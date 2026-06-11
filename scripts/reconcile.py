@@ -293,10 +293,51 @@ def retrigger_dead_heads() -> None:
                "-f", f"sha={new}")
 
 
+def fix_approved_but_red() -> None:
+    """Dead-zone repair: a PR with critic APPROVE but a failed CI check has
+    no automatic fixer — agent-fix's trigger is a REQUEST_CHANGES comment,
+    and the gate (correctly) won't merge red. Dispatch the fix agent for any
+    open agent PR in that state whose head is >20 min old (gives medic's
+    auto-retry time to clear transient flakes first). Origin: PR #46 sat
+    approved-but-red with nothing coming. Skips when a fix run is already
+    queued/in_progress (same busy-guard as the conflict sweep)."""
+    busy = json.loads(gh(
+        "run", "list", "--repo", REPO, "--workflow", "agent-fix.yml",
+        "--limit", "10", "--json", "status",
+    ) or "[]")
+    if any(r["status"] in ("queued", "in_progress") for r in busy):
+        return
+    prs = json.loads(gh(
+        "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+        "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
+    ) or "[]")
+    for pr in prs:
+        if not pr["headRefName"].startswith("agent/") or pr.get("mergeStateStatus") == "DIRTY":
+            continue
+        verdicts = [c["body"] for c in pr.get("comments", []) if "QA Critic" in (c.get("body") or "")]
+        if not verdicts or "VERDICT: APPROVE" not in verdicts[-1]:
+            continue
+        sha = pr["headRefOid"]
+        failed = gh("api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
+                    '[.check_runs[] | select(.name | endswith("review") | not)'
+                    ' | select(.conclusion // "" | IN("failure","timed_out","cancelled"))] | length')
+        if failed.strip() in ("", "0"):
+            continue
+        commit = json.loads(gh("api", f"repos/{REPO}/git/commits/{sha}") or "{}")
+        when = (commit.get("committer") or {}).get("date")
+        if not when or age_minutes(when) < 20:
+            continue
+        print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed.strip()} failed check(s) — dispatching fix agent")
+        gh("workflow", "run", "agent-fix.yml", "--repo", REPO,
+           "-f", f"pr_number={pr['number']}")
+        return  # one dispatch per sweep; the busy-guard handles the rest
+
+
 def main() -> None:
     nudges = 0
     unstick_conflicts()
     retrigger_dead_heads()
+    fix_approved_but_red()
     mine = [c for c in active_cards() if card_repo_slug(c["description"] or "") == REPO_SLUG]
     # Epics (agent:planner) are containers, not work: they carry no PR and sit
     # In Progress for the life of their children — never nudge them, and don't
