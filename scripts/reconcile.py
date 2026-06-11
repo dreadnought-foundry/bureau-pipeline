@@ -156,10 +156,16 @@ def blockers_of(card: dict) -> set[str]:
             "Duplicate",
         ):
             found.add(rel["issue"]["identifier"])
+    # A card's own id and its PARENT EPIC's id are never blockers: an epic
+    # only closes when its children finish, so an epic ref on a blocker line
+    # deadlocks the card forever (bit DRE-1207, DRE-1216, and DRE-1233 —
+    # "Serialize after: all other DRE-1200 work"). The planner brief bans
+    # epic ids on blocker lines; this makes the gate immune regardless.
+    parent_id = (card.get("parent") or {}).get("identifier")
     for line in (card["description"] or "").splitlines():
         if _BLOCKER_LINE.search(line):
             for ref in _CARD_REF.findall(line):
-                if ref != card["identifier"]:
+                if ref not in (card["identifier"], parent_id):
                     found.add(ref)
     return found
 
