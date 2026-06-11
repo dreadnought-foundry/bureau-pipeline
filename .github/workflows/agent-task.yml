@@ -87,6 +87,7 @@ jobs:
           allowed_bots: agent-bureau-bot
           claude_args: |
             --max-turns 80
+            --model claude-opus-4-8
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
             Read .bureau-pipeline/briefs/engineer.md for your role and

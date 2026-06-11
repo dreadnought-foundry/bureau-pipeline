@@ -98,7 +98,7 @@ jobs:
             echo "go=true"; echo "number=$PR"; echo "branch=$BRANCH"
             echo "card=$CARD"; echo "attempt=$ATTEMPT"
           } >> "$GITHUB_OUTPUT"
-          # Attempts 1-2: standard model. Attempt 3: escalate to Fable 5 with
+          # Attempts 1-2: Opus 4.8 (the engineer tier). Attempt 3: Fable 5 with
           # fresh-eyes framing (same-model retries share blind spots). Then hold.
           if [ "$ATTEMPT" -eq 3 ]; then
             {
@@ -106,7 +106,7 @@ jobs:
               echo "escalation=ESCALATION CONTEXT: Two previous fix attempts by another model failed to satisfy the critic. Do NOT assume their approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in /tmp/fix-blocker.txt rather than forcing a bad fix."
             } >> "$GITHUB_OUTPUT"
           else
-            echo "model_arg=" >> "$GITHUB_OUTPUT"
+            echo "model_arg=--model claude-opus-4-8" >> "$GITHUB_OUTPUT"
             echo "escalation=" >> "$GITHUB_OUTPUT"
           fi
           if [ "$ATTEMPTS" -ge 3 ]; then

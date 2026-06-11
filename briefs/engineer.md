@@ -41,6 +41,15 @@ Makefile and `.github/workflows/ci.yml` and run the closest equivalent.
   (or fix/chore as appropriate). PR body: what + why in 2-3 sentences, card
   URL, test evidence ("N new tests, all green locally").
 
+## Test rigor — no vacuous tests
+Every test must FAIL if the behavior it claims to verify is removed.
+Before opening the PR, audit each new test: mentally (or actually) revert
+your implementation change and confirm the test would go red. A test that
+passes against the unmodified codebase proves nothing and will be rejected
+by the critic as a review failure. Construct test fixtures so the guarded
+path is actually exercised (e.g. an input that WOULD be selected if the
+gate were missing).
+
 ## Progress heartbeats (dashboard)
 The CEO's dashboard renders a live progress bar per card from your phase
 comments. At EACH phase boundary, post one line to the card
