@@ -115,7 +115,7 @@ jobs:
           # verdict COMMENT is the review's source of truth (condition 2), and
           # a review run killed by an API blip must not deadlock the merge.
           VERDICT_JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
-            --jq '[.check_runs[] | select(.name != "review")] | {total: length, not_green: ([.[] | select(.status != "completed" or (.conclusion // "" | IN("success","skipped","neutral") | not))] | length)}')
+            --jq '[.check_runs[] | select(.name | endswith("review") | not)] | {total: length, not_green: ([.[] | select(.status != "completed" or (.conclusion // "" | IN("success","skipped","neutral") | not))] | length)}')
           TOTAL=$(echo "$VERDICT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
           NOT_GREEN=$(echo "$VERDICT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['not_green'])")
           [ "$TOTAL" = "0" ] && { echo "no checks reported yet — wait"; exit 0; }
