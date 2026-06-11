@@ -1,0 +1,148 @@
+# Plans an epic: triggered (via the product-repo stub) by the relay when a
+# card labeled agent:planner enters Todo. The planner decomposes the epic
+# into sub-issues (created in Backlog) and posts the plan to the epic as a
+# comment. The human approves by moving children Backlog → Todo, which
+# dispatches each through agent-task.yml.
+#
+# Reusable workflow: concurrency + permissions live in the calling stub.
+name: Agent Plan (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: true
+      BUREAU_APP_PRIVATE_KEY:
+        required: true
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      # Sub-issue descriptions must carry this repo's slug on their
+      # `**Repo:**` line so the relay routes them back here.
+      - name: Resolve repo slug
+        id: repo
+        run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      # The CEO's two verbs: Triage = "planner, deal with this" (plan, or
+      # RE-plan if children exist); Todo = "approved — build" (activate; or
+      # plan first if the epic was never planned, as a forgiving fallback).
+      - name: Route — plan or activate
+        id: route
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          FROM="${{ github.event.client_payload.trigger_state }}"
+          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
+          if [ "$FROM" != "triage" ] && [ "$KIDS" -gt 0 ]; then
+            echo "mode=activate" >> "$GITHUB_OUTPUT"
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "In Progress"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "▶️ Epic activated ($KIDS children) — the dependency gate will flow them to build in order. Nothing else to do."
+          else
+            echo "mode=plan" >> "$GITHUB_OUTPUT"
+            echo "kids=$KIDS" >> "$GITHUB_OUTPUT"
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
+          fi
+
+      - name: Plan epic
+        if: steps.route.outputs.mode == 'plan'
+        uses: anthropics/claude-code-action@v1
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: agent-bureau-bot
+          claude_args: |
+            --max-turns 50
+            --model claude-fable-5
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+          prompt: |
+            Read .bureau-pipeline/briefs/planner.md for your role, then
+            .github/bureau/overrides.md in this repo for stack-specific
+            context (it is mandatory reading if present), then plan this epic.
+
+            Epic: ${{ github.event.client_payload.identifier }} — ${{ github.event.client_payload.title }}
+            Epic URL: ${{ github.event.client_payload.url }}
+            Existing children: ${{ steps.route.outputs.kids }} — if greater
+            than zero you are RE-planning: read the existing children and any
+            prior plan comments first (gh + linear_ops as needed), keep what
+            still holds, create only the missing sub-issues, and update
+            ordering lines rather than duplicating cards.
+
+            Intent (written by the CEO — non-technical, judge outcomes not jargon):
+            ${{ github.event.client_payload.description }}
+
+            Process (mandatory):
+            1. Explore this repo enough to ground the plan in reality.
+            2. Decompose into the SMALLEST number of independently-shippable
+               sub-issues (each one PR, each with clear acceptance criteria).
+               If two sub-issues would share an interface, schema field, or
+               name string, define that contract explicitly in BOTH descriptions.
+            3. Create each sub-issue with:
+                 python3 .bureau-pipeline/scripts/linear_ops.py subissue \
+                   "${{ github.event.client_payload.identifier }}" "<title>" <desc-file>
+               Every description MUST start with a line `**Repo:** ${{ steps.repo.outputs.slug }}`,
+               include `## Acceptance criteria`, and — for every sub-issue
+               that must wait for a sibling — end with a line in EXACTLY this
+               form (the dependency gate parses it):
+                 **Blocked by:** DRE-N, DRE-M
+               Never write an epic's id on a "Blocked by"/"serialize after"
+               line in a child — epics stay In Progress for their whole life
+               and would deadlock the gate.
+            4. Post the plan to the epic for CEO review:
+                 python3 .bureau-pipeline/scripts/linear_ops.py comment \
+                   "${{ github.event.client_payload.identifier }}" "<plan>"
+               Write the plan in PLAIN ENGLISH for a non-technical reader:
+               what will be built, in what order, what could go wrong, rough
+               size. End with: "To start the build: move this epic to Todo
+               again — the children will flow automatically in order."
+            5. If the intent is too ambiguous to plan, create NO sub-issues and
+               instead post a comment asking the specific questions you need
+               answered.
+
+      - name: Epic → Plan Review
+        if: steps.route.outputs.mode == 'plan'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
+          if [ "$KIDS" -gt 0 ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Plan Review"
+          else
+            # Planner asked clarifying questions instead — back to Backlog so
+            # answering + re-Todo restarts planning cleanly.
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Backlog"
+          fi

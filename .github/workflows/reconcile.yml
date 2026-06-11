@@ -1,0 +1,67 @@
+# Reconcile sweep: every 15 minutes (cron lives in the calling stub), compare
+# Linear card states against pipeline reality (runs, PRs, verdicts) and nudge
+# whatever is stuck. The webhook path is primary; this sweep is the backstop
+# that makes a missed webhook a 15-minute delay instead of a silent stall.
+#
+# Reusable workflow: permissions live in the calling stub (contents: read,
+# actions: write). Job-level concurrency stays here.
+name: Reconcile (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      max_wip:
+        description: WIP cap for the dependency gate's auto-promotion
+        type: string
+        required: false
+        default: "8"
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: true
+      BUREAU_APP_PRIVATE_KEY:
+        required: true
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: reconcile
+      cancel-in-progress: false
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      - name: Sweep
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          MAX_WIP: ${{ inputs.max_wip }}
+        run: |
+          # Cards carry `**Repo:** <slug>` — reconcile.py compares against the
+          # lowercase repo basename.
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          export REPO_SLUG
+          python3 .bureau-pipeline/scripts/reconcile.py

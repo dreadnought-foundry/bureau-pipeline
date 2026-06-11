@@ -1,0 +1,138 @@
+# Deterministic merge gate: merges an agent PR when BOTH conditions hold —
+# every CI check green AND the latest QA Critic verdict is APPROVE. The merge
+# uses the qa-bot identity (distinct GitHub App), so author != merger is
+# enforced by identity, not policy. No human in the loop; no agent claims
+# trusted — both inputs are read from GitHub's own records.
+#
+# Triggered (via the product-repo stub) from both directions of the race: CI
+# finishing (workflow_run) and the critic verdict landing (issue_comment).
+# Whichever happens last merges.
+#
+# Reusable workflow: permissions live in the calling stub (contents: read,
+# actions: write). Job-level concurrency stays here — it keys off
+# github.event, which is the caller's.
+name: Merge Gate (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: false
+      BUREAU_APP_PRIVATE_KEY:
+        required: false
+      BUREAU_QA_APP_ID:
+        required: true
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  evaluate:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       startsWith(github.event.workflow_run.head_branch, 'agent/')) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, 'QA Critic'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: merge-gate-${{ github.event.workflow_run.head_branch || github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Mint qa-bot token (author != merger)
+        id: qa
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      - name: Evaluate and merge
+        env:
+          GH_TOKEN: ${{ steps.qa.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          EVENT: ${{ github.event_name }}
+          WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          IC_PR: ${{ github.event.issue.number }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Resolve the PR number from whichever event fired.
+          case "$EVENT" in
+            workflow_run)      PR=$(gh pr list --head "$WR_BRANCH" --state open --json number --jq '.[0].number' || true) ;;
+            workflow_dispatch) PR=$INPUT_PR ;;
+            *)                 PR=$IC_PR ;;
+          esac
+          [ -z "${PR:-}" ] || [ "$PR" = "null" ] && { echo "no open PR — nothing to do"; exit 0; }
+
+          BRANCH=$(gh pr view "$PR" --json headRefName,state --jq .headRefName)
+          STATE=$(gh pr view "$PR" --json state --jq .state)
+          [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
+          case "$BRANCH" in agent/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+          CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+
+          # Merge skew guard: a branch BEHIND main has green checks that were
+          # earned against an older main (this is how two 0013 migrations both
+          # merged). Update the branch instead — CI re-runs on the merged
+          # state and the gate re-evaluates when it completes.
+          MSTATE=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)
+          if [ "$MSTATE" = "BEHIND" ]; then
+            echo "branch is BEHIND main — updating branch; gate will re-run after CI"
+            gh api -X PUT "repos/${{ github.repository }}/pulls/$PR/update-branch" >/dev/null || true
+            exit 0
+          fi
+          if [ "$MSTATE" = "DIRTY" ]; then
+            echo "merge conflict with main — dispatching fix agent"
+            # qa-bot token lacks Actions perms (deliberate); use the workflow's
+            # own GITHUB_TOKEN — workflow_dispatch is exempt from the
+            # no-cascade rule, so the dispatched run still fires.
+            GH_TOKEN="${{ github.token }}" gh workflow run agent-fix.yml \
+              --repo "${{ github.repository }}" \
+              --ref "$(gh api repos/${{ github.repository }} --jq .default_branch)" \
+              -f pr_number="$PR" || true
+            exit 0
+          fi
+
+          # Condition 1: every check run on the head SHA has completed green.
+          # REST check-runs API, NOT `gh pr checks` — the GraphQL rollup needs
+          # actions:read the qa-bot App deliberately doesn't have.
+          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          # The "review" check-run (QA Review job) is excluded: the critic's
+          # verdict COMMENT is the review's source of truth (condition 2), and
+          # a review run killed by an API blip must not deadlock the merge.
+          VERDICT_JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name != "review")] | {total: length, not_green: ([.[] | select(.status != "completed" or (.conclusion // "" | IN("success","skipped","neutral") | not))] | length)}')
+          TOTAL=$(echo "$VERDICT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
+          NOT_GREEN=$(echo "$VERDICT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['not_green'])")
+          [ "$TOTAL" = "0" ] && { echo "no checks reported yet — wait"; exit 0; }
+          [ "$NOT_GREEN" != "0" ] && { echo "$NOT_GREEN of $TOTAL check runs not green — wait"; exit 0; }
+
+          # Condition 2: latest QA Critic verdict on the PR is APPROVE.
+          VERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+            --jq '[.[] | select(.body | contains("QA Critic"))] | last | .body' 2>/dev/null | head -1 || true)
+          case "$VERDICT" in
+            *"VERDICT: APPROVE"*) ;;
+            "") echo "no critic verdict yet — wait"; exit 0;;
+            *) echo "latest verdict is not APPROVE — holding"; exit 0;;
+          esac
+
+          # Both gates green: advance card, merge as qa-bot.
+          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In QA,In Progress" || true
+          gh pr merge "$PR" --merge --delete-branch
+          echo "merged PR #$PR"
+          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+            "🔀 Auto-merged by qa-bot: CI green + critic APPROVE. PR: $(gh pr view "$PR" --json url --jq .url)" || true

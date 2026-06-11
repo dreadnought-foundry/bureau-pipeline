@@ -1,0 +1,54 @@
+# Closes the loop: when an agent PR merges, the Linear card moves to Done.
+# This is the bureau's complete-card principle made structural — the Done
+# transition fires from GitHub's merge event (ground truth), never from an
+# agent's claim that it merged something.
+#
+# Reusable workflow: permissions live in the calling stub.
+name: Linear Sync (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: false
+      BUREAU_APP_PRIVATE_KEY:
+        required: false
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  card-done:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      - name: Card → Done
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          CARD=$(printf '%s\n%s' "$HEAD_REF" "$PR_TITLE" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          if [ -z "$CARD" ]; then
+            echo "no card reference in branch/title — nothing to sync"
+            exit 0
+          fi
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Done"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+            "✅ Merged: $PR_URL"

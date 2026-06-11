@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Minimal Linear operations for the agent pipeline (stdlib only).
+
+Subcommands:
+  state <DRE-N> <state-name>           move a card to a workflow state
+  advance <DRE-N> <to-state> <from-states-csv>
+                                       move ONLY if current state is in the csv
+                                       (guards against dragging Done cards back)
+  comment <DRE-N> <body>               add a comment to a card
+  subissue <DRE-N(parent)> <title> <description-file>
+                                       create a child issue (Backlog) under an epic
+  create <title> <description-file>    create a standalone card in Triage
+  children <DRE-N>                     print the number of child issues
+
+Auth: LINEAR_API_KEY env var.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.request
+
+API = "https://api.linear.app/graphql"
+
+
+def gql(query: str, variables: dict | None = None) -> dict:
+    req = urllib.request.Request(
+        API,
+        data=json.dumps({"query": query, "variables": variables or {}}).encode(),
+        headers={
+            "Authorization": os.environ["LINEAR_API_KEY"],
+            "Content-Type": "application/json",
+        },
+    )
+    # B310: URL is the constant https://api.linear.app endpoint, no user input.
+    with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
+        out = json.loads(resp.read())
+    if out.get("errors"):
+        raise SystemExit(f"linear error: {out['errors']}")
+    return out["data"]
+
+
+def get_issue(identifier: str) -> dict:
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             id identifier title team { id } state { name }
+           } }""",
+        {"id": identifier},
+    )
+    return data["issue"]
+
+
+def state_id(team_id: str, name: str) -> str:
+    data = gql(
+        """query($teamId: ID) { workflowStates(filter: {team: {id: {eq: $teamId}}}) {
+             nodes { id name } } }""",
+        {"teamId": team_id},
+    )
+    for node in data["workflowStates"]["nodes"]:
+        if node["name"].lower() == name.lower():
+            return node["id"]
+    raise SystemExit(f"no state named {name!r} on team")
+
+
+def cmd_state(identifier: str, state_name: str) -> None:
+    issue = get_issue(identifier)
+    sid = state_id(issue["team"]["id"], state_name)
+    gql(
+        """mutation($id: String!, $input: IssueUpdateInput!) {
+             issueUpdate(id: $id, input: $input) { success } }""",
+        {"id": issue["id"], "input": {"stateId": sid}},
+    )
+    print(f"{identifier} → {state_name}")
+
+
+def cmd_advance(identifier: str, to_state: str, from_states_csv: str) -> None:
+    issue = get_issue(identifier)
+    current = issue["state"]["name"].lower()
+    allowed = [s.strip().lower() for s in from_states_csv.split(",")]
+    if current not in allowed:
+        print(
+            f"{identifier} is in {issue['state']['name']!r}, not in {from_states_csv!r} — not advancing"
+        )
+        return
+    sid = state_id(issue["team"]["id"], to_state)
+    gql(
+        """mutation($id: String!, $input: IssueUpdateInput!) {
+             issueUpdate(id: $id, input: $input) { success } }""",
+        {"id": issue["id"], "input": {"stateId": sid}},
+    )
+    print(f"{identifier} → {to_state}")
+
+
+def cmd_comment(identifier: str, body: str) -> None:
+    issue = get_issue(identifier)
+    gql(
+        """mutation($input: CommentCreateInput!) {
+             commentCreate(input: $input) { success } }""",
+        {"input": {"issueId": issue["id"], "body": body}},
+    )
+    print(f"commented on {identifier}")
+
+
+def cmd_subissue(parent_identifier: str, title: str, description_file: str) -> None:
+    parent = get_issue(parent_identifier)
+    with open(description_file) as f:
+        description = f.read()
+    sid = state_id(parent["team"]["id"], "Backlog")
+    data = gql(
+        """mutation($input: IssueCreateInput!) {
+             issueCreate(input: $input) { success issue { identifier url } } }""",
+        {
+            "input": {
+                "teamId": parent["team"]["id"],
+                "parentId": parent["id"],
+                "title": title,
+                "description": description,
+                "stateId": sid,
+            }
+        },
+    )
+    issue = data["issueCreate"]["issue"]
+    print(f"created {issue['identifier']} {issue['url']}")
+
+
+def cmd_create(title: str, description_file: str) -> None:
+    teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
+    team_id = teams["teams"]["nodes"][0]["id"]
+    with open(description_file) as f:
+        description = f.read()
+    sid = state_id(team_id, "Triage")
+    data = gql(
+        """mutation($input: IssueCreateInput!) {
+             issueCreate(input: $input) { success issue { identifier url } } }""",
+        {
+            "input": {
+                "teamId": team_id,
+                "title": title,
+                "description": description,
+                "stateId": sid,
+            }
+        },
+    )
+    issue = data["issueCreate"]["issue"]
+    print(f"created {issue['identifier']} {issue['url']}")
+
+
+def cmd_children(identifier: str) -> None:
+    data = gql(
+        """query($id: String!) { issue(id: $id) { children { nodes { id } } } }""",
+        {"id": identifier},
+    )
+    print(len(data["issue"]["children"]["nodes"]))
+
+
+if __name__ == "__main__":
+    cmd, *args = sys.argv[1:]
+    {
+        "state": cmd_state,
+        "advance": cmd_advance,
+        "comment": cmd_comment,
+        "subissue": cmd_subissue,
+        "create": cmd_create,
+        "children": cmd_children,
+    }[cmd](*args)

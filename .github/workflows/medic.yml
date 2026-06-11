@@ -1,0 +1,103 @@
+# Pipeline medic: when any pipeline workflow fails, retry transient
+# infrastructure flakes once automatically (e.g. Docker Hub pull timeouts).
+# If the retry fails too, summon a diagnosis agent that reads the logs and
+# reports in plain English to Linear — to the card if one is involved,
+# otherwise as a new Triage card. Machines watch; agents think.
+#
+# Reusable workflow: the workflow_run trigger list (which workflows to watch)
+# lives in the calling stub — it can include product-specific CI workflows.
+name: Pipeline Medic (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: true
+      BUREAU_APP_PRIVATE_KEY:
+        required: true
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  retry:
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Rerun failed jobs once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "retrying ${{ github.event.workflow_run.name }} run ${{ github.event.workflow_run.id }} (attempt 1 failed)"
+          gh run rerun ${{ github.event.workflow_run.id }} --failed --repo ${{ github.repository }}
+
+  diagnose:
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt >= 2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      - name: Diagnosis agent
+        uses: anthropics/claude-code-action@v1
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: "*"
+          claude_args: |
+            --max-turns 40
+            --model claude-sonnet-4-6
+            --allowedTools "Bash,Read,Glob,Grep,Write"
+          prompt: |
+            You are the pipeline medic for this repo. The workflow
+            "${{ github.event.workflow_run.name }}" failed twice (original run
+            + one automatic retry), so this is NOT a transient flake.
+
+            Failed run: ${{ github.event.workflow_run.html_url }}
+            Head branch: ${{ github.event.workflow_run.head_branch }}
+
+            1. Read the failure logs:
+               gh run view ${{ github.event.workflow_run.id }} --log-failed
+               (GH_TOKEN is in your env.)
+            2. Diagnose the root cause. Distinguish: (a) bad code on the
+               branch, (b) broken workflow/config, (c) external service
+               failure, (d) missing secret/permission.
+            3. Report in PLAIN ENGLISH for a non-technical reader: what
+               failed, why, and what kind of fix it needs (2-5 sentences).
+               Include one line of precise technical detail at the end for
+               whoever fixes it.
+            4. Deliver the report:
+               - If the head branch matches agent/DRE-N, comment on that card:
+                 python3 .bureau-pipeline/scripts/linear_ops.py comment DRE-N "<report>"
+               - Otherwise: FIRST check for an existing open card for this same
+                 failure — search Linear (GraphQL via curl with LINEAR_API_KEY,
+                 or linear_ops) for a Triage/Todo/In Progress issue titled
+                 "Pipeline failure: ${{ github.event.workflow_run.name }}".
+                 If one exists, ADD A COMMENT to it ("failed again at <run url>;
+                 diagnosis unchanged/changed: ...") instead of creating a card.
+                 Only if none exists: write the report to /tmp/diag.md, then:
+                 python3 .bureau-pipeline/scripts/linear_ops.py create "Pipeline failure: ${{ github.event.workflow_run.name }}" /tmp/diag.md
+            Do NOT attempt to fix anything — diagnose and report only.

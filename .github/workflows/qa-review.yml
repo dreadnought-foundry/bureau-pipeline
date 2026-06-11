@@ -1,0 +1,129 @@
+# Critic agent: adversarially reviews every agent PR and posts a verdict in
+# plain English (the CEO judges outcomes, not diffs). The verdict is advisory
+# input to merge-gate.yml — the merge itself happens only when CI is green
+# AND the verdict is APPROVE.
+#
+# Reusable workflow: concurrency + permissions live in the calling stub.
+name: QA Review (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: true
+      BUREAU_APP_PRIVATE_KEY:
+        required: true
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  review:
+    # Only review agent-authored work (branch convention agent/DRE-N-*).
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.head.ref, 'agent/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      - name: Resolve PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          PR=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+          BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
+          CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          echo "card=$CARD" >> "$GITHUB_OUTPUT"
+
+      - name: Critic review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: agent-bureau-bot
+          claude_args: |
+            --max-turns 40
+            --model claude-sonnet-4-6
+            --allowedTools "Bash,Read,Glob,Grep,Write"
+          prompt: |
+            You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
+            in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
+            `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
+            It implements Linear card ${{ steps.pr.outputs.card }}.
+
+            Check, in order of severity:
+            1. Does the diff actually satisfy the card's acceptance criteria
+               (read the card description quoted in the PR body, and any
+               **Spec:** directory it references)?
+            2. Are the tests REAL — do they assert meaningful behavior, would
+               they fail if the implementation were wrong? Vacuous or
+               tautological tests are a blocking finding.
+            3. Correctness bugs, security issues, data-loss risks.
+            4. Scope creep — changes beyond the card.
+            5. Convention violations (style, naming, structure vs neighbors).
+
+            Default skeptical: your job is to find reasons NOT to merge. If
+            you cannot find any, approve.
+
+            EXHAUSTIVE SINGLE PASS + CONVERGENCE (mandatory): examine the
+            ENTIRE diff and list every blocking finding in THIS verdict — do
+            not ration findings across rounds. If earlier QA Critic verdicts
+            exist on this PR, you are RE-reviewing: verify the prior findings
+            are resolved, review what changed since, and raise a NEW finding
+            only if (a) the latest changes introduced it, or (b) it is
+            data-loss/security severity. A re-review that unveils yet another
+            pre-existing nit you could have caught earlier is a review
+            failure, not diligence. (Origin: PR #7 took 6 rounds.)
+
+            Write your verdict to /tmp/qa-verdict.md:
+            - First line exactly: `VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES`
+            - Then a summary in PLAIN ENGLISH for a non-technical reader:
+              what the change does, whether it matches the card, what risks
+              remain (2-6 sentences, no jargon, no file paths).
+            - If REQUEST_CHANGES: a `## For the fixing agent` section with
+              precise technical findings (file:line, what's wrong, what would
+              make it right).
+
+      - name: Post verdict
+        # not on cancellation: a superseded run must not post a fail-closed
+        # verdict that masks the live run's real one
+        if: always() && !cancelled()
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          PR: ${{ steps.pr.outputs.number }}
+          CARD: ${{ steps.pr.outputs.card }}
+        run: |
+          if [ ! -f /tmp/qa-verdict.md ]; then
+            printf 'VERDICT: REQUEST_CHANGES\nCritic run ended without producing a verdict — treating as not approved (fail closed).\n' > /tmp/qa-verdict.md
+          fi
+          { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md)"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
+          # The verdict comment is load-bearing (merge-gate reads it) —
+          # retry through transient GitHub API blips rather than losing it.
+          for i in 1 2 3 4; do
+            gh pr comment "$PR" --body-file /tmp/qa-comment.md && break
+            echo "comment attempt $i failed; retrying in $((i*10))s"; sleep $((i*10))
+          done
+          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-comment.md)" || true
