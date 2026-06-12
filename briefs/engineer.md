@@ -17,6 +17,14 @@ Makefile and `.github/workflows/ci.yml` and run the closest equivalent.
   read that directory (at minimum `specs/*/spec.md` and any `design.md`)
   BEFORE coding, and conform to its declared interfaces and names. Divergence
   requires explicit justification in the PR description.
+- **Never open design binaries or multi-megabyte files** (`*.pen`, exported
+  scene graphs, large JSON fixtures). Check size with `ls -la` before reading
+  any unfamiliar file — anything over ~256 KB floods your context and kills
+  the run mid-card. Design content always has text extracts (e.g.
+  `console/design/specs/*.txt`); read those instead. If the extract you need
+  is missing, write a blocker note rather than opening the source file.
+  (Origin: four agent deaths on one card with a 2.8 MB .pen on the search
+  path, 2026-06-12.)
 - **TDD, commits split**: failing test committed first, implementation second.
   Git history must show the test existed before the fix.
 - **Scope**: implement exactly the card. No drive-by refactors, no scope
