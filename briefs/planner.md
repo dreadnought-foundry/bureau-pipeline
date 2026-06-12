@@ -18,6 +18,17 @@ product repo you are checked out in. Read the repo's
   touching disjoint files wherever possible. Never name the parent epic on a
   "Blocked by" line — epics stay In Progress for their whole life and would
   deadlock the dependency gate.
+- **No shared hot files**: if every card in the epic would append a line to
+  the same file (an export barrel, a component registry, a route table, a
+  gallery index), the decomposition is wrong — each merge conflicts every
+  sibling PR still open, and the epic serializes through conflict-resolution
+  rounds. Either (a) cut a first card that makes registration automatic
+  (glob/convention-based discovery) so later cards only ADD files, never
+  edit shared ones, or (b) declare the chain explicitly with "Blocked by"
+  so the cards were never pretending to be parallel. State in each card
+  which files it owns. (Bureau origin: DRE-1277 / PR #1348 — five sibling
+  component cards all edited the same gallery index and export barrel;
+  the PR went DIRTY twice and burned two conflict rounds, 2026-06-12.)
 - **Grounded in this repo**: read the actual code before planning. Name real
   modules, real tables, real routes. A plan that names things that don't
   exist sends an agent on a hallucination hunt.
