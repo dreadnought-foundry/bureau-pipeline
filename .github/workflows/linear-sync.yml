@@ -52,3 +52,12 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Done"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
             "✅ Merged: $PR_URL"
+          # Event-driven promotion: this Done may have just unblocked
+          # dependent Backlog children — promote them NOW instead of making
+          # them wait for the drifting cron sweep ("*/15" delivers 78-100 min
+          # apart in practice). Promotion is pure Linear; the Backlog→Todo
+          # transition rides the relay webhook for the actual agent dispatch.
+          REPO="$GITHUB_REPOSITORY" \
+            REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
+            MAX_WIP=8 \
+            python3 .bureau-pipeline/scripts/reconcile.py --promote-only

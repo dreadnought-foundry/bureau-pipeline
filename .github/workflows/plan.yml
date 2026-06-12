@@ -68,6 +68,14 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "In Progress"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "▶️ Epic activated ($KIDS children) — the dependency gate will flow them to build in order. Nothing else to do."
+            # Event-driven promotion: eligibility changed THIS second — ready
+            # children must not wait for the cron sweep (GitHub delivers
+            # "*/15" 78-100 min apart in practice; DRE-1260 activated 9s
+            # after a sweep checked and faced an ~80-minute wait, 2026-06-12).
+            REPO="$GITHUB_REPOSITORY" \
+              REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
+              MAX_WIP=8 \
+              python3 .bureau-pipeline/scripts/reconcile.py --promote-only
           else
             echo "mode=plan" >> "$GITHUB_OUTPUT"
             echo "kids=$KIDS" >> "$GITHUB_OUTPUT"

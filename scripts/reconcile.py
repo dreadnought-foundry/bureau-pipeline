@@ -387,16 +387,29 @@ def fix_approved_but_red() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
-def main() -> None:
+def main(promote_only: bool = False) -> None:
+    """Full sweep by default; promote_only runs JUST the dependency gate.
+
+    promote_only exists because GitHub's cron is best-effort — the "*/15"
+    schedule delivers sweeps 78-100 minutes apart in practice. Eligibility
+    changes at two precise events, so those workflows invoke this directly:
+      - plan.yml, the moment an epic activates (In Progress)
+      - linear-sync.yml, the moment a merge flips a card to Done
+    Promotion is pure Linear (the Backlog→Todo transition rides the Linear
+    webhook → relay → repository_dispatch for the actual agent start), so
+    the event hooks need only LINEAR_API_KEY. (Origin: DRE-1260 activated
+    9s after a sweep checked and faced an ~80-minute wait, 2026-06-12.)
+    """
     nudges = 0
-    # Backstops run independently: one failing must not silence the others,
-    # but every write failure is recorded and fails the run at the end.
-    for backstop in (unstick_conflicts, retrigger_dead_heads, fix_approved_but_red):
-        try:
-            backstop()
-        except ReconcileWriteError as e:
-            _write_failures.append(str(e))
-            print(f"ERROR: {backstop.__name__}: {e}", file=sys.stderr)
+    if not promote_only:
+        # Backstops run independently: one failing must not silence the
+        # others, but every write failure is recorded and fails the run.
+        for backstop in (unstick_conflicts, retrigger_dead_heads, fix_approved_but_red):
+            try:
+                backstop()
+            except ReconcileWriteError as e:
+                _write_failures.append(str(e))
+                print(f"ERROR: {backstop.__name__}: {e}", file=sys.stderr)
     mine = [c for c in active_cards() if card_repo_slug(c["description"] or "") == REPO_SLUG]
     # Epics (agent:planner) are containers, not work: they carry no PR and sit
     # In Progress for the life of their children — never nudge them, and don't
@@ -406,9 +419,17 @@ def main() -> None:
         for c in mine
         if any(lbl["name"].lower() == "agent:planner" for lbl in c["labels"]["nodes"])
     }
-    close_finished_epics(epics)
+    if not promote_only:
+        close_finished_epics(epics)
     mine = [c for c in mine if c["identifier"] not in epics]
     promote_ready(active_count=len(mine))
+    if promote_only:
+        print(f"promote-only: gate evaluated (WIP base {len(mine)})")
+        if _write_failures:
+            sys.exit(
+                f"reconcile: {len(_write_failures)} write failure(s) — see ERROR lines above"
+            )
+        return
     for card in mine:
         ident, state = card["identifier"], card["state"]["name"]
         if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
@@ -470,4 +491,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(promote_only="--promote-only" in sys.argv)
