@@ -65,3 +65,17 @@ class ConflictsOnlyModeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConflictSweepJobTokenTest(unittest.TestCase):
+    """The linear-sync conflict-sweep job must pass GH_DISPATCH_TOKEN
+    (the stub-granted github.token) — the minted App token cannot dispatch
+    workflows (HTTP 403, same failure reconcile.yml already fixed)."""
+
+    def test_conflict_sweep_sets_dispatch_token(self):
+        wf = os.path.join(
+            os.path.dirname(__file__), "..", ".github", "workflows", "linear-sync.yml"
+        )
+        src = open(wf).read()
+        sweep = src.split("conflict-sweep:", 1)[1]
+        self.assertIn("GH_DISPATCH_TOKEN: ${{ github.token }}", sweep)

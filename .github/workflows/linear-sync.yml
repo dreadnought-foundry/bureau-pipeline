@@ -86,6 +86,10 @@ jobs:
       - name: Dispatch fix agents for newly conflicted PRs
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          # The App token cannot dispatch workflows (HTTP 403 — same lesson
+          # as reconcile.yml / DRE-1254): dispatches run under the stub's
+          # github.token, which the stub grants actions:write.
+          GH_DISPATCH_TOKEN: ${{ github.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           REPO: ${{ github.repository }}
         run: |
