@@ -120,7 +120,15 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
         run: |
-          PR_URL=$(gh pr list --head "$(git branch -r | grep -o "agent/${CARD}[^ ]*" | head -1 | sed 's|origin/||')" --json url --jq '.[0].url' 2>/dev/null || true)
+          # Resolve the card's branch FIRST and guard on it: an empty --head
+          # filter makes `gh pr list` return the repo's most recent open PR,
+          # which once attributed another card's PR to a dead run and sent it
+          # to In QA with a false "PR opened" receipt (DRE-1343, 2026-06-12).
+          BRANCH=$(git branch -r | grep -o "agent/${CARD}[^ ]*" | head -1 | sed 's|origin/||' || true)
+          PR_URL=""
+          if [ -n "$BRANCH" ]; then
+            PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
+          fi
           if [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🤖 PR opened: $PR_URL — CI + critic review running. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
