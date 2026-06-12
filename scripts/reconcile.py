@@ -389,7 +389,7 @@ def fix_approved_but_red() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
-def main(promote_only: bool = False) -> None:
+def main(promote_only: bool = False, conflicts_only: bool = False) -> None:
     """Full sweep by default; promote_only runs JUST the dependency gate.
 
     promote_only exists because GitHub's cron is best-effort — the "*/15"
@@ -401,7 +401,19 @@ def main(promote_only: bool = False) -> None:
     webhook → relay → repository_dispatch for the actual agent start), so
     the event hooks need only LINEAR_API_KEY. (Origin: DRE-1260 activated
     9s after a sweep checked and faced an ~80-minute wait, 2026-06-12.)
+
+    conflicts_only runs JUST the DIRTY-PR backstop, for the same cron-drift
+    reason: a merge to the default branch is the exact event that conflicts
+    sibling PRs touching the same files, so linear-sync invokes this on
+    every merge. Needs a dispatch-capable GH token, unlike promote_only.
+    (Origin: PR #1348 / DRE-1277 sat conflicted ~1h waiting on the cron.)
     """
+    if conflicts_only:
+        try:
+            unstick_conflicts()
+        except ReconcileWriteError as e:
+            sys.exit(f"reconcile --conflicts-only: {e}")
+        return
     nudges = 0
     if not promote_only:
         # Backstops run independently: one failing must not silence the
@@ -493,4 +505,7 @@ def main(promote_only: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    main(promote_only="--promote-only" in sys.argv)
+    main(
+        promote_only="--promote-only" in sys.argv,
+        conflicts_only="--conflicts-only" in sys.argv,
+    )
