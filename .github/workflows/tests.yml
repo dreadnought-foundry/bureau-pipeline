@@ -1,0 +1,32 @@
+# Tests for the central pipeline's own logic. Every product repo inherits
+# this code on its next run — changes here must pass these before merging.
+name: Pipeline Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: scripts unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests
+        env:
+          LINEAR_API_KEY: test-key
+          REPO: test/test
+          GH_TOKEN: test
+        run: python3 -m unittest discover -s tests -v
+      - name: Workflow YAML parses
+        run: |
+          pip -q install pyyaml
+          python3 -c "import yaml, glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('yaml ok')"

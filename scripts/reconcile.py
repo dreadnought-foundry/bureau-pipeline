@@ -39,7 +39,9 @@ import linear_ops  # noqa: E402
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
 
-STALE_MINUTES = {"Todo": 15, "In Progress": 180, "In QA": 120, "In Review": 60}
+# In Progress dropped 180→60: silent agent deaths now requeue instantly from
+# the run itself; this timer is only the backstop for lost run outcomes.
+STALE_MINUTES = {"Todo": 15, "In Progress": 60, "In QA": 120, "In Review": 60}
 MAX_WIP = int(os.environ.get("MAX_WIP", "4"))
 
 # "Blocked by: DRE-1204 + DRE-1205", "serialize after DRE-1226", "depends on

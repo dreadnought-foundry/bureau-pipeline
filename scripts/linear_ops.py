@@ -155,6 +155,25 @@ def cmd_children(identifier: str) -> None:
     print(len(data["issue"]["children"]["nodes"]))
 
 
+def count_comments(identifier: str, needle: str) -> int:
+    """How many comments on the card contain `needle`. Used by agent-task's
+    dead-run requeue cap (an agent ending with no PR and no blocker note)."""
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             comments(last: 50) { nodes { body } } } }""",
+        {"id": identifier},
+    )
+    return sum(
+        1
+        for c in data["issue"]["comments"]["nodes"]
+        if needle in (c.get("body") or "")
+    )
+
+
+def cmd_count_comments(identifier: str, needle: str) -> None:
+    print(count_comments(identifier, needle))
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     {
@@ -164,4 +183,5 @@ if __name__ == "__main__":
         "subissue": cmd_subissue,
         "create": cmd_create,
         "children": cmd_children,
+        "count-comments": cmd_count_comments,
     }[cmd](*args)
