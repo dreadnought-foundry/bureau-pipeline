@@ -58,6 +58,60 @@ def gh(*args: str) -> str:
     ).stdout.strip()
 
 
+class ReconcileWriteError(RuntimeError):
+    """A write-path gh call failed — surface it; never pretend success."""
+
+
+#: Write failures collected during the sweep; non-empty -> exit 1 so the
+#: Actions run goes red and medic picks it up.
+_write_failures: list[str] = []
+
+
+def gh_dispatch(*args: str) -> None:
+    """Run a write-path gh command LOUDLY: raise ReconcileWriteError on rc!=0.
+
+    Origin (2026-06-12, PR #48 / DRE-1254): every `gh workflow run` in this
+    sweep executed under the minted App token, which lacks Actions:write —
+    GitHub answered "HTTP 403: Resource not accessible by integration" and
+    the silent gh() helper discarded it. The sweep printed "dispatching fix
+    agent" (and posted "re-triggered" Linear comments) while nothing ran,
+    so conflicted PRs sat stuck through sweep after green sweep.
+
+    Two-part fix: (1) failures raise instead of vanishing; (2) dispatch runs
+    under GH_DISPATCH_TOKEN when set — the calling stub grants actions:write
+    to the workflow's github.token, which the reusable workflow passes
+    through (see reconcile.yml Sweep env).
+    """
+    env = None
+    dispatch_token = os.environ.get("GH_DISPATCH_TOKEN")
+    if dispatch_token:
+        env = {**os.environ, "GH_TOKEN": dispatch_token}
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", *args], capture_output=True, text=True, check=False, env=env
+    )
+    if p.returncode != 0:
+        raise ReconcileWriteError(
+            f"gh {' '.join(args)} failed rc={p.returncode}: {p.stderr.strip()[:400]}"
+        )
+
+
+def _nudge(workflow: str, pr_number: int) -> bool:
+    """Dispatch a workflow for a PR; True only when it actually went through.
+
+    Callers MUST gate their "re-triggered" Linear comments on this — a
+    comment claiming a re-trigger that 403'd is how DRE-1254 looked
+    "self-healing" while fully stalled.
+    """
+    try:
+        gh_dispatch("workflow", "run", workflow, "--repo", REPO,
+                    "-f", f"pr_number={pr_number}")
+        return True
+    except ReconcileWriteError as e:
+        _write_failures.append(str(e))
+        print(f"ERROR: {e}", file=sys.stderr)
+        return False
+
+
 def card_repo_slug(description: str) -> str | None:
     stripped = re.sub(r"```.*?```", "", description or "", flags=re.DOTALL)
     m = re.search(r"^\*\*Repo:\*\*\s*([a-z0-9._/-]+)\s*$", stripped, re.MULTILINE | re.IGNORECASE)
@@ -249,8 +303,8 @@ def unstick_conflicts() -> None:
         if pr.get("mergeStateStatus") != "DIRTY":
             continue
         print(f"conflict: PR #{pr['number']} ({pr['headRefName']}) DIRTY — dispatching fix agent")
-        gh("workflow", "run", "agent-fix.yml", "--repo", REPO,
-           "-f", f"pr_number={pr['number']}")
+        gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
+                    "-f", f"pr_number={pr['number']}")
 
 
 def retrigger_dead_heads() -> None:
@@ -328,16 +382,21 @@ def fix_approved_but_red() -> None:
         if not when or age_minutes(when) < 20:
             continue
         print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed.strip()} failed check(s) — dispatching fix agent")
-        gh("workflow", "run", "agent-fix.yml", "--repo", REPO,
-           "-f", f"pr_number={pr['number']}")
+        gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
+                    "-f", f"pr_number={pr['number']}")
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
 def main() -> None:
     nudges = 0
-    unstick_conflicts()
-    retrigger_dead_heads()
-    fix_approved_but_red()
+    # Backstops run independently: one failing must not silence the others,
+    # but every write failure is recorded and fails the run at the end.
+    for backstop in (unstick_conflicts, retrigger_dead_heads, fix_approved_but_red):
+        try:
+            backstop()
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: {backstop.__name__}: {e}", file=sys.stderr)
     mine = [c for c in active_cards() if card_repo_slug(c["description"] or "") == REPO_SLUG]
     # Epics (agent:planner) are containers, not work: they carry no PR and sit
     # In Progress for the life of their children — never nudge them, and don't
@@ -371,19 +430,11 @@ def main() -> None:
         elif state == "In Progress":
             if is_open:
                 linear_ops.cmd_advance(ident, "In QA", "In Progress")
-                gh(
-                    "workflow",
-                    "run",
-                    "qa-review.yml",
-                    "--repo",
-                    REPO,
-                    "-f",
-                    f"pr_number={pr['number']}",
-                )
-                linear_ops.cmd_comment(
-                    ident,
-                    "🧹 Reconcile: PR exists but card was stuck In Progress — advanced to In QA, critic re-triggered.",
-                )
+                if _nudge("qa-review.yml", pr["number"]):
+                    linear_ops.cmd_comment(
+                        ident,
+                        "🧹 Reconcile: PR exists but card was stuck In Progress — advanced to In QA, critic re-triggered.",
+                    )
             else:
                 linear_ops.cmd_state(ident, "Todo")
                 linear_ops.cmd_comment(
@@ -392,50 +443,30 @@ def main() -> None:
                 )
         elif state == "In QA" and is_open:
             if has_verdict(pr):
-                gh(
-                    "workflow",
-                    "run",
-                    "merge-gate.yml",
-                    "--repo",
-                    REPO,
-                    "-f",
-                    f"pr_number={pr['number']}",
-                )
-                linear_ops.cmd_comment(
-                    ident,
-                    "🧹 Reconcile: verdict present but merge never happened — merge gate re-triggered.",
-                )
+                if _nudge("merge-gate.yml", pr["number"]):
+                    linear_ops.cmd_comment(
+                        ident,
+                        "🧹 Reconcile: verdict present but merge never happened — merge gate re-triggered.",
+                    )
             else:
-                gh(
-                    "workflow",
-                    "run",
-                    "qa-review.yml",
-                    "--repo",
-                    REPO,
-                    "-f",
-                    f"pr_number={pr['number']}",
-                )
-                linear_ops.cmd_comment(
-                    ident, "🧹 Reconcile: no critic verdict after 2h — review re-triggered."
-                )
+                if _nudge("qa-review.yml", pr["number"]):
+                    linear_ops.cmd_comment(
+                        ident, "🧹 Reconcile: no critic verdict after 2h — review re-triggered."
+                    )
         elif state == "In QA" and not is_open:
             linear_ops.cmd_state(ident, "Todo")
             linear_ops.cmd_comment(ident, "🧹 Reconcile: In QA with no PR — requeued to Todo.")
         elif state == "In Review" and is_open:
-            gh(
-                "workflow",
-                "run",
-                "merge-gate.yml",
-                "--repo",
-                REPO,
-                "-f",
-                f"pr_number={pr['number']}",
-            )
-            linear_ops.cmd_comment(
-                ident, "🧹 Reconcile: stuck In Review — merge gate re-triggered."
-            )
+            if _nudge("merge-gate.yml", pr["number"]):
+                linear_ops.cmd_comment(
+                    ident, "🧹 Reconcile: stuck In Review — merge gate re-triggered."
+                )
         nudges += 1
     print(f"sweep complete: {nudges} nudge(s)")
+    if _write_failures:
+        # Red run -> medic's failed-workflow path picks it up. Never exit 0
+        # when a write we claimed to make didn't happen (DRE-1254 lesson).
+        sys.exit(f"reconcile: {len(_write_failures)} write failure(s) — see ERROR lines above")
 
 
 if __name__ == "__main__":

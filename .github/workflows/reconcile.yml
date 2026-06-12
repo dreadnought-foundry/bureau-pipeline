@@ -57,6 +57,11 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Workflow-dispatch needs actions:write, which the calling stub
+          # grants to the workflow's own token — the App token gets HTTP 403
+          # on the dispatch API (the silent DRE-1254 stall, 2026-06-12).
+          # reconcile.py's gh_dispatch() swaps this in for `gh workflow run`.
+          GH_DISPATCH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           MAX_WIP: ${{ inputs.max_wip }}
         run: |
