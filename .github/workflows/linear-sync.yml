@@ -61,3 +61,38 @@ jobs:
             REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
             MAX_WIP=8 \
             python3 .bureau-pipeline/scripts/reconcile.py --promote-only
+
+  # Event-driven conflict sweep: a merge to the default branch is the exact
+  # moment sibling PRs touching the same files go DIRTY — and DIRTY PRs emit
+  # zero workflow events, so without this only the drifting cron notices.
+  # (Origin: PR #1348 / DRE-1277 waited ~1h between sibling merges.)
+  conflict-sweep:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      - name: Dispatch fix agents for newly conflicted PRs
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          REPO: ${{ github.repository }}
+        run: |
+          # GitHub recomputes sibling mergeability lazily after a merge;
+          # give it a beat, then sweep twice so a slow recompute still
+          # lands inside this run rather than waiting for the cron.
+          sleep 45
+          python3 .bureau-pipeline/scripts/reconcile.py --conflicts-only
+          sleep 60
+          python3 .bureau-pipeline/scripts/reconcile.py --conflicts-only
