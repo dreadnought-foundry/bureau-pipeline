@@ -126,9 +126,15 @@ jobs:
               "🤖 PR opened: $PR_URL — CI + critic review running. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In QA" "In Progress,Todo"
           elif [ -f /tmp/agent-blocker.txt ]; then
+            # Backlog, NEVER Todo: the relay dispatches a fresh agent on every
+            # Todo transition, and a blocker is deterministic — the next agent
+            # reads the same card and blocks on the same wall, forever. (Origin:
+            # DRE-1286 redispatched 6s after its blocker note, 2026-06-12.)
+            # Backlog is inert until a human (or a description fix + the
+            # dependency gate) releases it.
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-              "🛑 Agent blocked: $(cat /tmp/agent-blocker.txt) — card returned to Todo. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
+              "🛑 Agent blocked: $(cat /tmp/agent-blocker.txt) — parked in Backlog until the blocker is resolved (a Todo return here would redispatch agents into the same wall). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" || true
           else
             # Silent agent death (ran out of turns/time without a PR or a
             # blocker note). Requeue IMMEDIATELY instead of waiting for the
