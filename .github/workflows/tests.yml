@@ -20,12 +20,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # pytest, not stdlib unittest discover: half the suite is written
+      # pytest-style (function tests), which unittest discover silently
+      # collects as ZERO tests — they had never run in CI before this.
       - name: Unit tests
         env:
           LINEAR_API_KEY: test-key
           REPO: test/test
           GH_TOKEN: test
-        run: python3 -m unittest discover -s tests -v
+        run: |
+          pip -q install pytest
+          python3 -m pytest tests -v
       - name: Workflow YAML parses
         run: |
           pip -q install pyyaml
