@@ -1,0 +1,72 @@
+# agents.yaml — the machine-readable agent roster (DRE-1335).
+#
+# THE CONTRACT: this file is the source of truth for "what agents exist and
+# how they run." The console reads it via the GitHub contents API (never by
+# parsing workflow YAML). Any change to an agent's model, budgets, trigger,
+# or brief in .github/workflows/ MUST update this file in the same PR.
+#
+# Schema (one entry per agent):
+#   name      — stable identifier (lowercase)
+#   role      — human label shown in the console roster
+#   model     — primary Claude model id; `ladder` lists escalation overrides
+#   trigger   — what starts a run (relay dispatch / GitHub event / sweep)
+#   maxTurns  — hard turn budget passed via claude_args
+#   maxBudget — advisory dollars per run (console display; not enforced)
+#   tools     — allowedTools passed to the agent
+#   briefPath — role brief in this repo (briefs/<role>.md), if any
+#   workflow  — the reusable workflow implementing the agent
+
+agents:
+  - name: engineer
+    role: Engineer
+    model: claude-opus-4-8
+    trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
+    maxTurns: 80
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    briefPath: briefs/engineer.md
+    workflow: .github/workflows/agent-task.yml
+
+  - name: fixer
+    role: Fix agent
+    model: claude-opus-4-8
+    ladder:
+      - attempt: 3
+        model: claude-fable-5
+        reason: "fresh-eyes escalation after two failed fix attempts"
+    trigger: "workflow_dispatch — merge-gate DIRTY path, conflict sweep, approved-but-red sweep, critic REQUEST_CHANGES"
+    maxTurns: 60
+    maxBudget: 9
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    briefPath: null
+    workflow: .github/workflows/agent-fix.yml
+
+  - name: critic
+    role: QA Critic
+    model: claude-sonnet-4-6
+    trigger: "agent PR opened/updated (head agent/*) or workflow_dispatch re-review"
+    maxTurns: 40
+    maxBudget: 3
+    tools: [Bash, Read, Glob, Grep]
+    briefPath: null
+    workflow: .github/workflows/qa-review.yml
+
+  - name: planner
+    role: Planner
+    model: claude-fable-5
+    trigger: "Linear epic (label agent:planner) → Todo → relay repository_dispatch (agent-plan)"
+    maxTurns: 50
+    maxBudget: 8
+    tools: [Bash, Read, Glob, Grep]
+    briefPath: briefs/planner.md
+    workflow: .github/workflows/plan.yml
+
+  - name: medic
+    role: Pipeline Medic
+    model: claude-sonnet-4-6
+    trigger: "workflow_run failed twice (attempt 1 auto-retries without an agent)"
+    maxTurns: 40
+    maxBudget: 3
+    tools: [Bash, Read, Glob, Grep, Write]
+    briefPath: null
+    workflow: .github/workflows/medic.yml
