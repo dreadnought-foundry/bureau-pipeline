@@ -25,6 +25,16 @@ Makefile and `.github/workflows/ci.yml` and run the closest equivalent.
   is missing, write a blocker note rather than opening the source file.
   (Origin: four agent deaths on one card with a 2.8 MB .pen on the search
   path, 2026-06-12.)
+- **No case-colliding filenames**: never create a file whose name differs from
+  an existing one only by letter case (e.g. `agentDetail.ts` beside
+  `AgentDetail.tsx`). TS/JS module resolution on case-insensitive filesystems
+  (macOS/Windows — most dev machines) then imports the WRONG file and the app
+  renders blank — yet Linux CI stays green and can't see it. A model/helper
+  module beside its component must differ by more than case (follow the repo's
+  `projectsOverview.ts`-next-to-`ProjectOverview.tsx` pattern, or suffix it
+  `fooModel.ts`). (Origin: the console rendered blank on macOS from
+  `AgentDetail.tsx` vs `agentDetail.ts`, 2026-06-13; a CI guard now enforces
+  this — don't make it fail.)
 - **TDD, commits split**: failing test committed first, implementation second.
   Git history must show the test existed before the fix.
 - **Scope**: implement exactly the card. No drive-by refactors, no scope
