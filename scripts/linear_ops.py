@@ -11,6 +11,8 @@ Subcommands:
                                        create a child issue (Backlog) under an epic
   create <title> <description-file>    create a standalone card in Triage
   children <DRE-N>                     print the number of child issues
+  add-label <DRE-N> <label-name>       attach a label (creating it if needed),
+                                       idempotent — used for the human-hold
 
 Auth: LINEAR_API_KEY env var.
 """
@@ -174,6 +176,55 @@ def cmd_count_comments(identifier: str, needle: str) -> None:
     print(count_comments(identifier, needle))
 
 
+def _team_label_id(team_id: str, name: str) -> str | None:
+    """ID of the team label named `name` (case-insensitive), or None."""
+    data = gql(
+        """query($teamId: String!) { team(id: $teamId) {
+             labels(first: 250) { nodes { id name } } } }""",
+        {"teamId": team_id},
+    )
+    for node in data["team"]["labels"]["nodes"]:
+        if node["name"].lower() == name.lower():
+            return node["id"]
+    return None
+
+
+def add_label(identifier: str, label_name: str) -> None:
+    """Attach `label_name` to a card, creating the team label if it doesn't
+    exist yet. Idempotent: a no-op if the card already carries it.
+
+    Used by the dead/hung-run hold (DRE-1403): stamping 'needs-human' lets the
+    reconcile sweep and the promotion gate recognise a card a human must look
+    at and leave it untouched until the label is removed.
+    """
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             id team { id } labels { nodes { id name } } } }""",
+        {"id": identifier},
+    )
+    issue = data["issue"]
+    existing = issue["labels"]["nodes"]
+    if any(lbl["name"].lower() == label_name.lower() for lbl in existing):
+        print(f"{identifier} already has label {label_name!r}")
+        return
+    team_id = issue["team"]["id"]
+    label_id = _team_label_id(team_id, label_name)
+    if label_id is None:
+        created = gql(
+            """mutation($input: IssueLabelCreateInput!) {
+                 issueLabelCreate(input: $input) { issueLabel { id } } }""",
+            {"input": {"name": label_name, "teamId": team_id}},
+        )
+        label_id = created["issueLabelCreate"]["issueLabel"]["id"]
+    label_ids = [lbl["id"] for lbl in existing] + [label_id]
+    gql(
+        """mutation($id: String!, $input: IssueUpdateInput!) {
+             issueUpdate(id: $id, input: $input) { success } }""",
+        {"id": issue["id"], "input": {"labelIds": label_ids}},
+    )
+    print(f"{identifier} + label {label_name!r}")
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     {
@@ -184,4 +235,5 @@ if __name__ == "__main__":
         "create": cmd_create,
         "children": cmd_children,
         "count-comments": cmd_count_comments,
+        "add-label": add_label,
     }[cmd](*args)

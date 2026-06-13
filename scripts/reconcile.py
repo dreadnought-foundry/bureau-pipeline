@@ -44,6 +44,25 @@ REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
 STALE_MINUTES = {"Todo": 15, "In Progress": 60, "In QA": 120, "In Review": 60}
 MAX_WIP = int(os.environ.get("MAX_WIP", "4"))
 
+# Human-hold (DRE-1403). A card whose agent keeps dying with no PR — whether it
+# crashes (counted by agent-task) or HANGS/times out (seen only here) — is
+# requeued at most REQUEUE_CAP times. After that it is parked in Backlog with
+# HOLD_LABEL so neither the relay nor this sweep re-dispatch it into the same
+# wall. Both paths count the shared DEAD_TAG so the cap is unified. A human
+# splits/fixes the card and removes the label to retry.
+HOLD_LABEL = "needs-human"
+DEAD_TAG = "dead-run-requeue"
+REQUEUE_CAP = int(os.environ.get("DEAD_RUN_CAP", "2"))
+
+
+def held(card: dict) -> bool:
+    """True if the card carries HOLD_LABEL — the sweep must not requeue, nudge,
+    or auto-promote it until a human removes the label."""
+    return any(
+        lbl["name"].lower() == HOLD_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes", [])
+    )
+
 # "Blocked by: DRE-1204 + DRE-1205", "serialize after DRE-1226", "depends on
 # DRE-N" — blockers are every DRE-N on a line that contains one of these
 # phrases. Line-scoped on purpose: parent-epic links appear all over card
@@ -242,6 +261,8 @@ def promote_ready(active_count: int) -> int:
         labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
         if "agent:planner" in labels:
             continue  # epics are promoted by humans, never by the sweep
+        if HOLD_LABEL in labels:
+            continue  # held for a human (DRE-1403) — never auto-promote
         parent = card.get("parent")
         if not parent or parent["state"]["name"] != "In Progress":
             continue  # parent epic not approved/active
@@ -446,6 +467,8 @@ def main(promote_only: bool = False, conflicts_only: bool = False) -> None:
         return
     for card in mine:
         ident, state = card["identifier"], card["state"]["name"]
+        if held(card):
+            continue  # human-hold: untouched until a human removes the label
         if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
             continue
 
@@ -471,11 +494,30 @@ def main(promote_only: bool = False, conflicts_only: bool = False) -> None:
                         "🧹 Reconcile: PR exists but card was stuck In Progress — advanced to In QA, critic re-triggered.",
                     )
             else:
-                linear_ops.cmd_state(ident, "Todo")
-                linear_ops.cmd_comment(
-                    ident,
-                    "🧹 Reconcile: agent run appears dead (no PR after 3h) — requeued to Todo.",
-                )
+                # No PR past the staleness window: the run is dead (silent
+                # crash) or HUNG (timed out — never reached agent-task's report
+                # step, so only we see it). Requeue a couple of times; after the
+                # shared cap, HOLD instead of looping forever (DRE-1403).
+                dead = linear_ops.count_comments(ident, DEAD_TAG)
+                if dead >= REQUEUE_CAP:
+                    linear_ops.add_label(ident, HOLD_LABEL)
+                    linear_ops.cmd_state(ident, "Backlog")
+                    linear_ops.cmd_comment(
+                        ident,
+                        f"🚨 held-for-human: agent keeps dying with no PR (hung or "
+                        f"silent) after {dead} requeues — parked in Backlog with the "
+                        f"'{HOLD_LABEL}' label so the sweep stops looping. A human must "
+                        "split/fix the card and clear the label to retry.",
+                    )
+                else:
+                    linear_ops.cmd_state(ident, "Todo")
+                    linear_ops.cmd_comment(
+                        ident,
+                        f"🪦 {DEAD_TAG}: In Progress with no PR past the "
+                        f"{STALE_MINUTES['In Progress']}-minute window — agent run "
+                        f"appears dead (hung or lost). Requeued to Todo "
+                        f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
+                    )
         elif state == "In QA" and is_open:
             if has_verdict(pr):
                 if _nudge("merge-gate.yml", pr["number"]):
