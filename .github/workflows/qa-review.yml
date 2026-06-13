@@ -62,7 +62,7 @@ jobs:
         # A crash here (is_error / no verdict) must NOT fail-close into a
         # false REQUEST_CHANGES — the gate below detects it and we retry.
         continue-on-error: true
-        with: &critic_with
+        with:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
@@ -71,7 +71,7 @@ jobs:
             --max-turns 40
             --model claude-sonnet-4-6
             --allowedTools "Bash,Read,Glob,Grep,Write"
-          prompt: &critic_prompt |
+          prompt: |
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
             in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
             `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
@@ -135,14 +135,63 @@ jobs:
         if: always() && !cancelled() && steps.gate1.outputs.real != 'true'
         run: rm -f /tmp/qa-verdict.md
 
+      # NOTE: the with block below is intentionally duplicated from the
+      # attempt-1 "Critic review" step and MUST be kept in sync with it.
+      # GitHub Actions does NOT support YAML anchors / merge keys, so this
+      # cannot be DRY'd with `&anchor` / `<<: *anchor` — the runner would
+      # fail to parse the file, breaking the critic in every consuming repo.
       - name: Critic review (retry)
         id: critic_retry
         if: always() && !cancelled() && steps.gate1.outputs.real != 'true'
         uses: anthropics/claude-code-action@v1
         continue-on-error: true
         with:
-          <<: *critic_with
-          prompt: *critic_prompt
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: agent-bureau-bot
+          claude_args: |
+            --max-turns 40
+            --model claude-sonnet-4-6
+            --allowedTools "Bash,Read,Glob,Grep,Write"
+          prompt: |
+            You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
+            in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
+            `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
+            It implements Linear card ${{ steps.pr.outputs.card }}.
+
+            Check, in order of severity:
+            1. Does the diff actually satisfy the card's acceptance criteria
+               (read the card description quoted in the PR body, and any
+               **Spec:** directory it references)?
+            2. Are the tests REAL — do they assert meaningful behavior, would
+               they fail if the implementation were wrong? Vacuous or
+               tautological tests are a blocking finding.
+            3. Correctness bugs, security issues, data-loss risks.
+            4. Scope creep — changes beyond the card.
+            5. Convention violations (style, naming, structure vs neighbors).
+
+            Default skeptical: your job is to find reasons NOT to merge. If
+            you cannot find any, approve.
+
+            EXHAUSTIVE SINGLE PASS + CONVERGENCE (mandatory): examine the
+            ENTIRE diff and list every blocking finding in THIS verdict — do
+            not ration findings across rounds. If earlier QA Critic verdicts
+            exist on this PR, you are RE-reviewing: verify the prior findings
+            are resolved, review what changed since, and raise a NEW finding
+            only if (a) the latest changes introduced it, or (b) it is
+            data-loss/security severity. A re-review that unveils yet another
+            pre-existing nit you could have caught earlier is a review
+            failure, not diligence. (Origin: PR #7 took 6 rounds.)
+
+            Write your verdict to /tmp/qa-verdict.md:
+            - First line exactly: `VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES`
+            - Then a summary in PLAIN ENGLISH for a non-technical reader:
+              what the change does, whether it matches the card, what risks
+              remain (2-6 sentences, no jargon, no file paths).
+            - If REQUEST_CHANGES: a `## For the fixing agent` section with
+              precise technical findings (file:line, what's wrong, what would
+              make it right).
 
       - name: Gate critic result (attempt 2)
         id: gate2
