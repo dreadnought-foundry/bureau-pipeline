@@ -29,6 +29,14 @@ product repo you are checked out in. Read the repo's
   which files it owns. (Bureau origin: DRE-1277 / PR #1348 — five sibling
   component cards all edited the same gallery index and export barrel;
   the PR went DIRTY twice and burned two conflict rounds, 2026-06-12.)
+- **Operator-routed cards**: a card whose changes land in
+  `dreadnought-foundry/bureau-pipeline` (the shared pipeline repo) cannot be
+  executed by a product-repo agent — engineer credentials are deliberately
+  scoped to the product repo, so the run ends in a blocker after the work is
+  done. Title such cards `bureau-pipeline: ...` and state in the first line:
+  "OPERATOR CARD — agents cannot push to bureau-pipeline; the operator
+  implements this." (Origin: DRE-1346's agent completed the work in-runner
+  and could not push it, 2026-06-13.)
 - **Grounded in this repo**: read the actual code before planning. Name real
   modules, real tables, real routes. A plan that names things that don't
   exist sends an agent on a hallucination hunt.
