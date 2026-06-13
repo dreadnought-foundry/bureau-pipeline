@@ -57,7 +57,11 @@ jobs:
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
 
       - name: Critic review
+        id: critic
         uses: anthropics/claude-code-action@v1
+        # A crash here (is_error / no verdict) must NOT fail-close into a
+        # false REQUEST_CHANGES — the gate below detects it and we retry.
+        continue-on-error: true
         with:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
@@ -106,7 +110,105 @@ jobs:
               precise technical findings (file:line, what's wrong, what would
               make it right).
 
-      - name: Post verdict
+      # Crash detection (mirrors DRE-1346's agent-result gate). A real
+      # verdict requires is_error != true AND a verdict file with a VERDICT:
+      # line. is_error / no-verdict means the critic did NOT actually run —
+      # we must retry, never post the crash as REQUEST_CHANGES.
+      - name: Gate critic result (attempt 1)
+        id: gate1
+        if: always() && !cancelled()
+        continue-on-error: true
+        run: |
+          EXEC_FILE="${{ steps.critic.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md; then
+            echo "real=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "real=false" >> "$GITHUB_OUTPUT"
+            echo "critic attempt 1 did not produce a real verdict — will retry"
+          fi
+
+      # Retry once (medic.yml's one-retry pattern, but in-workflow so we
+      # don't burn a whole failed run + rerun cycle on a transient critic
+      # crash). Clear any stale verdict so the gate re-evaluates honestly.
+      - name: Clear stale verdict before retry
+        if: always() && !cancelled() && steps.gate1.outputs.real != 'true'
+        run: rm -f /tmp/qa-verdict.md
+
+      # NOTE: the with block below is intentionally duplicated from the
+      # attempt-1 "Critic review" step and MUST be kept in sync with it.
+      # GitHub Actions does NOT support YAML anchors / merge keys, so this
+      # cannot be DRY'd with `&anchor` / `<<: *anchor` — the runner would
+      # fail to parse the file, breaking the critic in every consuming repo.
+      - name: Critic review (retry)
+        id: critic_retry
+        if: always() && !cancelled() && steps.gate1.outputs.real != 'true'
+        uses: anthropics/claude-code-action@v1
+        continue-on-error: true
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: agent-bureau-bot
+          claude_args: |
+            --max-turns 40
+            --model claude-sonnet-4-6
+            --allowedTools "Bash,Read,Glob,Grep,Write"
+          prompt: |
+            You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
+            in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
+            `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
+            It implements Linear card ${{ steps.pr.outputs.card }}.
+
+            Check, in order of severity:
+            1. Does the diff actually satisfy the card's acceptance criteria
+               (read the card description quoted in the PR body, and any
+               **Spec:** directory it references)?
+            2. Are the tests REAL — do they assert meaningful behavior, would
+               they fail if the implementation were wrong? Vacuous or
+               tautological tests are a blocking finding.
+            3. Correctness bugs, security issues, data-loss risks.
+            4. Scope creep — changes beyond the card.
+            5. Convention violations (style, naming, structure vs neighbors).
+
+            Default skeptical: your job is to find reasons NOT to merge. If
+            you cannot find any, approve.
+
+            EXHAUSTIVE SINGLE PASS + CONVERGENCE (mandatory): examine the
+            ENTIRE diff and list every blocking finding in THIS verdict — do
+            not ration findings across rounds. If earlier QA Critic verdicts
+            exist on this PR, you are RE-reviewing: verify the prior findings
+            are resolved, review what changed since, and raise a NEW finding
+            only if (a) the latest changes introduced it, or (b) it is
+            data-loss/security severity. A re-review that unveils yet another
+            pre-existing nit you could have caught earlier is a review
+            failure, not diligence. (Origin: PR #7 took 6 rounds.)
+
+            Write your verdict to /tmp/qa-verdict.md:
+            - First line exactly: `VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES`
+            - Then a summary in PLAIN ENGLISH for a non-technical reader:
+              what the change does, whether it matches the card, what risks
+              remain (2-6 sentences, no jargon, no file paths).
+            - If REQUEST_CHANGES: a `## For the fixing agent` section with
+              precise technical findings (file:line, what's wrong, what would
+              make it right).
+
+      - name: Gate critic result (attempt 2)
+        id: gate2
+        if: always() && !cancelled() && steps.gate1.outputs.real != 'true'
+        continue-on-error: true
+        run: |
+          EXEC_FILE="${{ steps.critic_retry.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md; then
+            echo "real=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "real=false" >> "$GITHUB_OUTPUT"
+            echo "critic retry also did not produce a real verdict — neutral + fail"
+          fi
+
+      - name: Post verdict or neutral status
+        id: post
         # not on cancellation: a superseded run must not post a fail-closed
         # verdict that masks the live run's real one
         if: always() && !cancelled()
@@ -115,11 +217,26 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
+          # A genuine review ran iff either gate saw a real verdict.
+          REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
         run: |
-          if [ ! -f /tmp/qa-verdict.md ]; then
-            printf 'VERDICT: REQUEST_CHANGES\nCritic run ended without producing a verdict — treating as not approved (fail closed).\n' > /tmp/qa-verdict.md
+          if [ "$REAL" = "true" ]; then
+            # A real verdict (APPROVE or REQUEST_CHANGES with findings) from a
+            # critic that actually ran — post it verbatim.
+            { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md)"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
+          else
+            # The critic CRASHED on both attempts (is_error / no verdict). Do
+            # NOT post REQUEST_CHANGES — that false reject churns good PRs into
+            # the fix loop (#1441/#1442, DRE-1330/1332, 2026-06-13). Post a
+            # NEUTRAL status: contains "QA Critic" (so merge-gate treats it as
+            # the latest verdict and it supersedes any stale APPROVE) but NO
+            # "VERDICT: APPROVE" line, so merge-gate holds rather than merges.
+            # The job then fails loudly below → red + medic-visible.
+            printf '%s\n\n%s\n' \
+              "🔎 QA Critic could not run (infra error) — re-review needed, this is NOT a code rejection." \
+              "The adversarial reviewer crashed twice (startup/auth failure, no inference). No findings were produced. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+              > /tmp/qa-comment.md
           fi
-          { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md)"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
           # The verdict comment is load-bearing (merge-gate reads it) —
           # retry through transient GitHub API blips rather than losing it.
           for i in 1 2 3 4; do
@@ -127,3 +244,12 @@ jobs:
             echo "comment attempt $i failed; retrying in $((i*10))s"; sleep $((i*10))
           done
           [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-comment.md)" || true
+
+      # Fail the job loudly AFTER the neutral comment is posted, so the
+      # infra failure is visibly red and the medic picks it up. A genuine
+      # review (real verdict) ends green regardless of APPROVE/REQUEST_CHANGES.
+      - name: Fail if critic never really ran
+        if: always() && !cancelled() && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
+        run: |
+          echo "::error::QA critic crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
+          exit 1
