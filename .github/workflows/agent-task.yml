@@ -165,19 +165,25 @@ jobs:
               "🛑 Agent blocked: $(cat /tmp/agent-blocker.txt) — parked in Backlog until the blocker is resolved (a Todo return here would redispatch agents into the same wall). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" || true
           else
-            # Silent agent death (ran out of turns/time without a PR or a
-            # blocker note). Requeue IMMEDIATELY instead of waiting for the
+            # Silent OR hung agent death (ran out of turns/time without a PR or
+            # a blocker note). Requeue IMMEDIATELY instead of waiting for the
             # staleness timer — two dead theme-card runs cost the console
-            # walking-skeleton ~6h overnight. Capped: after 2 dead runs the
-            # card holds for a human.
+            # walking-skeleton ~6h overnight. Capped: after REQUEUE_CAP dead
+            # runs the card is HELD (Backlog + needs-human label) so neither
+            # the relay nor the reconcile sweep re-dispatch it into the same
+            # wall. Hung/timed-out runs that never reach this step are caught by
+            # reconcile, which shares this 'dead-run-requeue' tag for one
+            # unified cap. (DRE-1403)
             DEAD=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
-              "$CARD" "ended with no PR and no blocker" || echo 0)
+              "$CARD" "dead-run-requeue" || echo 0)
             if [ "${DEAD:-0}" -ge 2 ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "🛑 Agent run ended with no PR and no blocker note for the 3rd time — holding for a human look. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                "🚨 held-for-human: agent run ended with no PR/blocker for the 3rd time — parked in Backlog with the 'needs-human' label so the sweep stops looping. A human must split/fix the card and clear the label to retry. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" || true
             else
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "⚠️ Agent run ended with no PR and no blocker note — requeued to Todo for a fresh agent (dead run $((DEAD + 1))/3). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                "🪦 dead-run-requeue: agent run ended with no PR and no blocker note — requeued to Todo for a fresh agent (dead run $((DEAD + 1))/3). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
             fi
           fi
