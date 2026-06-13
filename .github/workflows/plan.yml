@@ -46,10 +46,25 @@ jobs:
           repository: dreadnought-foundry/bureau-pipeline
           path: .bureau-pipeline
 
+      # Todo-entry card-validation gate (DRE-1405). An epic reaches plan.yml
+      # only via agent-plan, which the relay emits only when agent:planner is
+      # present — so the agent-label check is moot on this path; the gate here
+      # effectively enforces the resolvable-repo rule (and the still-in-Todo/
+      # Triage guard) before any planning runs. Bounce → Backlog + comment,
+      # skip all downstream steps.
+      - name: Card-validation gate
+        id: gate
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/validate_card.py gate \
+            "${{ github.event.client_payload.identifier }}"
+
       # Sub-issue descriptions must carry this repo's slug on their
       # `**Repo:**` line so the relay routes them back here.
       - name: Resolve repo slug
         id: repo
+        if: steps.gate.outputs.bounced != 'true'
         run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       # The CEO's two verbs: Triage = "planner, deal with this" (plan, or
@@ -57,6 +72,7 @@ jobs:
       # plan first if the epic was never planned, as a forgiving fallback).
       - name: Route — plan or activate
         id: route
+        if: steps.gate.outputs.bounced != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |

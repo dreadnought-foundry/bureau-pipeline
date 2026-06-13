@@ -67,7 +67,23 @@ jobs:
             echo "no .github/bureau/setup.sh — skipping product setup"
           fi
 
+      # Todo-entry card-validation gate (DRE-1405). The relay can't write to
+      # Linear, so a malformed card (no resolvable repo, or no agent: role
+      # label) would otherwise either silently vanish at the relay or dispatch
+      # a broken build here. Validate the LIVE card and, if malformed AND still
+      # in Todo/Triage, bounce it to Backlog with a diagnostic comment — and
+      # skip every downstream step. Runs BEFORE Card → In Progress so a bounced
+      # card never flips In Progress first.
+      - name: Card-validation gate
+        id: gate
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/validate_card.py gate \
+            "${{ github.event.client_payload.identifier }}"
+
       - name: Card → In Progress
+        if: steps.gate.outputs.bounced != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
@@ -76,6 +92,7 @@ jobs:
 
       - name: Implement card
         id: claude
+        if: steps.gate.outputs.bounced != 'true'
         uses: anthropics/claude-code-action@v1
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
@@ -119,7 +136,7 @@ jobs:
       # job went green and the medic never fired. Fail loudly; the report
       # step below still runs (always()) and requeues the card.
       - name: Gate on agent result
-        if: always()
+        if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
@@ -135,7 +152,7 @@ jobs:
             "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt
 
       - name: Report result to Linear
-        if: always()
+        if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
