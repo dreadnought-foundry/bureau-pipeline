@@ -75,6 +75,7 @@ jobs:
             "${{ github.event.client_payload.identifier }}" "In Progress"
 
       - name: Implement card
+        id: claude
         uses: anthropics/claude-code-action@v1
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
@@ -112,6 +113,26 @@ jobs:
             5. If the card is ambiguous or impossible as specified, do NOT
                guess: open no PR, and write your blocker reason to
                /tmp/agent-blocker.txt instead.
+
+      # DRE-1346 Fix 1: the execution result can end {"subtype":"success",
+      # "is_error":true} (usage-limit/API death mid-run) — previously the
+      # job went green and the medic never fired. Fail loudly; the report
+      # step below still runs (always()) and requeues the card.
+      - name: Gate on agent result
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CARD: ${{ github.event.client_payload.identifier }}
+        run: |
+          BRANCH=$(git branch -r | grep -o "agent/${CARD}[^ ]*" | head -1 | sed 's|origin/||' || true)
+          PR_URL=""
+          if [ -n "$BRANCH" ]; then
+            PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
+          fi
+          EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          python3 .bureau-pipeline/scripts/check_agent_result.py \
+            "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt
 
       - name: Report result to Linear
         if: always()
