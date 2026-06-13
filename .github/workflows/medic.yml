@@ -65,7 +65,11 @@ jobs:
         with:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          # github.token, NOT the App token: the App deliberately lacks
+          # actions:read, so a diagnosis agent holding it cannot fetch the
+          # failed run's logs — it was diagnosing blind (DRE-1346 Fix 3).
+          # The calling stub grants this token actions access.
+          github_token: ${{ github.token }}
           allowed_bots: "*"
           claude_args: |
             --max-turns 40
