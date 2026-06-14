@@ -56,6 +56,122 @@ jobs:
           CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
 
+      # ── Visual-QA stage (DRE-1481, layer 3b of DRE-1477) ──────────────────
+      # When the PR's card has a **Design:** ref AND the PR changed UI, render
+      # the affected screen(s) with the console harness (DRE-1480) and hand the
+      # critic both the design PNG and the fresh screenshot to compare. This
+      # GATES merges, so every branch here is conservative:
+      #   • no **Design:** ref / non-UI change  → SKIP (never block)
+      #   • harness or render failure           → NON-FATAL note (never block)
+      #   • when in doubt                        → SKIP
+      # The whole stage is best-effort: its product is just a `context` string
+      # injected into the critic prompt. It cannot fail the job (continue-on-
+      # error + a guaranteed fallback context), so it can never wedge the gate.
+      - name: Plan visual QA
+        id: vqplan
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          PR: ${{ steps.pr.outputs.number }}
+          CARD: ${{ steps.pr.outputs.card }}
+        run: |
+          set +e
+          mkdir -p /tmp/vqa
+          # The card description is the AUTHORITATIVE **Design:** source. The PR
+          # body is agent-authored and not guaranteed to quote the ref verbatim,
+          # so we read the live card and also scan the PR body as a backstop.
+          gh pr view "$PR" --json body --jq .body > /tmp/vqa/pr-body.txt 2>/dev/null || true
+          : > /tmp/vqa/card.txt
+          if [ -n "$CARD" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py description "$CARD" > /tmp/vqa/card.txt 2>/dev/null || : > /tmp/vqa/card.txt
+          fi
+          # Changed files vs the PR base, repo-root-relative.
+          gh pr diff "$PR" --name-only > /tmp/vqa/changed.txt 2>/dev/null || : > /tmp/vqa/changed.txt
+          # The screen map is the harness's own contract (single source of truth).
+          MJS=console/web/scripts/visual-qa/screens.mjs
+          python3 .bureau-pipeline/scripts/visual_qa_plan.py \
+            --card-text-file /tmp/vqa/card.txt \
+            --pr-body-file /tmp/vqa/pr-body.txt \
+            --changed-file /tmp/vqa/changed.txt \
+            --screens-mjs "$MJS" > /tmp/vqa/plan.json 2>/dev/null
+          # Any failure above → emit a safe skip plan so the gate degrades, never blocks.
+          if [ ! -s /tmp/vqa/plan.json ] || ! python3 -c "import json;json.load(open('/tmp/vqa/plan.json'))" 2>/dev/null; then
+            echo '{"run": false, "reason": "visual-QA planner unavailable — stage skipped (degrade, no block)"}' > /tmp/vqa/plan.json
+          fi
+          RUN=$(python3 -c "import json;print(json.load(open('/tmp/vqa/plan.json')).get('run') is True)")
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "plan: $(cat /tmp/vqa/plan.json)"
+
+      - name: Render affected screens
+        id: vqshots
+        # Only when the planner said run; best-effort, never fails the job.
+        if: steps.vqplan.outputs.run == 'True'
+        continue-on-error: true
+        env:
+          # Force the harness to dodge live network even if a screen route would.
+          CI: "true"
+        run: |
+          set +e
+          SCREENS=$(python3 -c "import json;print(','.join(json.load(open('/tmp/vqa/plan.json')).get('screens',[])))")
+          echo "rendering screens: $SCREENS"
+          STATUS=degraded
+          NOTE="harness did not run"
+          if [ -n "$SCREENS" ]; then
+            ( cd console/web \
+              && npm ci --no-audit --no-fund \
+              && npx playwright install --with-deps chromium \
+              && npm run shots -- "$SCREENS" ) > /tmp/vqa/shots.log 2>&1
+            RC=$?
+            if [ "$RC" -eq 0 ]; then
+              # Confirm each expected render actually exists and is non-empty.
+              MISSING=""
+              for k in $(echo "$SCREENS" | tr ',' ' '); do
+                f="console/design/images/_renders/$k.png"
+                if [ ! -s "$f" ]; then MISSING="$MISSING $k"; fi
+              done
+              if [ -z "$MISSING" ]; then
+                STATUS=ok; NOTE=""
+              else
+                STATUS=degraded; NOTE="no render produced for:$MISSING"
+              fi
+            else
+              STATUS=degraded; NOTE="screenshot harness exited $RC (see logs)"
+            fi
+          fi
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "note=$NOTE" >> "$GITHUB_OUTPUT"
+          echo "[vqshots] status=$STATUS note=$NOTE"
+          tail -40 /tmp/vqa/shots.log 2>/dev/null || true
+
+      - name: Build critic visual context
+        id: visual
+        if: always() && !cancelled()
+        continue-on-error: true
+        run: |
+          set +e
+          [ -s /tmp/vqa/plan.json ] || echo '{"run": false, "reason": "no plan"}' > /tmp/vqa/plan.json
+          STATUS="${{ steps.vqshots.outputs.status }}"
+          [ -n "$STATUS" ] || STATUS=degraded
+          NOTE="${{ steps.vqshots.outputs.note }}"
+          # Map each screen key to its render path for the context block.
+          RENDERED=$(python3 -c "import json;print(' '.join(f'{k}=console/design/images/_renders/{k}.png' for k in json.load(open('/tmp/vqa/plan.json')).get('screens',[])))")
+          python3 .bureau-pipeline/scripts/visual_qa_context.py \
+            --plan-file /tmp/vqa/plan.json \
+            --render-status "$STATUS" \
+            --render-note "$NOTE" \
+            --rendered $RENDERED > /tmp/vqa/context.txt 2>/dev/null
+          # Guaranteed fallback: if context generation failed, emit a no-block note.
+          if [ ! -s /tmp/vqa/context.txt ]; then
+            echo "VISUAL QA: not available for this PR. Do NOT raise any visual-comparison finding and do NOT block on it." > /tmp/vqa/context.txt
+          fi
+          # Expose as a multiline output for the prompt blocks below.
+          {
+            echo "context<<VQA_EOF"
+            cat /tmp/vqa/context.txt
+            echo "VQA_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Critic review
         id: critic
         uses: anthropics/claude-code-action@v1
@@ -89,6 +205,10 @@ jobs:
                console/design/images/screens/...), safe to Read directly. If
                the card has NO `**Design:**` ref, skip this comparison — its
                absence is NOT a finding.
+
+               VISUAL-QA STAGE (read this and follow it exactly — it gates
+               merges, so it is deliberately conservative):
+               ${{ steps.visual.outputs.context }}
             2. Are the tests REAL — do they assert meaningful behavior, would
                they fail if the implementation were wrong? Vacuous or
                tautological tests are a blocking finding.
@@ -197,6 +317,10 @@ jobs:
                console/design/images/screens/...), safe to Read directly. If
                the card has NO `**Design:**` ref, skip this comparison — its
                absence is NOT a finding.
+
+               VISUAL-QA STAGE (read this and follow it exactly — it gates
+               merges, so it is deliberately conservative):
+               ${{ steps.visual.outputs.context }}
             2. Are the tests REAL — do they assert meaningful behavior, would
                they fail if the implementation were wrong? Vacuous or
                tautological tests are a blocking finding.
