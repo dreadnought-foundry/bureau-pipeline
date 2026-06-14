@@ -191,6 +191,23 @@ def cmd_count_comments(identifier: str, needle: str) -> None:
     print(count_comments(identifier, needle))
 
 
+def comment_bodies(identifier: str) -> list[str]:
+    """All comment bodies on the card, oldest→newest. Used by the model-fallback
+    selector (DRE-1354) to read which model each prior attempt used / died on."""
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             comments(last: 50) { nodes { body } } } }""",
+        {"id": identifier},
+    )
+    return [c.get("body") or "" for c in data["issue"]["comments"]["nodes"]]
+
+
+def cmd_dump_comments(identifier: str) -> None:
+    """Print the card's comment bodies as a JSON array (oldest→newest) so the
+    workflow can feed them to model_fallback.py without a second API client."""
+    print(json.dumps(comment_bodies(identifier)))
+
+
 def _team_label_id(team_id: str, name: str) -> str | None:
     """ID of the team label named `name` (case-insensitive), or None."""
     data = gql(
@@ -251,5 +268,6 @@ if __name__ == "__main__":
         "create": cmd_create,
         "children": cmd_children,
         "count-comments": cmd_count_comments,
+        "dump-comments": cmd_dump_comments,
         "add-label": add_label,
     }[cmd](*args)

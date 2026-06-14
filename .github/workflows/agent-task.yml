@@ -82,6 +82,29 @@ jobs:
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
 
+      # Model-fallback on is_error (DRE-1354). If a PRIOR attempt for this card
+      # died with an API/model error (is_error), the relay/medic would otherwise
+      # re-run on the SAME model and die the same way. Read the card's comment
+      # history and pick the ALTERNATE model on the error-retry path (engineer
+      # Opus↔Fable). With no prior error, this returns the engineer primary
+      # (Opus 4.8). The chosen id is recorded in a heartbeat comment so the
+      # board shows which model each attempt used.
+      - name: Select model
+        id: model
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          CARD="${{ github.event.client_payload.identifier }}"
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
+            > /tmp/card-comments.json
+          # engineer ladder: primary claude-opus-4-8, is_error fallback
+          # claude-fable-5 (see model_fallback.py / agents.yaml).
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select \
+            engineer /tmp/card-comments.json)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "selected model: $MODEL"
+
       - name: Card → In Progress
         if: steps.gate.outputs.bounced != 'true'
         env:
@@ -89,6 +112,11 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py state \
             "${{ github.event.client_payload.identifier }}" "In Progress"
+          # Heartbeat: record which model this attempt uses so the board/console
+          # can surface per-attempt model (DRE-1354 AC).
+          python3 .bureau-pipeline/scripts/linear_ops.py comment \
+            "${{ github.event.client_payload.identifier }}" \
+            "🧠 model-attempt: ${{ steps.model.outputs.model }} — engineer agent starting."
 
       - name: Implement card
         id: claude
@@ -105,7 +133,7 @@ jobs:
           allowed_bots: agent-bureau-bot
           claude_args: |
             --max-turns 80
-            --model claude-opus-4-8
+            --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
             Read .bureau-pipeline/briefs/engineer.md for your role and
@@ -133,8 +161,16 @@ jobs:
 
       # DRE-1346 Fix 1: the execution result can end {"subtype":"success",
       # "is_error":true} (usage-limit/API death mid-run) — previously the
-      # job went green and the medic never fired. Fail loudly; the report
-      # step below still runs (always()) and requeues the card.
+      # job went green and the medic never fired. Fail loudly on a no-evidence
+      # silent death; the report step below still runs (always()) and requeues.
+      #
+      # DRE-1354: an is_error death is NO LONGER a hard gate failure
+      # (--ignore-is-error). The Report step handles it through the
+      # model-fallback requeue — switch model + count toward the shared hold cap.
+      # A hard fail here would trip the medic into re-running the job on the SAME
+      # flaky model, bypassing the cap (the DRE-1300 18×-loop). The card is still
+      # surfaced (model-error comment) and requeued; it just doesn't go red and
+      # re-run blind.
       - name: Gate on agent result
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
         env:
@@ -149,7 +185,7 @@ jobs:
           EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
           python3 .bureau-pipeline/scripts/check_agent_result.py \
-            "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt
+            "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt --ignore-is-error
 
       - name: Report result to Linear
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
@@ -157,7 +193,9 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
+          MODEL_USED: ${{ steps.model.outputs.model }}
         run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # Resolve the card's branch FIRST and guard on it: an empty --head
           # filter makes `gh pr list` return the repo's most recent open PR,
           # which once attributed another card's PR to a dead run and sent it
@@ -167,9 +205,20 @@ jobs:
           if [ -n "$BRANCH" ]; then
             PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
           fi
+
+          # Did the run die with an API/model error (is_error)? (DRE-1354)
+          # check_agent_result.py owns is_error detection; reuse it as the single
+          # source of truth so the gate and this step never disagree.
+          EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          IS_ERROR=false
+          if python3 -c "import sys; sys.path.insert(0, '.bureau-pipeline/scripts'); import check_agent_result as c; e=c._load_execution('$EXEC_FILE'); sys.exit(0 if (e or {}).get('is_error') is True else 1)"; then
+            IS_ERROR=true
+          fi
+
           if [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-              "🤖 PR opened: $PR_URL — CI + critic review running. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
             python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In QA" "In Progress,Todo"
           elif [ -f /tmp/agent-blocker.txt ]; then
             # Backlog, NEVER Todo: the relay dispatches a fresh agent on every
@@ -179,28 +228,33 @@ jobs:
             # Backlog is inert until a human (or a description fix + the
             # dependency gate) releases it.
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-              "🛑 Agent blocked: $(cat /tmp/agent-blocker.txt) — parked in Backlog until the blocker is resolved (a Todo return here would redispatch agents into the same wall). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "🛑 Agent blocked: $(cat /tmp/agent-blocker.txt) — parked in Backlog until the blocker is resolved (a Todo return here would redispatch agents into the same wall). Run: $RUN_URL"
             python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" || true
           else
-            # Silent OR hung agent death (ran out of turns/time without a PR or
-            # a blocker note). Requeue IMMEDIATELY instead of waiting for the
-            # staleness timer — two dead theme-card runs cost the console
-            # walking-skeleton ~6h overnight. Capped: after REQUEUE_CAP dead
-            # runs the card is HELD (Backlog + needs-human label) so neither
-            # the relay nor the reconcile sweep re-dispatch it into the same
-            # wall. Hung/timed-out runs that never reach this step are caught by
-            # reconcile, which shares this 'dead-run-requeue' tag for one
-            # unified cap. (DRE-1403)
+            # No PR and no blocker. Three death classes share ONE hold cap,
+            # counted by the 'dead-run-requeue' tag (DRE-1403): silent (here),
+            # hung (reconcile sweep), and — new in DRE-1354 — is_error (an
+            # API/model death mid-run). dead_run.decide() unifies requeue-vs-hold
+            # and, for an is_error death, records a 'model-error:' marker so the
+            # requeue's next attempt selects the ALTERNATE model (Opus↔Fable)
+            # instead of re-dying on the same one. is_error deaths now COUNT
+            # toward the cap (previously they failed the job and the medic re-ran
+            # on the same model, bypassing it — DRE-1300 looped 18×).
             DEAD=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
               "$CARD" "dead-run-requeue" || echo 0)
-            if [ "${DEAD:-0}" -ge 2 ]; then
-              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "🚨 held-for-human: agent run ended with no PR/blocker for the 3rd time — parked in Backlog with the 'needs-human' label so the sweep stops looping. A human must split/fix the card and clear the label to retry. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            ERR_FLAGS=""
+            if [ "$IS_ERROR" = "true" ]; then
+              ERR_FLAGS="--is-error --error-model $MODEL_USED"
+            fi
+            DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide \
+              "${DEAD:-0}" $ERR_FLAGS --run-url "$RUN_URL")
+            ACTION=$(printf '%s\n' "$DECISION" | head -1)
+            BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$BODY"
+            if [ "$ACTION" = "hold" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" || true
             else
-              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "🪦 dead-run-requeue: agent run ended with no PR and no blocker note — requeued to Todo for a fresh agent (dead run $((DEAD + 1))/3). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
             fi
           fi

@@ -62,8 +62,41 @@ class FailureReasonTest(unittest.TestCase):
         )
 
 
+class IgnoreIsErrorTest(unittest.TestCase):
+    """DRE-1354: the agent-task gate no longer hard-fails on is_error (the Report
+    step owns that path now), but a no-evidence silent death still fails."""
+
+    def test_is_error_ignored_when_flag_set(self):
+        self.assertIsNone(
+            check_agent_result.failure_reason(
+                {"is_error": True}, branch_exists=True, ignore_is_error=True
+            )
+        )
+
+    def test_is_error_still_fails_by_default(self):
+        self.assertEqual(
+            check_agent_result.failure_reason(
+                {"is_error": True}, branch_exists=True
+            ),
+            "execution result has is_error=true",
+        )
+
+    def test_no_evidence_still_fails_even_when_ignoring_is_error(self):
+        self.assertEqual(
+            check_agent_result.failure_reason(
+                {"is_error": True}, branch_exists=False, ignore_is_error=True
+            ),
+            "no agent branch, no PR, and no blocker note",
+        )
+
+    def test_is_error_death_helper(self):
+        self.assertTrue(check_agent_result.is_error_death({"is_error": True}))
+        self.assertFalse(check_agent_result.is_error_death({"is_error": False}))
+        self.assertFalse(check_agent_result.is_error_death(None))
+
+
 class CliTest(unittest.TestCase):
-    def _run(self, payload, branch="", pr="", blocker_file=""):
+    def _run(self, payload, branch="", pr="", blocker_file="", extra=()):
         with tempfile.TemporaryDirectory() as td:
             exec_path = os.path.join(td, "out.json")
             if payload is not None:
@@ -74,9 +107,14 @@ class CliTest(unittest.TestCase):
                 [sys.executable,
                  os.path.join(os.path.dirname(__file__), "..", "scripts",
                               "check_agent_result.py"),
-                 exec_path, branch, pr, blocker_file],
+                 exec_path, branch, pr, blocker_file, *extra],
                 capture_output=True, text=True, env=env,
             )
+
+    def test_cli_ignore_is_error_flag_exits_0_with_branch(self):
+        p = self._run({"is_error": True}, branch="agent/DRE-1",
+                      extra=("--ignore-is-error",))
+        self.assertEqual(p.returncode, 0)
 
     def test_cli_exit_1_on_is_error(self):
         p = self._run({"is_error": True}, branch="agent/DRE-1", pr="http://pr")
