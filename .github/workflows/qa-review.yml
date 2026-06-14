@@ -101,14 +101,31 @@ jobs:
             pre-existing nit you could have caught earlier is a review
             failure, not diligence. (Origin: PR #7 took 6 rounds.)
 
-            Write your verdict to /tmp/qa-verdict.md:
+            Write your verdict to /tmp/qa-verdict.md in TWO clearly separated
+            parts — a business summary the CEO reads, then the technical detail
+            the fixing agent reads:
+
             - First line exactly: `VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES`
-            - Then a summary in PLAIN ENGLISH for a non-technical reader:
-              what the change does, whether it matches the card, what risks
-              remain (2-6 sentences, no jargon, no file paths).
-            - If REQUEST_CHANGES: a `## For the fixing agent` section with
-              precise technical findings (file:line, what's wrong, what would
-              make it right).
+            - Then `## Summary` — for the CEO, who is NON-TECHNICAL and reads
+              this to make a decision, not to debug. Use plain business
+              language:
+                (a) what this change does for the product / the user, in 1-2
+                    sentences;
+                (b) whether it delivers what the card asked for;
+                (c) if you are blocking, WHY it matters — described as the
+                    user's experience or the business risk, NOT the mechanism.
+                    Good: "When someone taps between menu sections, the new
+                    section's sub-items don't appear, so the app looks broken."
+                    Bad: "useState captures `active` once at mount so the
+                    NavGroup never re-opens on client-side navigation."
+              BANNED in this section: code, variable/function names, file paths,
+              line numbers, framework or library terms (useState, props, API,
+              client-side, component, etc.), and the word "test". If a
+              non-technical reader couldn't act on it, rewrite it.
+            - If REQUEST_CHANGES: AFTER the summary, a `## For the fixing agent`
+              section with ALL the precise technical findings (file:line, what's
+              wrong, the fix, any test gaps). This is the ONLY place technical
+              language belongs — be as code-level and exact as the fixer needs.
 
       # Crash detection (mirrors DRE-1346's agent-result gate). A real
       # verdict requires is_error != true AND a verdict file with a VERDICT:
@@ -184,14 +201,31 @@ jobs:
             pre-existing nit you could have caught earlier is a review
             failure, not diligence. (Origin: PR #7 took 6 rounds.)
 
-            Write your verdict to /tmp/qa-verdict.md:
+            Write your verdict to /tmp/qa-verdict.md in TWO clearly separated
+            parts — a business summary the CEO reads, then the technical detail
+            the fixing agent reads:
+
             - First line exactly: `VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES`
-            - Then a summary in PLAIN ENGLISH for a non-technical reader:
-              what the change does, whether it matches the card, what risks
-              remain (2-6 sentences, no jargon, no file paths).
-            - If REQUEST_CHANGES: a `## For the fixing agent` section with
-              precise technical findings (file:line, what's wrong, what would
-              make it right).
+            - Then `## Summary` — for the CEO, who is NON-TECHNICAL and reads
+              this to make a decision, not to debug. Use plain business
+              language:
+                (a) what this change does for the product / the user, in 1-2
+                    sentences;
+                (b) whether it delivers what the card asked for;
+                (c) if you are blocking, WHY it matters — described as the
+                    user's experience or the business risk, NOT the mechanism.
+                    Good: "When someone taps between menu sections, the new
+                    section's sub-items don't appear, so the app looks broken."
+                    Bad: "useState captures `active` once at mount so the
+                    NavGroup never re-opens on client-side navigation."
+              BANNED in this section: code, variable/function names, file paths,
+              line numbers, framework or library terms (useState, props, API,
+              client-side, component, etc.), and the word "test". If a
+              non-technical reader couldn't act on it, rewrite it.
+            - If REQUEST_CHANGES: AFTER the summary, a `## For the fixing agent`
+              section with ALL the precise technical findings (file:line, what's
+              wrong, the fix, any test gaps). This is the ONLY place technical
+              language belongs — be as code-level and exact as the fixer needs.
 
       - name: Gate critic result (attempt 2)
         id: gate2
