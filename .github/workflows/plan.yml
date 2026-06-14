@@ -67,28 +67,27 @@ jobs:
         if: steps.gate.outputs.bounced != 'true'
         run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      # Model-fallback on is_error for the PLANNER (DRE-1354). The planner's
-      # primary model is Fable 5; when Fable is unavailable (404s, 2026-06-14)
-      # a re-dispatched plan run would otherwise re-die on the same dead model.
-      # Read the epic's comment history and, if a PRIOR plan attempt died with
-      # an API/model error (is_error), pick the ALTERNATE model on the retry
-      # path (planner Fable↔Opus). With no prior error this returns the planner
-      # primary (Fable 5). The chosen id is recorded in a heartbeat comment so
-      # the board shows which model each plan attempt used. Mirrors the engineer
-      # Select-model step in agent-task.yml; reuses the same selector.
+      # Model selection: the SAME ordered preference ladder as the engineer
+      # (DRE-1490). select() walks the shared ladder best→worst —
+      # claude-fable-5, then claude-opus-4-8, then claude-sonnet-4-6 (see
+      # model_fallback.py / agents.yaml) — and returns the first AVAILABLE
+      # model. Availability is probed via a minimal /v1/messages call using the
+      # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
+      # skip; any other response, including 429, ⇒ choose it; an inconclusive
+      # probe falls through to the next known-good model. Fable 5 currently 404s
+      # so this resolves to Opus 4.8 and self-heals to Fable when re-enabled —
+      # no code change. Mirrors the engineer Select-model step in agent-task.yml;
+      # reuses the same selector. The chosen id is recorded in a heartbeat
+      # comment so the board shows which model each plan attempt used.
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The probe authenticates with the same CLAUDE token the agent uses.
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
-          EPIC="${{ github.event.client_payload.identifier }}"
-          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
-            > /tmp/epic-comments.json
-          # planner ladder: primary claude-fable-5, is_error fallback
-          # claude-opus-4-8 (see model_fallback.py / agents.yaml).
-          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select \
-            planner /tmp/epic-comments.json)
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select planner)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "selected model: $MODEL"
 

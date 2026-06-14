@@ -82,26 +82,26 @@ jobs:
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
 
-      # Model-fallback on is_error (DRE-1354). If a PRIOR attempt for this card
-      # died with an API/model error (is_error), the relay/medic would otherwise
-      # re-run on the SAME model and die the same way. Read the card's comment
-      # history and pick the ALTERNATE model on the error-retry path (engineer
-      # Opus↔Fable). With no prior error, this returns the engineer primary
-      # (Opus 4.8). The chosen id is recorded in a heartbeat comment so the
-      # board shows which model each attempt used.
+      # Model selection: ordered preference ladder with runtime availability
+      # detection (DRE-1490). select() walks the shared ladder best→worst —
+      # claude-fable-5, then claude-opus-4-8, then claude-sonnet-4-6 (see
+      # model_fallback.py / agents.yaml) — and returns the first AVAILABLE
+      # model. Availability is probed via a minimal /v1/messages call using the
+      # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
+      # skip; any other response, including 429, ⇒ choose it; an inconclusive
+      # probe falls through to the next known-good model. Fable 5 currently 404s
+      # so this resolves to Opus 4.8 and self-heals to Fable when Anthropic
+      # re-enables it — no code change. The chosen id is recorded in a heartbeat
+      # comment so the board shows which model each attempt used.
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true'
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The probe authenticates with the same CLAUDE token the agent uses.
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
-          CARD="${{ github.event.client_payload.identifier }}"
-          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
-            > /tmp/card-comments.json
-          # engineer ladder: primary claude-opus-4-8, is_error fallback
-          # claude-fable-5 (see model_fallback.py / agents.yaml).
-          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select \
-            engineer /tmp/card-comments.json)
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select engineer)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "selected model: $MODEL"
 
