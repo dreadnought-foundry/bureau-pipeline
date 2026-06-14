@@ -17,6 +17,14 @@ Makefile and `.github/workflows/ci.yml` and run the closest equivalent.
   read that directory (at minimum `specs/*/spec.md` and any `design.md`)
   BEFORE coding, and conform to its declared interfaces and names. Divergence
   requires explicit justification in the PR description.
+- **Design first**: if the card declares a `**Design:**` ref (one or more
+  design artifacts, e.g. `console/design/images/screens/desktop/board.png`),
+  Read that image — and any spec it references — BEFORE implementing, and build
+  the UI to match it: layout, structure, components, spacing, and copy. These
+  PNGs are normal-sized exported screens (not the multi-megabyte `.pen` source),
+  so Read them directly. Divergence from the design requires explicit
+  justification in the PR description. If the card has no `**Design:**` ref,
+  there is nothing to read here — proceed as usual.
 - **Never open design binaries or multi-megabyte files** (`*.pen`, exported
   scene graphs, large JSON fixtures). Check size with `ls -la` before reading
   any unfamiliar file — anything over ~256 KB floods your context and kills
