@@ -95,6 +95,21 @@ def cmd_advance(identifier: str, to_state: str, from_states_csv: str) -> None:
     print(f"{identifier} → {to_state}")
 
 
+def set_description(identifier: str, body: str) -> None:
+    """Overwrite a card's description.
+
+    Used by the Todo-entry gate's fix-first repair (DRE-1405) to prepend the
+    `**Repo:** <slug>` frontmatter line when the repo was inferred but absent.
+    """
+    issue = get_issue(identifier)
+    gql(
+        """mutation($id: String!, $input: IssueUpdateInput!) {
+             issueUpdate(id: $id, input: $input) { success } }""",
+        {"id": issue["id"], "input": {"description": body}},
+    )
+    print(f"{identifier} description updated")
+
+
 def cmd_comment(identifier: str, body: str) -> None:
     issue = get_issue(identifier)
     gql(
@@ -231,6 +246,7 @@ if __name__ == "__main__":
         "state": cmd_state,
         "advance": cmd_advance,
         "comment": cmd_comment,
+        "set-description": set_description,
         "subissue": cmd_subissue,
         "create": cmd_create,
         "children": cmd_children,
