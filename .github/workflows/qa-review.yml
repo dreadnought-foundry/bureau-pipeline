@@ -80,7 +80,15 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the card's acceptance criteria
                (read the card description quoted in the PR body, and any
-               **Spec:** directory it references)?
+               **Spec:** directory it references)? If the card has a
+               `**Design:**` ref, Read the referenced design image(s) and
+               compare the diff against it — flag as findings any missing or
+               incorrect components, wrong structure/layout, wrong copy, or
+               obviously wrong layout intent. These design files are
+               normal-sized exported screen PNGs (under
+               console/design/images/screens/...), safe to Read directly. If
+               the card has NO `**Design:**` ref, skip this comparison — its
+               absence is NOT a finding.
             2. Are the tests REAL — do they assert meaningful behavior, would
                they fail if the implementation were wrong? Vacuous or
                tautological tests are a blocking finding.
@@ -180,7 +188,15 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the card's acceptance criteria
                (read the card description quoted in the PR body, and any
-               **Spec:** directory it references)?
+               **Spec:** directory it references)? If the card has a
+               `**Design:**` ref, Read the referenced design image(s) and
+               compare the diff against it — flag as findings any missing or
+               incorrect components, wrong structure/layout, wrong copy, or
+               obviously wrong layout intent. These design files are
+               normal-sized exported screen PNGs (under
+               console/design/images/screens/...), safe to Read directly. If
+               the card has NO `**Design:**` ref, skip this comparison — its
+               absence is NOT a finding.
             2. Are the tests REAL — do they assert meaningful behavior, would
                they fail if the implementation were wrong? Vacuous or
                tautological tests are a blocking finding.

@@ -40,10 +40,25 @@ product repo you are checked out in. Read the repo's
 - **Grounded in this repo**: read the actual code before planning. Name real
   modules, real tables, real routes. A plan that names things that don't
   exist sends an agent on a hallucination hunt.
+- **Design refs on UI cards**: when a sub-issue builds or changes UI that has
+  a design, add a `**Design:**` line naming the EXACT design artifact(s) the
+  engineer must build to — e.g.
+  `**Design:** console/design/images/screens/desktop/board.png`. The product
+  repos keep exported design PNGs under `console/design/images/screens/...`
+  with a `MANIFEST.md` index; name the precise screen file(s), and optionally
+  the MANIFEST.md pen node id, so there is no ambiguity. This exists so the
+  engineer builds to the real design (layout, structure, components, spacing,
+  copy) and the critic can Read the same image and verify the diff against it.
+  ONLY UI/design cards get a `**Design:**` line — non-UI cards (backend, infra,
+  scripts, data) omit it entirely; its absence is normal and never a defect.
+  (Origin: DRE-1477/1478 — agents were building UI from text alone and the
+  critic could only check copy, not visual fidelity.)
 
 ## Sub-issue description template
 ```
 **Repo:** <this repo's slug — the workflow prompt states it exactly>
+**Design:** <UI cards only — exact design artifact path(s), e.g.
+             console/design/images/screens/desktop/board.png; omit on non-UI cards>
 
 <what to build, 3-8 sentences, concrete>
 
