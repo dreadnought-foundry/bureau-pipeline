@@ -67,6 +67,31 @@ jobs:
         if: steps.gate.outputs.bounced != 'true'
         run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
+      # Model-fallback on is_error for the PLANNER (DRE-1354). The planner's
+      # primary model is Fable 5; when Fable is unavailable (404s, 2026-06-14)
+      # a re-dispatched plan run would otherwise re-die on the same dead model.
+      # Read the epic's comment history and, if a PRIOR plan attempt died with
+      # an API/model error (is_error), pick the ALTERNATE model on the retry
+      # path (planner Fable↔Opus). With no prior error this returns the planner
+      # primary (Fable 5). The chosen id is recorded in a heartbeat comment so
+      # the board shows which model each plan attempt used. Mirrors the engineer
+      # Select-model step in agent-task.yml; reuses the same selector.
+      - name: Select model
+        id: model
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
+            > /tmp/epic-comments.json
+          # planner ladder: primary claude-fable-5, is_error fallback
+          # claude-opus-4-8 (see model_fallback.py / agents.yaml).
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select \
+            planner /tmp/epic-comments.json)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "selected model: $MODEL"
+
       # The CEO's two verbs: Triage = "planner, deal with this" (plan, or
       # RE-plan if children exist); Todo = "approved — build" (activate; or
       # plan first if the epic was never planned, as a forgiving fallback).
@@ -98,7 +123,20 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
           fi
 
+      # Heartbeat: record which model this plan attempt uses so the board/
+      # console can surface per-attempt model (DRE-1354 AC), using the same
+      # machine-parseable `model-attempt:` marker the selector reads back.
+      - name: Plan heartbeat
+        if: steps.route.outputs.mode == 'plan'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py comment \
+            "${{ github.event.client_payload.identifier }}" \
+            "🧠 model-attempt: ${{ steps.model.outputs.model }} — planner agent starting."
+
       - name: Plan epic
+        id: claude
         if: steps.route.outputs.mode == 'plan'
         uses: anthropics/claude-code-action@v1
         env:
@@ -110,7 +148,7 @@ jobs:
           allowed_bots: agent-bureau-bot
           claude_args: |
             --max-turns 50
-            --model claude-fable-5
+            --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
             Read .bureau-pipeline/briefs/planner.md for your role, then
@@ -155,6 +193,31 @@ jobs:
             5. If the intent is too ambiguous to plan, create NO sub-issues and
                instead post a comment asking the specific questions you need
                answered.
+
+      # Record an is_error PLANNER death so the fallback engages on retry
+      # (DRE-1354). Unlike agent-task, a plan death has no PR/requeue path — the
+      # medic re-runs the SAME workflow_run on attempt 2. That rerun re-evaluates
+      # the Select-model step, which reads this `model-error:` marker and swings
+      # to the ALTERNATE model (Fable→Opus) instead of re-dying on the dead one.
+      # check_agent_result.py owns is_error detection (single source of truth);
+      # dead_run.error_marker writes the marker the selector parses.
+      - name: Record is_error death
+        if: always() && steps.route.outputs.mode == 'plan'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          MODEL_USED: ${{ steps.model.outputs.model }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          if python3 -c "import sys; sys.path.insert(0, '.bureau-pipeline/scripts'); import check_agent_result as c; e=c._load_execution('$EXEC_FILE'); sys.exit(0 if c.is_error_death(e) else 1)"; then
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "🪦 planner died with API/model error (is_error) on $MODEL_USED — the medic rerun will switch to the alternate model.$([ -n "$RUN_URL" ] && echo " Run: $RUN_URL")
+            $(python3 -c "import sys; sys.path.insert(0, '.bureau-pipeline/scripts'); import model_fallback as m; print(m.error_marker('$MODEL_USED'))")"
+          else
+            echo "no is_error planner death — nothing to record"
+          fi
 
       - name: Epic → Plan Review
         if: steps.route.outputs.mode == 'plan'

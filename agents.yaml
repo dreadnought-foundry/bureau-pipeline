@@ -20,6 +20,10 @@ agents:
   - name: engineer
     role: Engineer
     model: claude-opus-4-8
+    ladder:
+      - on: is_error
+        model: claude-fable-5
+        reason: "model-fallback (DRE-1354): a retry after an is_error death uses the alternate model so a single-model outage doesn't kill the run"
     trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
     maxTurns: 80
     maxBudget: 12
@@ -54,6 +58,10 @@ agents:
   - name: planner
     role: Planner
     model: claude-fable-5
+    ladder:
+      - on: is_error
+        model: claude-opus-4-8
+        reason: "model-fallback (DRE-1354): a retry after an is_error death uses the alternate model (Fable→Opus) so a single-model outage doesn't kill the run"
     trigger: "Linear epic (label agent:planner) → Todo → relay repository_dispatch (agent-plan)"
     maxTurns: 50
     maxBudget: 8

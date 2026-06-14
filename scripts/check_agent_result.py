@@ -25,15 +25,32 @@ import os
 import sys
 
 
+def is_error_death(execution: dict | None) -> bool:
+    """True when the execution result is a mid-run API/model death
+    ({"is_error": true}). The single source of truth for is_error detection,
+    reused by agent-task's Report step to route the death through the
+    model-fallback requeue path (DRE-1354)."""
+    return execution is not None and execution.get("is_error") is True
+
+
 def failure_reason(
     execution: dict | None,
     *,
     branch_exists: bool,
     pr_exists: bool = False,
     blocker_note: bool = False,
+    ignore_is_error: bool = False,
 ) -> str | None:
-    """Why this run should fail, or None if it is acceptable."""
-    if execution is not None and execution.get("is_error") is True:
+    """Why this run should fail, or None if it is acceptable.
+
+    `ignore_is_error` (DRE-1354): an is_error death is now handled by the Report
+    step's model-fallback requeue (it switches model + counts toward the hold
+    cap), so the agent-task gate no longer hard-fails on it — a hard fail would
+    trigger the medic to re-run the job on the SAME model, bypassing the cap
+    (the DRE-1300 18×-loop bug). The gate still fails on a no-evidence silent
+    death so a truly lost run stays loud.
+    """
+    if not ignore_is_error and is_error_death(execution):
         return "execution result has is_error=true"
     if not branch_exists and not pr_exists and not blocker_note:
         return "no agent branch, no PR, and no blocker note"
@@ -57,12 +74,18 @@ def _load_execution(path: str) -> dict | None:
 
 
 def main(argv: list[str]) -> int:
+    # Optional trailing --ignore-is-error flag (DRE-1354): the Report step owns
+    # the is_error→model-fallback requeue, so the gate should not hard-fail on it
+    # (a hard fail re-runs the job on the same model via the medic).
+    ignore_is_error = "--ignore-is-error" in argv
+    argv = [a for a in argv if a != "--ignore-is-error"]
     exec_path, branch, pr_url, blocker_file = (argv + ["", "", "", ""])[:4]
     reason = failure_reason(
         _load_execution(exec_path),
         branch_exists=bool(branch.strip()),
         pr_exists=bool(pr_url.strip()) and pr_url.strip() != "null",
         blocker_note=bool(blocker_file) and os.path.isfile(blocker_file),
+        ignore_is_error=ignore_is_error,
     )
     if reason:
         print(f"agent result gate: FAIL — {reason}")
