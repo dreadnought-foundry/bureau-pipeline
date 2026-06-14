@@ -48,6 +48,23 @@ class SelectModelTest(unittest.TestCase):
         ]
         self.assertEqual(mf.select_model("planner", comments), OPUS)
 
+    def test_planner_last_error_wins_when_both_models_have_died(self):
+        # Planner direction of last-error-wins: Fable died, we switched to Opus,
+        # Opus also died -> back to Fable (the planner's primary).
+        comments = [
+            mf.error_marker(FABLE),
+            mf.attempt_marker(OPUS),
+            mf.error_marker(OPUS),
+        ]
+        self.assertEqual(mf.select_model("planner", comments), FABLE)
+
+    def test_planner_healthy_attempt_does_not_switch(self):
+        # A healthy planner attempt (Fable, no error marker) stays on Fable —
+        # the 404-driven swing to Opus only fires on an actual is_error death.
+        self.assertEqual(
+            mf.select_model("planner", [mf.attempt_marker(FABLE)]), FABLE
+        )
+
     def test_last_error_wins_when_both_models_have_died(self):
         # Opus died, we switched to Fable, Fable also died -> back to Opus.
         comments = [
