@@ -8,7 +8,10 @@
 # Schema (one entry per agent):
 #   name      — stable identifier (lowercase)
 #   role      — human label shown in the console roster
-#   model     — primary Claude model id; `ladder` lists escalation overrides
+#   model     — best/default Claude model id (top of the ladder); `ladder` is the
+#               ordered preference ladder, best→worst — selection walks it at
+#               runtime and uses the first AVAILABLE model (DRE-1490). A 404'd
+#               model (Fable today) is skipped; it self-heals when re-enabled.
 #   trigger   — what starts a run (relay dispatch / GitHub event / sweep)
 #   maxTurns  — hard turn budget passed via claude_args
 #   maxBudget — advisory dollars per run (console display; not enforced)
@@ -19,11 +22,18 @@
 agents:
   - name: engineer
     role: Engineer
-    model: claude-opus-4-8
+    # Ordered preference ladder, best→worst (DRE-1490). Selection probes
+    # availability at runtime and uses the first AVAILABLE model — shared by
+    # engineer AND planner, no role hardcodes a model. Fable 5 currently 404s
+    # so this resolves to Opus 4.8; it self-heals to Fable when re-enabled.
+    model: claude-fable-5
     ladder:
-      - on: is_error
-        model: claude-fable-5
-        reason: "model-fallback (DRE-1354): a retry after an is_error death uses the alternate model so a single-model outage doesn't kill the run"
+      - model: claude-fable-5
+        reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
+      - model: claude-opus-4-8
+        reason: "first fallback — effective default today while Fable is unavailable"
+      - model: claude-sonnet-4-6
+        reason: "last resort if both Fable and Opus are unavailable"
     trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
     maxTurns: 80
     maxBudget: 12
@@ -57,11 +67,17 @@ agents:
 
   - name: planner
     role: Planner
+    # Same ordered preference ladder as the engineer (DRE-1490) — both roles
+    # walk it best→worst and use the first AVAILABLE model. Fable 5 currently
+    # 404s so this resolves to Opus 4.8; it self-heals to Fable when re-enabled.
     model: claude-fable-5
     ladder:
-      - on: is_error
-        model: claude-opus-4-8
-        reason: "model-fallback (DRE-1354): a retry after an is_error death uses the alternate model (Fable→Opus) so a single-model outage doesn't kill the run"
+      - model: claude-fable-5
+        reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
+      - model: claude-opus-4-8
+        reason: "first fallback — effective default today while Fable is unavailable"
+      - model: claude-sonnet-4-6
+        reason: "last resort if both Fable and Opus are unavailable"
     trigger: "Linear epic (label agent:planner) → Todo → relay repository_dispatch (agent-plan)"
     maxTurns: 50
     maxBudget: 8

@@ -45,14 +45,17 @@ class CapTest(unittest.TestCase):
         self.assertEqual(requeue.action, "requeue")
         self.assertIn(dead_run.DEAD_TAG, requeue.comments[0])
 
-    def test_is_error_records_model_marker_for_fallback(self):
-        # The requeue comment must carry a model-error: marker so the NEXT
-        # attempt's selector switches to the alternate model.
+    def test_is_error_records_model_marker_and_is_readable(self):
+        # The requeue comment must still carry a model-error: marker — it counts
+        # the death toward the shared hold cap and lets the board attribute the
+        # last is_error death to a model. (Under DRE-1490 selection no longer
+        # routes off this marker; it walks the availability ladder instead. The
+        # marker stays for hold-cap accounting + board attribution.)
         d = dead_run.decide(0, is_error=True, error_model=OPUS)
         self.assertIn("model-error:", d.comments[0])
         self.assertIn(OPUS, d.comments[0])
-        # Round-trip through the real selector: it must now pick Fable.
-        self.assertEqual(mf.select_model("engineer", d.comments), FABLE)
+        # The marker round-trips through the selector's reader.
+        self.assertEqual(mf.last_error_model(d.comments), OPUS)
 
     def test_hold_comment_names_both_models_tried(self):
         # AC: at the cap the hold comment names the model(s) tried.
