@@ -13,6 +13,9 @@ Subcommands:
   children <DRE-N>                     print the number of child issues
   add-label <DRE-N> <label-name>       attach a label (creating it if needed),
                                        idempotent — used for the human-hold
+  description <DRE-N>                   print the card's raw description to
+                                       stdout (the authoritative **Design:**
+                                       source the visual-QA stage reads)
 
 Auth: LINEAR_API_KEY env var.
 """
@@ -257,6 +260,23 @@ def add_label(identifier: str, label_name: str) -> None:
     print(f"{identifier} + label {label_name!r}")
 
 
+def cmd_description(identifier: str) -> None:
+    """Print a card's raw description (markdown) to stdout.
+
+    Used by the visual-QA stage (DRE-1481): the **Design:** ref lives in the
+    card description, which is the authoritative source (the PR body is
+    agent-authored and not guaranteed to quote it verbatim). Prints nothing
+    (not an error) for a description-less card so callers can treat empty as
+    "no design ref".
+    """
+    data = gql(
+        """query($id: String!) { issue(id: $id) { description } }""",
+        {"id": identifier},
+    )
+    issue = data.get("issue") or {}
+    sys.stdout.write(issue.get("description") or "")
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     {
@@ -270,4 +290,5 @@ if __name__ == "__main__":
         "count-comments": cmd_count_comments,
         "dump-comments": cmd_dump_comments,
         "add-label": add_label,
+        "description": cmd_description,
     }[cmd](*args)
