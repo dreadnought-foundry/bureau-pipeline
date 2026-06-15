@@ -61,6 +61,14 @@ jobs:
             REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
             MAX_WIP=8 \
             python3 .bureau-pipeline/scripts/reconcile.py --promote-only
+          # Event-driven epic close: this Done may have been an epic's LAST
+          # child — close the parent NOW instead of letting it read "still
+          # working" until the drifting cron's next full sweep (epic-close
+          # runs only there otherwise). Pure Linear, like promotion above.
+          # (Origin: DRE-1496 sat In Progress with 9/9 children Done; DRE-1552.)
+          REPO="$GITHUB_REPOSITORY" \
+            REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
+            python3 .bureau-pipeline/scripts/reconcile.py --close-epics
 
   # Event-driven conflict sweep: a merge to the default branch is the exact
   # moment sibling PRs touching the same files go DIRTY — and DIRTY PRs emit

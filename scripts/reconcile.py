@@ -410,7 +410,24 @@ def fix_approved_but_red() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
-def main(promote_only: bool = False, conflicts_only: bool = False) -> None:
+def repo_epics(active: list[dict]) -> set[str]:
+    """Identifiers of THIS repo's active epics (agent:planner cards).
+
+    Epics (agent:planner) are containers, not work: they carry no PR and sit
+    In Progress for the life of their children — never nudged, never counted
+    against the WIP cap. They DO close themselves when finished.
+    """
+    mine = [c for c in active if card_repo_slug(c["description"] or "") == REPO_SLUG]
+    return {
+        c["identifier"]
+        for c in mine
+        if any(lbl["name"].lower() == "agent:planner" for lbl in c["labels"]["nodes"])
+    }
+
+
+def main(
+    promote_only: bool = False, conflicts_only: bool = False, close_only: bool = False
+) -> None:
     """Full sweep by default; promote_only runs JUST the dependency gate.
 
     promote_only exists because GitHub's cron is best-effort — the "*/15"
@@ -422,6 +439,14 @@ def main(promote_only: bool = False, conflicts_only: bool = False) -> None:
     webhook → relay → repository_dispatch for the actual agent start), so
     the event hooks need only LINEAR_API_KEY. (Origin: DRE-1260 activated
     9s after a sweep checked and faced an ~80-minute wait, 2026-06-12.)
+
+    close_only runs JUST the epic-close pass, for the SAME cron-drift reason:
+    a merge that flips the last child to Done is the exact moment its parent
+    epic becomes all-Done, yet epic-close otherwise runs only on the drifting
+    full sweep — so an epic read "still working" for up to ~an hour after it
+    shipped (DRE-1496 sat In Progress with 9/9 children Done). linear-sync
+    invokes this on every merge. Pure Linear, like promote_only — needs only
+    LINEAR_API_KEY. (Origin: DRE-1552.)
 
     conflicts_only runs JUST the DIRTY-PR backstop, for the same cron-drift
     reason: a merge to the default branch is the exact event that conflicts
@@ -435,6 +460,11 @@ def main(promote_only: bool = False, conflicts_only: bool = False) -> None:
         except ReconcileWriteError as e:
             sys.exit(f"reconcile --conflicts-only: {e}")
         return
+    if close_only:
+        epics = repo_epics(active_cards())
+        close_finished_epics(epics)
+        print(f"close-only: epic close evaluated ({len(epics)} active epic(s))")
+        return
     nudges = 0
     if not promote_only:
         # Backstops run independently: one failing must not silence the
@@ -446,14 +476,7 @@ def main(promote_only: bool = False, conflicts_only: bool = False) -> None:
                 _write_failures.append(str(e))
                 print(f"ERROR: {backstop.__name__}: {e}", file=sys.stderr)
     mine = [c for c in active_cards() if card_repo_slug(c["description"] or "") == REPO_SLUG]
-    # Epics (agent:planner) are containers, not work: they carry no PR and sit
-    # In Progress for the life of their children — never nudge them, and don't
-    # count them against the WIP cap. They DO close themselves when finished.
-    epics = {
-        c["identifier"]
-        for c in mine
-        if any(lbl["name"].lower() == "agent:planner" for lbl in c["labels"]["nodes"])
-    }
+    epics = repo_epics(mine)
     if not promote_only:
         close_finished_epics(epics)
     mine = [c for c in mine if c["identifier"] not in epics]
@@ -550,4 +573,5 @@ if __name__ == "__main__":
     main(
         promote_only="--promote-only" in sys.argv,
         conflicts_only="--conflicts-only" in sys.argv,
+        close_only="--close-epics" in sys.argv,
     )
