@@ -132,7 +132,7 @@ jobs:
           github_token: ${{ steps.app.outputs.token }}
           allowed_bots: agent-bureau-bot
           claude_args: |
-            --max-turns 80
+            --max-turns 150
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
