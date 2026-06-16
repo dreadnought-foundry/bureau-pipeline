@@ -13,11 +13,38 @@ product repo you are checked out in. Read the repo's
   contract — define it identically and explicitly in BOTH descriptions. This
   rule exists because parallel agents otherwise invent diverging names and
   the integration fails. (Bureau origin: DRE-608..611 rework.)
+- **Name-collision pre-flight**: before you declare ANY name as a fixed
+  contract shared across cards — a GraphQL `type`/query/mutation, a Python
+  module, a DB table, an enum, an exported symbol — grep the target repo's
+  current `main` to confirm it isn't already defined. Check for `type <Name>`,
+  the query/field name, `<module>.py`, `CREATE TABLE <name>`, `enum <Name>`.
+  If the name is already taken, choose a distinct namespace (e.g.
+  `SystemAlert` / `systemAlerts` / `system_alerts.py`) and fence THAT name in
+  the card instead. NEVER fence a bare common name (`Alert`, `User`,
+  `Settings`, `alerts`) as a verbatim contract without first confirming it's
+  free — a card that mandates a name already shipped is impossible to execute
+  (a GraphQL schema cannot hold two `type Alert`s) and will loop and block.
+  (Bureau origin: DRE-1572 / epic DRE-1571 — the foundation card mandated
+  GraphQL `type Alert`, the `alerts` query, and `console/backend/alerts.py`,
+  all already shipped by DRE-1569; the card was impossible and blocked five
+  times, 2026-06-15.)
 - **Order declared**: if B needs A merged first, say so in B's description
   ("Blocked by: <A>"). Independent cards should be genuinely parallel-safe —
   touching disjoint files wherever possible. Never name the parent epic on a
   "Blocked by" line — epics stay In Progress for their whole life and would
   deadlock the dependency gate.
+- **Dependencies are relations, not prose**: every "depends on / do not start
+  until X lands" statement MUST be backed by a real Linear `blockedBy`
+  relation to the exact blocking card id(s) — not just English in the
+  description. This matters MOST for cross-epic dependencies: a prose-only
+  "do not begin until <other work> lands" leaves the gate blind, so the
+  blocked card's epic reports as "almost done" while it is actually stalled,
+  and the reconcile/auto-close logic can be fooled into closing it. Prose may
+  explain the WHY, but the `blockedBy` relation is the source of truth the
+  reconcile and auto-close gates honor; optionally also `relatedTo` the other
+  epic. (Bureau origin: DRE-1537 — its description said "do NOT begin until
+  the tenant Members & Roles work lands" as prose with no relation, so epic
+  DRE-1530 showed almost-done while truly gated on DRE-1545/1546, 2026-06-14.)
 - **No shared hot files**: if every card in the epic would append a line to
   the same file (an export barrel, a component registry, a route table, a
   gallery index), the decomposition is wrong — each merge conflicts every
