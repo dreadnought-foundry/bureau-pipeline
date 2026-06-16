@@ -54,6 +54,24 @@ HOLD_LABEL = "needs-human"
 DEAD_TAG = "dead-run-requeue"
 REQUEUE_CAP = int(os.environ.get("DEAD_RUN_CAP", "2"))
 
+# Engineer-blocker guard (DRE-1585). When the engineer agent hits a genuine,
+# deterministic blocker it posts this exact marker (see agent-task.yml) and
+# parks the card back in Backlog ON PURPOSE — re-dispatching would walk the
+# next agent straight into the same wall. The dependency gate, however, only
+# looks at FORMAL blockers (blocks relations + "Blocked by:" lines); when those
+# happen to be Done and the epic is active it re-promoted the card anyway.
+# Real incident: DRE-1572 looped Backlog→Todo→In Progress→Backlog FIVE times,
+# burning five engineer runs. So before promoting we also check for an
+# *unresolved* agent-blocker (latest blocker marker newer than any human reply).
+BLOCKER_MARKER = "🛑 Agent blocked"
+
+# Comments the pipeline itself authors all start with one of these emoji
+# markers (engineer/QA/reconcile receipts). A blocker is "resolved" only when a
+# HUMAN (CEO/operator) weighs in afterward — i.e. a comment that is NOT one of
+# our own machine markers. The gate's own "🧹 Auto-promoted" receipt is a
+# machine marker, so it can never clear the blocker and re-arm the loop.
+_AGENT_COMMENT_PREFIXES = ("🤖", "🛑", "🧹", "🪦", "🚨", "🏁")
+
 
 def held(card: dict) -> bool:
     """True if the card carries HOLD_LABEL — the sweep must not requeue, nudge,
@@ -207,6 +225,7 @@ def backlog_children() -> list[dict]:
              id identifier title description
              parent { identifier state { name } }
              labels { nodes { name } }
+             comments(last: 50) { nodes { body } }
              inverseRelations(first: 20) { nodes {
                type issue { identifier state { name } }
              } }
@@ -245,6 +264,31 @@ def blockers_of(card: dict) -> set[str]:
     return found
 
 
+def has_unresolved_blocker(card: dict) -> bool:
+    """True if the card's latest engineer-blocker marker has no human reply after
+    it — i.e. the card was parked in Backlog on a genuine blocker and nobody has
+    resolved it yet. Promoting such a card just re-dispatches the engineer into
+    the identical wall (DRE-1585 / DRE-1572's five-run loop).
+
+    Reads the card's `comments` (oldest→newest), which the dependency-gate query
+    fetches inline so no extra per-card API call is needed. Detection walks them
+    newest→oldest and stops at the first decisive comment — either the blocker
+    marker or a HUMAN comment (any comment NOT prefixed with one of the
+    pipeline's own machine markers). If that first decisive comment is the
+    blocker marker, the blocker is still open; a later human comment (or a human
+    moving/editing the card and commenting) flips it to resolved. A card with no
+    `comments` key (e.g. a hand-built test fixture) is treated as unblocked.
+    """
+    nodes = (card.get("comments") or {}).get("nodes", [])
+    for node in reversed(nodes):  # newest → oldest
+        text = (node.get("body") or "").lstrip()
+        if text.startswith(BLOCKER_MARKER):
+            return True  # newest decisive comment is an open blocker
+        if not text.startswith(_AGENT_COMMENT_PREFIXES):
+            return False  # a human spoke after the blocker — treat as resolved
+    return False  # no blocker marker on the card at all
+
+
 def promote_ready(active_count: int) -> int:
     """Auto-promote Backlog children whose blockers are all Done."""
     budget = MAX_WIP - active_count
@@ -270,6 +314,15 @@ def promote_ready(active_count: int) -> int:
             b for b in blockers_of(card) if card_state(b) not in ("Done", "Canceled", "Duplicate")
         }
         if unmet:
+            continue
+        # Formal blockers are clear, but the engineer may have parked this card
+        # on a *deterministic* blocker it flagged itself (DRE-1585). Re-promoting
+        # would redispatch it straight back into the same wall — exactly the
+        # five-run loop DRE-1572 hit. Skip until a human resolves it (a human
+        # comment after the blocker marker, or the human clears it some other way
+        # and the card leaves Backlog).
+        if has_unresolved_blocker(card):
+            print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
             continue
         linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
         linear_ops.cmd_comment(
