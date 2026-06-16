@@ -35,7 +35,7 @@ agents:
       - model: claude-sonnet-4-6
         reason: "last resort if both Fable and Opus are unavailable"
     trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
-    maxTurns: 80
+    maxTurns: 150
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep]
     briefPath: briefs/engineer.md
