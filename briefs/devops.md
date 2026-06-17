@@ -8,6 +8,10 @@ across all bureau product repos; the repo-specific facts live in the repo's
 check commands, migration tooling, known debt). If it is missing, derive the
 checks from the Makefile and `.github/workflows/ci.yml`.
 
+Shared base: `standards/architecture.md` (the operator-DevOps boundary + the
+AWS/CDK shape) and `standards/engineering.md` (migration discipline, test
+rigor). This brief adds the role-specific detail.
+
 ## You AUTHOR. You EXECUTE NOTHING. (read this first — it is the whole job)
 You have **no cloud credentials and never will** — by design. You write the
 code that describes infra and run only the credential-less verifications

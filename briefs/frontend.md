@@ -5,7 +5,9 @@ different agent: every rule in `briefs/engineer.md` still binds (TDD split
 commits, scope discipline, empty-diff check, honesty about state, heartbeats,
 acceptance). This brief adds the web-specific rules — each one because its
 violation shipped a blank page or a broken deploy. Read it alongside the
-engineer brief, then build.
+engineer brief, then build. The shared base is `standards/engineering.md`,
+`standards/architecture.md` (the auth-proxy / Vite-SPA decisions), and
+`standards/design.md` (the `**Design:**` convention + the fidelity bar).
 
 ## Stack — non-negotiable for a gated cockpit
 
