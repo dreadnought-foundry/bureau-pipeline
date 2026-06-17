@@ -41,6 +41,45 @@ agents:
     briefPath: briefs/engineer.md
     workflow: .github/workflows/agent-task.yml
 
+  - name: frontend
+    role: Frontend
+    # Engineer in WEB MODE — same shared ladder as engineer. The brief
+    # (briefs/frontend.md) binds every engineer rule and adds the web specifics
+    # (Vite SPA, the static-asset/MIME proxy trap, esbuild Node-API, same-origin
+    # /graphql, the **Design:** fidelity convention). Routed by an agent:frontend
+    # label; runs on the shared agent-task.yml like the engineer.
+    model: claude-fable-5
+    ladder:
+      - model: claude-fable-5
+        reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
+      - model: claude-opus-4-8
+        reason: "first fallback — effective default today while Fable is unavailable"
+      - model: claude-sonnet-4-6
+        reason: "last resort if both Fable and Opus are unavailable"
+    trigger: "Linear card (label agent:frontend) → Todo → relay repository_dispatch (agent-execute)"
+    maxTurns: 150
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    briefPath: briefs/frontend.md
+    workflow: .github/workflows/agent-task.yml
+
+  - name: devops
+    role: DevOps
+    model: claude-fable-5
+    ladder:
+      - model: claude-fable-5
+        reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
+      - model: claude-opus-4-8
+        reason: "first fallback — effective default today while Fable is unavailable"
+      - model: claude-sonnet-4-6
+        reason: "last resort if both Fable and Opus are unavailable"
+    trigger: "Linear card (label agent:devops) → Todo → relay repository_dispatch (agent-execute)"
+    maxTurns: 150
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    briefPath: briefs/devops.md
+    workflow: .github/workflows/agent-task.yml
+
   - name: fixer
     role: Fix agent
     model: claude-opus-4-8
@@ -64,6 +103,16 @@ agents:
     tools: [Bash, Read, Glob, Grep]
     briefPath: null
     workflow: .github/workflows/qa-review.yml
+
+  - name: verifier
+    role: Verifier
+    model: claude-sonnet-4-6
+    trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
+    maxTurns: 60
+    maxBudget: 5
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    briefPath: briefs/verifier.md
+    workflow: .github/workflows/verify.yml
 
   - name: planner
     role: Planner

@@ -12,6 +12,10 @@ before you push, migration tooling specifics, and any known debt you must
 not be blocked by. If it is missing, derive the local checks from the repo's
 Makefile and `.github/workflows/ci.yml` and run the closest equivalent.
 
+If the card is web-scoped (it carries a `web` label, or its changed files live
+under the web/SPA tree), ALSO read `briefs/frontend.md` and follow it as the web
+supplement to this brief — it adds to these conventions, it does not replace them.
+
 ## Discipline (each rule exists because its violation shipped a bug)
 - **Spec first**: if the card declares `**Spec:** openspec/changes/<id>/`,
   read that directory (at minimum `specs/*/spec.md` and any `design.md`)

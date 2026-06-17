@@ -130,6 +130,20 @@ jobs:
             *) echo "latest verdict is not APPROVE — holding"; exit 0;;
           esac
 
+          # Condition 3: behavioral Verifier (verify.yml). It is SCOPE-GATED —
+          # it only runs on multi-system/UI PRs and posts a "QA Verifier"
+          # verdict; on out-of-scope PRs it posts nothing. So an ABSENT verdict
+          # is NOT a gate (it just didn't run), mirroring the critic's
+          # fall-through-on-empty. But a PRESENT verdict's latest must be PASS:
+          # a FAIL or a neutral "could not run" status holds the merge.
+          VVERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+            --jq '[.[] | select(.body | contains("QA Verifier"))] | last | .body' 2>/dev/null | head -1 || true)
+          case "$VVERDICT" in
+            "") echo "no verifier verdict (verify out of scope / not run) — not a gate";;
+            *"VERDICT: PASS"*) ;;
+            *) echo "latest verifier verdict is not PASS — holding"; exit 0;;
+          esac
+
           # Both gates green: advance card, merge as qa-bot.
           [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In QA,In Progress" || true
           gh pr merge "$PR" --merge --delete-branch
