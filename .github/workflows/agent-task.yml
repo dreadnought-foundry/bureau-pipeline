@@ -106,6 +106,22 @@ jobs:
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "selected model: $MODEL (role: $ROLE)"
 
+      # Assemble the agent's context = the role's shared standards + role brief
+      # (DRE-1646). The build agents run headless and cannot load Skills, so
+      # standards/*.md is their only knowledge channel. assemble_context.py owns
+      # the per-role standards mapping (single source of truth) and reads the
+      # files from this checkout AT RUN TIME — so a `@main` edit to any standard
+      # propagates to every product repo's agents on the next run with no
+      # workflow change. The blob is written to a file the prompt points at.
+      - name: Assemble agent context
+        id: ctx
+        if: steps.gate.outputs.bounced != 'true'
+        run: |
+          ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
+          python3 .bureau-pipeline/scripts/assemble_context.py assemble "$ROLE" \
+            > .bureau-pipeline/agent-context.md
+          echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of context for role: $ROLE"
+
       - name: Card → In Progress
         if: steps.gate.outputs.bounced != 'true'
         env:
@@ -138,9 +154,11 @@ jobs:
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
-            Read .bureau-pipeline/briefs/${{ steps.gate.outputs.role || 'engineer' }}.md
-            for your role and conventions, then .github/bureau/overrides.md in
-            this repo for stack-specific commands (it is mandatory reading if
+            Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
+            operating context: the shared bureau standards for your role plus
+            your role brief (briefs/${{ steps.gate.outputs.role || 'engineer' }}.md
+            is included at the end of it). Then read .github/bureau/overrides.md
+            in this repo for stack-specific commands (it is mandatory reading if
             present), then implement this Linear card.
 
             Card: ${{ github.event.client_payload.identifier }} — ${{ github.event.client_payload.title }}

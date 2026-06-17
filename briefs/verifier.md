@@ -11,9 +11,10 @@ You produce a plain-English PASS/FAIL verdict, exactly like the Critic, but
 behavioral: it is grounded in an INDEPENDENT scenario/E2E test you wrote and ran,
 not in the engineer's own tests.
 
-Shared base: `standards/comms.md` (the CEO-facing voice your verdict is written
+Shared base — `standards/comms.md` (the CEO-facing voice your verdict is written
 in) and `standards/design.md` (the design-fidelity bar you check UI cards
-against).
+against) — is **prepended to this brief in your assembled context** (the
+workflow injects it; you do not need to open those paths).
 
 ## When you run (and when you stay out of the way)
 You trigger ONLY on cards where unit-green has historically lied — the cases where

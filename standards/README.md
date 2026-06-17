@@ -18,6 +18,28 @@ context. Two consumers read these files:
 2. **The interactive plugin** — the operator-facing packaging of the same
    standards (epic DRE-1644, card DRE-1647).
 
+### How CI agents actually receive them (DRE-1646)
+
+`scripts/assemble_context.py` is the single place that knows, per role, which
+standards an agent must act on (`ROLE_STANDARDS`). Every agent-bearing workflow
+(`agent-task`, `plan`, `qa-review`, `verify`, `agent-fix`, `medic`) runs an
+**Assemble** step that calls `assemble_context.py assemble <role>`; it reads
+these files **from the checkout at run time** and concatenates comms + the
+role's standards + the role brief into `.bureau-pipeline/agent-context.md`. The
+agent prompt then reads that one file FIRST. Because the files are read at run
+time and product repos consume the pipeline `@main`, editing a standard here
+propagates to every repo's agents on the next run — no workflow change, no
+per-repo copy. The per-role mapping:
+
+| Role | Standards injected (comms is added to all) |
+|---|---|
+| engineer / devops | engineering, architecture, card-quality |
+| frontend | engineering, architecture, card-quality, design |
+| planner | card-quality, engineering |
+| critic | engineering, architecture |
+| verifier | design |
+| fix / medic | engineering |
+
 ## The standards
 
 | File | Covers |

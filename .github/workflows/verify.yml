@@ -163,6 +163,19 @@ jobs:
             echo "no .github/bureau/setup.sh — skipping product setup"
           fi
 
+      # Assemble the verifier's context = the comms standard (its verdict voice)
+      # + the design standard (it checks UI against **Design:**) plus the
+      # verifier brief (DRE-1646). assemble_context.py reads the files from this
+      # checkout at run time, so a `@main` standards edit reaches the verifier on
+      # its next run with no workflow change. Shared by both verifier attempts.
+      - name: Assemble verifier context
+        id: ctx
+        if: steps.scope.outputs.in_scope == 'true'
+        run: |
+          python3 .bureau-pipeline/scripts/assemble_context.py assemble verifier \
+            > .bureau-pipeline/agent-context.md
+          echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of verifier context"
+
       - name: Verifier run
         id: verifier
         if: steps.scope.outputs.in_scope == 'true'
@@ -183,8 +196,11 @@ jobs:
             --model claude-sonnet-4-6
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
-            Read .bureau-pipeline/briefs/verifier.md for your role and method,
-            then .github/bureau/overrides.md in this repo for how to build and
+            Read .bureau-pipeline/agent-context.md FIRST — your assembled
+            operating context: the shared bureau standards for the verifier
+            (verdict voice + design fidelity) plus the verifier brief
+            (briefs/verifier.md is included at the end of it). Then read
+            .github/bureau/overrides.md in this repo for how to build and
             RUN the app locally (stack + commands; mandatory reading if present).
 
             You are the behavioral Verifier for PR #${{ steps.pr.outputs.number }}
@@ -287,8 +303,11 @@ jobs:
             --model claude-sonnet-4-6
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
-            Read .bureau-pipeline/briefs/verifier.md for your role and method,
-            then .github/bureau/overrides.md in this repo for how to build and
+            Read .bureau-pipeline/agent-context.md FIRST — your assembled
+            operating context: the shared bureau standards for the verifier
+            (verdict voice + design fidelity) plus the verifier brief
+            (briefs/verifier.md is included at the end of it). Then read
+            .github/bureau/overrides.md in this repo for how to build and
             RUN the app locally (stack + commands; mandatory reading if present).
 
             You are the behavioral Verifier for PR #${{ steps.pr.outputs.number }}

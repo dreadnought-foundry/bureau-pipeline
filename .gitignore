@@ -1,0 +1,6 @@
+# Runtime-assembled agent context (DRE-1646): the workflows write
+# scripts/assemble_context.py output to .bureau-pipeline/agent-context.md in
+# the CONSUMING repo's checkout. It must never be committed here.
+agent-context.md
+__pycache__/
+*.pyc
