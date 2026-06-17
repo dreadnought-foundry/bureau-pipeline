@@ -108,7 +108,8 @@ class InferRepoTest(unittest.TestCase):
     def test_valid_slugs_includes_agent_bureau(self):
         self.assertIn("agent-bureau", validate_card.VALID_SLUGS)
         self.assertEqual(
-            validate_card.VALID_SLUGS, {"atlas", "deltasolv", "vericorr", "agent-bureau"}
+            validate_card.VALID_SLUGS,
+            {"atlas", "deltasolv", "vericorr", "agent-bureau", "agent-bureau-demo"},
         )
 
 

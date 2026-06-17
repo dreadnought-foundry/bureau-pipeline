@@ -99,7 +99,7 @@ def missing(description: str, labels: list[str]) -> list[str]:
 # is a real repo + a real initiative that consumes this pipeline @main (the relay
 # DEFAULT_REPO covers it for routing). Inference must never resolve a slug that
 # isn't here — better to bounce than build on a repo that doesn't exist.
-VALID_SLUGS = {"atlas", "deltasolv", "vericorr", "agent-bureau"}
+VALID_SLUGS = {"atlas", "deltasolv", "vericorr", "agent-bureau", "agent-bureau-demo"}
 
 # Initiative-label slug → repo slug. The mapping is identity EXCEPT the one
 # documented alias: the Agent Bureau initiative carries the `initiative:bureau`
@@ -119,6 +119,7 @@ _PROJECT_PREFIX_TO_SLUG = {
     "atlas": "atlas",
     "deltasolv": "deltasolv",
     "vericorr": "vericorr",
+    "demo": "agent-bureau-demo",
 }
 
 _INITIATIVE_PREFIX = "initiative:"
