@@ -101,9 +101,10 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
-          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select engineer)
+          ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select "$ROLE")
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
-          echo "selected model: $MODEL"
+          echo "selected model: $MODEL (role: $ROLE)"
 
       - name: Card → In Progress
         if: steps.gate.outputs.bounced != 'true'
@@ -114,9 +115,10 @@ jobs:
             "${{ github.event.client_payload.identifier }}" "In Progress"
           # Heartbeat: record which model this attempt uses so the board/console
           # can surface per-attempt model (DRE-1354 AC).
+          ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ github.event.client_payload.identifier }}" \
-            "🧠 model-attempt: ${{ steps.model.outputs.model }} — engineer agent starting."
+            "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting."
 
       - name: Implement card
         id: claude
@@ -136,10 +138,10 @@ jobs:
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
-            Read .bureau-pipeline/briefs/engineer.md for your role and
-            conventions, then .github/bureau/overrides.md in this repo for
-            stack-specific commands (it is mandatory reading if present),
-            then implement this Linear card.
+            Read .bureau-pipeline/briefs/${{ steps.gate.outputs.role || 'engineer' }}.md
+            for your role and conventions, then .github/bureau/overrides.md in
+            this repo for stack-specific commands (it is mandatory reading if
+            present), then implement this Linear card.
 
             Card: ${{ github.event.client_payload.identifier }} — ${{ github.event.client_payload.title }}
             Card URL: ${{ github.event.client_payload.url }}

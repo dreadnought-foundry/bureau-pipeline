@@ -1,0 +1,407 @@
+# ENABLED — SCOPE-GATED
+# ─────────────────────────────────────────────────────────────────────────────
+# This is a real, wired pipeline stage (the behavioral Verifier): agents.yaml
+# registers it and merge-gate.yml consumes its verdict (a PRESENT "QA Verifier"
+# verdict must be PASS to merge; an ABSENT verdict — verify skipped / out of
+# scope — is NOT a gate). It runs ONLY on in-scope PRs (see the scope gate
+# below): UI cards (a **Design:** line) or multi-system diffs; everything else
+# SKIPs without posting a verdict or blocking. The system file-bucket globs in
+# the scope gate are heuristic and are tuned per-repo at each project kickoff
+# against that repo's real layout — review them when onboarding a new repo.
+# A product repo opts in by adding the thin stub that calls this workflow.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Verifier agent: distinct from the adversarial Critic (qa-review). The Critic
+# REVIEWS THE CODE; the Verifier RUNS THE FEATURE and proves it actually works.
+# It spins up the live app, writes an INDEPENDENT scenario/E2E test (Playwright
+# for UI, a cross-system scenario for backend↔frontend) derived from the card —
+# never the engineer's own (possibly self-confirming) tests — runs it against the
+# running app, and posts a plain-English behavioral PASS/FAIL verdict. It exists
+# for the "unit-green ≠ live-working" cases (the phase bar shipped 4/4 green and
+# was visibly broken), so it triggers ONLY on multi-system or UI cards.
+#
+# Like the Critic, its verdict is advisory input to merge-gate.yml: once wired,
+# the merge happens only when CI is green AND the Critic verdict is APPROVE AND
+# (where verify ran) the Verifier verdict is PASS.
+#
+# Reusable workflow: concurrency + permissions live in the calling stub.
+name: Verify (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: true
+      BUREAU_APP_PRIVATE_KEY:
+        required: true
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  verify:
+    # Only verify agent-authored work (branch convention agent/DRE-N-*).
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.head.ref, 'agent/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      - name: Resolve PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          PR=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+          BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
+          CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          echo "card=$CARD" >> "$GITHUB_OUTPUT"
+
+      # ── Scope gate: run ONLY on multi-system or UI cards ──────────────────
+      # The Verifier is expensive (it boots the app and drives a real E2E/
+      # scenario path), and on single-system non-UI cards there is no
+      # composition to exercise — running there would be noise that could
+      # wrongly gate a merge. So we decide up front whether this card is in
+      # scope, and if not we SKIP the whole job (no verdict posted, no block).
+      #
+      # In scope when EITHER:
+      #   • the card description carries a **Design:** line (a UI card), OR
+      #   • the diff touches ≥2 systems (touch-count: backend/GraphQL/REST,
+      #     frontend/UI, auth proxy, migration/schema, infra/config).
+      # The card description is the AUTHORITATIVE **Design:** source (the PR
+      # body is agent-authored and may not quote it verbatim); the changed-file
+      # set is the authoritative multi-system signal. When in doubt → SKIP
+      # (degrade, never block), mirroring the visual-QA stage's conservatism.
+      - name: Decide scope (multi-system / UI?)
+        id: scope
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          PR: ${{ steps.pr.outputs.number }}
+          CARD: ${{ steps.pr.outputs.card }}
+        run: |
+          set +e
+          mkdir -p /tmp/verify
+          : > /tmp/verify/card.txt
+          if [ -n "$CARD" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py description "$CARD" > /tmp/verify/card.txt 2>/dev/null || : > /tmp/verify/card.txt
+          fi
+          gh pr diff "$PR" --name-only > /tmp/verify/changed.txt 2>/dev/null || : > /tmp/verify/changed.txt
+
+          # UI signal: a **Design:** ref on the authoritative card description.
+          IS_UI=false
+          grep -qiE '^\s*\*\*Design:\*\*' /tmp/verify/card.txt && IS_UI=true
+
+          # Multi-system signal: changed files span ≥2 of the system buckets.
+          # Heuristic + conservative; this is a DRAFT and the bucket globs are
+          # the first thing to tune against a real repo at kickoff.
+          python3 - <<'PY' > /tmp/verify/multi.txt 2>/dev/null
+          import re
+          buckets = {
+            "backend":  [r"backend/", r"/graphql/", r"/api/", r"schema\.py$", r"resolvers"],
+            "frontend": [r"web/", r"\.tsx?$", r"/components/", r"/pages/"],
+            "proxy":    [r"proxy\.(ts|mjs|js)$", r"build-proxy"],
+            "migration":[r"alembic", r"migrations?/", r"models?/"],
+            "infra":    [r"infra/", r"\.github/", r"cdk", r"Dockerfile", r"\.ya?ml$"],
+          }
+          hit = set()
+          for line in open("/tmp/verify/changed.txt"):
+              f = line.strip()
+              if not f:
+                  continue
+              for name, pats in buckets.items():
+                  if any(re.search(p, f) for p in pats):
+                      hit.add(name)
+          print("true" if len(hit) >= 2 else "false")
+          PY
+          IS_MULTI=$(cat /tmp/verify/multi.txt 2>/dev/null || echo false)
+          [ -n "$IS_MULTI" ] || IS_MULTI=false
+
+          IN_SCOPE=false
+          if [ "$IS_UI" = "true" ] || [ "$IS_MULTI" = "true" ]; then IN_SCOPE=true; fi
+          echo "in_scope=$IN_SCOPE" >> "$GITHUB_OUTPUT"
+          echo "is_ui=$IS_UI" >> "$GITHUB_OUTPUT"
+          echo "scope decision: in_scope=$IN_SCOPE (ui=$IS_UI multi=$IS_MULTI)"
+
+      - name: Out of scope — skip (no verdict, no block)
+        if: steps.scope.outputs.in_scope != 'true'
+        run: |
+          echo "Card ${{ steps.pr.outputs.card }} is single-system, non-UI — Verifier does not run. No verdict posted; merge is not gated on a Verifier PASS for this PR."
+
+      # Product-specific environment so the agent can actually RUN the app
+      # (dev server / DB / toolchains). Optional by design — same setup.sh the
+      # engineer uses; a repo that needs nothing ships none.
+      - name: Product environment setup (optional)
+        if: steps.scope.outputs.in_scope == 'true'
+        env:
+          BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          if [ -f .github/bureau/setup.sh ]; then
+            bash .github/bureau/setup.sh
+          else
+            echo "no .github/bureau/setup.sh — skipping product setup"
+          fi
+
+      - name: Verifier run
+        id: verifier
+        if: steps.scope.outputs.in_scope == 'true'
+        uses: anthropics/claude-code-action@v1
+        # A crash here (is_error / no verdict) must NOT fail-close into a false
+        # FAIL — that would churn good PRs into the fix loop. The gate below
+        # detects it and we retry; on a double-crash we post a NEUTRAL status.
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: agent-bureau-bot
+          claude_args: |
+            --max-turns 60
+            --model claude-sonnet-4-6
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+          prompt: |
+            Read .bureau-pipeline/briefs/verifier.md for your role and method,
+            then .github/bureau/overrides.md in this repo for how to build and
+            RUN the app locally (stack + commands; mandatory reading if present).
+
+            You are the behavioral Verifier for PR #${{ steps.pr.outputs.number }}
+            in this repo, implementing Linear card ${{ steps.pr.outputs.card }}.
+            Use `gh pr view ${{ steps.pr.outputs.number }}` and
+            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).
+
+            You do NOT review the code — you RUN THE FEATURE and prove it works:
+            1. Read the card's acceptance criteria (read the LIVE card as the
+               authoritative source, not just the PR body). If the card has a
+               `**Design:**` ref, Read that screen PNG (normal-sized exports
+               under console/design/images/screens/..., safe to Read) and
+               verify the built screen against it.
+            2. Check out the PR branch and SPIN UP THE LIVE APP via the repo's
+               documented run path (Makefile targets / dev server / commands in
+               overrides.md). Confirm it is actually serving before testing.
+            3. Write an INDEPENDENT scenario/E2E test derived from the card and
+               design — NOT from the engineer's own tests (those can be
+               self-confirming: a test can pass green while covering nothing, and
+               a served-app test can pass in a permissive local env yet break in
+               reality). Playwright driving the real user flow for UI; a real
+               cross-system scenario through the live seam for backend↔frontend.
+               Include the adversarial inverse (empty/wrong/absent input) so
+               "renders something" can't pass for "renders the right thing."
+            4. RUN it against the running app and OBSERVE. Capture evidence
+               (assertion results; a screenshot of the actual rendered state for
+               UI). Never claim PASS without having run it in this session; if
+               the app won't start or the path errors, that is a FAIL reported
+               honestly.
+
+            Write your verdict to /tmp/verify-verdict.md in TWO clearly separated
+            parts — a business summary the CEO reads, then technical detail the
+            fixing agent reads:
+
+            - First line exactly: `VERDICT: PASS` or `VERDICT: FAIL`
+              (use `VERDICT: SKIP` + one reason line ONLY if, on inspection, the
+              card is genuinely out of scope or a pure environment/harness fault
+              you cannot attribute to the diff blocked the run — a SKIP must not
+              block the merge).
+            - Then `## Summary` — for the CEO, who is NON-TECHNICAL and reads this
+              to decide, not to debug. Plain business language describing what you
+              actually SAW when you ran the feature:
+                (a) what the feature is meant to do for the user, in 1-2 sentences;
+                (b) whether, when you used it, it actually did that;
+                (c) if FAIL, WHAT THE USER WOULD SEE — the broken experience, not
+                    the mechanism.
+                    Good: "I opened the board and dragged a card to Done — it
+                    snapped back and never moved, so it looks broken to anyone
+                    using it."
+              BANNED in this section: code, variable/function names, file paths,
+              line numbers, framework/library terms, and the word "test". If a
+              non-technical reader couldn't act on it, rewrite it.
+            - If FAIL: AFTER the summary, a `## For the fixing agent` section with
+              the precise technical detail — the exact scenario/E2E steps you ran,
+              what you expected, what actually happened, the failing assertion,
+              and the screenshot/log evidence. Paste the independent test (or its
+              key assertions) so the behavior you proved/disproved is reproducible.
+              This is the ONLY place technical language belongs.
+
+      # Crash detection (mirrors the Critic's gate). A real verdict requires
+      # is_error != true AND a verdict file with a VERDICT: line. is_error /
+      # no-verdict means the Verifier did NOT actually run — retry, never post
+      # the crash as FAIL.
+      - name: Gate verifier result (attempt 1)
+        id: gate1
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true'
+        continue-on-error: true
+        run: |
+          EXEC_FILE="${{ steps.verifier.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/verify-verdict.md; then
+            echo "real=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "real=false" >> "$GITHUB_OUTPUT"
+            echo "verifier attempt 1 did not produce a real verdict — will retry"
+          fi
+
+      - name: Clear stale verdict before retry
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
+        run: rm -f /tmp/verify-verdict.md
+
+      # NOTE: the with block below is intentionally duplicated from the
+      # attempt-1 "Verifier run" step and MUST be kept in sync with it. GitHub
+      # Actions does not support YAML anchors / merge keys, so this cannot be
+      # DRY'd — the runner would fail to parse the file.
+      - name: Verifier run (retry)
+        id: verifier_retry
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
+        uses: anthropics/claude-code-action@v1
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: agent-bureau-bot
+          claude_args: |
+            --max-turns 60
+            --model claude-sonnet-4-6
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+          prompt: |
+            Read .bureau-pipeline/briefs/verifier.md for your role and method,
+            then .github/bureau/overrides.md in this repo for how to build and
+            RUN the app locally (stack + commands; mandatory reading if present).
+
+            You are the behavioral Verifier for PR #${{ steps.pr.outputs.number }}
+            in this repo, implementing Linear card ${{ steps.pr.outputs.card }}.
+            Use `gh pr view ${{ steps.pr.outputs.number }}` and
+            `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).
+
+            You do NOT review the code — you RUN THE FEATURE and prove it works:
+            1. Read the card's acceptance criteria (read the LIVE card as the
+               authoritative source, not just the PR body). If the card has a
+               `**Design:**` ref, Read that screen PNG (normal-sized exports
+               under console/design/images/screens/..., safe to Read) and
+               verify the built screen against it.
+            2. Check out the PR branch and SPIN UP THE LIVE APP via the repo's
+               documented run path (Makefile targets / dev server / commands in
+               overrides.md). Confirm it is actually serving before testing.
+            3. Write an INDEPENDENT scenario/E2E test derived from the card and
+               design — NOT from the engineer's own tests (those can be
+               self-confirming: a test can pass green while covering nothing, and
+               a served-app test can pass in a permissive local env yet break in
+               reality). Playwright driving the real user flow for UI; a real
+               cross-system scenario through the live seam for backend↔frontend.
+               Include the adversarial inverse (empty/wrong/absent input) so
+               "renders something" can't pass for "renders the right thing."
+            4. RUN it against the running app and OBSERVE. Capture evidence
+               (assertion results; a screenshot of the actual rendered state for
+               UI). Never claim PASS without having run it in this session; if
+               the app won't start or the path errors, that is a FAIL reported
+               honestly.
+
+            Write your verdict to /tmp/verify-verdict.md in TWO clearly separated
+            parts — a business summary the CEO reads, then technical detail the
+            fixing agent reads:
+
+            - First line exactly: `VERDICT: PASS` or `VERDICT: FAIL`
+              (use `VERDICT: SKIP` + one reason line ONLY if, on inspection, the
+              card is genuinely out of scope or a pure environment/harness fault
+              you cannot attribute to the diff blocked the run — a SKIP must not
+              block the merge).
+            - Then `## Summary` — for the CEO, who is NON-TECHNICAL and reads this
+              to decide, not to debug. Plain business language describing what you
+              actually SAW when you ran the feature:
+                (a) what the feature is meant to do for the user, in 1-2 sentences;
+                (b) whether, when you used it, it actually did that;
+                (c) if FAIL, WHAT THE USER WOULD SEE — the broken experience, not
+                    the mechanism.
+                    Good: "I opened the board and dragged a card to Done — it
+                    snapped back and never moved, so it looks broken to anyone
+                    using it."
+              BANNED in this section: code, variable/function names, file paths,
+              line numbers, framework/library terms, and the word "test". If a
+              non-technical reader couldn't act on it, rewrite it.
+            - If FAIL: AFTER the summary, a `## For the fixing agent` section with
+              the precise technical detail — the exact scenario/E2E steps you ran,
+              what you expected, what actually happened, the failing assertion,
+              and the screenshot/log evidence. Paste the independent test (or its
+              key assertions) so the behavior you proved/disproved is reproducible.
+              This is the ONLY place technical language belongs.
+
+      - name: Gate verifier result (attempt 2)
+        id: gate2
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
+        continue-on-error: true
+        run: |
+          EXEC_FILE="${{ steps.verifier_retry.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/verify-verdict.md; then
+            echo "real=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "real=false" >> "$GITHUB_OUTPUT"
+            echo "verifier retry also did not produce a real verdict — neutral + fail"
+          fi
+
+      - name: Post verdict or neutral status
+        id: post
+        # Only when in scope. Not on cancellation: a superseded run must not
+        # post a fail-closed verdict that masks the live run's real one.
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          PR: ${{ steps.pr.outputs.number }}
+          CARD: ${{ steps.pr.outputs.card }}
+          REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+        run: |
+          if [ "$REAL" = "true" ]; then
+            # A real verdict (PASS or FAIL with evidence) from a Verifier that
+            # actually ran — post it verbatim. The "QA Verifier" marker lets
+            # merge-gate find it (distinct from the Critic's "QA Critic" marker).
+            { echo "🧪 QA Verifier — $(head -1 /tmp/verify-verdict.md)"; echo; tail -n +2 /tmp/verify-verdict.md; } > /tmp/verify-comment.md
+          else
+            # The Verifier CRASHED on both attempts (is_error / no verdict). Do
+            # NOT post FAIL — a false reject churns good PRs into the fix loop.
+            # Post a NEUTRAL status: contains "QA Verifier" (so merge-gate treats
+            # it as the latest Verifier status and it supersedes any stale PASS)
+            # but NO "VERDICT: PASS" line, so merge-gate holds. The job then fails
+            # loudly below → red + medic-visible.
+            printf '%s\n\n%s\n' \
+              "🧪 QA Verifier could not run (infra error) — re-verify needed, this is NOT a feature rejection." \
+              "The behavioral verifier crashed twice (startup/auth failure, or could not bring up the app). No behavior was exercised. Merge is held until a verifier actually runs this PR; this is not a request for changes." \
+              > /tmp/verify-comment.md
+          fi
+          for i in 1 2 3 4; do
+            gh pr comment "$PR" --body-file /tmp/verify-comment.md && break
+            echo "comment attempt $i failed; retrying in $((i*10))s"; sleep $((i*10))
+          done
+          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/verify-comment.md)" || true
+
+      # Fail the job loudly AFTER the neutral comment is posted, so the infra
+      # failure is visibly red and the medic picks it up. A genuine verdict
+      # (PASS or FAIL) ends green regardless. Out-of-scope runs end green.
+      - name: Fail if verifier never really ran
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
+        run: |
+          echo "::error::QA verifier crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
+          exit 1

@@ -263,7 +263,14 @@ def error_marker(model: str) -> str:
 
 
 def _role_from_labels(labels: list[str]) -> str:
-    return "planner" if "agent:planner" in [l.lower() for l in labels] else "engineer"
+    low = [l.lower() for l in labels]
+    if "agent:planner" in low:
+        return "planner"
+    if "agent:devops" in low:
+        return "devops"
+    if "agent:frontend" in low:
+        return "frontend"
+    return "engineer"
 
 
 # --------------------------------------------------------------------------- #

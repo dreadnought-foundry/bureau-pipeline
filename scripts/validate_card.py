@@ -186,6 +186,30 @@ def _emit(bounced: bool) -> None:
     print(f"bounced={val}")
 
 
+def _role_from_labels(labels: list[str]) -> str:
+    """The agent role to run for a card, derived from its resolved labels:
+    `devops` iff `agent:devops`, `frontend` iff `agent:frontend`, else
+    `engineer`. The planner is dispatched by a separate workflow (plan.yml), so
+    agent-task only ever picks between engineer / frontend / devops here."""
+    low = [l.lower() for l in (labels or [])]
+    if "agent:devops" in low:
+        return "devops"
+    if "agent:frontend" in low:
+        return "frontend"
+    return "engineer"
+
+
+def _emit_role(role: str) -> None:
+    # Mirror _emit: write the resolved role to the SAME GitHub step-output
+    # mechanism so agent-task.yml can branch brief/model/heartbeat on it. Always
+    # set (engineer on bounce/skip paths) so the output is never empty.
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as f:
+            f.write(f"role={role}\n")
+    print(f"role={role}")
+
+
 def cmd_gate(identifier: str) -> None:
     # Imported lazily so the pure core (and its tests) need no LINEAR_API_KEY.
     import linear_ops
@@ -195,6 +219,7 @@ def cmd_gate(identifier: str) -> None:
     if current not in _GATEABLE:
         print(f"{identifier} is in {current!r}, not a Todo-entry — gate skipped")
         _emit(False)
+        _emit_role("engineer")
         return
 
     card = _fetch_card(linear_ops, identifier)
@@ -204,6 +229,7 @@ def cmd_gate(identifier: str) -> None:
     if not gaps:
         print(f"{identifier} is clean — proceeding to build")
         _emit(False)
+        _emit_role(_role_from_labels(labels))
         return
 
     # --- Fix-first: decide the FULL repair before mutating anything, so a card
@@ -249,6 +275,10 @@ def cmd_gate(identifier: str) -> None:
     )
     print(f"{identifier} auto-fixed ({', '.join(fixed)}) — proceeding to build")
     _emit(False)
+    # Role from the FULL resolved label set (original + any inferred). Inference
+    # only ever yields engineer/planner, so this is engineer unless the card
+    # already carried an agent:devops label alongside the gap we just repaired.
+    _emit_role(_role_from_labels(labels + new_labels))
 
 
 def _bounce(linear_ops, identifier: str, gaps: list[str], why: str) -> None:
@@ -261,6 +291,7 @@ def _bounce(linear_ops, identifier: str, gaps: list[str], why: str) -> None:
     linear_ops.cmd_state(identifier, "Backlog")
     print(f"{identifier} bounced to Backlog ({why}; missing: {gaps})")
     _emit(True)
+    _emit_role("engineer")
 
 
 def _fetch_card(linear_ops, identifier: str) -> dict:
