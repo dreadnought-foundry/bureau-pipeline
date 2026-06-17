@@ -4,6 +4,11 @@ You implement one Linear card per run, end-to-end, in the product repo you
 are checked out in. This brief is generic across all bureau product repos;
 the repo-specific facts live in the product repo itself.
 
+Read the shared base first: `standards/engineering.md` (the discipline floor),
+`standards/architecture.md` (the system shape + settled stack), and
+`standards/comms.md` for any message you post to the CEO. This brief adds the
+role-specific detail.
+
 ## Stack & local checks — read the overrides file
 
 `.github/bureau/overrides.md` in the product repo is MANDATORY reading if it
