@@ -37,9 +37,11 @@ Auth: LINEAR_API_KEY env var (shared with linear_ops.py).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
+from pathlib import Path
 
 # IMPORTANT: this regex MUST stay in lockstep with the relay's _card_repo_slug
 # (cloud/relay/lambda_function.py in agent-bureau) so routing and validation
@@ -93,13 +95,73 @@ def missing(description: str, labels: list[str]) -> list[str]:
 # (the one case a fix would be a wrong-repo guess). The inference below is the
 # pure, no-I/O core; cmd_gate applies it and writes the labels/description.
 
+# --- Routing snapshot: derive VALID_SLUGS + the prefix map, never enumerate ---
+#
+# The valid-slug set and the project-prefix map are DERIVED from the SAME
+# canonical routing snapshot the relay reads (DRE-1624/1627/1628): the relay's
+# source of truth is the SSM parameter /bureau/relay/repo-map, seeded from and
+# mirrored by config/repo-map.json. The gate runs in GitHub Actions WITHOUT AWS
+# creds (and bureau-pipeline is checked out as a public repo with no token to
+# read agent-bureau's PRIVATE snapshot), so it cannot read SSM at runtime.
+# Instead we BUNDLE the snapshot as config/repo-map.json in THIS repo (the
+# "published JSON" read path) and derive both structures from it — so onboarding
+# a customer is a data write to the snapshot, not a two-line code edit here, and
+# the relay and the gate stay byte-aligned by reading the same shape.
+#
+# Lockstep is STRUCTURAL: test_repo_map_snapshot.py asserts the derived
+# structures equal the bundled snapshot (and that the bundled snapshot is a
+# superset of the documented aliases), so a hand-edit that drifts from the
+# snapshot fails CI rather than routing one way and validating another.
+
+_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "config" / "repo-map.json"
+
+# Last-known-good fallback: the snapshot bundled at the time of this commit. The
+# derive reads the on-disk snapshot first (so onboarding is a data edit); this
+# literal is used ONLY if that file is missing/unreadable/empty, so the gate
+# never hard-fails CI on a transient read error — it degrades to the last-known
+# slug set. The divergence test pins this literal to the on-disk snapshot, so it
+# can't silently rot.
+_FALLBACK_REPO_MAP = {
+    "atlas": "EveryBite/atlas",
+    "deltasolv": "dreadnought-foundry/deltasolv",
+    "vericorr": "dreadnought-foundry/vericorr",
+    "agent-bureau": "dreadnought-foundry/agent-bureau",
+    "agent-bureau-demo": "dreadnought-foundry/agent-bureau-demo",
+}
+
+
+def _load_repo_map() -> dict[str, str]:
+    """The slug → "owner/repo" routing snapshot, read from the bundled
+    config/repo-map.json. Falls back to the last-known-good literal above when
+    the file is missing/unreadable/empty/malformed, logging to stderr — so the
+    gate degrades gracefully instead of hard-failing CI on a transient read."""
+    try:
+        parsed = json.loads(_SNAPSHOT_PATH.read_text())
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+        print(
+            f"validate_card: routing snapshot {_SNAPSHOT_PATH} empty/not-a-dict; "
+            "using last-known-good fallback",
+            file=sys.stderr,
+        )
+    except Exception as exc:  # missing / unreadable / malformed JSON
+        print(
+            f"validate_card: could not read routing snapshot {_SNAPSHOT_PATH} "
+            f"({exc}); using last-known-good fallback",
+            file=sys.stderr,
+        )
+    return dict(_FALLBACK_REPO_MAP)
+
+
+_REPO_MAP = _load_repo_map()
+
 # The real repos the bureau pipeline serves — the SINGLE source of truth for a
-# valid repo slug. Mirrors the relay's REPO_MAP in agent-bureau
-# (cloud/relay/deploy.sh: {atlas, deltasolv, vericorr}) PLUS agent-bureau, which
-# is a real repo + a real initiative that consumes this pipeline @main (the relay
-# DEFAULT_REPO covers it for routing). Inference must never resolve a slug that
-# isn't here — better to bounce than build on a repo that doesn't exist.
-VALID_SLUGS = {"atlas", "deltasolv", "vericorr", "agent-bureau", "agent-bureau-demo"}
+# valid repo slug, DERIVED as the routing snapshot's keys (DRE-1624/1626).
+# Mirrors the relay's REPO_MAP keys (cloud/relay/lambda_function.py
+# `_infer_slug`: `valid_slugs = set(_repo_map())`). Inference must never resolve
+# a slug that isn't here — better to bounce than build on a repo that doesn't
+# exist; onboarding a repo adds it to the snapshot, no edit here.
+VALID_SLUGS = set(_REPO_MAP)
 
 # Initiative-label slug → repo slug. The mapping is identity EXCEPT the one
 # documented alias: the Agent Bureau initiative carries the `initiative:bureau`
@@ -107,20 +169,22 @@ VALID_SLUGS = {"atlas", "deltasolv", "vericorr", "agent-bureau", "agent-bureau-d
 # other initiative's label slug equals its repo slug. We keep this as an alias
 # table (not an enumeration) so an unknown/typo'd initiative resolves to its own
 # slug and is then rejected by the VALID_SLUGS guard — never silently dropped.
+# Byte-aligned with the relay's _INITIATIVE_ALIAS.
 _INITIATIVE_ALIAS = {"bureau": "agent-bureau"}
 
+# Non-identity project-NAME-prefix aliases (the token before the first ":").
+# Projects are named "<Product>: <thing>" (e.g. "Bureau: Console", "Demo:
+# Sandbox"); their prefix is the repo slug EXCEPT these product nicknames.
+# Byte-aligned with the relay's _PROJECT_PREFIX_ALIAS — the non-derivable bits.
+_PROJECT_PREFIX_ALIAS = {"bureau": "agent-bureau", "demo": "agent-bureau-demo"}
+
 # Linear project NAME prefix (the token before the first ":") → repo slug.
-# Projects are named "<Product>: <thing>" (e.g. "Bureau: Console",
-# "Atlas: Allergen Pivot", "DeltaSolv: Phase 6", "VeriCorr: Forms"). A prefix we
-# don't recognize (Foundry, Dev Sandbox, or anything else) yields no repo →
-# bounce. Keys are lowercased for case-insensitive matching.
-_PROJECT_PREFIX_TO_SLUG = {
-    "bureau": "agent-bureau",
-    "atlas": "atlas",
-    "deltasolv": "deltasolv",
-    "vericorr": "vericorr",
-    "demo": "agent-bureau-demo",
-}
+# DERIVED, mirroring the relay's _infer_slug: identity over every routable slug,
+# plus the non-derivable product nicknames in _PROJECT_PREFIX_ALIAS. A prefix we
+# don't recognize (Foundry, Dev Sandbox, …) yields no repo → bounce. Keys are
+# lowercased for case-insensitive matching.
+_PROJECT_PREFIX_TO_SLUG = {slug: slug for slug in VALID_SLUGS}
+_PROJECT_PREFIX_TO_SLUG.update(_PROJECT_PREFIX_ALIAS)
 
 _INITIATIVE_PREFIX = "initiative:"
 
