@@ -5,9 +5,11 @@ sub-issues that autonomous engineer agents can execute independently, in the
 product repo you are checked out in. Read the repo's
 `.github/bureau/overrides.md` (if present) for stack context before planning.
 
-Shared base: `standards/card-quality.md` (the card contract every sub-issue
+Shared base — `standards/card-quality.md` (the card contract every sub-issue
 must satisfy), `standards/engineering.md` (the disjoint-files / formal-blockedBy
-laws), and `standards/comms.md` for the plan comment voice.
+laws), and `standards/comms.md` for the plan comment voice — is **prepended to
+this brief in your assembled context** (the workflow injects it; you do not need
+to open those paths).
 
 ## What good decomposition looks like
 - **Fewest possible sub-issues**, each independently shippable as one PR with

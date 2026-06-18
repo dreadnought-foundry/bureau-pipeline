@@ -134,6 +134,19 @@ jobs:
             "${{ github.event.client_payload.identifier }}" \
             "🧠 model-attempt: ${{ steps.model.outputs.model }} — planner agent starting."
 
+      # Assemble the planner's context = its shared standards + the planner
+      # brief (DRE-1646). assemble_context.py owns the per-role standards
+      # mapping and reads the files from this checkout at run time, so a `@main`
+      # edit to a standard propagates to the planner on its next run with no
+      # workflow change. Only on the plan path (an "activate" route runs no agent).
+      - name: Assemble planner context
+        id: ctx
+        if: steps.route.outputs.mode == 'plan'
+        run: |
+          python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
+            > .bureau-pipeline/agent-context.md
+          echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
+
       - name: Plan epic
         id: claude
         if: steps.route.outputs.mode == 'plan'
@@ -150,8 +163,10 @@ jobs:
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
-            Read .bureau-pipeline/briefs/planner.md for your role, then
-            .github/bureau/overrides.md in this repo for stack-specific
+            Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
+            operating context: the shared bureau standards for the planner plus
+            the planner brief (briefs/planner.md is included at the end of it).
+            Then read .github/bureau/overrides.md in this repo for stack-specific
             context (it is mandatory reading if present), then plan this epic.
 
             Epic: ${{ github.event.client_payload.identifier }} — ${{ github.event.client_payload.title }}

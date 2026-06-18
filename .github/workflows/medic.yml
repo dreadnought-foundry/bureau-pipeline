@@ -58,6 +58,17 @@ jobs:
           repository: dreadnought-foundry/bureau-pipeline
           path: .bureau-pipeline
 
+      # Assemble the medic's context = the engineering standard (to ground its
+      # diagnosis) + the comms standard (its report is CEO-facing) (DRE-1646).
+      # assemble_context.py reads the files from this checkout at run time, so a
+      # `@main` standards edit reaches the medic on its next run, no workflow change.
+      - name: Assemble medic context
+        id: ctx
+        run: |
+          python3 .bureau-pipeline/scripts/assemble_context.py assemble medic \
+            > .bureau-pipeline/agent-context.md
+          echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of medic context"
+
       - name: Diagnosis agent
         uses: anthropics/claude-code-action@v1
         env:
@@ -76,6 +87,10 @@ jobs:
             --model claude-sonnet-4-6
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
+            Read .bureau-pipeline/agent-context.md FIRST — the shared bureau
+            engineering standard (to ground your diagnosis) and the comms
+            standard (your report goes to the non-technical CEO).
+
             You are the pipeline medic for this repo. The workflow
             "${{ github.event.workflow_run.name }}" failed twice (original run
             + one automatic retry), so this is NOT a transient flake.

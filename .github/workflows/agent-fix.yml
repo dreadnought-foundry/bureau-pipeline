@@ -194,6 +194,20 @@ jobs:
           [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ steps.pr.outputs.card }}" "$MSG" || true
 
+      # Assemble the fixing agent's context = the engineering standard (it
+      # works to the same discipline floor as the engineer) + the comms standard
+      # (DRE-1646). The fixer has no role brief; it reads the engineer brief for
+      # conventions (below) and these standards for the shared base.
+      # assemble_context.py reads the files from this checkout at run time, so a
+      # `@main` standards edit reaches the fixer on its next run, no workflow change.
+      - name: Assemble fix context
+        id: ctx
+        if: steps.pr.outputs.go == 'true'
+        run: |
+          python3 .bureau-pipeline/scripts/assemble_context.py assemble fix \
+            > .bureau-pipeline/agent-context.md
+          echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of fix context"
+
       - name: Fix
         if: steps.pr.outputs.go == 'true'
         uses: anthropics/claude-code-action@v1
@@ -211,6 +225,8 @@ jobs:
             You are the fixing agent for PR #${{ steps.pr.outputs.number }} in this
             repo. You are already checked out on its branch
             (${{ steps.pr.outputs.branch }}). Read
+            .bureau-pipeline/agent-context.md FIRST — the shared bureau
+            engineering and comms standards you must work to — then
             .bureau-pipeline/briefs/engineer.md for conventions, then
             .github/bureau/overrides.md in this repo for stack-specific
             commands (it is mandatory reading if present). GH_TOKEN is in

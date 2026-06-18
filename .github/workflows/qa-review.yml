@@ -56,6 +56,19 @@ jobs:
           CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
 
+      # Assemble the critic's context = the standards it reviews AGAINST
+      # (engineering + architecture) plus the comms standard for its verdict
+      # voice (DRE-1646). The critic has no role brief — standards are its whole
+      # knowledge channel. assemble_context.py reads the files from this checkout
+      # at run time, so a `@main` standards edit reaches the critic on its next
+      # run with no workflow change. Shared by both critic attempts below.
+      - name: Assemble critic context
+        id: ctx
+        run: |
+          python3 .bureau-pipeline/scripts/assemble_context.py assemble critic \
+            > .bureau-pipeline/agent-context.md
+          echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of critic context"
+
       # ── Visual-QA stage (DRE-1481, layer 3b of DRE-1477) ──────────────────
       # When the PR's card has a **Design:** ref AND the PR changed UI, render
       # the affected screen(s) with the console harness (DRE-1480) and hand the
@@ -188,6 +201,11 @@ jobs:
             --model claude-sonnet-4-6
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
+            Read .bureau-pipeline/agent-context.md FIRST — the bureau
+            engineering and architecture standards you review AGAINST, plus the
+            comms standard that governs the VOICE of the verdict you write for
+            the CEO. Hold the diff to those standards.
+
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
             in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
             `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
@@ -300,6 +318,11 @@ jobs:
             --model claude-sonnet-4-6
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
+            Read .bureau-pipeline/agent-context.md FIRST — the bureau
+            engineering and architecture standards you review AGAINST, plus the
+            comms standard that governs the VOICE of the verdict you write for
+            the CEO. Hold the diff to those standards.
+
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
             in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
             `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
