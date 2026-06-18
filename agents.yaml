@@ -63,6 +63,30 @@ agents:
     briefPath: briefs/frontend.md
     workflow: .github/workflows/agent-task.yml
 
+  - name: database-architect
+    role: Database Architect
+    # Data-layer specialist — relational schema design, migrations, indexing,
+    # query/performance tuning, plus analytical/warehouse modeling (dimensional,
+    # ELT, dbt). AUTHOR-ONLY: writes schema/migrations/models as code and NEVER
+    # executes against a live database. Shown in the roster now; CI auto-dispatch
+    # is intentionally NOT wired yet (no agent:database label route / no new
+    # workflow). The workflow field points at the shared agent-task.yml only to
+    # satisfy the roster schema — NOTHING routes a Linear label here, so it can
+    # never be auto-dispatched (label routing resolves only planner/devops/
+    # frontend, else engineer; see scripts/model_fallback.py + validate_card.py).
+    model: claude-opus-4-8
+    ladder:
+      - model: claude-opus-4-8
+        reason: "preferred — strongest reasoning for schema/migration correctness"
+      - model: claude-sonnet-4-6
+        reason: "fallback if Opus is unavailable"
+    trigger: "Operator-launched (interactive Claude Code / VS Code task); CI auto-dispatch not yet wired"
+    maxTurns: 150
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    briefPath: briefs/database-architect.md
+    workflow: .github/workflows/agent-task.yml
+
   - name: devops
     role: DevOps
     model: claude-fable-5
