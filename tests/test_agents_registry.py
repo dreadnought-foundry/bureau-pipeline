@@ -32,9 +32,10 @@ class AgentsRegistryTest(unittest.TestCase):
                           f"{a['name']}: maxTurns {a['maxTurns']} not in {a['workflow']}")
 
     def test_every_agent_has_a_valid_category(self):
-        # category groups the roster in the console (build/review/system);
+        # category groups the roster in the console by business function
+        # (product/development/operations/marketing/sales);
         # purely additive/display — no dispatch impact.
-        allowed = {"build", "review", "system"}
+        allowed = {"product", "development", "operations", "marketing", "sales"}
         for a in load():
             self.assertIn("category", a, f"{a['name']}: missing category")
             self.assertIn(a["category"], allowed,

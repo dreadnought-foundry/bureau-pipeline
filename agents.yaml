@@ -8,9 +8,11 @@
 # Schema (one entry per agent):
 #   name      — stable identifier (lowercase)
 #   role      — human label shown in the console roster
-#   category  — roster grouping for the console: build | review | system
-#               (build = card-executing builders; review = planning & review;
-#               system = automatic internal agents shown badged, not access-gated)
+#   category  — business-function grouping for the console roster:
+#               product | development | operations | marketing | sales
+#               (product = planning/spec; development = building & code review;
+#               operations = devops, fixes, verification, pipeline health;
+#               marketing/sales reserved for future agents — no entries yet)
 #   model     — best/default Claude model id (top of the ladder); `ladder` is the
 #               ordered preference ladder, best→worst — selection walks it at
 #               runtime and uses the first AVAILABLE model (DRE-1490). A 404'd
@@ -25,7 +27,7 @@
 agents:
   - name: engineer
     role: Engineer
-    category: build
+    category: development
     # Ordered preference ladder, best→worst (DRE-1490). Selection probes
     # availability at runtime and uses the first AVAILABLE model — shared by
     # engineer AND planner, no role hardcodes a model. Fable 5 currently 404s
@@ -47,7 +49,7 @@ agents:
 
   - name: frontend
     role: Frontend
-    category: build
+    category: development
     # Engineer in WEB MODE — same shared ladder as engineer. The brief
     # (briefs/frontend.md) binds every engineer rule and adds the web specifics
     # (Vite SPA, the static-asset/MIME proxy trap, esbuild Node-API, same-origin
@@ -70,7 +72,7 @@ agents:
 
   - name: database-architect
     role: Database Architect
-    category: build
+    category: development
     # Data-layer specialist — relational schema design, migrations, indexing,
     # query/performance tuning, plus analytical/warehouse modeling (dimensional,
     # ELT, dbt). AUTHOR-ONLY: writes schema/migrations/models as code and NEVER
@@ -95,7 +97,7 @@ agents:
 
   - name: devops
     role: DevOps
-    category: build
+    category: operations
     model: claude-fable-5
     ladder:
       - model: claude-fable-5
@@ -113,7 +115,7 @@ agents:
 
   - name: fixer
     role: Fix agent
-    category: system
+    category: operations
     model: claude-opus-4-8
     ladder:
       - attempt: 3
@@ -128,7 +130,7 @@ agents:
 
   - name: critic
     role: QA Critic
-    category: review
+    category: development
     model: claude-sonnet-4-6
     trigger: "agent PR opened/updated (head agent/*) or workflow_dispatch re-review"
     maxTurns: 40
@@ -139,7 +141,7 @@ agents:
 
   - name: verifier
     role: Verifier
-    category: system
+    category: operations
     model: claude-sonnet-4-6
     trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
     maxTurns: 60
@@ -150,7 +152,7 @@ agents:
 
   - name: planner
     role: Planner
-    category: review
+    category: product
     # Same ordered preference ladder as the engineer (DRE-1490) — both roles
     # walk it best→worst and use the first AVAILABLE model. Fable 5 currently
     # 404s so this resolves to Opus 4.8; it self-heals to Fable when re-enabled.
@@ -171,7 +173,7 @@ agents:
 
   - name: medic
     role: Pipeline Medic
-    category: system
+    category: operations
     model: claude-sonnet-4-6
     trigger: "workflow_run failed twice (attempt 1 auto-retries without an agent)"
     maxTurns: 40
