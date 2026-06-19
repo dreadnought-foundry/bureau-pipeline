@@ -1,0 +1,242 @@
+# Researches a Linear card and PROPOSES an approach — read-only, NO code.
+#
+# A per-card analog of plan.yml (which plans epics): triggered (via a thin stub
+# in the product repo) by the bureau-linear-relay Lambda's repository_dispatch
+# when a card is routed for the research-and-propose gate. The agent reads the
+# card against the codebase and posts a PLAIN-ENGLISH proposed approach (what it
+# would change, where, the approach, the risks, a rough size) as a Linear
+# comment. It opens NO branch and NO PR and writes NO code — the toolset is
+# read-only by construction.
+#
+# DORMANT until a later relay change emits the `agent-propose` dispatch type and
+# product repos add the matching stub. This file alters no existing behavior:
+# it is a brand-new reusable workflow on a brand-new event path. The
+# "Proposing"/"Proposed" states and the `proposed` label it references are
+# created in Linear separately (operator task) — they need not exist for this
+# file to merge.
+#
+# Reusable workflow: concurrency + permissions live in the calling stub (which
+# owns the trigger context). github.event / github.repository inside this file
+# resolve to the CALLER's event and repo.
+name: Agent Propose (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: true
+      BUREAU_APP_PRIVATE_KEY:
+        required: true
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+
+      # Central pipeline scripts + briefs (public repo — no token needed).
+      # Checked out AFTER the product repo so the product checkout's clean
+      # step can't wipe it; excluded from the product repo's git view.
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+      - name: Hide pipeline checkout from product git
+        run: echo ".bureau-pipeline/" >> .git/info/exclude
+
+      # Product-specific environment setup (mirrors agent-task.yml). Optional by
+      # design — a repo that needs nothing ships no setup.sh. Read-only research
+      # rarely needs it, but a repo whose code can't be understood without a
+      # toolchain (generated sources, etc.) may rely on it.
+      - name: Product environment setup (optional)
+        env:
+          BOT_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          if [ -f .github/bureau/setup.sh ]; then
+            bash .github/bureau/setup.sh
+          else
+            echo "no .github/bureau/setup.sh — skipping product setup"
+          fi
+
+      # Same Todo-entry card-validation gate the build path uses (DRE-1405):
+      # validate the LIVE card and, if malformed AND still in Todo/Triage, bounce
+      # it to Backlog with a diagnostic comment — and skip every downstream step.
+      # Also emits `role=` (engineer/frontend/devops) used for model selection
+      # and context assembly below.
+      - name: Card-validation gate
+        id: gate
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/validate_card.py gate \
+            "${{ github.event.client_payload.identifier }}"
+
+      # Model selection: the SAME ordered preference ladder as the engineer
+      # (DRE-1490). select() walks the shared ladder best→worst and returns the
+      # first AVAILABLE model, probed via a minimal /v1/messages call using the
+      # CLAUDE token already in the env (no new secret). Mirrors the engineer
+      # Select-model step in agent-task.yml; reuses the same selector and role.
+      - name: Select model
+        id: model
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: |
+          ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select "$ROLE")
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "selected model: $MODEL (role: $ROLE)"
+
+      # Assemble the engineer role context exactly like agent-task.yml: the
+      # role's shared standards + role brief, read from this checkout at run time
+      # so a `@main` edit to a standard propagates here with no workflow change.
+      # The propose brief (briefs/propose.md) is layered on via the prompt — it
+      # adds the read-only-research framing on top of the engineer context, so a
+      # proposal is sized against the same engineering floor the builder will use.
+      - name: Assemble agent context
+        id: ctx
+        if: steps.gate.outputs.bounced != 'true'
+        run: |
+          ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
+          python3 .bureau-pipeline/scripts/assemble_context.py assemble "$ROLE" \
+            > .bureau-pipeline/agent-context.md
+          echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of context for role: $ROLE"
+
+      - name: Card → Proposing
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py state \
+            "${{ github.event.client_payload.identifier }}" "Proposing"
+          # Heartbeat: record which model this attempt uses so the board/console
+          # can surface per-attempt model (same machine-parseable marker the
+          # selector reads back).
+          python3 .bureau-pipeline/scripts/linear_ops.py comment \
+            "${{ github.event.client_payload.identifier }}" \
+            "🧠 model-attempt: ${{ steps.model.outputs.model }} — propose (research-only) agent starting."
+
+      # Research-only run. The toolset is deliberately Read/Glob/Grep/Bash with
+      # NO Edit and NO Write — the agent CANNOT modify the working tree, create a
+      # branch, or open a PR. The prompt forbids it too, but the toolset is the
+      # real enforcement. --max-turns is capped low (30) to bound cost.
+      - name: Research and propose
+        id: claude
+        if: steps.gate.outputs.bounced != 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: agent-bureau-bot
+          claude_args: |
+            --max-turns 30
+            --model ${{ steps.model.outputs.model }}
+            --allowedTools "Bash,Read,Glob,Grep"
+          prompt: |
+            Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
+            operating context: the shared bureau standards for your role plus the
+            engineer role brief. Then read briefs/propose.md in the
+            .bureau-pipeline checkout — it is YOUR brief for this run and has the
+            final word: you RESEARCH this card and OUTPUT a plain-English
+            proposed approach, and you write NO code. Then read
+            .github/bureau/overrides.md in this repo for stack-specific context
+            (mandatory reading if present), then research this Linear card.
+
+            Card: ${{ github.event.client_payload.identifier }} — ${{ github.event.client_payload.title }}
+            Card URL: ${{ github.event.client_payload.url }}
+
+            Description:
+            ${{ github.event.client_payload.description }}
+
+            Your job (research-and-propose ONLY — NO code, NO branch, NO PR):
+            1. Explore this repo enough to ground a proposal in reality: find the
+               files/areas the card touches, read neighboring code, understand
+               the existing patterns. You have Read/Glob/Grep/Bash for INSPECTION
+               only — Edit and Write are not available to you.
+            2. Form a proposed approach: what you'd change, WHERE (real paths),
+               the approach (a few short steps), the risks/ambiguities, and a
+               rough size — all in PLAIN ENGLISH for a non-technical reader, per
+               briefs/propose.md.
+            3. Post the proposal as a comment on the card:
+                 python3 .bureau-pipeline/scripts/linear_ops.py comment \
+                   "${{ github.event.client_payload.identifier }}" "<proposal>"
+               GH_TOKEN and LINEAR_API_KEY are already in your env.
+            4. If the card is too ambiguous to propose an approach, post a comment
+               asking the specific questions you need answered instead of
+               guessing — and also write that reason to /tmp/agent-proposal.txt.
+            5. Write your final proposal text (the same plain-English proposal you
+               posted) to /tmp/agent-proposal.txt as well, so the workflow has a
+               backstop copy to post if your comment call failed.
+
+      # Backstop: if the agent's own comment call failed, post the captured
+      # proposal so the human still gets it. Reuses the same linear_ops comment
+      # helper agent-task / plan use. Best-effort — never fail the run on it.
+      - name: Post proposal to Linear (backstop)
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ github.event.client_payload.identifier }}
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -f /tmp/agent-proposal.txt ] && [ -s /tmp/agent-proposal.txt ]; then
+            # Only post the backstop if the agent did NOT already post a proposal
+            # this run (it stamps the model-attempt marker at start; a proposal
+            # comment is a separate later comment). count-comments lets us detect
+            # an already-posted backstop on a rerun so we stay idempotent.
+            ALREADY=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
+              "$CARD" "proposed-approach-backstop" || echo 0)
+            if [ "${ALREADY:-0}" = "0" ]; then
+              {
+                echo "📝 Proposed approach (backstop copy) — proposed-approach-backstop"
+                echo ""
+                cat /tmp/agent-proposal.txt
+                echo ""
+                echo "Run: $RUN_URL"
+              } > /tmp/proposal-comment.md
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                "$(cat /tmp/proposal-comment.md)" || true
+            else
+              echo "backstop already posted on a prior run — skipping"
+            fi
+          else
+            echo "no /tmp/agent-proposal.txt — the agent posted its proposal directly (or asked questions)"
+          fi
+
+      # Mark the card Proposed and stamp the `proposed` label — the marker a
+      # later relay change will read to know this card has a proposal awaiting
+      # human review. Idempotent helpers (add-label creates the label if absent
+      # and is a no-op if already present); state-set mirrors the existing
+      # workflows. Skipped on a bounce (the gate already parked the card).
+      - name: Card → Proposed (+ proposed label)
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ github.event.client_payload.identifier }}
+        run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" proposed || true
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Proposed"
