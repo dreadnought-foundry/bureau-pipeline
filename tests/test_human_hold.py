@@ -99,13 +99,16 @@ def test_add_label_creates_when_missing():
 
 
 # --------------------------------------------------------------------------
-# linear_ops.remove_label — detach, idempotent (DRE-1660 propose-gate marker)
+# linear_ops.remove_label — the generic detach helper (idempotent inverse of
+# add_label). It once cleared the retired `proposed` propose-gate marker
+# (DRE-1660); that machinery is gone (escalate-by-exception, DRE-1655/1662) but
+# the helper stays, so these pin its generic behavior on an example label.
 # --------------------------------------------------------------------------
 def test_remove_label_noop_when_absent():
     """Card without the label: read only, never mutate (idempotent no-op)."""
     payload = {"issue": {"id": "uuid-1", "labels": {"nodes": []}}}
     with patch.object(linear_ops, "gql", return_value=payload) as g:
-        linear_ops.remove_label("DRE-1", "proposed")
+        linear_ops.remove_label("DRE-1", "stale")
     assert g.call_count == 1  # the read; no issueUpdate
 
 
@@ -117,7 +120,7 @@ def test_remove_label_detaches_when_present():
                 "id": "uuid-1",
                 "labels": {
                     "nodes": [
-                        {"id": "Lp", "name": "proposed"},
+                        {"id": "Lp", "name": "stale"},
                         {"id": "Lk", "name": "size:M"},
                     ]
                 },
@@ -126,20 +129,20 @@ def test_remove_label_detaches_when_present():
         {"issueUpdate": {"success": True}},
     ]
     with patch.object(linear_ops, "gql", side_effect=seq) as g:
-        linear_ops.remove_label("DRE-1", "proposed")
+        linear_ops.remove_label("DRE-1", "stale")
     assert g.call_count == 2
-    # Only the surviving (non-proposed) label id is written back.
+    # Only the surviving (non-removed) label id is written back.
     assert g.call_args_list[1].args[1]["input"]["labelIds"] == ["Lk"]
 
 
 def test_remove_label_case_insensitive():
     """Matches the label name case-insensitively, like add_label."""
     seq = [
-        {"issue": {"id": "uuid-1", "labels": {"nodes": [{"id": "Lp", "name": "Proposed"}]}}},
+        {"issue": {"id": "uuid-1", "labels": {"nodes": [{"id": "Lp", "name": "Stale"}]}}},
         {"issueUpdate": {"success": True}},
     ]
     with patch.object(linear_ops, "gql", side_effect=seq) as g:
-        linear_ops.remove_label("DRE-1", "proposed")
+        linear_ops.remove_label("DRE-1", "stale")
     assert g.call_count == 2
     assert g.call_args_list[1].args[1]["input"]["labelIds"] == []
 

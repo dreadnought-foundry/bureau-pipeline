@@ -17,6 +17,26 @@ Linear card → relay Lambda → repository_dispatch on the product repo
 
 CI is deliberately NOT here — `ci.yml` stays product-specific in each repo.
 
+## Build by default; escalate by exception (DRE-1655)
+
+The engineer agent (`agent-task.yml` + `briefs/engineer.md`) is **autonomous by
+default**: it researches a card and, when confident, builds and ships it through
+the normal PR → critic → merge gates with no human in the loop. It **stops and
+asks only by exception** — on genuine uncertainty (ambiguous intent, a
+risky/destructive change, or a business A-vs-B decision). When it stops it posts
+a **plain-English question** as a Linear comment and parks the card in the
+`Plan Review` lane (the "needs you" queue, reused from epic plan approval); the
+CEO answers and moves it back to `Todo` to proceed or to `Backlog` to drop it.
+The critic + tests remain the correctness backstop on every merge.
+
+There is **no propose-first hard stop**. An earlier design (a read-only
+`propose.yml` pass, a `proposed` marker, and relay propose-vs-execute routing)
+was built, then **shelved and retired** — it stalled overnight automation and
+asked the CEO to approve technical approaches he can't evaluate. The
+`propose.yml` workflow and its marker are gone; the relay routing was canceled
+and never deployed. Only the `Plan Review` lane and the console "needs you"
+surfacing are reused.
+
 ## How a product repo consumes this
 
 Each pipeline workflow in the product repo is a thin stub: it owns the

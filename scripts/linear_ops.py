@@ -14,7 +14,7 @@ Subcommands:
   add-label <DRE-N> <label-name>       attach a label (creating it if needed),
                                        idempotent — used for the human-hold
   remove-label <DRE-N> <label-name>    detach a label, idempotent — a no-op if
-                                       absent; clears the propose-gate marker
+                                       absent (generic; mirrors add-label)
   description <DRE-N>                   print the card's raw description to
                                        stdout (the authoritative **Design:**
                                        source the visual-QA stage reads)
@@ -266,10 +266,10 @@ def remove_label(identifier: str, label_name: str) -> None:
     """Detach `label_name` from a card. Idempotent: a no-op if the card does
     not carry it (and never an error if the team label doesn't exist).
 
-    Mirrors add_label. Used by the build path (agent-task.yml) to clear the
-    `proposed` propose-gate marker the instant a build starts (DRE-1660): the
-    marker must be cleared exactly once so a card that later returns to Todo
-    gets a FRESH proposal instead of silently rebuilding off a stale one.
+    The generic inverse of add_label — kept available for any label the pipeline
+    needs to clear. (It once cleared the `proposed` propose-gate marker; that
+    hard-stop machinery was retired with the escalate-by-exception model,
+    DRE-1655/1662, but the helper remains useful and stays.)
     """
     data = gql(
         """query($id: String!) { issue(id: $id) {

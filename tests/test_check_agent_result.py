@@ -21,9 +21,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import check_agent_result  # noqa: E402
 
 
-def verdict(execution=None, branch=False, pr=False, blocker=False):
+NO_EVIDENCE = "no agent branch, no PR, no blocker note, and no escalation note"
+
+
+def verdict(execution=None, branch=False, pr=False, blocker=False, escalation=False):
     return check_agent_result.failure_reason(
-        execution, branch_exists=branch, pr_exists=pr, blocker_note=blocker
+        execution,
+        branch_exists=branch,
+        pr_exists=pr,
+        blocker_note=blocker,
+        escalation_note=escalation,
     )
 
 
@@ -35,13 +42,15 @@ class FailureReasonTest(unittest.TestCase):
         )
 
     def test_no_branch_no_pr_no_blocker_fails(self):
-        self.assertEqual(
-            verdict({"is_error": False}),
-            "no agent branch, no PR, and no blocker note",
-        )
+        self.assertEqual(verdict({"is_error": False}), NO_EVIDENCE)
 
     def test_honest_blocker_is_exempt(self):
         self.assertIsNone(verdict({"is_error": False}, blocker=True))
+
+    def test_honest_escalation_is_exempt(self):
+        # DRE-1655: the agent intentionally stopped to ask the CEO a decision —
+        # an honest, designed outcome (→ Plan Review), not a silent death.
+        self.assertIsNone(verdict({"is_error": False}, escalation=True))
 
     def test_clean_success_with_pr_passes(self):
         self.assertIsNone(verdict({"is_error": False}, branch=True, pr=True))
@@ -57,9 +66,7 @@ class FailureReasonTest(unittest.TestCase):
         self.assertIsNone(verdict(None, branch=True, pr=True))
 
     def test_missing_execution_file_with_no_evidence_still_fails(self):
-        self.assertEqual(
-            verdict(None), "no agent branch, no PR, and no blocker note"
-        )
+        self.assertEqual(verdict(None), NO_EVIDENCE)
 
 
 class IgnoreIsErrorTest(unittest.TestCase):
@@ -86,7 +93,7 @@ class IgnoreIsErrorTest(unittest.TestCase):
             check_agent_result.failure_reason(
                 {"is_error": True}, branch_exists=False, ignore_is_error=True
             ),
-            "no agent branch, no PR, and no blocker note",
+            NO_EVIDENCE,
         )
 
     def test_is_error_death_helper(self):
@@ -134,6 +141,30 @@ class CliTest(unittest.TestCase):
             self.assertEqual(p.returncode, 0)
         finally:
             os.unlink(blocker)
+
+    def test_cli_exit_0_on_escalation_note(self):
+        # DRE-1655: an escalation file (agent stopped to ask the CEO) keeps the
+        # gate green with no branch/PR — like a blocker note.
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("Should free-tier users see X, or only paid?")
+            esc = f.name
+        try:
+            p = self._run({"is_error": False},
+                          extra=("--escalation-file", esc))
+            self.assertEqual(p.returncode, 0)
+        finally:
+            os.unlink(esc)
+
+    def test_cli_empty_escalation_file_does_not_exempt(self):
+        # An empty escalation file is not a real escalation — no evidence ⇒ fail.
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            esc = f.name  # zero bytes
+        try:
+            p = self._run({"is_error": False},
+                          extra=("--escalation-file", esc))
+            self.assertEqual(p.returncode, 1)
+        finally:
+            os.unlink(esc)
 
 
 if __name__ == "__main__":

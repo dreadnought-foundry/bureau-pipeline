@@ -57,8 +57,9 @@ supplement to this brief — it adds to these conventions, it does not replace t
 - **TDD, commits split**: failing test committed first, implementation second.
   Git history must show the test existed before the fix.
 - **Scope**: implement exactly the card. No drive-by refactors, no scope
-  creep. If the card is wrong/ambiguous, stop and write the blocker (see
-  workflow prompt) — a wrong guess costs a full review cycle.
+  creep. If the card is wrong/ambiguous, stop and escalate (see "Build by
+  default; escalate by exception" below) — a wrong guess costs a full review
+  cycle.
 - **Empty-diff check**: before opening the PR, `git diff --stat <default-branch>...HEAD`
   must show real changes. Zero changed files = you did not do the work; stop
   and report a blocker.
@@ -77,6 +78,51 @@ supplement to this brief — it adds to these conventions, it does not replace t
 - **One PR per card**, branch `agent/DRE-N-<slug>`, title `feat(DRE-N): ...`
   (or fix/chore as appropriate). PR body: what + why in 2-3 sentences, card
   URL, test evidence ("N new tests, all green locally").
+
+## Build by default; escalate by exception (DRE-1655)
+You are **autonomous by default**. Research the card, and if you are confident
+you understand what's wanted and how to do it safely, **build and ship it** —
+the normal branch → TDD → PR → critic → merge flow, fully unattended (overnight
+is the point). Do NOT ask for permission on a card you can confidently execute;
+the critic and the test suite are the correctness backstop, so "confidently
+wrong" is still caught downstream.
+
+**Escalate (stop before opening a PR) ONLY on genuine uncertainty** — one of:
+- **Ambiguous intent you cannot safely resolve** — the card can be read two
+  materially different ways and picking wrong would build the wrong thing (not
+  a minor naming/style choice you can reasonably decide and note in the PR).
+- **A risky or destructive change** — data migrations that drop/rewrite data,
+  deleting a feature/endpoint, anything irreversible or wide-blast-radius where
+  a wrong call is expensive to undo.
+- **A real business decision (A vs B)** — a genuine product/behavior choice the
+  CEO should own (e.g. "should free-tier users see X or not"), not a technical
+  implementation detail.
+
+This is a **high bar**: the default must stay "ship it." If you find yourself
+escalating a card you could reasonably just build, you are over-escalating —
+build it and note the decision in the PR body instead. Routine ambiguity you
+can resolve by reading neighboring code, matching existing patterns, or making
+a sensible reversible choice is NOT an escalation; just build it.
+
+### How to escalate
+When (and only when) one of the three triggers above genuinely applies:
+1. Open **no branch and no PR** — stop before any code.
+2. Write your question to **`/tmp/agent-escalation.txt`** in **plain English /
+   business terms**: what the CEO needs to decide and why, phrased so a
+   non-technical reader can answer it. **No code, no diffs, no file paths, no
+   jargon** — the CEO judges behavior, not implementation. End with the
+   concrete options or the single question you need answered.
+3. Stop. The workflow posts your question as a Linear comment and moves the card
+   to the **`Plan Review`** lane (the "needs you" queue). The CEO answers and
+   moves the card back to `Todo` (a fresh run picks up the guidance from the
+   card/comments) or to `Backlog` to drop it.
+
+`/tmp/agent-escalation.txt` is the **business-decision / ambiguity** escape
+hatch (→ Plan Review, waiting on the CEO). It is distinct from
+`/tmp/agent-blocker.txt`, which is the **impossible-as-specified** path (→
+Backlog, inert until the card is fixed). Use escalation when a human DECISION
+unblocks you; use blocker when the card literally cannot be built as written.
+Write at most one of the two.
 
 ## Test rigor — no vacuous tests
 Every test must FAIL if the behavior it claims to verify is removed.

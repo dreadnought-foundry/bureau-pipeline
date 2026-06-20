@@ -129,15 +129,6 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py state \
             "${{ github.event.client_payload.identifier }}" "In Progress"
-          # Clear the propose-gate marker the instant a build starts (DRE-1660).
-          # The `proposed` label is the relay's single routing discriminator for
-          # the research-and-propose gate; clearing it exactly once here ensures a
-          # card that later returns to Todo gets a FRESH proposal rather than
-          # silently rebuilding off a stale one. remove-label is idempotent — a
-          # no-op (never a failure) if the card never carried the marker, so this
-          # is harmless on cards that never went through the propose gate.
-          python3 .bureau-pipeline/scripts/linear_ops.py remove-label \
-            "${{ github.event.client_payload.identifier }}" proposed || true
           # Heartbeat: record which model this attempt uses so the board/console
           # can surface per-attempt model (DRE-1354 AC).
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
@@ -176,6 +167,16 @@ jobs:
             Description:
             ${{ github.event.client_payload.description }}
 
+            Build by default; escalate by exception. You are autonomous: if you
+            are confident you understand the card and can do it safely, BUILD AND
+            SHIP it via the normal flow below — do not ask for permission. The
+            critic and tests gate the merge, so confident execution is the
+            default. STOP and escalate ONLY on genuine uncertainty: ambiguous
+            intent you cannot safely resolve, a risky/destructive change, or a
+            real business (A-vs-B) decision the CEO should own. See the
+            "Build by default; escalate by exception" section of your brief for
+            the decision rule — it is a HIGH bar; do not over-escalate.
+
             Process (mandatory):
             1. Create branch agent/${{ github.event.client_payload.identifier }}-<short-slug> off the default branch.
             2. TDD: write failing tests first, commit, then implement until green.
@@ -184,9 +185,16 @@ jobs:
             4. Push the branch and open a PR with `gh pr create` titled
                "feat(${{ github.event.client_payload.identifier }}): <summary>",
                body must include the card URL. GH_TOKEN is already in your env.
-            5. If the card is ambiguous or impossible as specified, do NOT
-               guess: open no PR, and write your blocker reason to
-               /tmp/agent-blocker.txt instead.
+            5. ESCALATE (only on genuine uncertainty — ambiguous intent, a
+               risky/destructive change, or a business A-vs-B decision): do NOT
+               guess and do NOT open a PR. Write a PLAIN-ENGLISH question (business
+               terms, NO code/diffs/file paths) to /tmp/agent-escalation.txt — the
+               workflow posts it to the card and parks the card in Plan Review for
+               the CEO. The CEO answers and moves the card back to Todo to proceed.
+            6. If the card is instead IMPOSSIBLE as specified (cannot be built as
+               written, no human decision would unblock it), open no PR and write
+               your blocker reason to /tmp/agent-blocker.txt instead (this parks
+               the card in Backlog). Write at most one of escalation/blocker.
 
       # DRE-1346 Fix 1: the execution result can end {"subtype":"success",
       # "is_error":true} (usage-limit/API death mid-run) — previously the
@@ -214,7 +222,8 @@ jobs:
           EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
           python3 .bureau-pipeline/scripts/check_agent_result.py \
-            "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt --ignore-is-error
+            "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt \
+            --escalation-file /tmp/agent-escalation.txt --ignore-is-error
 
       - name: Report result to Linear
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
@@ -249,6 +258,28 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
             python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In QA" "In Progress,Todo"
+          elif [ -f /tmp/agent-escalation.txt ] && [ -s /tmp/agent-escalation.txt ]; then
+            # Escalate-by-exception (DRE-1655/1706): the agent hit GENUINE
+            # uncertainty — ambiguous intent it can't safely resolve, a
+            # risky/destructive change, or a business A-vs-B decision the CEO
+            # should own — so it stopped BEFORE opening a PR and wrote a
+            # plain-English question. Post the question and park the card in
+            # Plan Review (the "needs you" lane plan.yml already uses for epics).
+            # The CEO answers in-thread and moves Plan Review → Todo to proceed
+            # (a fresh run reads the guidance) or → Backlog to drop it. Checked
+            # BEFORE the blocker branch: an escalation is a human DECISION that
+            # unblocks the build, distinct from an impossible-as-specified card.
+            {
+              echo "🙋 The agent paused for a decision before building — it judged this needs your call rather than a guess."
+              echo ""
+              cat /tmp/agent-escalation.txt
+              echo ""
+              echo "Answer here, then move this card to **Todo** to proceed (the agent picks up your guidance), or to **Backlog** to drop it. Run: $RUN_URL"
+            } > /tmp/escalation-comment.md
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+              "$(cat /tmp/escalation-comment.md)"
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Plan Review" "In Progress,Todo" || \
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review" || true
           elif [ -f /tmp/agent-blocker.txt ]; then
             # Backlog, NEVER Todo: the relay dispatches a fresh agent on every
             # Todo transition, and a blocker is deterministic — the next agent
