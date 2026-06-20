@@ -29,6 +29,51 @@ def blocker_branch() -> str:
     return m.group(1)
 
 
+def in_progress_step() -> str:
+    """The 'Card → In Progress' step body (start-of-build) in agent-task.yml."""
+    src = open(WORKFLOW).read()
+    m = re.search(
+        r"name:\s*Card → In Progress(.*?)(?:\n      - name:|\Z)", src, re.S
+    )
+    if not m:
+        raise AssertionError("'Card → In Progress' step not found in agent-task.yml")
+    return m.group(1)
+
+
+class ProposedMarkerClearedOnBuildTest(unittest.TestCase):
+    """DRE-1660: the `proposed` propose-gate marker must be cleared exactly once
+    at build start, idempotently, so a card that returns to Todo gets a FRESH
+    proposal instead of silently rebuilding off a stale one."""
+
+    def test_in_progress_step_clears_proposed_marker(self):
+        step = in_progress_step()
+        self.assertIn("remove-label", step, "build start must remove the marker label")
+        # `remove-label` and the `proposed` arg span a shell line-continuation,
+        # so match across newlines.
+        self.assertRegex(
+            step,
+            r"remove-label[\s\S]*?proposed",
+            "build start must remove the `proposed` marker specifically",
+        )
+
+    def test_marker_clear_is_idempotent(self):
+        # `|| true` so an absent marker (a card that never went through the
+        # propose gate) is a no-op, never a failure.
+        step = in_progress_step()
+        m = re.search(r"remove-label[\s\S]*?proposed[^\n]*", step)
+        self.assertIsNotNone(m)
+        self.assertIn("|| true", m.group(0), "remove-label must not fail the build")
+
+    def test_marker_cleared_exactly_once(self):
+        # Exactly one discriminator clear in the whole build workflow.
+        src = open(WORKFLOW).read()
+        self.assertEqual(
+            len(re.findall(r"remove-label[\s\S]*?proposed", src)),
+            1,
+            "the proposed marker must be cleared exactly once",
+        )
+
+
 class BlockerParksInBacklogTest(unittest.TestCase):
     def test_blocker_branch_parks_in_backlog(self):
         self.assertIn('state "$CARD" "Backlog"', blocker_branch())

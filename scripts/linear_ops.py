@@ -13,6 +13,8 @@ Subcommands:
   children <DRE-N>                     print the number of child issues
   add-label <DRE-N> <label-name>       attach a label (creating it if needed),
                                        idempotent — used for the human-hold
+  remove-label <DRE-N> <label-name>    detach a label, idempotent — a no-op if
+                                       absent; clears the propose-gate marker
   description <DRE-N>                   print the card's raw description to
                                        stdout (the authoritative **Design:**
                                        source the visual-QA stage reads)
@@ -260,6 +262,36 @@ def add_label(identifier: str, label_name: str) -> None:
     print(f"{identifier} + label {label_name!r}")
 
 
+def remove_label(identifier: str, label_name: str) -> None:
+    """Detach `label_name` from a card. Idempotent: a no-op if the card does
+    not carry it (and never an error if the team label doesn't exist).
+
+    Mirrors add_label. Used by the build path (agent-task.yml) to clear the
+    `proposed` propose-gate marker the instant a build starts (DRE-1660): the
+    marker must be cleared exactly once so a card that later returns to Todo
+    gets a FRESH proposal instead of silently rebuilding off a stale one.
+    """
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             id labels { nodes { id name } } } }""",
+        {"id": identifier},
+    )
+    issue = data["issue"]
+    existing = issue["labels"]["nodes"]
+    if not any(lbl["name"].lower() == label_name.lower() for lbl in existing):
+        print(f"{identifier} has no label {label_name!r} — nothing to remove")
+        return
+    label_ids = [
+        lbl["id"] for lbl in existing if lbl["name"].lower() != label_name.lower()
+    ]
+    gql(
+        """mutation($id: String!, $input: IssueUpdateInput!) {
+             issueUpdate(id: $id, input: $input) { success } }""",
+        {"id": issue["id"], "input": {"labelIds": label_ids}},
+    )
+    print(f"{identifier} − label {label_name!r}")
+
+
 def cmd_description(identifier: str) -> None:
     """Print a card's raw description (markdown) to stdout.
 
@@ -290,5 +322,6 @@ if __name__ == "__main__":
         "count-comments": cmd_count_comments,
         "dump-comments": cmd_dump_comments,
         "add-label": add_label,
+        "remove-label": remove_label,
         "description": cmd_description,
     }[cmd](*args)

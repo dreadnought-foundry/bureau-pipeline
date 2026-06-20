@@ -129,6 +129,15 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py state \
             "${{ github.event.client_payload.identifier }}" "In Progress"
+          # Clear the propose-gate marker the instant a build starts (DRE-1660).
+          # The `proposed` label is the relay's single routing discriminator for
+          # the research-and-propose gate; clearing it exactly once here ensures a
+          # card that later returns to Todo gets a FRESH proposal rather than
+          # silently rebuilding off a stale one. remove-label is idempotent — a
+          # no-op (never a failure) if the card never carried the marker, so this
+          # is harmless on cards that never went through the propose gate.
+          python3 .bureau-pipeline/scripts/linear_ops.py remove-label \
+            "${{ github.event.client_payload.identifier }}" proposed || true
           # Heartbeat: record which model this attempt uses so the board/console
           # can surface per-attempt model (DRE-1354 AC).
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
