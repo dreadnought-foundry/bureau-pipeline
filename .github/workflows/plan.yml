@@ -233,6 +233,31 @@ jobs:
             echo "no is_error planner death — nothing to record"
           fi
 
+      # Post-plan child validation (DRE-1715). Run the SAME validate_card core
+      # over EVERY child the planner just created — before the plan is allowed to
+      # finish — so a child with a placeholder/path body, missing repo, or no
+      # role label is caught here (the plan fails loudly) rather than stranding
+      # in Backlog for the operator to hand-repair. The create seam
+      # (linear_ops.py subissue) already rejects these at creation; this is the
+      # belt-and-braces sweep that closes any path that skipped the seam.
+      # Skipped when the planner created zero children (it asked questions).
+      - name: Validate created children
+        if: steps.route.outputs.mode == 'plan'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
+          if [ "$KIDS" -gt 0 ]; then
+            if ! python3 .bureau-pipeline/scripts/validate_card.py check-children "$EPIC"; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "🚧 The plan produced one or more INVALID child cards (placeholder/path body, missing repo, or no role label). See the failed run; the planner must re-emit them before this epic can build."
+              exit 1
+            fi
+          else
+            echo "no children created (planner asked questions) — nothing to validate"
+          fi
+
       - name: Epic → Plan Review
         if: steps.route.outputs.mode == 'plan'
         env:

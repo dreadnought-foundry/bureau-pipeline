@@ -8,7 +8,19 @@ Subcommands:
                                        (guards against dragging Done cards back)
   comment <DRE-N> <body>               add a comment to a card
   subissue <DRE-N(parent)> <title> <description-file>
-                                       create a child issue (Backlog) under an epic
+                                       create a child issue (Backlog) under an epic.
+                                       Inlines the file's CONTENTS (never a path),
+                                       inherits repo:<slug>+role labels from the
+                                       parent epic, encodes any **Blocked by:**
+                                       prose into real Linear blockedBy relations,
+                                       and validates the child through the SAME
+                                       validate_card gate before creating it — a
+                                       placeholder/empty body or a child missing
+                                       repo/role is REJECTED (exit 3), never
+                                       created broken. Optional flags:
+                                         --label <name>   (repeatable) extra label
+                                         --blocked-by DRE-N,DRE-M  (also parsed
+                                                          from the body line)
   create <title> <description-file>    create a standalone card in Triage
   children <DRE-N>                     print the number of child issues
   add-label <DRE-N> <label-name>       attach a label (creating it if needed),
@@ -26,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.request
 
@@ -125,14 +138,191 @@ def cmd_comment(identifier: str, body: str) -> None:
     print(f"commented on {identifier}")
 
 
-def cmd_subissue(parent_identifier: str, title: str, description_file: str) -> None:
+# --- Sub-issue body / dependency guards (DRE-1715) ---------------------------
+#
+# The planner is an LLM agent: left to itself it has, in practice, (a) passed a
+# scratch-file PATH (e.g. "/tmp/card2.md") as the card description instead of the
+# file's CONTENTS, (b) created label-less children, and (c) left build ordering
+# as English prose instead of real Linear blockedBy relations. cmd_subissue now
+# closes all three at the create seam so the operator never hand-repairs a child.
+# The functions below are the pure, no-I/O core (unit-tested directly); the gql
+# calls live in cmd_subissue.
+
+# A body that is JUST a filesystem path (the classic "/tmp/card2.md" mistake) —
+# a single line, no whitespace inside, that looks like a path. Anchored so a real
+# card body that merely MENTIONS a path in prose is not flagged.
+_PATHLIKE_RE = re.compile(r"^[~./]?[\w./-]+\.(md|txt|json|markdown)$")
+
+# Real markdown: a body must contain at least one of these to count as a genuine
+# card and not a stub — a heading, a list item, or a **bold** frontmatter line.
+_REAL_MARKDOWN_RE = re.compile(r"(^|\n)\s*(#{1,6}\s|[-*]\s|\*\*\w)")
+
+
+def body_problem(body: str) -> str | None:
+    """Why a sub-issue body is unusable, or None when it's a real card.
+
+    Rejects (the planner's three failure modes for the BODY):
+      * empty / whitespace-only;
+      * a literal filesystem PATH written where the contents belong
+        (single-line, path-shaped, e.g. "/tmp/card2.md" or "card2.md") — the
+        create step must read the file and pass its CONTENTS, not its name;
+      * a body with no real markdown structure at all (no heading, no list item,
+        no **bold** frontmatter) — a placeholder stub, not a card.
+    """
+    text = (body or "").strip()
+    if not text:
+        return "empty body"
+    one_line = "\n" not in text
+    if one_line and (_PATHLIKE_RE.match(text) or text.startswith(("/", "./", "~/"))):
+        return f"body looks like a file PATH, not card contents: {text!r}"
+    if not _REAL_MARKDOWN_RE.search(text):
+        return "body has no real markdown (no heading, list item, or **bold** line)"
+    return None
+
+
+# "**Blocked by:** DRE-1, DRE-2" / "Blocked by: DRE-3" anywhere in the body.
+_BLOCKED_BY_RE = re.compile(
+    r"^\s*\**\s*blocked\s*by\s*:?\**\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE
+)
+_DRE_RE = re.compile(r"\bDRE-\d+\b", re.IGNORECASE)
+
+
+def parse_blocked_by(body: str) -> list[str]:
+    """Card ids on a `**Blocked by:** DRE-N, DRE-M` body line → uppercased,
+    de-duplicated, order-preserving. Empty when there is no such line. This is
+    how prose ordering becomes real blockedBy relations (rule 3)."""
+    found: list[str] = []
+    for m in _BLOCKED_BY_RE.finditer(body or ""):
+        for dre in _DRE_RE.findall(m.group(1)):
+            up = dre.upper()
+            if up not in found:
+                found.append(up)
+    return found
+
+
+def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
+    """The labels a child must inherit from its parent epic (rule 2): the
+    `repo:<slug>` label (so the child routes to the same repo) plus a role label.
+
+    The role is `agent:engineer` by default, or `agent:devops` when the parent is
+    an infra/pipeline epic (its slug is the shared pipeline repo, or it carries
+    agent:devops itself). A child is NEVER label-less. The parent's own
+    agent:planner is intentionally NOT inherited — children are work, not epics.
+    """
+    low = [l.lower() for l in (parent_labels or [])]
+    out: list[str] = []
+    repo = next((l for l in low if l.startswith("repo:") and l.split(":", 1)[1].strip()), None)
+    if repo:
+        out.append(repo)
+    # devops iff the parent is a pipeline/infra epic.
+    pipeline_repo = repo in ("repo:bureau-pipeline",)
+    if "agent:devops" in low or pipeline_repo:
+        out.append("agent:devops")
+    else:
+        out.append("agent:engineer")
+    return out
+
+
+def _team_label_ids(team_id: str, names: list[str]) -> list[str]:
+    """Resolve label NAMES to ids on a team, creating any that don't exist.
+    Idempotent on the team-label side (reuses an existing label of the same
+    name)."""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        lid = _team_label_id(team_id, name)
+        if lid is None:
+            created = gql(
+                """mutation($input: IssueLabelCreateInput!) {
+                     issueLabelCreate(input: $input) { issueLabel { id } } }""",
+                {"input": {"name": name, "teamId": team_id}},
+            )
+            lid = created["issueLabelCreate"]["issueLabel"]["id"]
+        ids.append(lid)
+    return ids
+
+
+def _add_blocked_by(issue_id: str, blocker_identifiers: list[str]) -> list[str]:
+    """Create real Linear `blocks` relations so each blocker BLOCKS the new
+    child (rule 3). Returns the ids that resolved; silently skips an unknown id
+    rather than failing the whole create."""
+    resolved: list[str] = []
+    for ident in blocker_identifiers:
+        blocker = get_issue(ident)
+        if not blocker:
+            print(f"  ! blocked-by {ident} not found — skipping relation", file=sys.stderr)
+            continue
+        gql(
+            """mutation($input: IssueRelationCreateInput!) {
+                 issueRelationCreate(input: $input) { success } }""",
+            # blocker BLOCKS the child → the child is blockedBy the blocker.
+            {"input": {"issueId": blocker["id"], "relatedIssueId": issue_id, "type": "blocks"}},
+        )
+        resolved.append(ident)
+    return resolved
+
+
+def cmd_subissue(parent_identifier: str, title: str, description_file: str, *flags) -> None:
     parent = get_issue(parent_identifier)
-    with open(description_file) as f:
-        description = f.read()
+
+    # 1 — INLINE REAL CONTENTS. The arg is a FILE the planner drafted the card
+    # to; we read its CONTENTS. If the file is missing, the planner likely passed
+    # the body text (or a bare path) directly — fall back to treating the arg as
+    # the body so the path-guard below catches a bare "/tmp/cardN.md".
+    if os.path.isfile(description_file):
+        with open(description_file) as f:
+            description = f.read()
+    else:
+        description = description_file
+
+    # Extra flags: --label <name> (repeatable), --blocked-by DRE-N,DRE-M.
+    extra_labels, cli_blockers = _parse_flags(flags)
+
+    # 2 — LABELS: inherit repo:<slug> + role from the parent epic, plus any
+    # explicit --label. No child is ever created label-less.
+    parent_labels = _issue_label_names(parent["id"])
+    child_labels = parent_inherited_labels(parent_labels) + list(extra_labels)
+
+    # 3 — ORDERING → relations: union of the body's **Blocked by:** line and any
+    # --blocked-by flag. Never block on the parent epic (it deadlocks the gate).
+    blockers = [
+        b for b in parse_blocked_by(description) + list(cli_blockers)
+        if b.upper() != parent_identifier.upper()
+    ]
+    # de-dup, order-preserving
+    blockers = list(dict.fromkeys(b.upper() for b in blockers))
+
+    # --- GUARD before creating: reject a broken child, do NOT create it. ---
+    problem = body_problem(description)
+    if problem is not None:
+        raise SystemExit(
+            f"subissue REJECTED ({title!r}): {problem}. "
+            "Re-draft the card with real contents (not a path) and retry."
+        )
+
+    # 4 — VALIDATE through the EXISTING validate_card gate's pure core (single
+    # source of truth — no parallel checker). The child must carry a resolvable
+    # repo and an agent:* role once the inherited labels are applied.
+    import validate_card
+
+    gaps = validate_card.missing(description, child_labels)
+    if gaps:
+        raise SystemExit(
+            f"subissue REJECTED ({title!r}): child fails validate_card — missing "
+            + ", ".join(gaps)
+            + ". The parent epic must carry a repo:<slug> label (and the body a "
+            "**Repo:** line) so children inherit it."
+        )
+
     sid = state_id(parent["team"]["id"], "Backlog")
+    label_ids = _team_label_ids(parent["team"]["id"], child_labels)
     data = gql(
         """mutation($input: IssueCreateInput!) {
-             issueCreate(input: $input) { success issue { identifier url } } }""",
+             issueCreate(input: $input) { success issue { id identifier url } } }""",
         {
             "input": {
                 "teamId": parent["team"]["id"],
@@ -140,11 +330,39 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str) -> N
                 "title": title,
                 "description": description,
                 "stateId": sid,
+                "labelIds": label_ids,
             }
         },
     )
     issue = data["issueCreate"]["issue"]
-    print(f"created {issue['identifier']} {issue['url']}")
+    rel = _add_blocked_by(issue["id"], blockers) if blockers else []
+    extra = f" labels={','.join(child_labels)}"
+    extra += f" blockedBy={','.join(rel)}" if rel else ""
+    print(f"created {issue['identifier']} {issue['url']}{extra}")
+
+
+def _parse_flags(flags) -> tuple[list[str], list[str]]:
+    """Parse --label <name> (repeatable) and --blocked-by DRE-N,DRE-M from the
+    trailing CLI args. Pure; returns (labels, blocker_ids)."""
+    labels: list[str] = []
+    blockers: list[str] = []
+    it = iter(flags)
+    for tok in it:
+        if tok == "--label":
+            labels.append(next(it))
+        elif tok == "--blocked-by":
+            blockers.extend(d.upper() for d in _DRE_RE.findall(next(it)))
+    return labels, blockers
+
+
+def _issue_label_names(issue_id: str) -> list[str]:
+    """The label names currently on an issue (by node id)."""
+    data = gql(
+        """query($id: String!) { issue(id: $id) { labels { nodes { name } } } }""",
+        {"id": issue_id},
+    )
+    issue = data.get("issue") or {}
+    return [n["name"] for n in (issue.get("labels") or {}).get("nodes", [])]
 
 
 def cmd_create(title: str, description_file: str) -> None:

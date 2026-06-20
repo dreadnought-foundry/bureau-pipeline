@@ -42,7 +42,11 @@ to open those paths).
 - **Dependencies are relations, not prose**: every "depends on / do not start
   until X lands" statement MUST be backed by a real Linear `blockedBy`
   relation to the exact blocking card id(s) — not just English in the
-  description. This matters MOST for cross-epic dependencies: a prose-only
+  description. The `subissue` command does this FOR you: any `**Blocked by:**
+  DRE-N, DRE-M` line in the body it creates becomes a real Linear `blockedBy`
+  relation automatically (and it refuses to block a child on the parent epic).
+  So write the `**Blocked by:**` line and trust it — do NOT also try to hand-set
+  relations. This matters MOST for cross-epic dependencies: a prose-only
   "do not begin until <other work> lands" leaves the gate blind, so the
   blocked card's epic reports as "almost done" while it is actually stalled,
   and the reconcile/auto-close logic can be fooled into closing it. Prose may
@@ -87,6 +91,25 @@ to open those paths).
   (Origin: DRE-1477/1478 — agents were building UI from text alone and the
   critic could only check copy, not visual fidelity.)
 
+## Creating each sub-issue — write the file's CONTENTS, never its path
+Draft each card body to a temp file, then create it with:
+```
+python3 .bureau-pipeline/scripts/linear_ops.py subissue "<EPIC-ID>" "<title>" /tmp/cardN.md
+```
+The THIRD argument is a FILE PATH; `subissue` reads that file's CONTENTS and
+uses them as the card description. NEVER write the literal path (e.g.
+`/tmp/card2.md`) into a card body, and never pass a body string where a file is
+expected — `subissue` rejects a body that is a bare path, empty, or has no real
+markdown, and refuses to create that broken card. It also:
+  - inherits the `repo:<slug>` + role label from this epic, so the child is
+    never label-less (you do not need to add labels by hand);
+  - turns any `**Blocked by:** DRE-N, DRE-M` body line into real Linear
+    `blockedBy` relations;
+  - validates the child through the same `validate_card` gate the build uses,
+    rejecting any child missing a repo or role.
+If `subissue` exits non-zero, FIX the body it complained about and re-run — do
+not leave a half-created or skipped card.
+
 ## Sub-issue description template
 ```
 **Repo:** <this repo's slug — the workflow prompt states it exactly>
@@ -101,6 +124,8 @@ to open those paths).
 ## Acceptance criteria
 - [ ] <verifiable outcome>
 - [ ] <verifiable outcome>
+
+**Blocked by:** DRE-N   <- only if it must wait for a sibling; omit otherwise
 ```
 
 ## The plan comment (for the CEO — non-technical)
