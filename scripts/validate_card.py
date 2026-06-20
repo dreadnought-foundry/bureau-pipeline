@@ -31,6 +31,15 @@ already past Todo (In Progress/QA/…) is never touched.
 CLI:
   gate <DRE-N>   exit 0 always; prints `bounced=true` / `bounced=false` to
                  $GITHUB_OUTPUT (and stdout) so the workflow can skip the build.
+  check-children <EPIC>
+                 read-only post-plan sweep (DRE-1715): runs `missing()` — the
+                 SAME validation core the gate uses — over EVERY child of an
+                 epic, in WHATEVER state (children are created in Backlog, which
+                 the gate path deliberately leaves alone). Exit 0 iff every child
+                 carries a resolvable repo + an agent:* role and a non-placeholder
+                 body; exit 1 listing the offenders otherwise, so plan.yml fails
+                 the plan before it completes rather than shipping a broken child
+                 the operator must hand-repair.
 
 Auth: LINEAR_API_KEY env var (shared with linear_ops.py).
 """
@@ -380,6 +389,54 @@ def _fetch_card(linear_ops, identifier: str) -> dict:
     }
 
 
+# --- Post-plan child sweep (DRE-1715) ----------------------------------------
+#
+# After the planner creates children (in Backlog), confirm EVERY child is
+# complete and valid before the plan is allowed to finish — reusing this gate's
+# `missing()` (single source of truth, no parallel checker) plus the shared
+# body-placeholder guard. The gate's own cmd_gate intentionally only acts on
+# Todo/Triage cards, so it can't be the sweep; this read-only command can.
+
+
+def child_problems(title: str, description: str, labels: list[str]) -> list[str]:
+    """All reasons a created child is incomplete (empty == valid). Reuses
+    `missing()` for the repo/role contract and linear_ops.body_problem for the
+    path-like/empty/placeholder body — the SAME checks the create seam enforces,
+    so the sweep and the create path can never disagree."""
+    import linear_ops  # body_problem lives with the create seam
+
+    out = list(missing(description, labels))
+    body = linear_ops.body_problem(description)
+    if body is not None:
+        out.append(body)
+    return out
+
+
+def cmd_check_children(epic_identifier: str) -> None:
+    import linear_ops
+
+    data = linear_ops.gql(
+        """query($id: String!) { issue(id: $id) { children { nodes {
+             identifier title description labels { nodes { name } } } } } }""",
+        {"id": epic_identifier},
+    )
+    children = (((data or {}).get("issue") or {}).get("children") or {}).get("nodes", [])
+    broken: list[str] = []
+    for c in children:
+        labels = [n["name"].lower() for n in (c.get("labels") or {}).get("nodes", [])]
+        probs = child_problems(c.get("title") or "", c.get("description") or "", labels)
+        if probs:
+            broken.append(f"{c['identifier']}: " + "; ".join(probs))
+    if broken:
+        print(
+            f"❌ {len(broken)}/{len(children)} child card(s) of {epic_identifier} "
+            "are invalid:\n  " + "\n  ".join(broken),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    print(f"✅ all {len(children)} child card(s) of {epic_identifier} are valid")
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
-    {"gate": cmd_gate}[cmd](*args)
+    {"gate": cmd_gate, "check-children": cmd_check_children}[cmd](*args)
