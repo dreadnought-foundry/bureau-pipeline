@@ -99,6 +99,52 @@ def test_add_label_creates_when_missing():
 
 
 # --------------------------------------------------------------------------
+# linear_ops.remove_label — detach, idempotent (DRE-1660 propose-gate marker)
+# --------------------------------------------------------------------------
+def test_remove_label_noop_when_absent():
+    """Card without the label: read only, never mutate (idempotent no-op)."""
+    payload = {"issue": {"id": "uuid-1", "labels": {"nodes": []}}}
+    with patch.object(linear_ops, "gql", return_value=payload) as g:
+        linear_ops.remove_label("DRE-1", "proposed")
+    assert g.call_count == 1  # the read; no issueUpdate
+
+
+def test_remove_label_detaches_when_present():
+    """Present label is removed; other labels are preserved."""
+    seq = [
+        {
+            "issue": {
+                "id": "uuid-1",
+                "labels": {
+                    "nodes": [
+                        {"id": "Lp", "name": "proposed"},
+                        {"id": "Lk", "name": "size:M"},
+                    ]
+                },
+            }
+        },
+        {"issueUpdate": {"success": True}},
+    ]
+    with patch.object(linear_ops, "gql", side_effect=seq) as g:
+        linear_ops.remove_label("DRE-1", "proposed")
+    assert g.call_count == 2
+    # Only the surviving (non-proposed) label id is written back.
+    assert g.call_args_list[1].args[1]["input"]["labelIds"] == ["Lk"]
+
+
+def test_remove_label_case_insensitive():
+    """Matches the label name case-insensitively, like add_label."""
+    seq = [
+        {"issue": {"id": "uuid-1", "labels": {"nodes": [{"id": "Lp", "name": "Proposed"}]}}},
+        {"issueUpdate": {"success": True}},
+    ]
+    with patch.object(linear_ops, "gql", side_effect=seq) as g:
+        linear_ops.remove_label("DRE-1", "proposed")
+    assert g.call_count == 2
+    assert g.call_args_list[1].args[1]["input"]["labelIds"] == []
+
+
+# --------------------------------------------------------------------------
 # reconcile.held
 # --------------------------------------------------------------------------
 def test_held_true_with_label():

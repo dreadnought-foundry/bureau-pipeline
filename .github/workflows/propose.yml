@@ -10,10 +10,11 @@
 #
 # DORMANT until a later relay change emits the `agent-propose` dispatch type and
 # product repos add the matching stub. This file alters no existing behavior:
-# it is a brand-new reusable workflow on a brand-new event path. The
-# "Proposing"/"Proposed" states and the `proposed` label it references are
-# created in Linear separately (operator task) — they need not exist for this
-# file to merge.
+# it is a brand-new reusable workflow on a brand-new event path. It reuses the
+# team's EXISTING workflow lanes — `Planning` while it researches and
+# `Plan Review` once a proposal is posted (the human approves by moving
+# `Plan Review → Todo`) — so no new states need creating. The `proposed` label
+# it stamps is the relay's routing marker (the state names are not).
 #
 # Reusable workflow: concurrency + permissions live in the calling stub (which
 # owns the trigger context). github.event / github.repository inside this file
@@ -124,13 +125,13 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of context for role: $ROLE"
 
-      - name: Card → Proposing
+      - name: Card → Planning
         if: steps.gate.outputs.bounced != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py state \
-            "${{ github.event.client_payload.identifier }}" "Proposing"
+            "${{ github.event.client_payload.identifier }}" "Planning"
           # Heartbeat: record which model this attempt uses so the board/console
           # can surface per-attempt model (same machine-parseable marker the
           # selector reads back).
@@ -227,16 +228,17 @@ jobs:
             echo "no /tmp/agent-proposal.txt — the agent posted its proposal directly (or asked questions)"
           fi
 
-      # Mark the card Proposed and stamp the `proposed` label — the marker a
-      # later relay change will read to know this card has a proposal awaiting
-      # human review. Idempotent helpers (add-label creates the label if absent
-      # and is a no-op if already present); state-set mirrors the existing
-      # workflows. Skipped on a bounce (the gate already parked the card).
-      - name: Card → Proposed (+ proposed label)
+      # Move the card to Plan Review and stamp the `proposed` label — the marker
+      # a later relay change will read to know this card has a proposal awaiting
+      # human review (the human approves by moving Plan Review → Todo).
+      # Idempotent helpers (add-label creates the label if absent and is a no-op
+      # if already present); state-set mirrors the existing workflows. Skipped on
+      # a bounce (the gate already parked the card).
+      - name: Card → Plan Review (+ proposed label)
         if: steps.gate.outputs.bounced != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ github.event.client_payload.identifier }}
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" proposed || true
-          python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Proposed"
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review"

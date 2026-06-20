@@ -71,15 +71,15 @@ class ProposeGateTest(unittest.TestCase):
         )
         self.assertIn("validate_card.py", src(WF))
 
-    def test_gate_runs_before_proposing(self):
+    def test_gate_runs_before_planning(self):
         order = [s.lower() for s in steps_order(WF)]
         gate = next(i for i, s in enumerate(order) if "validation gate" in s)
-        proposing = next(i for i, s in enumerate(order) if "proposing" in s)
-        self.assertLess(gate, proposing, "gate must run before Card → Proposing")
+        planning = next(i for i, s in enumerate(order) if "planning" in s)
+        self.assertLess(gate, planning, "gate must run before Card → Planning")
 
     def test_expensive_steps_guarded_against_bounce(self):
         # The agent + state transitions must skip for a bounced card.
-        for name in ("Research and propose", "Card → Proposing", "Card → Proposed (+ proposed label)"):
+        for name in ("Research and propose", "Card → Planning", "Card → Plan Review (+ proposed label)"):
             self.assertIn(
                 "steps.gate.outputs.bounced",
                 step_body(WF, name),
@@ -108,14 +108,19 @@ class ProposeModelSelectionTest(unittest.TestCase):
 
 
 class ProposeLinearTransitionsTest(unittest.TestCase):
-    def test_sets_proposing_then_proposed(self):
+    def test_sets_planning_then_plan_review(self):
         order = [s.lower() for s in steps_order(WF)]
-        proposing = next(i for i, s in enumerate(order) if s.strip() == "card → proposing")
-        proposed = next(i for i, s in enumerate(order) if "card → proposed" in s)
-        self.assertLess(proposing, proposed, "Proposing must precede Proposed")
+        planning = next(i for i, s in enumerate(order) if s.strip() == "card → planning")
+        plan_review = next(i for i, s in enumerate(order) if "card → plan review" in s)
+        self.assertLess(planning, plan_review, "Planning must precede Plan Review")
         body = src(WF)
-        self.assertIn('"Proposing"', body, "must set the Proposing state")
-        self.assertIn('"Proposed"', body, "must set the Proposed state")
+        # Reuse the team's EXISTING lanes (DRE-1658): Planning while researching,
+        # Plan Review once a proposal is posted. The non-existent Proposing/
+        # Proposed states (which would have raised at runtime) must be gone.
+        self.assertIn('"Planning"', body, "must set the Planning state")
+        self.assertIn('"Plan Review"', body, "must set the Plan Review state")
+        self.assertNotIn('"Proposing"', body, "Proposing is not a real Linear state")
+        self.assertNotIn('"Proposed"', body, "Proposed is not a real Linear state")
 
     def test_uses_linear_ops_state_and_label_helpers(self):
         # Reuse the same idempotent helpers the existing workflows use.
@@ -123,6 +128,14 @@ class ProposeLinearTransitionsTest(unittest.TestCase):
         self.assertIn("linear_ops.py state", body)
         self.assertIn("linear_ops.py add-label", body)
         self.assertIn("add-label \"$CARD\" proposed", body)
+
+    def test_proposed_marker_label_still_stamped(self):
+        # Only the STATE names changed (DRE-1658); the `proposed` label is the
+        # relay's routing signal and must still be stamped.
+        self.assertIn(
+            "add-label \"$CARD\" proposed",
+            step_body(WF, "Card → Plan Review (+ proposed label)"),
+        )
 
     def test_posts_proposal_via_linear_comment(self):
         # The proposal reaches the human via a Linear comment (agent + backstop).
