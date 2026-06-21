@@ -202,7 +202,14 @@ def parse_blocked_by(body: str) -> list[str]:
 
 def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
     """The labels a child must inherit from its parent epic (rule 2): the
-    `repo:<slug>` label (so the child routes to the same repo) plus a role label.
+    `repo:<slug>` label (so the child routes to the same repo), the parent's
+    `initiative:<x>` label(s), and a role label.
+
+    The `initiative:*` label is load-bearing: the reconcile dependency-gate scopes
+    promotion to an initiative, so a child WITHOUT it never auto-promotes and
+    stalls in Backlog (DRE-1722 — epic DRE-1717's children sat unpromoted until
+    the operator hand-added `initiative:bureau`). Inheriting it deterministically
+    closes that gap.
 
     The role is `agent:engineer` by default, or `agent:devops` when the parent is
     an infra/pipeline epic (its slug is the shared pipeline repo, or it carries
@@ -214,6 +221,11 @@ def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
     repo = next((l for l in low if l.startswith("repo:") and l.split(":", 1)[1].strip()), None)
     if repo:
         out.append(repo)
+    # Inherit every `initiative:<x>` label the parent carries (non-empty slug),
+    # order-preserving — the reconcile dependency-gate keys promotion off it.
+    for l in low:
+        if l.startswith("initiative:") and l.split(":", 1)[1].strip() and l not in out:
+            out.append(l)
     # devops iff the parent is a pipeline/infra epic.
     pipeline_repo = repo in ("repo:bureau-pipeline",)
     if "agent:devops" in low or pipeline_repo:
@@ -309,13 +321,13 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # repo and an agent:* role once the inherited labels are applied.
     import validate_card
 
-    gaps = validate_card.missing(description, child_labels)
+    gaps = validate_card.missing(description, child_labels, require_initiative=True)
     if gaps:
         raise SystemExit(
             f"subissue REJECTED ({title!r}): child fails validate_card — missing "
             + ", ".join(gaps)
             + ". The parent epic must carry a repo:<slug> label (and the body a "
-            "**Repo:** line) so children inherit it."
+            "**Repo:** line) AND an initiative:<x> label so children inherit them."
         )
 
     sid = state_id(parent["team"]["id"], "Backlog")

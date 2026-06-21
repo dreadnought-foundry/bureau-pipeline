@@ -74,6 +74,38 @@ class MissingTest(unittest.TestCase):
     def test_case_insensitive_labels(self):
         self.assertEqual(missing("**Repo:** atlas", ["Agent:Engineer"]), [])
 
+    # --- DRE-1722: initiative is OPT-IN (default off keeps the Todo gate same) -
+
+    def test_initiative_not_required_by_default(self):
+        # The Todo-entry gate calls missing() with the default; a clean card with
+        # repo + role but NO initiative is still clean — unchanged behavior.
+        self.assertEqual(missing("**Repo:** atlas", ["agent:engineer"]), [])
+
+    def test_require_initiative_flags_when_absent(self):
+        out = missing("**Repo:** atlas", ["agent:engineer"], require_initiative=True)
+        self.assertEqual(len(out), 1)
+        self.assertIn("initiative:", out[0])
+
+    def test_require_initiative_clean_when_present(self):
+        self.assertEqual(
+            missing(
+                "**Repo:** atlas",
+                ["agent:engineer", "initiative:bureau"],
+                require_initiative=True,
+            ),
+            [],
+        )
+
+    def test_require_initiative_bare_label_does_not_count(self):
+        # A bare "initiative:" with no slug does not satisfy the requirement.
+        out = missing("**Repo:** atlas", ["agent:engineer", "initiative:"], require_initiative=True)
+        self.assertEqual(len(out), 1)
+        self.assertIn("initiative:", out[0])
+
+    def test_require_initiative_lists_all_three_gaps(self):
+        out = missing("no repo here", [], require_initiative=True)
+        self.assertEqual(len(out), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -74,6 +74,16 @@ to open those paths).
   "OPERATOR CARD — agents cannot push to bureau-pipeline; the operator
   implements this." (Origin: DRE-1346's agent completed the work in-runner
   and could not push it, 2026-06-13.)
+- **Human/infra work is NOT agent:engineer**: a card that is pure operator /
+  AWS / deploy / migration / infra work with NO agent-buildable code in a
+  product repo (e.g. "run `cdk deploy`", "flip the prod feature flag", "rotate
+  the secret", "raise the org Actions budget") must be labeled `needs-human` +
+  `agent:devops` — NOT `agent:engineer`. An engineer agent has no AWS creds and
+  cannot verify or execute it, so it would loop and end in a blocker; the
+  `needs-human` label tells the reconcile sweep and promotion gate to leave it
+  for the operator. Use judgment: if the card's deliverable is a diff in a
+  product repo, it's `agent:engineer`; if it's an action only a human/operator
+  can take and verify, it's `needs-human` + `agent:devops`.
 - **Grounded in this repo**: read the actual code before planning. Name real
   modules, real tables, real routes. A plan that names things that don't
   exist sends an agent on a hallucination hunt.
@@ -101,8 +111,10 @@ uses them as the card description. NEVER write the literal path (e.g.
 `/tmp/card2.md`) into a card body, and never pass a body string where a file is
 expected — `subissue` rejects a body that is a bare path, empty, or has no real
 markdown, and refuses to create that broken card. It also:
-  - inherits the `repo:<slug>` + role label from this epic, so the child is
-    never label-less (you do not need to add labels by hand);
+  - inherits the `repo:<slug>` + `initiative:<x>` + role label from this epic, so
+    the child is never label-less and the reconcile dependency-gate (which scopes
+    promotion to the initiative) can promote it (you do not need to add labels by
+    hand);
   - turns any `**Blocked by:** DRE-N, DRE-M` body line into real Linear
     `blockedBy` relations;
   - validates the child through the same `validate_card` gate the build uses,
