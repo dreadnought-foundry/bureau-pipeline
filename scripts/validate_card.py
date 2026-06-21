@@ -65,8 +65,10 @@ _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 # What's missing, in the exact words the bounce comment shows the CEO.
 _REPO_LABEL = "repo:"
 _AGENT_PREFIX = "agent:"
+_INITIATIVE_LABEL = "initiative:"
 WANT_REPO = "**Repo:** line or repo: label"
 WANT_AGENT = "agent: role label"
+WANT_INITIATIVE = "initiative: label"
 
 
 def _has_repo(description: str, labels: list[str]) -> bool:
@@ -86,14 +88,36 @@ def _has_agent_label(labels: list[str]) -> bool:
     return any(l.lower().startswith(_AGENT_PREFIX) for l in labels)
 
 
-def missing(description: str, labels: list[str]) -> list[str]:
-    """Return the list of missing requirements (empty list == clean card)."""
+def _has_initiative_label(labels: list[str]) -> bool:
+    # A non-empty `initiative:<x>` label (a bare "initiative:" does not count).
+    return any(
+        l.lower().startswith(_INITIATIVE_LABEL) and l.split(":", 1)[1].strip()
+        for l in labels
+    )
+
+
+def missing(description: str, labels: list[str], *, require_initiative: bool = False) -> list[str]:
+    """Return the list of missing requirements (empty list == clean card).
+
+    `require_initiative` additionally requires a non-empty `initiative:<x>` label.
+    It is OPT-IN and OFF by default so the Todo-entry gate is unchanged: that gate
+    runs BEFORE repo inference and routinely sees clean cards that carry only a
+    `**Repo:** <slug>` line and a role label (it INFERS the repo from an
+    initiative label when one is present, so it must not demand one). The
+    post-plan child sweep / create seam turn it ON — a planner-created child must
+    inherit `initiative:*` (DRE-1722) or the reconcile dependency-gate, which
+    scopes promotion to the initiative, never promotes it and it stalls in
+    Backlog. Inheritance (parent_inherited_labels) makes this hold deterministically;
+    the check is the backstop that fails the plan if it ever doesn't.
+    """
     labels = labels or []
     out: list[str] = []
     if not _has_repo(description, labels):
         out.append(WANT_REPO)
     if not _has_agent_label(labels):
         out.append(WANT_AGENT)
+    if require_initiative and not _has_initiative_label(labels):
+        out.append(WANT_INITIATIVE)
     return out
 
 
@@ -400,12 +424,14 @@ def _fetch_card(linear_ops, identifier: str) -> dict:
 
 def child_problems(title: str, description: str, labels: list[str]) -> list[str]:
     """All reasons a created child is incomplete (empty == valid). Reuses
-    `missing()` for the repo/role contract and linear_ops.body_problem for the
-    path-like/empty/placeholder body — the SAME checks the create seam enforces,
-    so the sweep and the create path can never disagree."""
+    `missing(..., require_initiative=True)` for the repo/role/initiative contract
+    and linear_ops.body_problem for the path-like/empty/placeholder body — the
+    SAME checks the create seam enforces, so the sweep and the create path can
+    never disagree. A child MUST carry `initiative:*` (inherited from the parent
+    epic) or the reconcile dependency-gate never promotes it (DRE-1722)."""
     import linear_ops  # body_problem lives with the create seam
 
-    out = list(missing(description, labels))
+    out = list(missing(description, labels, require_initiative=True))
     body = linear_ops.body_problem(description)
     if body is not None:
         out.append(body)

@@ -107,6 +107,38 @@ class TestParentInheritedLabels:
         # Even a label-less parent gives the child a role (engineer).
         assert linear_ops.parent_inherited_labels([]) == ["agent:engineer"]
 
+    # --- DRE-1722: the parent's initiative:* label is inherited too -----------
+
+    def test_inherits_initiative_alongside_repo_and_role(self):
+        # The load-bearing fix: a child gets repo + initiative + role, so the
+        # reconcile dependency-gate (scoped to the initiative) can promote it.
+        assert linear_ops.parent_inherited_labels(
+            ["repo:agent-bureau", "initiative:bureau", "agent:planner"]
+        ) == ["repo:agent-bureau", "initiative:bureau", "agent:engineer"]
+
+    def test_initiative_inherited_for_devops_epic_too(self):
+        assert linear_ops.parent_inherited_labels(
+            ["repo:bureau-pipeline", "initiative:bureau", "agent:planner"]
+        ) == ["repo:bureau-pipeline", "initiative:bureau", "agent:devops"]
+
+    def test_multiple_initiatives_all_inherited(self):
+        out = linear_ops.parent_inherited_labels(
+            ["repo:atlas", "initiative:bureau", "initiative:atlas", "agent:planner"]
+        )
+        assert out == ["repo:atlas", "initiative:bureau", "initiative:atlas", "agent:engineer"]
+
+    def test_empty_initiative_label_is_not_inherited(self):
+        # A bare "initiative:" with no slug is meaningless — never inherited.
+        assert linear_ops.parent_inherited_labels(
+            ["repo:atlas", "initiative:", "agent:planner"]
+        ) == ["repo:atlas", "agent:engineer"]
+
+    def test_case_insensitive_initiative(self):
+        # Labels are normalized to lowercase (the inherited form).
+        assert linear_ops.parent_inherited_labels(
+            ["repo:atlas", "Initiative:Bureau", "agent:planner"]
+        ) == ["repo:atlas", "initiative:bureau", "agent:engineer"]
+
 
 # --- flag parsing -------------------------------------------------------------
 
@@ -131,7 +163,7 @@ class FakeLinear:
     create input and any relation creates so tests can assert on labels +
     blockedBy without touching the network."""
 
-    def __init__(self, parent_labels=("repo:atlas", "agent:planner")):
+    def __init__(self, parent_labels=("repo:atlas", "initiative:bureau", "agent:planner")):
         self.parent_labels = list(parent_labels)
         self.created = None          # the issueCreate input
         self.relations = []          # (blocker_id, child_id) blocks-relations
@@ -182,14 +214,18 @@ def _run_subissue(fake, tmp_path, body, *flags):
     return buf.getvalue()
 
 
-def test_created_child_carries_repo_and_role_labels(tmp_path):
-    fake = FakeLinear(parent_labels=["repo:atlas", "agent:planner"])
+def test_created_child_carries_repo_initiative_and_role_labels(tmp_path):
+    fake = FakeLinear(parent_labels=["repo:atlas", "initiative:bureau", "agent:planner"])
     body = "**Repo:** atlas\n\nBuild it.\n\n## Acceptance criteria\n- [ ] done"
     out = _run_subissue(fake, tmp_path, body)
-    # Two labels created/attached: repo:atlas + agent:engineer (NOT planner).
-    assert set(fake.label_create_names) == {"repo:atlas", "agent:engineer"}
-    assert fake.created["labelIds"] == ["lbl-repo:atlas", "lbl-agent:engineer"]
-    assert "labels=repo:atlas,agent:engineer" in out
+    # Three labels created/attached: repo + initiative + agent:engineer (NOT planner).
+    assert set(fake.label_create_names) == {"repo:atlas", "initiative:bureau", "agent:engineer"}
+    assert fake.created["labelIds"] == [
+        "lbl-repo:atlas",
+        "lbl-initiative:bureau",
+        "lbl-agent:engineer",
+    ]
+    assert "labels=repo:atlas,initiative:bureau,agent:engineer" in out
 
 
 def test_created_child_inlines_contents_not_path(tmp_path):
@@ -266,6 +302,20 @@ def test_child_failing_validate_card_is_rejected(tmp_path):
     assert fake.created is None
 
 
+def test_child_missing_initiative_is_rejected(tmp_path):
+    # DRE-1722: a parent epic with repo + role but NO initiative:* label means
+    # the child can't inherit one → it would never auto-promote, so the create
+    # seam rejects it through the SAME gate rather than creating a stalled child.
+    fake = FakeLinear(parent_labels=["repo:atlas", "agent:planner"])  # no initiative
+    body = "**Repo:** atlas\n\n# A card\nBuild it."
+    with patch.object(linear_ops, "gql", side_effect=fake.gql):
+        with pytest.raises(SystemExit) as exc:
+            _run_subissue(fake, tmp_path, body)
+    assert "validate_card" in str(exc.value)
+    assert "initiative:" in str(exc.value)
+    assert fake.created is None
+
+
 # --- (d) the post-plan sweep reuses validate_card over every child -----------
 
 
@@ -273,14 +323,27 @@ class TestCheckChildren:
     def test_child_problems_reuses_missing_and_body_guard(self):
         import validate_card
 
-        # Clean child → no problems.
+        # Clean child → no problems (carries repo + initiative + role).
         assert validate_card.child_problems(
-            "Build it", "**Repo:** atlas\n\n# Card\n- [ ] do", ["repo:atlas", "agent:engineer"]
+            "Build it", "**Repo:** atlas\n\n# Card\n- [ ] do",
+            ["repo:atlas", "initiative:bureau", "agent:engineer"],
         ) == []
         # Missing role + path body → both flagged (missing() + body_problem).
-        probs = validate_card.child_problems("Bad", "/tmp/card2.md", ["repo:atlas"])
+        probs = validate_card.child_problems(
+            "Bad", "/tmp/card2.md", ["repo:atlas", "initiative:bureau"]
+        )
         assert any("agent:" in p for p in probs)
         assert any("PATH" in p for p in probs)
+
+    def test_child_problems_flags_missing_initiative(self):
+        # DRE-1722: a child with repo + role but NO initiative is flagged by the
+        # sweep — the reconcile dependency-gate would never promote it.
+        import validate_card
+
+        probs = validate_card.child_problems(
+            "A card", "**Repo:** atlas\n\n# Card\n- [ ] do", ["repo:atlas", "agent:engineer"]
+        )
+        assert any("initiative:" in p for p in probs)
 
     def test_check_children_passes_when_all_valid(self):
         import validate_card
@@ -289,7 +352,11 @@ class TestCheckChildren:
             "issue": {"children": {"nodes": [
                 {"identifier": "DRE-201", "title": "A",
                  "description": "**Repo:** atlas\n\n# C\n- [ ] x",
-                 "labels": {"nodes": [{"name": "repo:atlas"}, {"name": "agent:engineer"}]}},
+                 "labels": {"nodes": [
+                     {"name": "repo:atlas"},
+                     {"name": "initiative:bureau"},
+                     {"name": "agent:engineer"},
+                 ]}},
             ]}}
         }
         with patch.object(validate_card, "gql_unused", create=True):
@@ -308,7 +375,27 @@ class TestCheckChildren:
             "issue": {"children": {"nodes": [
                 {"identifier": "DRE-202", "title": "Bad",
                  "description": "/tmp/card2.md",   # path body
-                 "labels": {"nodes": [{"name": "repo:atlas"}]}},  # no role
+                 "labels": {"nodes": [{"name": "repo:atlas"}]}},  # no role/initiative
+            ]}}
+        }
+        with patch.object(_lo, "gql", return_value=payload):
+            with pytest.raises(SystemExit) as exc:
+                validate_card.cmd_check_children("DRE-EPIC")
+        assert exc.value.code == 1
+
+    def test_check_children_fails_on_child_missing_only_initiative(self):
+        # A child that is otherwise complete but lacks initiative:* fails the
+        # sweep (DRE-1722) — same backstop as the repo/role check.
+        import linear_ops as _lo
+        import validate_card
+
+        payload = {
+            "issue": {"children": {"nodes": [
+                {"identifier": "DRE-203", "title": "Almost",
+                 "description": "**Repo:** atlas\n\n# Card\n- [ ] do",
+                 "labels": {"nodes": [
+                     {"name": "repo:atlas"}, {"name": "agent:engineer"}
+                 ]}},  # no initiative:*
             ]}}
         }
         with patch.object(_lo, "gql", return_value=payload):
