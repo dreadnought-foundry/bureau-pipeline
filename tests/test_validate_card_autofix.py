@@ -194,9 +194,9 @@ class GateFixFirstTest(unittest.TestCase):
         fake = FakeLinear("Todo", "Do the thing.", ["agent:engineer", "initiative:bureau"])
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "repo:agent-bureau"), fake.added_labels)
-        # And a **Repo:** line is written to the top of the description.
-        self.assertEqual(len(fake.descriptions), 1)
-        self.assertTrue(fake.descriptions[0][1].startswith("**Repo:** agent-bureau"))
+        # DRE-1699: only the repo:<slug> LABEL is written — the deprecated
+        # **Repo:** stamp is no longer prepended to the description.
+        self.assertEqual(fake.descriptions, [])
         self.assertEqual(fake.states, [])
 
     def test_missing_repo_project_console_infers_agent_bureau(self):
@@ -205,7 +205,8 @@ class GateFixFirstTest(unittest.TestCase):
         )
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "repo:agent-bureau"), fake.added_labels)
-        self.assertTrue(fake.descriptions[0][1].startswith("**Repo:** agent-bureau"))
+        # DRE-1699: label only, no stamp written to the description.
+        self.assertEqual(fake.descriptions, [])
         self.assertEqual(fake.states, [])
 
     def test_missing_repo_no_initiative_unknown_project_bounces(self):
@@ -261,7 +262,8 @@ class GateFixFirstTest(unittest.TestCase):
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "agent:planner"), fake.added_labels)
         self.assertIn(("DRE-999", "repo:atlas"), fake.added_labels)
-        self.assertTrue(fake.descriptions[0][1].startswith("**Repo:** atlas"))
+        # DRE-1699: repo label only — no **Repo:** stamp written.
+        self.assertEqual(fake.descriptions, [])
         self.assertEqual(fake.states, [])
         # Single auto-fix comment naming what was added + the inference source.
         fixes = [c for c in fake.comments if "Auto-fixed" in c[1]]

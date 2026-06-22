@@ -2,8 +2,10 @@
 """Todo-entry card-validation gate (DRE-1405) — FIX-FIRST.
 
 A card is clean to enter Todo only if it has BOTH:
-  1. a resolvable repo — a `**Repo:** <slug>` frontmatter line OR a `repo:<slug>`
-     label; and
+  1. a resolvable repo — the `repo:<slug>` LABEL is the canonical source of
+     truth (DRE-1699); a legacy `**Repo:** <slug>` frontmatter line is still
+     ACCEPTED as a deprecated fallback so pre-label cards keep routing, but new
+     cards should carry the label only; and
   2. an agent-role label — any `agent:*` label (engineer, planner, qa-reviewer,
      devops, … — checked by prefix, not an enumerated list).
 
@@ -13,8 +15,8 @@ bouncing (the original behavior). It:
      else agent:engineer) and adds it;
   2. infers the repo deterministically — from an `initiative:<x>` label (2a) or
      the card's Linear project NAME prefix (2b), validated against the real-repo
-     set VALID_SLUGS — and adds the `repo:<slug>` label + a `**Repo:** <slug>`
-     line at the top of the description.
+     set VALID_SLUGS — and adds the `repo:<slug>` LABEL (and ONLY the label,
+     DRE-1699 — it no longer prepends the deprecated `**Repo:**` stamp).
 On a successful repair the card PROCEEDS (no bounce) and gets a 🔧 comment.
 It is BOUNCED to Backlog ONLY when the repo cannot be inferred (no initiative
 label, unknown/absent project) or the inference yields a slug that isn't a real
@@ -66,20 +68,21 @@ _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _REPO_LABEL = "repo:"
 _AGENT_PREFIX = "agent:"
 _INITIATIVE_LABEL = "initiative:"
-WANT_REPO = "**Repo:** line or repo: label"
+WANT_REPO = "repo: label (or legacy **Repo:** line)"
 WANT_AGENT = "agent: role label"
 WANT_INITIATIVE = "initiative: label"
 
 
 def _has_repo(description: str, labels: list[str]) -> bool:
-    # Label form: repo:<slug> with a non-empty slug.
+    # Canonical form (DRE-1699): the repo:<slug> LABEL with a non-empty slug.
     if any(
         l.lower().startswith(_REPO_LABEL) and l.split(":", 1)[1].strip()
         for l in labels
     ):
         return True
-    # Frontmatter form, ignoring fenced code blocks (avoids the doc-example
-    # false positive the relay guards against).
+    # DEPRECATED fallback: a legacy `**Repo:** <slug>` frontmatter line, kept
+    # only so pre-label cards still validate/route. Ignores fenced code blocks
+    # (avoids the doc-example false positive the relay guards against).
     stripped = _FENCE_RE.sub("", description or "")
     return _REPO_RE.search(stripped) is not None
 
@@ -101,9 +104,10 @@ def missing(description: str, labels: list[str], *, require_initiative: bool = F
 
     `require_initiative` additionally requires a non-empty `initiative:<x>` label.
     It is OPT-IN and OFF by default so the Todo-entry gate is unchanged: that gate
-    runs BEFORE repo inference and routinely sees clean cards that carry only a
-    `**Repo:** <slug>` line and a role label (it INFERS the repo from an
-    initiative label when one is present, so it must not demand one). The
+    runs BEFORE repo inference and routinely sees clean cards that carry a
+    `repo:<slug>` label (or a legacy `**Repo:** <slug>` line) and a role label
+    but no initiative — it INFERS the repo from an initiative label only when one
+    is present, so it must not demand one. The
     post-plan child sweep / create seam turn it ON — a planner-created child must
     inherit `initiative:*` (DRE-1722) or the reconcile dependency-gate, which
     scopes promotion to the initiative, never promotes it and it stalls in
@@ -334,7 +338,6 @@ def cmd_gate(identifier: str) -> None:
     new_labels: list[str] = []
     fixed: list[str] = []          # human-readable bits for the auto-fix comment
     sources: set[str] = set()
-    new_description = description
 
     if WANT_AGENT in gaps:
         agent_label = infer_agent_label(card["title"], card["has_children"], labels)
@@ -357,13 +360,15 @@ def cmd_gate(identifier: str) -> None:
         new_labels.append(f"repo:{slug}")
         fixed.append(f"repo:{slug}")
         sources.add(source)
-        new_description = f"**Repo:** {slug}\n\n{description}".rstrip("\n") if description else f"**Repo:** {slug}"
+        # DRE-1699: the repo:<slug> LABEL is the source of truth. The autofix
+        # adds only the label — it no longer prepends the deprecated **Repo:**
+        # stamp to the description.
 
-    # Every gap is fixable → apply the repair, then let the card proceed.
+    # Every gap is fixable → apply the repair (label-only, DRE-1699), then let
+    # the card proceed. The description is left untouched — the label carries
+    # the repo signal.
     for label in new_labels:
         linear_ops.add_label(identifier, label)
-    if new_description != description:
-        linear_ops.set_description(identifier, new_description)
 
     src = f" (inferred from {', '.join(sorted(sources))})" if sources else ""
     linear_ops.cmd_comment(

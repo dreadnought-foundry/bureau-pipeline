@@ -8,9 +8,11 @@ this is the standard it implements. Create cards with the Linear MCP
 duplicates.
 
 ## Required — a card is valid with BOTH
-1. **`**Repo:** <slug>`** as a frontmatter line in the description (slug ∈ the
-   relay's `VALID_SLUGS`) — **OR** a `repo:<slug>` label. Frontmatter wins;
-   fenced code is ignored.
+1. A **`repo:<slug>` label** (slug ∈ the relay's `VALID_SLUGS`) — the canonical
+   source of truth for the card's repo. *(Legacy fallback: a `**Repo:** <slug>`
+   frontmatter line in the description is still ACCEPTED for pre-existing cards
+   so they keep routing, but it's deprecated — set the label, don't write the
+   stamp. Fenced code is ignored.)*
 2. An **`agent:*` label** (`agent:engineer`, `agent:frontend`, `agent:devops`,
    `agent:planner`, …).
 
@@ -60,7 +62,8 @@ approval before any work — autonomy is the default, the human is the exception
 Expressed by Linear **native parent/child** (not a label, not frontmatter).
 `[EPIC]` in the title OR having children ⇒ the gate infers `agent:planner`. The
 epic's **first prose paragraph** is the CEO-readable plan summary — lead with it
-(after the `**Repo:**` line). To start an epic, **move ONLY the epic to In
+(the repo is carried by the `repo:<slug>` label, not a body line). To start an
+epic, **move ONLY the epic to In
 Progress and stop** — reconcile auto-promotes the unblocked children; never
 hand-move children (it double-dispatches and reverts in-progress work).
 
