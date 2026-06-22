@@ -122,9 +122,13 @@ markdown, and refuses to create that broken card. It also:
 If `subissue` exits non-zero, FIX the body it complained about and re-run — do
 not leave a half-created or skipped card.
 
+The repo is conveyed by the **`repo:<slug>` LABEL** (DRE-1699 — the source of
+truth), which `subissue` inherits from this epic automatically (see above). Set
+the label, **do NOT write a `**Repo:** <slug>` line** into the body — that stamp
+is a deprecated legacy fallback, not part of new cards.
+
 ## Sub-issue description template
 ```
-**Repo:** <this repo's slug — the workflow prompt states it exactly>
 **Design:** <UI cards only — exact design artifact path(s), e.g.
              console/design/images/screens/desktop/board.png; omit on non-UI cards>
 

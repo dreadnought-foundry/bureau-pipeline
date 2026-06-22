@@ -30,6 +30,23 @@ class MissingTest(unittest.TestCase):
             [],
         )
 
+    def test_label_only_card_is_valid_canonical_form(self):
+        # DRE-1699: the repo:<slug> LABEL is the source of truth — a card with
+        # the label and NO **Repo:** stamp anywhere in the body is fully valid.
+        self.assertEqual(
+            missing("Just plain body, no stamp at all.", ["agent:engineer", "repo:atlas"]),
+            [],
+        )
+
+    def test_legacy_stamp_only_card_still_accepted(self):
+        # DRE-1699: the **Repo:** stamp is a DEPRECATED fallback retained only so
+        # legacy cards (created before the label became canonical) still route.
+        # A stamp with no repo:<slug> label remains valid.
+        self.assertEqual(
+            missing("**Repo:** atlas\n\nDo the thing.", ["agent:engineer"]),
+            [],
+        )
+
     def test_clean_epic_planner(self):
         # Epics are just agent:planner cards — same rules.
         self.assertEqual(

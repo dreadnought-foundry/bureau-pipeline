@@ -114,10 +114,12 @@ def cmd_advance(identifier: str, to_state: str, from_states_csv: str) -> None:
 
 
 def set_description(identifier: str, body: str) -> None:
-    """Overwrite a card's description.
+    """Overwrite a card's description (generic helper / `set-description` CLI).
 
-    Used by the Todo-entry gate's fix-first repair (DRE-1405) to prepend the
-    `**Repo:** <slug>` frontmatter line when the repo was inferred but absent.
+    NOTE (DRE-1699): the Todo-entry gate's fix-first repair NO LONGER calls this
+    to prepend a `**Repo:** <slug>` stamp — the `repo:<slug>` label is now the
+    canonical repo signal, so the gate adds only the label and leaves the body
+    alone. This remains a general-purpose description setter.
     """
     issue = get_issue(identifier)
     gql(
@@ -326,8 +328,9 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
         raise SystemExit(
             f"subissue REJECTED ({title!r}): child fails validate_card — missing "
             + ", ".join(gaps)
-            + ". The parent epic must carry a repo:<slug> label (and the body a "
-            "**Repo:** line) AND an initiative:<x> label so children inherit them."
+            + ". The parent epic must carry a repo:<slug> label AND an "
+            "initiative:<x> label so children inherit them (DRE-1699: the repo "
+            "LABEL is the source of truth — no **Repo:** stamp needed)."
         )
 
     sid = state_id(parent["team"]["id"], "Backlog")
