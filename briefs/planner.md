@@ -66,6 +66,26 @@ to open those paths).
   which files it owns. (Bureau origin: DRE-1277 / PR #1348 — five sibling
   component cards all edited the same gallery index and export barrel;
   the PR went DIRTY twice and burned two conflict rounds, 2026-06-12.)
+- **Contention files → a foundation card that owns them first**: some shared
+  files cannot be made append-only or glob-discovered the way a barrel can —
+  a shared CONFIG / THEME / SCHEMA that must exist as ONE canonical file
+  (`tailwind.config.ts`, `tokens.css`, `package.json`, `schema.py`,
+  `App.tsx`, a shared types module). Run a **contention pre-flight**: list the
+  files each proposed card will create or edit, and if **two or more cards'
+  file lists intersect** on such a file, that file is a contention point — do
+  NOT let the cards race to write it in parallel (each writes it its own way
+  and every PR re-collides on that file). Instead **carve a dedicated
+  foundation card that OWNS and fully establishes that file first** (e.g.
+  "brand/theme layer owns `tailwind.config.ts` + `tokens.css` with the
+  complete token set"), and give every card that touches it a
+  `**Blocked by:** <foundation-id>` line so they build ON TOP of the
+  established file instead of editing it concurrently. The dependency gate
+  already promotes a foundation card's dependents only after it ships. This
+  generalizes the "scaffold card owns the dir" pattern to ANY shared file.
+  (Bureau origin: DRE-1442 — the marketing-website epic was cut as
+  "file-disjoint, parallel" but several cards shared `tailwind.config.ts`;
+  they built in parallel, each wrote it differently, and PR #1600 looped
+  CONFLICTING for hours as siblings re-collided on that one file, 2026-06-15.)
 - **Operator-routed cards**: a card whose changes land in
   `dreadnought-foundry/bureau-pipeline` (the shared pipeline repo) cannot be
   executed by a product-repo agent — engineer credentials are deliberately
