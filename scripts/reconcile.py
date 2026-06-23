@@ -20,6 +20,16 @@ Done — blockers read from Linear's native "blocks" relations AND from
 A WIP cap (MAX_WIP, default 4 active cards) throttles promotion so the
 pipeline never floods.
 
+EPIC-LEVEL dependencies (DRE-1772): the gate also honours dependencies between
+EPICS. Before promoting an epic's children, it checks that EPIC's own
+"blocked-by" relations (read the same way as a card's); if any blocker epic is
+not Done, none of that epic's children promote this sweep — regardless of the
+epic's own state. And when a blocker epic reaches Done, every epic blocked-by
+it whose blockers are now ALL Done is auto-advanced from Backlog to Triage
+(which re-triggers the planner) — never to In Progress, so the Plan Review
+human-approval gate is preserved. Both behaviors fail SAFE on unreadable
+relation data (don't promote / don't advance on uncertainty).
+
 Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 """
 
@@ -264,6 +274,109 @@ def blockers_of(card: dict) -> set[str]:
     return found
 
 
+def _fetch_epic_relations(epic_identifier: str) -> dict | None:
+    """Read an epic's identifier, description, and `blocked-by` relations.
+
+    Returns the same shape `blockers_of` consumes (identifier, description,
+    inverseRelations) so the epic-level gate can reuse it verbatim. Returns
+    None on any read failure so callers can fail SAFE (DRE-1772).
+    """
+    try:
+        data = linear_ops.gql(
+            """query($id: String!) { issue(id: $id) {
+                 identifier description
+                 inverseRelations(first: 20) { nodes {
+                   type issue { identifier state { name } }
+                 } }
+               } }""",
+            {"id": epic_identifier},
+        )
+    except Exception as e:  # noqa: BLE001 — any Linear/transport error -> fail safe
+        print(f"epic-gate: could not read relations for {epic_identifier}: {e}")
+        return None
+    return (data or {}).get("issue")
+
+
+def epic_blockers_unmet(epic_identifier: str) -> bool:
+    """True if EPIC `epic_identifier` is itself blocked-by another epic/card
+    that is not yet Done — in which case none of its children may promote this
+    sweep (DRE-1772, epic-level gate).
+
+    Reuses the exact card-level blocker detection (`blockers_of`: native
+    `blocks` relations + "Blocked by:/serialize after/depends on" description
+    lines), just applied to the epic. A blocker counts as MET only when its
+    state is Done/Canceled/Duplicate. Fails SAFE: if the epic's relation data
+    can't be read, returns True (treat as blocked, do not promote).
+    """
+    epic = _fetch_epic_relations(epic_identifier)
+    if epic is None:
+        return True  # ambiguous/unreadable -> fail safe (blocked)
+    epic.setdefault("parent", None)
+    epic.setdefault("identifier", epic_identifier)
+    # Native `blocks` relations: `blockers_of` already filters these to
+    # NON-terminal blockers (state not in Done/Canceled/Duplicate), reading the
+    # state inline from the relation — so any relation-blocker it returns is, by
+    # construction, unmet and needs no extra fetch.
+    relation_blockers = {
+        rel["issue"]["identifier"]
+        for rel in epic["inverseRelations"]["nodes"]
+        if rel["type"] == "blocks"
+    }
+    for blocker in blockers_of(epic):
+        if blocker in relation_blockers:
+            return True  # relation blocker, already known non-terminal
+        # A description-line blocker ("Blocked by: DRE-N"): state unknown, fetch.
+        if card_state(blocker) not in ("Done", "Canceled", "Duplicate"):
+            return True
+    return False
+
+
+def advance_unblocked_epics(done_epic: str) -> None:
+    """When epic `done_epic` reaches Done, pull the next epics in the chain into
+    the pipeline (DRE-1772, auto-advance).
+
+    For each epic that `done_epic` `blocks` (its forward `relations`): if ALL of
+    that epic's own blocker epics are now Done AND it is still in Backlog, move
+    it to **Triage** (which triggers the planner). NEVER to In Progress — the
+    Plan Review approval gate stays human-owned. Idempotent and safe:
+      * only acts on epics still in Backlog (never re-advances one already past
+        it, never thrashes an operator-parked or already-running epic);
+      * never revives a Canceled/Duplicate/Done dependent;
+      * fails SAFE on unreadable relation data (advances nothing).
+    """
+    try:
+        data = linear_ops.gql(
+            """query($id: String!) { issue(id: $id) {
+                 relations(first: 20) { nodes {
+                   type issue { identifier }
+                 } } } }""",
+            {"id": done_epic},
+        )
+    except Exception as e:  # noqa: BLE001 — fail safe
+        print(f"epic-advance: could not read forward relations for {done_epic}: {e}")
+        return
+    issue = (data or {}).get("issue")
+    if not issue:
+        return  # fail safe — nothing to advance
+    dependents = {
+        rel["issue"]["identifier"]
+        for rel in (issue.get("relations") or {}).get("nodes", [])
+        if rel["type"] == "blocks"
+    }
+    for dep in sorted(dependents):
+        if card_state(dep) != "Backlog":
+            continue  # idempotent: only ever advance a still-Backlog epic
+        if epic_blockers_unmet(dep):
+            continue  # another blocker epic isn't Done yet — hold
+        linear_ops.cmd_advance(dep, "Triage", "Backlog")
+        linear_ops.cmd_comment(
+            dep,
+            f"🧹 Auto-advanced Backlog → Triage: blocker epic {done_epic} is Done "
+            "and all blocker epics are now complete. The planner will take it from "
+            "here; a human still approves the plan (→ In Progress).",
+        )
+
+
 def has_unresolved_blocker(card: dict) -> bool:
     """True if the card's latest engineer-blocker marker has no human reply after
     it — i.e. the card was parked in Backlog on a genuine blocker and nobody has
@@ -296,6 +409,9 @@ def promote_ready(active_count: int) -> int:
         print(f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — none promoted")
         return 0
     promoted = 0
+    # Cache the epic-level gate per parent epic: it is the same answer for every
+    # child of that epic, so consult Linear once per epic per sweep (DRE-1772).
+    epic_gate: dict[str, bool] = {}
     candidates = sorted(backlog_children(), key=lambda c: int(c["identifier"].split("-")[1]))
     for card in candidates:
         if promoted >= budget:
@@ -310,6 +426,19 @@ def promote_ready(active_count: int) -> int:
         parent = card.get("parent")
         if not parent or parent["state"]["name"] != "In Progress":
             continue  # parent epic not approved/active
+        # Epic-level gate (DRE-1772): even an active (plan-approved) epic must
+        # not start its children while the epic itself is blocked-by a
+        # prerequisite epic that has not shipped. Composes with the card-level
+        # gate, MAX_WIP, and the DRE-1585 agent-blocker guard below.
+        epic_id = parent["identifier"]
+        if epic_id not in epic_gate:
+            epic_gate[epic_id] = epic_blockers_unmet(epic_id)
+        if epic_gate[epic_id]:
+            print(
+                f"promotion: {card['identifier']}'s epic {epic_id} is blocked by "
+                "an unfinished epic — skipping"
+            )
+            continue
         unmet = {
             b for b in blockers_of(card) if card_state(b) not in ("Done", "Canceled", "Duplicate")
         }
@@ -353,6 +482,10 @@ def close_finished_epics(epic_identifiers: set[str]) -> None:
                 f"🏁 Epic complete: all {len(states)} children are closed "
                 f"({states.count('Done')} done). Closed automatically by the reconcile sweep.",
             )
+            # This epic just shipped — pull the next epics in the dependency
+            # chain into the pipeline (DRE-1772). Merge-time hook; the full
+            # sweep is the backstop.
+            advance_unblocked_epics(epic)
 
 
 def unstick_conflicts() -> None:

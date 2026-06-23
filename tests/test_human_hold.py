@@ -265,9 +265,9 @@ def test_promote_ready_promotes_unheld_card():
     reconcile._write_failures.clear()
     with patch.object(
         reconcile, "backlog_children", return_value=[_backlog_candidate([{"name": "size:M"}])]
-    ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
-        reconcile.linear_ops, "cmd_comment"
-    ):
+    ), patch.object(reconcile, "epic_blockers_unmet", return_value=False), patch.object(
+        reconcile.linear_ops, "cmd_advance"
+    ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
     advance.assert_called_once_with("DRE-1331", "Todo", "Backlog")

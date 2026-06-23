@@ -118,8 +118,10 @@ def test_promote_ready_promotes_card_with_resolved_blocker():
     reconcile._write_failures.clear()
     card = _candidate([BLOCKER, "Fixed upstream, go ahead."])
     with patch.object(reconcile, "backlog_children", return_value=[card]), patch.object(
-        reconcile.linear_ops, "cmd_advance"
-    ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
+        reconcile, "epic_blockers_unmet", return_value=False
+    ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
+        reconcile.linear_ops, "cmd_comment"
+    ):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
     advance.assert_called_once_with("DRE-1572", "Todo", "Backlog")
@@ -130,8 +132,10 @@ def test_promote_ready_promotes_card_without_blocker():
     reconcile._write_failures.clear()
     card = _candidate(["🤖 PR opened: https://x"])
     with patch.object(reconcile, "backlog_children", return_value=[card]), patch.object(
-        reconcile.linear_ops, "cmd_advance"
-    ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
+        reconcile, "epic_blockers_unmet", return_value=False
+    ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
+        reconcile.linear_ops, "cmd_comment"
+    ):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
     advance.assert_called_once_with("DRE-1572", "Todo", "Backlog")
