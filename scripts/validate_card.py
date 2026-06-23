@@ -160,7 +160,7 @@ _SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "config" / "repo-map.j
 # can't silently rot.
 _FALLBACK_REPO_MAP = {
     "atlas": "EveryBite/atlas",
-    "deltasolv": "dreadnought-foundry/deltasolv",
+    "deltasolv": "DeltaSolv/deltasolv",
     "vericorr": "dreadnought-foundry/vericorr",
     "agent-bureau": "dreadnought-foundry/agent-bureau",
     "agent-bureau-demo": "dreadnought-foundry/agent-bureau-demo",
