@@ -442,6 +442,20 @@ jobs:
           done
           [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-comment.md)" || true
 
+          # DRE-1874: reconcile the FORMAL review state with the verdict. When
+          # the critic earlier said REQUEST_CHANGES, claude-code-action submits
+          # a formal "Changes requested" review (as this bot). On the APPROVE
+          # flip, qa-review only posted a comment — the stale formal review kept
+          # reviewDecision=CHANGES_REQUESTED and mergeStateStatus=BLOCKED, so
+          # the merge-gate (and even --admin) couldn't merge until a human
+          # dismissed it. On an APPROVE verdict, dismiss the stale
+          # changes-requested review(s) AND submit a fresh APPROVE review so
+          # GitHub's reviewDecision becomes APPROVED. Best-effort (the script
+          # never fails the job) and idempotent.
+          if [ "$REAL" = "true" ] && head -1 /tmp/qa-verdict.md | grep -q "VERDICT: APPROVE"; then
+            python3 .bureau-pipeline/scripts/sync_review_state.py "${{ github.repository }}" "$PR" || true
+          fi
+
       # Fail the job loudly AFTER the neutral comment is posted, so the
       # infra failure is visibly red and the medic picks it up. A genuine
       # review (real verdict) ends green regardless of APPROVE/REQUEST_CHANGES.
