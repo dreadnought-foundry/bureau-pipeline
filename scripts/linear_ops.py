@@ -2,7 +2,14 @@
 """Minimal Linear operations for the agent pipeline (stdlib only).
 
 Subcommands:
-  state <DRE-N> <state-name>           move a card to a workflow state
+  state <DRE-N> <state-name> [--park]  move a card to a workflow state. Refuses
+                                       to un-complete a terminal (Done/Canceled)
+                                       card (DRE-1877), and re-routes a BUILDING
+                                       card (In Progress) aimed at Backlog to
+                                       Todo so it re-dispatches instead of
+                                       stranding (DRE-1885). `--park` opts a
+                                       deliberate hold (blocker / dead-run cap)
+                                       out of that reroute — Backlog is intended.
   advance <DRE-N> <to-state> <from-states-csv>
                                        move ONLY if current state is in the csv
                                        (guards against dragging Done cards back)
@@ -66,6 +73,7 @@ def get_issue(identifier: str) -> dict:
     data = gql(
         """query($id: String!) { issue(id: $id) {
              id identifier title team { id } state { name type }
+             labels { nodes { name } }
            } }""",
         {"id": identifier},
     )
@@ -96,8 +104,25 @@ def state_id_and_type(team_id: str, name: str) -> tuple[str, str]:
 # Linear lifecycle buckets that mean "this card is finished, do not reopen it".
 _TERMINAL_TYPES = ("completed", "canceled")
 
+# The hold label a DELIBERATE human-hold stamps on a card before parking it in
+# Backlog (DRE-1403). Its presence is the native "a human owns this now" signal
+# that exempts a Backlog park from the building-card reroute below.
+_HOLD_LABEL = "needs-human"
 
-def cmd_state(identifier: str, state_name: str) -> None:
+
+def _label_names(issue: dict) -> list[str]:
+    return [
+        (lbl.get("name") or "")
+        for lbl in ((issue.get("labels") or {}).get("nodes") or [])
+    ]
+
+
+def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
+    # `--park` (passed by the DELIBERATE park callers: the agent-task blocker
+    # branch + both dead-run/hung HOLD-cap paths) opts a Backlog move out of the
+    # building-card reroute below. Everything else is treated as an ordinary
+    # transition that must NOT be allowed to strand a building card.
+    deliberate_park = "--park" in flags
     issue = get_issue(identifier)
     target_id, target_type = state_id_and_type(issue["team"]["id"], state_name)
     # Ground-truth guard (DRE-1877): a merged PR moves its card to Done, and Done
@@ -111,12 +136,49 @@ def cmd_state(identifier: str, state_name: str) -> None:
     # Forward/terminal moves (→ Done, → Canceled, Done→Done idempotency) are
     # always allowed; only un-completing a terminal card is refused.
     current_type = (issue.get("state") or {}).get("type")
+    current_name = (issue.get("state") or {}).get("name", current_type)
     if current_type in _TERMINAL_TYPES and target_type not in _TERMINAL_TYPES:
-        current_name = (issue.get("state") or {}).get("name", current_type)
         print(
             f"{identifier} is {current_name!r} (terminal) — refusing to move it to "
             f"{state_name!r}; a finished card is ground truth and is never reopened "
             f"by an automated transition."
+        )
+        return
+    # Building-card guard (DRE-1885, follow-on to DRE-1877, one lifecycle state
+    # earlier): a card that is actively BUILDING — current state-type `started`
+    # (In Progress) — must never be silently knocked into Backlog, where nothing
+    # re-promotes it and it strands. This is what stranded DRE-1822: it went Todo
+    # → In Progress at 20:08, a hold/park reverted it to Backlog at 20:13 during
+    # the Actions-budget-block + dead-run window, and it sat ~3h until a human
+    # re-promoted it — stalling epic E4.1. Same class as DRE-1803, but on the
+    # building card rather than the finished one.
+    #
+    # If a building card genuinely must be re-queued, send it to Todo (which
+    # re-dispatches via the cascade), NEVER Backlog (inert — nothing picks it up).
+    # Two exemptions keep the LEGITIMATE Backlog parks working:
+    #   * `--park` — a deliberate hold caller (the blocker branch, whose Todo
+    #     would redispatch agents into the same wall — DRE-1286; and the HOLD-cap
+    #     after REQUEUE_CAP dead runs — DRE-1403/1572), and
+    #   * the card already carries the `needs-human` hold label (a human owns it).
+    # A not-started card (backlog/unstarted/triage) dropped to Backlog — an
+    # explicit operator/CEO park, or a card that never started — is untouched.
+    if (
+        current_type == "started"
+        and target_type == "backlog"
+        and not deliberate_park
+        and _HOLD_LABEL not in [n.lower() for n in _label_names(issue)]
+    ):
+        todo_id, _ = state_id_and_type(issue["team"]["id"], "Todo")
+        gql(
+            """mutation($id: String!, $input: IssueUpdateInput!) {
+                 issueUpdate(id: $id, input: $input) { success } }""",
+            {"id": issue["id"], "input": {"stateId": todo_id}},
+        )
+        print(
+            f"{identifier} is {current_name!r} (building) — re-queued to 'Todo' "
+            f"instead of {state_name!r}; an actively-building card is never parked "
+            f"in Backlog (inert, nothing re-promotes it), only re-dispatched via "
+            f"Todo. Pass --park (or stamp 'needs-human') for a deliberate hold."
         )
         return
     gql(

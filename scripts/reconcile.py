@@ -728,7 +728,10 @@ def main(
                 dead = linear_ops.count_comments(ident, DEAD_TAG)
                 if dead >= REQUEUE_CAP:
                     linear_ops.add_label(ident, HOLD_LABEL)
-                    linear_ops.cmd_state(ident, "Backlog")
+                    # --park: a deliberate HOLD-cap park (DRE-1403). Without it
+                    # the DRE-1885 building-card guard would re-route this
+                    # In Progress → Backlog move to Todo and re-loop forever.
+                    linear_ops.cmd_state(ident, "Backlog", "--park")
                     linear_ops.cmd_comment(
                         ident,
                         f"🚨 held-for-human: agent keeps dying with no PR (hung or "

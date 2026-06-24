@@ -289,7 +289,11 @@ jobs:
             # dependency gate) releases it.
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🛑 Agent blocked: $(cat /tmp/agent-blocker.txt) — parked in Backlog until the blocker is resolved (a Todo return here would redispatch agents into the same wall). Run: $RUN_URL"
-            python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" || true
+            # --park: a blocker is a DELIBERATE Backlog hold (Todo would
+            # redispatch into the same wall — DRE-1286). Without it the
+            # DRE-1885 building-card guard would re-route this In Progress →
+            # Backlog move to Todo and reintroduce that loop.
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
           else
             # No PR and no blocker. Three death classes share ONE hold cap,
             # counted by the 'dead-run-requeue' tag (DRE-1403): silent (here),
@@ -313,7 +317,10 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$BODY"
             if [ "$ACTION" = "hold" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
-              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" || true
+              # --park: a deliberate HOLD-cap park (DRE-1403) — the agent kept
+              # dying with no PR. Without it the DRE-1885 building-card guard
+              # would re-route this In Progress → Backlog move to Todo and loop.
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
             else
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
             fi
