@@ -65,7 +65,7 @@ def gql(query: str, variables: dict | None = None) -> dict:
 def get_issue(identifier: str) -> dict:
     data = gql(
         """query($id: String!) { issue(id: $id) {
-             id identifier title team { id } state { name }
+             id identifier title team { id } state { name type }
            } }""",
         {"id": identifier},
     )
@@ -73,24 +73,56 @@ def get_issue(identifier: str) -> dict:
 
 
 def state_id(team_id: str, name: str) -> str:
+    """The workflow-state id for `name` on a team. (Use `state_id_and_type` when
+    the caller also needs the state's lifecycle type.)"""
+    return state_id_and_type(team_id, name)[0]
+
+
+def state_id_and_type(team_id: str, name: str) -> tuple[str, str]:
+    """`(id, type)` for the named workflow state. `type` is Linear's lifecycle
+    bucket — one of: backlog, unstarted, started, completed, canceled — which is
+    what tells terminal (completed/canceled) states apart from in-flight ones."""
     data = gql(
         """query($teamId: ID) { workflowStates(filter: {team: {id: {eq: $teamId}}}) {
-             nodes { id name } } }""",
+             nodes { id name type } } }""",
         {"teamId": team_id},
     )
     for node in data["workflowStates"]["nodes"]:
         if node["name"].lower() == name.lower():
-            return node["id"]
+            return node["id"], node["type"]
     raise SystemExit(f"no state named {name!r} on team")
+
+
+# Linear lifecycle buckets that mean "this card is finished, do not reopen it".
+_TERMINAL_TYPES = ("completed", "canceled")
 
 
 def cmd_state(identifier: str, state_name: str) -> None:
     issue = get_issue(identifier)
-    sid = state_id(issue["team"]["id"], state_name)
+    target_id, target_type = state_id_and_type(issue["team"]["id"], state_name)
+    # Ground-truth guard (DRE-1877): a merged PR moves its card to Done, and Done
+    # is the truth. Never let a LATER, non-terminal transition drag a finished
+    # card (completed/canceled) back into the working lanes. This is what stranded
+    # DRE-1803 in DeltaSolv: linear-sync set it Done on the PR #16 merge, then a
+    # concurrent duplicate run's dead-run HOLD path did `state Backlog` ~9 min
+    # later and clobbered it — so the Done card looked unfinished, its dependent
+    # never promoted, and the epic stalled. The hold/requeue/blocker parks all
+    # route through here, so guarding the seam fixes every one of them at once.
+    # Forward/terminal moves (→ Done, → Canceled, Done→Done idempotency) are
+    # always allowed; only un-completing a terminal card is refused.
+    current_type = (issue.get("state") or {}).get("type")
+    if current_type in _TERMINAL_TYPES and target_type not in _TERMINAL_TYPES:
+        current_name = (issue.get("state") or {}).get("name", current_type)
+        print(
+            f"{identifier} is {current_name!r} (terminal) — refusing to move it to "
+            f"{state_name!r}; a finished card is ground truth and is never reopened "
+            f"by an automated transition."
+        )
+        return
     gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
-        {"id": issue["id"], "input": {"stateId": sid}},
+        {"id": issue["id"], "input": {"stateId": target_id}},
     )
     print(f"{identifier} → {state_name}")
 

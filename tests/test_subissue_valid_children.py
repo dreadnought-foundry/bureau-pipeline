@@ -184,7 +184,11 @@ class FakeLinear:
             return {"issue": {"labels": {"nodes": [{"name": n} for n in self.parent_labels]}}}
         # state_id
         if "workflowStates" in q:
-            return {"workflowStates": {"nodes": [{"id": "state-backlog", "name": "Backlog"}]}}
+            return {
+                "workflowStates": {
+                    "nodes": [{"id": "state-backlog", "name": "Backlog", "type": "backlog"}]
+                }
+            }
         # _team_label_id lookups → pretend none exist yet
         if "team(id: $teamId)" in q and "labels(first: 250)" in q:
             return {"team": {"labels": {"nodes": []}}}
