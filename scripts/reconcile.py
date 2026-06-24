@@ -167,6 +167,24 @@ def card_repo_slug(description: str) -> str | None:
     return m.group(1).lower().rsplit("/", 1)[-1] if m else None
 
 
+def card_repo(card: dict) -> str | None:
+    """A card's repo slug, LABEL-first (DRE-1879).
+
+    The `repo:<slug>` label is the canonical repo signal — the `**Repo:**`
+    description stamp is a deprecated relic that cards created the modern way no
+    longer carry (DRE-1699/DRE-1697). The event-driven promotion gate matched ONLY
+    the stamp, so a label-only card (e.g. DeltaSolv's DRE-1811, `repo:deltasolv`,
+    no stamp) returned None and was silently skipped — its blocker went Done on a
+    merge but it never promoted, stranding the chain until the operator did it by
+    hand. Read the label first; fall back to the legacy stamp for old cards.
+    """
+    for lbl in (card.get("labels") or {}).get("nodes", []):
+        name = (lbl.get("name") or "").lower()
+        if name.startswith("repo:"):
+            return name[len("repo:"):].rsplit("/", 1)[-1] or None
+    return card_repo_slug(card.get("description") or "")
+
+
 def age_minutes(iso: str) -> float:
     then = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     return (datetime.now(UTC) - then).total_seconds() / 60
@@ -416,7 +434,7 @@ def promote_ready(active_count: int) -> int:
     for card in candidates:
         if promoted >= budget:
             break
-        if card_repo_slug(card["description"] or "") != REPO_SLUG:
+        if card_repo(card) != REPO_SLUG:
             continue
         labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
         if "agent:planner" in labels:
@@ -603,7 +621,7 @@ def repo_epics(active: list[dict]) -> set[str]:
     In Progress for the life of their children — never nudged, never counted
     against the WIP cap. They DO close themselves when finished.
     """
-    mine = [c for c in active if card_repo_slug(c["description"] or "") == REPO_SLUG]
+    mine = [c for c in active if card_repo(c) == REPO_SLUG]
     return {
         c["identifier"]
         for c in mine
@@ -661,7 +679,7 @@ def main(
             except ReconcileWriteError as e:
                 _write_failures.append(str(e))
                 print(f"ERROR: {backstop.__name__}: {e}", file=sys.stderr)
-    mine = [c for c in active_cards() if card_repo_slug(c["description"] or "") == REPO_SLUG]
+    mine = [c for c in active_cards() if card_repo(c) == REPO_SLUG]
     epics = repo_epics(mine)
     if not promote_only:
         close_finished_epics(epics)
