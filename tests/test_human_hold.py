@@ -201,7 +201,10 @@ def test_in_progress_holds_after_cap():
     ) as cmd_state, patch.object(reconcile.linear_ops, "cmd_comment"):
         reconcile.main()
     add_label.assert_called_once_with("DRE-1331", reconcile.HOLD_LABEL)
-    cmd_state.assert_called_once_with("DRE-1331", "Backlog")
+    # --park: the HOLD-cap park is DELIBERATE, so it opts out of the DRE-1885
+    # building-card reroute (otherwise an In Progress → Backlog hold would be
+    # re-routed to Todo and loop forever past the cap).
+    cmd_state.assert_called_once_with("DRE-1331", "Backlog", "--park")
     assert ("DRE-1331", "Todo") not in [c.args for c in cmd_state.call_args_list]
 
 
