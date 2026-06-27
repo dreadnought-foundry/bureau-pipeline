@@ -13,12 +13,18 @@ Checks (card must carry **Repo:** atlas, any owner-prefix form):
               no verdict -> re-trigger qa-review; no PR -> back to Todo
   In Review   stale >1h: PR merged -> Done; else re-trigger merge-gate
 
-Also runs the dependency gate: Backlog children whose parent epic is
-In Progress (= plan approved) are auto-promoted to Todo once every blocker is
-Done — blockers read from Linear's native "blocks" relations AND from
-"Blocked by: DRE-N" / "serialize after DRE-N" lines in the description.
-A WIP cap (MAX_WIP, default 4 active cards) throttles promotion so the
-pipeline never floods.
+Also runs the dependency gate: Backlog children whose parent epic is ACTIVATED
+(= plan approved) are auto-promoted to Todo once every blocker is Done — blockers
+read from Linear's native "blocks" relations AND from "Blocked by: DRE-N" /
+"serialize after DRE-N" lines in the description. A WIP cap (MAX_WIP, default 4
+active cards) throttles promotion so the pipeline never floods.
+
+An epic counts as ACTIVATED in EITHER Todo OR In Progress (DRE-1893). The CEO's
+activation action is moving an approved epic to **Todo** (lifecycle Backlog →
+Planning → Todo); In Progress is a downstream/system progression. Todo is purely
+ADDITIVE to the pre-existing In Progress trigger, so both activate identically
+and nothing that worked before changes. MAX_WIP and the blocker checks are
+unchanged — only the set of parent states that count as "active" widened.
 
 EPIC-LEVEL dependencies (DRE-1772): the gate also honours dependencies between
 EPICS. Before promoting an epic's children, it checks that EPIC's own
@@ -53,6 +59,14 @@ REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
 # the run itself; this timer is only the backstop for lost run outcomes.
 STALE_MINUTES = {"Todo": 15, "In Progress": 60, "In QA": 120, "In Review": 60}
 MAX_WIP = int(os.environ.get("MAX_WIP", "4"))
+
+# Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893).
+# The CEO activates an approved epic by moving it to **Todo** (lifecycle Backlog
+# → Planning → Todo); In Progress is a later/system progression that historically
+# was the ONLY activation trigger. Todo is ADDITIVE: an epic in either state
+# promotes its unblocked Backlog children. Anything else (Backlog, Planning,
+# Plan Review, Done, …) is not active and its children stay parked.
+EPIC_ACTIVE_STATES = ("Todo", "In Progress")
 
 # Human-hold (DRE-1403). A card whose agent keeps dying with no PR — whether it
 # crashes (counted by agent-task) or HANGS/times out (seen only here) — is
@@ -442,8 +456,8 @@ def promote_ready(active_count: int) -> int:
         if HOLD_LABEL in labels:
             continue  # held for a human (DRE-1403) — never auto-promote
         parent = card.get("parent")
-        if not parent or parent["state"]["name"] != "In Progress":
-            continue  # parent epic not approved/active
+        if not parent or parent["state"]["name"] not in EPIC_ACTIVE_STATES:
+            continue  # parent epic not approved/active (Todo or In Progress; DRE-1893)
         # Epic-level gate (DRE-1772): even an active (plan-approved) epic must
         # not start its children while the epic itself is blocked-by a
         # prerequisite epic that has not shipped. Composes with the card-level
@@ -637,7 +651,8 @@ def main(
     promote_only exists because GitHub's cron is best-effort — the "*/15"
     schedule delivers sweeps 78-100 minutes apart in practice. Eligibility
     changes at two precise events, so those workflows invoke this directly:
-      - plan.yml, the moment an epic activates (In Progress)
+      - plan.yml, the moment an epic activates (Todo or In Progress; the gate
+        counts an epic as active in EITHER state — DRE-1893)
       - linear-sync.yml, the moment a merge flips a card to Done
     Promotion is pure Linear (the Backlog→Todo transition rides the Linear
     webhook → relay → repository_dispatch for the actual agent start), so
