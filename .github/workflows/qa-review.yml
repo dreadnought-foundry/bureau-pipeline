@@ -26,8 +26,22 @@ on:
 
 jobs:
   review:
-    # Only review agent-authored work (branch convention agent/DRE-N-*).
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.head.ref, 'agent/')
+    # Review every CARD PR, not just agent-dispatched ones (DRE-1888).
+    #   • agent/DRE-N-*               — normal pipeline work (unchanged)
+    #   • fix/DRE-N-*, feat/DRE-N-*…  — operator-routed card PRs (the ones the
+    #     pipeline's repo-scoped agent tokens can't author, so the operator
+    #     opens them by hand); these used to SKIP the critic and merge with no
+    #     adversarial verdict — now they pass the same gate.
+    # A branch with a linked Linear card (DRE-<n>, the signal linear-sync uses
+    # to close the loop) is real product work and gets reviewed; a truly
+    # chrome-only branch (no linked card) is still skipped below by the
+    # "Decide review" step, which is the authoritative gate (should_review_pr.py).
+    # This broadened `if:` just lets the job START for the same set of branches;
+    # the Python step is the single source of truth for the decision.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.pull_request.head.ref, 'agent/') ||
+      contains(github.event.pull_request.head.ref, 'DRE-')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -45,7 +59,31 @@ jobs:
           repository: dreadnought-foundry/bureau-pipeline
           path: .bureau-pipeline
 
+      # Authoritative review gate (DRE-1888). A workflow_dispatch always
+      # reviews (operator asked for it explicitly). For a PR event, the critic
+      # runs iff the branch is an agent branch OR carries a linked card; a
+      # chrome-only PR with no linked card is skipped here — every later step
+      # is guarded on steps.decide.outputs.review so the job ends green-skip
+      # without burning critic inference.
+      - name: Decide review
+        id: decide
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "review=true" >> "$GITHUB_OUTPUT"
+            echo "workflow_dispatch — reviewing on request"
+            exit 0
+          fi
+          if python3 .bureau-pipeline/scripts/should_review_pr.py "$HEAD_REF"; then
+            echo "review=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "review=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Resolve PR
+        if: steps.decide.outputs.review == 'true'
         id: pr
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -64,6 +102,7 @@ jobs:
       # run with no workflow change. Shared by both critic attempts below.
       - name: Assemble critic context
         id: ctx
+        if: steps.decide.outputs.review == 'true'
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble critic \
             > .bureau-pipeline/agent-context.md
@@ -82,6 +121,7 @@ jobs:
       # error + a guaranteed fallback context), so it can never wedge the gate.
       - name: Plan visual QA
         id: vqplan
+        if: steps.decide.outputs.review == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -119,7 +159,7 @@ jobs:
       - name: Render affected screens
         id: vqshots
         # Only when the planner said run; best-effort, never fails the job.
-        if: steps.vqplan.outputs.run == 'True'
+        if: steps.decide.outputs.review == 'true' && steps.vqplan.outputs.run == 'True'
         continue-on-error: true
         env:
           # Force the harness to dodge live network even if a screen route would.
@@ -159,7 +199,7 @@ jobs:
 
       - name: Build critic visual context
         id: visual
-        if: always() && !cancelled()
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
         continue-on-error: true
         run: |
           set +e
@@ -187,6 +227,7 @@ jobs:
 
       - name: Critic review
         id: critic
+        if: steps.decide.outputs.review == 'true'
         uses: anthropics/claude-code-action@v1
         # A crash here (is_error / no verdict) must NOT fail-close into a
         # false REQUEST_CHANGES — the gate below detects it and we retry.
@@ -279,7 +320,7 @@ jobs:
       # we must retry, never post the crash as REQUEST_CHANGES.
       - name: Gate critic result (attempt 1)
         id: gate1
-        if: always() && !cancelled()
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
         continue-on-error: true
         run: |
           EXEC_FILE="${{ steps.critic.outputs.execution_file }}"
@@ -295,7 +336,7 @@ jobs:
       # don't burn a whole failed run + rerun cycle on a transient critic
       # crash). Clear any stale verdict so the gate re-evaluates honestly.
       - name: Clear stale verdict before retry
-        if: always() && !cancelled() && steps.gate1.outputs.real != 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
         run: rm -f /tmp/qa-verdict.md
 
       # NOTE: the with block below is intentionally duplicated from the
@@ -305,7 +346,7 @@ jobs:
       # fail to parse the file, breaking the critic in every consuming repo.
       - name: Critic review (retry)
         id: critic_retry
-        if: always() && !cancelled() && steps.gate1.outputs.real != 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
         uses: anthropics/claude-code-action@v1
         continue-on-error: true
         with:
@@ -392,7 +433,7 @@ jobs:
 
       - name: Gate critic result (attempt 2)
         id: gate2
-        if: always() && !cancelled() && steps.gate1.outputs.real != 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
         continue-on-error: true
         run: |
           EXEC_FILE="${{ steps.critic_retry.outputs.execution_file }}"
@@ -407,8 +448,9 @@ jobs:
       - name: Post verdict or neutral status
         id: post
         # not on cancellation: a superseded run must not post a fail-closed
-        # verdict that masks the live run's real one
-        if: always() && !cancelled()
+        # verdict that masks the live run's real one. Skipped entirely when
+        # the decide gate said this PR is chrome-only (no verdict to post).
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -460,7 +502,9 @@ jobs:
       # infra failure is visibly red and the medic picks it up. A genuine
       # review (real verdict) ends green regardless of APPROVE/REQUEST_CHANGES.
       - name: Fail if critic never really ran
-        if: always() && !cancelled() && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
+        # Only when we actually tried to review — a chrome-only PR (decide
+        # said skip) never runs the gates, so it must NOT fail here.
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
         run: |
           echo "::error::QA critic crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
           exit 1

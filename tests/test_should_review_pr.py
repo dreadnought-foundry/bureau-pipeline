@@ -1,0 +1,118 @@
+"""RED-first tests for the QA-critic review gate (DRE-1888).
+
+Origin: the adversarial critic (qa-review.yml) only ran on agent-dispatched
+branches (`agent/DRE-N-*`). Operator-routed cards — the ones the pipeline's
+repo-scoped agent tokens can't author, so the operator opens the PR by hand on
+a `fix/DRE-N-...` / `feat/DRE-N-...` branch — were SKIPPED. Operator work thus
+merged with no real critic verdict, dodging the gate every normal card PR
+passes.
+
+The fix opts operator-routed CARD PRs in: a PR whose head branch carries a
+linked Linear card (`DRE-<n>`, the same signal linear-sync uses to close the
+loop) gets the critic, whatever the branch prefix. A truly chrome-only PR
+(no linked card) stays skippable so the gate never blocks non-card work.
+
+These tests must FAIL before should_review_pr.py exists / before qa-review.yml
+broadens its guard, and PASS after.
+"""
+
+import os
+import subprocess
+import sys
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+import should_review_pr  # noqa: E402
+
+
+class ShouldReviewTest(unittest.TestCase):
+    # --- operator-routed card PRs: NOW reviewed (the DRE-1888 fix) -------
+
+    def test_operator_fix_branch_with_card_is_reviewed(self):
+        # The exact shape that was skipping before: an operator-authored
+        # bureau-pipeline fix on a fix/DRE-N branch.
+        self.assertTrue(
+            should_review_pr.should_review("fix/DRE-1885-dont-park-building-card")
+        )
+
+    def test_operator_feat_branch_with_card_is_reviewed(self):
+        self.assertTrue(
+            should_review_pr.should_review("feat/DRE-1888-critic-on-operator-prs")
+        )
+
+    def test_docs_branch_with_card_is_reviewed(self):
+        # A card is a card regardless of the conventional-commit prefix.
+        self.assertTrue(should_review_pr.should_review("docs/DRE-1900-adr"))
+
+    def test_bare_card_branch_is_reviewed(self):
+        self.assertTrue(should_review_pr.should_review("DRE-1773"))
+
+    # --- normal pipeline PRs: STILL reviewed (no regression) ------------
+
+    def test_agent_branch_is_reviewed(self):
+        self.assertTrue(
+            should_review_pr.should_review("agent/DRE-1759-engine-drilldown")
+        )
+
+    def test_agent_branch_even_without_card_is_reviewed(self):
+        # Legacy convention is honored on the prefix alone.
+        self.assertTrue(should_review_pr.should_review("agent/some-task"))
+
+    # --- chrome-only PRs: STILL skippable -------------------------------
+
+    def test_chore_branch_without_card_is_skipped(self):
+        self.assertFalse(should_review_pr.should_review("chore/bump-deps"))
+
+    def test_docs_branch_without_card_is_skipped(self):
+        self.assertFalse(should_review_pr.should_review("docs/readme-typo"))
+
+    def test_empty_branch_is_skipped(self):
+        self.assertFalse(should_review_pr.should_review(""))
+
+    def test_none_branch_is_skipped(self):
+        self.assertFalse(should_review_pr.should_review(None))
+
+    # --- card extraction matches the pipeline's DRE-N convention --------
+
+    def test_card_in_branch_picks_first_reference(self):
+        self.assertEqual(
+            should_review_pr.card_in_branch("fix/DRE-1885-then-DRE-1999"),
+            "DRE-1885",
+        )
+
+    def test_card_in_branch_none_when_absent(self):
+        self.assertIsNone(should_review_pr.card_in_branch("chore/bump-deps"))
+
+
+class CliTest(unittest.TestCase):
+    """CLI: exit 0 == review (run the critic); exit 1 == skip. Stdout carries
+    a `review=true|false` line the workflow captures as a step output."""
+
+    def _run(self, branch):
+        return subprocess.run(
+            [sys.executable,
+             os.path.join(os.path.dirname(__file__), "..", "scripts",
+                          "should_review_pr.py"),
+             branch],
+            capture_output=True, text=True,
+        )
+
+    def test_cli_exit_0_and_review_true_on_operator_card_branch(self):
+        p = self._run("fix/DRE-1885-dont-park")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("review=true", p.stdout)
+
+    def test_cli_exit_0_on_agent_branch(self):
+        p = self._run("agent/DRE-1-x")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("review=true", p.stdout)
+
+    def test_cli_exit_1_and_review_false_on_chrome_branch(self):
+        p = self._run("chore/bump-deps")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("review=false", p.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()
