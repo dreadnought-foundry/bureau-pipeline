@@ -49,10 +49,15 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           PR=${{ github.event.issue.number || github.event.inputs.pr_number }}
-          INFO=$(gh pr view "$PR" --repo ${{ github.repository }} --json state,headRefName,mergeStateStatus)
+          INFO=$(gh pr view "$PR" --repo ${{ github.repository }} --json state,headRefName,headRefOid,mergeStateStatus)
           STATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
           BRANCH=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['headRefName'])")
           MSTATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['mergeStateStatus'])")
+          # The head SHA at dispatch time — the Report step compares against the
+          # post-run SHA to detect a fix that pushed no new commit (DRE: the
+          # phantom "Fix attempt N pushed" that re-triggers nothing).
+          HEAD_SHA=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['headRefOid'])")
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           case "$BRANCH" in agent/*) ;; *) echo "not an agent branch"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0;; esac
           [ "$STATE" != "OPEN" ] && { echo "PR is $STATE"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }
           CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
@@ -261,19 +266,64 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ steps.pr.outputs.card }}
+          PRE_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           PR=${{ steps.pr.outputs.number }}
+
+          # Park-to-human helper. A dispute or a no-progress fix run leaves the
+          # branch's LATEST critic verdict at REQUEST_CHANGES with no new commit
+          # to re-review — so the critic never re-fires and merge-gate correctly
+          # but permanently HOLDS ("latest verdict is not APPROVE — holding").
+          # The card then sits silently in In QA forever (DeltaSolv PR #64/#74,
+          # 2026-06-28: ~20h stall, hand-merged). That is exactly an
+          # escalate-by-exception case (the engineer and the critic disagree, or
+          # the fix made no headway), so route it to the human the same way
+          # agent-task.yml does: Plan Review (the "needs you" lane) + a
+          # needs-human stamp, with a plain-English note. The CEO answers and
+          # moves the card → Todo (proceed) or → Backlog (drop).
+          park_for_human() {
+            [ -n "$CARD" ] || return 0
+            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Plan Review" "In QA,In Progress,Todo" || \
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review" --park || true
+          }
+
           if [ -f /tmp/fix-blocker.txt ]; then
             gh pr comment "$PR" --repo ${{ github.repository }} \
               --body "🛑 Fix attempt ${{ steps.pr.outputs.attempt }} blocked: $(cat /tmp/fix-blocker.txt)"
-            [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment \
-              "${{ steps.pr.outputs.card }}" \
-              "🛑 Fix agent disputed the findings — needs a human look. Details on PR #$PR." || true
-          else
-            if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
-              BODY="🔀 Conflict resolution round ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
-            else
-              BODY="🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
+            # Escalate, don't just narrate. The fixer disputed the critic's
+            # findings and (per its instructions) pushed NOTHING — so the branch
+            # holds a stale REQUEST_CHANGES the critic will never lift on its own.
+            # Park the card in Plan Review so it surfaces in the CEO's queue
+            # instead of stalling invisibly in In QA.
+            if [ -n "$CARD" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                "🙋 The fix agent disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong. This needs your call. Details on PR #$PR. Move this card to **Todo** to have the reviewer take another look or to **Backlog** to drop it." || true
             fi
-            gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY"
+            park_for_human
+          else
+            # The fixer reported success — but only a NEW commit re-triggers CI +
+            # the critic. If the head SHA did not advance (the agent committed
+            # nothing, or its push was a no-op), announcing "review re-running"
+            # is a lie: no run fires, the stale REQUEST_CHANGES stands, and the
+            # card stalls in In QA (DeltaSolv PR #74, 2026-06-28). Verify real
+            # forward progress; escalate to the human when there is none.
+            POST_SHA=$(gh pr view "$PR" --repo ${{ github.repository }} --json headRefOid --jq .headRefOid)
+            if [ -n "$PRE_SHA" ] && [ "$POST_SHA" = "$PRE_SHA" ]; then
+              gh pr comment "$PR" --repo ${{ github.repository }} \
+                --body "🛑 Fix attempt ${{ steps.pr.outputs.attempt }} pushed no new commit (branch still at \`${POST_SHA:0:8}\`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck."
+              if [ -n "$CARD" ]; then
+                python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                  "🙋 The fix agent ran but produced no change the reviewer can re-check, so this card can't move on its own. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **Backlog** to drop it." || true
+              fi
+              park_for_human
+            else
+              if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
+                BODY="🔀 Conflict resolution round ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
+              else
+                BODY="🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
+              fi
+              gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY"
+            fi
           fi
