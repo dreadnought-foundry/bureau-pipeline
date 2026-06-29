@@ -4,6 +4,18 @@
 # reports in plain English to Linear — to the card if one is involved,
 # otherwise as a new Triage card. Machines watch; agents think.
 #
+# EXCEPTION (DRE-1921, the #1 quota-burn fix): a QA critic that crashed on
+# INFRASTRUCTURE (a GitHub rate-limit, or an auth/startup death) is NOT a
+# retryable failure. qa-review.yml posts a neutral "could not run (infra error)"
+# comment and fails the job loudly "for medic visibility" — but re-running the
+# critic against an exhausted rate-limit cannot succeed and only deepens the
+# limit, and the diagnosis agent burns yet more GitHub quota. On 2026-06-28 six
+# PRs looped on exactly this and burned the bot's GitHub quota twice. So before
+# retrying or diagnosing, the medic classifies the failed run; on a critic
+# infra-crash it BACKS OFF (no rerun, no diagnosis agent), posts a single
+# plain-English "reviewer down (infra) — not a code rejection" note, and lets a
+# later natural trigger (a new push, the rate-limit window resetting) re-review.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -27,8 +39,46 @@ on:
         required: false
 
 jobs:
+  # Classify the failed run BEFORE any retry/diagnose fires (DRE-1921). A QA
+  # critic infra-crash (rate-limit / auth) must not be re-run — doing so deepens
+  # the limit and loops, burning the bot's GitHub quota. This single job fetches
+  # the failed run's logs once and exposes `infra_crash` to gate the jobs below.
+  classify:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      infra_crash: ${{ steps.c.outputs.infra_crash }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+      - name: Classify failed run
+        id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Pull the failed run's logs (best-effort — a fetch failure must not
+          # crash the classifier; we default to "not a crash" = normal handling).
+          gh run view ${{ github.event.workflow_run.id }} --log-failed \
+            --repo ${{ github.repository }} > /tmp/medic-log.txt 2>/dev/null || : > /tmp/medic-log.txt
+          OUT=$(python3 .bureau-pipeline/scripts/medic_classify.py \
+            "${{ github.event.workflow_run.name }}" /tmp/medic-log.txt)
+          echo "$OUT" >> "$GITHUB_OUTPUT"
+          echo "$OUT"
+
+  # Re-run transient flakes once — UNLESS the classifier flagged a critic
+  # infra-crash (DRE-1921), in which case re-running cannot help and only
+  # deepens the rate-limit. A real REQUEST_CHANGES verdict never reaches here:
+  # the critic RAN, the qa-review job ended green, and the fix routes through
+  # agent-fix.yml — not the medic.
   retry:
-    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
+    needs: classify
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1 &&
+      needs.classify.outputs.infra_crash != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -39,8 +89,42 @@ jobs:
           echo "retrying ${{ github.event.workflow_run.name }} run ${{ github.event.workflow_run.id }} (attempt 1 failed)"
           gh run rerun ${{ github.event.workflow_run.id }} --failed --repo ${{ github.repository }}
 
+  # Critic infra-crash back-off (DRE-1921). No rerun, no diagnosis agent —
+  # just one plain-English note so the stall is visible without burning quota.
+  # The reviewer was DOWN (infra), this is NOT a code rejection; a later natural
+  # trigger (a new push, or the rate-limit window resetting) re-reviews. Runs on
+  # attempt 1 only so it posts the note ONCE per failed run, not on every rerun.
+  backoff:
+    needs: classify
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1 &&
+      needs.classify.outputs.infra_crash == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+      - name: Note reviewer-down (infra) on the card — no rerun
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          # The card (if any) is encoded in the head branch (agent/DRE-N).
+          CARD=$(printf '%s' "${{ github.event.workflow_run.head_branch }}" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          echo "critic infra-crash on ${{ github.event.workflow_run.html_url }} — backing off (no rerun, no diagnosis); card=${CARD:-none}"
+          if [ -n "$CARD" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+              "🔌 The code reviewer was temporarily unavailable (an infrastructure rate-limit, not a problem with the work). The pipeline is deliberately NOT retrying right now — retrying would make the rate-limit worse. The review will run again on its own once the limit resets or the next change is pushed. No action needed from you; nothing was rejected." || true
+          fi
+
   diagnose:
-    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt >= 2
+    needs: classify
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt >= 2 &&
+      needs.classify.outputs.infra_crash != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
