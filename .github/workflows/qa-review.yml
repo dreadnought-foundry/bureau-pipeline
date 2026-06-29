@@ -15,14 +15,24 @@ on:
         required: false
       LINEAR_API_KEY:
         required: true
+      # The critic mints its GitHub token from the qa-bot App, NOT the dispatch
+      # bot (DRE-1921). The relay's repository_dispatch and the critic's review
+      # API calls used to share the SAME bureau-bot installation, so they drew
+      # down one 5,000/hr quota bucket together and exhausted it in lockstep
+      # (the 2026-06-28 rate-limit incident). The qa-bot App is a SEPARATE
+      # installation with its own independent quota, so card dispatch and code
+      # review no longer compete. (qa-bot is also a non-author of agent PRs, so
+      # its formal APPROVE review in sync_review_state.py now succeeds instead
+      # of being rejected as a self-approval.) These are required here now; the
+      # dispatch-bot secrets are no longer used by this workflow.
       BUREAU_APP_ID:
-        required: true
+        required: false
       BUREAU_APP_PRIVATE_KEY:
-        required: true
+        required: false
       BUREAU_QA_APP_ID:
-        required: false
+        required: true
       BUREAU_QA_APP_PRIVATE_KEY:
-        required: false
+        required: true
 
 jobs:
   review:
@@ -45,12 +55,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Mint bot token
+      # Mint from the qa-bot App so the critic's GitHub calls draw from the
+      # qa-bot installation's SEPARATE 5,000/hr quota — not the dispatch bot's
+      # bucket the relay's repository_dispatch already consumes (DRE-1921).
+      # Kept as id `app` so every `steps.app.outputs.token` reference below is
+      # unchanged; only the App identity behind the token moved.
+      - name: Mint qa-bot token (separate quota from relay dispatch)
         id: app
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@v5
 

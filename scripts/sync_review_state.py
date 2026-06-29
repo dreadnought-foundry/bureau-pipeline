@@ -2,9 +2,9 @@
 """Reconcile the PR's FORMAL review state with an APPROVE verdict (stdlib only).
 
 THE BUG (DRE-1874, live evidence on PRs #1830/#1827, 2026-06-24):
-  The QA critic runs via claude-code-action with the bureau-bot github_token.
+  The QA critic runs via claude-code-action with the critic's github_token.
   When the critic's verdict is REQUEST_CHANGES, the action submits a FORMAL
-  GitHub "Changes requested" review (authored by agent-bureau-bot). When the
+  GitHub "Changes requested" review (authored by the critic's bot). When the
   fixing agent later resolves the findings and the critic flips to APPROVE,
   qa-review.yml only posts a *comment* (`🔎 QA Critic — VERDICT: APPROVE`).
   The earlier formal review is never touched — so GitHub keeps
@@ -24,9 +24,11 @@ THE FIX:
   Both steps are idempotent: dismissing only the reviews whose latest state is
   CHANGES_REQUESTED, and the APPROVE review is harmless to repeat.
 
-This runs with the SAME token qa-review.yml already mints (the bureau-bot App
-via GH_TOKEN). The bot has write access to the repo, which is all GitHub
-requires to dismiss a review and to submit a new one.
+This runs with the SAME token qa-review.yml already mints (the qa-bot App via
+GH_TOKEN — DRE-1921). The bot has write access to the repo, which is all GitHub
+requires to dismiss a review and to submit a new one. Because qa-bot is NOT the
+author of agent PRs, its fresh APPROVE review (step 2) is accepted instead of
+being rejected as a self-approval — the case the dispatch-bot token hit.
 
 Called from qa-review.yml only on an APPROVE verdict:
 
