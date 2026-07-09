@@ -9,8 +9,9 @@ Checks (card must carry **Repo:** atlas, any owner-prefix form):
   Todo        stale >15m, no open PR, no fresh dispatch -> re-fire dispatch
   In Progress stale >3h: PR open -> advance In QA + trigger qa-review;
               no PR -> back to Todo (relay re-dispatches on the transition)
-  In QA       stale >2h: PR merged -> Done; verdict present -> merge-gate;
-              no verdict -> re-trigger qa-review; no PR -> back to Todo
+  In QA       stale >2h: PR merged -> Done; verdict bound to the current
+              head (DRE-1990) -> merge-gate; verdict missing OR stale/
+              unbound -> re-trigger qa-review; no PR -> back to Todo
   In Review   stale >1h: PR merged -> Done; else re-trigger merge-gate
 
 Also runs the dependency gate: Backlog children whose parent epic is ACTIVATED
@@ -228,7 +229,7 @@ def pr_for(identifier: str) -> dict | None:
         "--limit",
         "100",
         "--json",
-        "number,headRefName,state,comments",
+        "number,headRefName,state,comments,headRefOid",
     )
     for pr in json.loads(out or "[]"):
         if re.search(rf"\b{identifier}\b", pr["headRefName"]):
@@ -237,7 +238,26 @@ def pr_for(identifier: str) -> dict | None:
 
 
 def has_verdict(pr: dict) -> bool:
-    return any("QA Critic" in (c.get("body") or "") for c in pr.get("comments", []))
+    """True iff the latest QA Critic comment is a verdict BOUND to the PR's
+    CURRENT head commit — the verdict line ends `@<full-sha>` (DRE-1990).
+
+    A stale binding (verdict for an older commit) or a legacy/neutral
+    comment with no SHA is NOT a verdict: merge-gate ignores those
+    fail-closed, so nudging merge-gate would spin forever. Returning False
+    routes the In QA re-nudge to qa-review instead, producing a fresh,
+    bound verdict — this is also the automatic one-time re-review path for
+    APPROVEs posted before DRE-1990 shipped.
+    """
+    bodies = [
+        c.get("body") or ""
+        for c in pr.get("comments", [])
+        if "QA Critic" in (c.get("body") or "")
+    ]
+    if not bodies:
+        return False
+    first_line = bodies[-1].splitlines()[0] if bodies[-1] else ""
+    m = re.search(r"@([0-9a-f]{40})", first_line)
+    return bool(m) and m.group(1) == (pr.get("headRefOid") or "")
 
 
 def redispatch(card: dict) -> None:
