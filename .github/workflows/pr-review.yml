@@ -1,0 +1,38 @@
+# Self-critic stub — run the adversarial QA critic on bureau-pipeline's OWN PRs.
+#
+# Every product repo runs the critic via a thin stub like this; until now the
+# pipeline repo itself was the one exception — its workflows are all reusable
+# (workflow_call) and never fire on its own PRs, so control-plane changes (the
+# merge gate, the agents' prompts) shipped with NO adversarial review. This
+# stub closes that: same reusable qa-review, same verdict contract, on every
+# PR here. Merges stay HUMAN (no merge-gate stub — deliberate: the self-host
+# ADR keeps promotion of the control plane with the operator, who reads the
+# critic's VERDICT comment before merging).
+#
+# SECURITY — the `uses:` ref is the FULLY QUALIFIED @main form on purpose.
+# A local `./.github/workflows/qa-review.yml` reference would resolve from the
+# PR's merge ref, letting a PR that edits qa-review.yml choose the logic that
+# reviews itself. @main pins the critic to the already-merged version.
+name: QA Review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+
+concurrency:
+  group: qa-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/qa-review.yml@main
+    secrets: inherit
