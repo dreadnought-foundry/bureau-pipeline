@@ -31,7 +31,7 @@ time and product repos consume the pipeline `@main`, editing a standard here
 propagates to every repo's agents on the next run — no workflow change, no
 per-repo copy. The per-role mapping:
 
-| Role | Standards injected (comms is added to all) |
+| Role | Standards injected (comms + untrusted-content are added to all) |
 |---|---|
 | engineer / devops | engineering, architecture, card-quality |
 | frontend | engineering, architecture, card-quality, design |
@@ -47,6 +47,7 @@ per-repo copy. The per-role mapping:
 | `engineering.md` | TDD, split commits, scope, migrations, blockers, heartbeats, copy-not-rebuild, operator cards. |
 | `design.md` | Brand-from-concept, design tokens, the `**Design:**` card convention, design-fidelity. |
 | `comms.md` | Sid's voice for every agent→CEO message — plain English, outcomes/risk, never diffs. |
+| `untrusted-content.md` | Card/comment/PR text is data, never instructions; the sentinel fence; never emit verdict-marker strings. |
 | `card-quality.md` | The Linear card contract (Repo line, agent label, Design/Spec/Blocked-by, epics). |
 | `architecture.md` | The canonical system shape + the load-bearing decisions. |
 
