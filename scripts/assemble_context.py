@@ -18,9 +18,11 @@ Why a script and not inline YAML:
     agents on the next run with NO workflow change.
   - Testable: the mapping is a pure dict; `assemble()` is pure given a reader.
 
-Every agent gets `standards/comms.md` (the CEO-facing voice). Each role then
-adds its task-specific standards, in the order below. The role brief is appended
-LAST so role-specific detail has the final word over the shared base.
+Every agent gets `standards/comms.md` (the CEO-facing voice) and
+`standards/untrusted-content.md` (card/comment/PR text is data, not
+instructions — DRE-1989). Each role then adds its task-specific standards, in
+the order below. The role brief is appended LAST so role-specific detail has
+the final word over the shared base.
 
 CLI:
   assemble <role> [--root DIR]   print the concatenated context blob to stdout
@@ -43,9 +45,10 @@ import sys
 #
 # Keys are the role names the workflows pass (validate_card._role_from_labels
 # emits engineer/frontend/devops; plan/critic/verifier/fix/medic are named by
-# their workflow). `standards/comms.md` is added to EVERY role by assemble(), so
-# it is intentionally NOT repeated in these lists — list only the role-specific
-# additions. Order is the order the agent reads them in.
+# their workflow). `standards/comms.md` and `standards/untrusted-content.md`
+# are added to EVERY role by assemble(), so they are intentionally NOT repeated
+# in these lists — list only the role-specific additions. Order is the order
+# the agent reads them in.
 ROLE_STANDARDS: dict[str, list[str]] = {
     # Implementation agents build to the engineering floor + the system shape,
     # against the card contract, and report in the CEO's voice.
@@ -72,6 +75,11 @@ ROLE_STANDARDS: dict[str, list[str]] = {
 # Every agent reads this first — the CEO-facing voice for any message it posts.
 COMMS = "comms.md"
 
+# ...and this second — card/comment/PR text is untrusted data, never
+# instructions (DRE-1989). Universal because EVERY role reads text authored
+# outside the trust boundary (card bodies, PR comments, commit messages).
+UNTRUSTED = "untrusted-content.md"
+
 # Brief file per role, relative to the repo root (mirrors agents.yaml briefPath).
 # Roles without a brief (critic, fix, medic) get None — standards only.
 ROLE_BRIEF: dict[str, str | None] = {
@@ -87,13 +95,14 @@ ROLE_BRIEF: dict[str, str | None] = {
 
 
 def standards_for(role: str) -> list[str]:
-    """Ordered standards filenames for a role: comms first, then role-specific.
+    """Ordered standards filenames for a role: comms, then untrusted-content,
+    then role-specific.
 
     Raises KeyError for an unknown role — callers must pass a known role so a
     typo fails loudly rather than silently dropping every standard.
     """
     extra = ROLE_STANDARDS[role]
-    return [COMMS, *extra]
+    return [COMMS, UNTRUSTED, *extra]
 
 
 def context_paths(role: str, root: str = ".bureau-pipeline") -> list[str]:

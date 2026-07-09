@@ -36,18 +36,29 @@ class MappingTest(unittest.TestCase):
                 f"{role} must read comms.md first",
             )
 
+    def test_untrusted_content_is_second_for_every_role(self):
+        # Every agent reads card/comment/PR text, so every role gets the
+        # untrusted-content standard (DRE-1989), right after comms.
+        for role in ac.ROLE_STANDARDS:
+            self.assertEqual(
+                ac.standards_for(role)[1],
+                "untrusted-content.md",
+                f"{role} must read untrusted-content.md second",
+            )
+
     def test_card_spec_per_role_mapping(self):
-        # The exact per-role set from DRE-1646 (comms is added to all; the lists
-        # below are the role-specific additions, order-significant).
+        # The exact per-role set from DRE-1646 (comms + untrusted-content are
+        # added to all; the lists below are the role-specific additions,
+        # order-significant).
         expected = {
-            "engineer": ["comms.md", "engineering.md", "architecture.md", "card-quality.md"],
-            "frontend": ["comms.md", "engineering.md", "architecture.md", "card-quality.md", "design.md"],
-            "devops": ["comms.md", "engineering.md", "architecture.md", "card-quality.md"],
-            "planner": ["comms.md", "card-quality.md", "engineering.md"],
-            "critic": ["comms.md", "engineering.md", "architecture.md"],
-            "verifier": ["comms.md", "design.md"],
-            "fix": ["comms.md", "engineering.md"],
-            "medic": ["comms.md", "engineering.md"],
+            "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md"],
+            "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md"],
+            "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md"],
+            "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md"],
+            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md"],
+            "verifier": ["comms.md", "untrusted-content.md", "design.md"],
+            "fix": ["comms.md", "untrusted-content.md", "engineering.md"],
+            "medic": ["comms.md", "untrusted-content.md", "engineering.md"],
         }
         self.assertEqual(set(expected), set(ac.ROLE_STANDARDS))
         for role, want in expected.items():
@@ -85,9 +96,9 @@ class AssembleTest(unittest.TestCase):
         # comms first, brief last, in the mapping order.
         self.assertEqual(
             [os.path.basename(p) for p in seen],
-            ["comms.md", "engineering.md", "architecture.md", "card-quality.md", "engineer.md"],
+            ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "engineer.md"],
         )
-        for name in ["comms.md", "engineering.md", "architecture.md", "card-quality.md", "engineer.md"]:
+        for name in ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "engineer.md"]:
             self.assertIn(f"BODY OF {name}", blob)
         # Sections are fenced + labeled so the agent can tell them apart.
         self.assertIn("===== BEGIN standards/comms.md =====", blob)
