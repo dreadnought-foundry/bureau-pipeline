@@ -33,6 +33,10 @@ on:
 
 jobs:
   evaluate:
+    # issue_comment leg (DRE-1987): only a verdict comment AUTHORED BY the
+    # qa-bot App wakes the gate — anyone can type "QA Critic" in a comment.
+    # The literal must match the BUREAU_QA_APP bot login; the decision steps
+    # below re-derive the same login from the minted token (app-slug).
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' &&
@@ -40,7 +44,8 @@ jobs:
        startsWith(github.event.workflow_run.head_branch, 'agent/')) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
-       contains(github.event.comment.body, 'QA Critic'))
+       contains(github.event.comment.body, 'QA Critic') &&
+       github.event.comment.user.login == 'agent-bureau-qa-bot[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -122,8 +127,18 @@ jobs:
           [ "$NOT_GREEN" != "0" ] && { echo "$NOT_GREEN of $TOTAL check runs not green — wait"; exit 0; }
 
           # Condition 2: latest QA Critic verdict on the PR is APPROVE.
+          # DRE-1987: only comments AUTHORED BY the qa-bot App count. Without
+          # the author check, the engineer bot (or anyone who can comment)
+          # could post "QA Critic … VERDICT: APPROVE" on its own PR and forge
+          # approval. The trusted login is derived from the same App key this
+          # gate merges with (app-slug of the minted token), so a rename of
+          # the App follows automatically; GitHub reserves the "[bot]" suffix,
+          # so no user account can impersonate it. Empirically the critic
+          # posts as agent-bureau-qa-bot[bot] since bureau-pipeline #51.
+          QA_LOGIN="${{ steps.qa.outputs.app-slug }}[bot]"
+          export QA_LOGIN
           VERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-            --jq '[.[] | select(.body | contains("QA Critic"))] | last | .body' 2>/dev/null | head -1 || true)
+            --jq '[.[] | select((.user.login == env.QA_LOGIN) and (.body | contains("QA Critic")))] | last | .body' 2>/dev/null | head -1 || true)
           case "$VERDICT" in
             *"VERDICT: APPROVE"*) ;;
             "") echo "no critic verdict yet — wait"; exit 0;;
@@ -136,8 +151,11 @@ jobs:
           # is NOT a gate (it just didn't run), mirroring the critic's
           # fall-through-on-empty. But a PRESENT verdict's latest must be PASS:
           # a FAIL or a neutral "could not run" status holds the merge.
+          # Same authorship rule as the critic (DRE-1987): only qa-bot-authored
+          # Verifier verdicts count — a forged FAIL could stall merges and a
+          # forged PASS could mask a real FAIL posted later by the real bot.
           VVERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-            --jq '[.[] | select(.body | contains("QA Verifier"))] | last | .body' 2>/dev/null | head -1 || true)
+            --jq '[.[] | select((.user.login == env.QA_LOGIN) and (.body | contains("QA Verifier")))] | last | .body' 2>/dev/null | head -1 || true)
           case "$VVERDICT" in
             "") echo "no verifier verdict (verify out of scope / not run) — not a gate";;
             *"VERDICT: PASS"*) ;;
