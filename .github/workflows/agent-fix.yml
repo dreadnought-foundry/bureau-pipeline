@@ -251,9 +251,18 @@ jobs:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
-          # DRE-1988: only the qa-bot identity (the verdict author) may act as
-          # the triggering bot — the action strips the [bot] suffix on compare.
-          allowed_bots: "agent-bureau-qa-bot"
+          # DRE-1988: two bot actors, no wildcard. agent-bureau-qa-bot is the
+          # verdict author (comment-triggered runs). github-actions is the
+          # actor of BOTH machine workflow_dispatch legs — merge-gate's
+          # conflict repair and reconcile.py's approved-but-red/stuck-PR
+          # fixes, dispatched via `gh workflow run` with github.token; the
+          # action's actor check runs unconditionally, so omitting it kills
+          # every conflict-repair run fleet-wide. Only this repo's own
+          # workflows can mint the github-actions actor, so allowing it does
+          # not reopen the anyone-can-comment hole (comment-driven starts
+          # still require qa-bot authorship in the job `if` above). The
+          # action strips the [bot] suffix on compare.
+          allowed_bots: "agent-bureau-qa-bot,github-actions"
           claude_args: |
             --max-turns 60
             ${{ steps.pr.outputs.model_arg }}
