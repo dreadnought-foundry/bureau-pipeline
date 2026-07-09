@@ -40,10 +40,12 @@ on:
         required: true
       BUREAU_APP_PRIVATE_KEY:
         required: true
+      # Required since DRE-1987: the verdict comment must be AUTHORED by the
+      # qa-bot App or merge-gate ignores it (verdict-authorship check).
       BUREAU_QA_APP_ID:
-        required: false
+        required: true
       BUREAU_QA_APP_PRIVATE_KEY:
-        required: false
+        required: true
 
 jobs:
   verify:
@@ -381,13 +383,26 @@ jobs:
             echo "verifier retry also did not produce a real verdict — neutral + fail"
           fi
 
+      # DRE-1987: the verdict must be AUTHORED by the qa-bot App — merge-gate
+      # only honors qa-bot-authored "QA Verifier" comments (verdict-authorship
+      # check), and the worker bot must never be able to author a verdict on
+      # its own PR. Same pattern as qa-review.yml since #51; also keeps
+      # verdict posts in the qa-bot's separate API-quota bucket.
+      - name: Mint qa-bot token (verdicts author as qa-bot)
+        id: qa
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+
       - name: Post verdict or neutral status
         id: post
         # Only when in scope. Not on cancellation: a superseded run must not
         # post a fail-closed verdict that masks the live run's real one.
         if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.qa.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
