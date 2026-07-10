@@ -230,6 +230,24 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of fix context"
 
+      # DRE-1996: the branch name is agent-chosen (agent/* refs, and git
+      # refnames may contain $ and backticks) and the escalation preamble
+      # opens the prompt's FIRST line. The escalation is workflow-static
+      # today, but both are step outputs headed into the prompt — route them
+      # through the sanitizer via env (no shell expansion) so neither can
+      # ever smuggle multi-line or sentinel-lookalike text into the prompt.
+      # tests/test_untrusted_content_wiring.py pins this.
+      - name: Sanitize agent-influenced prompt fields
+        id: safe
+        if: steps.pr.outputs.go == 'true'
+        env:
+          RAW_BRANCH: ${{ steps.pr.outputs.branch }}
+          RAW_ESCALATION: ${{ steps.pr.outputs.escalation }}
+        run: |
+          python3 .bureau-pipeline/scripts/sanitize_untrusted.py \
+            line RAW_BRANCH branch \
+            line RAW_ESCALATION escalation
+
       # DRE-1988: the spec the fixing agent executes must come ONLY from the
       # qa-bot identity. Pre-fetch the latest qa-bot-authored QA Critic comment
       # into a file instead of letting the agent trawl the PR's comment thread,
@@ -277,10 +295,10 @@ jobs:
             ${{ steps.pr.outputs.model_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
-            ${{ steps.pr.outputs.escalation }}
+            ${{ steps.safe.outputs.escalation }}
             You are the fixing agent for PR #${{ steps.pr.outputs.number }} in this
             repo. You are already checked out on its branch
-            (${{ steps.pr.outputs.branch }}). Read
+            (${{ steps.safe.outputs.branch }}). Read
             .bureau-pipeline/agent-context.md FIRST — the shared bureau
             engineering and comms standards you must work to — then
             .bureau-pipeline/briefs/engineer.md for conventions, then

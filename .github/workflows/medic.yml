@@ -110,9 +110,12 @@ jobs:
       - name: Note reviewer-down (infra) on the card — no rerun
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # DRE-1996: env, not inline ${{ }} — branch names are agent-chosen
+          # and git refnames may contain $ and backticks (shell injection).
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           # The card (if any) is encoded in the head branch (agent/DRE-N).
-          CARD=$(printf '%s' "${{ github.event.workflow_run.head_branch }}" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          CARD=$(printf '%s' "$HEAD_BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
           echo "critic infra-crash on ${{ github.event.workflow_run.html_url }} — backing off (no rerun, no diagnosis); card=${CARD:-none}"
           if [ -n "$CARD" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
@@ -153,6 +156,19 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of medic context"
 
+      # DRE-1996: the head branch is agent-chosen (agent/* refs) — attacker-
+      # influenceable text headed into the diagnosis prompt. Hand it to the
+      # sanitizer via env (no shell expansion) to collapse any hostile shape
+      # into one defanged line; the prompt interpolates only the sanitized
+      # output. tests/test_untrusted_content_wiring.py pins this.
+      - name: Sanitize agent-influenced prompt fields
+        id: safe
+        env:
+          RAW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          python3 .bureau-pipeline/scripts/sanitize_untrusted.py \
+            line RAW_HEAD_BRANCH head_branch
+
       - name: Diagnosis agent
         uses: anthropics/claude-code-action@v1
         env:
@@ -180,7 +196,7 @@ jobs:
             + one automatic retry), so this is NOT a transient flake.
 
             Failed run: ${{ github.event.workflow_run.html_url }}
-            Head branch: ${{ github.event.workflow_run.head_branch }}
+            Head branch: ${{ steps.safe.outputs.head_branch }}
 
             1. Read the failure logs:
                gh run view ${{ github.event.workflow_run.id }} --log-failed
