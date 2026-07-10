@@ -96,7 +96,7 @@ jobs:
           STATE=$(gh pr view "$PR" --json state --jq .state)
           [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
           case "$BRANCH" in agent/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
-          CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 
           # Merge skew guard: a branch BEHIND main has green checks that were
           # earned against an older main (this is how two 0013 migrations both
