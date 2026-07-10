@@ -415,6 +415,136 @@ class ProducerFormatTest(GateBlockTest):
         self.assertNotIn("GATE_FALLTHROUGH", out)
 
 
+class VerifierSkipNonblockingTest(GateBlockTest):
+    """DRE-1991: briefs/verifier.md promises a `VERDICT: SKIP` "never blocks
+    the merge" (the card was out of Verifier scope on inspection, or a pure
+    environment fault unrelated to the diff blocked the run). The gate must
+    honor that: a qa-bot-authored SKIP bound to the CURRENT head falls
+    through exactly like an ABSENT verifier verdict — critic APPROVE + green
+    CI still decide. The DRE-1990 fail-closed asymmetry is unchanged: a SKIP
+    whose SHA is missing or stale proves the PR is in Verifier scope but the
+    status is not about this commit, so it HOLDS, same as PASS/FAIL.
+
+    Full decision table (one test per row):
+
+      verdict line          | head       | expected
+      ----------------------+------------+---------------
+      PASS  @head           | head       | merge-eligible
+      FAIL  @head           | head       | hold
+      SKIP  @head           | head       | merge-eligible   ← THE DRE-1991 row
+      SKIP  @stale          | newer head | hold
+      SKIP  (no sha)        | head       | hold
+      (absent)              | head       | merge-eligible
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.block = extract_block(MERGE_GATE, VERIFIER_BEGIN, VERIFIER_END)
+
+    def gate(self, vverdict_first_line, head):
+        return self.run_block(
+            self.block, {"VVERDICT": vverdict_first_line, "SHA": head}
+        )
+
+    def test_31_table_pass_at_head_is_merge_eligible(self):
+        out = self.gate(verifier_line("PASS", SHA_REVIEWED), SHA_REVIEWED)
+        self.assertIn("GATE_FALLTHROUGH", out)
+
+    def test_32_table_fail_at_head_holds(self):
+        out = self.gate(verifier_line("FAIL", SHA_REVIEWED), SHA_REVIEWED)
+        self.assertNotIn("GATE_FALLTHROUGH", out)
+
+    def test_33_table_skip_at_head_is_merge_eligible(self):
+        # THE row this card fixes: the brief promises SKIP never blocks, but
+        # the gate treated everything non-PASS as a hold — a SKIP'd PR waited
+        # forever for a verifier PASS that would never come.
+        out = self.gate(verifier_line("SKIP", SHA_REVIEWED), SHA_REVIEWED)
+        self.assertIn("GATE_FALLTHROUGH", out)
+        self.assertIn("SKIP", out)
+
+    def test_34_table_skip_stale_sha_holds(self):
+        # A present verdict proves Verifier scope; a stale one says nothing
+        # about the CURRENT head. Treating it as "skip → merge" would fail
+        # OPEN for code pushed after the skip — hold for a fresh verify.
+        out = self.gate(verifier_line("SKIP", SHA_REVIEWED), SHA_NEWER)
+        self.assertNotIn("GATE_FALLTHROUGH", out)
+
+    def test_35_table_skip_missing_sha_holds(self):
+        # Pre-DRE-1990 format / unbound status: same fail-closed rule as an
+        # unbound PASS — hold until a fresh, bound status lands.
+        out = self.gate(verifier_line("SKIP"), SHA_REVIEWED)
+        self.assertNotIn("GATE_FALLTHROUGH", out)
+
+    def test_36_table_absent_verdict_is_merge_eligible(self):
+        out = self.gate("", SHA_REVIEWED)
+        self.assertIn("GATE_FALLTHROUGH", out)
+
+    def test_37_skip_with_reason_text_on_the_line_still_falls_through(self):
+        # The brief asks for "SKIP + one reason line"; agents sometimes put
+        # the reason on the verdict line itself. The compose step appends
+        # @sha to whatever head -1 yields, so the gate must match SKIP with
+        # trailing prose before the @sha.
+        line = (
+            "🧪 QA Verifier — VERDICT: SKIP — single-system doc change, "
+            f"nothing to run @{SHA_REVIEWED}"
+        )
+        out = self.gate(line, SHA_REVIEWED)
+        self.assertIn("GATE_FALLTHROUGH", out)
+
+
+class VerifierSkipProducerTest(GateBlockTest):
+    """DRE-1991 producer↔consumer: a SKIP written to /tmp/verify-verdict.md
+    is a REAL verdict (check_critic_result.py accepts any VERDICT: line), so
+    verify.yml composes it through the SAME @sha-stamped line as PASS/FAIL.
+    Prove the live composition output falls through the gate for the head it
+    ran on and holds for a newer head. Uses ProducerFormatTest's live
+    extraction helpers (not a subclass — that would re-run its tests here)."""
+
+    VERIFY_FILES = ProducerFormatTest.VERIFY_FILES
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.verifier_block = extract_block(
+            MERGE_GATE, VERIFIER_BEGIN, VERIFIER_END
+        )
+
+    def tearDown(self):
+        for path in self.VERIFY_FILES:
+            Path(path).unlink(missing_ok=True)
+
+    def compose_skip(self):
+        line = ProducerFormatTest.extract_compose_line(
+            VERIFY, '{ echo "🧪 QA Verifier — '
+        )
+        verdict_file, comment_file = self.VERIFY_FILES
+        Path(verdict_file).write_text(
+            "VERDICT: SKIP\n\n## Summary\nOut of scope on inspection — "
+            "single-system change, nothing to run.\n"
+        )
+        run_shell(
+            "set -euo pipefail\n"
+            f"REVIEWED_SHA={shlex.quote(SHA_REVIEWED)}\n" + line + "\n"
+        )
+        return Path(comment_file).read_text().splitlines()[0]
+
+    def test_38_verify_compose_skip_feeds_gate_same_head(self):
+        posted = self.compose_skip()
+        self.assertIn(f"@{SHA_REVIEWED}", posted)
+        out = self.run_block(
+            self.verifier_block, {"VVERDICT": posted, "SHA": SHA_REVIEWED}
+        )
+        self.assertIn("GATE_FALLTHROUGH", out)
+
+    def test_39_verify_compose_skip_is_stale_for_a_newer_head(self):
+        posted = self.compose_skip()
+        out = self.run_block(
+            self.verifier_block, {"VVERDICT": posted, "SHA": SHA_NEWER}
+        )
+        self.assertNotIn("GATE_FALLTHROUGH", out)
+
+
 class ReconcileHasVerdictTest(unittest.TestCase):
     """reconcile.has_verdict() must apply the same binding: only a verdict
     bound to the PR's CURRENT head counts. Otherwise the In QA re-nudge
