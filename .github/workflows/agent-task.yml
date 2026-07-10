@@ -26,12 +26,41 @@ on:
         required: false
       BUREAU_QA_APP_PRIVATE_KEY:
         required: false
+      # Dispatch-pool workers (DRE-2013): agent-bureau-bot-2/3/4 — three
+      # worker-identical Apps whose only job is spreading the worker-token
+      # mint across independent 5,000 req/hr quota buckets (4-bucket pool
+      # ≈ 20k/hr). ALL optional: a repo without them runs on the original
+      # app exactly as before. To extend the pool, add a pair here, a probe
+      # step, the selector env pair, and one clause per worker-mint input.
+      BUREAU_APP_ID_2:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_2:
+        required: false
+      BUREAU_APP_ID_3:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_3:
+        required: false
+      BUREAU_APP_ID_4:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_4:
+        required: false
 
 jobs:
   execute:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The secrets context is not readable in a step-level `if:`, so the
+      # dispatch-pool probe mints check slot PRESENCE via these job-env
+      # mirrors (app ids only — never keys). Empty ⇒ the probe is skipped
+      # and the pool shrinks (DRE-2013 graceful degradation).
+      BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+      BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+      BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     steps:
+      # Boot token: the ORIGINAL app (pool slot 1). Used for the checkouts
+      # below (a handful of requests) and as slot 1's /rate_limit probe;
+      # everything quota-heavy after pool selection uses the worker token.
       - name: Mint bot token
         id: app
         uses: actions/create-github-app-token@v2
@@ -55,11 +84,86 @@ jobs:
       - name: Hide pipeline checkout from product git
         run: echo ".bureau-pipeline/" >> .git/info/exclude
 
+      # ---- Dispatch-pool worker selection (DRE-2013) ----
+      # Four worker-identical GitHub Apps (agent-bureau-bot + -2/-3/-4) give
+      # four independent 5,000 req/hr REST quota buckets (~20k/hr; the
+      # 2026-06-28 incident exhausted a single bucket twice). Mint a probe
+      # token per CONFIGURED pool app — absent secrets skip the step and just
+      # shrink the pool; continue-on-error so a broken pool app can never
+      # fail a build — then let dispatch_pool.py read each bucket's
+      # /rate_limit (the endpoint is quota-exempt) and pick the app with the
+      # most remaining core quota (deterministic hash fallback on read
+      # failure). The selector only ever sees app ids + probe tokens, NEVER
+      # private keys, and only outputs WHICH slot to use; the worker mint
+      # below maps that slot to its secret pair explicitly (Actions can't
+      # index secrets dynamically). Slot 1 is the original app and its probe
+      # is the boot token — a repo without the new secrets degrades to a
+      # single-app pool and behaves exactly as before.
+      - name: Mint pool probe token (2)
+        id: probe_2
+        if: ${{ env.BUREAU_APP_ID_2 != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_2 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+      - name: Mint pool probe token (3)
+        id: probe_3
+        if: ${{ env.BUREAU_APP_ID_3 != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_3 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+      - name: Mint pool probe token (4)
+        id: probe_4
+        if: ${{ env.BUREAU_APP_ID_4 != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_4 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
+
+      - name: Select dispatch-pool app
+        id: pool
+        env:
+          BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+          BUREAU_POOL_TOKEN: ${{ steps.app.outputs.token }}
+          BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          BUREAU_POOL_TOKEN_2: ${{ steps.probe_2.outputs.token }}
+          BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          BUREAU_POOL_TOKEN_3: ${{ steps.probe_3.outputs.token }}
+          BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          BUREAU_POOL_TOKEN_4: ${{ steps.probe_4.outputs.token }}
+          # Deterministic fallback key: the card id (run id when absent).
+          BUREAU_POOL_KEY: ${{ github.event.client_payload.identifier || github.run_id }}
+        run: |
+          python3 .bureau-pipeline/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
+
+      # Worker token: minted from the SELECTED pool app. Explicit per-N map
+      # (Actions can't index secrets dynamically); each clause yields '' when
+      # not selected — or when a selected slot's secrets are unexpectedly
+      # empty — so the chain always falls through to the original app pair.
+      - name: Mint worker token (selected pool app)
+        id: worker
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
       # Product-specific environment setup (submodules, toolchains, test DB).
       # Optional by design: a repo that needs nothing ships no setup.sh.
       - name: Product environment setup (optional)
         env:
-          BOT_TOKEN: ${{ steps.app.outputs.token }}
+          BOT_TOKEN: ${{ steps.worker.outputs.token }}
         run: |
           if [ -f .github/bureau/setup.sh ]; then
             bash .github/bureau/setup.sh
@@ -147,7 +251,7 @@ jobs:
         with:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.worker.outputs.token }}
           allowed_bots: agent-bureau-bot
           claude_args: |
             --max-turns 150
@@ -216,7 +320,7 @@ jobs:
       - name: Gate on agent result
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
         run: |
           BRANCH=$(git branch -r | grep -o "agent/${CARD}[^ ]*" | head -1 | sed 's|origin/||' || true)
@@ -234,7 +338,7 @@ jobs:
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
           MODEL_USED: ${{ steps.model.outputs.model }}
         run: |
@@ -315,6 +419,7 @@ jobs:
             if [ "$IS_ERROR" = "true" ]; then
               ERR_FLAGS="--is-error --error-model $MODEL_USED"
             fi
+            # shellcheck disable=SC2086  # ERR_FLAGS is deliberately word-split
             DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide \
               "${DEAD:-0}" $ERR_FLAGS --run-url "$RUN_URL")
             ACTION=$(printf '%s\n' "$DECISION" | head -1)
