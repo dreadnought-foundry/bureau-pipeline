@@ -1,5 +1,7 @@
 # Deterministic merge gate: merges an agent PR when BOTH conditions hold —
-# every CI check green AND the latest QA Critic verdict is APPROVE. The merge
+# every CI check green AND the latest QA Critic verdict is APPROVE **for the
+# PR's current head commit** (DRE-1990: the verdict embeds the SHA it
+# reviewed; a missing or stale SHA is treated as no verdict). The merge
 # uses the qa-bot identity (distinct GitHub App), so author != merger is
 # enforced by identity, not policy. No human in the loop; no agent claims
 # trusted — both inputs are read from GitHub's own records.
@@ -139,11 +141,36 @@ jobs:
           export QA_LOGIN
           VERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
             --jq '[.[] | select((.user.login == env.QA_LOGIN) and (.body | contains("QA Critic")))] | last | .body' 2>/dev/null | head -1 || true)
+          # ── DRE-1990 critic-verdict SHA binding (tests execute this block verbatim — keep the markers, keep it pure shell) ──
+          # A verdict is only trusted for the exact commit the critic
+          # reviewed: qa-review.yml embeds it on the verdict line
+          # (`VERDICT: <X> @<full-sha>`). Code pushed AFTER a genuine APPROVE
+          # must not ride that approval into main (PRs #13/#25 did exactly
+          # that). Fail-closed: a verdict whose SHA is MISSING (posted before
+          # DRE-1990, or the neutral could-not-run status) or STALE (≠ the
+          # current head) is treated as NO verdict — the gate waits for a
+          # fresh review of the current head.
+          # CUTOVER: any PR still open when this ships whose APPROVE predates
+          # it has an unbound verdict → one re-review nudge is needed;
+          # reconcile's In QA sweep now re-triggers qa-review automatically
+          # for verdicts not bound to the current head.
+          case "$VERDICT" in
+            "") echo "no critic verdict yet — wait"; exit 0;;
+          esac
+          V_SHA=$(printf '%s' "$VERDICT" | grep -oE '@[0-9a-f]{40}' | head -1 | cut -c2- || true)
+          if [ -z "$V_SHA" ]; then
+            echo "critic verdict names no reviewed commit (pre-DRE-1990 format or neutral status) — treated as NO verdict; waiting for a fresh review of $SHA"
+            exit 0
+          fi
+          if [ "$V_SHA" != "$SHA" ]; then
+            echo "critic verdict is for $V_SHA but head is now $SHA — stale; treated as NO verdict, waiting for a fresh review"
+            exit 0
+          fi
           case "$VERDICT" in
             *"VERDICT: APPROVE"*) ;;
-            "") echo "no critic verdict yet — wait"; exit 0;;
             *) echo "latest verdict is not APPROVE — holding"; exit 0;;
           esac
+          # ── DRE-1990 end critic binding ──
 
           # Condition 3: behavioral Verifier (verify.yml). It is SCOPE-GATED —
           # it only runs on multi-system/UI PRs and posts a "QA Verifier"
@@ -156,11 +183,31 @@ jobs:
           # forged PASS could mask a real FAIL posted later by the real bot.
           VVERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
             --jq '[.[] | select((.user.login == env.QA_LOGIN) and (.body | contains("QA Verifier")))] | last | .body' 2>/dev/null | head -1 || true)
-          case "$VVERDICT" in
-            "") echo "no verifier verdict (verify out of scope / not run) — not a gate";;
-            *"VERDICT: PASS"*) ;;
-            *) echo "latest verifier verdict is not PASS — holding"; exit 0;;
-          esac
+          # ── DRE-1990 verifier-verdict SHA binding (tests execute this block verbatim — keep the markers, keep it pure shell) ──
+          # Same binding as the critic, with ONE deliberate asymmetry: an
+          # ABSENT verifier verdict falls through (scope-gated stage — it may
+          # simply never have run on this PR), but a PRESENT verdict proves
+          # this PR is in Verifier scope, so a missing/stale SHA must HOLD
+          # for a fresh verify — treating it as "absent" would fail OPEN and
+          # merge code the Verifier never ran.
+          if [ -z "$VVERDICT" ]; then
+            echo "no verifier verdict (verify out of scope / not run) — not a gate"
+          else
+            VV_SHA=$(printf '%s' "$VVERDICT" | grep -oE '@[0-9a-f]{40}' | head -1 | cut -c2- || true)
+            if [ -z "$VV_SHA" ]; then
+              echo "verifier verdict names no verified commit (pre-DRE-1990 format or neutral status) — holding for a fresh verify"
+              exit 0
+            fi
+            if [ "$VV_SHA" != "$SHA" ]; then
+              echo "verifier verdict is for $VV_SHA but head is now $SHA — stale; holding for a fresh verify"
+              exit 0
+            fi
+            case "$VVERDICT" in
+              *"VERDICT: PASS"*) ;;
+              *) echo "latest verifier verdict is not PASS — holding"; exit 0;;
+            esac
+          fi
+          # ── DRE-1990 end verifier binding ──
 
           # Both gates green: advance card, merge as qa-bot.
           [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In QA,In Progress" || true

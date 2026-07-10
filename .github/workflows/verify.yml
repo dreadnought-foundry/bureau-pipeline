@@ -78,6 +78,12 @@ jobs:
           BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
           CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
+          # DRE-1990: capture the head commit the Verifier is about to run.
+          # The verdict embeds it (`VERDICT: <X> @<sha>`) so merge-gate can
+          # refuse to apply a PASS to any commit pushed after the verify.
+          # Captured BEFORE the run starts — fail-closed on mid-run pushes.
+          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       # ── Scope gate: run ONLY on multi-system or UI cards ──────────────────
       # The Verifier is expensive (it boots the app and drives a real E2E/
@@ -406,13 +412,21 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
+          # DRE-1990: the commit this verify actually ran, captured at run
+          # start by the Resolve PR step.
+          REVIEWED_SHA: ${{ steps.pr.outputs.sha }}
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
         run: |
           if [ "$REAL" = "true" ]; then
             # A real verdict (PASS or FAIL with evidence) from a Verifier that
             # actually ran — post it verbatim. The "QA Verifier" marker lets
             # merge-gate find it (distinct from the Critic's "QA Critic" marker).
-            { echo "🧪 QA Verifier — $(head -1 /tmp/verify-verdict.md)"; echo; tail -n +2 /tmp/verify-verdict.md; } > /tmp/verify-comment.md
+            # DRE-1990: the verdict line is BOUND to the verified commit
+            # (`VERDICT: <X> @<full-sha>`); merge-gate holds on a PASS whose
+            # SHA is missing or no longer the PR head — code pushed after a
+            # PASS never rides it into main. Pre-DRE-1990 verifier verdicts
+            # (no @sha) are treated the same: hold until a fresh verify.
+            { echo "🧪 QA Verifier — $(head -1 /tmp/verify-verdict.md) @${REVIEWED_SHA}"; echo; tail -n +2 /tmp/verify-verdict.md; } > /tmp/verify-comment.md
           else
             # The Verifier CRASHED on both attempts (is_error / no verdict). Do
             # NOT post FAIL — a false reject churns good PRs into the fix loop.

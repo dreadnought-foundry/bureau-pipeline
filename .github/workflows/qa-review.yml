@@ -108,6 +108,15 @@ jobs:
           BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
           CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
+          # DRE-1990: capture the head commit the critic is about to review.
+          # The verdict comment embeds it (`VERDICT: <X> @<sha>`) so
+          # merge-gate can refuse to apply the verdict to any LATER commit.
+          # Captured BEFORE the review starts — fail-closed: if code lands
+          # mid-review, the embedded SHA is already behind the new head and
+          # the gate holds for a fresh review instead of merging code the
+          # critic never saw.
+          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       # Assemble the critic's context = the standards it reviews AGAINST
       # (engineering + architecture) plus the comms standard for its verdict
@@ -471,13 +480,24 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
+          # DRE-1990: the commit this review actually looked at, captured at
+          # review start by the Resolve PR step.
+          REVIEWED_SHA: ${{ steps.pr.outputs.sha }}
           # A genuine review ran iff either gate saw a real verdict.
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
         run: |
           if [ "$REAL" = "true" ]; then
             # A real verdict (APPROVE or REQUEST_CHANGES with findings) from a
-            # critic that actually ran — post it verbatim.
-            { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md)"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
+            # critic that actually ran — post it verbatim, BOUND to the commit
+            # it reviewed (DRE-1990): the verdict line becomes
+            # `VERDICT: <X> @<full-sha>` and merge-gate only honors it while
+            # the PR head still IS that commit. Any push after an APPROVE
+            # demotes it to no-verdict and the merge waits for a fresh review.
+            # CUTOVER: verdicts posted before DRE-1990 carry no @sha and are
+            # likewise treated as stale — an open PR with an old-format
+            # APPROVE needs one re-review nudge (reconcile's In QA sweep now
+            # re-triggers qa-review for verdicts not bound to the head).
+            { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md) @${REVIEWED_SHA}"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
           else
             # The critic CRASHED on both attempts (is_error / no verdict). Do
             # NOT post REQUEST_CHANGES — that false reject churns good PRs into
