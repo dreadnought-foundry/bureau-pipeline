@@ -1,39 +1,39 @@
-"""RED-first tests for merge-gate verdict AUTHORSHIP (DRE-1987).
+"""Merge-gate verdict AUTHORSHIP tests (DRE-1987, migrated by DRE-1992).
 
 Origin (2026-07-09): merge-gate.yml merged on any comment containing
 "QA Critic" + "VERDICT: APPROVE" regardless of author, so the engineer bot
 (or anyone able to comment) could forge approval on its own PR. The fix
-filters both verdict reads — the QA Critic verdict and the QA Verifier
-verdict — by comment author: only comments whose .user.login equals the
-qa-bot App's login (derived in the workflow from the minted token's
-app-slug + "[bot]", exported as QA_LOGIN) count at all.
+(#57) filters both verdict reads — the QA Critic verdict and the QA
+Verifier verdict — by comment author: only comments whose .user.login
+equals the qa-bot App's login (derived in the workflow from the minted
+token's app-slug + "[bot]", exported as QA_LOGIN) count at all.
 
-These tests run the EXACT jq filter expressions from merge-gate.yml —
-extracted from the workflow file at test time, not copied — against mock
-GitHub comment JSON, with QA_LOGIN set in the subprocess environment just
-as the workflow exports it. Extracting from the live file means a future
-diff that weakens either filter (e.g. drops the
-`(.user.login == env.QA_LOGIN) and` clause) turns THIS test red; a copied
-string would keep passing against the stale expression.
+MIGRATION (DRE-1992): these cases originally executed the exact jq filter
+expressions extracted from merge-gate.yml at test time. The decision moved
+into scripts/merge_gate.py, so the same numbered cases (the critic's
+enumeration on PR #57) now run against merge_gate.latest_verdict_comment —
+the function the gate's decide() uses for both verdict reads. What kept the
+old extraction honest (a diff weakening the live filter turns tests red)
+still holds: these tests exercise the LIVE selection function, and
+tests/test_merge_gate_decision_table.py proves decide() end-to-end against
+the frozen pre-extraction shell, forged-author rows included, while
+tests/test_merge_gate_wiring.py pins the workflow to pass the app-slug-
+derived login into the script.
 
-RED-first proof (2026-07-09, run before committing): with
-`(.user.login == env.QA_LOGIN) and ` removed from both filters in
-merge-gate.yml, 8 of these tests fail — cases 2, 3, 5, 7, 8, 10, 12 (all
-the forged/ignored-author cases, a superset of the critic's required
-2/3/7/8/12) plus the filter-shape guard; restoring the clause turns all
-green. The numbered cases match the critic's enumeration on PR #57.
+Selection is now also ANCHORED (DRE-1992 scope note 2026-07-09): a comment
+counts only if its first line OPENS with the marker — merely quoting or
+mentioning "QA Critic" in prose is invisible. The delta rows in the
+decision table document the exact behavior change.
 """
 
-import json
-import os
-import re
-import shutil
-import subprocess
+import sys
 import unittest
+from pathlib import Path
 
-WORKFLOW = os.path.join(
-    os.path.dirname(__file__), "..", ".github", "workflows", "merge-gate.yml"
-)
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import merge_gate  # noqa: E402
 
 # The login the workflow derives at runtime: steps.qa.outputs.app-slug +
 # "[bot]". Empirically agent-bureau-qa-bot[bot] since bureau-pipeline #51.
@@ -50,20 +50,6 @@ V_NEUTRAL = (
 )
 
 
-def extract_filter(marker):
-    """Pull the exact --jq expression for one verdict read out of the
-    workflow file. Exactly one expression must mention the marker."""
-    with open(WORKFLOW) as f:
-        text = f.read()
-    exprs = [e for e in re.findall(r"--jq '([^']*)'", text) if marker in e]
-    if len(exprs) != 1:
-        raise AssertionError(
-            f"expected exactly one --jq expression containing {marker!r} "
-            f"in merge-gate.yml, found {len(exprs)}"
-        )
-    return exprs[0]
-
-
 def comment(login, body):
     """A GitHub issue-comment shaped like the REST API returns it.
     login=None models a deleted account (null user). App identities carry
@@ -77,50 +63,35 @@ def comment(login, body):
 
 
 class AuthorshipFilterTest(unittest.TestCase):
-    """Base: run a verdict filter exactly as the workflow does — jq
-    subprocess, QA_LOGIN in the environment (the workflow exports it)."""
+    """Base: run one verdict read exactly as decide() does — the live
+    selection function, the workflow-derived QA_LOGIN."""
 
     marker = None  # set by subclasses
 
-    @classmethod
-    def setUpClass(cls):
-        if shutil.which("jq") is None:
-            raise AssertionError("jq is required to run these tests")
-        if cls.marker is not None:
-            cls.expr = extract_filter(cls.marker)
-
     def latest_verdict(self, comments):
         """Returns the body of the latest COUNTED verdict, or None —
-        mirroring the workflow's `"" == no verdict` fall-through."""
-        proc = subprocess.run(
-            ["jq", self.expr],
-            input=json.dumps(comments),
-            capture_output=True,
-            text=True,
-            env={**os.environ, "QA_LOGIN": QA_LOGIN},
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        return json.loads(proc.stdout)
+        mirroring the gate's no-verdict fall-through."""
+        return merge_gate.latest_verdict_comment(comments, QA_LOGIN, self.marker)
 
 
 class CriticVerdictAuthorshipTest(AuthorshipFilterTest):
-    """Condition 2: the QA Critic verdict read (merge-gate.yml VERDICT=)."""
+    """Condition 2: the QA Critic verdict read."""
 
-    marker = "QA Critic"
+    marker = merge_gate.CRITIC_MARKER
 
     def test_01_qa_bot_approve_counts(self):
         got = self.latest_verdict([comment(QA_LOGIN, QA_APPROVE)])
         self.assertEqual(got, QA_APPROVE)
 
     def test_02_engineer_bot_forged_approve_is_invisible(self):
-        # THE hole this card closes: the PR-authoring worker bot posts the
+        # THE hole DRE-1987 closed: the PR-authoring worker bot posts the
         # magic words on its own PR. Must not count as any verdict at all.
         got = self.latest_verdict([comment(WORKER_LOGIN, QA_APPROVE)])
         self.assertIsNone(got)
 
     def test_03_human_approve_is_invisible(self):
         got = self.latest_verdict(
-            [comment("some-human", 'QA Critic — VERDICT: APPROVE — lgtm!')]
+            [comment("some-human", "QA Critic — VERDICT: APPROVE — lgtm!")]
         )
         self.assertIsNone(got)
 
@@ -150,13 +121,25 @@ class CriticVerdictAuthorshipTest(AuthorshipFilterTest):
         got = self.latest_verdict([comment(None, QA_APPROVE)])
         self.assertIsNone(got)
 
+    def test_14_quoted_verdict_is_invisible_even_from_qa_bot(self):
+        # DRE-1992 scope note: a comment merely QUOTING a verdict must not
+        # count — even when the qa-bot itself posts the quote.
+        got = self.latest_verdict([comment(QA_LOGIN, f"> {QA_APPROVE}")])
+        self.assertIsNone(got)
+
+    def test_15_marker_mention_in_prose_is_invisible(self):
+        got = self.latest_verdict(
+            [comment(QA_LOGIN, "Waiting on the QA Critic to re-run.")]
+        )
+        self.assertIsNone(got)
+
 
 class VerifierVerdictAuthorshipTest(AuthorshipFilterTest):
-    """Condition 3: the QA Verifier verdict read (merge-gate.yml VVERDICT=).
-    An ABSENT verifier verdict is not a gate (scope-gated stage), so a
-    forged verdict being INVISIBLE (None) means 'verifier did not run'."""
+    """Condition 3: the QA Verifier verdict read. An ABSENT verifier verdict
+    is not a gate (scope-gated stage), so a forged verdict being INVISIBLE
+    (None) means 'verifier did not run'."""
 
-    marker = "QA Verifier"
+    marker = merge_gate.VERIFIER_MARKER
 
     def test_07_engineer_bot_forged_pass_is_invisible(self):
         got = self.latest_verdict([comment(WORKER_LOGIN, V_PASS)])
@@ -174,9 +157,9 @@ class VerifierVerdictAuthorshipTest(AuthorshipFilterTest):
 
     def test_11_qa_bot_fail_counts_and_holds(self):
         # NOT fail-open: a real FAIL must be visible so the gate's
-        # "not PASS — holding" branch fires. (This is why verify.yml now
-        # posts its verdict with the qa-bot token, atomically in DRE-1987 —
-        # a worker-bot-authored FAIL would be invisible, see case 12.)
+        # "not PASS — holding" branch fires. (This is why verify.yml posts
+        # its verdict with the qa-bot token, atomically in DRE-1987 — a
+        # worker-bot-authored FAIL would be invisible, see case 12.)
         got = self.latest_verdict([comment(QA_LOGIN, V_FAIL)])
         self.assertEqual(got, V_FAIL)
 
@@ -187,8 +170,8 @@ class VerifierVerdictAuthorshipTest(AuthorshipFilterTest):
         self.assertIsNone(got)
 
     def test_13_qa_bot_neutral_could_not_run_counts_and_holds(self):
-        # Contains "QA Verifier" but no "VERDICT: PASS": visible, latest,
-        # supersedes any stale PASS, and holds the merge.
+        # Opens with "🧪 QA Verifier" but carries no structured verdict:
+        # visible, latest, supersedes any stale PASS, and holds the merge.
         got = self.latest_verdict(
             [comment(QA_LOGIN, V_PASS), comment(QA_LOGIN, V_NEUTRAL)]
         )
@@ -196,18 +179,32 @@ class VerifierVerdictAuthorshipTest(AuthorshipFilterTest):
 
 
 class FilterShapeTest(unittest.TestCase):
-    """Both verdict reads must exist and be author-guarded — catches a
-    refactor that deletes a read outright (the extraction would fail
-    inside the case tests too, but this names the failure plainly)."""
+    """Both verdict reads must stay author-guarded inside decide() itself —
+    catches a refactor that drops the login filter from one read (the case
+    tests above hit the shared function; this exercises the composition).
+    The workflow side (QA_LOGIN derived from the minted token's app-slug)
+    is pinned by tests/test_merge_gate_wiring.py."""
 
-    def test_both_filters_present_and_author_guarded(self):
-        for marker in ("QA Critic", "QA Verifier"):
-            expr = extract_filter(marker)
-            self.assertIn(
-                "env.QA_LOGIN",
-                expr,
-                f"the {marker} verdict read lost its authorship guard",
-            )
+    HEAD = "aa11" * 10
+    GREEN = [{"name": "unit", "status": "completed", "conclusion": "success"}]
+
+    def test_decide_ignores_forged_critic_verdict(self):
+        decision = merge_gate.decide(
+            self.HEAD, QA_LOGIN, self.GREEN,
+            [comment(WORKER_LOGIN, f"{QA_APPROVE} @{self.HEAD}")],
+        )
+        self.assertEqual(decision.action, "wait")
+        self.assertIn("no critic verdict yet", decision.reason)
+
+    def test_decide_ignores_forged_verifier_fail(self):
+        decision = merge_gate.decide(
+            self.HEAD, QA_LOGIN, self.GREEN,
+            [
+                comment(QA_LOGIN, f"{QA_APPROVE} @{self.HEAD}"),
+                comment(WORKER_LOGIN, f"{V_FAIL} @{self.HEAD}"),
+            ],
+        )
+        self.assertEqual(decision.action, "merge")
 
 
 if __name__ == "__main__":
