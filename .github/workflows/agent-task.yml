@@ -342,7 +342,7 @@ jobs:
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
         run: |
-          BRANCH=$(git branch -r | grep -o "agent/${CARD}[^ ]*" | head -1 | sed 's|origin/||' || true)
+          BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
           PR_URL=""
           if [ -n "$BRANCH" ]; then
             PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
@@ -366,7 +366,7 @@ jobs:
           # filter makes `gh pr list` return the repo's most recent open PR,
           # which once attributed another card's PR to a dead run and sent it
           # to In QA with a false "PR opened" receipt (DRE-1343, 2026-06-12).
-          BRANCH=$(git branch -r | grep -o "agent/${CARD}[^ ]*" | head -1 | sed 's|origin/||' || true)
+          BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
           PR_URL=""
           if [ -n "$BRANCH" ]; then
             PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
