@@ -1,0 +1,230 @@
+# Deterministic merge gate: merges an agent PR when BOTH conditions hold —
+# every CI check green AND the latest QA Critic verdict is APPROVE **for the
+# PR's current head commit** (DRE-1990: the verdict embeds the SHA it
+# reviewed; a missing or stale SHA is treated as no verdict). The merge
+# uses the qa-bot identity (distinct GitHub App), so author != merger is
+# enforced by identity, not policy. No human in the loop; no agent claims
+# trusted — both inputs are read from GitHub's own records.
+#
+# Triggered (via the product-repo stub) from both directions of the race: CI
+# finishing (workflow_run) and the critic verdict landing (issue_comment).
+# Whichever happens last merges.
+#
+# Reusable workflow: permissions live in the calling stub (contents: read,
+# actions: write). Job-level concurrency stays here — it keys off
+# github.event, which is the caller's.
+name: Merge Gate (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: false
+      BUREAU_APP_PRIVATE_KEY:
+        required: false
+      BUREAU_QA_APP_ID:
+        required: true
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  evaluate:
+    # issue_comment leg (DRE-1987): only a verdict comment AUTHORED BY the
+    # qa-bot App wakes the gate — anyone can type "QA Critic" in a comment.
+    # The literal must match the BUREAU_QA_APP bot login; the decision steps
+    # below re-derive the same login from the minted token (app-slug).
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       startsWith(github.event.workflow_run.head_branch, 'agent/')) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, 'QA Critic') &&
+       github.event.comment.user.login == 'agent-bureau-qa-bot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: merge-gate-${{ github.event.workflow_run.head_branch || github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Mint qa-bot token (author != merger)
+        id: qa
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          path: .bureau-pipeline
+
+      - name: Evaluate and merge
+        env:
+          GH_TOKEN: ${{ steps.qa.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          EVENT: ${{ github.event_name }}
+          WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          IC_PR: ${{ github.event.issue.number }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Resolve the PR number from whichever event fired.
+          case "$EVENT" in
+            workflow_run)      PR=$(gh pr list --head "$WR_BRANCH" --state open --json number --jq '.[0].number' || true) ;;
+            workflow_dispatch) PR=$INPUT_PR ;;
+            *)                 PR=$IC_PR ;;
+          esac
+          [ -z "${PR:-}" ] || [ "$PR" = "null" ] && { echo "no open PR — nothing to do"; exit 0; }
+
+          BRANCH=$(gh pr view "$PR" --json headRefName,state --jq .headRefName)
+          STATE=$(gh pr view "$PR" --json state --jq .state)
+          [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
+          case "$BRANCH" in agent/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+          CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+
+          # Merge skew guard: a branch BEHIND main has green checks that were
+          # earned against an older main (this is how two 0013 migrations both
+          # merged). Update the branch instead — CI re-runs on the merged
+          # state and the gate re-evaluates when it completes.
+          MSTATE=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)
+          if [ "$MSTATE" = "BEHIND" ]; then
+            echo "branch is BEHIND main — updating branch; gate will re-run after CI"
+            gh api -X PUT "repos/${{ github.repository }}/pulls/$PR/update-branch" >/dev/null || true
+            exit 0
+          fi
+          if [ "$MSTATE" = "DIRTY" ]; then
+            echo "merge conflict with main — dispatching fix agent"
+            # qa-bot token lacks Actions perms (deliberate); use the workflow's
+            # own GITHUB_TOKEN — workflow_dispatch is exempt from the
+            # no-cascade rule, so the dispatched run still fires.
+            GH_TOKEN="${{ github.token }}" gh workflow run agent-fix.yml \
+              --repo "${{ github.repository }}" \
+              --ref "$(gh api repos/${{ github.repository }} --jq .default_branch)" \
+              -f pr_number="$PR" || true
+            exit 0
+          fi
+
+          # Condition 1: every check run on the head SHA has completed green.
+          # REST check-runs API, NOT `gh pr checks` — the GraphQL rollup needs
+          # actions:read the qa-bot App deliberately doesn't have.
+          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          # The "review" check-run (QA Review job) is excluded: the critic's
+          # verdict COMMENT is the review's source of truth (condition 2), and
+          # a review run killed by an API blip must not deadlock the merge.
+          VERDICT_JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name | endswith("review") | not)] | {total: length, not_green: ([.[] | select(.status != "completed" or (.conclusion // "" | IN("success","skipped","neutral") | not))] | length)}')
+          TOTAL=$(echo "$VERDICT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
+          NOT_GREEN=$(echo "$VERDICT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['not_green'])")
+          [ "$TOTAL" = "0" ] && { echo "no checks reported yet — wait"; exit 0; }
+          [ "$NOT_GREEN" != "0" ] && { echo "$NOT_GREEN of $TOTAL check runs not green — wait"; exit 0; }
+
+          # Condition 2: latest QA Critic verdict on the PR is APPROVE.
+          # DRE-1987: only comments AUTHORED BY the qa-bot App count. Without
+          # the author check, the engineer bot (or anyone who can comment)
+          # could post "QA Critic … VERDICT: APPROVE" on its own PR and forge
+          # approval. The trusted login is derived from the same App key this
+          # gate merges with (app-slug of the minted token), so a rename of
+          # the App follows automatically; GitHub reserves the "[bot]" suffix,
+          # so no user account can impersonate it. Empirically the critic
+          # posts as agent-bureau-qa-bot[bot] since bureau-pipeline #51.
+          QA_LOGIN="${{ steps.qa.outputs.app-slug }}[bot]"
+          export QA_LOGIN
+          VERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+            --jq '[.[] | select((.user.login == env.QA_LOGIN) and (.body | contains("QA Critic")))] | last | .body' 2>/dev/null | head -1 || true)
+          # ── DRE-1990 critic-verdict SHA binding (tests execute this block verbatim — keep the markers, keep it pure shell) ──
+          # A verdict is only trusted for the exact commit the critic
+          # reviewed: qa-review.yml embeds it on the verdict line
+          # (`VERDICT: <X> @<full-sha>`). Code pushed AFTER a genuine APPROVE
+          # must not ride that approval into main (PRs #13/#25 did exactly
+          # that). Fail-closed: a verdict whose SHA is MISSING (posted before
+          # DRE-1990, or the neutral could-not-run status) or STALE (≠ the
+          # current head) is treated as NO verdict — the gate waits for a
+          # fresh review of the current head.
+          # CUTOVER: any PR still open when this ships whose APPROVE predates
+          # it has an unbound verdict → one re-review nudge is needed;
+          # reconcile's In QA sweep now re-triggers qa-review automatically
+          # for verdicts not bound to the current head.
+          case "$VERDICT" in
+            "") echo "no critic verdict yet — wait"; exit 0;;
+          esac
+          V_SHA=$(printf '%s' "$VERDICT" | grep -oE '@[0-9a-f]{40}' | head -1 | cut -c2- || true)
+          if [ -z "$V_SHA" ]; then
+            echo "critic verdict names no reviewed commit (pre-DRE-1990 format or neutral status) — treated as NO verdict; waiting for a fresh review of $SHA"
+            exit 0
+          fi
+          if [ "$V_SHA" != "$SHA" ]; then
+            echo "critic verdict is for $V_SHA but head is now $SHA — stale; treated as NO verdict, waiting for a fresh review"
+            exit 0
+          fi
+          case "$VERDICT" in
+            *"VERDICT: APPROVE"*) ;;
+            *) echo "latest verdict is not APPROVE — holding"; exit 0;;
+          esac
+          # ── DRE-1990 end critic binding ──
+
+          # Condition 3: behavioral Verifier (verify.yml). It is SCOPE-GATED —
+          # it only runs on multi-system/UI PRs and posts a "QA Verifier"
+          # verdict; on out-of-scope PRs it posts nothing. So an ABSENT verdict
+          # is NOT a gate (it just didn't run), mirroring the critic's
+          # fall-through-on-empty. A PRESENT verdict decides: PASS proceeds; a
+          # SKIP bound to the current head is advisory and proceeds too
+          # (DRE-1991 — the Verifier found the card out of scope on
+          # inspection, or a pure environment fault blocked the run; the
+          # brief promises a SKIP never blocks); a FAIL or a neutral "could
+          # not run" status holds the merge.
+          # Same authorship rule as the critic (DRE-1987): only qa-bot-authored
+          # Verifier verdicts count — a forged FAIL could stall merges and a
+          # forged PASS could mask a real FAIL posted later by the real bot.
+          VVERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+            --jq '[.[] | select((.user.login == env.QA_LOGIN) and (.body | contains("QA Verifier")))] | last | .body' 2>/dev/null | head -1 || true)
+          # ── DRE-1990 verifier-verdict SHA binding (tests execute this block verbatim — keep the markers, keep it pure shell) ──
+          # Same binding as the critic, with ONE deliberate asymmetry: an
+          # ABSENT verifier verdict falls through (scope-gated stage — it may
+          # simply never have run on this PR), but a PRESENT verdict proves
+          # this PR is in Verifier scope, so a missing/stale SHA must HOLD
+          # for a fresh verify — treating it as "absent" would fail OPEN and
+          # merge code the Verifier never ran.
+          if [ -z "$VVERDICT" ]; then
+            echo "no verifier verdict (verify out of scope / not run) — not a gate"
+          else
+            VV_SHA=$(printf '%s' "$VVERDICT" | grep -oE '@[0-9a-f]{40}' | head -1 | cut -c2- || true)
+            if [ -z "$VV_SHA" ]; then
+              echo "verifier verdict names no verified commit (pre-DRE-1990 format or neutral status) — holding for a fresh verify"
+              exit 0
+            fi
+            if [ "$VV_SHA" != "$SHA" ]; then
+              echo "verifier verdict is for $VV_SHA but head is now $SHA — stale; holding for a fresh verify"
+              exit 0
+            fi
+            case "$VVERDICT" in
+              *"VERDICT: PASS"*) ;;
+              # DRE-1991: the Verifier brief promises a SKIP "never blocks the
+              # merge" (out of scope on inspection, or a pure environment
+              # fault it cannot attribute to the diff). A SKIP bound to the
+              # CURRENT head is therefore advisory — fall through exactly like
+              # an ABSENT verdict; critic APPROVE + green CI still decide.
+              # The SHA checks ABOVE already ran, so a SKIP with a missing or
+              # stale SHA never reaches this arm — it held there, fail-closed,
+              # same as PASS/FAIL.
+              *"VERDICT: SKIP"*) echo "verifier verdict is SKIP for the current head — advisory, not a gate";;
+              *) echo "latest verifier verdict is not PASS — holding"; exit 0;;
+            esac
+          fi
+          # ── DRE-1990 end verifier binding ──
+
+          # Both gates green: advance card, merge as qa-bot.
+          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In QA,In Progress" || true
+          gh pr merge "$PR" --merge --delete-branch
+          echo "merged PR #$PR"
+          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+            "🔀 Auto-merged by qa-bot: CI green + critic APPROVE. PR: $(gh pr view "$PR" --json url --jq .url)" || true
