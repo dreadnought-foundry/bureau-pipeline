@@ -176,8 +176,12 @@ jobs:
           # it only runs on multi-system/UI PRs and posts a "QA Verifier"
           # verdict; on out-of-scope PRs it posts nothing. So an ABSENT verdict
           # is NOT a gate (it just didn't run), mirroring the critic's
-          # fall-through-on-empty. But a PRESENT verdict's latest must be PASS:
-          # a FAIL or a neutral "could not run" status holds the merge.
+          # fall-through-on-empty. A PRESENT verdict decides: PASS proceeds; a
+          # SKIP bound to the current head is advisory and proceeds too
+          # (DRE-1991 — the Verifier found the card out of scope on
+          # inspection, or a pure environment fault blocked the run; the
+          # brief promises a SKIP never blocks); a FAIL or a neutral "could
+          # not run" status holds the merge.
           # Same authorship rule as the critic (DRE-1987): only qa-bot-authored
           # Verifier verdicts count — a forged FAIL could stall merges and a
           # forged PASS could mask a real FAIL posted later by the real bot.
@@ -204,6 +208,15 @@ jobs:
             fi
             case "$VVERDICT" in
               *"VERDICT: PASS"*) ;;
+              # DRE-1991: the Verifier brief promises a SKIP "never blocks the
+              # merge" (out of scope on inspection, or a pure environment
+              # fault it cannot attribute to the diff). A SKIP bound to the
+              # CURRENT head is therefore advisory — fall through exactly like
+              # an ABSENT verdict; critic APPROVE + green CI still decide.
+              # The SHA checks ABOVE already ran, so a SKIP with a missing or
+              # stale SHA never reaches this arm — it held there, fail-closed,
+              # same as PASS/FAIL.
+              *"VERDICT: SKIP"*) echo "verifier verdict is SKIP for the current head — advisory, not a gate";;
               *) echo "latest verifier verdict is not PASS — holding"; exit 0;;
             esac
           fi
