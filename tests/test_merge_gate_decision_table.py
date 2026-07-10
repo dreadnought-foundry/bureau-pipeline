@@ -17,10 +17,15 @@ implementations and the outcomes are compared case-for-case.
     `git show ba4305d:.github/workflows/merge-gate.yml`.)
 
 Rows where old and new AGREE prove parity. Rows marked delta=... are the
-ONE sanctioned behavior change — STRUCTURED/ANCHORED verdict parsing (scope
-note 2026-07-09: a comment merely QUOTING a verdict marker must not count
-as a verdict). Those rows assert BOTH the old and the new outcome
-explicitly, so the delta is documented in executable form, not prose.
+TWO sanctioned behavior changes — (a) STRUCTURED/ANCHORED verdict parsing
+(scope note 2026-07-09: a comment merely QUOTING a verdict marker must not
+count as a verdict) and (b) VERIFIED-ORIGIN review-run exclusion (DRE-1994:
+the old `endswith("review")` name test let a PR-authored failing job named
+`sneaky-review` vanish from the all-green rule; exclusion now requires the
+check run to sit in a check suite produced by a known review WORKFLOW FILE,
+per GitHub's own workflow-runs record). Those rows assert BOTH the old and
+the new outcome explicitly, so the delta is documented in executable form,
+not prose.
 
 Every row cites its artifact: the fixture line range holding the old shell
 that produced the expected outcome, and (where one exists) the pre-existing
@@ -92,9 +97,29 @@ def comment(login, body):
     return {"user": user, "body": body}
 
 
-def run(name="unit", status="completed", conclusion="success"):
-    """A GitHub check-run as the REST check-runs API returns it."""
-    return {"name": name, "status": status, "conclusion": conclusion}
+# Check-suite ids as GitHub assigns them: ONE suite per workflow RUN, so a
+# check run is tied to the workflow FILE that produced it via the suite id
+# (verified live on agent-bureau PR #1899, head 62b73729: check run
+# "call / review" id 86251660121 sits in suite 78612234136, which the
+# workflow-runs listing maps to path .github/workflows/qa-review.yml; the
+# CI run sits in its own suite 78612233475; every run's app.id is 15368 —
+# github-actions — so the app can NOT discriminate, the suite→path can).
+CI_SUITE = 78612233475  # the repo's CI workflow run
+REVIEW_SUITE = 78612234136  # the qa-review.yml (critic) workflow run
+EVIL_SUITE = 78612239999  # a PR-authored workflow's own run — never review
+REVIEW_SUITES = frozenset({REVIEW_SUITE})  # the verified-origin record
+
+
+def run(name="unit", status="completed", conclusion="success", suite=CI_SUITE):
+    """A GitHub check-run as the REST check-runs API returns it. Every
+    Actions-created run carries its workflow run's check_suite id."""
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "app": {"id": 15368, "slug": "github-actions"},
+        "check_suite": {"id": suite},
+    }
 
 
 GREEN_CI = [run("unit"), run("Workflow YAML parses")]
@@ -110,6 +135,7 @@ class Row:
     reason: str  # substring the NEW reason line must carry
     cite: str  # fixture lines + pre-existing test that pinned this row
     checks: list = field(default_factory=lambda: list(GREEN_CI))
+    review_suites: frozenset = REVIEW_SUITES  # verified review-run origins
     old_expect: str = None  # only set on delta rows
     delta: str = None  # the sanctioned behavior change this row documents
 
@@ -132,22 +158,85 @@ ROWS = [
         "critic APPROVE",
         "fixture L125 (conclusion IN success,skipped,neutral)",
         checks=[run("a"), run("b", conclusion="skipped"), run("c", conclusion="neutral")]),
-    Row("ci_review_run_excluded", [CRITIC_OK], "merge", "critic APPROVE",
-        'fixture L121-125 (`endswith("review")` excluded); comment L121-123: '
-        "a review run killed by an API blip must not deadlock the merge",
-        checks=[run("unit"), run("review", conclusion="failure")]),
-    Row("ci_suffixed_review_run_excluded", [CRITIC_OK], "merge", "critic APPROVE",
-        "fixture L125 (endswith, not equality — any *review name is excluded)",
-        checks=[run("unit"), run("call / review", status="in_progress", conclusion=None)]),
+    Row("ci_verified_review_run_crashed_still_excluded", [CRITIC_OK], "merge",
+        "critic APPROVE",
+        "fixture L121-125 rationale preserved under DRE-1994 (a review run "
+        "killed by an API blip must not deadlock the merge — the verdict "
+        "COMMENT is the review's source of truth); exclusion now by verified "
+        "origin: the run sits in the qa-review workflow's suite",
+        checks=[run("unit"),
+                run("call / review", conclusion="failure", suite=REVIEW_SUITE)]),
+    Row("ci_verified_review_pending_no_deadlock", [CRITIC_OK], "merge",
+        "critic APPROVE",
+        "DRE-1994 requirement: the critic posts its verdict BEFORE its own "
+        "job completes, so when the issue_comment leg wakes the gate the "
+        "genuine review run is still in_progress — verified origin keeps it "
+        "excluded (old fixture L125 excluded it by name)",
+        checks=[run("unit"),
+                run("call / review", status="in_progress", conclusion=None,
+                    suite=REVIEW_SUITE)]),
     Row("ci_capitalised_Review_is_NOT_excluded", [CRITIC_OK], "wait", "not green",
-        'fixture L125 (jq endswith is case-sensitive: "QA Review" does not '
-        'end with "review") — pinned as-is',
-        checks=[run("unit"), run("QA Review", conclusion="failure")]),
-    Row("ci_only_review_runs_is_no_checks", [CRITIC_OK], "wait",
+        'OLD: fixture L125 jq endswith is case-sensitive ("QA Review" does '
+        'not end with "review"). NEW: same outcome by a different route — '
+        "the run is not in a verified review suite, so it counts",
+        checks=[run("unit"), run("QA Review", conclusion="failure", suite=EVIL_SUITE)]),
+    Row("ci_only_verified_review_run_is_no_checks", [CRITIC_OK], "wait",
         "no checks reported yet",
         "fixture L124-128 (exclusion runs BEFORE the total — a PR whose only "
-        "run is the review reports TOTAL=0) — pinned as-is",
-        checks=[run("review")]),
+        "run is the review reports TOTAL=0) — pinned as-is under DRE-1994",
+        checks=[run("call / review", suite=REVIEW_SUITE)]),
+
+    # ── condition 1, DRE-1994: exclusion by VERIFIED ORIGIN, not name ────
+    Row("ci_sneaky_review_failure_blocks", [CRITIC_OK], "wait", "not green",
+        "DRE-1994 (child of DRE-1978): check names come from PR-authored "
+        "workflow files, so the old name test was attacker-nameable — a "
+        "failing job named 'sneaky-review' was invisible to the all-green "
+        "rule and MERGED red code. Its run has its own check suite (GitHub "
+        "gives every workflow run one), never the review workflow's → it "
+        "counts and blocks.",
+        checks=[run("unit"), run("sneaky-review", conclusion="failure",
+                                 suite=EVIL_SUITE)],
+        old_expect="merge",
+        delta="verified-origin exclusion: a *review NAME no longer exempts "
+              "a check from the all-green rule"),
+    Row("ci_sneaky_review_pending_blocks", [CRITIC_OK], "wait", "not green",
+        "DRE-1994: the pending flavor — an attacker-named run cannot park "
+        "itself outside the all-green rule while incomplete either",
+        checks=[run("unit"), run("sneaky-review", status="in_progress",
+                                 conclusion=None, suite=EVIL_SUITE)],
+        old_expect="merge",
+        delta="verified-origin exclusion: a *review NAME no longer exempts "
+              "a check from the all-green rule"),
+    Row("ci_unverified_green_review_named_run_counts_as_ci", [CRITIC_OK],
+        "merge", "critic APPROVE",
+        "DRE-1994: a review-NAMED run outside the verified review suite is "
+        "just a check like any other — green here, so both old (excluded by "
+        "name) and new (counted, green) merge; the routes differ, the "
+        "outcome agrees",
+        checks=[run("unit"), run("review", suite=EVIL_SUITE)]),
+    Row("ci_origin_beats_name_nonreview_job_in_review_suite_excluded",
+        [CRITIC_OK], "merge", "critic APPROVE",
+        "DRE-1994: origin REPLACES the name test entirely — any job of the "
+        "pipeline-owned review workflow (here one not named *review) shares "
+        "the crash-must-not-deadlock rationale and is excluded by its suite. "
+        "OLD counted it by name → wait.",
+        checks=[run("unit"), run("call / prepare", conclusion="failure",
+                                 suite=REVIEW_SUITE)],
+        old_expect="wait",
+        delta="verified-origin exclusion: suite membership, not name, "
+              "decides — review-workflow jobs are excluded whatever their name"),
+    Row("ci_no_origin_record_fails_closed", [CRITIC_OK], "wait", "not green",
+        "DRE-1994 fail-closed direction: if the workflow-runs listing is "
+        "unavailable (API blip → the workflow substitutes an empty record), "
+        "NOTHING is excluded — the genuine review run counts and the gate "
+        "waits; it never merges past an unverifiable check. OLD had no "
+        "origin record at all and excluded by name → merge.",
+        checks=[run("unit"), run("call / review", status="in_progress",
+                                 conclusion=None, suite=REVIEW_SUITE)],
+        review_suites=frozenset(),
+        old_expect="merge",
+        delta="verified-origin exclusion: no origin record → no exclusion "
+              "(wait), never fail open"),
 
     # ── condition 2: critic verdict (fixture L131-173) ───────────────────
     Row("critic_no_comments", [], "wait", "no critic verdict yet",
@@ -429,6 +518,7 @@ def test_new_decision(row):
         qa_login=QA_LOGIN,
         check_runs=row.checks,
         comments=row.comments,
+        review_suites=row.review_suites,
     )
     assert decision.action == row.expect, (
         f"[{row.id}] expected {row.expect}, got {decision.action} "
@@ -460,7 +550,9 @@ def test_every_delta_row_names_its_sanction():
     for row in ROWS:
         if row.old_expect != row.expect:
             assert row.delta, f"[{row.id}] old≠new but no delta rationale"
-            assert "anchored" in row.delta or "quot" in row.delta
+            assert any(
+                key in row.delta for key in ("anchored", "quot", "origin")
+            ), f"[{row.id}] delta rationale names no sanctioned change"
 
 
 if __name__ == "__main__":

@@ -86,6 +86,34 @@ class ScriptInvocationTest(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertIn(f"comments\" > {m.group(1)}", self.run_block)
 
+    def test_review_origin_record_is_gathered_and_passed(self):
+        """DRE-1994: the review-run exclusion needs GitHub's own record of
+        which workflow FILE produced each check suite — the workflow-runs
+        listing for the head SHA, written to the exact file the script is
+        handed, with a fail-CLOSED empty substitute on an API blip."""
+        self.assertIn("actions/runs?head_sha=$SHA", self.run_block)
+        m = re.search(r"--workflow-runs-file (\S+)", self.run_block)
+        self.assertIsNotNone(m, "workflow does not pass --workflow-runs-file")
+        self.assertIn(f"> {m.group(1)}", self.run_block)
+        self.assertIn('\'{"workflow_runs":[]}\'', self.run_block)
+
+    def test_origin_listing_uses_the_workflows_own_token(self):
+        """The runs listing needs actions:read, which the qa-bot App
+        deliberately lacks — that ONE read must use the workflow's own
+        token, not GH_TOKEN (the qa-bot token)."""
+        line = next(
+            ln for ln in self.run_block.splitlines()
+            if "actions/runs?head_sha=$SHA" in ln
+        )
+        self.assertIn('GH_TOKEN="${{ github.token }}"', line)
+
+    def test_review_workflow_allowlist_is_passed_explicitly(self):
+        """The exclusion allowlist is PATHS of pipeline-owned review stubs —
+        visible in the workflow, so a stub rename is a reviewable diff here,
+        not silent drift inside the script's default."""
+        self.assertIn("--review-workflows", self.run_block)
+        self.assertIn(".github/workflows/qa-review.yml", self.run_block)
+
     def test_merge_only_on_explicit_decision(self):
         """`gh pr merge` must be reachable only behind the machine-readable
         `decision=merge` — fail-closed if the script output ever changes
@@ -114,18 +142,21 @@ class CliContractTest(unittest.TestCase):
     HEAD = "aa11" * 10
     QA = "agent-bureau-qa-bot[bot]"
 
-    def run_cli(self, check_runs, comments):
+    def run_cli(self, check_runs, comments, workflow_runs=()):
         with tempfile.TemporaryDirectory() as td:
             cr = Path(td) / "check-runs.json"
             cm = Path(td) / "comments.json"
-            # The workflow hands the RAW REST payload over — an object with
-            # a check_runs key, not a bare list.
+            wr = Path(td) / "workflow-runs.json"
+            # The workflow hands the RAW REST payloads over — objects with
+            # check_runs / workflow_runs keys, not bare lists.
             cr.write_text(json.dumps({"total_count": len(check_runs), "check_runs": check_runs}))
             cm.write_text(json.dumps(comments))
+            wr.write_text(json.dumps({"workflow_runs": list(workflow_runs)}))
             return subprocess.run(
                 [sys.executable, str(SCRIPT),
                  "--head-sha", self.HEAD, "--qa-login", self.QA,
-                 "--check-runs-file", str(cr), "--comments-file", str(cm)],
+                 "--check-runs-file", str(cr), "--comments-file", str(cm),
+                 "--workflow-runs-file", str(wr)],
                 capture_output=True, text=True,
             )
 
@@ -159,12 +190,15 @@ class CliContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cr = Path(td) / "check-runs.json"
             cm = Path(td) / "comments.json"
+            wr = Path(td) / "workflow-runs.json"
             cr.write_text("not json")
             cm.write_text("[]")
+            wr.write_text(json.dumps({"workflow_runs": []}))
             proc = subprocess.run(
                 [sys.executable, str(SCRIPT),
                  "--head-sha", self.HEAD, "--qa-login", self.QA,
-                 "--check-runs-file", str(cr), "--comments-file", str(cm)],
+                 "--check-runs-file", str(cr), "--comments-file", str(cm),
+                 "--workflow-runs-file", str(wr)],
                 capture_output=True, text=True,
             )
         self.assertEqual(proc.returncode, 2)
@@ -174,12 +208,15 @@ class CliContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cr = Path(td) / "check-runs.json"
             cm = Path(td) / "comments.json"
+            wr = Path(td) / "workflow-runs.json"
             cr.write_text(json.dumps({"check_runs": []}))
             cm.write_text("[]")
+            wr.write_text(json.dumps({"workflow_runs": []}))
             proc = subprocess.run(
                 [sys.executable, str(SCRIPT),
                  "--head-sha", "not-a-sha", "--qa-login", self.QA,
-                 "--check-runs-file", str(cr), "--comments-file", str(cm)],
+                 "--check-runs-file", str(cr), "--comments-file", str(cm),
+                 "--workflow-runs-file", str(wr)],
                 capture_output=True, text=True,
             )
         self.assertEqual(proc.returncode, 2)
