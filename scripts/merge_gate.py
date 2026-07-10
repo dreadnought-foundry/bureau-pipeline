@@ -11,11 +11,23 @@ no agent claims trusted, no human in the loop.
 The three conditions (all must pass, evaluated in this order):
 
 1. CI — every check run on the PR's head SHA has completed green
-   (conclusion success/skipped/neutral). Check runs whose name ends with
-   "review" are EXCLUDED: the critic's verdict COMMENT is the review's
-   source of truth (condition 2), and a review run killed by an API blip
-   must not deadlock the merge. No runs at all → wait (checks haven't
-   reported yet).
+   (conclusion success/skipped/neutral). The REVIEW workflow's own check
+   runs are EXCLUDED: the critic's verdict COMMENT is the review's source
+   of truth (condition 2), and a review run killed by an API blip must not
+   deadlock the merge. Exclusion is by VERIFIED ORIGIN, never by name
+   (DRE-1994): the old `endswith("review")` name test was attacker-nameable
+   — check names come from PR-authored workflow files, so a failing job
+   named `sneaky-review` was invisible to the all-green rule. Now a check
+   run is excluded only if its check suite belongs to a workflow run that
+   GitHub's own workflow-runs record attributes to an allowlisted review
+   workflow FILE (path). GitHub gives every workflow run its own check
+   suite, so a PR-authored workflow — whatever its jobs are named — can
+   never place a check run inside the review workflow's suite. Residual
+   (documented in tests/test_merge_gate_check_origin.py): a PR modifying
+   the review stub at its own path still gets excluded — exactly the run
+   class the exclusion targets, and exclusion grants no approval power
+   (condition 2 still gates). No counted runs at all → wait (checks
+   haven't reported yet).
 
 2. QA Critic — the latest critic verdict comment is APPROVE, bound to the
    PR's current head:
@@ -56,7 +68,11 @@ tests/test_merge_gate_decision_table.py.
 Contract with merge-gate.yml:
   stdin/argv: --head-sha, --qa-login, --check-runs-file (the raw REST
     payload of GET /repos/{repo}/commits/{sha}/check-runs), --comments-file
-    (the raw REST payload of GET /repos/{repo}/issues/{pr}/comments).
+    (the raw REST payload of GET /repos/{repo}/issues/{pr}/comments),
+    --workflow-runs-file (the raw REST payload of
+    GET /repos/{repo}/actions/runs?head_sha={sha} — the verified-origin
+    record for the review-run exclusion), --review-workflows (optional
+    comma-separated allowlist of review workflow paths).
   stdout: zero or more `note=` lines, then exactly one `decision=` line
     (merge | wait | hold) and one `reason=` line (plain English).
   exit 0 = decided; exit 2 = malformed input (the job fails loudly and
@@ -79,6 +95,14 @@ from typing import Optional
 
 CRITIC_MARKER = "QA Critic"
 VERIFIER_MARKER = "QA Verifier"
+
+# Workflow FILES whose runs are the review stage — their check runs are
+# excluded from condition 1 by verified origin (DRE-1994). Paths as GitHub
+# records them on the workflow RUN, not names a PR can choose.
+DEFAULT_REVIEW_WORKFLOWS = (
+    ".github/workflows/qa-review.yml",  # the product-repo critic stub
+    ".github/workflows/pr-review.yml",  # bureau-pipeline's own critic
+)
 
 # Green = completed with a conclusion GitHub treats as non-blocking.
 GREEN_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
@@ -147,10 +171,31 @@ def verdict_token(line: str, marker: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def evaluate_checks(check_runs) -> Optional[Decision]:
-    """Condition 1. None = green, proceed."""
+def review_suite_ids(workflow_runs, review_workflows) -> frozenset:
+    """Check-suite ids of the runs produced by the review workflow files —
+    the verified-origin record (DRE-1994). GitHub attributes every workflow
+    run to its workflow FILE (`path`) and gives it its own check suite
+    (`check_suite_id`), so a check run ties back to its producing file by
+    suite membership; the names a PR chooses for its jobs never enter into
+    it. Runs without a suite id never match (a suite-less check run must
+    not be excludable via a None match)."""
+    return frozenset(
+        r["check_suite_id"]
+        for r in workflow_runs
+        if r.get("path") in review_workflows
+        and r.get("check_suite_id") is not None
+    )
+
+
+def evaluate_checks(check_runs, review_suites=frozenset()) -> Optional[Decision]:
+    """Condition 1. None = green, proceed. Only check runs sitting in a
+    verified review workflow's check suite are excluded — an empty origin
+    record (listing API blip) excludes nothing and the gate waits,
+    fail-closed."""
     counted = [
-        r for r in check_runs if not str(r.get("name") or "").endswith("review")
+        r
+        for r in check_runs
+        if (r.get("check_suite") or {}).get("id") not in review_suites
     ]
     total = len(counted)
     if total == 0:
@@ -225,9 +270,17 @@ def evaluate_verifier(line: str, head_sha: str) -> tuple[Optional[Decision], str
     return Decision("hold", "latest verifier verdict is not PASS — holding"), ""
 
 
-def decide(head_sha: str, qa_login: str, check_runs, comments) -> Decision:
-    """The whole gate: conditions 1 → 2 → 3, first blocker wins."""
-    blocked = evaluate_checks(check_runs)
+def decide(
+    head_sha: str,
+    qa_login: str,
+    check_runs,
+    comments,
+    review_suites=frozenset(),
+) -> Decision:
+    """The whole gate: conditions 1 → 2 → 3, first blocker wins.
+    `review_suites` is the verified-origin record from review_suite_ids();
+    the default (empty — nothing excluded) is the fail-closed direction."""
+    blocked = evaluate_checks(check_runs, review_suites)
     if blocked:
         return blocked
 
@@ -259,6 +312,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="raw REST payload of GET commits/{sha}/check-runs")
     parser.add_argument("--comments-file", required=True,
                         help="raw REST payload of GET issues/{pr}/comments")
+    parser.add_argument("--workflow-runs-file", required=True,
+                        help="raw REST payload of GET actions/runs?head_sha=<sha> "
+                             "— the verified-origin record for the review-run "
+                             "exclusion (DRE-1994)")
+    parser.add_argument("--review-workflows",
+                        default=",".join(DEFAULT_REVIEW_WORKFLOWS),
+                        help="comma-separated paths of the review workflow "
+                             "files whose check runs are excluded from the "
+                             "all-green rule")
     return parser
 
 
@@ -294,7 +356,24 @@ def main(argv=None) -> int:
     if not isinstance(comments, list):
         _die("comments payload is not a list")
 
-    decision = decide(args.head_sha, args.qa_login, check_runs, comments)
+    try:
+        with open(args.workflow_runs_file) as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _die(f"cannot read workflow runs: {e}")
+    workflow_runs = (
+        payload.get("workflow_runs") if isinstance(payload, dict) else payload
+    )
+    if not isinstance(workflow_runs, list):
+        _die("workflow-runs payload has no workflow_runs list")
+    review_paths = frozenset(
+        p.strip() for p in args.review_workflows.split(",") if p.strip()
+    )
+    review_suites = review_suite_ids(workflow_runs, review_paths)
+
+    decision = decide(
+        args.head_sha, args.qa_login, check_runs, comments, review_suites
+    )
     for note in decision.notes:
         print(f"note={note}")
     print(f"decision={decision.action}")

@@ -122,10 +122,10 @@ jobs:
 
           # Gather the decision inputs from GitHub's own records; the rules
           # live in scripts/merge_gate.py (DRE-1992 — conditions 1-3:
-          # CI green with the *review-run exclusion, critic APPROVE authored
-          # by the qa-bot App and SHA-bound to this head, verifier
-          # PASS/SKIP/absent with the fail-closed present-but-stale
-          # asymmetry).
+          # CI green with the review-run exclusion by VERIFIED ORIGIN
+          # (DRE-1994), critic APPROVE authored by the qa-bot App and
+          # SHA-bound to this head, verifier PASS/SKIP/absent with the
+          # fail-closed present-but-stale asymmetry).
           # REST check-runs API, NOT `gh pr checks` — the GraphQL rollup needs
           # actions:read the qa-bot App deliberately doesn't have.
           SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
@@ -135,6 +135,18 @@ jobs:
           # shell had — not as a red merge-gate run.
           gh api "repos/${{ github.repository }}/issues/$PR/comments" > /tmp/comments.json 2>/dev/null \
             || echo '[]' > /tmp/comments.json
+          # DRE-1994: the review-run exclusion is by VERIFIED ORIGIN, not
+          # name — a PR-authored job can call itself "sneaky-review" and it
+          # still counts against all-green. The runs listing is GitHub's own
+          # record of which workflow FILE (path) produced each check suite;
+          # merge_gate.py excludes only check runs sitting in a suite of an
+          # allowlisted review workflow. The listing needs actions:read,
+          # which the qa-bot App deliberately lacks — this ONE read uses the
+          # workflow's own token (the calling stub grants actions perms). A
+          # blip here must fail CLOSED: empty record → no exclusions → the
+          # gate waits; it never merges past an unverifiable check.
+          GH_TOKEN="${{ github.token }}" gh api "repos/${{ github.repository }}/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
+            || echo '{"workflow_runs":[]}' > /tmp/workflow-runs.json
           # The trusted verdict author is derived from the same App key this
           # gate merges with (app-slug of the minted token), so an App rename
           # follows automatically; GitHub reserves the "[bot]" suffix, so no
@@ -147,6 +159,8 @@ jobs:
             --qa-login "$QA_LOGIN" \
             --check-runs-file /tmp/check-runs.json \
             --comments-file /tmp/comments.json \
+            --workflow-runs-file /tmp/workflow-runs.json \
+            --review-workflows ".github/workflows/qa-review.yml,.github/workflows/pr-review.yml" \
             | tee /tmp/gate-decision
           # Fail-closed on shape drift: no `decision=merge` line, no merge.
           DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
