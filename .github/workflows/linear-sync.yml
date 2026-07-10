@@ -3,6 +3,16 @@
 # transition fires from GitHub's merge event (ground truth), never from an
 # agent's claim that it merged something.
 #
+# Done gate (DRE-2027, DRE-727 class): the ONLY card this workflow may move
+# to Done is the one whose OWN agent branch was merged — head ref anchored
+# `agent/DRE-<n>-<slug>`, delimiter required after the number (DRE-142 can
+# never act for DRE-1428; same rule as agent-task.yml's branch lookup,
+# DRE-2025). Card references in PR titles/bodies are prose, not provenance —
+# they never transition other cards ("part of DRE-99" in a title used to
+# auto-Done epic DRE-99, and the cloud era has no auto-revert). Hand-named
+# branches (ops/..., chore/...) auto-Done NOTHING: the operator closes those
+# cards by hand, which was already the real behavior for operator work.
+#
 # Reusable workflow: permissions live in the calling stub.
 name: Linear Sync (reusable)
 
@@ -41,12 +51,15 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          CARD=$(printf '%s\n%s' "$HEAD_REF" "$PR_TITLE" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          # Own-branch provenance only (DRE-2027): anchored agent/DRE-<n>-
+          # with the delimiter required after the number; case-insensitive,
+          # normalized to uppercase (DRE-2003). PR title/body never read.
+          CARD=$(printf '%s' "$HEAD_REF" | grep -oiE '^agent/DRE-[0-9]+-' | grep -oiE 'DRE-[0-9]+' | tr '[:lower:]' '[:upper:]' || true)
           if [ -z "$CARD" ]; then
-            echo "no card reference in branch/title — nothing to sync"
+            echo "head branch '$HEAD_REF' is not a card's own agent branch (agent/DRE-<n>-<slug>) — no automatic Done"
+            echo "card references in PR titles/bodies never transition cards; hand-named branches are closed by the operator"
             exit 0
           fi
           python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Done"
