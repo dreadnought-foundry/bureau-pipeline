@@ -237,9 +237,56 @@ def pr_for(identifier: str) -> dict | None:
     return None
 
 
+QA_BOT_LOGIN = "agent-bureau-qa-bot"
+
+
+def is_qa_bot_comment(comment: dict) -> bool:
+    """True iff the PR comment was AUTHORED by the qa-bot App (DRE-1998).
+
+    The verdict reads below previously trusted any comment whose BODY
+    mentioned "QA Critic" — a forged comment (worker bot, human) could
+    suppress the In QA re-review nudge (card stalls in In QA) or read as
+    APPROVE to the approved-but-red sweep (spurious agent-fix dispatches).
+    Merge was never at risk — merge-gate enforces authorship itself
+    (DRE-1987) — this closes the stall/waste vector.
+
+    Login shape: reconcile's comments come from `gh pr list --json
+    comments` (GraphQL-backed), where a GitHub App's author.login carries
+    NO "[bot]" suffix — "agent-bureau-qa-bot", unlike the REST user.login
+    "agent-bureau-qa-bot[bot]" merge-gate reads. The suffix is stripped
+    before comparing so either payload shape matches; a literal
+    "agent-bureau-qa-bot[bot]" compare would match NOTHING here and wedge
+    every In QA card in review churn.
+
+    Why a literal login instead of merge-gate's app-slug derivation:
+    merge-gate learns the slug from the qa-bot token it mints in order to
+    merge; reconcile mints only the WORKER bot token (reconcile.yml) and
+    never acts as the qa-bot, so deriving the slug would mean minting a
+    qa-bot token solely to learn its own name. If the App is ever renamed
+    this fails CLOSED and visibly: reconcile sees no verdict and re-nudges
+    qa-review (fresh-review churn on the card), never a merge.
+    """
+    login = (comment.get("author") or {}).get("login") or ""
+    return login.removesuffix("[bot]") == QA_BOT_LOGIN
+
+
+def critic_comment_bodies(pr: dict) -> list[str]:
+    """Bodies of the PR's QA Critic comments, oldest→newest — counting ONLY
+    comments authored by the qa-bot App. Forged critic comments are
+    invisible (not merely non-approving), so a forged trailing comment can
+    never shadow or mask a genuine verdict (DRE-1998)."""
+    return [
+        c.get("body") or ""
+        for c in pr.get("comments", [])
+        if is_qa_bot_comment(c) and "QA Critic" in (c.get("body") or "")
+    ]
+
+
 def has_verdict(pr: dict) -> bool:
-    """True iff the latest QA Critic comment is a verdict BOUND to the PR's
-    CURRENT head commit — the verdict line ends `@<full-sha>` (DRE-1990).
+    """True iff the latest qa-bot-authored QA Critic comment is a verdict
+    BOUND to the PR's CURRENT head commit — the verdict line ends
+    `@<full-sha>` (DRE-1990); forged/non-qa-bot comments are invisible
+    (DRE-1998).
 
     A stale binding (verdict for an older commit) or a legacy/neutral
     comment with no SHA is NOT a verdict: merge-gate ignores those
@@ -248,11 +295,7 @@ def has_verdict(pr: dict) -> bool:
     bound verdict — this is also the automatic one-time re-review path for
     APPROVEs posted before DRE-1990 shipped.
     """
-    bodies = [
-        c.get("body") or ""
-        for c in pr.get("comments", [])
-        if "QA Critic" in (c.get("body") or "")
-    ]
+    bodies = critic_comment_bodies(pr)
     if not bodies:
         return False
     first_line = bodies[-1].splitlines()[0] if bodies[-1] else ""
@@ -629,7 +672,10 @@ def fix_approved_but_red() -> None:
     for pr in prs:
         if not pr["headRefName"].startswith("agent/") or pr.get("mergeStateStatus") == "DIRTY":
             continue
-        verdicts = [c["body"] for c in pr.get("comments", []) if "QA Critic" in (c.get("body") or "")]
+        # qa-bot-authored comments only (DRE-1998): a forged APPROVE must
+        # not spawn agent-fix dispatches, and a forged trailing non-APPROVE
+        # must not mask a genuine one.
+        verdicts = critic_comment_bodies(pr)
         if not verdicts or "VERDICT: APPROVE" not in verdicts[-1]:
             continue
         sha = pr["headRefOid"]
