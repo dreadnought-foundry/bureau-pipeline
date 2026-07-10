@@ -73,32 +73,26 @@ class MergeGateExtractionTest(unittest.TestCase):
 
 
 class LinearSyncExtractionTest(unittest.TestCase):
-    """linear-sync.yml parses $HEAD_REF + $PR_TITLE; its $CARD is the card
-    closed on merge (card → Done)."""
+    """linear-sync.yml parses $HEAD_REF (only — DRE-2027 dropped $PR_TITLE
+    from extraction: titles are prose, not provenance); its $CARD is the card
+    closed on merge (card → Done). Case-insensitivity now applies to the
+    card's own agent branch — the one shape still allowed to auto-Done; the
+    Done-gate cases themselves live in tests/test_linear_sync_done_gate.py."""
 
     def setUp(self):
         self.line = card_extraction_line("linear-sync.yml")
 
-    def _card(self, head_ref: str, title: str) -> str:
-        return run_extraction(
-            self.line, f'HEAD_REF="{head_ref}"; PR_TITLE="{title}"'
-        )
+    def _card(self, head_ref: str) -> str:
+        return run_extraction(self.line, f'HEAD_REF="{head_ref}"')
 
-    def test_lowercase_branch_extracts_uppercase_card(self):
-        self.assertEqual(
-            self._card("ops/dre-123-x", "some title"), "DRE-123"
-        )
-
-    def test_lowercase_title_extracts_uppercase_card(self):
-        self.assertEqual(
-            self._card("no-card-here", "fix(dre-77): tidy"), "DRE-77"
-        )
+    def test_lowercase_agent_branch_extracts_uppercase_card(self):
+        self.assertEqual(self._card("agent/dre-123-x"), "DRE-123")
 
     def test_uppercase_branch_still_extracts(self):
-        self.assertEqual(self._card("agent/DRE-9-x", ""), "DRE-9")
+        self.assertEqual(self._card("agent/DRE-9-x"), "DRE-9")
 
     def test_no_card_ref_stays_empty(self):
-        self.assertEqual(self._card("chore/deps", "bump deps"), "")
+        self.assertEqual(self._card("chore/deps"), "")
 
 
 if __name__ == "__main__":
