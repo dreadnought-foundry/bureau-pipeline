@@ -86,8 +86,13 @@ jobs:
           # budget-exhaustion this way with an unreviewed Fable 5 fix).
           LAST_VERDICT_IDX=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
             --jq '[to_entries[] | select(.value.user.login == "agent-bureau-qa-bot[bot]") | select(.value.body | contains("QA Critic"))] | last | .key // -1')
+          # DRE-1995: the push marker (and the two attempt counters below) are
+          # posted by THIS workflow as agent-bureau-bot[bot] — the worker
+          # identity, not qa-bot, which is why DRE-1988's gating didn't cover
+          # them. Filter the read-back to that author, or any commenter can
+          # plant the marker to flip fix-vs-conflict routing.
           LAST_PUSH_IDX=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-            --jq '[to_entries[] | select(.value.body | contains("pushed — CI and critic review re-running"))] | last | .key // -1')
+            --jq '[to_entries[] | select(.value.user.login == "agent-bureau-bot[bot]") | select(.value.body | contains("pushed — CI and critic review re-running"))] | last | .key // -1')
           MODE=fix
           if [ "$MSTATE" = "DIRTY" ]; then
             case "$VERDICT" in
@@ -99,8 +104,10 @@ jobs:
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
           if [ "$MODE" = "conflict" ]; then
+            # DRE-1995: count only worker-bot-authored rounds — forged
+            # markers would exhaust the 5-round budget instantly.
             RESOLVED=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-              --jq '[.[] | select(.body | contains("🔀 Conflict resolution"))] | length')
+              --jq '[.[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("🔀 Conflict resolution"))] | length')
             ATTEMPT=$((RESOLVED + 1))
             {
               echo "go=true"; echo "number=$PR"; echo "branch=$BRANCH"
@@ -117,8 +124,10 @@ jobs:
             exit 0
           fi
 
+          # DRE-1995: count only worker-bot-authored attempts — forged
+          # markers would burn the 3-attempt budget and hold the PR.
           ATTEMPTS=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-            --jq '[.[] | select(.body | contains("🔧 Fix attempt"))] | length')
+            --jq '[.[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("🔧 Fix attempt"))] | length')
           ATTEMPT=$((ATTEMPTS + 1))
           {
             echo "go=true"; echo "number=$PR"; echo "branch=$BRANCH"
