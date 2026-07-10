@@ -11,6 +11,16 @@ name: Agent Task (reusable)
 
 on:
   workflow_call:
+    inputs:
+      pipeline_ref:
+        description: >-
+          bureau-pipeline ref for the INTERNAL checkouts (scripts, briefs,
+          standards). A stub pinned to this workflow @vN MUST pass the same
+          vN here, or its scripts still float @main. Omitted = main (the
+          rolling channel), byte-identical to the pre-DRE-2026 behavior.
+        type: string
+        required: false
+        default: main
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -80,6 +90,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
       - name: Hide pipeline checkout from product git
         run: echo ".bureau-pipeline/" >> .git/info/exclude
