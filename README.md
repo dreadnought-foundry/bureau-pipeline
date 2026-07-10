@@ -4,9 +4,11 @@ The Agent Bureau's pipeline, defined once. Every product repo
 (EveryBite/atlas, dreadnought-foundry/deltasolv, dreadnought-foundry/vericorr,
 …) runs the SAME eight workflows from here via GitHub reusable workflows.
 A change merged to `main` in this repo is live in every product repo on its
-next trigger — `@main` is the rollout channel. There are no versioned tags;
-if a change is risky, test it by pointing one repo's stub at a branch ref
-first.
+next trigger — `@main` is the rolling channel. For fleet repos that want
+change isolation there is a **tagged release channel** (`v1`, `v2`, …, cut by
+the operator): a stub pins `uses: ...@vN` **and** passes
+`pipeline_ref: vN`, and moves only when the operator re-points it. See
+"Release channel" below.
 
 ```
 Linear card → relay Lambda → repository_dispatch on the product repo
@@ -75,7 +77,7 @@ Division of labor:
 | `on:` triggers (incl. product-specific `workflow_run` lists) | job-level `if:` event filters |
 | workflow-level `concurrency:` | job-level `concurrency:` (merge-gate, reconcile) |
 | `permissions:` (constrains `GITHUB_TOKEN`) | — (jobs inherit the caller's token scope) |
-| `secrets: inherit` + `with:` inputs (`max_wip` on reconcile) | `secrets:`/`inputs:` declarations |
+| `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on reconcile) | `secrets:`/`inputs:` declarations |
 
 What the product repo still carries:
 
@@ -95,6 +97,49 @@ tokens may EVER live here, in code or in workflow files**): set
 `LINEAR_API_KEY`, `BUREAU_APP_ID`, `BUREAU_APP_PRIVATE_KEY`,
 `BUREAU_QA_APP_ID`, `BUREAU_QA_APP_PRIVATE_KEY` in each product repo, and
 install both bureau GitHub Apps on its org.
+
+## Release channel: pinning, canary, promotion (DRE-2026)
+
+The reusable workflows re-checkout this repo internally (into
+`.bureau-pipeline/`) for their scripts, briefs, and standards. Those
+checkouts thread the `pipeline_ref` workflow_call input
+(`ref: ${{ inputs.pipeline_ref || 'main' }}`), so a pin only holds if the
+stub sets BOTH halves:
+
+```yaml
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml@v1
+    with:
+      pipeline_ref: v1   # MUST match the tag on the uses: line
+    secrets: inherit
+```
+
+**The pairing rule: `uses: ...@vN` must pair with `pipeline_ref: vN`.**
+The `uses:` ref pins only the top-level workflow YAML; `pipeline_ref` pins
+everything that YAML checks out and executes (scripts/briefs/standards). A
+stub that pins `uses:` but omits `pipeline_ref` runs vN YAML with @main
+scripts — the exact chimera this channel exists to prevent. Omitting both
+(plain `@main`, no input) is the rolling channel, unchanged.
+`scripts/check_pipeline_ref.py` (a Pipeline Tests step, unit-tested in
+`tests/test_pipeline_ref_threading.py`) fails CI here if any internal
+checkout stops threading the input.
+
+**Canary**: the fleet consumes the current `vN` tag. **agent-bureau is the
+designated canary and stays on `@main`** (no `pipeline_ref`), so every
+merge here soaks on the canary's real traffic before the fleet sees it.
+
+**Promotion** (operator-only, never an agent): after a change has soaked on
+the canary, the operator cuts or re-points the next tag at the merged sha —
+
+```bash
+git tag -f v2 <merged-sha> && git push origin v2 --force
+```
+
+— then re-points fleet stubs (`@v1` → `@v2` together with
+`pipeline_ref: v2`) repo by repo. Rollback is the same move in reverse:
+re-point the stub back to the previous tag pair. Tags are not PR-reviewable,
+so cutting/moving them is deliberately a human step outside the pipeline.
 
 ## Layout
 
