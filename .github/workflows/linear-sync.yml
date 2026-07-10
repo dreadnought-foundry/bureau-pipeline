@@ -44,7 +44,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          CARD=$(printf '%s\n%s' "$HEAD_REF" "$PR_TITLE" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          CARD=$(printf '%s\n%s' "$HEAD_REF" "$PR_TITLE" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
           if [ -z "$CARD" ]; then
             echo "no card reference in branch/title — nothing to sync"
             exit 0

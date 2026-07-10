@@ -37,16 +37,21 @@ import sys
 
 # Same pattern linear-sync.yml / merge-gate.yml use to pull the card from a
 # branch ref — keep these in lockstep so "has a linked card" means exactly
-# what the rest of the pipeline means by it.
-_CARD_RE = re.compile(r"DRE-[0-9]+")
+# what the rest of the pipeline means by it. Case-INsensitive (DRE-2003): the
+# workflow-level contains() guard already was, so a lowercase `ops/dre-N-...`
+# branch used to start the review job while this gate said skip — a silent
+# review bypass. Extracted ids are normalized to uppercase before use
+# (Linear identifiers are uppercase; `dre-123` must resolve to card DRE-123).
+_CARD_RE = re.compile(r"DRE-[0-9]+", re.IGNORECASE)
 
 
 def card_in_branch(branch: str | None) -> str | None:
-    """The first `DRE-<n>` card reference in the branch ref, or None."""
+    """The first `DRE-<n>` card reference in the branch ref (uppercased,
+    matching Linear's identifier convention), or None."""
     if not branch:
         return None
     m = _CARD_RE.search(branch)
-    return m.group(0) if m else None
+    return m.group(0).upper() if m else None
 
 
 def should_review(branch: str | None) -> bool:
