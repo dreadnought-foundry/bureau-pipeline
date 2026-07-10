@@ -48,6 +48,35 @@ class ShouldReviewTest(unittest.TestCase):
     def test_bare_card_branch_is_reviewed(self):
         self.assertTrue(should_review_pr.should_review("DRE-1773"))
 
+    # --- lowercase card refs: reviewed + normalized (DRE-2003) ----------
+    # The workflow-level contains() guard is case-INsensitive but this
+    # authoritative gate was not: a lowercase `ops/dre-N-...` branch started
+    # the review job yet returned review=false — a silent review bypass
+    # (bit us live 2026-07-09; three security PRs re-pushed as uppercase
+    # twins).
+
+    def test_lowercase_ops_branch_with_card_is_reviewed(self):
+        self.assertTrue(should_review_pr.should_review("ops/dre-123-x"))
+
+    def test_uppercase_agent_branch_still_reviewed(self):
+        self.assertTrue(should_review_pr.should_review("agent/DRE-9-x"))
+
+    def test_chore_deps_without_card_still_skipped(self):
+        # Case-insensitivity must not over-match: no card ref, still skip.
+        self.assertFalse(should_review_pr.should_review("chore/deps"))
+
+    def test_card_in_branch_normalizes_lowercase_to_uppercase(self):
+        # Linear identifiers are uppercase; `dre-123` must resolve to card
+        # DRE-123, so the extractor normalizes before anything uses it.
+        self.assertEqual(
+            should_review_pr.card_in_branch("ops/dre-123-x"), "DRE-123"
+        )
+
+    def test_card_in_branch_normalizes_mixed_case(self):
+        self.assertEqual(
+            should_review_pr.card_in_branch("fix/Dre-42-y"), "DRE-42"
+        )
+
     # --- normal pipeline PRs: STILL reviewed (no regression) ------------
 
     def test_agent_branch_is_reviewed(self):
@@ -112,6 +141,14 @@ class CliTest(unittest.TestCase):
         p = self._run("chore/bump-deps")
         self.assertEqual(p.returncode, 1)
         self.assertIn("review=false", p.stdout)
+
+    def test_cli_exit_0_and_review_true_on_lowercase_card_branch(self):
+        # DRE-2003: the lowercase shape that silently bypassed the critic.
+        p = self._run("ops/dre-1987-merge-gate-verdict-authorship")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("review=true", p.stdout)
+        # The card it reports must be the real (uppercase) Linear identifier.
+        self.assertIn("DRE-1987", p.stdout)
 
 
 if __name__ == "__main__":
