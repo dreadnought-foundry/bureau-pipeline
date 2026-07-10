@@ -31,6 +31,7 @@ stays proved against consumer expectation — a copied string would keep
 passing after a drift; the extracted line cannot.
 """
 
+import json
 import os
 import re
 import shlex
@@ -38,7 +39,9 @@ import shutil
 import subprocess
 import sys
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 QA_REVIEW = ROOT / ".github" / "workflows" / "qa-review.yml"
@@ -57,6 +60,12 @@ SHA_NEWER = "bb22" * 10  # a commit pushed AFTER the verdict landed
 
 QA_LOGIN = "agent-bureau-qa-bot[bot]"
 WORKER_LOGIN = "agent-bureau-bot[bot]"  # authors PRs — must never count
+
+# reconcile reads comments via `gh pr list --json comments` (GraphQL-backed):
+# there a GitHub App's author.login carries NO "[bot]" suffix, unlike the
+# REST user.login shape merge-gate reads (verified against the live repo).
+GH_QA_LOGIN = "agent-bureau-qa-bot"
+GH_WORKER_LOGIN = "agent-bureau-bot"
 
 CRITIC_NEUTRAL = (
     "🔎 QA Critic could not run (infra error) — re-review needed, "
@@ -429,9 +438,12 @@ class ReconcileHasVerdictTest(unittest.TestCase):
     and a fresh review is never requested — a wedged card."""
 
     def pr(self, head, bodies):
+        # Genuine critic comments, in the gh CLI (GraphQL) author shape.
         return {
             "headRefOid": head,
-            "comments": [{"body": b} for b in bodies],
+            "comments": [
+                {"author": {"login": GH_QA_LOGIN}, "body": b} for b in bodies
+            ],
         }
 
     def test_22_bound_fresh_verdict_counts(self):
@@ -508,6 +520,173 @@ class BindingShapeTest(unittest.TestCase):
                 re.escape(marker) + r"[^\n]*@\$\{REVIEWED_SHA\}",
                 f"{path.name} no longer embeds the reviewed SHA in its verdict line",
             )
+
+
+class ReconcileVerdictAuthorshipTest(unittest.TestCase):
+    """DRE-1998: reconcile's verdict reads must count ONLY comments AUTHORED
+    by the qa-bot App — the same rule merge-gate enforces (DRE-1987 / #57).
+
+    Before this, has_verdict() trusted any comment whose BODY mentioned
+    "QA Critic": a forged verdict (worker bot, human) with the current head
+    SHA read as a real verdict, so the In QA re-nudge kicked merge-gate
+    (which correctly ignores the forgery) instead of qa-review — no fresh
+    review was ever requested and the card stalled in In QA. Merge itself
+    was never at risk; this closes the stall vector."""
+
+    def comment(self, login, body):
+        # gh pr list --json comments (GraphQL) shape: author.login,
+        # bots WITHOUT the "[bot]" suffix.
+        return {"author": {"login": login}, "body": body}
+
+    def pr(self, head, comments):
+        return {"headRefOid": head, "comments": comments}
+
+    def test_40_genuine_qa_bot_verdict_counts(self):
+        pr = self.pr(
+            SHA_REVIEWED,
+            [self.comment(GH_QA_LOGIN, critic_line("APPROVE", SHA_REVIEWED))],
+        )
+        self.assertTrue(reconcile.has_verdict(pr))
+
+    def test_41_forged_worker_bot_verdict_is_invisible(self):
+        # Correct marker, correct verdict token, correct CURRENT-head SHA —
+        # but authored by the worker bot. Must read as NO verdict so
+        # reconcile re-triggers qa-review; the forgery cannot suppress it.
+        pr = self.pr(
+            SHA_REVIEWED,
+            [self.comment(GH_WORKER_LOGIN, critic_line("APPROVE", SHA_REVIEWED))],
+        )
+        self.assertFalse(reconcile.has_verdict(pr))
+
+    def test_42_forged_human_verdict_is_invisible(self):
+        pr = self.pr(
+            SHA_REVIEWED,
+            [self.comment("some-human", critic_line("APPROVE", SHA_REVIEWED))],
+        )
+        self.assertFalse(reconcile.has_verdict(pr))
+
+    def test_43_rest_shape_bot_suffix_login_still_counts(self):
+        # Robustness: if the payload ever arrives REST-shaped (login
+        # "agent-bureau-qa-bot[bot]"), the genuine verdict must still count —
+        # otherwise every card wedges in review churn after a payload switch.
+        pr = self.pr(
+            SHA_REVIEWED,
+            [self.comment(QA_LOGIN, critic_line("APPROVE", SHA_REVIEWED))],
+        )
+        self.assertTrue(reconcile.has_verdict(pr))
+
+    def test_44_forged_trailing_comment_cannot_shadow_genuine_verdict(self):
+        # Genuine bound APPROVE, then a forged "could not run" style critic
+        # comment: the forgery is invisible (not merely non-approving), so
+        # the latest COUNTED comment is still the genuine bound verdict.
+        pr = self.pr(
+            SHA_REVIEWED,
+            [
+                self.comment(GH_QA_LOGIN, critic_line("APPROVE", SHA_REVIEWED)),
+                self.comment(GH_WORKER_LOGIN, CRITIC_NEUTRAL),
+            ],
+        )
+        self.assertTrue(reconcile.has_verdict(pr))
+
+    def test_45_authorless_comment_is_invisible(self):
+        # No author info (deleted account / malformed payload): fail closed.
+        pr = self.pr(
+            SHA_REVIEWED, [{"body": critic_line("APPROVE", SHA_REVIEWED)}]
+        )
+        self.assertFalse(reconcile.has_verdict(pr))
+
+
+class ApprovedButRedAuthorshipTest(unittest.TestCase):
+    """DRE-1998, second read site: fix_approved_but_red() dispatches
+    agent-fix off the latest QA Critic APPROVE on a red PR. Before this it
+    read ANY comment mentioning "QA Critic" — a forged APPROVE spawned
+    agent-fix dispatches (waste), and a forged trailing non-APPROVE masked a
+    genuine one (missed repair). Only qa-bot-authored comments may count."""
+
+    OLD_DATE = (datetime.now(UTC) - timedelta(hours=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+    def comment(self, login, body):
+        return {"author": {"login": login}, "body": body}
+
+    def make_pr(self, comments):
+        return {
+            "number": 77,
+            "headRefName": "agent/DRE-9999-widget",
+            "headRefOid": SHA_REVIEWED,
+            "mergeStateStatus": "CLEAN",
+            "comments": comments,
+        }
+
+    def run_sweep(self, pr):
+        """Run the LIVE fix_approved_but_red with gh mocked: no fix run
+        busy, one open PR, 1 failed check, head commit an hour old."""
+
+        def fake_gh(*args):
+            if args[:2] == ("run", "list"):
+                return "[]"
+            if args[:2] == ("pr", "list"):
+                return json.dumps([pr])
+            if args[0] == "api" and args[1].endswith("/check-runs"):
+                return "1"
+            if args[0] == "api" and "/git/commits/" in args[1]:
+                return json.dumps({"committer": {"date": self.OLD_DATE}})
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with (
+            mock.patch.object(reconcile, "gh", side_effect=fake_gh),
+            mock.patch.object(reconcile, "gh_dispatch") as dispatch,
+        ):
+            reconcile.fix_approved_but_red()
+        return dispatch
+
+    def test_46_genuine_qa_bot_approve_dispatches_fix(self):
+        dispatch = self.run_sweep(
+            self.make_pr(
+                [self.comment(GH_QA_LOGIN, critic_line("APPROVE", SHA_REVIEWED))]
+            )
+        )
+        dispatch.assert_called_once()
+        self.assertIn("pr_number=77", dispatch.call_args.args)
+
+    def test_47_forged_worker_bot_approve_does_not_dispatch(self):
+        # THE waste vector: a forged APPROVE must not spawn agent-fix runs.
+        dispatch = self.run_sweep(
+            self.make_pr(
+                [
+                    self.comment(
+                        GH_WORKER_LOGIN, critic_line("APPROVE", SHA_REVIEWED)
+                    )
+                ]
+            )
+        )
+        dispatch.assert_not_called()
+
+    def test_48_forged_human_approve_does_not_dispatch(self):
+        dispatch = self.run_sweep(
+            self.make_pr(
+                [self.comment("some-human", critic_line("APPROVE", SHA_REVIEWED))]
+            )
+        )
+        dispatch.assert_not_called()
+
+    def test_49_forged_trailing_comment_cannot_mask_genuine_approve(self):
+        # Genuine APPROVE then a forged REQUEST_CHANGES: the forgery is
+        # invisible, the counted latest verdict is still the genuine
+        # APPROVE — the red PR still gets its fix dispatch.
+        dispatch = self.run_sweep(
+            self.make_pr(
+                [
+                    self.comment(GH_QA_LOGIN, critic_line("APPROVE", SHA_REVIEWED)),
+                    self.comment(
+                        GH_WORKER_LOGIN,
+                        critic_line("REQUEST_CHANGES", SHA_REVIEWED),
+                    ),
+                ]
+            )
+        )
+        dispatch.assert_called_once()
 
 
 if __name__ == "__main__":
