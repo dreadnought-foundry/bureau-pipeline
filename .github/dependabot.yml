@@ -25,6 +25,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Bounded sweeps (DRE-2049; live origin: agent-bureau's first sweep
+    # opened 27 PRs at once): at most 5 open PRs per ecosystem, so a weekly
+    # sweep arrives as a reviewable set — dependabot holds the rest back
+    # until a slot frees up.
+    open-pull-requests-limit: 5
     groups:
       # One grouped PR per week for everything minor/patch — majors are
       # excluded, so they surface as separate human-merge PRs.
@@ -36,6 +41,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
     groups:
       actions-minor-patch:
         patterns: ["*"]
