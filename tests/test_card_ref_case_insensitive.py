@@ -15,6 +15,11 @@ tests), so they fail on the real shipped shell, not a re-implementation:
   • lowercase `dre-123` in a branch/title  → extracts, normalized to DRE-123
   • uppercase `DRE-9`                      → still extracts (no regression)
   • no card ref                            → still empty (no over-match)
+
+DRE-2016 extends the same lockstep coverage to the four remaining
+extraction sites the DRE-2003 audit found: agent-fix, qa-review, medic,
+verify. Those feed Linear comments/context (not the merge decision), so a
+case-sensitive miss only breaks card-linking — but the contract is the same.
 """
 
 import re
@@ -86,6 +91,86 @@ class LinearSyncExtractionTest(unittest.TestCase):
         return run_extraction(self.line, f'HEAD_REF="{head_ref}"')
 
     def test_lowercase_agent_branch_extracts_uppercase_card(self):
+        self.assertEqual(self._card("agent/dre-123-x"), "DRE-123")
+
+    def test_uppercase_branch_still_extracts(self):
+        self.assertEqual(self._card("agent/DRE-9-x"), "DRE-9")
+
+    def test_no_card_ref_stays_empty(self):
+        self.assertEqual(self._card("chore/deps"), "")
+
+
+class AgentFixExtractionTest(unittest.TestCase):
+    """agent-fix.yml parses $BRANCH; its $CARD threads the card ref into
+    the fixing agent's context and Linear attempt comments."""
+
+    def setUp(self):
+        self.line = card_extraction_line("agent-fix.yml")
+
+    def _card(self, branch: str) -> str:
+        return run_extraction(self.line, f'BRANCH="{branch}"')
+
+    def test_lowercase_branch_extracts_uppercase_card(self):
+        self.assertEqual(self._card("agent/dre-123-x"), "DRE-123")
+
+    def test_uppercase_branch_still_extracts(self):
+        self.assertEqual(self._card("agent/DRE-9-x"), "DRE-9")
+
+    def test_no_card_ref_stays_empty(self):
+        self.assertEqual(self._card("chore/deps"), "")
+
+
+class QaReviewExtractionTest(unittest.TestCase):
+    """qa-review.yml parses $BRANCH; its $CARD gives the critic the card
+    context and addresses the verdict's Linear comment."""
+
+    def setUp(self):
+        self.line = card_extraction_line("qa-review.yml")
+
+    def _card(self, branch: str) -> str:
+        return run_extraction(self.line, f'BRANCH="{branch}"')
+
+    def test_lowercase_branch_extracts_uppercase_card(self):
+        self.assertEqual(self._card("agent/dre-123-x"), "DRE-123")
+
+    def test_uppercase_branch_still_extracts(self):
+        self.assertEqual(self._card("agent/DRE-9-x"), "DRE-9")
+
+    def test_no_card_ref_stays_empty(self):
+        self.assertEqual(self._card("chore/deps"), "")
+
+
+class MedicExtractionTest(unittest.TestCase):
+    """medic.yml parses $HEAD_BRANCH; its $CARD addresses the
+    reviewer-down note posted to the card."""
+
+    def setUp(self):
+        self.line = card_extraction_line("medic.yml")
+
+    def _card(self, head_branch: str) -> str:
+        return run_extraction(self.line, f'HEAD_BRANCH="{head_branch}"')
+
+    def test_lowercase_branch_extracts_uppercase_card(self):
+        self.assertEqual(self._card("agent/dre-123-x"), "DRE-123")
+
+    def test_uppercase_branch_still_extracts(self):
+        self.assertEqual(self._card("agent/DRE-9-x"), "DRE-9")
+
+    def test_no_card_ref_stays_empty(self):
+        self.assertEqual(self._card("chore/deps"), "")
+
+
+class VerifyExtractionTest(unittest.TestCase):
+    """verify.yml parses $BRANCH; its $CARD gives the Verifier the card
+    context and addresses the PASS/FAIL Linear comment."""
+
+    def setUp(self):
+        self.line = card_extraction_line("verify.yml")
+
+    def _card(self, branch: str) -> str:
+        return run_extraction(self.line, f'BRANCH="{branch}"')
+
+    def test_lowercase_branch_extracts_uppercase_card(self):
         self.assertEqual(self._card("agent/dre-123-x"), "DRE-123")
 
     def test_uppercase_branch_still_extracts(self):
