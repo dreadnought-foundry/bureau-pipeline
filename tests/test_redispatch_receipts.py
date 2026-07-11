@@ -139,6 +139,10 @@ def _sweep_mocks(extra=None):
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale
         "pr_for": MagicMock(return_value=None),  # no PR — the redispatch case
+        # DRE-1993: the stranded-card watchdog runs on every full sweep and
+        # would make real Linear calls on this mocked card; stub it out —
+        # this test exercises the redispatch receipt honesty, not the watchdog.
+        "flag_stranded": MagicMock(return_value=set()),
     }
     if extra:
         m.update(extra)

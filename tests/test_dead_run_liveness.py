@@ -239,6 +239,10 @@ def _full_sweep_mocks(extra=None):
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale
         "pr_for": MagicMock(return_value=None),  # no PR
+        # DRE-1993: the stranded-card watchdog runs on every full sweep and
+        # would make real Linear calls on these mocked cards; stub it out —
+        # these tests exercise the dead-run requeue, not the watchdog.
+        "flag_stranded": MagicMock(return_value=set()),
     }
     if extra:
         m.update(extra)

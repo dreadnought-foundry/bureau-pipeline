@@ -15,6 +15,12 @@ Checks (card must carry **Repo:** atlas, any owner-prefix form):
               capped by the shared dead-run cap (DRE-2034)
   In Review   stale >1h: PR merged -> Done; else re-trigger merge-gate
 
+Stranded-card watchdog (DRE-1993): every card/epic in Planning / Todo /
+In Progress whose repo has no route in the routing snapshot, or (this repo's
+cards) with no run receipt after 30 minutes, gets ONE plain-English comment
+naming the reason plus the needs-human label — the board must never say work
+is happening while nothing runs (DRE-1978 sat in Planning 7 days unseen).
+
 Also runs the dependency gate: Backlog children whose parent epic is ACTIVATED
 (= plan approved) are auto-promoted to Todo once every blocker is Done — blockers
 read from Linear's native "blocks" relations AND from "Blocked by: DRE-N" /
@@ -54,6 +60,7 @@ from datetime import UTC, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
+import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
@@ -107,6 +114,27 @@ _AGENT_COMMENT_PREFIXES = ("🤖", "🛑", "🧹", "🪦", "🚨", "🏁")
 RUN_MARKER = "🧠 model-attempt:"
 _RUN_ID = re.compile(r"/actions/runs/(\d+)\b")
 _LIFE_PREFIXES = ("⏳", "🧠")
+
+# Stranded-card watchdog (DRE-1993). A card/epic parked in an ACTIVE lane
+# with NO evidence any matching run ever started is invisible to every other
+# backstop: the board says work is happening while nothing runs. Live
+# incident: DRE-1978 sat in Planning for SEVEN DAYS with zero planner runs
+# (its repo label routed nowhere at the time) — the CEO found it by asking.
+# Budget blocks, quota exhaustion, relay outages, and any future off-map repo
+# all strand cards the same silent way. flag_stranded() below alarms on both
+# classes, ONCE per card (the WATCHDOG_TAG comment is the idempotency
+# marker), and adds HOLD_LABEL so the sweep stops re-dispatching into the
+# same wall. Planning is a watchdog-only lane: the nudge loop / WIP cap
+# below never see it (no STALE_MINUTES entry, no defined nudge).
+WATCHDOG_LANES = ("Planning", "Todo", "In Progress")
+WATCHDOG_MINUTES = int(os.environ.get("WATCHDOG_MINUTES", "30"))
+WATCHDOG_TAG = "stranded-watchdog"
+
+# The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
+# updatedAt every ~15-minute cycle, so a silently-failing dispatch loop never
+# LOOKS WATCHDOG_MINUTES stale — a prior receipt with still no proof-of-life
+# is the same evidence as the elapsed time: dispatch fired, nothing ran.
+_TODO_REDISPATCH_NOTE = "card sat in Todo with no run — re-dispatched"
 
 
 def held(card: dict) -> bool:
@@ -247,17 +275,94 @@ def age_minutes(iso: str) -> float:
     return (datetime.now(UTC) - then).total_seconds() / 60
 
 
-def active_cards() -> list[dict]:
+# The nudge loop's lanes — the pre-DRE-1993 sweep, byte-identical. The
+# watchdog passes WATCHDOG_LANES instead to also see Planning.
+SWEEP_STATES = ("Todo", "In Progress", "In QA", "In Review")
+
+
+def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     data = linear_ops.gql(
-        """query { issues(first: 100, filter: {
+        """query($states: [String!]!) { issues(first: 100, filter: {
              team: {key: {eq: "DRE"}},
-             state: {name: {in: ["Todo", "In Progress", "In QA", "In Review"]}}
+             state: {name: {in: $states}}
            }) { nodes {
              id identifier title description updatedAt
              state { name } labels { nodes { name } }
-           } } }"""
+           } } }""",
+        {"states": list(states)},
     )
     return data["issues"]["nodes"]
+
+
+def flag_stranded() -> set[str]:
+    """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
+
+    Two strand classes, checked over WATCHDOG_LANES on every full sweep:
+      (a) NO ROUTE — the card's repo slug is not in the routing snapshot
+          (validate_card.VALID_SLUGS, mirroring the relay's map), so no
+          dispatch can EVER start a run. Flagged within one sweep, however
+          fresh the card. Every repo's sweep checks this (an off-map card
+          belongs to no sweep's `mine`); the once-ever gate makes whichever
+          sweep gets there first the only one that speaks.
+      (b) NO RUN — a dispatchable card of THIS sweep's repo with zero run
+          receipts (the DRE-2032 🧠/⏳ proof-of-life comments; agent-task
+          and plan both post them at run start) after WATCHDOG_MINUTES —
+          or after a prior Todo-redispatch receipt, which resets updatedAt
+          every cycle and would otherwise hide the strand forever. A card
+          with ANY receipt started a run once (live or dead) and is never
+          flagged: started-then-died is the dead-run requeue's case.
+          Epics past Planning are containers — no run ever targets them,
+          so their receipt-less state is normal, not a strand.
+
+    Flagging = one plain-English comment (🚨 + WATCHDOG_TAG) naming the
+    reason, plus HOLD_LABEL — no state move, no cancel. A false positive
+    (e.g. a run queued 30+ minutes behind a runner-capacity crunch, which
+    posts no receipt until it starts) costs a label a human removes; the
+    run itself is untouched. Fail loud beats fail silent (DRE-1979).
+
+    Returns the identifiers flagged THIS sweep so the caller's nudge loop
+    can skip them — their fetched labels predate the hold label.
+    """
+    flagged: set[str] = set()
+    for card in active_cards(WATCHDOG_LANES):
+        ident, state = card["identifier"], card["state"]["name"]
+        if held(card):
+            continue  # already in a human's queue — never spam
+        slug = card_repo(card)
+        routable = slug is not None and slug in validate_card.VALID_SLUGS
+        if routable and slug != REPO_SLUG:
+            continue  # that repo's own sweep runs the no-run check for its cards
+        labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
+        if routable and state != "Planning" and "agent:planner" in labels:
+            continue  # an epic past Planning carries no run — normal, not stranded
+        bodies = linear_ops.comment_bodies(ident)
+        if any(WATCHDOG_TAG in b for b in bodies):
+            continue  # flagged once already — idempotent forever
+        if routable:
+            if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
+                continue  # a run DID start — the dead-run machinery owns it now
+            redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
+            if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
+                continue  # young — give the dispatch time to start a run
+            reason = (
+                f"no agent run has started after {WATCHDOG_MINUTES}+ minutes in "
+                f"{state} (no run receipts on the card) — check the GitHub Actions "
+                "budget, the LLM quota, and the relay. If a run is merely queued, "
+                f"remove the '{HOLD_LABEL}' label; otherwise this card needs a "
+                "human to unblock the pipeline."
+            )
+        else:
+            reason = (
+                f"repo '{slug or 'none — no repo label'}' isn't on the dispatch "
+                "rail — no agent can ever pick this card up, so it must be "
+                "hand-built (or the repo onboarded to the routing map first). "
+                f"Labeled '{HOLD_LABEL}' for a human."
+            )
+        linear_ops.cmd_comment(ident, f"🚨 {WATCHDOG_TAG}: {reason}")
+        linear_ops.add_label(ident, HOLD_LABEL)
+        flagged.add(ident)
+        print(f"watchdog: {ident} in {state} flagged ({'no-run' if routable else 'no-route'})")
+    return flagged
 
 
 def pr_for(identifier: str) -> dict | None:
@@ -954,6 +1059,7 @@ def main(
         print(f"close-only: epic close evaluated ({len(epics)} active epic(s))")
         return
     nudges = 0
+    flagged: set[str] = set()
     if not promote_only:
         # Backstops run independently: one failing must not silence the
         # others, but every write failure is recorded and fails the run.
@@ -968,6 +1074,10 @@ def main(
             except ReconcileWriteError as e:
                 _write_failures.append(str(e))
                 print(f"ERROR: {backstop.__name__}: {e}", file=sys.stderr)
+        # Stranded-card watchdog (DRE-1993) — BEFORE the nudge loop, so a
+        # card flagged this very sweep is skipped below (its fetched labels
+        # predate the hold label the watchdog just added).
+        flagged = flag_stranded()
     mine = [c for c in active_cards() if card_repo(c) == REPO_SLUG]
     epics = repo_epics(mine)
     if not promote_only:
@@ -983,7 +1093,7 @@ def main(
         return
     for card in mine:
         ident, state = card["identifier"], card["state"]["name"]
-        if held(card):
+        if held(card) or ident in flagged:
             continue  # human-hold: untouched until a human removes the label
         if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
             continue
@@ -1007,10 +1117,10 @@ def main(
         elif state == "Todo" and not is_open:
             # The receipt follows the dispatch's REAL outcome: a 🧹 success
             # receipt on a 403'd dispatch is the DRE-1254 false-receipt class.
+            # The success note is _TODO_REDISPATCH_NOTE so the watchdog's
+            # prior-redispatch detection (see flag_stranded) still matches it.
             if redispatch(card):
-                linear_ops.cmd_comment(
-                    ident, "🧹 Reconcile: card sat in Todo with no run — re-dispatched."
-                )
+                linear_ops.cmd_comment(ident, f"🧹 Reconcile: {_TODO_REDISPATCH_NOTE}.")
             else:
                 linear_ops.cmd_comment(
                     ident,
