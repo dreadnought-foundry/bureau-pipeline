@@ -29,12 +29,14 @@ class ConflictsOnlyModeTest(unittest.TestCase):
         with mock.patch.object(reconcile, "unstick_conflicts") as unstick, \
              mock.patch.object(reconcile, "retrigger_dead_heads") as dead_heads, \
              mock.patch.object(reconcile, "fix_approved_but_red") as approved_red, \
+             mock.patch.object(reconcile, "retry_outage_fixes") as outage, \
              mock.patch.object(reconcile, "active_cards") as cards, \
              mock.patch.object(reconcile, "promote_ready") as promote:
             reconcile.main(conflicts_only=True)
         unstick.assert_called_once_with()
         dead_heads.assert_not_called()
         approved_red.assert_not_called()
+        outage.assert_not_called()
         cards.assert_not_called()
         promote.assert_not_called()
 
@@ -52,6 +54,7 @@ class ConflictsOnlyModeTest(unittest.TestCase):
         with mock.patch.object(reconcile, "unstick_conflicts") as unstick, \
              mock.patch.object(reconcile, "retrigger_dead_heads") as dead_heads, \
              mock.patch.object(reconcile, "fix_approved_but_red") as approved_red, \
+             mock.patch.object(reconcile, "retry_outage_fixes"), \
              mock.patch.object(reconcile, "active_cards", return_value=[]) as cards, \
              mock.patch.object(reconcile, "promote_ready") as promote, \
              mock.patch.object(reconcile, "backlog_children", return_value=[]):
