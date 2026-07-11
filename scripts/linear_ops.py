@@ -52,6 +52,16 @@ import urllib.request
 API = "https://api.linear.app/graphql"
 
 
+class LinearError(RuntimeError):
+    """A Linear API/reference error (errors payload, unknown state, rejected
+    sub-issue). A REAL exception — never SystemExit — so library callers can
+    isolate a failure to one card instead of dying wholesale: SystemExit
+    subclasses BaseException and sailed past every `except Exception` in the
+    reconcile sweep, letting one typo'd blocker reference kill the entire
+    sweep every run (DRE-2035). The CLI __main__ converts it to a nonzero
+    exit explicitly at top level, so command-line behavior is unchanged."""
+
+
 def gql(query: str, variables: dict | None = None) -> dict:
     req = urllib.request.Request(
         API,
@@ -65,7 +75,7 @@ def gql(query: str, variables: dict | None = None) -> dict:
     with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
         out = json.loads(resp.read())
     if out.get("errors"):
-        raise SystemExit(f"linear error: {out['errors']}")
+        raise LinearError(f"linear error: {out['errors']}")
     return out["data"]
 
 
@@ -98,7 +108,7 @@ def state_id_and_type(team_id: str, name: str) -> tuple[str, str]:
     for node in data["workflowStates"]["nodes"]:
         if node["name"].lower() == name.lower():
             return node["id"], node["type"]
-    raise SystemExit(f"no state named {name!r} on team")
+    raise LinearError(f"no state named {name!r} on team")
 
 
 # Linear lifecycle buckets that mean "this card is finished, do not reopen it".
@@ -407,7 +417,7 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # --- GUARD before creating: reject a broken child, do NOT create it. ---
     problem = body_problem(description)
     if problem is not None:
-        raise SystemExit(
+        raise LinearError(
             f"subissue REJECTED ({title!r}): {problem}. "
             "Re-draft the card with real contents (not a path) and retry."
         )
@@ -419,7 +429,7 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
 
     gaps = validate_card.missing(description, child_labels, require_initiative=True)
     if gaps:
-        raise SystemExit(
+        raise LinearError(
             f"subissue REJECTED ({title!r}): child fails validate_card — missing "
             + ", ".join(gaps)
             + ". The parent epic must carry a repo:<slug> label AND an "
@@ -638,17 +648,22 @@ def cmd_description(identifier: str) -> None:
 
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
-    {
-        "state": cmd_state,
-        "advance": cmd_advance,
-        "comment": cmd_comment,
-        "set-description": set_description,
-        "subissue": cmd_subissue,
-        "create": cmd_create,
-        "children": cmd_children,
-        "count-comments": cmd_count_comments,
-        "dump-comments": cmd_dump_comments,
-        "add-label": add_label,
-        "remove-label": remove_label,
-        "description": cmd_description,
-    }[cmd](*args)
+    try:
+        {
+            "state": cmd_state,
+            "advance": cmd_advance,
+            "comment": cmd_comment,
+            "set-description": set_description,
+            "subissue": cmd_subissue,
+            "create": cmd_create,
+            "children": cmd_children,
+            "count-comments": cmd_count_comments,
+            "dump-comments": cmd_dump_comments,
+            "add-label": add_label,
+            "remove-label": remove_label,
+            "description": cmd_description,
+        }[cmd](*args)
+    except LinearError as e:
+        # The ONLY process abort: explicit, at top level, CLI-only. Library
+        # importers (reconcile above all) get a catchable exception instead.
+        sys.exit(str(e))

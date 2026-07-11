@@ -88,6 +88,17 @@ HOLD_LABEL = "needs-human"
 DEAD_TAG = "dead-run-requeue"
 REQUEUE_CAP = int(os.environ.get("DEAD_RUN_CAP", "2"))
 
+# Per-card isolation for the dependency gate (DRE-2035). One bad "Blocked by:"
+# reference used to kill the WHOLE sweep: card_state() on a nonexistent id made
+# linear_ops raise SystemExit, which sails past every `except Exception`
+# (BaseException subclass) — promotion, nudges, and the dead-run machinery all
+# died every run until a human found the offending card. linear_ops now raises
+# LinearError instead, and the gate SKIPS just the unevaluable card: a loud
+# ERROR line, ONE explanatory comment on the card (keyed on this tag, like
+# DEAD_TAG), a sweep-level skip count — and the rest of the sweep proceeds.
+BAD_REF_TAG = "unresolvable-blocker-reference"
+_card_skips: list[str] = []
+
 # Engineer-blocker guard (DRE-1585). When the engineer agent hits a genuine,
 # deterministic blocker it posts this exact marker (see agent-task.yml) and
 # parks the card back in Backlog ON PURPOSE — re-dispatching would walk the
@@ -666,7 +677,18 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
         if blocker in relation_blockers:
             return True  # relation blocker, already known non-terminal
         # A description-line blocker ("Blocked by: DRE-N"): state unknown, fetch.
-        if card_state(blocker) not in ("Done", "Canceled", "Duplicate"):
+        try:
+            state = card_state(blocker)
+        except linear_ops.LinearError as e:
+            # A reference that doesn't resolve (typo'd id) must not kill the
+            # sweep (DRE-2035) — same fail-safe as unreadable relation data:
+            # treat the epic as blocked, loudly, and keep sweeping.
+            print(
+                f"epic-gate: blocker reference {blocker} on {epic_identifier} "
+                f"doesn't resolve ({e}) — treating epic as blocked"
+            )
+            return True
+        if state not in ("Done", "Canceled", "Duplicate"):
             return True
     return False
 
@@ -742,6 +764,31 @@ def has_unresolved_blocker(card: dict) -> bool:
     return False  # no blocker marker on the card at all
 
 
+def skip_bad_reference(identifier: str, err: Exception) -> None:
+    """Record a card the gate could not evaluate (a blocker reference that
+    doesn't resolve, or any other per-card Linear failure): a loud ERROR line,
+    the sweep-level skip counter, and ONE plain-English comment on the card
+    across repeated sweeps (keyed on BAD_REF_TAG, the DEAD_TAG pattern).
+    Reporting must never kill the sweep, so the comment path is itself guarded
+    (DRE-2035)."""
+    _card_skips.append(f"{identifier}: {err}")
+    print(
+        f"ERROR: {identifier} skipped — blocker reference doesn't resolve: {err}",
+        file=sys.stderr,
+    )
+    try:
+        if linear_ops.count_comments(identifier, BAD_REF_TAG) == 0:
+            linear_ops.cmd_comment(
+                identifier,
+                f"🚨 {BAD_REF_TAG}: a blocker reference on this card doesn't "
+                "resolve in Linear (likely a typo'd card id on a blocker "
+                "line) — fix the reference. The reconcile sweep skips this "
+                "card until then; the rest of the fleet is unaffected.",
+            )
+    except Exception as e:  # noqa: BLE001 — reporting never blocks the sweep
+        print(f"ERROR: could not post skip comment on {identifier}: {e}", file=sys.stderr)
+
+
 def promote_ready(active_count: int) -> int:
     """Auto-promote Backlog children whose blockers are all Done."""
     budget = MAX_WIP - active_count
@@ -766,40 +813,74 @@ def promote_ready(active_count: int) -> int:
         parent = card.get("parent")
         if not parent or parent["state"]["name"] not in EPIC_ACTIVE_STATES:
             continue  # parent epic not approved/active (Todo or In Progress; DRE-1893)
-        # Epic-level gate (DRE-1772): even an active (plan-approved) epic must
-        # not start its children while the epic itself is blocked-by a
-        # prerequisite epic that has not shipped. Composes with the card-level
-        # gate, MAX_WIP, and the DRE-1585 agent-blocker guard below.
-        epic_id = parent["identifier"]
-        if epic_id not in epic_gate:
-            epic_gate[epic_id] = epic_blockers_unmet(epic_id)
-        if epic_gate[epic_id]:
+        # Per-card isolation (DRE-2035): everything from here on reads Linear
+        # per THIS card — a blocker reference that doesn't resolve raises
+        # LinearError, which must skip this one card (loudly, with a one-time
+        # comment), never kill the gate for the rest of the fleet.
+        # The read-guard covers ONLY the gate-evaluation reads: a LinearError
+        # here means a blocker reference doesn't resolve, so this one card is
+        # skipped as unevaluable (DRE-2035). The mutations that follow are
+        # DELIBERATELY outside it — a write failure there is a write failure,
+        # not a bad reference, and must not stamp the card with a false
+        # "reference doesn't resolve" diagnostic (critic PR #89).
+        try:
+            # Epic-level gate (DRE-1772): even an active (plan-approved) epic
+            # must not start its children while the epic itself is blocked-by a
+            # prerequisite epic that has not shipped. Composes with the
+            # card-level gate, MAX_WIP, and the DRE-1585 agent-blocker guard
+            # below.
+            epic_id = parent["identifier"]
+            if epic_id not in epic_gate:
+                epic_gate[epic_id] = epic_blockers_unmet(epic_id)
+            if epic_gate[epic_id]:
+                print(
+                    f"promotion: {card['identifier']}'s epic {epic_id} is blocked by "
+                    "an unfinished epic — skipping"
+                )
+                continue
+            unmet = {
+                b for b in blockers_of(card) if card_state(b) not in ("Done", "Canceled", "Duplicate")
+            }
+            if unmet:
+                continue
+            # Formal blockers are clear, but the engineer may have parked this card
+            # on a *deterministic* blocker it flagged itself (DRE-1585). Re-promoting
+            # would redispatch it straight back into the same wall — exactly the
+            # five-run loop DRE-1572 hit. Skip until a human resolves it (a human
+            # comment after the blocker marker, or the human clears it some other way
+            # and the card leaves Backlog).
+            if has_unresolved_blocker(card):
+                print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
+                continue
+        except linear_ops.LinearError as e:
+            skip_bad_reference(card["identifier"], e)
+            continue
+        # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
+        # bad reference: record it on the existing _write_failures path (fails
+        # the run red for medic) instead of the bad-reference diagnostic.
+        try:
+            linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
+            linear_ops.cmd_comment(
+                card["identifier"],
+                "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done.",
+            )
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{card['identifier']} advance/comment: {e}")
             print(
-                f"promotion: {card['identifier']}'s epic {epic_id} is blocked by "
-                "an unfinished epic — skipping"
+                f"ERROR: failed to advance/comment on {card['identifier']}: {e}",
+                file=sys.stderr,
             )
             continue
-        unmet = {
-            b for b in blockers_of(card) if card_state(b) not in ("Done", "Canceled", "Duplicate")
-        }
-        if unmet:
-            continue
-        # Formal blockers are clear, but the engineer may have parked this card
-        # on a *deterministic* blocker it flagged itself (DRE-1585). Re-promoting
-        # would redispatch it straight back into the same wall — exactly the
-        # five-run loop DRE-1572 hit. Skip until a human resolves it (a human
-        # comment after the blocker marker, or the human clears it some other way
-        # and the card leaves Backlog).
-        if has_unresolved_blocker(card):
-            print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
-            continue
-        linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
-        linear_ops.cmd_comment(
-            card["identifier"],
-            "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done.",
-        )
         promoted += 1
     print(f"promotion: {promoted} card(s) promoted (WIP {active_count}+{promoted}/{MAX_WIP})")
+    if _card_skips:
+        # A red pattern the run log can't miss (DRE-2035) — pairs with the
+        # per-card ERROR lines above; the sweep itself stays alive and green.
+        print(
+            f"promotion: {len(_card_skips)} card(s) SKIPPED on unresolvable "
+            "blocker references — see ERROR lines above",
+            file=sys.stderr,
+        )
     return promoted
 
 
