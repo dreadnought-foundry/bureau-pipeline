@@ -172,7 +172,12 @@ def test_in_qa_nudge_dispatches_the_selfhost_stub():
         "labels": {"nodes": [{"name": "agent:engineer"}]},
         "updatedAt": "2026-07-11T00:00:00Z",
     }
-    pr = _pr(branch="agent/DRE-2047-dependabot-review-dispatch", author="agent-bureau-bot")
+    # main()'s nudge loop also reads the PR's open/merged state (a field the
+    # dependabot backstop never needs — its listing is pre-filtered to open).
+    pr = {
+        **_pr(branch="agent/DRE-2047-dependabot-review-dispatch", author="agent-bureau-bot"),
+        "state": "OPEN",
+    }
     mocks = {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),

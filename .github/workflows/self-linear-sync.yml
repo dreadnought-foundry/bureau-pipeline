@@ -13,5 +13,13 @@ permissions:
 
 jobs:
   call:
+    # DEPENDABOT (DRE-2047): dependabot closes its own superseded PRs, and a
+    # dependabot-actor'd run gets the EMPTY Dependabot secrets store — the
+    # reusable would die at required-secret validation with zero steps (the
+    # pr-review.yml failure class). Nothing is lost by skipping: a dependabot
+    # PR has no Linear card to sync, and a close-without-merge conflicts no
+    # sibling branches. Merges are performed by the qa-bot, whose closed
+    # event runs with normal secrets.
+    if: github.actor != 'dependabot[bot]'
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/linear-sync.yml@main
     secrets: inherit

@@ -257,6 +257,19 @@ def _nudge(workflow: str, pr_number: int) -> bool:
         return False
 
 
+def review_workflow() -> str:
+    """The DISPATCHABLE critic stub's filename for this sweep's repo.
+
+    Product repos name their qa-review stub qa-review.yml. bureau-pipeline
+    itself can't: that filename IS the reusable definition (workflow_call
+    only — `gh workflow run qa-review.yml` 422s there), so its stub is
+    pr-review.yml (test_self_host_stubs.py). Every review dispatch in this
+    sweep must resolve through here or the self-host repo's re-reviews and
+    dependabot reviews (DRE-2047) silently never fire.
+    """
+    return "pr-review.yml" if REPO_SLUG == "bureau-pipeline" else "qa-review.yml"
+
+
 def card_repo_slug(description: str) -> str | None:
     stripped = re.sub(r"```.*?```", "", description or "", flags=re.DOTALL)
     m = re.search(r"^\*\*Repo:\*\*\s*([a-z0-9._/-]+)\s*$", stripped, re.MULTILINE | re.IGNORECASE)
@@ -1144,6 +1157,107 @@ def retry_dead_fix_runs() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
+# Dependabot review routing (DRE-2047). A workflow run triggered by
+# dependabot[bot]'s pull_request events receives GitHub's separate Dependabot
+# secrets store — EMPTY for us — plus a read-only token, so the critic stub's
+# `secrets: inherit` passes nothing and the reusable dies at required-secret
+# validation with ZERO steps (bp PRs #93–#96, run 29168433294). The stub now
+# SKIPS that doomed run; THIS backstop is the real review path. Same branch/
+# author discipline as merge_gate.py's condition D.
+DEPENDABOT_BRANCH_PREFIX = "dependabot/"
+DEPENDABOT_DISPATCH_TAG = "dependabot-review-dispatch"
+
+
+def is_dependabot_pr(pr: dict) -> bool:
+    """True iff the PR is on a dependabot-named branch AND authored by
+    dependabot[bot]. gh's PR listings surface a Bot author's login variously
+    as "dependabot" (GraphQL), "dependabot[bot]" (REST shape) or
+    "app/dependabot" (gh's bot marker) — normalize all three. A human's
+    branch merely NAMED dependabot/... is not dependabot's: its
+    pull_request events run with normal secrets, so the event-driven review
+    already works and a sweep dispatch would double-review it."""
+    if not (pr.get("headRefName") or "").startswith(DEPENDABOT_BRANCH_PREFIX):
+        return False
+    login = (pr.get("author") or {}).get("login") or ""
+    return login.removeprefix("app/").removesuffix("[bot]") == "dependabot"
+
+
+def dependabot_dispatch_receipt(pr: dict) -> bool:
+    """True iff a WORKER-BOT receipt already covers the PR's current head —
+    the once-per-sha bound. Forged receipts by other authors are invisible
+    (DRE-1998 discipline): the worst a forger achieves is one extra review,
+    never a suppressed one."""
+    sha = pr.get("headRefOid") or ""
+    return bool(sha) and any(
+        DEPENDABOT_DISPATCH_TAG in (c.get("body") or "") and sha in (c.get("body") or "")
+        for c in pr.get("comments", [])
+        if is_worker_bot_comment(c)
+    )
+
+
+def _post_dependabot_receipt(pr: dict) -> None:
+    """Post the once-per-sha dispatch receipt on the PR (as the worker bot —
+    the sweep's default GH_TOKEN). A failed post is recorded, not raised:
+    the dispatch DID happen; the next sweep merely re-dispatches one extra
+    review, and the red run tells medic why."""
+    body = (
+        f"🔁 {DEPENDABOT_DISPATCH_TAG} @{pr['headRefOid']}: dependabot-triggered "
+        "pull_request runs get GitHub's empty Dependabot secrets store, so the "
+        "reconcile sweep dispatched the critic via workflow_dispatch instead "
+        "(DRE-2047). One dispatch per head sha — a rebase re-arms."
+    )
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", "pr", "comment", str(pr["number"]), "--repo", REPO, "--body", body],
+        capture_output=True, text=True, check=False,
+    )
+    if p.returncode != 0:
+        err = (
+            f"dependabot receipt on PR #{pr['number']} failed "
+            f"rc={p.returncode}: {p.stderr.strip()[:400]}"
+        )
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+
+
+def review_dependabot_prs() -> None:
+    """DRE-2047: dispatch the critic for dependabot PRs — their own
+    pull_request events can never produce a review (empty Dependabot secrets
+    store; the stub skips those doomed runs), and with no Linear card the
+    In QA nudges never see them either. workflow_dispatch runs with full
+    secrets against the PR ref — deliberately NOT pull_request_target, which
+    would attach secrets to a checkout of untrusted head code.
+
+    Every open dependabot-authored PR whose CURRENT head has no sha-bound
+    verdict gets ONE dispatch, bounded per head sha by the worker-bot
+    receipt (a crashed critic run must not re-dispatch every sweep; a
+    rebase changes the sha and re-arms). All eligible PRs dispatch in one
+    sweep — dependabot arrives in batches, and the acceptance is a verdict
+    within one sweep, not one PR per sweep. DIRTY PRs are skipped:
+    dependabot rebases its own conflicts, which re-arms the new head."""
+    prs = json.loads(gh(
+        "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+        "--json", "number,headRefName,headRefOid,author,mergeStateStatus,comments",
+    ) or "[]")
+    for pr in prs:
+        if not is_dependabot_pr(pr):
+            continue
+        if pr.get("mergeStateStatus") == "DIRTY":
+            print(f"dependabot: PR #{pr['number']} is DIRTY — dependabot's own "
+                  "rebase will re-arm the new head")
+            continue
+        if not pr.get("headRefOid"):
+            continue  # no sha to bind a receipt to — retry next sweep
+        if has_verdict(pr) or dependabot_dispatch_receipt(pr):
+            continue
+        print(
+            f"dependabot: PR #{pr['number']} head {pr['headRefOid'][:8]} has no "
+            f"bound verdict — its pull_request review runs are doomed (empty "
+            f"Dependabot secrets store), dispatching {review_workflow()}"
+        )
+        if _nudge(review_workflow(), pr["number"]):
+            _post_dependabot_receipt(pr)
+
+
 def repo_epics(active: list[dict]) -> set[str]:
     """Identifiers of THIS repo's active epics (agent:planner cards).
 
@@ -1210,6 +1324,7 @@ def main(
             retrigger_dead_heads,
             fix_approved_but_red,
             retry_dead_fix_runs,
+            review_dependabot_prs,
         ):
             try:
                 backstop()
@@ -1273,7 +1388,7 @@ def main(
         elif state == "In Progress":
             if is_open:
                 linear_ops.cmd_advance(ident, "In QA", "In Progress")
-                if _nudge("qa-review.yml", pr["number"]):
+                if _nudge(review_workflow(), pr["number"]):
                     linear_ops.cmd_comment(
                         ident,
                         "🧹 Reconcile: PR exists but card was stuck In Progress — advanced to In QA, critic re-triggered.",
@@ -1323,7 +1438,10 @@ def main(
                         "🧹 Reconcile: verdict present but merge never happened — merge gate re-triggered.",
                     )
             else:
-                if _nudge("qa-review.yml", pr["number"]):
+                # review_workflow(), not a hardcoded qa-review.yml: in the
+                # self-host repo that filename is the reusable and the
+                # dispatch would 422 silently into _write_failures (DRE-2047).
+                if _nudge(review_workflow(), pr["number"]):
                     linear_ops.cmd_comment(
                         ident, "🧹 Reconcile: no critic verdict after 2h — review re-triggered."
                     )
