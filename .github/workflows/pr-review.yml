@@ -41,5 +41,14 @@ permissions:
 
 jobs:
   call:
+    # DEPENDABOT (DRE-2047): a pull_request run triggered by dependabot[bot]
+    # receives GitHub's separate Dependabot secrets store (empty for us) plus
+    # a read-only token — `secrets: inherit` passes nothing and the reusable
+    # dies at required-secret validation with ZERO steps (PRs #93–#96, run
+    # 29168433294). Skip that doomed run here, at the only point early
+    # enough; the reconcile sweep dispatches the REAL review for dependabot
+    # PRs via workflow_dispatch below (full secrets, reviewing the PR ref —
+    # never pull_request_target against untrusted code).
+    if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/qa-review.yml@main
     secrets: inherit
