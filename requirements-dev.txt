@@ -1,0 +1,6 @@
+# CI test toolchain — the pip manifest Dependabot watches (DRE-2039).
+# ==-pinned on purpose: Dependabot maintains pins (minors/patches grouped
+# and auto-merged, majors human-merged); tests.yml installs from this file
+# so a bump PR's green run actually exercises the bumped version.
+pytest==9.1.1
+PyYAML==6.0.1

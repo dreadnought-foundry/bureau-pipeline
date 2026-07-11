@@ -10,6 +10,24 @@ no agent claims trusted, no human in the loop.
 
 The conditions (all must pass, evaluated in this order):
 
+D. DEPENDABOT POLICY (DRE-2039) — evaluated FIRST, and only for
+   `dependabot/**` heads: minors/patches ride the normal gate below,
+   majors are human-merged. The PR is gate-mergeable only if it is
+   PROVABLY all-minor/patch, read deterministically from Dependabot's
+   own per-dependency metadata — the
+   `update-type: version-update:semver-<major|minor|patch>` lines it
+   embeds verbatim in every commit message (the record
+   dependabot/fetch-metadata parses; grouped PRs carry one line per
+   updated dependency). Any semver-major, a missing/indeterminate
+   signal, or a `dependabot/**` branch whose PR author is not
+   dependabot[bot] (commit messages are author-controlled; GitHub
+   reserves the [bot] suffix, so the author record can't be forged) is
+   decision `human`: the workflow posts the honest "waiting for human
+   merge" state once and does nothing — no future CI/verdict event
+   changes the answer, so the gate must neither wait on nor mutate
+   (update-branch) a human-owned PR, which is why this runs before
+   condition 0.
+
 0. BRANCH CURRENCY (DRE-1924) — the PR's head must contain its base
    branch's tip, per GitHub's own compare record (GET
    compare/{base}...{head_sha}, status ahead/identical). A stale branch
@@ -92,18 +110,26 @@ Contract with merge-gate.yml:
     record for the review-run exclusion), --compare-file (the status of
     GET /repos/{repo}/compare/{base}...{head_sha} — the branch-currency
     record, DRE-1924), --review-workflows (optional comma-separated
-    allowlist of review workflow paths).
+    allowlist of review workflow paths), --head-ref / --pr-author /
+    --pr-commits-file (the dependabot-policy record, DRE-2039: the PR's
+    head branch, its author per GitHub's REST user.login, and the raw
+    payload of GET pulls/{pr}/commits — all optional; on a dependabot/**
+    head their absence fails closed to `human`).
   stdout: zero or more `note=` lines, then exactly one `decision=` line
-    (merge | update | wait | hold) and one `reason=` line (plain English).
+    (merge | update | wait | hold | human) and one `reason=` line (plain
+    English).
   exit 0 = decided; exit 2 = malformed input (the job fails loudly and
     nothing merges — never fail open).
 
-wait vs hold vs update: `wait` means the gate expects a future event to
-change the answer (CI finishing, a fresh review of the current head);
-`hold` means an explicit negative verdict is standing (REQUEST_CHANGES,
-Verifier FAIL) and only a new verdict lifts it; `update` means the branch
-is stale and the workflow should update it from its base (CI then re-runs
-on the merged result). None of the three merges.
+wait vs hold vs update vs human: `wait` means the gate expects a future
+event to change the answer (CI finishing, a fresh review of the current
+head); `hold` means an explicit negative verdict is standing
+(REQUEST_CHANGES, Verifier FAIL) and only a new verdict lifts it; `update`
+means the branch is stale and the workflow should update it from its base
+(CI then re-runs on the merged result); `human` means the PR is outside
+the gate's mandate entirely (a Dependabot major, DRE-2039) — the workflow
+posts the honest waiting-for-human state once and leaves the PR alone.
+None of the four merges.
 """
 
 from __future__ import annotations
@@ -135,6 +161,21 @@ GREEN_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
 CURRENT_STATUSES = frozenset({"ahead", "identical"})
 STALE_STATUSES = frozenset({"behind", "diverged"})
 
+# Dependabot policy (DRE-2039): applies only to Dependabot's own branches,
+# authored by its GitHub-reserved App login (the [bot] suffix cannot be
+# taken by a user account, so the PR's user.login is an unforgeable record).
+DEPENDABOT_PREFIX = "dependabot/"
+DEPENDABOT_LOGIN = "dependabot[bot]"
+
+# Dependabot's per-dependency semver signal, embedded verbatim in its commit
+# messages inside the `updated-dependencies` YAML block — the same record
+# dependabot/fetch-metadata parses. One line per updated dependency, so a
+# grouped PR yields one match per member.
+_UPDATE_TYPE_RE = re.compile(
+    r"^\s*update-type:\s*[\"']?version-update:semver-(major|minor|patch)[\"']?\s*$",
+    re.M,
+)
+
 # A full 40-hex SHA anywhere on the verdict line (`@<sha>`), as the
 # producers append it. Abbreviated SHAs deliberately do not bind.
 _SHA_RE = re.compile(r"@([0-9a-f]{40})")
@@ -159,7 +200,7 @@ def _verdict_re(marker: str) -> re.Pattern:
 
 @dataclass
 class Decision:
-    action: str  # merge | wait | hold
+    action: str  # merge | update | wait | hold | human
     reason: str
     notes: list = field(default_factory=list)
 
@@ -213,6 +254,48 @@ def review_suite_ids(workflow_runs, review_workflows) -> frozenset:
         if r.get("path") in review_workflows
         and r.get("check_suite_id") is not None
     )
+
+
+def dependabot_update_types(pr_commits) -> list:
+    """Every per-dependency semver update-type in the PR's commit messages
+    (`major`/`minor`/`patch`), in order. `pr_commits` is the raw payload of
+    GET pulls/{pr}/commits."""
+    types = []
+    for c in pr_commits:
+        message = ((c.get("commit") or {}).get("message")) or ""
+        types.extend(_UPDATE_TYPE_RE.findall(message))
+    return types
+
+
+def evaluate_dependabot(head_ref, pr_author, pr_commits) -> Optional[Decision]:
+    """Condition D (DRE-2039). None = not a dependabot/** head, or provably
+    all-minor/patch — the normal gate conditions then apply unchanged.
+    Everything else is `human`: the PR is Dependabot-shaped but not the
+    gate's to merge, and no future CI/verdict event changes that — the
+    workflow posts the honest waiting-for-human state and does nothing."""
+    if not (head_ref or "").startswith(DEPENDABOT_PREFIX):
+        return None
+    if pr_author != DEPENDABOT_LOGIN:
+        return Decision(
+            "human",
+            f"dependabot/** head authored by {pr_author or 'unknown'!r}, not "
+            f"{DEPENDABOT_LOGIN} — the semver metadata only counts on "
+            "Dependabot's own PRs; waiting for human merge",
+        )
+    update_types = dependabot_update_types(pr_commits)
+    if not update_types:
+        return Decision(
+            "human",
+            "no deterministic semver signal (update-type metadata) in the "
+            "PR's commits — cannot prove minor/patch; waiting for human merge",
+        )
+    if "major" in update_types:
+        return Decision(
+            "human",
+            "major version bump — Dependabot majors are human-merged; "
+            "waiting for human merge",
+        )
+    return None
 
 
 def evaluate_currency(compare_status) -> Optional[Decision]:
@@ -326,12 +409,22 @@ def decide(
     comments,
     review_suites=frozenset(),
     compare_status=None,
+    head_ref="",
+    pr_author="",
+    pr_commits=(),
 ) -> Decision:
-    """The whole gate: conditions 0 → 1 → 2 → 3, first blocker wins.
+    """The whole gate: conditions D → 0 → 1 → 2 → 3, first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
     `compare_status` is the branch-currency record (DRE-1924); the default
-    (None — unverifiable → wait) is likewise fail-closed."""
+    (None — unverifiable → wait) is likewise fail-closed. `head_ref` /
+    `pr_author` / `pr_commits` are the dependabot-policy record (DRE-2039);
+    the defaults leave non-dependabot heads untouched, and on a
+    dependabot/** head an empty record fails closed to `human`."""
+    blocked = evaluate_dependabot(head_ref, pr_author, pr_commits)
+    if blocked:
+        return blocked
+
     blocked = evaluate_currency(compare_status)
     if blocked:
         return blocked
@@ -381,6 +474,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="comma-separated paths of the review workflow "
                              "files whose check runs are excluded from the "
                              "all-green rule")
+    parser.add_argument("--head-ref", default="",
+                        help="the PR's head branch name — the dependabot "
+                             "policy (DRE-2039) keys on the dependabot/** "
+                             "prefix; empty = policy not applicable")
+    parser.add_argument("--pr-author", default="",
+                        help="the PR author's login per GitHub's REST "
+                             "user.login (keeps the [bot] suffix)")
+    parser.add_argument("--pr-commits-file", default=None,
+                        help="raw REST payload of GET pulls/{pr}/commits — "
+                             "carries Dependabot's per-dependency update-type "
+                             "metadata; omitted/empty fails closed on a "
+                             "dependabot/** head")
     return parser
 
 
@@ -441,9 +546,24 @@ def main(argv=None) -> int:
     # `{}` (the workflow's blip substitute) yields None → wait, fail-closed.
     compare_status = payload.get("status")
 
+    # Dependabot-policy record (DRE-2039). Optional: absent, a dependabot/**
+    # head fails closed to `human` inside evaluate_dependabot; malformed,
+    # fail loud like every other input.
+    pr_commits = []
+    if args.pr_commits_file:
+        try:
+            with open(args.pr_commits_file) as f:
+                pr_commits = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            _die(f"cannot read PR commits: {e}")
+        if not isinstance(pr_commits, list):
+            _die("pr-commits payload is not a list")
+
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status,
+        head_ref=args.head_ref, pr_author=args.pr_author,
+        pr_commits=pr_commits,
     )
     for note in decision.notes:
         print(f"note={note}")

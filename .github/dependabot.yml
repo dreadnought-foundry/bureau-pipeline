@@ -1,0 +1,38 @@
+# Dependabot for bureau-pipeline itself (DRE-2039) — dependency PRs ride the
+# same rail as agent PRs: qa-review's critic reviews them (its allowed_bots
+# admits dependabot) and the merge gate auto-merges ONLY what is provably
+# minor/patch per Dependabot's own update-type commit metadata
+# (scripts/merge_gate.py evaluate_dependabot). The grouping below SHAPES the
+# PRs to match that policy: minor+patch grouped per ecosystem (one
+# gate-mergeable PR a week), majors left OUTSIDE every group so each arrives
+# as its own PR and waits for a human merge.
+#
+# Stable-only defaults, documented: Dependabot never proposes a pre-release
+# unless a manifest already tracks one — requirements-dev.txt pins stable
+# releases and the workflows pin stable action tags, so every proposed bump
+# is a stable version; no ignore rules are needed for that.
+#
+# Guarded by tests/test_dependabot_config.py — a config edit that groups
+# majors in, drops an ecosystem, or leaves the weekly cadence is a red diff.
+version: 2
+updates:
+  # The CI test toolchain (requirements-dev.txt — the manifest tests.yml
+  # installs from, so a bumped PR's green actually exercises the bump).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      pip-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  # Action tags across .github/workflows/*.yml.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]

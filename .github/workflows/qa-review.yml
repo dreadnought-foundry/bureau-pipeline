@@ -55,6 +55,9 @@ jobs:
     #   • repair/<failing-sha>        — red-main auto-repair PRs (DRE-1927):
     #     cardless agent fixes to a broken main; the critic gets a repair
     #     context block (original failing log + test-touch flag) below.
+    #   • dependabot/**               — dependency PRs (DRE-2039): the merge
+    #     gate auto-merges grouped minor/patch bumps ONLY on a SHA-bound
+    #     APPROVE, so the critic must run here too.
     # A branch with a linked Linear card (DRE-<n>, the signal linear-sync uses
     # to close the loop) is real product work and gets reviewed; a truly
     # chrome-only branch (no linked card) is still skipped below by the
@@ -65,6 +68,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.pull_request.head.ref, 'agent/') ||
       startsWith(github.event.pull_request.head.ref, 'repair/') ||
+      startsWith(github.event.pull_request.head.ref, 'dependabot/') ||
       contains(github.event.pull_request.head.ref, 'DRE-')
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -325,7 +329,7 @@ jobs:
           github_token: ${{ steps.app.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
           # push fires synchronize as agent-bureau-qa-bot (DRE-2037).
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot
           claude_args: |
             --max-turns 40
             --model claude-sonnet-4-6
@@ -452,7 +456,7 @@ jobs:
           github_token: ${{ steps.app.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
           # push fires synchronize as agent-bureau-qa-bot (DRE-2037).
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot
           claude_args: |
             --max-turns 40
             --model claude-sonnet-4-6

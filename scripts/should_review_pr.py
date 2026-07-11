@@ -23,6 +23,10 @@ Decision (branch-name only, so it runs as cheaply as the old `if:` guard):
     DRE-1927: it carries no card, so without this opt-in an agent-authored
     fix to a broken main would merge with NO adversarial review, the exact
     bypass adr-red-main-auto-repair's guardrail 1 forbids)
+  • branch starts with `dependabot/`       → review   (dependency PR —
+    DRE-2039: the merge gate auto-merges grouped minor/patch bumps ONLY on
+    a SHA-bound critic APPROVE, so without this opt-in the dependency rail
+    is dead wiring that waits forever)
   • branch carries a `DRE-<n>` reference   → review   (operator-routed card PR)
   • otherwise (no linked card)             → skip     (chrome-only)
 
@@ -63,11 +67,12 @@ def should_review(branch: str | None) -> bool:
 
     Review when the branch is an agent branch (legacy convention, unchanged),
     a red-main repair branch (DRE-1927 — cardless agent work that must never
-    dodge the critic), OR it carries a linked Linear card (operator-routed
-    card PRs — DRE-1888). Skip only truly chrome-only branches with no
-    linked card.
+    dodge the critic), a dependabot branch (DRE-2039 — the gate's minor/patch
+    auto-merge needs the critic's SHA-bound APPROVE), OR it carries a linked
+    Linear card (operator-routed card PRs — DRE-1888). Skip only truly
+    chrome-only branches with no linked card.
     """
-    if branch and branch.startswith(("agent/", "repair/")):
+    if branch and branch.startswith(("agent/", "repair/", "dependabot/")):
         return True
     return card_in_branch(branch) is not None
 
@@ -82,6 +87,8 @@ def main(argv: list[str]) -> int:
             why = "agent branch"
         elif branch.startswith("repair/"):
             why = "red-main repair branch"
+        elif branch.startswith("dependabot/"):
+            why = "dependabot dependency PR"
         else:
             why = f"linked card {card}"
         print(f"will review {branch!r} ({why})")

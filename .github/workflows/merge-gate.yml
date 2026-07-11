@@ -15,6 +15,11 @@
 # table parity suite. This workflow only GATHERS the inputs and ACTS on the
 # script's machine-readable verdict.
 #
+# dependabot/** branches ride the same gate (DRE-2039) with one extra
+# condition: the PR must be provably minor/patch per Dependabot's own
+# update-type commit metadata. Majors (and anything unprovable) get the
+# honest "waiting for human merge" comment and are left alone.
+#
 # Triggered (via the product-repo stub) from both directions of the race: CI
 # finishing (workflow_run) and the critic verdict landing (issue_comment).
 # Whichever happens last merges.
@@ -63,7 +68,8 @@ jobs:
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.event == 'pull_request' &&
        (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
-        startsWith(github.event.workflow_run.head_branch, 'repair/'))) ||
+        startsWith(github.event.workflow_run.head_branch, 'repair/') ||
+        startsWith(github.event.workflow_run.head_branch, 'dependabot/'))) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        contains(github.event.comment.body, 'QA Critic') &&
@@ -111,9 +117,12 @@ jobs:
           STATE=$(gh pr view "$PR" --json state --jq .state)
           [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
           # agent/* = card work; repair/* = red-main auto-repair PRs
-          # (DRE-1927) — both merge ONLY here, as qa-bot, on CI green +
-          # critic APPROVE (author != merger by App identity).
-          case "$BRANCH" in agent/*|repair/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+          # (DRE-1927); dependabot/* = dependency bumps (DRE-2039, gated
+          # below on Dependabot's own semver metadata: minors/patches
+          # auto-merge, majors wait for a human) — all merge ONLY here, as
+          # qa-bot, on CI green + critic APPROVE (author != merger by App
+          # identity).
+          case "$BRANCH" in agent/*|repair/*|dependabot/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 
           # Textual merge conflict: update-branch cannot resolve it; the
@@ -123,6 +132,12 @@ jobs:
           # toggle already on, and was untested.)
           MSTATE=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)
           if [ "$MSTATE" = "DIRTY" ]; then
+            # A conflicted dependency PR is Dependabot's (or a human's) to
+            # rebase — an agent pushing to its branch would fight it.
+            case "$BRANCH" in dependabot/*)
+              echo "dependabot PR has a merge conflict — Dependabot/a human resolves it, not the fix agent"
+              exit 0;;
+            esac
             echo "merge conflict with main — dispatching fix agent"
             # qa-bot token lacks Actions perms (deliberate); use the workflow's
             # own GITHUB_TOKEN — workflow_dispatch is exempt from the
@@ -172,6 +187,16 @@ jobs:
           # gate waits; it never merges past an unverifiable check.
           GH_TOKEN="${{ github.token }}" gh api "repos/${{ github.repository }}/actions/runs?head_sha=$SHA&per_page=100" > /tmp/workflow-runs.json 2>/dev/null \
             || echo '{"workflow_runs":[]}' > /tmp/workflow-runs.json
+          # DRE-2039: the dependabot-policy record. The author comes from
+          # GitHub's own PR record (REST user.login keeps the [bot] suffix
+          # gh's author field strips — the policy only trusts semver
+          # metadata on Dependabot's own PRs); the commits carry
+          # Dependabot's per-dependency `update-type` metadata. A blip
+          # fails CLOSED: `[]` → no provable minor/patch → decision=human,
+          # never a blind merge.
+          AUTHOR=$(gh api "repos/${{ github.repository }}/pulls/$PR" --jq .user.login 2>/dev/null || echo "")
+          gh api "repos/${{ github.repository }}/pulls/$PR/commits?per_page=100" > /tmp/pr-commits.json 2>/dev/null \
+            || echo '[]' > /tmp/pr-commits.json
           # The trusted verdict author is derived from the same App key this
           # gate merges with (app-slug of the minted token), so an App rename
           # follows automatically; GitHub reserves the "[bot]" suffix, so no
@@ -187,6 +212,9 @@ jobs:
             --workflow-runs-file /tmp/workflow-runs.json \
             --compare-file /tmp/compare.json \
             --review-workflows ".github/workflows/qa-review.yml,.github/workflows/pr-review.yml" \
+            --head-ref "$BRANCH" \
+            --pr-author "$AUTHOR" \
+            --pr-commits-file /tmp/pr-commits.json \
             | tee /tmp/gate-decision
           # Fail-closed on shape drift: no `decision=merge` line, no merge.
           DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
@@ -197,6 +225,19 @@ jobs:
           if [ "$DECISION" = "update" ]; then
             echo "branch is stale relative to $BASE — updating; gate re-runs after CI"
             gh api -X PUT "repos/${{ github.repository }}/pulls/$PR/update-branch" >/dev/null || true
+            exit 0
+          fi
+          # DRE-2039: a Dependabot major (or an unprovable minor/patch) is
+          # a human's to merge — post the honest state ONCE (the gate
+          # re-runs on every CI/verdict event; the already-fetched comments
+          # record keeps it idempotent) and touch nothing.
+          if [ "$DECISION" = "human" ]; then
+            REASON=$(grep -m1 '^reason=' /tmp/gate-decision | cut -d= -f2-)
+            STATE_MARKER="⏸️ Merge gate: waiting for human merge"
+            if ! jq -e --arg m "$STATE_MARKER" 'map(select((.body // "") | startswith($m))) | length > 0' /tmp/comments.json >/dev/null; then
+              gh pr comment "$PR" --body "$STATE_MARKER — $REASON" || true
+            fi
+            echo "waiting for human merge: $REASON"
             exit 0
           fi
           [ "$DECISION" = "merge" ] || exit 0
