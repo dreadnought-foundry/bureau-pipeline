@@ -97,6 +97,15 @@ BLOCKER_MARKER = "🛑 Agent blocked"
 # machine marker, so it can never clear the blocker and re-arm the loop.
 _AGENT_COMMENT_PREFIXES = ("🤖", "🛑", "🧹", "🪦", "🚨", "🏁")
 
+# Live-run liveness gate (DRE-2032). agent-task's "Card → In Progress" step
+# posts this heartbeat with the run's URL, so the card itself maps to its
+# Actions run. ⏳ (phase receipts) and 🧠 (model-attempt) are the only
+# PROOF-OF-LIFE prefixes — the sweep's own 🪦/🧹/🚨 receipts must never count,
+# or every requeue comment would suppress the next requeue forever.
+RUN_MARKER = "🧠 model-attempt:"
+_RUN_ID = re.compile(r"/actions/runs/(\d+)\b")
+_LIFE_PREFIXES = ("⏳", "🧠")
+
 
 def held(card: dict) -> bool:
     """True if the card carries HOLD_LABEL — the sweep must not requeue, nudge,
@@ -235,6 +244,62 @@ def pr_for(identifier: str) -> dict | None:
         if re.search(rf"\b{identifier}\b", pr["headRefName"]):
             return pr
     return None
+
+
+def agent_run_alive(identifier: str) -> bool:
+    """True if the card's agent-task run is ACTUALLY still running — in which
+    case the card is NOT dead, regardless of elapsed time, and the sweep must
+    leave it alone (DRE-2032).
+
+    Origin (2026-07-10 20:07–22:22Z, DRE-2023 on agent-bureau): three builds
+    each ran ~45 minutes with real progress receipts on the card; the
+    In-Progress-no-PR branch read the staleness as death, requeued to Todo,
+    and the fresh dispatch CANCELLED the still-running build via the per-card
+    concurrency group (run 29125285930 concluded cancelled at "Gate on agent
+    result"). The dead-run cap then parked the card needs-human — the watchdog
+    caused all three deaths it was counting.
+
+    Detection, authoritative first:
+      1. The newest 🧠 model-attempt heartbeat carries the run's URL
+         (agent-task.yml posts it at Card → In Progress). Ask GitHub for THAT
+         run's status: queued/in_progress/etc. → alive; completed → dead (a
+         concluded run with no PR is the real requeue case, and a fresh
+         receipt must not shadow it).
+      2. When no run id is readable (legacy heartbeat, comment never posted)
+         or the status read fails (API blip), fall back to receipts: a ⏳/🧠
+         comment younger than the In Progress staleness window is proof of
+         life without a GitHub call. The sweep's own 🪦/🧹/🚨 receipts never
+         count. With neither signal the card is dead, exactly as before.
+    """
+    nodes = linear_ops.gql(
+        """query($id: String!) { issue(id: $id) {
+             comments(last: 50) { nodes { body createdAt } } } }""",
+        {"id": identifier},
+    )["issue"]["comments"]["nodes"]
+    for node in reversed(nodes):  # newest → oldest: the CURRENT attempt's run
+        body = (node.get("body") or "").lstrip()
+        if not body.startswith(RUN_MARKER):
+            continue
+        m = _RUN_ID.search(body)
+        if not m:
+            break  # legacy heartbeat without a run URL — receipts decide
+        status = gh("api", f"repos/{REPO}/actions/runs/{m.group(1)}",
+                    "--jq", ".status")
+        if status == "completed":
+            return False  # concluded with no PR: the real dead-run case
+        if status:
+            return True  # queued / in_progress / waiting / … — a live run
+        break  # unreadable status — receipts decide
+    for node in reversed(nodes):
+        body = (node.get("body") or "").lstrip()
+        created = node.get("createdAt") or ""
+        if (
+            body.startswith(_LIFE_PREFIXES)
+            and created
+            and age_minutes(created) < STALE_MINUTES["In Progress"]
+        ):
+            return True
+    return False
 
 
 QA_BOT_LOGIN = "agent-bureau-qa-bot"
@@ -802,10 +867,19 @@ def main(
                         "🧹 Reconcile: PR exists but card was stuck In Progress — advanced to In QA, critic re-triggered.",
                     )
             else:
-                # No PR past the staleness window: the run is dead (silent
-                # crash) or HUNG (timed out — never reached agent-task's report
-                # step, so only we see it). Requeue a couple of times; after the
-                # shared cap, HOLD instead of looping forever (DRE-1403).
+                # No PR past the staleness window: dead (silent crash), HUNG
+                # (timed out — never reached agent-task's report step, so only
+                # we see it) — or STILL RUNNING a legitimately long build.
+                # Check liveness FIRST: a queued/in_progress run means not
+                # dead regardless of elapsed time, and a requeue would kill it
+                # (the Todo transition re-dispatches; the fresh run cancels
+                # the live one via the per-card concurrency group — DRE-2032,
+                # run 29125285930 / DRE-2023's three-loop death). Otherwise
+                # requeue a couple of times; after the shared cap, HOLD
+                # instead of looping forever (DRE-1403).
+                if agent_run_alive(ident):
+                    print(f"live: {ident} agent run still going — leaving alone")
+                    continue
                 dead = linear_ops.count_comments(ident, DEAD_TAG)
                 if dead >= REQUEUE_CAP:
                     linear_ops.add_label(ident, HOLD_LABEL)

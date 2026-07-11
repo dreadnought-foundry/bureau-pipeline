@@ -174,6 +174,9 @@ def _full_sweep_mocks(extra=None):
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale
         "pr_for": MagicMock(return_value=None),  # no PR
+        # DRE-2032: the dead-run branch first checks the card's agent-task run
+        # is not STILL RUNNING; these tests exercise the genuinely-dead paths.
+        "agent_run_alive": MagicMock(return_value=False),
     }
     if extra:
         m.update(extra)
