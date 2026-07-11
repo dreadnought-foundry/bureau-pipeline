@@ -47,11 +47,11 @@ jobs:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           token: ${{ steps.app.outputs.token }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
