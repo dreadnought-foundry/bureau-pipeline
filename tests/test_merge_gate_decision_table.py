@@ -519,6 +519,10 @@ def test_new_decision(row):
         check_runs=row.checks,
         comments=row.comments,
         review_suites=row.review_suites,
+        # The ba4305d shell had no branch-currency concept, so every parity
+        # row models a CURRENT branch; condition 0 (DRE-1924) is a no-op
+        # here and has its own suite (test_merge_gate_branch_currency.py).
+        compare_status="ahead",
     )
     assert decision.action == row.expect, (
         f"[{row.id}] expected {row.expect}, got {decision.action} "
