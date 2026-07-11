@@ -59,7 +59,10 @@ class ConflictsOnlyModeTest(unittest.TestCase):
         unstick.assert_called_once_with()
         dead_heads.assert_called_once_with()
         approved_red.assert_called_once_with()
-        cards.assert_called_once_with()
+        # Two reads since DRE-1993: the stranded-card watchdog's lane sweep
+        # (Planning included) plus the nudge loop's default read.
+        self.assertIn(mock.call(reconcile.WATCHDOG_LANES), cards.call_args_list)
+        self.assertIn(mock.call(), cards.call_args_list)
         promote.assert_called_once()
 
 
