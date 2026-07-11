@@ -817,6 +817,12 @@ def promote_ready(active_count: int) -> int:
         # per THIS card — a blocker reference that doesn't resolve raises
         # LinearError, which must skip this one card (loudly, with a one-time
         # comment), never kill the gate for the rest of the fleet.
+        # The read-guard covers ONLY the gate-evaluation reads: a LinearError
+        # here means a blocker reference doesn't resolve, so this one card is
+        # skipped as unevaluable (DRE-2035). The mutations that follow are
+        # DELIBERATELY outside it — a write failure there is a write failure,
+        # not a bad reference, and must not stamp the card with a false
+        # "reference doesn't resolve" diagnostic (critic PR #89).
         try:
             # Epic-level gate (DRE-1772): even an active (plan-approved) epic
             # must not start its children while the epic itself is blocked-by a
@@ -846,13 +852,24 @@ def promote_ready(active_count: int) -> int:
             if has_unresolved_blocker(card):
                 print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
                 continue
+        except linear_ops.LinearError as e:
+            skip_bad_reference(card["identifier"], e)
+            continue
+        # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
+        # bad reference: record it on the existing _write_failures path (fails
+        # the run red for medic) instead of the bad-reference diagnostic.
+        try:
             linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
             linear_ops.cmd_comment(
                 card["identifier"],
                 "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done.",
             )
         except linear_ops.LinearError as e:
-            skip_bad_reference(card["identifier"], e)
+            _write_failures.append(f"{card['identifier']} advance/comment: {e}")
+            print(
+                f"ERROR: failed to advance/comment on {card['identifier']}: {e}",
+                file=sys.stderr,
+            )
             continue
         promoted += 1
     print(f"promotion: {promoted} card(s) promoted (WIP {active_count}+{promoted}/{MAX_WIP})")

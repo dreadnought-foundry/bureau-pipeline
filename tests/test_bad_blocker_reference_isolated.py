@@ -226,6 +226,60 @@ def test_comment_failure_does_not_kill_the_sweep():
 
 
 # ---------------------------------------------------------------------------
+# A WRITE failure is NOT a bad reference: the promote mutations sit outside
+# the read-guard, so a LinearError from cmd_advance/cmd_comment must not stamp
+# the card with the "reference doesn't resolve" diagnostic (critic PR #89).
+# ---------------------------------------------------------------------------
+def test_advance_write_failure_is_not_a_bad_reference():
+    """A clean card whose gate passes but whose cmd_advance raises LinearError
+    must NOT be diagnosed as a bad reference: skip_bad_reference is never
+    called, no BAD_REF_TAG comment is posted, and the failure lands on the
+    _write_failures path instead."""
+    good = _candidate("DRE-200")  # no blocker line — the gate passes
+
+    def _advance(*args, **kwargs):
+        raise linear_ops.LinearError("linear error: rate limited")
+
+    with patch.object(reconcile, "backlog_children", return_value=[good]), \
+        patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+        patch.object(reconcile, "skip_bad_reference") as skip, \
+        patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+        patch.object(
+            reconcile.linear_ops, "cmd_advance", side_effect=_advance
+        ), \
+        patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+        promoted = reconcile.promote_ready(active_count=0)
+    assert promoted == 0
+    skip.assert_not_called()  # a write failure is not a reference failure
+    assert not any(
+        reconcile.BAD_REF_TAG in call.args[1] for call in comment.call_args_list
+    )
+    assert any("DRE-200" in f for f in reconcile._write_failures)
+
+
+def test_comment_write_failure_after_advance_is_not_a_bad_reference():
+    """cmd_advance succeeds (the card DID move) but the follow-up
+    'Auto-promoted' cmd_comment raises: the card must not receive a false
+    bad-reference alarm, and skip_bad_reference is never called."""
+    good = _candidate("DRE-200")
+
+    def _comment(identifier, body):
+        raise linear_ops.LinearError("linear error: rate limited")
+
+    with patch.object(reconcile, "backlog_children", return_value=[good]), \
+        patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+        patch.object(reconcile, "skip_bad_reference") as skip, \
+        patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+        patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+        patch.object(reconcile.linear_ops, "cmd_comment", side_effect=_comment):
+        promoted = reconcile.promote_ready(active_count=0)
+    advance.assert_called_once_with("DRE-200", "Todo", "Backlog")
+    assert promoted == 0  # comment failed, so the card is not counted promoted
+    skip.assert_not_called()
+    assert any("DRE-200" in f for f in reconcile._write_failures)
+
+
+# ---------------------------------------------------------------------------
 # epic_blockers_unmet: a bad reference on the EPIC fails safe, not fatal
 # ---------------------------------------------------------------------------
 def test_epic_bad_blocker_reference_fails_safe_blocked():
