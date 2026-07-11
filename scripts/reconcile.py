@@ -1166,6 +1166,12 @@ def retry_dead_fix_runs() -> None:
 # author discipline as merge_gate.py's condition D.
 DEPENDABOT_BRANCH_PREFIX = "dependabot/"
 DEPENDABOT_DISPATCH_TAG = "dependabot-review-dispatch"
+# Per-sweep dispatch pacing (DRE-2049). Dependabot arrives in batches —
+# agent-bureau's first sweep opened 27 PRs at once — and every dispatch is a
+# full critic run, so an unpaced backstop would burst-drain the LLM
+# subscription in a single reconcile pass. At most this many dispatches per
+# sweep, oldest PR first; the tail waits for the next sweep (~15 min cron).
+DEPENDABOT_DISPATCH_CAP = 3
 
 
 def is_dependabot_pr(pr: dict) -> bool:
@@ -1230,14 +1236,17 @@ def review_dependabot_prs() -> None:
     Every open dependabot-authored PR whose CURRENT head has no sha-bound
     verdict gets ONE dispatch, bounded per head sha by the worker-bot
     receipt (a crashed critic run must not re-dispatch every sweep; a
-    rebase changes the sha and re-arms). All eligible PRs dispatch in one
-    sweep — dependabot arrives in batches, and the acceptance is a verdict
-    within one sweep, not one PR per sweep. DIRTY PRs are skipped:
-    dependabot rebases its own conflicts, which re-arms the new head."""
+    rebase changes the sha and re-arms). Dispatches are PACED (DRE-2049):
+    at most DEPENDABOT_DISPATCH_CAP per sweep, oldest PR first, so a batch
+    sweep can't burst-drain the critic's LLM quota — settled PRs (verdict
+    or receipt on the current head) consume no slot, and the deferred tail
+    is reported, never silently dropped. DIRTY PRs are skipped: dependabot
+    rebases its own conflicts, which re-arms the new head."""
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
         "--json", "number,headRefName,headRefOid,author,mergeStateStatus,comments",
     ) or "[]")
+    eligible = []
     for pr in prs:
         if not is_dependabot_pr(pr):
             continue
@@ -1249,6 +1258,9 @@ def review_dependabot_prs() -> None:
             continue  # no sha to bind a receipt to — retry next sweep
         if has_verdict(pr) or dependabot_dispatch_receipt(pr):
             continue
+        eligible.append(pr)
+    eligible.sort(key=lambda p: p["number"])  # oldest first — drain in arrival order
+    for pr in eligible[:DEPENDABOT_DISPATCH_CAP]:
         print(
             f"dependabot: PR #{pr['number']} head {pr['headRefOid'][:8]} has no "
             f"bound verdict — its pull_request review runs are doomed (empty "
@@ -1256,6 +1268,13 @@ def review_dependabot_prs() -> None:
         )
         if _nudge(review_workflow(), pr["number"]):
             _post_dependabot_receipt(pr)
+    deferred = len(eligible) - DEPENDABOT_DISPATCH_CAP
+    if deferred > 0:
+        print(
+            f"dependabot: {deferred} eligible PR(s) deferred past the "
+            f"per-sweep dispatch cap ({DEPENDABOT_DISPATCH_CAP}) — the next "
+            f"sweep picks them up oldest-first (DRE-2049)"
+        )
 
 
 def repo_epics(active: list[dict]) -> set[str]:

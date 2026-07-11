@@ -66,5 +66,8 @@ jobs:
           # branch name must not become shell input.
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The author decides the dependabot exemption (DRE-2049) —
+          # GitHub-attested identity, never the spoofable branch name.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           python3 scripts/check_tdd_commits.py "origin/$BASE_REF" "$HEAD_SHA"
