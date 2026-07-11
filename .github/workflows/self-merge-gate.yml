@@ -1,0 +1,37 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — the gate
+# DOES auto-merge agent PRs to main here: per the accepted ADR, main is the
+# STAGING channel (the fleet consumes human-promoted tags after DRE-1983), so
+# the permanent human gate is release promotion, not per-PR merges. The
+# authenticated verdict (DRE-1978: qa-bot identity + SHA binding) is the
+# prerequisite that made this safe to open.
+#
+# The workflow_run list names this repo's own PR-check workflows — keep it
+# current when CI changes (DRE-2028: a pull_request workflow missing here is
+# a check the gate never re-evaluates on; tests/test_self_host_stubs.py
+# enforces the coverage structurally).
+#
+# @main on purpose, fully qualified: a local ./ ref would resolve from the
+# PR's merge ref, letting a PR that edits merge-gate.yml choose the logic
+# that merges it. @main pins the gate to the already-merged version.
+name: Merge Gate
+
+on:
+  workflow_run:
+    workflows: [Pipeline Tests, QA Review]
+    types: [completed]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to (re-)evaluate
+        required: true
+
+permissions:
+  contents: read
+  actions: write  # dispatch agent-fix on DIRTY (qa-bot App has no Actions perms)
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/merge-gate.yml@main
+    secrets: inherit

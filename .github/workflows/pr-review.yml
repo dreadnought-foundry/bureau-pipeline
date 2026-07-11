@@ -5,9 +5,11 @@
 # (workflow_call) and never fire on its own PRs, so control-plane changes (the
 # merge gate, the agents' prompts) shipped with NO adversarial review. This
 # stub closes that: same reusable qa-review, same verdict contract, on every
-# PR here. Merges stay HUMAN (no merge-gate stub — deliberate: the self-host
-# ADR keeps promotion of the control plane with the operator, who reads the
-# critic's VERDICT comment before merging).
+# PR here. Since DRE-1929 (accepted adr-bureau-pipeline-self-host) the full
+# stub set exists — self-merge-gate.yml DOES auto-merge on an authenticated
+# APPROVE: main is the staging channel (the fleet consumes human-promoted
+# tags), so the permanent human gate is release PROMOTION, not per-PR merges.
+# This file stays the ONE qa-review stub; don't add a second caller.
 #
 # SECURITY — the `uses:` ref is the FULLY QUALIFIED @main form on purpose.
 # A local `./.github/workflows/qa-review.yml` reference would resolve from the

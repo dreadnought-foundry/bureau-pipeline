@@ -1,0 +1,20 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo.
+# @main on purpose: this repo is the canary channel; the fleet rides tags.
+name: Agent Plan
+
+on:
+  repository_dispatch:
+    types: [agent-plan]
+
+concurrency:
+  group: agent-${{ github.event.client_payload.identifier }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/plan.yml@main
+    secrets: inherit

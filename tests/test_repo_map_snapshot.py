@@ -54,6 +54,18 @@ class RepoMapSnapshotTest(unittest.TestCase):
         self.assertEqual(snap["agent-bureau"], "dreadnought-foundry/agent-bureau")
         self.assertEqual(snap["agent-bureau-demo"], "dreadnought-foundry/agent-bureau-demo")
 
+    def test_bureau_pipeline_is_a_routable_slug(self):
+        # DRE-1929 (adr-bureau-pipeline-self-host): this repo itself is on the
+        # dispatch rail — `repo:bureau-pipeline` cards must validate and route.
+        # Both of the gate's copies (snapshot + fallback literal) must know it,
+        # or dispatch works only until the first SSM/snapshot read blip.
+        self.assertEqual(
+            _snapshot()["bureau-pipeline"], "dreadnought-foundry/bureau-pipeline")
+        self.assertIn("bureau-pipeline", validate_card.VALID_SLUGS)
+        self.assertEqual(
+            validate_card._FALLBACK_REPO_MAP["bureau-pipeline"],
+            "dreadnought-foundry/bureau-pipeline")
+
     # --- the DERIVE works -----------------------------------------------------
 
     def test_valid_slugs_are_the_snapshot_keys(self):
