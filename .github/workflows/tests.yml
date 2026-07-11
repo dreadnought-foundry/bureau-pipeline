@@ -42,3 +42,26 @@ jobs:
         run: |
           pip -q install pyyaml
           python3 scripts/check_pipeline_ref.py
+
+  # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
+  # rail's test-first order is enforced mechanically here — a commit touching
+  # tests/ must precede the first commit changing non-test code (docs-only
+  # and ops-only PRs exempt). Head-suite greenness is the `unit` job's job.
+  tdd:
+    name: TDD commit discipline
+    # push runs (main) have no PR commit list to judge — PR events only.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # the check walks the PR's whole commit list
+      - name: RED test precedes implementation
+        env:
+          # Through env, never interpolated into the shell line — a crafted
+          # branch name must not become shell input.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 scripts/check_tdd_commits.py "origin/$BASE_REF" "$HEAD_SHA"
