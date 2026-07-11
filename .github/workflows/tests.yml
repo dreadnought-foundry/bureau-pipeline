@@ -29,7 +29,10 @@ jobs:
           REPO: test/test
           GH_TOKEN: test
         run: |
-          pip -q install pytest pyyaml
+          # From the pinned manifest, not bare names — requirements-dev.txt
+          # is Dependabot's pip manifest (DRE-2039); installing from it is
+          # what makes a version-bump PR actually exercise the new pins.
+          pip -q install -r requirements-dev.txt
           python3 -m pytest tests -v
       - name: Workflow YAML parses
         run: |

@@ -1,0 +1,7 @@
+# Test/tooling deps for the pipeline's own suite (DRE-2039). Exact pins on
+# purpose: this file is Dependabot's pip manifest — weekly grouped
+# minor/patch bumps ride the merge-gate rail, majors wait for a human
+# (.github/dependabot.yml). CI installs from this file (tests.yml), so a
+# bump here is what the suite actually runs against.
+pytest==9.1.1
+PyYAML==6.0.1

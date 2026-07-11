@@ -63,7 +63,8 @@ jobs:
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.event == 'pull_request' &&
        (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
-        startsWith(github.event.workflow_run.head_branch, 'repair/'))) ||
+        startsWith(github.event.workflow_run.head_branch, 'repair/') ||
+        startsWith(github.event.workflow_run.head_branch, 'dependabot/'))) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        contains(github.event.comment.body, 'QA Critic') &&
@@ -111,9 +112,11 @@ jobs:
           STATE=$(gh pr view "$PR" --json state --jq .state)
           [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
           # agent/* = card work; repair/* = red-main auto-repair PRs
-          # (DRE-1927) — both merge ONLY here, as qa-bot, on CI green +
-          # critic APPROVE (author != merger by App identity).
-          case "$BRANCH" in agent/*|repair/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+          # (DRE-1927); dependabot/* = dependency PRs (DRE-2039, minor/
+          # patch only — the script's condition D routes majors to a
+          # human). All merge ONLY here, as qa-bot, on CI green + critic
+          # APPROVE (author != merger by App identity).
+          case "$BRANCH" in agent/*|repair/*|dependabot/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 
           # Textual merge conflict: update-branch cannot resolve it; the
@@ -123,6 +126,13 @@ jobs:
           # toggle already on, and was untested.)
           MSTATE=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)
           if [ "$MSTATE" = "DIRTY" ]; then
+            # DRE-2039: never point the fix agent at a dependabot PR — it
+            # has no card to work, and Dependabot rebases/recreates its own
+            # conflicted PRs.
+            case "$BRANCH" in dependabot/*)
+              echo "dependabot PR has a conflict — dependabot rebases its own PRs; not dispatching the fix agent"
+              exit 0;;
+            esac
             echo "merge conflict with main — dispatching fix agent"
             # qa-bot token lacks Actions perms (deliberate); use the workflow's
             # own GITHUB_TOKEN — workflow_dispatch is exempt from the
@@ -178,6 +188,16 @@ jobs:
           # user account can impersonate it. Empirically the critic posts as
           # agent-bureau-qa-bot[bot] since bureau-pipeline #51.
           QA_LOGIN="${{ steps.qa.outputs.app-slug }}[bot]"
+          # DRE-2039: the dependabot-policy record — the PR author from
+          # GitHub's own PR object (REST user.login gives the literal
+          # "dependabot[bot]"; gh's GraphQL author rendering varies by
+          # version) and the PR's commits, whose messages carry Dependabot's
+          # machine-readable update-type trailer (the semver signal). A blip
+          # must fail CLOSED: empty record → the script waits; it never
+          # judges the semver level on unverifiable data.
+          AUTHOR=$(gh api "repos/${{ github.repository }}/pulls/$PR" --jq .user.login)
+          gh api "repos/${{ github.repository }}/pulls/$PR/commits?per_page=100" > /tmp/pr-commits.json 2>/dev/null \
+            || echo '[]' > /tmp/pr-commits.json
 
           python3 .bureau-pipeline/scripts/merge_gate.py \
             --head-sha "$SHA" \
@@ -187,6 +207,9 @@ jobs:
             --workflow-runs-file /tmp/workflow-runs.json \
             --compare-file /tmp/compare.json \
             --review-workflows ".github/workflows/qa-review.yml,.github/workflows/pr-review.yml" \
+            --head-branch "$BRANCH" \
+            --pr-author "$AUTHOR" \
+            --pr-commits-file /tmp/pr-commits.json \
             | tee /tmp/gate-decision
           # Fail-closed on shape drift: no `decision=merge` line, no merge.
           DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
@@ -197,6 +220,19 @@ jobs:
           if [ "$DECISION" = "update" ]; then
             echo "branch is stale relative to $BASE — updating; gate re-runs after CI"
             gh api -X PUT "repos/${{ github.repository }}/pulls/$PR/update-branch" >/dev/null || true
+            exit 0
+          fi
+          # DRE-2039: `human` = the gate will NEVER merge this PR (a
+          # dependabot major / unprovable semver level). Post the honest
+          # state ONCE — the already-fetched comments record is the
+          # idempotence check, so re-evaluations don't spam the PR — and
+          # stop. No verdict-shaped text: this is a status note, not an
+          # approval credential.
+          if [ "$DECISION" = "human" ]; then
+            REASON=$(grep -m1 '^reason=' /tmp/gate-decision | cut -d= -f2-)
+            if ! grep -q "Merge gate: waiting for human merge" /tmp/comments.json; then
+              gh pr comment "$PR" --body "⏸️ Merge gate: waiting for human merge — $REASON"
+            fi
             exit 0
           fi
           [ "$DECISION" = "merge" ] || exit 0

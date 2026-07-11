@@ -61,10 +61,14 @@ jobs:
     # "Decide review" step, which is the authoritative gate (should_review_pr.py).
     # This broadened `if:` just lets the job START for the same set of branches;
     # the Python step is the single source of truth for the decision.
+    #   • dependabot/**               — dependency PRs (DRE-2039): the merge
+    #     gate auto-merges a grouped minor/patch bump ONLY on a SHA-bound
+    #     critic APPROVE, so the critic must actually run here.
     if: >
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.pull_request.head.ref, 'agent/') ||
       startsWith(github.event.pull_request.head.ref, 'repair/') ||
+      startsWith(github.event.pull_request.head.ref, 'dependabot/') ||
       contains(github.event.pull_request.head.ref, 'DRE-')
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -325,7 +329,7 @@ jobs:
           github_token: ${{ steps.app.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
           # push fires synchronize as agent-bureau-qa-bot (DRE-2037).
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot
           claude_args: |
             --max-turns 40
             --model claude-sonnet-4-6
@@ -452,7 +456,7 @@ jobs:
           github_token: ${{ steps.app.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
           # push fires synchronize as agent-bureau-qa-bot (DRE-2037).
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot
           claude_args: |
             --max-turns 40
             --model claude-sonnet-4-6

@@ -1,0 +1,42 @@
+# Automated dependency maintenance (DRE-2039, child of DRE-2038): Dependabot
+# rides the normal rail — its PRs get the adversarial critic like any agent
+# PR, and merge-gate.yml auto-merges ONLY grouped minor/patch updates on CI
+# green + a SHA-bound APPROVE (scripts/merge_gate.py condition D). Majors
+# deliberately fall OUTSIDE the groups below, so each arrives as its own
+# single-dependency PR that the gate marks "waiting for human merge" and
+# never touches.
+#
+# STABLE-ONLY DEFAULTS (documented on purpose — we rely on them):
+#   • Dependabot only proposes STABLE releases; pre-releases (alpha/beta/rc)
+#     are ignored unless a dependency is already pinned to one. No
+#     versioning-strategy / ignore stanzas needed for that — it is the
+#     default, and adding config here would only obscure it.
+#   • The pip manifest is requirements-dev.txt (exact pins), which tests.yml
+#     installs from — so every bump is exercised by the full suite before
+#     the gate ever sees green.
+#
+# Guard tests: tests/test_dependabot_config.py pins this file's shape;
+# tests/test_merge_gate_dependabot.py pins the gate policy;
+# tests/test_worker_pool_allowed_bots.py pins dependabot's allowed_bots
+# admission at the qa-review/verify sites (and nowhere else).
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      # One grouped PR per week for everything minor/patch — majors are
+      # excluded, so they surface as separate human-merge PRs.
+      pip-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
