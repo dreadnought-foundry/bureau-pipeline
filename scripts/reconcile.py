@@ -51,6 +51,7 @@ import tempfile
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 
 REPO = os.environ["REPO"]
@@ -759,6 +760,69 @@ def fix_approved_but_red() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
+WORKER_BOT_LOGIN = "agent-bureau-bot"
+
+
+def is_worker_bot_comment(comment: dict) -> bool:
+    """True iff the PR comment was authored by the WORKER bot App — the
+    identity agent-fix's Report step posts with. Same login-shape tolerance
+    as is_qa_bot_comment: `gh pr list --json comments` is GraphQL-backed and
+    carries no "[bot]" suffix; the suffix is stripped so either shape
+    matches. Same literal-login rationale too (reconcile never re-mints a
+    token just to learn its own slug; a rename fails CLOSED — no dispatch)."""
+    login = (comment.get("author") or {}).get("login") or ""
+    return login.removesuffix("[bot]") == WORKER_BOT_LOGIN
+
+
+def retry_dead_fix_runs() -> None:
+    """DRE-2018: re-dispatch the fix agent for a PR whose last fix run died
+    of a model/API error (is_error — an outage, not an agent failure).
+
+    A dying fix run pushes nothing, and the qa-bot's REQUEST_CHANGES comment
+    that triggered it is consumed — nothing event-driven ever re-fires
+    agent-fix for that PR (the medic does not watch Agent Fix; merge-gate
+    dispatches it only for merge conflicts), so the PR would stall in In QA
+    forever. agent-fix's Report step posts the fix-run-model-death marker
+    instead of parking; this sweep is the promised retry.
+
+    Dispatch iff the NEWEST worker-bot comment on the PR carries the marker:
+    any later fix outcome (pushed / blocked / held) posts a newer worker-bot
+    comment and switches the sweep off. The retry cap lives in agent-fix's
+    Report step (the death after fix_dead_run.RETRY_CAP posts a hold WITHOUT
+    the marker), so the sweep stays dumb. Non-worker authors are invisible —
+    a planted marker must not spawn fix runs (DRE-1995/1998 discipline).
+    Skips DIRTY PRs (unstick_conflicts owns those) and backs off while a fix
+    run is queued/in_progress; one dispatch per sweep, like
+    fix_approved_but_red."""
+    busy = json.loads(gh(
+        "run", "list", "--repo", REPO, "--workflow", "agent-fix.yml",
+        "--limit", "10", "--json", "status",
+    ) or "[]")
+    if any(r["status"] in ("queued", "in_progress") for r in busy):
+        return
+    prs = json.loads(gh(
+        "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+        "--json", "number,headRefName,mergeStateStatus,comments",
+    ) or "[]")
+    for pr in prs:
+        if not pr["headRefName"].startswith("agent/") or pr.get("mergeStateStatus") == "DIRTY":
+            continue
+        worker = [
+            c.get("body") or ""
+            for c in pr.get("comments", [])
+            if is_worker_bot_comment(c)
+        ]
+        if not worker or fix_dead_run.OUTAGE_TAG not in worker[-1]:
+            continue
+        print(
+            f"dead fix run: PR #{pr['number']} last fix run died of a "
+            f"model/API error — re-dispatching fix agent"
+        )
+        gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
+                    "-f", f"pr_number={pr['number']}")
+        return  # one dispatch per sweep; the busy-guard handles the rest
+
+
 def repo_epics(active: list[dict]) -> set[str]:
     """Identifiers of THIS repo's active epics (agent:planner cards).
 
@@ -819,7 +883,12 @@ def main(
     if not promote_only:
         # Backstops run independently: one failing must not silence the
         # others, but every write failure is recorded and fails the run.
-        for backstop in (unstick_conflicts, retrigger_dead_heads, fix_approved_but_red):
+        for backstop in (
+            unstick_conflicts,
+            retrigger_dead_heads,
+            fix_approved_but_red,
+            retry_dead_fix_runs,
+        ):
             try:
                 backstop()
             except ReconcileWriteError as e:
