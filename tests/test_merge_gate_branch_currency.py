@@ -135,8 +135,10 @@ class ReproductionTest(unittest.TestCase):
         """The tree's own test suite: run every test_*.py it carries.
         Returns True when green."""
         for test in sorted(Path(repo).glob("test_*.py")):
+            # -B: no __pycache__ — stray bytecode in the work tree would
+            # block the branch switches below.
             proc = subprocess.run(
-                [sys.executable, str(test)], cwd=repo,
+                [sys.executable, "-B", str(test)], cwd=repo,
                 capture_output=True, text=True,
             )
             if proc.returncode != 0:
@@ -164,7 +166,7 @@ class ReproductionTest(unittest.TestCase):
 
             # Base: a registry that does not know asana.
             (repo / "registry.py").write_text('CONNECTORS = ["slack"]\n')
-            self._git(repo, "add", "-A")
+            self._git(repo, "add", "registry.py")
             self._git(repo, "commit", "-qm", "base: connector registry")
 
             # Test PR, cut from base: asserts asana is unknown. Green on
@@ -174,7 +176,7 @@ class ReproductionTest(unittest.TestCase):
                 "from registry import CONNECTORS\n"
                 'assert "asana" not in CONNECTORS, "asana must be unknown"\n'
             )
-            self._git(repo, "add", "-A")
+            self._git(repo, "add", "test_registry.py")
             self._git(repo, "commit", "-qm", "test PR: asana is unknown")
             self.assertTrue(self._suite(repo), "test PR must be green alone")
 
@@ -184,7 +186,7 @@ class ReproductionTest(unittest.TestCase):
             (repo / "registry.py").write_text(
                 'CONNECTORS = ["slack", "asana"]\n'
             )
-            self._git(repo, "add", "-A")
+            self._git(repo, "add", "registry.py")
             self._git(repo, "commit", "-qm", "connector PR: register asana")
             self.assertTrue(self._suite(repo), "main must be green alone")
 
@@ -315,8 +317,8 @@ class WiringTest(unittest.TestCase):
         never falls through to `gh pr merge`."""
         guard = self.run_block.find('[ "$DECISION" = "update" ]')
         self.assertGreater(guard, -1, "update decision guard missing")
-        put = self.run_block.find("update-branch")
-        self.assertGreater(put, guard, "update-branch not behind the guard")
+        put = self.run_block.find('-X PUT "repos/${{ github.repository }}/pulls/$PR/update-branch"')
+        self.assertGreater(put, guard, "update-branch PUT not behind the guard")
         merge_guard = self.run_block.find('[ "$DECISION" = "merge" ] || exit 0')
         self.assertGreater(merge_guard, put,
                            "update arm must precede the merge guard")
