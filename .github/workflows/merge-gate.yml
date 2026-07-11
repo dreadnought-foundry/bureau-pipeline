@@ -1,10 +1,13 @@
-# Deterministic merge gate: merges an agent PR when BOTH conditions hold —
-# every CI check green AND the latest QA Critic verdict is APPROVE **for the
-# PR's current head commit** (DRE-1990: the verdict embeds the SHA it
-# reviewed; a missing or stale SHA is treated as no verdict). The merge
-# uses the qa-bot identity (distinct GitHub App), so author != merger is
-# enforced by identity, not policy. No human in the loop; no agent claims
-# trusted — both inputs are read from GitHub's own records.
+# Deterministic merge gate: merges an agent PR when ALL conditions hold —
+# the branch current with its base (DRE-1924: a stale-but-green branch is
+# updated and re-checked, never merged blind — the "green alone, red
+# together" guard), every CI check green, AND the latest QA Critic verdict
+# is APPROVE **for the PR's current head commit** (DRE-1990: the verdict
+# embeds the SHA it reviewed; a missing or stale SHA is treated as no
+# verdict). The merge uses the qa-bot identity (distinct GitHub App), so
+# author != merger is enforced by identity, not policy. No human in the
+# loop; no agent claims trusted — all inputs are read from GitHub's own
+# records.
 #
 # The DECISION itself lives in scripts/merge_gate.py (DRE-1992) with the
 # full rules and their history (DRE-1987 authorship, DRE-1990 SHA binding,
@@ -109,16 +112,12 @@ jobs:
           case "$BRANCH" in agent/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 
-          # Merge skew guard: a branch BEHIND main has green checks that were
-          # earned against an older main (this is how two 0013 migrations both
-          # merged). Update the branch instead — CI re-runs on the merged
-          # state and the gate re-evaluates when it completes.
+          # Textual merge conflict: update-branch cannot resolve it; the
+          # fix agent can. (Merge SKEW — a stale-but-green branch — is the
+          # script's condition 0 below, DRE-1924: the old shell BEHIND
+          # fast-path only worked with branch protection's up-to-date
+          # toggle already on, and was untested.)
           MSTATE=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)
-          if [ "$MSTATE" = "BEHIND" ]; then
-            echo "branch is BEHIND main — updating branch; gate will re-run after CI"
-            gh api -X PUT "repos/${{ github.repository }}/pulls/$PR/update-branch" >/dev/null || true
-            exit 0
-          fi
           if [ "$MSTATE" = "DIRTY" ]; then
             echo "merge conflict with main — dispatching fix agent"
             # qa-bot token lacks Actions perms (deliberate); use the workflow's
@@ -132,7 +131,9 @@ jobs:
           fi
 
           # Gather the decision inputs from GitHub's own records; the rules
-          # live in scripts/merge_gate.py (DRE-1992 — conditions 1-3:
+          # live in scripts/merge_gate.py (DRE-1992 — conditions 0-3:
+          # branch current with its base (DRE-1924 — a stale branch's green
+          # was earned against an older main; update, never merge blind),
           # CI green with the review-run exclusion by VERIFIED ORIGIN
           # (DRE-1994), critic APPROVE authored by the qa-bot App and
           # SHA-bound to this head, verifier PASS/SKIP/absent with the
@@ -141,6 +142,15 @@ jobs:
           # actions:read the qa-bot App deliberately doesn't have.
           SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
           gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" > /tmp/check-runs.json
+          # DRE-1924: the branch-currency record — GitHub's own compare of
+          # the PR's base against its current head (works with or without
+          # the branch-protection up-to-date toggle). Trimmed to the status
+          # field the script reads. A blip must fail CLOSED: `{}` → status
+          # unknown → the gate waits; it never merges past an unverifiable
+          # base and never updates the branch on unverifiable data.
+          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" --jq '{status: .status}' > /tmp/compare.json 2>/dev/null \
+            || echo '{}' > /tmp/compare.json
           # A transient comments-API failure must read as "no verdicts yet"
           # (the gate waits, fail-closed) — the same tolerance the inline
           # shell had — not as a red merge-gate run.
@@ -171,10 +181,20 @@ jobs:
             --check-runs-file /tmp/check-runs.json \
             --comments-file /tmp/comments.json \
             --workflow-runs-file /tmp/workflow-runs.json \
+            --compare-file /tmp/compare.json \
             --review-workflows ".github/workflows/qa-review.yml,.github/workflows/pr-review.yml" \
             | tee /tmp/gate-decision
           # Fail-closed on shape drift: no `decision=merge` line, no merge.
           DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
+          # DRE-1924: a stale branch is updated, never merged blind — CI
+          # re-runs on the merged result and the gate re-evaluates when it
+          # completes (a fresh SHA-bound review follows too, since the
+          # update commit moves the head).
+          if [ "$DECISION" = "update" ]; then
+            echo "branch is stale relative to $BASE — updating; gate re-runs after CI"
+            gh api -X PUT "repos/${{ github.repository }}/pulls/$PR/update-branch" >/dev/null || true
+            exit 0
+          fi
           [ "$DECISION" = "merge" ] || exit 0
 
           # Both gates green: advance card, merge as qa-bot.
