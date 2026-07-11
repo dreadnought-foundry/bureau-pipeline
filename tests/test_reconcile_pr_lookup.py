@@ -170,6 +170,11 @@ def _sweep_mocks(extra=None):
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
         "fix_approved_but_red": MagicMock(),
+        # DRE-2018 added a fourth sweep backstop; mock it out with its
+        # siblings so these read-failure tests exercise only the PR-lookup
+        # path, not the fix-retry backstop's own gh calls (it has its own
+        # coverage in test_reconcile_retries_dead_fix_runs.py).
+        "retry_dead_fix_runs": MagicMock(),
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale
