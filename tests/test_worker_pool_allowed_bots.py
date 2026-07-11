@@ -31,6 +31,14 @@ merge gate updates a behind branch as agent-bureau-qa-bot, whose push fires
 admit the qa-bot (runs 29162737344/29162589799 crashed without it), while
 agent-task and plan must NOT (the qa-bot never authors builds — two-robot
 authorship separation).
+
+DRE-2039 is the third occurrence of the class: dependabot[bot] opens and
+rebases its own PRs, so its pushes fire `pull_request` on qa-review and
+verify — both must admit `dependabot` (the action matches the actor slug
+without GitHub's reserved "[bot]" suffix, same as every entry here) or the
+critic crashes on every dependency PR and the merge gate waits forever.
+Dependabot never authors card builds, so agent-task and plan must NOT
+admit it, and agent-fix's deliberate exact list stays untouched.
 """
 import glob
 import os
@@ -171,6 +179,54 @@ class QaBotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
                     f"{filename}: allowed_bots={tokens} must not admit "
                     f"{QA_BOT} — the qa-bot never authors builds",
                 )
+
+
+class DependabotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
+    """DRE-2039: dependabot[bot]'s own pushes (open, rebase, recreate) fire
+    `pull_request` on qa-review and verify, so both must admit `dependabot`
+    — the review a dependabot PR MUST get before the merge gate will touch
+    it. Dependabot never authors card builds, so agent-task and plan must
+    NOT admit it (same authorship separation as the qa-bot)."""
+
+    DEPENDABOT = "dependabot"
+
+    def test_qa_review_and_verify_admit_dependabot(self):
+        expected = {"qa-review.yml": 2, "verify.yml": 2}
+        for filename, count in expected.items():
+            sites = [
+                tokens for name, tokens in all_sites() if name == filename
+            ]
+            self.assertEqual(
+                len(sites), count,
+                f"{filename}: expected {count} allowed_bots site(s), found {sites}",
+            )
+            for tokens in sites:
+                self.assertIn(
+                    self.DEPENDABOT, tokens,
+                    f"{filename}: allowed_bots={tokens} is missing "
+                    f"{self.DEPENDABOT} — dependabot's own PR events crash "
+                    "the critic/verifier without it (DRE-2039)",
+                )
+
+    def test_agent_task_and_plan_exclude_dependabot(self):
+        for filename in ("agent-task.yml", "plan.yml"):
+            sites = [
+                tokens for name, tokens in all_sites() if name == filename
+            ]
+            self.assertTrue(sites, f"{filename}: no allowed_bots site found")
+            for tokens in sites:
+                self.assertNotIn(
+                    self.DEPENDABOT, tokens,
+                    f"{filename}: allowed_bots={tokens} must not admit "
+                    f"{self.DEPENDABOT} — dependabot never authors builds",
+                )
+
+    def test_agent_fix_excludes_dependabot(self):
+        # Redundant with AgentFixGateUnchangedTest's exact-equality pin, but
+        # names the DRE-2039 requirement directly if that list ever widens.
+        path = os.path.join(WORKFLOWS_DIR, "agent-fix.yml")
+        for tokens in allowed_bots_values(path):
+            self.assertNotIn(self.DEPENDABOT, tokens)
 
 
 class AgentFixGateUnchangedTest(unittest.TestCase):

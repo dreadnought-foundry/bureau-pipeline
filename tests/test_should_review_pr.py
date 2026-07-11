@@ -88,6 +88,23 @@ class ShouldReviewTest(unittest.TestCase):
         # Legacy convention is honored on the prefix alone.
         self.assertTrue(should_review_pr.should_review("agent/some-task"))
 
+    # --- dependabot PRs: reviewed (DRE-2039) -----------------------------
+    # The merge gate auto-merges a grouped minor/patch dependabot PR ONLY on
+    # a SHA-bound critic APPROVE — so the critic must actually review
+    # dependabot/** or the gate waits forever on a verdict that can't exist.
+
+    def test_dependabot_grouped_branch_is_reviewed(self):
+        self.assertTrue(
+            should_review_pr.should_review("dependabot/pip/pip-minor-patch-1a2b3c4")
+        )
+
+    def test_dependabot_actions_branch_is_reviewed(self):
+        self.assertTrue(
+            should_review_pr.should_review(
+                "dependabot/github_actions/actions-minor-patch-9f8e7d6"
+            )
+        )
+
     # --- chrome-only PRs: STILL skippable -------------------------------
 
     def test_chore_branch_without_card_is_skipped(self):
@@ -134,6 +151,11 @@ class CliTest(unittest.TestCase):
 
     def test_cli_exit_0_on_agent_branch(self):
         p = self._run("agent/DRE-1-x")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("review=true", p.stdout)
+
+    def test_cli_exit_0_and_review_true_on_dependabot_branch(self):
+        p = self._run("dependabot/pip/pip-minor-patch-1a2b3c4")
         self.assertEqual(p.returncode, 0)
         self.assertIn("review=true", p.stdout)
 
