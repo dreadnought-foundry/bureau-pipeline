@@ -60,7 +60,7 @@ jobs:
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -150,9 +150,9 @@ jobs:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
