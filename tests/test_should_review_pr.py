@@ -88,6 +88,23 @@ class ShouldReviewTest(unittest.TestCase):
         # Legacy convention is honored on the prefix alone.
         self.assertTrue(should_review_pr.should_review("agent/some-task"))
 
+    # --- dependabot PRs: reviewed (DRE-2039) -----------------------------
+    # The merge gate auto-merges grouped minor/patch bumps ONLY on a
+    # SHA-bound critic APPROVE — so dependabot/** branches must get the
+    # critic, or the dependency rail is dead wiring that waits forever.
+
+    def test_dependabot_pip_branch_is_reviewed(self):
+        self.assertTrue(
+            should_review_pr.should_review("dependabot/pip/pip-minor-patch-0a1b2c")
+        )
+
+    def test_dependabot_actions_branch_is_reviewed(self):
+        self.assertTrue(
+            should_review_pr.should_review(
+                "dependabot/github_actions/actions/checkout-6"
+            )
+        )
+
     # --- chrome-only PRs: STILL skippable -------------------------------
 
     def test_chore_branch_without_card_is_skipped(self):

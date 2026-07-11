@@ -31,6 +31,13 @@ merge gate updates a behind branch as agent-bureau-qa-bot, whose push fires
 admit the qa-bot (runs 29162737344/29162589799 crashed without it), while
 agent-task and plan must NOT (the qa-bot never authors builds — two-robot
 authorship separation).
+
+DRE-2039 is the third occurrence of the class: dependabot[bot]'s own
+pull_request events (opened/synchronize on its dependency PRs) trigger
+qa-review and verify, so both must admit it — the critic verdict is what
+lets the merge gate auto-merge grouped minor/patch bumps at all. Dependabot
+never authors card builds, so agent-task and plan must NOT admit it, and
+agent-fix's deliberate lock (DRE-1988) stays untouched.
 """
 import glob
 import os
@@ -44,6 +51,10 @@ WORKFLOWS_DIR = os.path.join(
 WORKER_BOT = "agent-bureau-bot"
 POOL_BOTS = ["agent-bureau-bot-2", "agent-bureau-bot-3", "agent-bureau-bot-4"]
 QA_BOT = "agent-bureau-qa-bot"
+# Bare slug, matching every other token here: claude-code-action normalizes
+# both sides by stripping a trailing "[bot]", so `dependabot` admits the
+# dependabot[bot] actor exactly as `agent-bureau-bot` admits its App.
+DEPENDABOT = "dependabot"
 
 ALLOWED_BOTS_RE = re.compile(r"^\s*allowed_bots:\s*(.+?)\s*$", re.M)
 
@@ -170,6 +181,47 @@ class QaBotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
                     QA_BOT, tokens,
                     f"{filename}: allowed_bots={tokens} must not admit "
                     f"{QA_BOT} — the qa-bot never authors builds",
+                )
+
+
+class DependabotReviewedButNeverAuthorsTest(unittest.TestCase):
+    """DRE-2039: dependabot[bot]'s own pull_request events (opened /
+    synchronize on its dependency PRs) trigger qa-review and verify, so
+    every allowed_bots site in those two must admit it — without the critic
+    verdict the merge gate can never auto-merge a grouped minor/patch bump.
+    Dependabot never authors card builds, so agent-task and plan must NOT
+    admit it (same authorship separation as the qa-bot), and agent-fix's
+    deliberate lock (DRE-1988) must stay closed to it too."""
+
+    def test_qa_review_and_verify_admit_dependabot(self):
+        expected = {"qa-review.yml": 2, "verify.yml": 2}
+        for filename, count in expected.items():
+            sites = [
+                tokens for name, tokens in all_sites() if name == filename
+            ]
+            self.assertEqual(
+                len(sites), count,
+                f"{filename}: expected {count} allowed_bots site(s), found {sites}",
+            )
+            for tokens in sites:
+                self.assertIn(
+                    DEPENDABOT, tokens,
+                    f"{filename}: allowed_bots={tokens} is missing {DEPENDABOT} — "
+                    "Dependabot's own PR events trigger this workflow and "
+                    "crash it without the allowlist entry (DRE-2039)",
+                )
+
+    def test_agent_task_plan_and_agent_fix_exclude_dependabot(self):
+        for filename in ("agent-task.yml", "plan.yml", "agent-fix.yml"):
+            sites = [
+                tokens for name, tokens in all_sites() if name == filename
+            ]
+            self.assertTrue(sites, f"{filename}: no allowed_bots site found")
+            for tokens in sites:
+                self.assertNotIn(
+                    DEPENDABOT, tokens,
+                    f"{filename}: allowed_bots={tokens} must not admit "
+                    f"{DEPENDABOT} — Dependabot never authors or fixes builds",
                 )
 
 
