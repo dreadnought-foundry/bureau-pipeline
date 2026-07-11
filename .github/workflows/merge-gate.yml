@@ -77,7 +77,7 @@ jobs:
     steps:
       - name: Mint qa-bot token (author != merger)
         id: qa
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
