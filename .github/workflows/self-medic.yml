@@ -4,13 +4,17 @@
 #
 # The workflow_run list names this repo's own pipeline-stage + CI workflows
 # (DRE-2028: keep it current when CI changes; tests/test_self_host_stubs.py
-# enforces coverage). No deploy/release workflows are listed — the medic must
-# never auto-retry a deploy.
+# enforces coverage). DRE-2036 widened the rule: EVERY workflow that runs
+# under its own name is watched — including the scheduled Reconcile sweep and
+# comment-triggered Agent Fix, so the safety net's own failures are diagnosed
+# too. Only Pipeline Medic itself is exempt (a red medic must not loop on
+# itself). No deploy/release workflows exist here — the medic must never
+# auto-retry a deploy.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix]
     types: [completed]
 
 permissions:
