@@ -97,6 +97,9 @@ class StaleAssertionEndToEndTest(unittest.TestCase):
         self.assertIn("VERDICT: REQUEST_CHANGES", ctx)
 
     def test_step_4_the_merge_gate_merges_only_on_green_plus_approve(self):
+        # compare_status="ahead" satisfies branch currency (DRE-1924
+        # condition 0) — the repair branch was cut from the failing head, so
+        # a live repair PR is current by construction.
         checks = [{"status": "completed", "conclusion": "success",
                    "check_suite": {"id": 7}}]
         approve = [{
@@ -104,7 +107,8 @@ class StaleAssertionEndToEndTest(unittest.TestCase):
             "body": f"🔎 QA Critic — VERDICT: APPROVE @{FIX_HEAD_SHA}\n\nok",
         }]
         self.assertEqual(
-            merge_gate.decide(FIX_HEAD_SHA, QA_LOGIN, checks, approve).action,
+            merge_gate.decide(FIX_HEAD_SHA, QA_LOGIN, checks, approve,
+                              compare_status="ahead").action,
             "merge",
         )
         # A test-gutting rejection stands as a hold — the fix loop, not the
@@ -115,7 +119,8 @@ class StaleAssertionEndToEndTest(unittest.TestCase):
                      "\n\nweakened assertion, no stale justification"),
         }]
         self.assertEqual(
-            merge_gate.decide(FIX_HEAD_SHA, QA_LOGIN, checks, reject).action,
+            merge_gate.decide(FIX_HEAD_SHA, QA_LOGIN, checks, reject,
+                              compare_status="ahead").action,
             "hold",
         )
 

@@ -182,10 +182,12 @@ class MergeAndFixRoutingTest(unittest.TestCase):
         self.assertIn("agent/*|repair/*", src("agent-fix.yml"))
 
     def test_merge_gate_decision_merges_an_approved_repair_pr(self):
-        # The DECISION layer is branch-agnostic: green checks + a qa-bot
-        # APPROVE bound to head → merge. Author != merger holds because the
-        # verdict author and merging identity are the qa-bot App while the
-        # repair PR's author is the worker App.
+        # The DECISION layer is branch-agnostic: branch currency (DRE-1924
+        # condition 0, compare_status="ahead" — a repair branch is cut from
+        # the failing head so a live one is current) + green checks + a
+        # qa-bot APPROVE bound to head → merge. Author != merger holds
+        # because the verdict author and merging identity are the qa-bot App
+        # while the repair PR's author is the worker App.
         import merge_gate
 
         head = SHA
@@ -196,7 +198,8 @@ class MergeAndFixRoutingTest(unittest.TestCase):
             "body": f"🔎 QA Critic — VERDICT: APPROVE @{head}\n\nLooks right.",
         }]
         decision = merge_gate.decide(head, "agent-bureau-qa-bot[bot]",
-                                     checks, comments)
+                                     checks, comments,
+                                     compare_status="ahead")
         self.assertEqual(decision.action, "merge")
 
 
