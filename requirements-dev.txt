@@ -4,4 +4,4 @@
 # (.github/dependabot.yml). CI installs from this file (tests.yml), so a
 # bump here is what the suite actually runs against.
 pytest==9.1.1
-PyYAML==6.0.1
+PyYAML==6.0.3
