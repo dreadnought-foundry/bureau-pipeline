@@ -264,11 +264,15 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py state \
             "${{ github.event.client_payload.identifier }}" "In Progress"
           # Heartbeat: record which model this attempt uses so the board/console
-          # can surface per-attempt model (DRE-1354 AC).
+          # can surface per-attempt model (DRE-1354 AC). The run URL maps the
+          # card to THIS Actions run so the reconcile sweep can check the run
+          # is actually still alive before declaring the card dead (DRE-2032 —
+          # the sweep once requeued a live 45-minute build and the redispatch
+          # cancelled it via the concurrency group, run 29125285930).
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ github.event.client_payload.identifier }}" \
-            "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting."
+            "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Implement card
         id: claude
