@@ -18,6 +18,12 @@ The rule (engineering standard: "commit the failing test FIRST"):
     ops  = `.github/` + `config/` + `agents.yaml`.
     Anything unrecognized counts as code — fail-closed, so a new source tree
     can't silently dodge the discipline.
+  • Dependabot-authored PRs are exempt (DRE-2049): a dependency bump has no
+    behavior of its own to RED-test — its proof is the whole suite running
+    against the bumped pins (the `unit` job installs from the manifest).
+    The author arrives via the PR_AUTHOR env var, GitHub-attested identity
+    (never the spoofable branch name). Live origin: bp #93's critic-APPROVEd
+    pyyaml minor could not auto-merge behind a permanently red TDD check.
   • Merge commits are skipped: merging an advanced main into the branch
     brings mainline commits that are not the PR's own work.
 
@@ -35,6 +41,7 @@ loud, never pass.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -48,6 +55,18 @@ _TEST_PREFIXES = ("tests/",)
 _DOCS_PREFIXES = ("docs/",)
 _OPS_PREFIXES = (".github/", "config/")
 _OPS_FILES = frozenset({"agents.yaml"})
+
+
+def is_dependabot_author(login: str | None) -> bool:
+    """True iff the PR author login is dependabot[bot]. Same normalization
+    as reconcile.is_dependabot_pr: GitHub surfaces a Bot login as
+    "dependabot" (GraphQL), "dependabot[bot]" (REST/Actions event shape) or
+    "app/dependabot" (gh's bot marker) — all the same actor. Exact match on
+    the normalized login, so a user account NAMED to look like the bot
+    doesn't dodge the discipline."""
+    if not login:
+        return False
+    return login.removeprefix("app/").removesuffix("[bot]") == "dependabot"
 
 
 def classify_path(path: str) -> str:
@@ -112,6 +131,10 @@ def main(argv: list[str]) -> int:
         print("usage: check_tdd_commits.py <base> <head>", file=sys.stderr)
         return 2
     base, head = argv
+    if is_dependabot_author(os.environ.get("PR_AUTHOR")):
+        print("exempt: dependabot-authored dependency PR — no RED test to "
+              "demand; the unit job runs the suite against the bumped pins")
+        return 0
     try:
         commits = pr_commits(base, head)
     except subprocess.CalledProcessError as e:

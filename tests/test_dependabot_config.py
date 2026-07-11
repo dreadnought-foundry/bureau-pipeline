@@ -67,6 +67,18 @@ class DependabotConfigTest(unittest.TestCase):
                 f"{eco}: group must hold exactly minor+patch (majors separate)",
             )
 
+    def test_each_ecosystem_caps_open_prs_at_five(self):
+        """DRE-2049 (live: agent-bureau's first sweep opened 27 PRs at once):
+        every ecosystem bounds its open PRs so a weekly sweep arrives as a
+        reviewable set, not a flood — dependabot holds the rest back until
+        slots free up."""
+        updates = updates_by_ecosystem()
+        for eco in ("pip", "github-actions"):
+            self.assertEqual(
+                updates[eco].get("open-pull-requests-limit"), 5,
+                f"{eco}: open-pull-requests-limit must cap the sweep at 5",
+            )
+
     def test_stable_only_default_is_documented(self):
         # Dependabot's default (no prereleases unless already on one) is the
         # behavior we rely on — the file must say so where the next editor

@@ -54,7 +54,7 @@ jobs:
     steps:
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -196,9 +196,9 @@ jobs:
 
       - name: Notify hold on Linear
         if: steps.pr.outputs.held == 'true' && steps.pr.outputs.card != ''
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
       - if: steps.pr.outputs.held == 'true' && steps.pr.outputs.card != ''
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -216,7 +216,7 @@ jobs:
 
       - name: Checkout PR branch
         if: steps.pr.outputs.go == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           token: ${{ steps.app.outputs.token }}
           ref: ${{ steps.pr.outputs.branch }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Checkout pipeline scripts + briefs
         if: steps.pr.outputs.go == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}

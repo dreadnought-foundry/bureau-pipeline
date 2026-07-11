@@ -80,14 +80,14 @@ jobs:
       # unchanged; only the App identity behind the token moved.
       - name: Mint qa-bot token (separate quota from relay dispatch)
         id: app
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -316,6 +316,37 @@ jobs:
             --log-file /tmp/repair/original-failure.log \
             --log-note "$NOTE"
 
+      # ── Card-context stage (DRE-2052) ─────────────────────────────────────
+      # The prompt used to interpolate the card ref raw — for a cardless PR
+      # (dependabot/**, repair/**) that rendered as "It implements Linear
+      # card ." and pointed the critic's card-criteria instructions at the
+      # PR body, which for dependabot is machine-generated release notes,
+      # potentially hundreds of KB of untrusted changelog (the routed
+      # agent-bureau reviews died is_error on both attempts, 2026-07-11;
+      # bureau-pipeline's small-body actions bumps survived the same
+      # dispatch). review_card_context.py builds the block deterministically
+      # per PR shape: card PRs keep today's sentence; cardless dependabot
+      # PRs get an explicit deps-policy review with the body sanitized,
+      # size-capped, and fenced (DRE-1996 discipline); repair and other
+      # cardless shapes are stated plainly and card bookkeeping no-ops.
+      # Inputs ride env only — nothing agent-influenced is interpolated
+      # into this script, so it is also executable verbatim by the tests.
+      - name: Build card review context
+        id: cardctx
+        if: steps.decide.outputs.review == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          CARD: ${{ steps.pr.outputs.card }}
+        run: |
+          BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName || true)
+          gh pr view "$PR" --json body --jq .body > /tmp/cardctx-pr-body.txt 2>/dev/null \
+            || : > /tmp/cardctx-pr-body.txt
+          python3 .bureau-pipeline/scripts/review_card_context.py \
+            --card "$CARD" \
+            --branch "$BRANCH" \
+            --pr-body-file /tmp/cardctx-pr-body.txt
+
       - name: Critic review
         id: critic
         if: steps.decide.outputs.review == 'true'
@@ -343,12 +374,20 @@ jobs:
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
             in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
             `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
-            It implements Linear card ${{ steps.pr.outputs.card }}.
+
+            CARD CONTEXT (DRE-2052 — what this PR implements and how to
+            judge check 1; follow it exactly). Fallback if the block below
+            is empty: judge a DRE-carrying branch against its card quoted
+            in the PR body, and a cardless branch on the diff alone —
+            never invent a card:
+            ${{ steps.cardctx.outputs.context }}
 
             Check, in order of severity:
-            1. Does the diff actually satisfy the card's acceptance criteria
-               (read the card description quoted in the PR body, and any
-               **Spec:** directory it references)? If the card has a
+            1. Does the diff actually satisfy the acceptance criteria the
+               CARD CONTEXT block above defines — for a card PR the card's
+               criteria (its description and any **Spec:** directory it
+               references), for a cardless PR the policy the block states?
+               If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
                incorrect components, wrong structure/layout, wrong copy, or
@@ -470,12 +509,20 @@ jobs:
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
             in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
             `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
-            It implements Linear card ${{ steps.pr.outputs.card }}.
+
+            CARD CONTEXT (DRE-2052 — what this PR implements and how to
+            judge check 1; follow it exactly). Fallback if the block below
+            is empty: judge a DRE-carrying branch against its card quoted
+            in the PR body, and a cardless branch on the diff alone —
+            never invent a card:
+            ${{ steps.cardctx.outputs.context }}
 
             Check, in order of severity:
-            1. Does the diff actually satisfy the card's acceptance criteria
-               (read the card description quoted in the PR body, and any
-               **Spec:** directory it references)? If the card has a
+            1. Does the diff actually satisfy the acceptance criteria the
+               CARD CONTEXT block above defines — for a card PR the card's
+               criteria (its description and any **Spec:** directory it
+               references), for a cardless PR the policy the block states?
+               If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
                incorrect components, wrong structure/layout, wrong copy, or

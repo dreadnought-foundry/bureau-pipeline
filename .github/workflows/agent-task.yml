@@ -73,12 +73,12 @@ jobs:
       # everything quota-heavy after pool selection uses the worker token.
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           token: ${{ steps.app.outputs.token }}
           fetch-depth: 0
@@ -87,7 +87,7 @@ jobs:
       # Checked out AFTER the product repo so the product checkout's clean
       # step can't wipe it; excluded from the product repo's git view so an
       # agent `git add -A` can never commit it.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -114,7 +114,7 @@ jobs:
         id: probe_2
         if: ${{ env.BUREAU_APP_ID_2 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -122,7 +122,7 @@ jobs:
         id: probe_3
         if: ${{ env.BUREAU_APP_ID_3 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -130,7 +130,7 @@ jobs:
         id: probe_4
         if: ${{ env.BUREAU_APP_ID_4 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -157,7 +157,7 @@ jobs:
       # empty — so the chain always falls through to the original app pair.
       - name: Mint worker token (selected pool app)
         id: worker
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
