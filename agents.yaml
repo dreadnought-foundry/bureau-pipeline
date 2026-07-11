@@ -181,3 +181,22 @@ agents:
     tools: [Bash, Read, Glob, Grep, Write]
     briefPath: null
     workflow: .github/workflows/medic.yml
+
+  - name: repairer
+    role: Red-Main Repair
+    category: operations
+    # Engineer ladder (DRE-1490): the repair agent is an engineer-tier fixer.
+    model: claude-fable-5
+    ladder:
+      - model: claude-fable-5
+        reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
+      - model: claude-opus-4-8
+        reason: "first fallback — effective default today while Fable is unavailable"
+      - model: claude-sonnet-4-6
+        reason: "last resort if both Fable and Opus are unavailable"
+    trigger: "workflow_run — default-branch CI conclusion=failure (event-driven; no polling; ≤2 attempts per failing SHA)"
+    maxTurns: 100
+    maxBudget: 10
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    briefPath: null
+    workflow: .github/workflows/red-main-repair.yml

@@ -33,6 +33,11 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write
+  # DRE-1927: the repair-PR review context fetches the ORIGINAL failing
+  # run's logs with github.token (the qa-bot App deliberately lacks
+  # actions:read). Read-only; absent it, the stage degrades to the
+  # maximum-suspicion fallback rather than blocking review.
+  actions: read
 
 jobs:
   call:

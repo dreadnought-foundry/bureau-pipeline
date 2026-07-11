@@ -9,12 +9,14 @@
 # comment-triggered Agent Fix, so the safety net's own failures are diagnosed
 # too. Only Pipeline Medic itself is exempt (a red medic must not loop on
 # itself). No deploy/release workflows exist here — the medic must never
-# auto-retry a deploy.
+# auto-retry a deploy. Red-Main Repair is watched, never watching: a
+# repair run's own failure routes through the medic (DRE-1927 guardrail 2 —
+# no new retry loop anywhere).
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair]
     types: [completed]
 
 permissions:

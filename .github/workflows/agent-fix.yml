@@ -74,7 +74,11 @@ jobs:
           # phantom "Fix attempt N pushed" that re-triggers nothing).
           HEAD_SHA=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['headRefOid'])")
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          case "$BRANCH" in agent/*) ;; *) echo "not an agent branch"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0;; esac
+          # repair/* joins agent/* (DRE-1927): a repair PR's REQUEST_CHANGES
+          # routes through THIS loop with its existing budgets — the ADR's
+          # no-new-retry-loop guardrail. Repair branches carry no DRE-N;
+          # every card comment below is already guarded on CARD non-empty.
+          case "$BRANCH" in agent/*|repair/*) ;; *) echo "not an agent branch"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0;; esac
           [ "$STATE" != "OPEN" ] && { echo "PR is $STATE"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 

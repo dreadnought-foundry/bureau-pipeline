@@ -1,9 +1,10 @@
 # ADR: red-main auto-repair — the build fixes itself instead of a human
 
-- **Status:** Proposed — awaiting CEO sign-off on DRE-1925. The build card
-  ([DRE-1923](https://linear.app/dreadnoughtfoundry/issue/DRE-1923)) is
-  blocked until this ADR is Accepted; sign-off is captured on the DRE-1925
-  card (the CEO's comment/approval there flips this line to Accepted).
+- **Status:** Accepted — 2026-07-11 (CEO sign-off on DRE-1925). Built by
+  DRE-1927 (the build card under the
+  [DRE-1923](https://linear.app/dreadnoughtfoundry/issue/DRE-1923) epic):
+  `.github/workflows/red-main-repair.yml` + `scripts/red_main_repair.py` +
+  `scripts/repair_context.py`.
 - **Date:** 2026-07-11
 - **Cards:** DRE-1925 (this design), DRE-1923 (the build it gates)
 
@@ -173,6 +174,5 @@ installation buckets the 2026-06-28 incident exhausted):
 
 ## Sign-off
 
-CEO sign-off is captured on DRE-1925 in Linear. Until then this ADR is
-**Proposed** and DRE-1923 must not start; on sign-off, flip the Status line
-to Accepted and unblock the build card.
+CEO sign-off is captured on DRE-1925 in Linear (2026-07-11); this ADR is
+**Accepted** and the DRE-1923 build is unblocked.

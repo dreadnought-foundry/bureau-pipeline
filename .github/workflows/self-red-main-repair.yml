@@ -1,0 +1,29 @@
+# Self-host trigger stub (DRE-1927, adr-red-main-auto-repair) — this repo
+# consumes its OWN reusable workflows exactly like a product repo.
+# @main on purpose: this repo is the canary channel; the fleet rides tags.
+#
+# Watches this repo's CI on completion; the reusable workflow's job gate
+# fires only on conclusion=failure on the default branch (event-driven off
+# workflow_run — NO polling; the reconcile sweep stays the only scheduled
+# job in the system). The repair stage never watches itself — its own
+# failures are the medic's job (self-medic.yml watches "Red-Main Repair").
+#
+# github.token needs actions:read so the failed run's logs can be fetched
+# for classification (guardrail 2); contents/pull-requests write mirror the
+# agent-task stub — the fix agent authors a branch + PR here.
+name: Red-Main Repair
+
+on:
+  workflow_run:
+    workflows: [Pipeline Tests]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/red-main-repair.yml@main
+    secrets: inherit
