@@ -139,7 +139,8 @@ class SuitelessCheckRunTest(unittest.TestCase):
     def test_suiteless_red_check_blocks(self):
         bare = {"name": "unit", "status": "completed", "conclusion": "failure"}
         decision = merge_gate.decide(HEAD, QA_LOGIN, [bare], APPROVE,
-                                     review_suites=frozenset())
+                                     review_suites=frozenset(),
+                                     compare_status="ahead")
         self.assertEqual(decision.action, "wait")
         self.assertIn("not green", decision.reason)
 
@@ -160,12 +161,16 @@ class CliOriginContractTest(unittest.TestCase):
                               {"total_count": len(workflow_runs),
                                "workflow_runs": workflow_runs}))
             cm.write_text(json.dumps(comments))
+            # A current branch — condition 0 (DRE-1924) has its own suite.
+            cp = Path(td) / "compare.json"
+            cp.write_text(json.dumps({"status": "ahead"}))
             return subprocess.run(
                 [sys.executable, str(SCRIPT),
                  "--head-sha", HEAD, "--qa-login", QA_LOGIN,
                  "--check-runs-file", str(cr),
                  "--comments-file", str(cm),
-                 "--workflow-runs-file", str(wr), *extra],
+                 "--workflow-runs-file", str(wr),
+                 "--compare-file", str(cp), *extra],
                 capture_output=True, text=True,
             )
 

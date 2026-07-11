@@ -147,16 +147,19 @@ class CliContractTest(unittest.TestCase):
             cr = Path(td) / "check-runs.json"
             cm = Path(td) / "comments.json"
             wr = Path(td) / "workflow-runs.json"
+            cp = Path(td) / "compare.json"
             # The workflow hands the RAW REST payloads over — objects with
             # check_runs / workflow_runs keys, not bare lists.
             cr.write_text(json.dumps({"total_count": len(check_runs), "check_runs": check_runs}))
             cm.write_text(json.dumps(comments))
             wr.write_text(json.dumps({"workflow_runs": list(workflow_runs)}))
+            # A current branch — condition 0 (DRE-1924) has its own suite.
+            cp.write_text(json.dumps({"status": "ahead"}))
             return subprocess.run(
                 [sys.executable, str(SCRIPT),
                  "--head-sha", self.HEAD, "--qa-login", self.QA,
                  "--check-runs-file", str(cr), "--comments-file", str(cm),
-                 "--workflow-runs-file", str(wr)],
+                 "--workflow-runs-file", str(wr), "--compare-file", str(cp)],
                 capture_output=True, text=True,
             )
 
@@ -191,14 +194,16 @@ class CliContractTest(unittest.TestCase):
             cr = Path(td) / "check-runs.json"
             cm = Path(td) / "comments.json"
             wr = Path(td) / "workflow-runs.json"
+            cp = Path(td) / "compare.json"
             cr.write_text("not json")
             cm.write_text("[]")
             wr.write_text(json.dumps({"workflow_runs": []}))
+            cp.write_text(json.dumps({"status": "ahead"}))
             proc = subprocess.run(
                 [sys.executable, str(SCRIPT),
                  "--head-sha", self.HEAD, "--qa-login", self.QA,
                  "--check-runs-file", str(cr), "--comments-file", str(cm),
-                 "--workflow-runs-file", str(wr)],
+                 "--workflow-runs-file", str(wr), "--compare-file", str(cp)],
                 capture_output=True, text=True,
             )
         self.assertEqual(proc.returncode, 2)
@@ -209,14 +214,16 @@ class CliContractTest(unittest.TestCase):
             cr = Path(td) / "check-runs.json"
             cm = Path(td) / "comments.json"
             wr = Path(td) / "workflow-runs.json"
+            cp = Path(td) / "compare.json"
             cr.write_text(json.dumps({"check_runs": []}))
             cm.write_text("[]")
             wr.write_text(json.dumps({"workflow_runs": []}))
+            cp.write_text(json.dumps({"status": "ahead"}))
             proc = subprocess.run(
                 [sys.executable, str(SCRIPT),
                  "--head-sha", "not-a-sha", "--qa-login", self.QA,
                  "--check-runs-file", str(cr), "--comments-file", str(cm),
-                 "--workflow-runs-file", str(wr)],
+                 "--workflow-runs-file", str(wr), "--compare-file", str(cp)],
                 capture_output=True, text=True,
             )
         self.assertEqual(proc.returncode, 2)
