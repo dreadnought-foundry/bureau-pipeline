@@ -52,6 +52,9 @@ jobs:
     #     pipeline's repo-scoped agent tokens can't author, so the operator
     #     opens them by hand); these used to SKIP the critic and merge with no
     #     adversarial verdict — now they pass the same gate.
+    #   • repair/<failing-sha>        — red-main auto-repair PRs (DRE-1927):
+    #     cardless agent fixes to a broken main; the critic gets a repair
+    #     context block (original failing log + test-touch flag) below.
     # A branch with a linked Linear card (DRE-<n>, the signal linear-sync uses
     # to close the loop) is real product work and gets reviewed; a truly
     # chrome-only branch (no linked card) is still skipped below by the
@@ -61,6 +64,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.pull_request.head.ref, 'agent/') ||
+      startsWith(github.event.pull_request.head.ref, 'repair/') ||
       contains(github.event.pull_request.head.ref, 'DRE-')
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -260,6 +264,54 @@ jobs:
             echo "VQA_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # ── Repair-PR stage (DRE-1927, adr-red-main-auto-repair guardrail 1) ──
+      # A repair/<failing-sha> PR is an agent's fix for a broken main — the
+      # critic must judge it against the ORIGINAL failing log, with every
+      # test-tree edit mechanically flagged as a mandatory finding
+      # (test-gutting is the #1 danger the ADR names). repair_context.py is
+      # inert for non-repair branches, degrades to a maximum-suspicion
+      # instruction when the log can't be fetched, and writes its output
+      # under a random heredoc delimiter (log text must never terminate the
+      # output block). The log listing/read needs actions:read, which the
+      # qa-bot App deliberately lacks — that ONE read uses the workflow's
+      # own token, and a blip degrades toward suspicion, never past it.
+      - name: Build repair-PR review context
+        id: repair
+        if: steps.decide.outputs.review == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RUNS_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set +e
+          mkdir -p /tmp/repair
+          BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
+          gh pr diff "$PR" --name-only > /tmp/repair/changed.txt 2>/dev/null || : > /tmp/repair/changed.txt
+          : > /tmp/repair/original-failure.log
+          NOTE=""
+          # The failing head SHA is encoded in the branch name itself —
+          # deterministic, no trust in the PR body.
+          SHA=$(printf '%s' "$BRANCH" | grep -oE '^repair/[0-9a-f]{40}' | cut -d/ -f2 || true)
+          if [ -n "$SHA" ]; then
+            RUN_ID=$(GH_TOKEN="$RUNS_TOKEN" gh api \
+              "repos/${{ github.repository }}/actions/runs?head_sha=$SHA&status=failure&per_page=20" \
+              --jq "first(.workflow_runs[] | select(.head_branch == \"$DEFAULT_BRANCH\")) | .id" 2>/dev/null)
+            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+              GH_TOKEN="$RUNS_TOKEN" gh run view "$RUN_ID" --log-failed \
+                --repo ${{ github.repository }} > /tmp/repair/original-failure.log 2>/dev/null \
+                || NOTE="log fetch failed for run $RUN_ID"
+            else
+              NOTE="no failed default-branch run found for $SHA"
+            fi
+          fi
+          python3 .bureau-pipeline/scripts/repair_context.py \
+            --branch "$BRANCH" \
+            --changed-file /tmp/repair/changed.txt \
+            --log-file /tmp/repair/original-failure.log \
+            --log-note "$NOTE"
+
       - name: Critic review
         id: critic
         if: steps.decide.outputs.review == 'true'
@@ -303,6 +355,14 @@ jobs:
                VISUAL-QA STAGE (read this and follow it exactly — it gates
                merges, so it is deliberately conservative):
                ${{ steps.visual.outputs.context }}
+
+               REPAIR-PR STAGE (DRE-1927 — follow it exactly; it gates
+               agent-authored fixes to a broken main). Fallback rule: if
+               this PR's head branch starts with `repair/` and
+               the block below is empty, treat ANY change under a test tree
+               as a blocking finding — going green by silencing the failing
+               signal is the failure mode this stage exists to catch:
+               ${{ steps.repair.outputs.context }}
             2. Are the tests REAL — do they assert meaningful behavior, would
                they fail if the implementation were wrong? Vacuous or
                tautological tests are a blocking finding.
@@ -420,6 +480,14 @@ jobs:
                VISUAL-QA STAGE (read this and follow it exactly — it gates
                merges, so it is deliberately conservative):
                ${{ steps.visual.outputs.context }}
+
+               REPAIR-PR STAGE (DRE-1927 — follow it exactly; it gates
+               agent-authored fixes to a broken main). Fallback rule: if
+               this PR's head branch starts with `repair/` and
+               the block below is empty, treat ANY change under a test tree
+               as a blocking finding — going green by silencing the failing
+               signal is the failure mode this stage exists to catch:
+               ${{ steps.repair.outputs.context }}
             2. Are the tests REAL — do they assert meaningful behavior, would
                they fail if the implementation were wrong? Vacuous or
                tautological tests are a blocking finding.

@@ -19,6 +19,10 @@ the gate never blocks on things that aren't card work.
 Decision (branch-name only, so it runs as cheaply as the old `if:` guard):
 
   • branch starts with `agent/`            → review   (unchanged; no regression)
+  • branch starts with `repair/`           → review   (red-main repair PR —
+    DRE-1927: it carries no card, so without this opt-in an agent-authored
+    fix to a broken main would merge with NO adversarial review, the exact
+    bypass adr-red-main-auto-repair's guardrail 1 forbids)
   • branch carries a `DRE-<n>` reference   → review   (operator-routed card PR)
   • otherwise (no linked card)             → skip     (chrome-only)
 
@@ -57,11 +61,13 @@ def card_in_branch(branch: str | None) -> str | None:
 def should_review(branch: str | None) -> bool:
     """True iff the critic should adversarially review this PR's branch.
 
-    Review when the branch is an agent branch (legacy convention, unchanged)
-    OR it carries a linked Linear card (operator-routed card PRs — DRE-1888).
-    Skip only truly chrome-only branches with no linked card.
+    Review when the branch is an agent branch (legacy convention, unchanged),
+    a red-main repair branch (DRE-1927 — cardless agent work that must never
+    dodge the critic), OR it carries a linked Linear card (operator-routed
+    card PRs — DRE-1888). Skip only truly chrome-only branches with no
+    linked card.
     """
-    if branch and branch.startswith("agent/"):
+    if branch and branch.startswith(("agent/", "repair/")):
         return True
     return card_in_branch(branch) is not None
 
@@ -72,7 +78,12 @@ def main(argv: list[str]) -> int:
     print(f"review={'true' if review else 'false'}")
     if review:
         card = card_in_branch(branch)
-        why = "agent branch" if branch.startswith("agent/") else f"linked card {card}"
+        if branch.startswith("agent/"):
+            why = "agent branch"
+        elif branch.startswith("repair/"):
+            why = "red-main repair branch"
+        else:
+            why = f"linked card {card}"
         print(f"will review {branch!r} ({why})")
         return 0
     print(f"skipping {branch!r}: chrome-only PR, no linked card")

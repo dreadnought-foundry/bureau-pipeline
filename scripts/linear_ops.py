@@ -29,6 +29,10 @@ Subcommands:
                                          --blocked-by DRE-N,DRE-M  (also parsed
                                                           from the body line)
   create <title> <description-file>    create a standalone card in Triage
+  find-open <title>                    print the identifier of an existing
+                                       non-terminal (not Done/Canceled) card
+                                       with exactly this title, else nothing —
+                                       red-main-repair's escalation dedup
   children <DRE-N>                     print the number of child issues
   add-label <DRE-N> <label-name>       attach a label (creating it if needed),
                                        idempotent — used for the human-hold
@@ -496,6 +500,25 @@ def cmd_create(title: str, description_file: str) -> None:
     print(f"created {issue['identifier']} {issue['url']}")
 
 
+def cmd_find_open(title: str) -> None:
+    """Print the identifier of an existing card with exactly `title` that is
+    not completed/canceled, else print nothing. red-main-repair.yml calls
+    this before creating an escalation/triage card so duplicate failure
+    events for the same red main never mint duplicate cards; terminal cards
+    deliberately don't count — a re-broken main deserves a fresh card."""
+    data = gql(
+        """query($t: String!) {
+             issues(filter: {
+               title: {eq: $t},
+               state: {type: {nin: ["completed", "canceled"]}}
+             }, first: 1) { nodes { identifier } } }""",
+        {"t": title},
+    )
+    nodes = data["issues"]["nodes"]
+    if nodes:
+        print(nodes[0]["identifier"])
+
+
 def cmd_children(identifier: str) -> None:
     data = gql(
         """query($id: String!) { issue(id: $id) { children { nodes { id } } } }""",
@@ -645,6 +668,7 @@ if __name__ == "__main__":
         "set-description": set_description,
         "subissue": cmd_subissue,
         "create": cmd_create,
+        "find-open": cmd_find_open,
         "children": cmd_children,
         "count-comments": cmd_count_comments,
         "dump-comments": cmd_dump_comments,
