@@ -1,0 +1,23 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo.
+# @main on purpose: this repo is the canary channel; the fleet rides tags.
+#
+# max_wip is left at the reusable's default ("8") — a conservative cap for the
+# control-plane repo, deliberately below agent-bureau's "12".
+name: Reconcile
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  repository_dispatch:
+    types: [reconcile]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@main
+    secrets: inherit

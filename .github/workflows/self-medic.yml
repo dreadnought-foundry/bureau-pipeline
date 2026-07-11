@@ -1,0 +1,23 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo.
+# @main on purpose: this repo is the canary channel; the fleet rides tags.
+#
+# The workflow_run list names this repo's own pipeline-stage + CI workflows
+# (DRE-2028: keep it current when CI changes; tests/test_self_host_stubs.py
+# enforces coverage). No deploy/release workflows are listed — the medic must
+# never auto-retry a deploy.
+name: Pipeline Medic
+
+on:
+  workflow_run:
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/medic.yml@main
+    secrets: inherit

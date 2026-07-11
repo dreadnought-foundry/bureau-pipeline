@@ -1,0 +1,26 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo. The stub
+# owns the trigger, concurrency, and permissions; everything else is central.
+#
+# @main on purpose: bureau-pipeline IS the canary channel. The fleet consumes
+# human-promoted tags (@v1), so an agent merge to main here changes nothing
+# live — it only stages the next release. The fully qualified form (never a
+# local ./ ref) pins the logic to the already-merged version, not the PR's.
+name: Agent Task
+
+on:
+  repository_dispatch:
+    types: [agent-execute]
+
+concurrency:
+  group: agent-${{ github.event.client_payload.identifier }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml@main
+    secrets: inherit

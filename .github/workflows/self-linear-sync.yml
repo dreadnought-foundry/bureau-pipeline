@@ -1,0 +1,17 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo.
+# @main on purpose: this repo is the canary channel; the fleet rides tags.
+name: Linear Sync
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  actions: write  # conflict-sweep dispatches agent-fix via github.token
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/linear-sync.yml@main
+    secrets: inherit
