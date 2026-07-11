@@ -192,6 +192,7 @@ class FilterShapeTest(unittest.TestCase):
         decision = merge_gate.decide(
             self.HEAD, QA_LOGIN, self.GREEN,
             [comment(WORKER_LOGIN, f"{QA_APPROVE} @{self.HEAD}")],
+            compare_status="ahead",
         )
         self.assertEqual(decision.action, "wait")
         self.assertIn("no critic verdict yet", decision.reason)
@@ -203,6 +204,7 @@ class FilterShapeTest(unittest.TestCase):
                 comment(QA_LOGIN, f"{QA_APPROVE} @{self.HEAD}"),
                 comment(WORKER_LOGIN, f"{V_FAIL} @{self.HEAD}"),
             ],
+            compare_status="ahead",
         )
         self.assertEqual(decision.action, "merge")
 

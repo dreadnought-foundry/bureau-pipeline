@@ -8,7 +8,25 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The three conditions (all must pass, evaluated in this order):
+The conditions (all must pass, evaluated in this order):
+
+0. BRANCH CURRENCY (DRE-1924) — the PR's head must contain its base
+   branch's tip, per GitHub's own compare record (GET
+   compare/{base}...{head_sha}, status ahead/identical). A stale branch
+   (behind/diverged) earned its green against an older base — the exact
+   "green alone, red together" class that turned main red on 2026-07-11:
+   the Asana connector PR (registered `asana`) and a test PR (asserted
+   `asana` is unknown) were each green on their own branch, red once both
+   landed. Decision `update`: the workflow updates the branch and exits;
+   CI re-runs on the merged result and the gate re-evaluates. An unknown
+   status (compare API blip → the workflow substitutes `{}`) is `wait`,
+   fail-closed — never merge past an unverifiable base, and never fire
+   the update mutation on unverifiable data either. This replaces the
+   untested shell `mergeStateStatus == BEHIND` fast-path, which GitHub
+   only reports when branch protection's "require branches to be up to
+   date" toggle is already on — the compare record works regardless.
+   Evaluated FIRST (the old fast-path's position): green checks and a
+   bound APPROVE on a stale branch prove nothing about the merged result.
 
 1. CI — every check run on the PR's head SHA has completed green
    (conclusion success/skipped/neutral). The REVIEW workflow's own check
@@ -71,17 +89,21 @@ Contract with merge-gate.yml:
     (the raw REST payload of GET /repos/{repo}/issues/{pr}/comments),
     --workflow-runs-file (the raw REST payload of
     GET /repos/{repo}/actions/runs?head_sha={sha} — the verified-origin
-    record for the review-run exclusion), --review-workflows (optional
-    comma-separated allowlist of review workflow paths).
+    record for the review-run exclusion), --compare-file (the status of
+    GET /repos/{repo}/compare/{base}...{head_sha} — the branch-currency
+    record, DRE-1924), --review-workflows (optional comma-separated
+    allowlist of review workflow paths).
   stdout: zero or more `note=` lines, then exactly one `decision=` line
-    (merge | wait | hold) and one `reason=` line (plain English).
+    (merge | update | wait | hold) and one `reason=` line (plain English).
   exit 0 = decided; exit 2 = malformed input (the job fails loudly and
     nothing merges — never fail open).
 
-wait vs hold: `wait` means the gate expects a future event to change the
-answer (CI finishing, a fresh review of the current head); `hold` means an
-explicit negative verdict is standing (REQUEST_CHANGES, Verifier FAIL) and
-only a new verdict lifts it. The workflow treats both as "do not merge".
+wait vs hold vs update: `wait` means the gate expects a future event to
+change the answer (CI finishing, a fresh review of the current head);
+`hold` means an explicit negative verdict is standing (REQUEST_CHANGES,
+Verifier FAIL) and only a new verdict lifts it; `update` means the branch
+is stale and the workflow should update it from its base (CI then re-runs
+on the merged result). None of the three merges.
 """
 
 from __future__ import annotations
@@ -106,6 +128,12 @@ DEFAULT_REVIEW_WORKFLOWS = (
 
 # Green = completed with a conclusion GitHub treats as non-blocking.
 GREEN_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
+
+# GitHub compare/{base}...{head} status values (DRE-1924): the head is
+# current when it contains the base's tip, stale when the base has commits
+# the head lacks. Anything else is unverifiable → wait, fail-closed.
+CURRENT_STATUSES = frozenset({"ahead", "identical"})
+STALE_STATUSES = frozenset({"behind", "diverged"})
 
 # A full 40-hex SHA anywhere on the verdict line (`@<sha>`), as the
 # producers append it. Abbreviated SHAs deliberately do not bind.
@@ -184,6 +212,27 @@ def review_suite_ids(workflow_runs, review_workflows) -> frozenset:
         for r in workflow_runs
         if r.get("path") in review_workflows
         and r.get("check_suite_id") is not None
+    )
+
+
+def evaluate_currency(compare_status) -> Optional[Decision]:
+    """Condition 0 (DRE-1924). None = head contains the base's tip,
+    proceed. Stale → `update` (the workflow updates the branch; CI re-runs
+    on the merged result). Unknown → `wait` — never merge past an
+    unverifiable base, and never mutate the branch on unverifiable data."""
+    if compare_status in CURRENT_STATUSES:
+        return None
+    if compare_status in STALE_STATUSES:
+        return Decision(
+            "update",
+            f"branch is {compare_status} relative to its base — its green "
+            "was earned against an older base; update the branch and "
+            "re-run CI on the merged result",
+        )
+    return Decision(
+        "wait",
+        f"branch currency unknown (compare status {compare_status!r}) — "
+        "wait; never merge past an unverifiable base",
     )
 
 
@@ -276,10 +325,17 @@ def decide(
     check_runs,
     comments,
     review_suites=frozenset(),
+    compare_status=None,
 ) -> Decision:
-    """The whole gate: conditions 1 → 2 → 3, first blocker wins.
+    """The whole gate: conditions 0 → 1 → 2 → 3, first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
-    the default (empty — nothing excluded) is the fail-closed direction."""
+    the default (empty — nothing excluded) is the fail-closed direction.
+    `compare_status` is the branch-currency record (DRE-1924); the default
+    (None — unverifiable → wait) is likewise fail-closed."""
+    blocked = evaluate_currency(compare_status)
+    if blocked:
+        return blocked
+
     blocked = evaluate_checks(check_runs, review_suites)
     if blocked:
         return blocked
@@ -316,6 +372,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="raw REST payload of GET actions/runs?head_sha=<sha> "
                              "— the verified-origin record for the review-run "
                              "exclusion (DRE-1994)")
+    parser.add_argument("--compare-file", required=True,
+                        help="REST payload of GET compare/{base}...{head_sha} "
+                             "(the status field suffices) — the branch-"
+                             "currency record (DRE-1924)")
     parser.add_argument("--review-workflows",
                         default=",".join(DEFAULT_REVIEW_WORKFLOWS),
                         help="comma-separated paths of the review workflow "
@@ -371,8 +431,19 @@ def main(argv=None) -> int:
     )
     review_suites = review_suite_ids(workflow_runs, review_paths)
 
+    try:
+        with open(args.compare_file) as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _die(f"cannot read compare record: {e}")
+    if not isinstance(payload, dict):
+        _die("compare payload is not an object")
+    # `{}` (the workflow's blip substitute) yields None → wait, fail-closed.
+    compare_status = payload.get("status")
+
     decision = decide(
-        args.head_sha, args.qa_login, check_runs, comments, review_suites
+        args.head_sha, args.qa_login, check_runs, comments, review_suites,
+        compare_status,
     )
     for note in decision.notes:
         print(f"note={note}")
