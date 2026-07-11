@@ -11,7 +11,8 @@ Checks (card must carry **Repo:** atlas, any owner-prefix form):
               no PR -> back to Todo (relay re-dispatches on the transition)
   In QA       stale >2h: PR merged -> Done; verdict bound to the current
               head (DRE-1990) -> merge-gate; verdict missing OR stale/
-              unbound -> re-trigger qa-review; no PR -> back to Todo
+              unbound -> re-trigger qa-review; no PR -> back to Todo,
+              capped by the shared dead-run cap (DRE-2034)
   In Review   stale >1h: PR merged -> Done; else re-trigger merge-gate
 
 Also runs the dependency gate: Backlog children whose parent epic is ACTIVATED
@@ -126,6 +127,10 @@ _CARD_REF = re.compile(r"DRE-\d+")
 def gh(*args: str) -> str:
     # B603/B607: args are program-constructed (no user input), shell=False,
     # and "gh" resolves via PATH on the runner by design.
+    # SILENT by design — safe only where an empty answer means "do nothing"
+    # (the PR-level backstops) or the caller has its own fallback
+    # (agent_run_alive's receipt path). The card PR lookup and every write
+    # use the LOUD helpers below instead (DRE-1254, DRE-2034).
     return subprocess.run(  # nosec B603 B607
         ["gh", *args], capture_output=True, text=True, check=False
     ).stdout.strip()
@@ -135,9 +140,36 @@ class ReconcileWriteError(RuntimeError):
     """A write-path gh call failed — surface it; never pretend success."""
 
 
+class ReconcileReadError(RuntimeError):
+    """A read-path gh call failed — surface it; never act on the fabricated
+    empty result (a 403 is NOT "this card has no PR")."""
+
+
 #: Write failures collected during the sweep; non-empty -> exit 1 so the
 #: Actions run goes red and medic picks it up.
 _write_failures: list[str] = []
+
+#: Read failures (unreadable PR lookups) collected the same way — the sweep
+#: skips the unreadable card, sweeps the rest, and still exits 1 (DRE-2034).
+_read_failures: list[str] = []
+
+
+def gh_read(*args: str) -> str:
+    """Run a read-path gh command LOUDLY: raise ReconcileReadError on rc!=0.
+
+    Origin (2026-06-28, twice live / DRE-2034): the silent gh() helper
+    discarded exit code and stderr, so a 403/rate-limit on the PR lookup
+    parsed as "[]" — indistinguishable from "this card has no PR" — and the
+    sweep requeued healthy cards off that fabricated emptiness.
+    """
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", *args], capture_output=True, text=True, check=False
+    )
+    if p.returncode != 0:
+        raise ReconcileReadError(
+            f"gh {' '.join(args)} failed rc={p.returncode}: {p.stderr.strip()[:400]}"
+        )
+    return p.stdout.strip()
 
 
 def gh_dispatch(*args: str) -> None:
@@ -228,22 +260,38 @@ def active_cards() -> list[dict]:
 
 
 def pr_for(identifier: str) -> dict | None:
-    out = gh(
-        "pr",
-        "list",
-        "--repo",
-        REPO,
-        "--state",
-        "all",
-        "--limit",
-        "100",
-        "--json",
-        "number,headRefName,state,comments,headRefOid",
-    )
-    for pr in json.loads(out or "[]"):
-        if re.search(rf"\b{identifier}\b", pr["headRefName"]):
-            return pr
-    return None
+    """The card's PR, looked up by HEAD BRANCH (agent/DRE-N-*), reads LOUD.
+
+    Both reads raise ReconcileReadError on failure — acting on a 403 parsed
+    as "no PR" is what falsely requeued healthy cards on 2026-06-28.
+
+    Search by head branch first (`head:agent/DRE-N` matches branch-name
+    tokens): an old card's PR must never fall off a list window and read as
+    missing. The newest-100 scan survives ONLY as a fallback for search-index
+    lag on a just-opened PR. Either way the \\b-anchored confirm keeps
+    near-miss identifiers out (DRE-1034 vs DRE-10345), and among matches the
+    highest PR number wins — the newest attempt; an older merged PR must not
+    shadow a newer open one and flip the card to Done.
+    """
+    fields = "number,headRefName,state,comments,headRefOid"
+
+    def newest_match(out: str) -> dict | None:
+        matches = [
+            pr for pr in json.loads(out or "[]")
+            if re.search(rf"\b{identifier}\b", pr["headRefName"])
+        ]
+        return max(matches, key=lambda pr: pr["number"]) if matches else None
+
+    found = newest_match(gh_read(
+        "pr", "list", "--repo", REPO, "--state", "all", "--limit", "30",
+        "--search", f"head:agent/{identifier}", "--json", fields,
+    ))
+    if found:
+        return found
+    return newest_match(gh_read(
+        "pr", "list", "--repo", REPO, "--state", "all", "--limit", "100",
+        "--json", fields,
+    ))
 
 
 def agent_run_alive(identifier: str) -> bool:
@@ -368,7 +416,19 @@ def has_verdict(pr: dict) -> bool:
     return bool(m) and m.group(1) == (pr.get("headRefOid") or "")
 
 
-def redispatch(card: dict) -> None:
+def redispatch(card: dict) -> bool:
+    """Re-fire the card's repository_dispatch; True ONLY on confirmed success.
+
+    Callers MUST gate their "re-dispatched" receipt on the return value — the
+    old silent gh() meant a 403'd dispatch still told the CEO the card was
+    restarted (the DRE-1254 false-receipt class, DRE-2034). A failure is
+    recorded so the sweep run goes red for medic.
+
+    Runs under the default App token on purpose: the dispatches API needs
+    contents:write, which the App token holds — GH_DISPATCH_TOKEN (the
+    stub's github.token) is contents:read and exists only for
+    `gh workflow run` (actions:write), so gh_dispatch would 403 here.
+    """
     labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
     event = "agent-plan" if "agent:planner" in labels else "agent-execute"
     payload = {
@@ -382,8 +442,22 @@ def redispatch(card: dict) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"event_type": event, "client_payload": payload}, f)
         path = f.name
-    gh("api", f"repos/{REPO}/dispatches", "--input", path)
-    os.unlink(path)
+    try:
+        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+            ["gh", "api", f"repos/{REPO}/dispatches", "--input", path],
+            capture_output=True, text=True, check=False,
+        )
+    finally:
+        os.unlink(path)
+    if p.returncode != 0:
+        err = (
+            f"redispatch {card['identifier']}: gh api repos/{REPO}/dispatches "
+            f"failed rc={p.returncode}: {p.stderr.strip()[:400]}"
+        )
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return False
+    return True
 
 
 def backlog_children() -> list[dict]:
@@ -845,7 +919,15 @@ def main(
         if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
             continue
 
-        pr = pr_for(ident)
+        try:
+            pr = pr_for(ident)
+        except ReconcileReadError as e:
+            # An unreadable answer is NOT "no PR": act on nothing for this
+            # card (no requeue, no receipt), sweep the rest, exit red at the
+            # end so medic sees it (DRE-2034; happened live twice 2026-06-28).
+            _read_failures.append(str(e))
+            print(f"ERROR: pr_for {ident}: {e}", file=sys.stderr)
+            continue
         merged = pr is not None and pr["state"] == "MERGED"
         is_open = pr is not None and pr["state"] == "OPEN"
         print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
@@ -854,10 +936,19 @@ def main(
             linear_ops.cmd_state(ident, "Done")
             linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
         elif state == "Todo" and not is_open:
-            redispatch(card)
-            linear_ops.cmd_comment(
-                ident, "🧹 Reconcile: card sat in Todo with no run — re-dispatched."
-            )
+            # The receipt follows the dispatch's REAL outcome: a 🧹 success
+            # receipt on a 403'd dispatch is the DRE-1254 false-receipt class.
+            if redispatch(card):
+                linear_ops.cmd_comment(
+                    ident, "🧹 Reconcile: card sat in Todo with no run — re-dispatched."
+                )
+            else:
+                linear_ops.cmd_comment(
+                    ident,
+                    "🚨 Reconcile: re-dispatch FAILED — the dispatch call did not "
+                    "go through, so no run was started. The sweep run is red; "
+                    "medic will pick it up, and the next sweep retries.",
+                )
         elif state == "In Progress":
             if is_open:
                 linear_ops.cmd_advance(ident, "In QA", "In Progress")
@@ -916,8 +1007,30 @@ def main(
                         ident, "🧹 Reconcile: no critic verdict after 2h — review re-triggered."
                     )
         elif state == "In QA" and not is_open:
-            linear_ops.cmd_state(ident, "Todo")
-            linear_ops.cmd_comment(ident, "🧹 Reconcile: In QA with no PR — requeued to Todo.")
+            # Capped like the In Progress dead-run path (DRE-1403 mechanics,
+            # same shared DEAD_TAG counter): uncapped, a card whose PR keeps
+            # reading as gone laps In QA → Todo → In Progress → In QA forever,
+            # burning an agent run per lap (DRE-2034).
+            dead = linear_ops.count_comments(ident, DEAD_TAG)
+            if dead >= REQUEUE_CAP:
+                linear_ops.add_label(ident, HOLD_LABEL)
+                # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as
+                # the In Progress hold.
+                linear_ops.cmd_state(ident, "Backlog", "--park")
+                linear_ops.cmd_comment(
+                    ident,
+                    f"🚨 held-for-human: In QA with no PR after {dead} requeues — "
+                    f"parked in Backlog with the '{HOLD_LABEL}' label so the sweep "
+                    "stops looping. A human must split/fix the card and clear the "
+                    "label to retry.",
+                )
+            else:
+                linear_ops.cmd_state(ident, "Todo")
+                linear_ops.cmd_comment(
+                    ident,
+                    f"🪦 {DEAD_TAG}: In QA with no PR — requeued to Todo "
+                    f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
+                )
         elif state == "In Review" and is_open:
             if _nudge("merge-gate.yml", pr["number"]):
                 linear_ops.cmd_comment(
@@ -925,10 +1038,14 @@ def main(
                 )
         nudges += 1
     print(f"sweep complete: {nudges} nudge(s)")
-    if _write_failures:
+    if _write_failures or _read_failures:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
-        # when a write we claimed to make didn't happen (DRE-1254 lesson).
-        sys.exit(f"reconcile: {len(_write_failures)} write failure(s) — see ERROR lines above")
+        # when a write we claimed to make didn't happen (DRE-1254 lesson) or
+        # when a card's PR state was unreadable (DRE-2034 lesson).
+        sys.exit(
+            f"reconcile: {len(_write_failures)} write / {len(_read_failures)} read "
+            "failure(s) — see ERROR lines above"
+        )
 
 
 if __name__ == "__main__":
