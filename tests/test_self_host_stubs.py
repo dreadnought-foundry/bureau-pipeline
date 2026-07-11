@@ -192,8 +192,45 @@ class WatchListTest(unittest.TestCase):
 
     def test_medic_watches_every_pipeline_stage(self):
         watched = set(self._watch("self-medic.yml"))
-        for stage in ("Agent Task", "Agent Plan", "Merge Gate", "Linear Sync"):
+        for stage in (
+            "Agent Task",
+            "Agent Plan",
+            "Merge Gate",
+            "Linear Sync",
+            "Reconcile",
+            "Agent Fix",
+        ):
             self.assertIn(stage, watched, f"medic must watch the {stage} stage")
+
+    def test_medic_watches_every_runnable_workflow(self):
+        """DRE-2036: the DRE-2028 guard covered only pull_request check
+        workflows because it was cut against a merge-gate stall — an unwatched
+        PR check meant the gate never re-evaluated. But scheduled and
+        comment-triggered workflows go red too: reconcile exits 1 on write
+        failures, and nothing watching its runs means the safety net dies
+        silently. So EVERY workflow that produces runs under its own name must
+        be in the medic watch list. Deliberate exemptions only:
+
+          * workflow_call-only files — reusable definitions never run under
+            their own name; their runs surface under the calling stub's name;
+          * Pipeline Medic itself — the medic must not watch (retry, diagnose)
+            its own failures, or a red medic loops on itself
+            (test_medic_does_not_watch_itself pins the inverse).
+        """
+        watched = set(self._watch("self-medic.yml"))
+        for fname, doc in _all_workflows().items():
+            triggers = set(_on(doc))
+            if triggers <= {"workflow_call"}:
+                continue
+            name = doc.get("name") or fname
+            if name == "Pipeline Medic":
+                continue
+            self.assertIn(
+                name, watched,
+                f"runnable workflow {name!r} ({fname}) is missing from the "
+                f"medic watch list (DRE-2036) — its red runs would go "
+                f"undiagnosed",
+            )
 
     def test_medic_does_not_watch_itself(self):
         self.assertNotIn("Pipeline Medic", self._watch("self-medic.yml"))

@@ -319,6 +319,7 @@ jobs:
             --out .bureau-pipeline/fix-thread.md
 
       - name: Fix
+        id: claude
         if: steps.pr.outputs.go == 'true'
         uses: anthropics/claude-code-action@v1
         with:
@@ -445,13 +446,53 @@ jobs:
             # forward progress; escalate to the human when there is none.
             POST_SHA=$(gh pr view "$PR" --repo ${{ github.repository }} --json headRefOid --jq .headRefOid)
             if [ -n "$PRE_SHA" ] && [ "$POST_SHA" = "$PRE_SHA" ]; then
-              gh pr comment "$PR" --repo ${{ github.repository }} \
-                --body "🛑 Fix attempt ${{ steps.pr.outputs.attempt }} pushed no new commit (branch still at \`${POST_SHA:0:8}\`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck."
-              if [ -n "$CARD" ]; then
-                python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                  "🙋 The fix agent ran but produced no change the reviewer can re-check, so this card can't move on its own. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **Backlog** to drop it." || true
+              # DRE-2018: distinguish a model DEATH (is_error — API outage,
+              # exhausted subscription; the 2026-07-10 DeltaSolv token outage)
+              # from a fix that RAN and pushed nothing. An outage must not
+              # read as an agent failure in the CEO's queue: fix_dead_run.py
+              # answers retry (post the fix-run-model-death marker the
+              # reconcile sweep re-dispatches on — no park, no needs-human,
+              # no fix-attempt burned), hold (the death after the cap —
+              # medic's cap pattern), or escalate (genuine no-progress:
+              # today's behavior, unchanged). The cap counts CONSECUTIVE
+              # worker-bot deaths since the last successful push, not every
+              # death marker ever posted — a recovered outage episode must not
+              # pre-exhaust the cap for a fresh one (DRE-2018 review). Hand the
+              # full comment list to fix_dead_run.py; it filters to
+              # worker-bot-authored markers (DRE-1995 discipline) and stops the
+              # count at the last push marker.
+              EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
+              [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+              COMMENTS_JSON=$(mktemp)
+              gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+                > "$COMMENTS_JSON" || echo '[]' > "$COMMENTS_JSON"
+              RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              DECISION=$(python3 .bureau-pipeline/scripts/fix_dead_run.py decide \
+                "$EXEC_FILE" --comments-json "$COMMENTS_JSON" --run-url "$RUN_URL")
+              ACTION=$(printf '%s\n' "$DECISION" | head -1)
+              BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
+              if [ "$ACTION" = "retry" ]; then
+                gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY"
+                if [ -n "$CARD" ]; then
+                  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                    "🤖 The AI service was unavailable during the last fix run — an outage, not a problem with the work. The pipeline retries automatically; no action needed." || true
+                fi
+              elif [ "$ACTION" = "hold" ]; then
+                gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY"
+                if [ -n "$CARD" ]; then
+                  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                    "🙋 The AI service failed several fix runs in a row on this PR — that looks like an outage or account problem, not bad work. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **Backlog** to drop it." || true
+                fi
+                park_for_human
+              else
+                gh pr comment "$PR" --repo ${{ github.repository }} \
+                  --body "🛑 Fix attempt ${{ steps.pr.outputs.attempt }} pushed no new commit (branch still at \`${POST_SHA:0:8}\`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck."
+                if [ -n "$CARD" ]; then
+                  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                    "🙋 The fix agent ran but produced no change the reviewer can re-check, so this card can't move on its own. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **Backlog** to drop it." || true
+                fi
+                park_for_human
               fi
-              park_for_human
             else
               if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
                 BODY="🔀 Conflict resolution round ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."

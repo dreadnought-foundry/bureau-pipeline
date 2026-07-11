@@ -277,7 +277,9 @@ def test_pathlike_body_passed_as_arg_is_rejected(tmp_path):
     buf = io.StringIO()
     with patch.object(linear_ops, "gql", side_effect=fake.gql):
         with redirect_stdout(buf):
-            with pytest.raises(SystemExit) as exc:
+            # LinearError, not SystemExit — a rejection must stay catchable by
+            # library callers (DRE-2035); the CLI converts it at top level.
+            with pytest.raises(linear_ops.LinearError) as exc:
                 linear_ops.cmd_subissue("DRE-EPIC", "Bad card", "/tmp/card2.md")
     assert "PATH" in str(exc.value)
     assert fake.created is None  # nothing was created
@@ -286,7 +288,7 @@ def test_pathlike_body_passed_as_arg_is_rejected(tmp_path):
 def test_empty_body_file_is_rejected(tmp_path):
     fake = FakeLinear()
     with patch.object(linear_ops, "gql", side_effect=fake.gql):
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(linear_ops.LinearError) as exc:
             _run_subissue(fake, tmp_path, "   \n  ")
     assert "empty body" in str(exc.value)
     assert fake.created is None
@@ -299,7 +301,7 @@ def test_child_failing_validate_card_is_rejected(tmp_path):
     fake = FakeLinear(parent_labels=["agent:planner"])  # no repo: label to inherit
     body = "# A card with no repo frontmatter\nBuild it."
     with patch.object(linear_ops, "gql", side_effect=fake.gql):
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(linear_ops.LinearError) as exc:
             _run_subissue(fake, tmp_path, body)
     assert "validate_card" in str(exc.value)
     assert "Repo:" in str(exc.value)
@@ -313,7 +315,7 @@ def test_child_missing_initiative_is_rejected(tmp_path):
     fake = FakeLinear(parent_labels=["repo:atlas", "agent:planner"])  # no initiative
     body = "**Repo:** atlas\n\n# A card\nBuild it."
     with patch.object(linear_ops, "gql", side_effect=fake.gql):
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(linear_ops.LinearError) as exc:
             _run_subissue(fake, tmp_path, body)
     assert "validate_card" in str(exc.value)
     assert "initiative:" in str(exc.value)

@@ -11,8 +11,15 @@ Checks (card must carry **Repo:** atlas, any owner-prefix form):
               no PR -> back to Todo (relay re-dispatches on the transition)
   In QA       stale >2h: PR merged -> Done; verdict bound to the current
               head (DRE-1990) -> merge-gate; verdict missing OR stale/
-              unbound -> re-trigger qa-review; no PR -> back to Todo
+              unbound -> re-trigger qa-review; no PR -> back to Todo,
+              capped by the shared dead-run cap (DRE-2034)
   In Review   stale >1h: PR merged -> Done; else re-trigger merge-gate
+
+Stranded-card watchdog (DRE-1993): every card/epic in Planning / Todo /
+In Progress whose repo has no route in the routing snapshot, or (this repo's
+cards) with no run receipt after 30 minutes, gets ONE plain-English comment
+naming the reason plus the needs-human label — the board must never say work
+is happening while nothing runs (DRE-1978 sat in Planning 7 days unseen).
 
 Also runs the dependency gate: Backlog children whose parent epic is ACTIVATED
 (= plan approved) are auto-promoted to Todo once every blocker is Done — blockers
@@ -51,7 +58,9 @@ import tempfile
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
+import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
@@ -78,6 +87,17 @@ EPIC_ACTIVE_STATES = ("Todo", "In Progress")
 HOLD_LABEL = "needs-human"
 DEAD_TAG = "dead-run-requeue"
 REQUEUE_CAP = int(os.environ.get("DEAD_RUN_CAP", "2"))
+
+# Per-card isolation for the dependency gate (DRE-2035). One bad "Blocked by:"
+# reference used to kill the WHOLE sweep: card_state() on a nonexistent id made
+# linear_ops raise SystemExit, which sails past every `except Exception`
+# (BaseException subclass) — promotion, nudges, and the dead-run machinery all
+# died every run until a human found the offending card. linear_ops now raises
+# LinearError instead, and the gate SKIPS just the unevaluable card: a loud
+# ERROR line, ONE explanatory comment on the card (keyed on this tag, like
+# DEAD_TAG), a sweep-level skip count — and the rest of the sweep proceeds.
+BAD_REF_TAG = "unresolvable-blocker-reference"
+_card_skips: list[str] = []
 
 # Engineer-blocker guard (DRE-1585). When the engineer agent hits a genuine,
 # deterministic blocker it posts this exact marker (see agent-task.yml) and
@@ -106,6 +126,27 @@ RUN_MARKER = "🧠 model-attempt:"
 _RUN_ID = re.compile(r"/actions/runs/(\d+)\b")
 _LIFE_PREFIXES = ("⏳", "🧠")
 
+# Stranded-card watchdog (DRE-1993). A card/epic parked in an ACTIVE lane
+# with NO evidence any matching run ever started is invisible to every other
+# backstop: the board says work is happening while nothing runs. Live
+# incident: DRE-1978 sat in Planning for SEVEN DAYS with zero planner runs
+# (its repo label routed nowhere at the time) — the CEO found it by asking.
+# Budget blocks, quota exhaustion, relay outages, and any future off-map repo
+# all strand cards the same silent way. flag_stranded() below alarms on both
+# classes, ONCE per card (the WATCHDOG_TAG comment is the idempotency
+# marker), and adds HOLD_LABEL so the sweep stops re-dispatching into the
+# same wall. Planning is a watchdog-only lane: the nudge loop / WIP cap
+# below never see it (no STALE_MINUTES entry, no defined nudge).
+WATCHDOG_LANES = ("Planning", "Todo", "In Progress")
+WATCHDOG_MINUTES = int(os.environ.get("WATCHDOG_MINUTES", "30"))
+WATCHDOG_TAG = "stranded-watchdog"
+
+# The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
+# updatedAt every ~15-minute cycle, so a silently-failing dispatch loop never
+# LOOKS WATCHDOG_MINUTES stale — a prior receipt with still no proof-of-life
+# is the same evidence as the elapsed time: dispatch fired, nothing ran.
+_TODO_REDISPATCH_NOTE = "card sat in Todo with no run — re-dispatched"
+
 
 def held(card: dict) -> bool:
     """True if the card carries HOLD_LABEL — the sweep must not requeue, nudge,
@@ -126,6 +167,10 @@ _CARD_REF = re.compile(r"DRE-\d+")
 def gh(*args: str) -> str:
     # B603/B607: args are program-constructed (no user input), shell=False,
     # and "gh" resolves via PATH on the runner by design.
+    # SILENT by design — safe only where an empty answer means "do nothing"
+    # (the PR-level backstops) or the caller has its own fallback
+    # (agent_run_alive's receipt path). The card PR lookup and every write
+    # use the LOUD helpers below instead (DRE-1254, DRE-2034).
     return subprocess.run(  # nosec B603 B607
         ["gh", *args], capture_output=True, text=True, check=False
     ).stdout.strip()
@@ -135,9 +180,36 @@ class ReconcileWriteError(RuntimeError):
     """A write-path gh call failed — surface it; never pretend success."""
 
 
+class ReconcileReadError(RuntimeError):
+    """A read-path gh call failed — surface it; never act on the fabricated
+    empty result (a 403 is NOT "this card has no PR")."""
+
+
 #: Write failures collected during the sweep; non-empty -> exit 1 so the
 #: Actions run goes red and medic picks it up.
 _write_failures: list[str] = []
+
+#: Read failures (unreadable PR lookups) collected the same way — the sweep
+#: skips the unreadable card, sweeps the rest, and still exits 1 (DRE-2034).
+_read_failures: list[str] = []
+
+
+def gh_read(*args: str) -> str:
+    """Run a read-path gh command LOUDLY: raise ReconcileReadError on rc!=0.
+
+    Origin (2026-06-28, twice live / DRE-2034): the silent gh() helper
+    discarded exit code and stderr, so a 403/rate-limit on the PR lookup
+    parsed as "[]" — indistinguishable from "this card has no PR" — and the
+    sweep requeued healthy cards off that fabricated emptiness.
+    """
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", *args], capture_output=True, text=True, check=False
+    )
+    if p.returncode != 0:
+        raise ReconcileReadError(
+            f"gh {' '.join(args)} failed rc={p.returncode}: {p.stderr.strip()[:400]}"
+        )
+    return p.stdout.strip()
 
 
 def gh_dispatch(*args: str) -> None:
@@ -214,36 +286,129 @@ def age_minutes(iso: str) -> float:
     return (datetime.now(UTC) - then).total_seconds() / 60
 
 
-def active_cards() -> list[dict]:
+# The nudge loop's lanes — the pre-DRE-1993 sweep, byte-identical. The
+# watchdog passes WATCHDOG_LANES instead to also see Planning.
+SWEEP_STATES = ("Todo", "In Progress", "In QA", "In Review")
+
+
+def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     data = linear_ops.gql(
-        """query { issues(first: 100, filter: {
+        """query($states: [String!]!) { issues(first: 100, filter: {
              team: {key: {eq: "DRE"}},
-             state: {name: {in: ["Todo", "In Progress", "In QA", "In Review"]}}
+             state: {name: {in: $states}}
            }) { nodes {
              id identifier title description updatedAt
              state { name } labels { nodes { name } }
-           } } }"""
+           } } }""",
+        {"states": list(states)},
     )
     return data["issues"]["nodes"]
 
 
+def flag_stranded() -> set[str]:
+    """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
+
+    Two strand classes, checked over WATCHDOG_LANES on every full sweep:
+      (a) NO ROUTE — the card's repo slug is not in the routing snapshot
+          (validate_card.VALID_SLUGS, mirroring the relay's map), so no
+          dispatch can EVER start a run. Flagged within one sweep, however
+          fresh the card. Every repo's sweep checks this (an off-map card
+          belongs to no sweep's `mine`); the once-ever gate makes whichever
+          sweep gets there first the only one that speaks.
+      (b) NO RUN — a dispatchable card of THIS sweep's repo with zero run
+          receipts (the DRE-2032 🧠/⏳ proof-of-life comments; agent-task
+          and plan both post them at run start) after WATCHDOG_MINUTES —
+          or after a prior Todo-redispatch receipt, which resets updatedAt
+          every cycle and would otherwise hide the strand forever. A card
+          with ANY receipt started a run once (live or dead) and is never
+          flagged: started-then-died is the dead-run requeue's case.
+          Epics past Planning are containers — no run ever targets them,
+          so their receipt-less state is normal, not a strand.
+
+    Flagging = one plain-English comment (🚨 + WATCHDOG_TAG) naming the
+    reason, plus HOLD_LABEL — no state move, no cancel. A false positive
+    (e.g. a run queued 30+ minutes behind a runner-capacity crunch, which
+    posts no receipt until it starts) costs a label a human removes; the
+    run itself is untouched. Fail loud beats fail silent (DRE-1979).
+
+    Returns the identifiers flagged THIS sweep so the caller's nudge loop
+    can skip them — their fetched labels predate the hold label.
+    """
+    flagged: set[str] = set()
+    for card in active_cards(WATCHDOG_LANES):
+        ident, state = card["identifier"], card["state"]["name"]
+        if held(card):
+            continue  # already in a human's queue — never spam
+        slug = card_repo(card)
+        routable = slug is not None and slug in validate_card.VALID_SLUGS
+        if routable and slug != REPO_SLUG:
+            continue  # that repo's own sweep runs the no-run check for its cards
+        labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
+        if routable and state != "Planning" and "agent:planner" in labels:
+            continue  # an epic past Planning carries no run — normal, not stranded
+        bodies = linear_ops.comment_bodies(ident)
+        if any(WATCHDOG_TAG in b for b in bodies):
+            continue  # flagged once already — idempotent forever
+        if routable:
+            if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
+                continue  # a run DID start — the dead-run machinery owns it now
+            redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
+            if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
+                continue  # young — give the dispatch time to start a run
+            reason = (
+                f"no agent run has started after {WATCHDOG_MINUTES}+ minutes in "
+                f"{state} (no run receipts on the card) — check the GitHub Actions "
+                "budget, the LLM quota, and the relay. If a run is merely queued, "
+                f"remove the '{HOLD_LABEL}' label; otherwise this card needs a "
+                "human to unblock the pipeline."
+            )
+        else:
+            reason = (
+                f"repo '{slug or 'none — no repo label'}' isn't on the dispatch "
+                "rail — no agent can ever pick this card up, so it must be "
+                "hand-built (or the repo onboarded to the routing map first). "
+                f"Labeled '{HOLD_LABEL}' for a human."
+            )
+        linear_ops.cmd_comment(ident, f"🚨 {WATCHDOG_TAG}: {reason}")
+        linear_ops.add_label(ident, HOLD_LABEL)
+        flagged.add(ident)
+        print(f"watchdog: {ident} in {state} flagged ({'no-run' if routable else 'no-route'})")
+    return flagged
+
+
 def pr_for(identifier: str) -> dict | None:
-    out = gh(
-        "pr",
-        "list",
-        "--repo",
-        REPO,
-        "--state",
-        "all",
-        "--limit",
-        "100",
-        "--json",
-        "number,headRefName,state,comments,headRefOid",
-    )
-    for pr in json.loads(out or "[]"):
-        if re.search(rf"\b{identifier}\b", pr["headRefName"]):
-            return pr
-    return None
+    """The card's PR, looked up by HEAD BRANCH (agent/DRE-N-*), reads LOUD.
+
+    Both reads raise ReconcileReadError on failure — acting on a 403 parsed
+    as "no PR" is what falsely requeued healthy cards on 2026-06-28.
+
+    Search by head branch first (`head:agent/DRE-N` matches branch-name
+    tokens): an old card's PR must never fall off a list window and read as
+    missing. The newest-100 scan survives ONLY as a fallback for search-index
+    lag on a just-opened PR. Either way the \\b-anchored confirm keeps
+    near-miss identifiers out (DRE-1034 vs DRE-10345), and among matches the
+    highest PR number wins — the newest attempt; an older merged PR must not
+    shadow a newer open one and flip the card to Done.
+    """
+    fields = "number,headRefName,state,comments,headRefOid"
+
+    def newest_match(out: str) -> dict | None:
+        matches = [
+            pr for pr in json.loads(out or "[]")
+            if re.search(rf"\b{identifier}\b", pr["headRefName"])
+        ]
+        return max(matches, key=lambda pr: pr["number"]) if matches else None
+
+    found = newest_match(gh_read(
+        "pr", "list", "--repo", REPO, "--state", "all", "--limit", "30",
+        "--search", f"head:agent/{identifier}", "--json", fields,
+    ))
+    if found:
+        return found
+    return newest_match(gh_read(
+        "pr", "list", "--repo", REPO, "--state", "all", "--limit", "100",
+        "--json", fields,
+    ))
 
 
 def agent_run_alive(identifier: str) -> bool:
@@ -368,7 +533,19 @@ def has_verdict(pr: dict) -> bool:
     return bool(m) and m.group(1) == (pr.get("headRefOid") or "")
 
 
-def redispatch(card: dict) -> None:
+def redispatch(card: dict) -> bool:
+    """Re-fire the card's repository_dispatch; True ONLY on confirmed success.
+
+    Callers MUST gate their "re-dispatched" receipt on the return value — the
+    old silent gh() meant a 403'd dispatch still told the CEO the card was
+    restarted (the DRE-1254 false-receipt class, DRE-2034). A failure is
+    recorded so the sweep run goes red for medic.
+
+    Runs under the default App token on purpose: the dispatches API needs
+    contents:write, which the App token holds — GH_DISPATCH_TOKEN (the
+    stub's github.token) is contents:read and exists only for
+    `gh workflow run` (actions:write), so gh_dispatch would 403 here.
+    """
     labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
     event = "agent-plan" if "agent:planner" in labels else "agent-execute"
     payload = {
@@ -382,8 +559,22 @@ def redispatch(card: dict) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"event_type": event, "client_payload": payload}, f)
         path = f.name
-    gh("api", f"repos/{REPO}/dispatches", "--input", path)
-    os.unlink(path)
+    try:
+        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+            ["gh", "api", f"repos/{REPO}/dispatches", "--input", path],
+            capture_output=True, text=True, check=False,
+        )
+    finally:
+        os.unlink(path)
+    if p.returncode != 0:
+        err = (
+            f"redispatch {card['identifier']}: gh api repos/{REPO}/dispatches "
+            f"failed rc={p.returncode}: {p.stderr.strip()[:400]}"
+        )
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return False
+    return True
 
 
 def backlog_children() -> list[dict]:
@@ -486,7 +677,18 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
         if blocker in relation_blockers:
             return True  # relation blocker, already known non-terminal
         # A description-line blocker ("Blocked by: DRE-N"): state unknown, fetch.
-        if card_state(blocker) not in ("Done", "Canceled", "Duplicate"):
+        try:
+            state = card_state(blocker)
+        except linear_ops.LinearError as e:
+            # A reference that doesn't resolve (typo'd id) must not kill the
+            # sweep (DRE-2035) — same fail-safe as unreadable relation data:
+            # treat the epic as blocked, loudly, and keep sweeping.
+            print(
+                f"epic-gate: blocker reference {blocker} on {epic_identifier} "
+                f"doesn't resolve ({e}) — treating epic as blocked"
+            )
+            return True
+        if state not in ("Done", "Canceled", "Duplicate"):
             return True
     return False
 
@@ -562,6 +764,31 @@ def has_unresolved_blocker(card: dict) -> bool:
     return False  # no blocker marker on the card at all
 
 
+def skip_bad_reference(identifier: str, err: Exception) -> None:
+    """Record a card the gate could not evaluate (a blocker reference that
+    doesn't resolve, or any other per-card Linear failure): a loud ERROR line,
+    the sweep-level skip counter, and ONE plain-English comment on the card
+    across repeated sweeps (keyed on BAD_REF_TAG, the DEAD_TAG pattern).
+    Reporting must never kill the sweep, so the comment path is itself guarded
+    (DRE-2035)."""
+    _card_skips.append(f"{identifier}: {err}")
+    print(
+        f"ERROR: {identifier} skipped — blocker reference doesn't resolve: {err}",
+        file=sys.stderr,
+    )
+    try:
+        if linear_ops.count_comments(identifier, BAD_REF_TAG) == 0:
+            linear_ops.cmd_comment(
+                identifier,
+                f"🚨 {BAD_REF_TAG}: a blocker reference on this card doesn't "
+                "resolve in Linear (likely a typo'd card id on a blocker "
+                "line) — fix the reference. The reconcile sweep skips this "
+                "card until then; the rest of the fleet is unaffected.",
+            )
+    except Exception as e:  # noqa: BLE001 — reporting never blocks the sweep
+        print(f"ERROR: could not post skip comment on {identifier}: {e}", file=sys.stderr)
+
+
 def promote_ready(active_count: int) -> int:
     """Auto-promote Backlog children whose blockers are all Done."""
     budget = MAX_WIP - active_count
@@ -586,40 +813,74 @@ def promote_ready(active_count: int) -> int:
         parent = card.get("parent")
         if not parent or parent["state"]["name"] not in EPIC_ACTIVE_STATES:
             continue  # parent epic not approved/active (Todo or In Progress; DRE-1893)
-        # Epic-level gate (DRE-1772): even an active (plan-approved) epic must
-        # not start its children while the epic itself is blocked-by a
-        # prerequisite epic that has not shipped. Composes with the card-level
-        # gate, MAX_WIP, and the DRE-1585 agent-blocker guard below.
-        epic_id = parent["identifier"]
-        if epic_id not in epic_gate:
-            epic_gate[epic_id] = epic_blockers_unmet(epic_id)
-        if epic_gate[epic_id]:
+        # Per-card isolation (DRE-2035): everything from here on reads Linear
+        # per THIS card — a blocker reference that doesn't resolve raises
+        # LinearError, which must skip this one card (loudly, with a one-time
+        # comment), never kill the gate for the rest of the fleet.
+        # The read-guard covers ONLY the gate-evaluation reads: a LinearError
+        # here means a blocker reference doesn't resolve, so this one card is
+        # skipped as unevaluable (DRE-2035). The mutations that follow are
+        # DELIBERATELY outside it — a write failure there is a write failure,
+        # not a bad reference, and must not stamp the card with a false
+        # "reference doesn't resolve" diagnostic (critic PR #89).
+        try:
+            # Epic-level gate (DRE-1772): even an active (plan-approved) epic
+            # must not start its children while the epic itself is blocked-by a
+            # prerequisite epic that has not shipped. Composes with the
+            # card-level gate, MAX_WIP, and the DRE-1585 agent-blocker guard
+            # below.
+            epic_id = parent["identifier"]
+            if epic_id not in epic_gate:
+                epic_gate[epic_id] = epic_blockers_unmet(epic_id)
+            if epic_gate[epic_id]:
+                print(
+                    f"promotion: {card['identifier']}'s epic {epic_id} is blocked by "
+                    "an unfinished epic — skipping"
+                )
+                continue
+            unmet = {
+                b for b in blockers_of(card) if card_state(b) not in ("Done", "Canceled", "Duplicate")
+            }
+            if unmet:
+                continue
+            # Formal blockers are clear, but the engineer may have parked this card
+            # on a *deterministic* blocker it flagged itself (DRE-1585). Re-promoting
+            # would redispatch it straight back into the same wall — exactly the
+            # five-run loop DRE-1572 hit. Skip until a human resolves it (a human
+            # comment after the blocker marker, or the human clears it some other way
+            # and the card leaves Backlog).
+            if has_unresolved_blocker(card):
+                print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
+                continue
+        except linear_ops.LinearError as e:
+            skip_bad_reference(card["identifier"], e)
+            continue
+        # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
+        # bad reference: record it on the existing _write_failures path (fails
+        # the run red for medic) instead of the bad-reference diagnostic.
+        try:
+            linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
+            linear_ops.cmd_comment(
+                card["identifier"],
+                "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done.",
+            )
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{card['identifier']} advance/comment: {e}")
             print(
-                f"promotion: {card['identifier']}'s epic {epic_id} is blocked by "
-                "an unfinished epic — skipping"
+                f"ERROR: failed to advance/comment on {card['identifier']}: {e}",
+                file=sys.stderr,
             )
             continue
-        unmet = {
-            b for b in blockers_of(card) if card_state(b) not in ("Done", "Canceled", "Duplicate")
-        }
-        if unmet:
-            continue
-        # Formal blockers are clear, but the engineer may have parked this card
-        # on a *deterministic* blocker it flagged itself (DRE-1585). Re-promoting
-        # would redispatch it straight back into the same wall — exactly the
-        # five-run loop DRE-1572 hit. Skip until a human resolves it (a human
-        # comment after the blocker marker, or the human clears it some other way
-        # and the card leaves Backlog).
-        if has_unresolved_blocker(card):
-            print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
-            continue
-        linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
-        linear_ops.cmd_comment(
-            card["identifier"],
-            "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done.",
-        )
         promoted += 1
     print(f"promotion: {promoted} card(s) promoted (WIP {active_count}+{promoted}/{MAX_WIP})")
+    if _card_skips:
+        # A red pattern the run log can't miss (DRE-2035) — pairs with the
+        # per-card ERROR lines above; the sweep itself stays alive and green.
+        print(
+            f"promotion: {len(_card_skips)} card(s) SKIPPED on unresolvable "
+            "blocker references — see ERROR lines above",
+            file=sys.stderr,
+        )
     return promoted
 
 
@@ -759,6 +1020,69 @@ def fix_approved_but_red() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
+WORKER_BOT_LOGIN = "agent-bureau-bot"
+
+
+def is_worker_bot_comment(comment: dict) -> bool:
+    """True iff the PR comment was authored by the WORKER bot App — the
+    identity agent-fix's Report step posts with. Same login-shape tolerance
+    as is_qa_bot_comment: `gh pr list --json comments` is GraphQL-backed and
+    carries no "[bot]" suffix; the suffix is stripped so either shape
+    matches. Same literal-login rationale too (reconcile never re-mints a
+    token just to learn its own slug; a rename fails CLOSED — no dispatch)."""
+    login = (comment.get("author") or {}).get("login") or ""
+    return login.removesuffix("[bot]") == WORKER_BOT_LOGIN
+
+
+def retry_dead_fix_runs() -> None:
+    """DRE-2018: re-dispatch the fix agent for a PR whose last fix run died
+    of a model/API error (is_error — an outage, not an agent failure).
+
+    A dying fix run pushes nothing, and the qa-bot's REQUEST_CHANGES comment
+    that triggered it is consumed — nothing event-driven ever re-fires
+    agent-fix for that PR (the medic does not watch Agent Fix; merge-gate
+    dispatches it only for merge conflicts), so the PR would stall in In QA
+    forever. agent-fix's Report step posts the fix-run-model-death marker
+    instead of parking; this sweep is the promised retry.
+
+    Dispatch iff the NEWEST worker-bot comment on the PR carries the marker:
+    any later fix outcome (pushed / blocked / held) posts a newer worker-bot
+    comment and switches the sweep off. The retry cap lives in agent-fix's
+    Report step (the death after fix_dead_run.RETRY_CAP posts a hold WITHOUT
+    the marker), so the sweep stays dumb. Non-worker authors are invisible —
+    a planted marker must not spawn fix runs (DRE-1995/1998 discipline).
+    Skips DIRTY PRs (unstick_conflicts owns those) and backs off while a fix
+    run is queued/in_progress; one dispatch per sweep, like
+    fix_approved_but_red."""
+    busy = json.loads(gh(
+        "run", "list", "--repo", REPO, "--workflow", "agent-fix.yml",
+        "--limit", "10", "--json", "status",
+    ) or "[]")
+    if any(r["status"] in ("queued", "in_progress") for r in busy):
+        return
+    prs = json.loads(gh(
+        "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+        "--json", "number,headRefName,mergeStateStatus,comments",
+    ) or "[]")
+    for pr in prs:
+        if not pr["headRefName"].startswith("agent/") or pr.get("mergeStateStatus") == "DIRTY":
+            continue
+        worker = [
+            c.get("body") or ""
+            for c in pr.get("comments", [])
+            if is_worker_bot_comment(c)
+        ]
+        if not worker or fix_dead_run.OUTAGE_TAG not in worker[-1]:
+            continue
+        print(
+            f"dead fix run: PR #{pr['number']} last fix run died of a "
+            f"model/API error — re-dispatching fix agent"
+        )
+        gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
+                    "-f", f"pr_number={pr['number']}")
+        return  # one dispatch per sweep; the busy-guard handles the rest
+
+
 def repo_epics(active: list[dict]) -> set[str]:
     """Identifiers of THIS repo's active epics (agent:planner cards).
 
@@ -816,15 +1140,25 @@ def main(
         print(f"close-only: epic close evaluated ({len(epics)} active epic(s))")
         return
     nudges = 0
+    flagged: set[str] = set()
     if not promote_only:
         # Backstops run independently: one failing must not silence the
         # others, but every write failure is recorded and fails the run.
-        for backstop in (unstick_conflicts, retrigger_dead_heads, fix_approved_but_red):
+        for backstop in (
+            unstick_conflicts,
+            retrigger_dead_heads,
+            fix_approved_but_red,
+            retry_dead_fix_runs,
+        ):
             try:
                 backstop()
             except ReconcileWriteError as e:
                 _write_failures.append(str(e))
                 print(f"ERROR: {backstop.__name__}: {e}", file=sys.stderr)
+        # Stranded-card watchdog (DRE-1993) — BEFORE the nudge loop, so a
+        # card flagged this very sweep is skipped below (its fetched labels
+        # predate the hold label the watchdog just added).
+        flagged = flag_stranded()
     mine = [c for c in active_cards() if card_repo(c) == REPO_SLUG]
     epics = repo_epics(mine)
     if not promote_only:
@@ -840,12 +1174,20 @@ def main(
         return
     for card in mine:
         ident, state = card["identifier"], card["state"]["name"]
-        if held(card):
+        if held(card) or ident in flagged:
             continue  # human-hold: untouched until a human removes the label
         if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
             continue
 
-        pr = pr_for(ident)
+        try:
+            pr = pr_for(ident)
+        except ReconcileReadError as e:
+            # An unreadable answer is NOT "no PR": act on nothing for this
+            # card (no requeue, no receipt), sweep the rest, exit red at the
+            # end so medic sees it (DRE-2034; happened live twice 2026-06-28).
+            _read_failures.append(str(e))
+            print(f"ERROR: pr_for {ident}: {e}", file=sys.stderr)
+            continue
         merged = pr is not None and pr["state"] == "MERGED"
         is_open = pr is not None and pr["state"] == "OPEN"
         print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
@@ -854,10 +1196,19 @@ def main(
             linear_ops.cmd_state(ident, "Done")
             linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
         elif state == "Todo" and not is_open:
-            redispatch(card)
-            linear_ops.cmd_comment(
-                ident, "🧹 Reconcile: card sat in Todo with no run — re-dispatched."
-            )
+            # The receipt follows the dispatch's REAL outcome: a 🧹 success
+            # receipt on a 403'd dispatch is the DRE-1254 false-receipt class.
+            # The success note is _TODO_REDISPATCH_NOTE so the watchdog's
+            # prior-redispatch detection (see flag_stranded) still matches it.
+            if redispatch(card):
+                linear_ops.cmd_comment(ident, f"🧹 Reconcile: {_TODO_REDISPATCH_NOTE}.")
+            else:
+                linear_ops.cmd_comment(
+                    ident,
+                    "🚨 Reconcile: re-dispatch FAILED — the dispatch call did not "
+                    "go through, so no run was started. The sweep run is red; "
+                    "medic will pick it up, and the next sweep retries.",
+                )
         elif state == "In Progress":
             if is_open:
                 linear_ops.cmd_advance(ident, "In QA", "In Progress")
@@ -916,8 +1267,30 @@ def main(
                         ident, "🧹 Reconcile: no critic verdict after 2h — review re-triggered."
                     )
         elif state == "In QA" and not is_open:
-            linear_ops.cmd_state(ident, "Todo")
-            linear_ops.cmd_comment(ident, "🧹 Reconcile: In QA with no PR — requeued to Todo.")
+            # Capped like the In Progress dead-run path (DRE-1403 mechanics,
+            # same shared DEAD_TAG counter): uncapped, a card whose PR keeps
+            # reading as gone laps In QA → Todo → In Progress → In QA forever,
+            # burning an agent run per lap (DRE-2034).
+            dead = linear_ops.count_comments(ident, DEAD_TAG)
+            if dead >= REQUEUE_CAP:
+                linear_ops.add_label(ident, HOLD_LABEL)
+                # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as
+                # the In Progress hold.
+                linear_ops.cmd_state(ident, "Backlog", "--park")
+                linear_ops.cmd_comment(
+                    ident,
+                    f"🚨 held-for-human: In QA with no PR after {dead} requeues — "
+                    f"parked in Backlog with the '{HOLD_LABEL}' label so the sweep "
+                    "stops looping. A human must split/fix the card and clear the "
+                    "label to retry.",
+                )
+            else:
+                linear_ops.cmd_state(ident, "Todo")
+                linear_ops.cmd_comment(
+                    ident,
+                    f"🪦 {DEAD_TAG}: In QA with no PR — requeued to Todo "
+                    f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
+                )
         elif state == "In Review" and is_open:
             if _nudge("merge-gate.yml", pr["number"]):
                 linear_ops.cmd_comment(
@@ -925,10 +1298,14 @@ def main(
                 )
         nudges += 1
     print(f"sweep complete: {nudges} nudge(s)")
-    if _write_failures:
+    if _write_failures or _read_failures:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
-        # when a write we claimed to make didn't happen (DRE-1254 lesson).
-        sys.exit(f"reconcile: {len(_write_failures)} write failure(s) — see ERROR lines above")
+        # when a write we claimed to make didn't happen (DRE-1254 lesson) or
+        # when a card's PR state was unreadable (DRE-2034 lesson).
+        sys.exit(
+            f"reconcile: {len(_write_failures)} write / {len(_read_failures)} read "
+            "failure(s) — see ERROR lines above"
+        )
 
 
 if __name__ == "__main__":
