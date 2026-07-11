@@ -64,12 +64,22 @@ passes against the unmodified codebase proves nothing and the critic rejects it.
   5/5 PR opened. Never skip 1/5 (it is your "alive" signal). Reporting must
   never block the build.
 
-## Operator-card convention
-A card whose changes land in `dreadnought-foundry/bureau-pipeline` (this repo)
-**cannot be agent-executed** — engineer credentials are scoped to the product
-repo. Title it `bureau-pipeline: …` and state on line one: "OPERATOR CARD —
-agents cannot push to bureau-pipeline; the operator implements this." Branch
-name is NOT proof of who built it — verify the PR **author**.
+## Self-hosting convention (supersedes the retired Operator-card convention, 2026-07-11)
+bureau-pipeline IS a dispatch target (DRE-1929 Option A; ADR
+`adr-bureau-pipeline-self-host.md` in agent-bureau — "agents author, human
+promotes", CEO sign-off recorded on DRE-1925). Agent-authored PRs to this repo
+are the DESIGNED path: cards dispatch, engineer agents build, the critic
+reviews, the gate merges to `main`. The trust boundary is NOT authorship — it
+is (1) the authenticated critic + gate (sha-bound verdicts, author ≠ merger
+enforced by separate App identities), and (2) HUMAN RELEASE PROMOTION: the
+fleet consumes tagged releases (`vN`, paired `pipeline_ref`), never this
+repo's live `main`; only agent-bureau and bureau-pipeline ride `@main` as the
+canary channel. A bad merge here stages a bad NEXT release — it cannot
+silently reprogram the fleet; cutting/re-pointing the release tag is a human
+act and the permanent gate.
+
+Reviewers: verify the verdict binds the head sha and the gate identities held.
+Do NOT block on agent authorship — that convention is retired.
 
 ## Acceptance
 Your PR merges only when every check is green AND the critic verdict is APPROVE
