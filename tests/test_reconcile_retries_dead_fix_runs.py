@@ -63,6 +63,11 @@ def sweep(prs, busy="[]"):
          mock.patch.object(
              reconcile, "gh_dispatch",
              side_effect=lambda *a: calls.append(a),
+         ), \
+         mock.patch.object(
+             # Card not human-parked (DRE-2024 gate) — keeps this suite
+             # hermetic; the park gate has its own suite.
+             reconcile, "card_parked_for_human", return_value=False,
          ):
         reconcile.retry_dead_fix_runs()
     return calls

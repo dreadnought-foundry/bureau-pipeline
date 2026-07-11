@@ -92,7 +92,7 @@ def test_failed_dispatch_is_loud_not_silent():
     calls: list = []
     with patch.object(
         reconcile.subprocess, "run", side_effect=_fake_run_factory(1, calls)
-    ):
+    ), patch.object(reconcile, "card_parked_for_human", return_value=False):
         with pytest.raises(Exception) as exc_info:
             reconcile.unstick_conflicts()
 
@@ -107,7 +107,7 @@ def test_successful_dispatch_does_not_raise():
     calls: list = []
     with patch.object(
         reconcile.subprocess, "run", side_effect=_fake_run_factory(0, calls)
-    ):
+    ), patch.object(reconcile, "card_parked_for_human", return_value=False):
         reconcile.unstick_conflicts()  # must not raise
     assert len(calls) == 1
 
@@ -119,7 +119,7 @@ def test_dispatch_uses_dispatch_token_when_set():
     with patch.dict(os.environ, {"GH_DISPATCH_TOKEN": "ghs_dispatch", "GH_TOKEN": "ghs_app"}):
         with patch.object(
             reconcile.subprocess, "run", side_effect=_fake_run_factory(0, calls)
-        ):
+        ), patch.object(reconcile, "card_parked_for_human", return_value=False):
             reconcile.unstick_conflicts()
     assert calls, "dispatch attempt expected"
     env = calls[0]["env"]
