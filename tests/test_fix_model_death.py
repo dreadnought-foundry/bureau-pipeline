@@ -39,6 +39,16 @@ WORKFLOW = os.path.join(
 DIED = {"subtype": "success", "is_error": True}
 RAN = {"subtype": "success", "is_error": False}
 
+# Comment fixtures in the REST issues/comments shape the workflow now hands to
+# fix_dead_run.py (oldest-first, `{"user": {"login"}, "body"}`).
+WORKER = "agent-bureau-bot[bot]"
+MARKER = f"⚡ {fix_dead_run.OUTAGE_TAG}: the fix run died with an API/model error."
+PUSH_C = "🔧 Fix attempt 1 pushed — CI and critic review re-running."
+
+
+def _c(login, body):
+    return {"user": {"login": login}, "body": body}
+
 
 def decision(execution, prior_deaths=0, **kw):
     return fix_dead_run.decide(execution, prior_deaths, **kw)
@@ -115,6 +125,61 @@ class DecideTest(unittest.TestCase):
         self.assertIn("https://runs/42", c)
 
 
+class ConsecutiveDeathsTest(unittest.TestCase):
+    """DRE-2018 review finding: the retry cap must count only CONSECUTIVE
+    deaths since the last successful push, not every death marker the PR has
+    ever carried. A recovered outage episode weeks ago must not pre-exhaust
+    the cap for a fresh one."""
+
+    def count(self, comments):
+        return fix_dead_run.consecutive_prior_deaths(comments)
+
+    def test_counts_all_deaths_within_one_episode(self):
+        # No push between them — all deaths are in a row.
+        self.assertEqual(self.count([_c(WORKER, MARKER), _c(WORKER, MARKER)]), 2)
+
+    def test_push_resets_the_consecutive_run(self):
+        # The critic's cross-episode scenario: [marker, marker, push, marker]
+        # → only the post-push death counts (1), NOT the cumulative 3.
+        comments = [
+            _c(WORKER, MARKER), _c(WORKER, MARKER),
+            _c(WORKER, PUSH_C), _c(WORKER, MARKER),
+        ]
+        self.assertEqual(self.count(comments), 1)
+
+    def test_conflict_push_marker_also_resets(self):
+        # Both push markers carry the same "pushed — CI and critic review
+        # re-running" substring, so a conflict-round push clears the run too.
+        conflict_push = "🔀 Conflict resolution round 2 pushed — CI and " \
+                        "critic review re-running."
+        comments = [_c(WORKER, MARKER), _c(WORKER, conflict_push),
+                    _c(WORKER, MARKER)]
+        self.assertEqual(self.count(comments), 1)
+
+    def test_ignores_non_worker_bot_markers(self):
+        # DRE-1995: anyone can plant the marker; only worker-bot deaths count.
+        self.assertEqual(
+            self.count([_c("attacker[bot]", MARKER), _c(WORKER, MARKER)]), 1
+        )
+
+    def test_forged_push_marker_does_not_reset(self):
+        # A push marker from a non-worker identity must not clear the run —
+        # otherwise an attacker could reset the cap and force endless retries.
+        comments = [_c(WORKER, MARKER), _c("attacker[bot]", PUSH_C),
+                    _c(WORKER, MARKER)]
+        self.assertEqual(self.count(comments), 2)
+
+    def test_hold_comment_neither_counts_nor_resets(self):
+        # The hold comment (🛑, no OUTAGE_TAG marker) is worker-bot authored
+        # but is neither a death marker nor a push — it is transparent here.
+        hold = "🛑 The AI service failed 3 fix runs in a row on this PR."
+        self.assertEqual(self.count([_c(WORKER, MARKER), _c(WORKER, hold)]), 1)
+
+    def test_empty_or_none(self):
+        self.assertEqual(self.count([]), 0)
+        self.assertEqual(self.count(None), 0)
+
+
 class CliTest(unittest.TestCase):
     def _run(self, payload, prior="0", extra=()):
         with tempfile.TemporaryDirectory() as td:
@@ -159,6 +224,42 @@ class CliTest(unittest.TestCase):
         p = self._run(DIED, extra=("--run-url", "https://runs/7"))
         self.assertIn("https://runs/7", self._action_and_body(p)[1])
 
+    def _run_comments(self, payload, comments, extra=()):
+        with tempfile.TemporaryDirectory() as td:
+            exec_path = os.path.join(td, "out.json")
+            with open(exec_path, "w") as f:
+                json.dump(payload, f)
+            comments_path = os.path.join(td, "comments.json")
+            with open(comments_path, "w") as f:
+                json.dump(comments, f)
+            return subprocess.run(
+                [sys.executable,
+                 os.path.join(os.path.dirname(__file__), "..", "scripts",
+                              "fix_dead_run.py"),
+                 "decide", exec_path,
+                 "--comments-json", comments_path, *extra],
+                capture_output=True, text=True,
+            )
+
+    def test_cli_comments_json_counts_only_post_push_deaths(self):
+        # Cumulative would be 3 (→ hold); consecutive since the push is 1
+        # (→ retry). The --comments-json path must derive the consecutive count.
+        comments = [
+            _c(WORKER, MARKER), _c(WORKER, MARKER),
+            _c(WORKER, PUSH_C), _c(WORKER, MARKER),
+        ]
+        p = self._run_comments(DIED, comments)
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(self._action_and_body(p)[0], "retry")
+
+    def test_cli_comments_json_holds_at_consecutive_cap(self):
+        # A push, then RETRY_CAP deaths with no push between → hold.
+        comments = [_c(WORKER, PUSH_C)] + [
+            _c(WORKER, MARKER) for _ in range(fix_dead_run.RETRY_CAP)
+        ]
+        p = self._run_comments(DIED, comments)
+        self.assertEqual(self._action_and_body(p)[0], "hold")
+
     def test_cli_result_list_shape(self):
         # The action can write a message list ending with the result record
         # (the same tolerance check_agent_result._load_execution has).
@@ -188,17 +289,18 @@ class WorkflowWiringTest(unittest.TestCase):
     def test_report_consults_fix_dead_run(self):
         self.assertIn("fix_dead_run.py", report_step())
 
-    def test_death_count_reads_worker_bot_comments_only(self):
-        # DRE-1995 discipline: anyone can comment on a PR; only worker-bot
-        # authored marker comments may count toward the retry cap.
+    def test_death_count_hands_full_comment_list_to_the_script(self):
+        # DRE-2018 review: the retry cap must be scoped to CONSECUTIVE deaths
+        # since the last push, which requires the push markers and comment
+        # authorship — so the Report step hands the full comment list to
+        # fix_dead_run.py via --comments-json instead of a cumulative jq count.
+        # (The worker-bot filter + push-marker reset now live in the script,
+        # unit-tested by ConsecutiveDeathsTest; DRE-1995 discipline preserved.)
         step = report_step()
-        m = re.search(
-            r"select\(\.user\.login == \"agent-bureau-bot\[bot\]\"\)[^\n]*"
-            + re.escape(f'contains("{fix_dead_run.OUTAGE_TAG}")'),
-            step,
-        )
-        self.assertIsNotNone(
-            m, "death counter must filter to worker-bot + marker in one jq"
+        self.assertIn("--comments-json", step)
+        # The old cumulative count — every marker ever posted — must be gone.
+        self.assertNotIn(
+            f'contains("{fix_dead_run.OUTAGE_TAG}"))] | length', step
         )
 
     def test_retry_branch_never_parks(self):
