@@ -87,7 +87,7 @@ jobs:
           PR=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           echo "number=$PR" >> "$GITHUB_OUTPUT"
           BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName)
-          CARD=$(printf '%s' "$BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
           echo "card=$CARD" >> "$GITHUB_OUTPUT"
           # DRE-1990: capture the head commit the Verifier is about to run.
           # The verdict embeds it (`VERDICT: <X> @<sha>`) so merge-gate can

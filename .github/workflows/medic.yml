@@ -127,7 +127,7 @@ jobs:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           # The card (if any) is encoded in the head branch (agent/DRE-N).
-          CARD=$(printf '%s' "$HEAD_BRANCH" | grep -oE 'DRE-[0-9]+' | head -1 || true)
+          CARD=$(printf '%s' "$HEAD_BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
           echo "critic infra-crash on ${{ github.event.workflow_run.html_url }} — backing off (no rerun, no diagnosis); card=${CARD:-none}"
           if [ -n "$CARD" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
