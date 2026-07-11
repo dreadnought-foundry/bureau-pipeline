@@ -345,7 +345,8 @@ class WorkflowWiringTest(unittest.TestCase):
 
     def step(self, name: str) -> str:
         m = re.search(
-            rf"name: {re.escape(name)}\b(.*?)(?:\n      - name:|\n      - if:|\Z)",
+            rf"name: {re.escape(name)}\n(.*?)"
+            r"(?:\n      - name:|\n      - if:|\n\n      #|\Z)",
             src(), re.S,
         )
         self.assertIsNotNone(m, f"step {name!r} not found in agent-fix.yml")
