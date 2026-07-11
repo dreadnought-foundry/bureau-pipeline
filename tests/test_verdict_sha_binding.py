@@ -637,6 +637,11 @@ class ApprovedButRedAuthorshipTest(unittest.TestCase):
         with (
             mock.patch.object(reconcile, "gh", side_effect=fake_gh),
             mock.patch.object(reconcile, "gh_dispatch") as dispatch,
+            # Card not human-parked (DRE-2024 gate) — this suite tests
+            # verdict authorship; the park gate has its own suite.
+            mock.patch.object(
+                reconcile, "card_parked_for_human", return_value=False
+            ),
         ):
             reconcile.fix_approved_but_red()
         return dispatch

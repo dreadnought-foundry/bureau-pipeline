@@ -376,6 +376,61 @@ def flag_stranded() -> set[str]:
     return flagged
 
 
+# Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
+# agent-fix from PR state alone (DIRTY / approved-but-red / dead-fix-run),
+# blind to the card — so a card the fix loop had already escalated to
+# needs-human / Plan Review kept getting the identical doomed run every
+# sweep (DeltaSolv PR #120 / DRE-2009: five max-turns deaths in one evening,
+# runs 29115842272×2, 29122046329, 29125603420, 29128546908). Human-parked
+# means the loop is over until a human acts: look the card up by the DRE-N
+# in the head ref and skip the dispatch. Same family as the medic↔critic
+# loop-break (bureau-pipeline #50).
+PARKED_STATE = "Plan Review"
+_BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
+
+
+def branch_card(head_ref: str) -> str | None:
+    """The DRE-N a head ref carries (upper-cased), or None (repair/* etc.)."""
+    m = _BRANCH_CARD.search(head_ref or "")
+    return m.group(0).upper() if m else None
+
+
+def card_parked_for_human(identifier: str) -> bool:
+    """True if the card sits in the Plan Review lane OR carries HOLD_LABEL —
+    a human's queue either way, so no fix agent may be dispatched for its PR.
+    Fails SAFE on an unreadable card: treat as parked (skip this sweep; the
+    next one retries) rather than dispatch into a possibly-parked card."""
+    try:
+        issue = linear_ops.gql(
+            """query($id: String!) { issue(id: $id) {
+                 state { name } labels { nodes { name } } } }""",
+            {"id": identifier},
+        )["issue"] or {}
+    except Exception as e:  # noqa: BLE001 — any Linear/transport error -> fail safe
+        print(f"park-gate: could not read {identifier}: {e} — skipping dispatch")
+        return True
+    if ((issue.get("state") or {}).get("name")) == PARKED_STATE:
+        return True
+    return any(
+        (lbl.get("name") or "").lower() == HOLD_LABEL
+        for lbl in (issue.get("labels") or {}).get("nodes", [])
+    )
+
+
+def fix_dispatch_blocked(pr: dict) -> bool:
+    """True when the PR's card is human-parked and the caller must NOT
+    dispatch agent-fix for it. A ref with no card (repair/*, experiments)
+    has no park state to consult and never blocks."""
+    card = branch_card(pr.get("headRefName") or "")
+    if card and card_parked_for_human(card):
+        print(
+            f"park-gate: PR #{pr['number']} card {card} is human-parked "
+            "(Plan Review / needs-human) — not dispatching agent-fix"
+        )
+        return True
+    return False
+
+
 def pr_for(identifier: str) -> dict | None:
     """The card's PR, looked up by HEAD BRANCH (agent/DRE-N-*), reads LOUD.
 
@@ -932,6 +987,8 @@ def unstick_conflicts() -> None:
             continue
         if pr.get("mergeStateStatus") != "DIRTY":
             continue
+        if fix_dispatch_blocked(pr):
+            continue  # human-parked card (DRE-2024) — the loop is over
         print(f"conflict: PR #{pr['number']} ({pr['headRefName']}) DIRTY — dispatching fix agent")
         gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
@@ -1014,6 +1071,8 @@ def fix_approved_but_red() -> None:
         when = (commit.get("committer") or {}).get("date")
         if not when or age_minutes(when) < 20:
             continue
+        if fix_dispatch_blocked(pr):
+            continue  # human-parked card (DRE-2024) — the loop is over
         print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed.strip()} failed check(s) — dispatching fix agent")
         gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
@@ -1074,6 +1133,8 @@ def retry_dead_fix_runs() -> None:
         ]
         if not worker or fix_dead_run.OUTAGE_TAG not in worker[-1]:
             continue
+        if fix_dispatch_blocked(pr):
+            continue  # human-parked card (DRE-2024) — the loop is over
         print(
             f"dead fix run: PR #{pr['number']} last fix run died of a "
             f"model/API error — re-dispatching fix agent"

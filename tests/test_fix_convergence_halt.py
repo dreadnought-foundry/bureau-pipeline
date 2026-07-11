@@ -98,8 +98,10 @@ class HaltSourcePinTest(unittest.TestCase):
         # Inside the halt branch the step must set go=false and stop — the
         # refusal, not another 8-minute doomed run.
         step = resolve_step()
+        # Anchor on the OUTER fi (10-space indent) — the once-per-sha
+        # receipt guard nests its own if/fi (12-space) inside the block.
         m = re.search(
-            r'if \[ "\$\{NOPROG:-0\}" -ge 2 \];.*?\n\s*fi\n', step, re.S
+            r'if \[ "\$\{NOPROG:-0\}" -ge 2 \];.*?\n          fi\n', step, re.S
         )
         self.assertIsNotNone(m, "halt branch not found in Resolve step")
         self.assertIn('echo "go=false"', m.group(0))
