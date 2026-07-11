@@ -23,6 +23,14 @@ pattern as test_agent_fix_identity_gate.py — no copied fixtures) and pins:
      — that gate is a deliberate security lock (DRE-1988, see
      test_agent_fix_identity_gate.py) and must not be widened for the pool.
   3. No allowlist outside medic.yml is the `*` wildcard.
+
+DRE-2037 extends the invariant: every bot identity that can LEGITIMATELY
+trigger a workflow must be in that workflow's allowed_bots. The DRE-1924
+merge gate updates a behind branch as agent-bureau-qa-bot, whose push fires
+`pull_request: synchronize` on qa-review and verify — so those two must
+admit the qa-bot (runs 29162737344/29162589799 crashed without it), while
+agent-task and plan must NOT (the qa-bot never authors builds — two-robot
+authorship separation).
 """
 import glob
 import os
@@ -35,6 +43,7 @@ WORKFLOWS_DIR = os.path.join(
 
 WORKER_BOT = "agent-bureau-bot"
 POOL_BOTS = ["agent-bureau-bot-2", "agent-bureau-bot-3", "agent-bureau-bot-4"]
+QA_BOT = "agent-bureau-qa-bot"
 
 ALLOWED_BOTS_RE = re.compile(r"^\s*allowed_bots:\s*(.+?)\s*$", re.M)
 
@@ -122,6 +131,46 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
                         bot, tokens,
                         f"{filename}: allowed_bots={tokens} is missing {bot}",
                     )
+
+
+class QaBotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
+    """DRE-2037: the DRE-1924 merge gate updates a behind PR branch as the
+    qa-bot; that push fires `pull_request: synchronize` on qa-review and
+    verify, so both must admit agent-bureau-qa-bot or every gate-freshened PR
+    gets a crashed critic instead of the fresh review the skew-guard forces.
+    The qa-bot must never author builds, so agent-task and plan must NOT
+    admit it (two-robot authorship separation)."""
+
+    def test_qa_review_and_verify_admit_the_qa_bot(self):
+        expected = {"qa-review.yml": 2, "verify.yml": 2}
+        for filename, count in expected.items():
+            sites = [
+                tokens for name, tokens in all_sites() if name == filename
+            ]
+            self.assertEqual(
+                len(sites), count,
+                f"{filename}: expected {count} allowed_bots site(s), found {sites}",
+            )
+            for tokens in sites:
+                self.assertIn(
+                    QA_BOT, tokens,
+                    f"{filename}: allowed_bots={tokens} is missing {QA_BOT} — "
+                    "the merge gate's update-branch push (DRE-1924) triggers "
+                    "this workflow as the qa-bot and crashes it",
+                )
+
+    def test_agent_task_and_plan_exclude_the_qa_bot(self):
+        for filename in ("agent-task.yml", "plan.yml"):
+            sites = [
+                tokens for name, tokens in all_sites() if name == filename
+            ]
+            self.assertTrue(sites, f"{filename}: no allowed_bots site found")
+            for tokens in sites:
+                self.assertNotIn(
+                    QA_BOT, tokens,
+                    f"{filename}: allowed_bots={tokens} must not admit "
+                    f"{QA_BOT} — the qa-bot never authors builds",
+                )
 
 
 class AgentFixGateUnchangedTest(unittest.TestCase):
