@@ -51,6 +51,7 @@ import tempfile
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fix_run_outage  # noqa: E402
 import linear_ops  # noqa: E402
 
 REPO = os.environ["REPO"]
@@ -333,6 +334,22 @@ def is_qa_bot_comment(comment: dict) -> bool:
     """
     login = (comment.get("author") or {}).get("login") or ""
     return login.removesuffix("[bot]") == QA_BOT_LOGIN
+
+
+WORKER_BOT_LOGIN = "agent-bureau-bot"
+
+
+def is_worker_bot_comment(comment: dict) -> bool:
+    """True iff the PR comment was AUTHORED by the worker-bot App.
+
+    Same login-shape handling as is_qa_bot_comment above (GraphQL
+    author.login carries no "[bot]" suffix), same DRE-1995 discipline as
+    agent-fix's own counters: the outage-retry sweep below reads the fix
+    loop's status markers, and a forged marker must not be able to spawn
+    fix dispatches or suppress a real retry.
+    """
+    login = (comment.get("author") or {}).get("login") or ""
+    return login.removesuffix("[bot]") == WORKER_BOT_LOGIN
 
 
 def critic_comment_bodies(pr: dict) -> list[str]:
@@ -759,6 +776,63 @@ def fix_approved_but_red() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
+# Every comment the fix loop posts on a PR carries one of these markers
+# (pushed / blocked / no-progress / budget exhausted / outage retry+hold).
+# The outage sweep reads the LATEST of them as the loop's last word.
+FIX_STATUS_MARKERS = (
+    "Fix attempt",
+    "Conflict resolution",
+    "Conflict-resolution",
+    "Fix budget exhausted",
+    "fix-outage",
+)
+
+
+def retry_outage_fixes() -> None:
+    """DRE-2018: re-dispatch the fix agent for a PR whose last fix run died
+    with an API/model outage (is_error) instead of running.
+
+    agent-fix's Report step posts a fix-outage-retry-tagged comment and
+    parks NOTHING on a model-death — the promised automatic retry is THIS
+    sweep, ~15 min later, which also gives the outage time to clear (an
+    immediate self-requeue would die straight back into it). The cap lives
+    in agent-fix itself: after the outage repeats past fix_run_outage's
+    RETRY_CAP it posts an untagged fix-outage-held comment instead, which
+    this sweep ignores, so the loop terminates. Dispatch condition: on an
+    open, non-DIRTY agent PR (DIRTY already re-dispatches via
+    unstick_conflicts), the LATEST worker-bot-authored fix-loop status
+    comment is an outage-retry marker."""
+    busy = json.loads(gh(
+        "run", "list", "--repo", REPO, "--workflow", "agent-fix.yml",
+        "--limit", "10", "--json", "status",
+    ) or "[]")
+    if any(r["status"] in ("queued", "in_progress") for r in busy):
+        print("outage sweep: fix agent busy — retry next sweep")
+        return
+    prs = json.loads(gh(
+        "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+        "--json", "number,headRefName,mergeStateStatus,comments",
+    ) or "[]")
+    for pr in prs:
+        if not pr["headRefName"].startswith("agent/") or pr.get("mergeStateStatus") == "DIRTY":
+            continue
+        statuses = [
+            (c.get("body") or "")
+            for c in pr.get("comments", [])
+            if is_worker_bot_comment(c)
+            and any(m in (c.get("body") or "") for m in FIX_STATUS_MARKERS)
+        ]
+        if not statuses or fix_run_outage.OUTAGE_TAG not in statuses[-1]:
+            continue
+        print(
+            f"outage retry: PR #{pr['number']} ({pr['headRefName']}) — last fix "
+            f"run died in an AI-service outage; dispatching fix agent"
+        )
+        gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
+                    "-f", f"pr_number={pr['number']}")
+        return  # one dispatch per sweep; the busy-guard handles the rest
+
+
 def repo_epics(active: list[dict]) -> set[str]:
     """Identifiers of THIS repo's active epics (agent:planner cards).
 
@@ -819,7 +893,12 @@ def main(
     if not promote_only:
         # Backstops run independently: one failing must not silence the
         # others, but every write failure is recorded and fails the run.
-        for backstop in (unstick_conflicts, retrigger_dead_heads, fix_approved_but_red):
+        for backstop in (
+            unstick_conflicts,
+            retrigger_dead_heads,
+            fix_approved_but_red,
+            retry_outage_fixes,
+        ):
             try:
                 backstop()
             except ReconcileWriteError as e:
