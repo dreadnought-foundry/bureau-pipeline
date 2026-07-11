@@ -63,6 +63,7 @@ EXPECTED_STUBS = {
     "self-reconcile.yml": ("reconcile.yml", "Reconcile"),
     "self-linear-sync.yml": ("linear-sync.yml", "Linear Sync"),
     "self-agent-fix.yml": ("agent-fix.yml", "Agent Fix"),
+    "self-red-main-repair.yml": ("red-main-repair.yml", "Red-Main Repair"),
     "pr-review.yml": ("qa-review.yml", "QA Review"),
     # verify.yml deliberately has NO stub: its scope gate targets UI cards
     # (**Design:** lines) / multi-system app diffs, and bureau-pipeline has no
