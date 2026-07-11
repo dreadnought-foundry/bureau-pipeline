@@ -305,6 +305,72 @@ def test_failed_dispatch_posts_no_receipt_and_is_recorded():
     assert reconcile._write_failures, "the failed dispatch must be recorded"
 
 
+# --------------------------------------------------------------------------
+# Dispatch pacing (DRE-2049): a batch sweep must not burst-drain the critic
+# --------------------------------------------------------------------------
+# Live learning, 2026-07-11: agent-bureau's first dependabot sweep opened 27
+# PRs at once. Unpaced, the backstop would fire 27 critic runs in a single
+# reconcile pass — each a full LLM review — burst-draining the subscription.
+# The cap defers the tail to later sweeps, oldest PR first.
+
+CAP = getattr(reconcile, "DEPENDABOT_DISPATCH_CAP", 3)
+
+
+def test_dispatch_cap_is_three_per_sweep():
+    assert reconcile.DEPENDABOT_DISPATCH_CAP == 3, (
+        "the per-sweep dependabot dispatch cap is the DRE-2049 quota bound"
+    )
+
+
+def _dispatched_numbers(state):
+    return [
+        int(arg.removeprefix("pr_number="))
+        for argv in state["dispatches"]
+        for arg in argv
+        if arg.startswith("pr_number=")
+    ]
+
+
+def test_batch_sweep_dispatches_at_most_the_cap_oldest_first():
+    """ACCEPTANCE: five fresh dependabot PRs, listed newest-first the way
+    `gh pr list` returns them → exactly CAP dispatches, and they go to the
+    OLDEST (lowest-numbered) PRs so the queue drains in arrival order."""
+    state = _sweep([_pr(number=n) for n in (105, 104, 103, 102, 101)])
+    assert _dispatched_numbers(state) == [101, 102, 103], (
+        "a batch beyond the cap must dispatch exactly "
+        f"{CAP} reviews, oldest PR first — got {_dispatched_numbers(state)}"
+    )
+    assert len(state["receipts"]) == 3, (
+        "receipts must cover only the PRs actually dispatched — a receipt "
+        "on a deferred PR would suppress its review forever"
+    )
+
+
+def test_already_reviewed_prs_do_not_consume_cap_slots():
+    """The cap bounds DISPATCHES, not scanned PRs: heads already covered by
+    a receipt or a bound verdict are settled — the fresh tail behind them
+    must still get its full quota — in oldest-first order."""
+    state = _sweep([
+        _pr(number=105),
+        _pr(number=104),
+        _pr(number=103, comments=[_verdict(SHA)]),
+        _pr(number=102, comments=[_receipt(SHA)]),
+        _pr(number=101, comments=[_receipt(SHA)]),
+    ])
+    assert _dispatched_numbers(state) == [104, 105]
+
+
+def test_deferred_prs_are_reported_not_silent(capsys):
+    """No silent caps: when the sweep defers PRs past the quota, it must say
+    so — a truncated sweep that reads as "covered everything" is how a
+    stalled queue hides."""
+    _sweep([_pr(number=n) for n in (101, 102, 103, 104, 105)])
+    out = capsys.readouterr().out
+    assert "deferred" in out and "2" in out, (
+        "the sweep must report the 2 PRs held back for the next pass"
+    )
+
+
 def test_main_runs_the_dependabot_backstop():
     """The backstop must be wired into the full sweep alongside its siblings."""
     mocks = {

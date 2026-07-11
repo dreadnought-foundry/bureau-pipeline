@@ -169,6 +169,34 @@ class CheckCommitsTest(unittest.TestCase):
         )
 
 
+class DependabotExemptionTest(unittest.TestCase):
+    """DRE-2049: dependabot-authored PRs are exempt from the RED-test-first
+    rule. A dependency bump has no behavior of its own to test — its proof is
+    the whole suite running against the bumped pins (the `unit` job installs
+    from requirements-dev.txt). Without this, every dependabot PR carries a
+    permanent red check and the merge gate can never auto-merge a
+    critic-APPROVEd minor (live: bp #93, 2026-07-11)."""
+
+    def test_dependabot_author_login_shapes_all_count(self):
+        # Same normalization as reconcile.is_dependabot_pr: GraphQL surfaces
+        # "dependabot", REST "dependabot[bot]", gh's bot marker "app/dependabot".
+        for login in ("dependabot", "dependabot[bot]", "app/dependabot"):
+            self.assertTrue(
+                check_tdd_commits.is_dependabot_author(login),
+                f"login shape {login!r} is dependabot and must be exempt",
+            )
+
+    def test_human_and_agent_authors_are_not_exempt(self):
+        for login in ("alice", "agent-bureau-bot", "", None):
+            self.assertFalse(check_tdd_commits.is_dependabot_author(login))
+
+    def test_dependabot_impersonating_substring_is_not_exempt(self):
+        # The match is exact on the normalized login — a user account NAMED
+        # to look like the bot must not dodge the discipline.
+        for login in ("notdependabot", "dependabot-fan", "dependabot2[bot]"):
+            self.assertFalse(check_tdd_commits.is_dependabot_author(login))
+
+
 class GitCliTest(unittest.TestCase):
     """End-to-end against a real (temp) git repo, invoked the way the
     workflow invokes it: `check_tdd_commits.py <base> <head>`. Exit 0 = pass,
@@ -201,10 +229,14 @@ class GitCliTest(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", msg)
 
-    def run_check(self, base="main", head="HEAD"):
+    def run_check(self, base="main", head="HEAD", author=None):
+        env = {**os.environ}
+        env.pop("PR_AUTHOR", None)
+        if author is not None:
+            env["PR_AUTHOR"] = author
         return subprocess.run(
             [sys.executable, str(SCRIPT), base, head],
-            cwd=self.repo, capture_output=True, text=True,
+            cwd=self.repo, capture_output=True, text=True, env=env,
         )
 
     def test_test_first_branch_exits_0(self):
@@ -248,6 +280,25 @@ class GitCliTest(unittest.TestCase):
     def test_unknown_ref_exits_2_never_passes(self):
         p = self.run_check(head="no-such-ref")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+
+    # --- dependabot exemption end-to-end (DRE-2049) -----------------------
+
+    def test_dependabot_authored_bump_exits_0_without_a_test_commit(self):
+        # A dependency bump: one code-classified commit (the pinned
+        # manifest), no test commit anywhere — the exact shape of bp #93.
+        self.git("checkout", "-q", "-b", "dependabot/pip/pip-minor-patch-1a2b3c")
+        self.add_commit("requirements-dev.txt", "build(deps): bump the pip group")
+        p = self.run_check(author="dependabot[bot]")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("exempt", p.stdout)
+        self.assertIn("dependabot", p.stdout)
+
+    def test_human_author_env_does_not_exempt(self):
+        # PR_AUTHOR set but not dependabot: the discipline holds unchanged.
+        self.git("checkout", "-q", "-b", "agent/DRE-5-x")
+        self.add_commit("scripts/widget.py", "fix(DRE-5): impl first")
+        p = self.run_check(author="alice")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
 
 
 class WorkflowWiringTest(unittest.TestCase):
@@ -297,6 +348,20 @@ class WorkflowWiringTest(unittest.TestCase):
         )
         self.assertIn('"origin/$BASE_REF"', step["run"])
         self.assertIn('"$HEAD_SHA"', step["run"])
+
+    def test_pr_author_reaches_the_check_for_the_dependabot_exemption(self):
+        # DRE-2049: the script decides the dependabot exemption off the PR's
+        # author — GitHub-attested identity, not a spoofable branch name. It
+        # rides env like the refs, never shell interpolation.
+        step = next(
+            s for s in self.job["steps"]
+            if "check_tdd_commits.py" in (s.get("run") or "")
+        )
+        self.assertIn(
+            "github.event.pull_request.user.login",
+            str(step.get("env", {}).get("PR_AUTHOR", "")),
+            "the job must hand the PR author to the check via PR_AUTHOR",
+        )
 
 
 if __name__ == "__main__":
