@@ -177,6 +177,10 @@ def _full_sweep_mocks(extra=None):
         # DRE-2032: the dead-run branch first checks the card's agent-task run
         # is not STILL RUNNING; these tests exercise the genuinely-dead paths.
         "agent_run_alive": MagicMock(return_value=False),
+        # DRE-1993: the stranded-card watchdog runs on every full sweep and
+        # would make real Linear calls on these mocked cards; stub it out —
+        # these tests exercise the human-hold path, not the watchdog.
+        "flag_stranded": MagicMock(return_value=set()),
     }
     if extra:
         m.update(extra)

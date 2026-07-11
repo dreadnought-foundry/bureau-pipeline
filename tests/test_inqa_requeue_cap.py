@@ -64,6 +64,10 @@ def _sweep_mocks(extra=None):
         "pr_for": MagicMock(return_value=None),  # In QA, no PR
         "redispatch": MagicMock(return_value=True),
         "active_cards": MagicMock(return_value=[_inqa_card()]),
+        # DRE-1993: the stranded-card watchdog runs on every full sweep and
+        # would make real Linear calls on this mocked card; stub it out —
+        # this test exercises the In-QA requeue cap, not the watchdog.
+        "flag_stranded": MagicMock(return_value=set()),
     }
     if extra:
         m.update(extra)
