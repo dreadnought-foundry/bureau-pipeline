@@ -450,15 +450,21 @@ jobs:
               # reconcile sweep re-dispatches on — no park, no needs-human,
               # no fix-attempt burned), hold (the death after the cap —
               # medic's cap pattern), or escalate (genuine no-progress:
-              # today's behavior, unchanged). The death count reads only
-              # worker-bot-authored marker comments (DRE-1995 discipline).
+              # today's behavior, unchanged). The cap counts CONSECUTIVE
+              # worker-bot deaths since the last successful push, not every
+              # death marker ever posted — a recovered outage episode must not
+              # pre-exhaust the cap for a fresh one (DRE-2018 review). Hand the
+              # full comment list to fix_dead_run.py; it filters to
+              # worker-bot-authored markers (DRE-1995 discipline) and stops the
+              # count at the last push marker.
               EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
               [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
-              DEATHS=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-                --jq '[.[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("fix-run-model-death"))] | length')
+              COMMENTS_JSON=$(mktemp)
+              gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+                > "$COMMENTS_JSON" || echo '[]' > "$COMMENTS_JSON"
               RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               DECISION=$(python3 .bureau-pipeline/scripts/fix_dead_run.py decide \
-                "$EXEC_FILE" "${DEATHS:-0}" --run-url "$RUN_URL")
+                "$EXEC_FILE" --comments-json "$COMMENTS_JSON" --run-url "$RUN_URL")
               ACTION=$(printf '%s\n' "$DECISION" | head -1)
               BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
               if [ "$ACTION" = "retry" ]; then

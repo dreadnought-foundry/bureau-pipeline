@@ -11,8 +11,12 @@ dead_run's requeue cap); this module is the fix-loop counterpart.
 
 Called from agent-fix.yml's Report step when the head SHA did not advance:
 
-    python3 fix_dead_run.py decide <execution-json-path> <prior_deaths> \
-        [--run-url U]
+    python3 fix_dead_run.py decide <execution-json-path> \
+        --comments-json <pr-comments-json> [--run-url U]
+
+The retry cap is scoped to CONSECUTIVE deaths since the last successful push
+(consecutive_prior_deaths), not every death marker the PR ever carried — a
+recovered outage episode must not pre-exhaust the cap for a fresh one.
 
 Prints the action on line 1, a blank line, then the PR comment body (empty
 for "escalate" — the workflow keeps its own escalation text):
@@ -37,6 +41,7 @@ execution result (is_error detection + list-shaped payload tolerance).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -48,7 +53,58 @@ import check_agent_result  # noqa: E402
 # other reads route on ("🔧 Fix attempt", "🔀 Conflict resolution", the
 # "pushed — CI and critic review re-running" push marker, a leading 🛑).
 OUTAGE_TAG = "fix-run-model-death"
+# Substring shared by BOTH worker-bot push markers ("🔧 Fix attempt N pushed…"
+# and "🔀 Conflict resolution round N pushed…"). A push means the branch moved
+# forward — it clears the current run of consecutive deaths.
+PUSH_MARKER = "pushed — CI and critic review re-running"
+# The worker (dispatch) bot identity, sans the "[bot]" login suffix. Only its
+# comments count toward the cap or clear it (DRE-1995 discipline).
+WORKER_LOGIN = "agent-bureau-bot"
 RETRY_CAP = 2  # retry at most twice (deaths 1,2), then hold on the 3rd
+
+
+def _comment_login(comment: dict) -> str:
+    """Login of a REST/GraphQL comment record ('' if absent), suffix intact."""
+    for key in ("user", "author"):
+        who = comment.get(key)
+        if isinstance(who, dict) and who.get("login"):
+            return who["login"]
+    return ""
+
+
+def consecutive_prior_deaths(
+    comments: list | None, *, worker_login: str = WORKER_LOGIN
+) -> int:
+    """Count worker-bot OUTAGE_TAG markers SINCE the last successful push.
+
+    DRE-2018 review finding: the retry cap must fire on three deaths *in a
+    row*, not on every death marker the PR has ever carried. A recovered
+    outage episode (deaths that were retried, then a push that succeeded)
+    must not pre-exhaust the cap for a fresh, unrelated outage weeks later.
+
+    Walk newest→oldest; a worker-bot push marker ends the run (return what we
+    have). Only worker-bot-authored comments are considered — a forged marker
+    or a forged push from any other identity is transparent (DRE-1995)."""
+    deaths = 0
+    for comment in reversed(comments or []):
+        if _comment_login(comment).removesuffix("[bot]") != worker_login:
+            continue
+        body = comment.get("body") or ""
+        if PUSH_MARKER in body:
+            break  # a successful push clears the consecutive run
+        if OUTAGE_TAG in body:
+            deaths += 1
+    return deaths
+
+
+def _load_comments(path: str) -> list:
+    """Read the REST issues/comments JSON array; [] on any read/parse error."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
 
 
 class Decision:
@@ -108,13 +164,19 @@ def decide(
 def main(argv: list[str]) -> int:
     """CLI for the workflow:
 
-      decide <execution-json-path> <prior_deaths> [--run-url U]
+      decide <execution-json-path> [<prior_deaths>] \
+          [--comments-json PATH] [--run-url U]
+
+    With --comments-json (the workflow's path), the prior-deaths count is
+    DERIVED from the PR's comment list — scoped to consecutive worker-bot
+    deaths since the last push — and any positional <prior_deaths> is ignored.
+    Without it, the positional integer is used (kept for the unit tests).
 
     Prints the action on line 1, then a blank line, then the comment body.
     """
     if not argv or argv[0] != "decide":
         print("usage: fix_dead_run.py decide <execution-json-path> "
-              "<prior_deaths> [--run-url U]")
+              "[<prior_deaths>] [--comments-json PATH] [--run-url U]")
         return 2
     rest = argv[1:]
     run_url = ""
@@ -123,8 +185,17 @@ def main(argv: list[str]) -> int:
         if i + 1 < len(rest):
             run_url = rest[i + 1]
         del rest[i : i + 2]
+    comments_path = ""
+    if "--comments-json" in rest:
+        i = rest.index("--comments-json")
+        if i + 1 < len(rest):
+            comments_path = rest[i + 1]
+        del rest[i : i + 2]
     exec_path = rest[0] if rest else ""
-    prior = int(rest[1]) if len(rest) > 1 and rest[1].isdigit() else 0
+    if comments_path:
+        prior = consecutive_prior_deaths(_load_comments(comments_path))
+    else:
+        prior = int(rest[1]) if len(rest) > 1 and rest[1].isdigit() else 0
     d = decide(
         check_agent_result._load_execution(exec_path), prior, run_url=run_url
     )
