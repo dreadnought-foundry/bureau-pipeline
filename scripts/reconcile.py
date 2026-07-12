@@ -1198,6 +1198,17 @@ DEPENDABOT_DISPATCH_TAG = "dependabot-review-dispatch"
 # subscription in a single reconcile pass. At most this many dispatches per
 # sweep, oldest PR first; the tail waits for the next sweep (~15 min cron).
 DEPENDABOT_DISPATCH_CAP = 3
+# Outcome-aware retry bound (DRE-2071). A dispatched review that CRASHES
+# (infra failure — the run concludes with no verdict ever posted) must not
+# freeze the head behind its receipt forever (bit twice live 2026-07-12:
+# 27 agent-bureau reviews crashed pre-DRE-2052, then 6 atlas/deltasolv
+# reviews on the v3 actor/secrets gaps — both needed an operator). But a
+# persistently crashing reviewer must never be retried unboundedly either
+# (bp#50, the medic-loop lesson): at most this many dispatched reviews per
+# head sha, counted by the worker-bot receipts; hitting the cap surfaces on
+# the fail-loudly rail instead of looping. A rebase changes the sha and
+# re-arms a fresh budget.
+DEPENDABOT_RECEIPT_CAP = 2
 
 
 def is_dependabot_pr(pr: dict) -> bool:
@@ -1214,17 +1225,47 @@ def is_dependabot_pr(pr: dict) -> bool:
     return login.removeprefix("app/").removesuffix("[bot]") == "dependabot"
 
 
-def dependabot_dispatch_receipt(pr: dict) -> bool:
-    """True iff a WORKER-BOT receipt already covers the PR's current head —
-    the once-per-sha bound. Forged receipts by other authors are invisible
-    (DRE-1998 discipline): the worst a forger achieves is one extra review,
-    never a suppressed one."""
+def dependabot_receipt_count(pr: dict) -> int:
+    """How many WORKER-BOT receipts cover the PR's current head — the
+    per-sha dispatch count the DEPENDABOT_RECEIPT_CAP bounds (DRE-2071).
+    Forged receipts by other authors are invisible (DRE-1998 discipline):
+    a forger can neither suppress a review nor exhaust the retry budget —
+    the worst achieved is one extra review. Receipts bound to a superseded
+    sha don't count either: a rebase re-arms a fresh budget."""
     sha = pr.get("headRefOid") or ""
-    return bool(sha) and any(
-        DEPENDABOT_DISPATCH_TAG in (c.get("body") or "") and sha in (c.get("body") or "")
+    if not sha:
+        return 0
+    return sum(
+        1
         for c in pr.get("comments", [])
         if is_worker_bot_comment(c)
+        and DEPENDABOT_DISPATCH_TAG in (c.get("body") or "")
+        and sha in (c.get("body") or "")
     )
+
+
+def _review_dispatch_in_flight() -> bool:
+    """True iff a workflow_dispatch run of this repo's review stub is still
+    queued/in progress — or the listing is unreadable.
+
+    This is how a receipt-bearing head resolves its dispatched run's outcome
+    at sweep time (DRE-2071): no in-flight run + no bound verdict means the
+    dispatched review CONCLUDED without one — a green review always posts
+    its verdict, so that is the failure/cancelled crash case. Fails CLOSED
+    on an unreadable listing (DRE-2034 read discipline): re-dispatching
+    while the prior run is live would CANCEL it via the stub's per-PR
+    concurrency group (cancel-in-progress) — the DRE-2032
+    watchdog-kills-its-patient class. Repo-wide on purpose: the In QA
+    re-review nudges share the same stub, and deferring a retry one sweep
+    is always cheaper than cancelling a live review."""
+    out = gh("run", "list", "--repo", REPO, "--workflow", review_workflow(),
+             "--event", "workflow_dispatch", "--limit", "50",
+             "--json", "status")
+    try:
+        runs = json.loads(out)
+    except ValueError:
+        return True  # unreadable — never risk cancelling a live review
+    return any(r.get("status") != "completed" for r in runs)
 
 
 def _post_dependabot_receipt(pr: dict) -> None:
@@ -1236,7 +1277,9 @@ def _post_dependabot_receipt(pr: dict) -> None:
         f"🔁 {DEPENDABOT_DISPATCH_TAG} @{pr['headRefOid']}: dependabot-triggered "
         "pull_request runs get GitHub's empty Dependabot secrets store, so the "
         "reconcile sweep dispatched the critic via workflow_dispatch instead "
-        "(DRE-2047). One dispatch per head sha — a rebase re-arms."
+        f"(DRE-2047). At most {DEPENDABOT_RECEIPT_CAP} dispatches per head sha "
+        "— a crashed review run earns one retry (DRE-2071); a rebase re-arms "
+        "a fresh budget."
     )
     p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
         ["gh", "pr", "comment", str(pr["number"]), "--repo", REPO, "--body", body],
@@ -1260,19 +1303,25 @@ def review_dependabot_prs() -> None:
     would attach secrets to a checkout of untrusted head code.
 
     Every open dependabot-authored PR whose CURRENT head has no sha-bound
-    verdict gets ONE dispatch, bounded per head sha by the worker-bot
-    receipt (a crashed critic run must not re-dispatch every sweep; a
-    rebase changes the sha and re-arms). Dispatches are PACED (DRE-2049):
-    at most DEPENDABOT_DISPATCH_CAP per sweep, oldest PR first, so a batch
-    sweep can't burst-drain the critic's LLM quota — settled PRs (verdict
-    or receipt on the current head) consume no slot, and the deferred tail
-    is reported, never silently dropped. DIRTY PRs are skipped: dependabot
-    rebases its own conflicts, which re-arms the new head."""
+    verdict gets a dispatch bounded per head sha by the worker-bot receipts,
+    OUTCOME-AWARE since DRE-2071: while the dispatched run is still in
+    flight the receipt blocks (re-dispatching would cancel the live run via
+    the stub's concurrency group), a run that concluded with no verdict
+    (crashed) earns ONE retry, and at DEPENDABOT_RECEIPT_CAP receipts the
+    head stops and surfaces on the fail-loudly rail instead of looping
+    (bp#50); a rebase changes the sha and re-arms. Dispatches are PACED
+    (DRE-2049): at most DEPENDABOT_DISPATCH_CAP per sweep, oldest PR first,
+    so a batch sweep can't burst-drain the critic's LLM quota — settled PRs
+    (verdict, or receipt with its run unresolved) consume no slot, and the
+    deferred tail is reported, never silently dropped. DIRTY PRs are
+    skipped: dependabot rebases its own conflicts, which re-arms the new
+    head."""
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
         "--json", "number,headRefName,headRefOid,author,mergeStateStatus,comments",
     ) or "[]")
     eligible = []
+    in_flight = None  # lazy — fetched once, only when a receipt needs its outcome
     for pr in prs:
         if not is_dependabot_pr(pr):
             continue
@@ -1282,8 +1331,40 @@ def review_dependabot_prs() -> None:
             continue
         if not pr.get("headRefOid"):
             continue  # no sha to bind a receipt to — retry next sweep
-        if has_verdict(pr) or dependabot_dispatch_receipt(pr):
+        if has_verdict(pr):
             continue
+        receipts = dependabot_receipt_count(pr)
+        if receipts == 0:
+            eligible.append(pr)
+            continue
+        # Receipt(s) but no bound verdict: the dispatched review has not
+        # produced one. Resolve its outcome before deciding (DRE-2071).
+        if in_flight is None:
+            in_flight = _review_dispatch_in_flight()
+        if in_flight:
+            print(
+                f"dependabot: PR #{pr['number']} head {pr['headRefOid'][:8]} "
+                "has a dispatch receipt and a workflow_dispatch review run "
+                "is still in flight — waiting, never double-dispatching"
+            )
+            continue
+        if receipts >= DEPENDABOT_RECEIPT_CAP:
+            err = (
+                f"dependabot: PR #{pr['number']} head {pr['headRefOid'][:8]} — "
+                f"{receipts} dispatched reviews concluded with no verdict "
+                f"(crashed) and the retry cap ({DEPENDABOT_RECEIPT_CAP}) is "
+                f"reached; NOT re-dispatching (bp#50). A human must fix the "
+                f"reviewer, then rebase the PR (a new head re-arms) or "
+                f"dispatch {review_workflow()} by hand."
+            )
+            _write_failures.append(err)
+            print(f"ERROR: {err}", file=sys.stderr)
+            continue
+        print(
+            f"dependabot: PR #{pr['number']} head {pr['headRefOid'][:8]} — "
+            f"dispatched review concluded with no verdict (crashed run); "
+            f"retry {receipts + 1}/{DEPENDABOT_RECEIPT_CAP}"
+        )
         eligible.append(pr)
     eligible.sort(key=lambda p: p["number"])  # oldest first — drain in arrival order
     for pr in eligible[:DEPENDABOT_DISPATCH_CAP]:
