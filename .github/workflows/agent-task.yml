@@ -197,6 +197,28 @@ jobs:
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
 
+      # Duplicate-dispatch guard (DRE-2057). The relay sometimes fires TWO
+      # agent-execute dispatches for one Todo transition (~60s apart; five
+      # twin-PR incidents: #76 #83 #90 #97 #102/#103). The stub's per-card
+      # concurrency group only SERIALIZES them (cancel-in-progress stays
+      # false — DRE-2032), so the dup builds the card again LATER. Skip —
+      # clean exit, 🤖 receipt on the card — when another run for this card
+      # is still queued/in_progress (via the 🧠 heartbeat's run URL) or an
+      # OPEN agent PR already exists; a re-dispatch after the PR closed or
+      # merged still builds (the rebuild case). Fail-open: unreadable
+      # answers proceed. EVERY step below honors the skip — the Report step
+      # especially, or a skipped dup would read as a dead run and requeue.
+      - name: Duplicate-dispatch guard
+        id: dedupe
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.worker.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 .bureau-pipeline/scripts/dedupe_dispatch.py gate \
+            "${{ github.event.client_payload.identifier }}"
+
       # Model selection: ordered preference ladder with runtime availability
       # detection (DRE-1490). select() walks the shared ladder best→worst —
       # claude-fable-5, then claude-opus-4-8, then claude-sonnet-4-6 (see
@@ -210,7 +232,7 @@ jobs:
       # comment so the board shows which model each attempt used.
       - name: Select model
         id: model
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           # The probe authenticates with the same CLAUDE token the agent uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -230,7 +252,7 @@ jobs:
       # workflow change. The blob is written to a file the prompt points at.
       - name: Assemble agent context
         id: ctx
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           python3 .bureau-pipeline/scripts/assemble_context.py assemble "$ROLE" \
@@ -247,7 +269,7 @@ jobs:
       # sanitized outputs; tests/test_untrusted_content_wiring.py pins this.
       - name: Sanitize untrusted card text
         id: card
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           RAW_TITLE: ${{ github.event.client_payload.title }}
           RAW_DESCRIPTION: ${{ github.event.client_payload.description }}
@@ -257,7 +279,7 @@ jobs:
             body RAW_DESCRIPTION description
 
       - name: Card → In Progress
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
@@ -276,7 +298,7 @@ jobs:
 
       - name: Implement card
         id: claude
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
@@ -355,7 +377,7 @@ jobs:
       # surfaced (model-error comment) and requeued; it just doesn't go red and
       # re-run blind.
       - name: Gate on agent result
-        if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
+        if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
@@ -372,7 +394,7 @@ jobs:
             --escalation-file /tmp/agent-escalation.txt --ignore-is-error
 
       - name: Report result to Linear
-        if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true'
+        if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.worker.outputs.token }}
