@@ -270,6 +270,32 @@ def review_workflow() -> str:
     return "pr-review.yml" if REPO_SLUG == "bureau-pipeline" else "qa-review.yml"
 
 
+def fix_workflow() -> str:
+    """The DISPATCHABLE fix stub's filename for this sweep's repo.
+
+    Same resolution as review_workflow(), same reason: product repos name
+    their agent-fix stub agent-fix.yml, but in bureau-pipeline that filename
+    IS the reusable definition (workflow_call only — `gh workflow run
+    agent-fix.yml` 422'd every sweep, run 29198533233 / DRE-2056), so its
+    stub is self-agent-fix.yml. Both the dispatches AND the busy-guard
+    `run list` calls must resolve through here — runs only ever exist under
+    the stub's filename, so a guard watching the reusable reads permanently
+    idle.
+    """
+    return "self-agent-fix.yml" if REPO_SLUG == "bureau-pipeline" else "agent-fix.yml"
+
+
+def gate_workflow() -> str:
+    """The DISPATCHABLE merge-gate stub's filename for this sweep's repo.
+
+    Third member of the review_workflow()/fix_workflow() family (DRE-2056):
+    the In QA / In Review nudges dispatch merge-gate.yml, which in
+    bureau-pipeline is the workflow_call-only reusable — the stub is
+    self-merge-gate.yml.
+    """
+    return "self-merge-gate.yml" if REPO_SLUG == "bureau-pipeline" else "merge-gate.yml"
+
+
 def card_repo_slug(description: str) -> str | None:
     stripped = re.sub(r"```.*?```", "", description or "", flags=re.DOTALL)
     m = re.search(r"^\*\*Repo:\*\*\s*([a-z0-9._/-]+)\s*$", stripped, re.MULTILINE | re.IGNORECASE)
@@ -985,7 +1011,7 @@ def unstick_conflicts() -> None:
     fix agent for any open agent PR sitting in conflict. (Origin: PR #25 /
     DRE-1218 sat 35 minutes with pushes firing nothing.)"""
     busy = json.loads(gh(
-        "run", "list", "--repo", REPO, "--workflow", "agent-fix.yml",
+        "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
         "--limit", "10", "--json", "status",
     ) or "[]")
     if any(r["status"] in ("queued", "in_progress") for r in busy):
@@ -1003,7 +1029,7 @@ def unstick_conflicts() -> None:
         if fix_dispatch_blocked(pr):
             continue  # human-parked card (DRE-2024) — the loop is over
         print(f"conflict: PR #{pr['number']} ({pr['headRefName']}) DIRTY — dispatching fix agent")
-        gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
+        gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
 
 
@@ -1056,7 +1082,7 @@ def fix_approved_but_red() -> None:
     approved-but-red with nothing coming. Skips when a fix run is already
     queued/in_progress (same busy-guard as the conflict sweep)."""
     busy = json.loads(gh(
-        "run", "list", "--repo", REPO, "--workflow", "agent-fix.yml",
+        "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
         "--limit", "10", "--json", "status",
     ) or "[]")
     if any(r["status"] in ("queued", "in_progress") for r in busy):
@@ -1087,7 +1113,7 @@ def fix_approved_but_red() -> None:
         if fix_dispatch_blocked(pr):
             continue  # human-parked card (DRE-2024) — the loop is over
         print(f"approved-but-red: PR #{pr['number']} has APPROVE + {failed.strip()} failed check(s) — dispatching fix agent")
-        gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
+        gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
         return  # one dispatch per sweep; the busy-guard handles the rest
 
@@ -1127,7 +1153,7 @@ def retry_dead_fix_runs() -> None:
     run is queued/in_progress; one dispatch per sweep, like
     fix_approved_but_red."""
     busy = json.loads(gh(
-        "run", "list", "--repo", REPO, "--workflow", "agent-fix.yml",
+        "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
         "--limit", "10", "--json", "status",
     ) or "[]")
     if any(r["status"] in ("queued", "in_progress") for r in busy):
@@ -1152,7 +1178,7 @@ def retry_dead_fix_runs() -> None:
             f"dead fix run: PR #{pr['number']} last fix run died of a "
             f"model/API error — re-dispatching fix agent"
         )
-        gh_dispatch("workflow", "run", "agent-fix.yml", "--repo", REPO,
+        gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
         return  # one dispatch per sweep; the busy-guard handles the rest
 
@@ -1451,7 +1477,7 @@ def main(
                     )
         elif state == "In QA" and is_open:
             if has_verdict(pr):
-                if _nudge("merge-gate.yml", pr["number"]):
+                if _nudge(gate_workflow(), pr["number"]):
                     linear_ops.cmd_comment(
                         ident,
                         "🧹 Reconcile: verdict present but merge never happened — merge gate re-triggered.",
@@ -1490,7 +1516,7 @@ def main(
                     f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
                 )
         elif state == "In Review" and is_open:
-            if _nudge("merge-gate.yml", pr["number"]):
+            if _nudge(gate_workflow(), pr["number"]):
                 linear_ops.cmd_comment(
                     ident, "🧹 Reconcile: stuck In Review — merge gate re-triggered."
                 )

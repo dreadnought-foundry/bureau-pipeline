@@ -134,10 +134,17 @@ jobs:
               exit 0;;
             esac
             echo "merge conflict with main — dispatching fix agent"
+            # DRE-2056: in the self-host repo agent-fix.yml IS the reusable
+            # (workflow_call only — dispatching it 422s, and the || true
+            # below swallowed that); the dispatchable stub there is
+            # self-agent-fix.yml. Same resolution reconcile.fix_workflow()
+            # makes for the sweep's dispatches.
+            FIX_WF=agent-fix.yml
+            [ "${{ github.repository }}" = "dreadnought-foundry/bureau-pipeline" ] && FIX_WF=self-agent-fix.yml
             # qa-bot token lacks Actions perms (deliberate); use the workflow's
             # own GITHUB_TOKEN — workflow_dispatch is exempt from the
             # no-cascade rule, so the dispatched run still fires.
-            GH_TOKEN="${{ github.token }}" gh workflow run agent-fix.yml \
+            GH_TOKEN="${{ github.token }}" gh workflow run "$FIX_WF" \
               --repo "${{ github.repository }}" \
               --ref "$(gh api repos/${{ github.repository }} --jq .default_branch)" \
               -f pr_number="$PR" || true
