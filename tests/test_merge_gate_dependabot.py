@@ -325,7 +325,10 @@ class WorkflowWiringTest(unittest.TestCase):
         # Dependabot rebases/recreates its own conflicted PRs; the fix agent
         # has no card to work and would thrash.
         guard = self.run_block.find('case "$BRANCH" in dependabot/*')
-        dispatch = self.run_block.find("gh workflow run agent-fix.yml")
+        # $FIX_WF, not a literal: the stub filename resolves per repo
+        # (DRE-2056 — agent-fix.yml is the workflow_call-only reusable in
+        # bureau-pipeline itself; test_self_stub_dispatch_parity.py).
+        dispatch = self.run_block.find('gh workflow run "$FIX_WF"')
         self.assertGreater(guard, -1, "no dependabot guard in the DIRTY arm")
         self.assertLess(guard, dispatch,
                         "dependabot guard must precede the fix-agent dispatch")
