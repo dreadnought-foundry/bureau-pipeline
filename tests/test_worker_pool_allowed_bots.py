@@ -39,6 +39,17 @@ without GitHub's reserved "[bot]" suffix, same as every entry here) or the
 critic crashes on every dependency PR and the merge gate waits forever.
 Dependabot never authors card builds, so agent-task and plan must NOT
 admit it, and agent-fix's deliberate exact list stays untouched.
+
+DRE-2053 is the fourth: reconcile's sweep runs on the workflow's own
+GITHUB_TOKEN, so every workflow it starts via `gh workflow run` (the
+dependabot review path from DRE-2047, In QA re-review nudges, unstick
+dispatches) has initiating actor `github-actions` (type: Bot). No allowlist
+admitted it, so all 3 paced dependabot review dispatches of the first
+post-DRE-2049 sweep crashed before reviewing (agent-bureau run 29197368605).
+Rather than re-deriving reachability per workflow a fifth time, the invariant
+is now blanket: EVERY allowed_bots site admits `github-actions`, so the next
+new call site can't regress it. Never via `*` — the allowlist stays explicit
+(NoNewWildcardTest still pins the wildcard to medic.yml alone).
 """
 import glob
 import os
@@ -227,6 +238,43 @@ class DependabotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
         path = os.path.join(WORKFLOWS_DIR, "agent-fix.yml")
         for tokens in allowed_bots_values(path):
             self.assertNotIn(self.DEPENDABOT, tokens)
+
+
+class GithubActionsAdmittedEverywhereTest(unittest.TestCase):
+    """DRE-2053: reconcile dispatches workflows on its own GITHUB_TOKEN, so
+    the dispatched run's initiating actor is `github-actions` (type: Bot).
+    Every allowed_bots site must admit it — blanket, not per-reachable-file,
+    so a new call site can't reintroduce the lockout — and explicitly, never
+    via the `*` wildcard."""
+
+    GITHUB_ACTIONS = "github-actions"
+
+    def test_sites_exist(self):
+        # Sanity: the blanket invariant below is vacuous if extraction
+        # finds nothing.
+        explicit = [s for s in all_sites() if "*" not in s[1]]
+        self.assertGreaterEqual(
+            len(explicit), 8,
+            "expected explicit allowed_bots sites in qa-review.yml (x2), "
+            "verify.yml (x2), agent-task.yml, plan.yml, agent-fix.yml, "
+            f"red-main-repair.yml; found {explicit}",
+        )
+
+    def test_every_explicit_allowlist_admits_github_actions(self):
+        failures = []
+        for filename, tokens in all_sites():
+            if "*" in tokens:
+                # medic's sanctioned wildcard already admits every bot;
+                # NoNewWildcardTest pins where that is allowed.
+                continue
+            if self.GITHUB_ACTIONS not in tokens:
+                failures.append(f"{filename}: allowed_bots={tokens}")
+        self.assertEqual(
+            failures, [],
+            "every allowed_bots site must admit github-actions — reconcile's "
+            "workflow_dispatch runs initiate as that actor and crash the "
+            "action before reviewing (DRE-2053):\n" + "\n".join(failures),
+        )
 
 
 class AgentFixGateUnchangedTest(unittest.TestCase):
