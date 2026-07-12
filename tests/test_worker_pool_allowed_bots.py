@@ -39,6 +39,17 @@ without GitHub's reserved "[bot]" suffix, same as every entry here) or the
 critic crashes on every dependency PR and the merge gate waits forever.
 Dependabot never authors card builds, so agent-task and plan must NOT
 admit it, and agent-fix's deliberate exact list stays untouched.
+
+DRE-2053 is the fourth: reconcile dispatches workflows with the workflow's
+own GITHUB_TOKEN (GH_DISPATCH_TOKEN — the App token 403s on the dispatch
+API, DRE-1254), so every reconcile-initiated `workflow_dispatch` run's
+initiating actor is `github-actions` (type: Bot). The DRE-2047 dependabot
+review dispatches all crashed on qa-review's actor gate (agent-bureau run
+29197368605). Rather than chase the reachable-today subset, EVERY
+allowed_bots site must admit `github-actions` — any workflow here can
+become a `gh workflow run` target of reconcile/merge-gate tomorrow, and
+this lockout class has now shipped four times. medic.yml's deliberate `*`
+satisfies it trivially; no new wildcard is allowed (NoNewWildcardTest).
 """
 import glob
 import os
@@ -227,6 +238,30 @@ class DependabotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
         path = os.path.join(WORKFLOWS_DIR, "agent-fix.yml")
         for tokens in allowed_bots_values(path):
             self.assertNotIn(self.DEPENDABOT, tokens)
+
+
+class EverySiteAdmitsGithubActionsTest(unittest.TestCase):
+    """DRE-2053: reconcile's `gh workflow run` dispatches carry the
+    workflow's own GITHUB_TOKEN, so the dispatched run's initiating actor is
+    `github-actions` — every allowed_bots site must admit it or the next
+    reconcile-reachable call site crashes before reviewing (4th lockout of
+    this class). The wildcard counts as admitting (medic.yml only —
+    NoNewWildcardTest keeps `*` from spreading)."""
+
+    GITHUB_ACTIONS = "github-actions"
+
+    def test_every_allowed_bots_site_admits_github_actions(self):
+        failures = []
+        for filename, tokens in all_sites():
+            if self.GITHUB_ACTIONS not in tokens and "*" not in tokens:
+                failures.append(f"{filename}: allowed_bots={tokens}")
+        self.assertEqual(
+            failures, [],
+            "every allowed_bots must admit github-actions — reconcile's "
+            "workflow_dispatch runs initiate as github-actions (type: Bot) "
+            "and crash the action's actor gate without it (DRE-2053):\n"
+            + "\n".join(failures),
+        )
 
 
 class AgentFixGateUnchangedTest(unittest.TestCase):

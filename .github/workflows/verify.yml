@@ -210,8 +210,10 @@ jobs:
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
-          # push fires synchronize as agent-bureau-qa-bot (DRE-2037).
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot
+          # push fires synchronize as agent-bureau-qa-bot (DRE-2037). github-actions:
+          # reconcile's workflow_dispatch runs initiate as the workflow token's
+          # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
             --max-turns 60
             --model claude-sonnet-4-6
@@ -319,8 +321,10 @@ jobs:
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
-          # push fires synchronize as agent-bureau-qa-bot (DRE-2037).
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot
+          # push fires synchronize as agent-bureau-qa-bot (DRE-2037). github-actions:
+          # reconcile's workflow_dispatch runs initiate as the workflow token's
+          # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
             --max-turns 60
             --model claude-sonnet-4-6

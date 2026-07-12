@@ -187,7 +187,10 @@ jobs:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4
+          # github-actions: reconcile dispatches on the workflow's own
+          # GITHUB_TOKEN, so its workflow_dispatch runs initiate as
+          # github-actions (DRE-2053).
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
             --max-turns 50
             --model ${{ steps.model.outputs.model }}
