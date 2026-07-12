@@ -122,6 +122,11 @@ def _run_factory(state):
             return SimpleNamespace(
                 returncode=0, stdout=json.dumps(state["prs"]), stderr=""
             )
+        if argv[1] == "run" and argv[2] == "list":
+            # The DRE-2071 outcome lookup for receipt-bearing heads.
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps(state.get("runs", [])), stderr=""
+            )
         if argv[1] == "workflow" and argv[2] == "run":
             state["dispatches"].append(argv)
             rc = state.get("dispatch_rc", 0)
@@ -137,8 +142,14 @@ def _run_factory(state):
     return fake_run
 
 
-def _sweep(prs, dispatch_rc=0):
-    state = {"prs": prs, "dispatches": [], "receipts": [], "dispatch_rc": dispatch_rc}
+def _sweep(prs, dispatch_rc=0, runs=()):
+    state = {
+        "prs": prs,
+        "dispatches": [],
+        "receipts": [],
+        "dispatch_rc": dispatch_rc,
+        "runs": list(runs),
+    }
     with patch.object(reconcile.subprocess, "run", side_effect=_run_factory(state)):
         reconcile.review_dependabot_prs()
     return state
@@ -224,13 +235,18 @@ def test_dependabot_pr_with_no_verdict_gets_exactly_one_review_dispatch():
     )
 
 
-def test_receipt_for_current_head_suppresses_redispatch():
-    """A crashed critic run must not loop: the sweep dispatches once per
-    head sha, keyed on its own receipt."""
-    state = _sweep([_pr(comments=[_receipt(SHA)])])
+def test_receipt_with_review_in_flight_suppresses_redispatch():
+    """The receipt bounds the dispatch per head sha while the dispatched
+    review run is still in flight — re-dispatching would cancel the live
+    run via the stub's concurrency group. (A CRASHED run's receipt no
+    longer blocks forever: the bounded retry lives in
+    test_dependabot_receipt_retry.py, DRE-2071.)"""
+    state = _sweep(
+        [_pr(comments=[_receipt(SHA)])], runs=[{"status": "in_progress"}]
+    )
     assert state["dispatches"] == [], (
-        "a worker-bot receipt for the CURRENT head sha means already "
-        "dispatched — no second dispatch"
+        "a worker-bot receipt for the CURRENT head sha with its review run "
+        "still in flight means already dispatched — no second dispatch"
     )
 
 
@@ -348,15 +364,16 @@ def test_batch_sweep_dispatches_at_most_the_cap_oldest_first():
 
 def test_already_reviewed_prs_do_not_consume_cap_slots():
     """The cap bounds DISPATCHES, not scanned PRs: heads already covered by
-    a receipt or a bound verdict are settled — the fresh tail behind them
-    must still get its full quota — in oldest-first order."""
+    a bound verdict or by a receipt whose review run is still in flight are
+    settled — the fresh tail behind them must still get its full quota — in
+    oldest-first order."""
     state = _sweep([
         _pr(number=105),
         _pr(number=104),
         _pr(number=103, comments=[_verdict(SHA)]),
         _pr(number=102, comments=[_receipt(SHA)]),
         _pr(number=101, comments=[_receipt(SHA)]),
-    ])
+    ], runs=[{"status": "in_progress"}])
     assert _dispatched_numbers(state) == [104, 105]
 
 
