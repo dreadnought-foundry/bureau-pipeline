@@ -58,7 +58,13 @@ on:
 jobs:
   execute:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The total-runtime cap. 45 murdered legitimately long builds mid-work
+    # (DRE-2074: DRE-2070's profiling runs were killed at the 45-minute mark
+    # 4× while in_progress with fresh ⏳ receipts, and the Report step then
+    # counted each kill as a dead run). When this timeout DOES fire, the
+    # Report step defers (dead_run.py --cancelled) and the reconcile sweep
+    # requeues off the run's real conclusion.
+    timeout-minutes: 120
     env:
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
@@ -381,6 +387,10 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
+          # DRE-2074: 'cancelled' = the agent was killed (job timeout /
+          # external cancel) while still working — not a silent death; a red
+          # gate here would summon the medic to re-run a healthy-but-slow card.
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
         run: |
           BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
           PR_URL=""
@@ -391,7 +401,8 @@ jobs:
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
           python3 .bureau-pipeline/scripts/check_agent_result.py \
             "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt \
-            --escalation-file /tmp/agent-escalation.txt --ignore-is-error
+            --escalation-file /tmp/agent-escalation.txt --ignore-is-error \
+            --claude-outcome "$CLAUDE_OUTCOME"
 
       - name: Report result to Linear
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -400,6 +411,10 @@ jobs:
           GH_TOKEN: ${{ steps.worker.outputs.token }}
           CARD: ${{ github.event.client_payload.identifier }}
           MODEL_USED: ${{ steps.model.outputs.model }}
+          # DRE-2074: a cancelled agent step (job timeout / external cancel)
+          # is a KILLED run, not a dead agent — the no-PR branch below must
+          # defer instead of counting the shared dead-run cap.
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # Resolve the card's branch FIRST and guard on it: an empty --head
@@ -472,11 +487,22 @@ jobs:
             # instead of re-dying on the same one. is_error deaths now COUNT
             # toward the cap (previously they failed the job and the medic re-ran
             # on the same model, bypassing it — DRE-1300 looped 18×).
+            #
+            # A CANCELLED agent step is NOT a death (DRE-2074): the job timeout
+            # (or an external cancel) killed a still-working agent — the old
+            # code counted each kill as a silent death and parked DRE-2070
+            # after 4 of them. decide --cancelled answers "defer": post the
+            # receipt, move nothing, count nothing; the reconcile sweep
+            # requeues off the run's real conclusion (DRE-2032), with the
+            # existing cap.
             DEAD=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
               "$CARD" "dead-run-requeue" || echo 0)
             ERR_FLAGS=""
             if [ "$IS_ERROR" = "true" ]; then
               ERR_FLAGS="--is-error --error-model $MODEL_USED"
+            fi
+            if [ "$CLAUDE_OUTCOME" = "cancelled" ]; then
+              ERR_FLAGS="$ERR_FLAGS --cancelled"
             fi
             # shellcheck disable=SC2086  # ERR_FLAGS is deliberately word-split
             DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide \
@@ -490,7 +516,10 @@ jobs:
               # dying with no PR. Without it the DRE-1885 building-card guard
               # would re-route this In Progress → Backlog move to Todo and loop.
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
-            else
+            elif [ "$ACTION" = "requeue" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
             fi
+            # ACTION=defer (cancelled run): receipt only — the card stays
+            # In Progress and reconcile owns the requeue after the run
+            # actually concludes.
           fi
