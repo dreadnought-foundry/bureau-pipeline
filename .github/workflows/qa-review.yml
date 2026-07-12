@@ -64,12 +64,27 @@ jobs:
     #   • dependabot/**               — dependency PRs (DRE-2039): the merge
     #     gate auto-merges a grouped minor/patch bump ONLY on a SHA-bound
     #     critic APPROVE, so the critic must actually run here.
+    #
+    # DEPENDABOT SELF-SKIP (DRE-2067, leading conjunct): a pull_request run
+    # triggered by dependabot[bot] gets GitHub's separate Dependabot secrets
+    # store (empty for us), so the qa-bot token mint below crashes red with
+    # zero review. DRE-2047 guarded only this repo's own stub — fleet stubs
+    # call this reusable with `secrets: inherit` and no guard, so the skip
+    # must live HERE, on the job `if` (the only point evaluated before the
+    # mint; a false job `if` skips clean green/neutral). Actor-based, not
+    # PR-author-based: the secrets store is keyed to the triggering actor —
+    # a human pushing to a dependabot/ head has normal secrets and still
+    # gets the event-driven review. The reconcile sweep's workflow_dispatch
+    # (DRE-2047) is the real review route for dependabot PRs and passes the
+    # event_name disjunct untouched. NOT pull_request_target — full secrets
+    # are never attached to a dependabot-triggered event.
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]') &&
+      (github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.pull_request.head.ref, 'agent/') ||
       startsWith(github.event.pull_request.head.ref, 'repair/') ||
       startsWith(github.event.pull_request.head.ref, 'dependabot/') ||
-      contains(github.event.pull_request.head.ref, 'DRE-')
+      contains(github.event.pull_request.head.ref, 'DRE-'))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

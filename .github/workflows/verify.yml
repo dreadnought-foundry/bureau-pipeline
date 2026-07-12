@@ -60,7 +60,16 @@ on:
 jobs:
   verify:
     # Only verify agent-authored work (branch convention agent/DRE-N-*).
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.pull_request.head.ref, 'agent/')
+    # DEPENDABOT SELF-SKIP (DRE-2067, leading conjunct — mirrors
+    # qa-review.yml): a dependabot-actor'd pull_request run gets the empty
+    # Dependabot secrets store and the bot token mint crashes. The agent/
+    # branch gate happens to exclude dependabot heads today, but qa-review's
+    # gate was equally narrow before DRE-1888 broadened it — the explicit
+    # guard pins the invariant against the same drift.
+    if: >
+      (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]') &&
+      (github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.pull_request.head.ref, 'agent/'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
