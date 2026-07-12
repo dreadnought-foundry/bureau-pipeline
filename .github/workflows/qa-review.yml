@@ -360,7 +360,9 @@ jobs:
           github_token: ${{ steps.app.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
           # push fires synchronize as agent-bureau-qa-bot (DRE-2037).
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot
+          # github-actions included for reconcile's workflow_dispatch nudges,
+          # which run on the sweep's own GITHUB_TOKEN (DRE-2053).
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
             --max-turns 40
             --model claude-sonnet-4-6
@@ -495,7 +497,9 @@ jobs:
           github_token: ${{ steps.app.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
           # push fires synchronize as agent-bureau-qa-bot (DRE-2037).
-          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot
+          # github-actions included for reconcile's workflow_dispatch nudges,
+          # which run on the sweep's own GITHUB_TOKEN (DRE-2053).
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
             --max-turns 40
             --model claude-sonnet-4-6
