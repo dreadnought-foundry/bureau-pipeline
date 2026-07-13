@@ -44,6 +44,7 @@ def failure_reason(
     blocker_note: bool = False,
     escalation_note: bool = False,
     ignore_is_error: bool = False,
+    claude_outcome: str = "",
 ) -> str | None:
     """Why this run should fail, or None if it is acceptable.
 
@@ -53,9 +54,19 @@ def failure_reason(
     trigger the medic to re-run the job on the SAME model, bypassing the cap
     (the DRE-1300 18×-loop bug). The gate still fails on a no-evidence silent
     death so a truly lost run stays loud.
+
+    `claude_outcome` (DRE-2074): the agent step's Actions outcome. "cancelled"
+    means the agent was KILLED (job timeout / external cancel) while still
+    working — no evidence is expected, so it is not a silent death and must
+    not fail the gate (a red gate summons the medic to re-run a healthy-but-
+    slow card). It waives ONLY the silent-death reason: an is_error record is
+    affirmative evidence of a model death and still fails without the ignore
+    flag. The reconcile sweep owns the requeue off the run's real conclusion.
     """
     if not ignore_is_error and is_error_death(execution):
         return "execution result has is_error=true"
+    if claude_outcome == "cancelled":
+        return None
     if (
         not branch_exists
         and not pr_exists
@@ -96,6 +107,14 @@ def main(argv: list[str]) -> int:
         i = argv.index("--escalation-file")
         escalation_file = (argv[i + 1] if i + 1 < len(argv) else "")
         del argv[i : i + 2]
+    # Optional --claude-outcome <outcome> (DRE-2074): the agent step's Actions
+    # outcome. "cancelled" = the run was killed externally mid-build, not a
+    # silent death — the gate stays green and reconcile owns the follow-up.
+    claude_outcome = ""
+    if "--claude-outcome" in argv:
+        i = argv.index("--claude-outcome")
+        claude_outcome = (argv[i + 1] if i + 1 < len(argv) else "")
+        del argv[i : i + 2]
     exec_path, branch, pr_url, blocker_file = (argv + ["", "", "", ""])[:4]
 
     def _has_note(path: str) -> bool:
@@ -108,6 +127,7 @@ def main(argv: list[str]) -> int:
         blocker_note=bool(blocker_file) and os.path.isfile(blocker_file),
         escalation_note=_has_note(escalation_file),
         ignore_is_error=ignore_is_error,
+        claude_outcome=claude_outcome,
     )
     if reason:
         print(f"agent result gate: FAIL — {reason}")
