@@ -129,6 +129,7 @@ def _sweep_mocks(extra=None):
     m = {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
+        "check_dependabot_capacity": MagicMock(),
         "fix_approved_but_red": MagicMock(),
         # DRE-2018 added a fourth sweep backstop; mock it out with its
         # siblings so these receipt tests exercise only the Todo-redispatch

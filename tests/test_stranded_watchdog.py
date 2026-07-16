@@ -294,6 +294,7 @@ def _full_sweep_mocks(extra=None):
     m = {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
+        "check_dependabot_capacity": MagicMock(),
         "fix_approved_but_red": MagicMock(),
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
