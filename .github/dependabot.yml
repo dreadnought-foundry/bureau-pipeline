@@ -6,11 +6,19 @@
 # single-dependency PR that the gate marks "waiting for human merge" and
 # never touches.
 #
+# REJECTING a parked major (DRE-2118 — docs/dependabot-major-rejection.md is
+# the playbook): the ONLY durable rejection is a per-dependency `ignore`
+# stanza in this file (template below), merged BEFORE the PR is closed —
+# a plain close without it just re-files on the weekly schedule. NEVER use
+# the `@dependabot ignore*` comment commands: `ignore this major version`
+# re-files the next major down (the DRE-2064 walk-down, ~19 PRs) and
+# `@dependabot ignore` refuses grouped PRs outright (DRE-2062).
+#
 # STABLE-ONLY DEFAULTS (documented on purpose — we rely on them):
 #   • Dependabot only proposes STABLE releases; pre-releases (alpha/beta/rc)
-#     are ignored unless a dependency is already pinned to one. No
-#     versioning-strategy / ignore stanzas needed for that — it is the
-#     default, and adding config here would only obscure it.
+#     are ignored unless a dependency is already pinned to one. That is the
+#     default — no versioning-strategy config needed. `ignore` stanzas in
+#     this file serve ONE purpose only: rejecting majors (DRE-2118, above).
 #   • The pip manifest is requirements-dev.txt (exact pins), which tests.yml
 #     installs from — so every bump is exercised by the full suite before
 #     the gate ever sees green.
@@ -36,6 +44,15 @@ updates:
       pip-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    # Rejected majors go here — uncomment and copy the block once per
+    # dependency (same shape under github-actions). Ledger + playbook:
+    # docs/dependabot-major-rejection.md. The test suite splices this
+    # template into real config, so keep the "# " prefixes intact.
+    # --- begin major-reject template ---
+    # ignore:
+    #   - dependency-name: "<the dependency>"
+    #     update-types: ["version-update:semver-major"]
+    # --- end major-reject template ---
 
   - package-ecosystem: "github-actions"
     directory: "/"
