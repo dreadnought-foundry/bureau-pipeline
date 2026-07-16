@@ -36,6 +36,7 @@ def _phase_mocks():
     return {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
+        "check_dependabot_capacity": MagicMock(),
         "fix_approved_but_red": MagicMock(),
         "active_cards": MagicMock(return_value=[]),
         "close_finished_epics": MagicMock(),

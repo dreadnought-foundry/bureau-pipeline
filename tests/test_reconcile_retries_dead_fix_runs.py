@@ -123,6 +123,7 @@ class RetryDeadFixRunsTest(unittest.TestCase):
         with mock.patch.object(reconcile, "unstick_conflicts"), \
              mock.patch.object(reconcile, "retrigger_dead_heads"), \
              mock.patch.object(reconcile, "fix_approved_but_red"), \
+             mock.patch.object(reconcile, "check_dependabot_capacity"), \
              mock.patch.object(reconcile, "retry_dead_fix_runs") as retry, \
              mock.patch.object(reconcile, "active_cards", return_value=[]), \
              mock.patch.object(reconcile, "promote_ready"), \

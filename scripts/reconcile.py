@@ -50,6 +50,7 @@ Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
@@ -1443,6 +1444,210 @@ def review_dependabot_prs() -> None:
         )
 
 
+# Dependabot slot-capacity monitor (DRE-2119, found by the DRE-2110
+# vendor-boundary audit, checklist Q3/Q5). Vendor behavior at the bound:
+# once open-pull-requests-limit PRs are open for an ecosystem, Dependabot
+# silently stops opening NEW version-update PRs — including the weekly
+# grouped minor/patch (security-relevant) PR. Majors are deliberately
+# excluded from the groups, arrive as singles, and the merge gate parks
+# them as `human` (condition D) — so unattended majors eat the slots until
+# the patch stream starves, with no signal anywhere. No-silent-killers:
+# WARN (console-only) at ~80% of the CONFIGURED limit, CRITICAL on the
+# fail-loudly rail AT the limit, naming the parked PRs.
+DEPENDABOT_CONFIG = ".github/dependabot.yml"  # cwd = the target repo checkout
+#: Dependabot's documented default when open-pull-requests-limit is omitted.
+DEPENDABOT_DEFAULT_PR_LIMIT = 5
+DEPENDABOT_WARN_FRACTION = 0.8
+
+# dependabot.yml names ecosystems by manifest keyword; branch names carry the
+# vendor's INTERNAL package-manager token (dependabot/<token>/...). Most pairs
+# differ only by "-" vs "_"; these diverge entirely.
+_DEPENDABOT_BRANCH_TOKENS = {
+    "npm": "npm_and_yarn",
+    "gomod": "go_modules",
+    "gitsubmodule": "submodules",
+    "mix": "hex",
+}
+
+
+def dependabot_branch_token(ecosystem: str) -> str:
+    """The branch-segment spelling of a dependabot.yml ecosystem name
+    (github-actions -> github_actions, npm -> npm_and_yarn, ...)."""
+    return _DEPENDABOT_BRANCH_TOKENS.get(ecosystem, ecosystem.replace("-", "_"))
+
+
+def parse_dependabot_limits(text: str) -> dict:
+    """{ecosystem: {"limit": int|None, "groups": [names]}} from a
+    dependabot.yml body. Stdlib on purpose: this sweep runs on the runner's
+    bare python3 — reconcile.yml has no pip-install step, so PyYAML is not
+    guaranteed. The shape understood here is the one the config guard pins
+    (tests/test_dependabot_config.py), and parser drift against the LIVE
+    file turns tests/test_dependabot_limit_alerts.py red."""
+    result: dict[str, dict] = {}
+    entry = None
+    item_indent = None    # indent of the `- ` update-entry dashes
+    groups_indent = None  # indent of the current entry's `groups:` key
+    name_indent = None    # indent where that block's group NAMES live
+    in_updates = False
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent == 0:
+            in_updates = stripped == "updates:"
+            entry = item_indent = groups_indent = name_indent = None
+            continue
+        if not in_updates:
+            continue
+        if stripped.startswith("- ") and (item_indent is None or indent == item_indent):
+            item_indent = indent
+            entry = {"limit": None, "groups": []}
+            groups_indent = name_indent = None
+            indent += 2
+            stripped = stripped[2:].strip()
+            if not stripped:
+                continue
+        if entry is None:
+            continue
+        if groups_indent is not None and indent <= groups_indent:
+            groups_indent = name_indent = None
+        key, sep, val = stripped.partition(":")
+        if not sep:
+            continue  # e.g. a nested list item — not a key
+        key = key.strip()
+        val = val.split(" #", 1)[0].strip().strip("\"'")
+        if groups_indent is not None:
+            # The first keyed child of `groups:` sets the name level; only
+            # keys AT that level are group names (deeper = patterns/...).
+            if not val and (name_indent is None or indent == name_indent):
+                name_indent = indent
+                entry["groups"].append(key)
+            continue
+        if key == "package-ecosystem" and val:
+            result[val] = entry
+        elif key == "open-pull-requests-limit":
+            try:
+                entry["limit"] = int(val)
+            except ValueError:
+                pass
+        elif key == "groups" and not val:
+            groups_indent = indent
+    return result
+
+
+def _is_grouped_dependabot_branch(pr: dict, groups: list) -> bool:
+    """True when the PR is one of the ecosystem's grouped updates — its
+    branch's final segment is `<group-name>-<hash>`. Everything else is a
+    single-dependency PR: the human-merge lane condition D parks."""
+    last = (pr.get("headRefName") or "").rsplit("/", 1)[-1]
+    return any(last.startswith(f"{g}-") for g in groups)
+
+
+def check_dependabot_capacity() -> None:
+    """DRE-2119: WARN/CRITICAL before open-pull-requests-limit starves the
+    minor/patch group.
+
+    Read-only monitor, per configured ecosystem: count(open dependabot-
+    authored PRs on dependabot/<token>/...) against the CONFIGURED limit
+    (vendor default 5 when the key is omitted; 0 = version updates
+    disabled, skipped). At ceil(80%): a WARNING sweep line, console-only.
+    AT the limit: a CRITICAL on the fail-loudly rail (_write_failures ->
+    red run -> medic -> Linear) naming the parked human-lane PRs — the
+    singles the merge gate never auto-merges — so the operator decision
+    (merge, or a config `ignore` rule) is forced BEFORE Dependabot silently
+    stops opening new version-update PRs.
+
+    Fail-safe per the DRE-2034 read discipline: no config file = the repo
+    doesn't run Dependabot, silence; an EXISTING config that parses to
+    nothing, or an unreadable PR listing, is a recorded read failure (red
+    run), never a quiet zero. Security-update PRs share the branch
+    namespace and count too — they occupy slots the same way. A sustained
+    at-limit condition re-fires each sweep by design: the pressure IS the
+    operator forcing function (same shape as the DEPENDABOT_RECEIPT_CAP
+    alert)."""
+    try:
+        with open(DEPENDABOT_CONFIG, encoding="utf-8") as fh:
+            config_text = fh.read()
+    except FileNotFoundError:
+        return  # no dependabot config -> no limit to starve
+    config = parse_dependabot_limits(config_text)
+    if not config:
+        err = (
+            f"{DEPENDABOT_CONFIG} exists but no update entries parsed — the "
+            "slot-capacity check is blind (parser drift or malformed "
+            "config); fix one of them (DRE-2119)"
+        )
+        _read_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return
+    try:
+        out = gh_read(
+            "pr", "list", "--repo", REPO, "--state", "open", "--limit", "100",
+            "--json", "number,title,headRefName,author",
+        )
+        prs = json.loads(out or "[]")
+    except (ReconcileReadError, ValueError) as e:
+        # An unreadable listing is NOT "0 open PRs — all quiet" (DRE-2034).
+        err = f"check_dependabot_capacity: PR listing unreadable: {e}"
+        _read_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return
+    by_token = {dependabot_branch_token(eco): eco for eco in config}
+    counted: dict[str, list[dict]] = {eco: [] for eco in config}
+    for pr in prs:
+        if not is_dependabot_pr(pr):
+            continue
+        parts = (pr.get("headRefName") or "").split("/")
+        eco = by_token.get(parts[1]) if len(parts) >= 3 else None
+        if eco is None:
+            # A genuine dependabot PR the mapping can't place still occupies
+            # a slot somewhere — invisible would mean undercounting, so say so.
+            print(
+                f"WARNING: dependabot PR #{pr['number']} "
+                f"({pr.get('headRefName')}) matches no configured ecosystem "
+                "— the slot count may be low (token mapping or config drift)"
+            )
+            continue
+        counted[eco].append(pr)
+    for eco, cfg in config.items():
+        limit = cfg["limit"] if cfg["limit"] is not None else DEPENDABOT_DEFAULT_PR_LIMIT
+        if limit <= 0:
+            continue  # 0 disables version updates for the ecosystem
+        open_prs = sorted(counted[eco], key=lambda p: p["number"])
+        n = len(open_prs)
+        if n >= limit:
+            parked = [
+                p for p in open_prs
+                if not _is_grouped_dependabot_branch(p, cfg["groups"])
+            ]
+            listing = ", ".join(
+                f"#{p['number']} ({(p.get('title') or '').strip()[:80]})"
+                for p in parked
+            ) or "none identified — every slot is a grouped PR"
+            err = (
+                f"CRITICAL: dependabot {eco} is at its open-PR limit "
+                f"({n}/{limit}) — Dependabot now silently opens NO new "
+                f"version-update PRs for {eco}, the grouped minor/patch "
+                f"(security-relevant) stream included. Parked human-lane "
+                f"PR(s) holding slots: {listing}. Operator decision needed "
+                "per the majors playbook: merge each, or add a config "
+                "`ignore` rule in dependabot.yml (`@dependabot ignore` "
+                "does not work on grouped PRs — DRE-2062 — and a per-major "
+                "ignore walks down to the next major — DRE-2064)."
+            )
+            _write_failures.append(err)
+            print(err, file=sys.stderr)
+        elif n >= max(1, math.ceil(limit * DEPENDABOT_WARN_FRACTION)):
+            print(
+                f"WARNING: dependabot {eco}: {n}/{limit} open-PR slots used "
+                f"— at {limit} Dependabot silently stops opening new "
+                "version-update PRs (grouped minor/patch included); merge "
+                "or config-ignore the parked PRs before the limit bites "
+                "(DRE-2119)"
+            )
+
+
 def repo_epics(active: list[dict]) -> set[str]:
     """Identifiers of THIS repo's active epics (agent:planner cards).
 
@@ -1510,6 +1715,7 @@ def main(
             fix_approved_but_red,
             retry_dead_fix_runs,
             review_dependabot_prs,
+            check_dependabot_capacity,
         ):
             try:
                 backstop()
