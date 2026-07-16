@@ -49,13 +49,18 @@ class MappingTest(unittest.TestCase):
     def test_card_spec_per_role_mapping(self):
         # The exact per-role set from DRE-1646 (comms + untrusted-content are
         # added to all; the lists below are the role-specific additions,
-        # order-significant).
+        # order-significant). vendor-boundaries.md (DRE-2105) goes to every
+        # role that plans, builds, or reviews work touching an external
+        # trigger/event/command — planner/engineer/frontend/devops/critic.
+        # console-honesty.md (DRE-2107) goes to the roles that build or
+        # review console surfaces rendering pipeline state —
+        # engineer/frontend/critic.
         expected = {
-            "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md"],
-            "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md"],
-            "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md"],
-            "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "design-parity.md"],
-            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "design-parity.md"],
+            "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
+            "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "vendor-boundaries.md", "console-honesty.md"],
+            "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
+            "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md"],
+            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md"],
             "verifier": ["comms.md", "untrusted-content.md", "design.md", "design-parity.md"],
             "fix": ["comms.md", "untrusted-content.md", "engineering.md"],
             "medic": ["comms.md", "untrusted-content.md", "engineering.md"],
@@ -63,6 +68,39 @@ class MappingTest(unittest.TestCase):
         self.assertEqual(set(expected), set(ac.ROLE_STANDARDS))
         for role, want in expected.items():
             self.assertEqual(ac.standards_for(role), want, f"role {role}")
+
+    def test_vendor_boundaries_reaches_the_boundary_roles_only(self):
+        # DRE-2105: the vendor-behavior premortem checklist must reach every
+        # role that authors or gates boundary-touching work. verifier/fix/
+        # medic run INSIDE an already-designed flow and don't design new
+        # vendor interactions — keeping their context lean is deliberate.
+        for role in ("planner", "engineer", "frontend", "devops", "critic"):
+            self.assertIn(
+                "vendor-boundaries.md", ac.standards_for(role),
+                f"{role} must receive the vendor-boundaries standard",
+            )
+        for role in ("verifier", "fix", "medic"):
+            self.assertNotIn(
+                "vendor-boundaries.md", ac.standards_for(role),
+                f"{role} must not carry the vendor-boundaries standard",
+            )
+
+    def test_console_honesty_reaches_the_console_roles_only(self):
+        # DRE-2107: badges derive from what actually happened — the standard
+        # must reach every role that builds or reviews console surfaces
+        # rendering pipeline state. devops/planner/verifier/fix/medic don't
+        # author console state elements — keeping their context lean is
+        # deliberate.
+        for role in ("engineer", "frontend", "critic"):
+            self.assertIn(
+                "console-honesty.md", ac.standards_for(role),
+                f"{role} must receive the console-honesty standard",
+            )
+        for role in ("devops", "planner", "verifier", "fix", "medic"):
+            self.assertNotIn(
+                "console-honesty.md", ac.standards_for(role),
+                f"{role} must not carry the console-honesty standard",
+            )
 
     def test_frontend_alone_gets_design(self):
         # design.md is the frontend/verifier signal — engineer/devops must not
@@ -94,11 +132,13 @@ class AssembleTest(unittest.TestCase):
 
         blob = ac.assemble("engineer", stub)
         # comms first, brief last, in the mapping order.
-        self.assertEqual(
-            [os.path.basename(p) for p in seen],
-            ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "engineer.md"],
-        )
-        for name in ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "engineer.md"]:
+        expected = [
+            "comms.md", "untrusted-content.md", "engineering.md",
+            "architecture.md", "card-quality.md", "vendor-boundaries.md",
+            "console-honesty.md", "engineer.md",
+        ]
+        self.assertEqual([os.path.basename(p) for p in seen], expected)
+        for name in expected:
             self.assertIn(f"BODY OF {name}", blob)
         # Sections are fenced + labeled so the agent can tell them apart.
         self.assertIn("===== BEGIN standards/comms.md =====", blob)
