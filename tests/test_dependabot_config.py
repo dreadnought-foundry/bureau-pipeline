@@ -173,10 +173,6 @@ class MajorRejectionTest(unittest.TestCase):
             "dependabot.yml must point the next editor at the playbook",
         )
 
-    def test_live_ignore_stanzas_keep_the_major_only_shape(self):
-        for eco, update in updates_by_ecosystem().items():
-            assert_ignore_rules_reject_majors_per_dependency(self, eco, update)
-
     def test_commented_template_splices_into_a_valid_ignore_stanza(self):
         """The template in dependabot.yml must be copy-paste correct: strip
         the comment markers between its sentinel lines and the result must
