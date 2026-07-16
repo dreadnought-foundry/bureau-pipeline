@@ -54,9 +54,9 @@ class MappingTest(unittest.TestCase):
             "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md"],
             "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md"],
             "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md"],
-            "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md"],
-            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md"],
-            "verifier": ["comms.md", "untrusted-content.md", "design.md"],
+            "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "design-parity.md"],
+            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "design-parity.md"],
+            "verifier": ["comms.md", "untrusted-content.md", "design.md", "design-parity.md"],
             "fix": ["comms.md", "untrusted-content.md", "engineering.md"],
             "medic": ["comms.md", "untrusted-content.md", "engineering.md"],
         }

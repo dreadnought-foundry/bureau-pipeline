@@ -58,14 +58,16 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # DevOps shares the engineer set (infra is code; same discipline + shape).
     "devops": ["engineering.md", "architecture.md", "card-quality.md"],
     # The planner authors cards (card-quality), sizes them against the
-    # engineering floor, and writes plan comments the CEO reads (comms).
-    "planner": ["card-quality.md", "engineering.md"],
-    # The critic reviews diffs AGAINST the engineering + architecture standards;
-    # its verdict voice is comms.
-    "critic": ["engineering.md", "architecture.md"],
+    # engineering floor, writes plan comments the CEO reads (comms), and must
+    # account for every designed surface (design-parity — DRE-2116).
+    "planner": ["card-quality.md", "engineering.md", "design-parity.md"],
+    # The critic reviews diffs AGAINST the engineering + architecture standards
+    # (plus the design-parity lens for **Design:**-bearing PRs); its verdict
+    # voice is comms.
+    "critic": ["engineering.md", "architecture.md", "design-parity.md"],
     # The verifier proves the feature works (comms for its verdict) and checks
-    # UI against the design standard.
-    "verifier": ["design.md"],
+    # UI against the design standard + the design-parity no-fake-states lens.
+    "verifier": ["design.md", "design-parity.md"],
     # The fixing agent and the medic work to the engineering floor and report
     # in the CEO's voice.
     "fix": ["engineering.md"],
