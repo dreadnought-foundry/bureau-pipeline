@@ -44,6 +44,14 @@ jobs:
     # without the author check that comment spawns a code-writing agent on the
     # branch. workflow_dispatch stays open: it requires repo write access and
     # is how merge-gate routes conflicts into this loop.
+    # A job-if runs before any step can mint an App token, so the qa-bot
+    # login is hardcoded here (unlike the app-slug-derived checks in the
+    # steps) and does NOT follow an App rename.
+    # RENAME PROCEDURE (DRE-2120): renaming the qa App must update every
+    # hardcoded login site in .github/workflows/ together with the roster in
+    # tests/test_qa_login_literal_roster.py, in one commit — a missed site
+    # sends this gate dark silently (REQUEST_CHANGES verdicts stop
+    # dispatching the fix agent, no sweep covers it, PRs strand).
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event.issue.pull_request &&
