@@ -51,18 +51,22 @@ import sys
 # the agent reads them in.
 ROLE_STANDARDS: dict[str, list[str]] = {
     # Implementation agents build to the engineering floor + the system shape,
-    # against the card contract, and report in the CEO's voice.
-    "engineer": ["engineering.md", "architecture.md", "card-quality.md"],
+    # against the card contract, and report in the CEO's voice. They also
+    # answer the vendor-behavior premortem before touching an external
+    # trigger/event/command (DRE-2105 — the 2026-07-12 boundary lessons).
+    "engineer": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
     # Frontend is the engineer in web mode + the design-fidelity standard.
-    "frontend": ["engineering.md", "architecture.md", "card-quality.md", "design.md"],
+    "frontend": ["engineering.md", "architecture.md", "card-quality.md", "design.md", "vendor-boundaries.md"],
     # DevOps shares the engineer set (infra is code; same discipline + shape).
-    "devops": ["engineering.md", "architecture.md", "card-quality.md"],
+    "devops": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
     # The planner authors cards (card-quality), sizes them against the
-    # engineering floor, and writes plan comments the CEO reads (comms).
-    "planner": ["card-quality.md", "engineering.md"],
-    # The critic reviews diffs AGAINST the engineering + architecture standards;
-    # its verdict voice is comms.
-    "critic": ["engineering.md", "architecture.md"],
+    # engineering floor, writes plan comments the CEO reads (comms), and
+    # bakes the vendor-boundary answers into boundary-touching cards.
+    "planner": ["card-quality.md", "engineering.md", "vendor-boundaries.md"],
+    # The critic reviews diffs AGAINST the engineering + architecture
+    # standards — and walks the vendor-boundaries checklist on
+    # boundary-touching PRs; its verdict voice is comms.
+    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md"],
     # The verifier proves the feature works (comms for its verdict) and checks
     # UI against the design standard.
     "verifier": ["design.md"],
