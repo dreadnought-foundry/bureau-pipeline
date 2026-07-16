@@ -57,7 +57,14 @@ jobs:
     # issue_comment leg (DRE-1987): only a verdict comment AUTHORED BY the
     # qa-bot App wakes the gate — anyone can type "QA Critic" in a comment.
     # The literal must match the BUREAU_QA_APP bot login; the decision steps
-    # below re-derive the same login from the minted token (app-slug).
+    # below re-derive the same login from the minted token (app-slug), but a
+    # job-if runs before any step can mint one, so the login is hardcoded
+    # here and does NOT follow an App rename.
+    # RENAME PROCEDURE (DRE-2120): renaming the qa App must update every
+    # hardcoded login site in .github/workflows/ together with the roster in
+    # tests/test_qa_login_literal_roster.py, in one commit — a missed site
+    # sends this leg dark silently (verdicts stop landing merges until
+    # reconcile's ~15-min gate nudge picks them up).
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' &&
