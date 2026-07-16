@@ -51,6 +51,7 @@ class ConflictsOnlyModeTest(unittest.TestCase):
     def test_default_mode_unchanged_runs_all_backstops_and_promotion(self):
         with mock.patch.object(reconcile, "unstick_conflicts") as unstick, \
              mock.patch.object(reconcile, "retrigger_dead_heads") as dead_heads, \
+             mock.patch.object(reconcile, "check_dependabot_capacity"), \
              mock.patch.object(reconcile, "fix_approved_but_red") as approved_red, \
              mock.patch.object(reconcile, "active_cards", return_value=[]) as cards, \
              mock.patch.object(reconcile, "promote_ready") as promote, \
