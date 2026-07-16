@@ -22,8 +22,10 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / ".github" / "dependabot.yml"
 REQUIREMENTS = ROOT / "requirements-dev.txt"
 TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
+PLAYBOOK = ROOT / "docs" / "dependabot-major-rejection.md"
 
 MERGEABLE_UPDATE_TYPES = {"minor", "patch"}
+MAJOR_IGNORE_TYPE = "version-update:semver-major"
 
 
 def updates_by_ecosystem():
@@ -108,6 +110,94 @@ class PipManifestWiringTest(unittest.TestCase):
             "tests.yml must install the suite's deps from requirements-dev.txt "
             "— a pin CI ignores makes every Dependabot pip PR vacuous",
         )
+
+
+def assert_ignore_rules_reject_majors_per_dependency(testcase, eco, update):
+    """The one shape an ignore rule may take here (DRE-2118): per-dependency,
+    majors only. Anything broader would silently swallow the minor/patch
+    stream the grouped auto-merge lane depends on."""
+    for rule in update.get("ignore") or []:
+        testcase.assertIn(
+            "dependency-name", rule,
+            f"{eco}: every ignore rule must name ONE dependency — a bare "
+            "rule ignores the whole ecosystem",
+        )
+        testcase.assertEqual(
+            rule.get("update-types"), [MAJOR_IGNORE_TYPE],
+            f"{eco}: ignore rule for {rule.get('dependency-name')!r} must "
+            "reject majors ONLY — without update-types Dependabot stops "
+            "proposing minors and patches too",
+        )
+
+
+class MajorRejectionTest(unittest.TestCase):
+    """DRE-2118 — the config-ignore rejection path for parked majors.
+
+    The merge gate parks every Dependabot major for a human, but both
+    `@dependabot ignore*` commands are booby-trapped (DRE-2064 walk-down,
+    DRE-2062 grouped-PR refusal) and plain closing re-files weekly. The
+    durable rejection is a config `ignore` stanza. These tests pin the
+    operator playbook and the config template that carries the pattern.
+    """
+
+    def test_playbook_doc_exists(self):
+        self.assertTrue(
+            PLAYBOOK.is_file(),
+            f"missing {PLAYBOOK.relative_to(ROOT)} — the operator playbook "
+            "for rejecting a Dependabot major",
+        )
+
+    def test_playbook_names_the_one_safe_path_in_order(self):
+        text = PLAYBOOK.read_text()
+        self.assertIn(".github/dependabot.yml", text)
+        self.assertIn(MAJOR_IGNORE_TYPE, text,
+                      "the playbook must show the exact ignore stanza shape")
+        step1 = text.find("Step 1")
+        step2 = text.find("Step 2")
+        self.assertGreaterEqual(step1, 0, "playbook lost its Step 1")
+        self.assertGreater(step2, step1,
+                           "config ignore stanza (Step 1) must come BEFORE "
+                           "closing the PR (Step 2)")
+
+    def test_playbook_forbids_the_comment_commands(self):
+        text = PLAYBOOK.read_text()
+        self.assertIn("@dependabot ignore", text,
+                      "the do-not-use commands must be named explicitly")
+        # The live incidents are the argument — the doc cites both.
+        self.assertIn("DRE-2064", text)  # the ignore-command walk-down
+        self.assertIn("DRE-2062", text)  # ignore refuses grouped PRs
+
+    def test_config_points_at_the_playbook(self):
+        self.assertIn(
+            "docs/dependabot-major-rejection.md", CONFIG.read_text(),
+            "dependabot.yml must point the next editor at the playbook",
+        )
+
+    def test_commented_template_splices_into_a_valid_ignore_stanza(self):
+        """The template in dependabot.yml must be copy-paste correct: strip
+        the comment markers between its sentinel lines and the result must
+        parse as exactly the per-dependency major-only shape. Mangle the
+        template's indentation and this goes red."""
+        lines = CONFIG.read_text().splitlines()
+        starts = [i for i, l in enumerate(lines)
+                  if "begin major-reject template" in l]
+        ends = [i for i, l in enumerate(lines)
+                if "end major-reject template" in l]
+        self.assertEqual(len(starts), 1,
+                         "dependabot.yml must carry exactly one sentinel-"
+                         "marked major-reject template")
+        self.assertEqual(len(ends), 1)
+        body = [l.replace("# ", "", 1)
+                for l in lines[starts[0] + 1:ends[0]]]
+        self.assertTrue(body, "template between the sentinels is empty")
+        indent = min(len(l) - len(l.lstrip()) for l in body if l.strip())
+        stanza = yaml.safe_load("\n".join(l[indent:] for l in body))
+        self.assertIsInstance(stanza, dict)
+        self.assertIn("ignore", stanza)
+        assert_ignore_rules_reject_majors_per_dependency(
+            self, "template", stanza)
+        self.assertTrue(stanza["ignore"],
+                        "template must show at least one example rule")
 
 
 if __name__ == "__main__":
