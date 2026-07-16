@@ -246,7 +246,24 @@ jobs:
 
           # Both gates green: advance card, merge as qa-bot.
           [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In QA,In Progress" || true
-          gh pr merge "$PR" --merge --delete-branch
+          # DRE-2117: pin the merge to the exact head every condition above
+          # (including the SHA-bound critic APPROVE) was evaluated against —
+          # a push or rebase landing since $SHA was captured makes GitHub
+          # reject the merge (405) instead of merging a head the critic
+          # never reviewed (the DRE-1990 skew at the last step). Classify
+          # the failure before deciding loud/quiet: a MOVED (or
+          # unverifiable) head is the benign race — exit clean, the new
+          # head's own events re-run the gate; a failure with the head
+          # still at $SHA is real and stays a red run.
+          if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA"; then
+            NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null || true)
+            if [ -n "$NOW" ] && [ "$NOW" = "$SHA" ]; then
+              echo "merge failed with the head still at $SHA — real failure"
+              exit 1
+            fi
+            echo "head moved since evaluation (was $SHA, now ${NOW:-unverifiable}) — not merging; the gate re-runs on the new head's events"
+            exit 0
+          fi
           echo "merged PR #$PR"
           [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
             "🔀 Auto-merged by qa-bot: CI green + critic APPROVE. PR: $(gh pr view "$PR" --json url --jq .url)" || true
