@@ -192,6 +192,7 @@ def test_in_qa_nudge_dispatches_the_selfhost_stub():
     mocks = {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
+        "check_dependabot_capacity": MagicMock(),
         "fix_approved_but_red": MagicMock(),
         "retry_dead_fix_runs": MagicMock(),
         "close_finished_epics": MagicMock(),
@@ -393,6 +394,7 @@ def test_main_runs_the_dependabot_backstop():
     mocks = {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
+        "check_dependabot_capacity": MagicMock(),
         "fix_approved_but_red": MagicMock(),
         "retry_dead_fix_runs": MagicMock(),
         "review_dependabot_prs": MagicMock(),
