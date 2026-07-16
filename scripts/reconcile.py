@@ -55,6 +55,7 @@ import re
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1003,13 +1004,42 @@ def close_finished_epics(epic_identifiers: set[str]) -> None:
             advance_unblocked_epics(epic)
 
 
+# UNKNOWN-mergeable polling bounds (DRE-2121). GitHub computes a PR's
+# mergeable state LAZILY, so the merge-triggered sweep must wait out the
+# recompute — but bounded, so linear-sync stays fast. 3 × 20s covers the
+# recompute comfortably; anything slower belongs to the cron backstop.
+CONFLICT_POLL_TRIES = 3
+CONFLICT_POLL_SECONDS = 20
+
+
+def _dispatch_conflict_fix(pr: dict) -> None:
+    """Dispatch the fix agent for one DIRTY agent PR (human-park gated)."""
+    if fix_dispatch_blocked(pr):
+        return  # human-parked card (DRE-2024) — the loop is over
+    print(f"conflict: PR #{pr['number']} ({pr['headRefName']}) DIRTY — dispatching fix agent")
+    gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
+                "-f", f"pr_number={pr['number']}")
+
+
 def unstick_conflicts() -> None:
     """A conflicted (DIRTY) PR emits no workflow events at all — GitHub
     cannot build its test-merge commit, so pull_request workflows silently
     never run, and the merge gate's DIRTY path (which fires on those very
     events) never gets a chance. This sweep is the backstop: dispatch the
     fix agent for any open agent PR sitting in conflict. (Origin: PR #25 /
-    DRE-1218 sat 35 minutes with pushes firing nothing.)"""
+    DRE-1218 sat 35 minutes with pushes firing nothing.)
+
+    UNKNOWN is "not yet computed", never "not dirty" (DRE-2121). GitHub
+    computes mergeable lazily, so the merge-triggered sweep (linear-sync
+    fires this seconds after a merge — the exact event that conflicts
+    siblings) races the recompute: bp#109 merged 00:56:57, the sweep listed
+    at 00:57:10, #110 read UNKNOWN, and the sweep honestly found nothing
+    DIRTY while the conflicted PR sat 17 minutes for a hand-nudge. Reading
+    a PR triggers the recompute, so agent PRs reading UNKNOWN are re-read
+    (bounded: CONFLICT_POLL_TRIES × CONFLICT_POLL_SECONDS) until each
+    resolves, then acted on — at most one dispatch per PR per invocation.
+    Still UNKNOWN at the cap: log loudly and leave it to the cron backstop.
+    """
     busy = json.loads(gh(
         "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
         "--limit", "10", "--json", "status",
@@ -1021,16 +1051,45 @@ def unstick_conflicts() -> None:
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
         "--json", "number,headRefName,mergeStateStatus",
     ) or "[]")
+    pending = []  # agent PRs whose mergeable GitHub hasn't computed yet
     for pr in prs:
         if not pr["headRefName"].startswith("agent/"):
             continue
-        if pr.get("mergeStateStatus") != "DIRTY":
-            continue
-        if fix_dispatch_blocked(pr):
-            continue  # human-parked card (DRE-2024) — the loop is over
-        print(f"conflict: PR #{pr['number']} ({pr['headRefName']}) DIRTY — dispatching fix agent")
-        gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
-                    "-f", f"pr_number={pr['number']}")
+        status = pr.get("mergeStateStatus")
+        if status == "UNKNOWN":
+            pending.append(pr)
+        elif status == "DIRTY":
+            _dispatch_conflict_fix(pr)
+    for attempt in range(1, CONFLICT_POLL_TRIES + 1):
+        if not pending:
+            return
+        print(
+            f"conflict sweep: {len(pending)} PR(s) mergeable UNKNOWN — GitHub "
+            f"is still computing; re-read {attempt}/{CONFLICT_POLL_TRIES} "
+            f"in {CONFLICT_POLL_SECONDS}s"
+        )
+        time.sleep(CONFLICT_POLL_SECONDS)
+        still_unknown = []
+        for pr in pending:
+            fresh = json.loads(gh(
+                "pr", "view", str(pr["number"]), "--repo", REPO,
+                "--json", "number,headRefName,mergeStateStatus",
+            ) or "{}")
+            status = fresh.get("mergeStateStatus")
+            if status == "DIRTY":
+                _dispatch_conflict_fix(fresh)
+            elif status in (None, "UNKNOWN"):
+                # Unreadable counts as unresolved — keep polling, never guess.
+                still_unknown.append(fresh or pr)
+        pending = still_unknown
+    if pending:
+        nums = ", ".join(f"#{p['number']}" for p in pending)
+        print(
+            f"ERROR: conflict sweep: mergeable still UNKNOWN after "
+            f"{CONFLICT_POLL_TRIES}×{CONFLICT_POLL_SECONDS}s for {nums} — "
+            "leaving to the cron backstop",
+            file=sys.stderr,
+        )
 
 
 def retrigger_dead_heads() -> None:
