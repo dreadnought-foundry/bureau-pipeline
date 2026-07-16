@@ -122,6 +122,15 @@ governs how you consume it.
   scripts, data) omit it entirely; its absence is normal and never a defect.
   (Origin: DRE-1477/1478 — agents were building UI from text alone and the
   critic could only check copy, not visual fidelity.)
+- **Cards must sum to the design**: when the epic references a design
+  contract (a `design/` directory, `**Design:**` refs, a screen inventory),
+  enumerate EVERY designed surface in scope and account for each — a card
+  with a `**Design:**` ref, or an explicit `deferred: <surface> — <reason>`
+  line in the plan comment. Silent omission is a planning defect; deferring
+  is a decision the CEO can read and veto. Full rule:
+  `standards/design-parity.md` (in your assembled context). (Origin: the
+  DeltaSolv gap audit, 2026-07-13 — ~67 designed screens never carded, the
+  epic closed anyway.)
 
 ## Creating each sub-issue — write the file's CONTENTS, never its path
 Draft each card body to a temp file, then create it with:
