@@ -135,6 +135,46 @@ class ScriptInvocationTest(unittest.TestCase):
         )
 
 
+class MatchHeadCommitTest(unittest.TestCase):
+    """DRE-2117: every gate condition — including the SHA-bound critic
+    APPROVE — is evaluated against $SHA captured once. The merge call must
+    pin that same SHA (`--match-head-commit`) so a push or rebase landing in
+    the race window makes GitHub reject the merge instead of merging a head
+    the critic never reviewed (the DRE-1990 skew, closed at the last step)."""
+
+    def setUp(self):
+        self.run_block = evaluate_step_run()
+        self.merge_line = next(
+            ln for ln in self.run_block.splitlines() if "gh pr merge" in ln
+        )
+
+    def test_merge_pins_the_evaluated_head_sha(self):
+        self.assertIn(
+            '--match-head-commit "$SHA"', self.merge_line,
+            "gh pr merge does not pin the evaluated head SHA — a head moved "
+            "between evaluation and merge would merge unreviewed",
+        )
+
+    def test_moved_head_is_a_clean_skip_not_a_red_run(self):
+        """Under `set -euo pipefail` a bare failing merge reds the run; the
+        raced head is the benign case — the failure must be HANDLED and exit
+        0, so the new head's own events re-run the gate (no medic churn)."""
+        self.assertIn("if ! gh pr merge", self.run_block,
+                      "merge failure is unhandled — a moved head reds the run")
+        tail = self.run_block[self.run_block.find("if ! gh pr merge"):]
+        self.assertIn("exit 0", tail, "moved-head arm does not exit clean")
+
+    def test_merge_failure_with_unmoved_head_stays_loud(self):
+        """Classify-first: only a MOVED head is the benign race. The handler
+        re-reads the current headRefOid, and a failure with the head still at
+        $SHA is a real failure that must stay a red run."""
+        tail = self.run_block[self.run_block.find("if ! gh pr merge"):]
+        self.assertIn("headRefOid", tail,
+                      "handler never re-reads the head to classify the failure")
+        self.assertIn("exit 1", tail,
+                      "an unmoved-head merge failure is silently swallowed")
+
+
 class CliContractTest(unittest.TestCase):
     """Run the real CLI the way the workflow does and assert the grep-able
     contract: `decision=` and `reason=` lines on stdout, exit 0."""
