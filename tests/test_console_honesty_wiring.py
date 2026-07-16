@@ -123,9 +123,12 @@ class CriticLensTest(unittest.TestCase):
     standard must say so."""
 
     def test_critic_lens_exists(self):
-        text = body().lower()
-        self.assertIn("critic", text)
-        self.assertIn("three rules", text)
+        text = body()
+        # Both phrases appear ONLY in the "Critic: the three rules are a
+        # review gate" section; removing that section makes this go red,
+        # whereas "critic"/"three rules" survive elsewhere in the doc.
+        self.assertIn("the three rules are a review gate", text)
+        self.assertIn("REQUEST_CHANGES-grade finding", text)
 
 
 if __name__ == "__main__":
