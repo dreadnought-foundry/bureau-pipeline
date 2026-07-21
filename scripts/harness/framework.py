@@ -32,6 +32,17 @@ import merge_gate
 # harness- = ours to delete. A run id follows, then the scenario name.
 HARNESS_BRANCH_PREFIX = "agent/harness-"
 
+# Second sweepable namespace (DRE-2100): gate_paths probes merge_gate's
+# condition D with a dependabot-NAMED branch. The harness- marker keeps it
+# ours to delete and disjoint from every genuine Dependabot branch —
+# those are dependabot/<ecosystem>/..., and no ecosystem token starts
+# with "harness-" (sweeping a real one would kill the vendor PR
+# dependabot_flow exists to consume).
+DEPENDABOT_HARNESS_BRANCH_PREFIX = "dependabot/harness-"
+
+# Every prefix the sweep owns; is_harness_ref rides on this tuple.
+HARNESS_BRANCH_PREFIXES = (HARNESS_BRANCH_PREFIX, DEPENDABOT_HARNESS_BRANCH_PREFIX)
+
 # Where probe files land in the sandbox (merged ones included) — the sweep
 # clears this directory on the default branch, so a run that crashed after
 # its merge but before its cleanup leaves nothing permanent behind.
@@ -69,13 +80,21 @@ def scenario_branch(run_id: str, scenario_name: str) -> str:
     return f"{HARNESS_BRANCH_PREFIX}{validate_run_id(run_id)}-{scenario_name}"
 
 
+def dependabot_scenario_branch(run_id: str, scenario_name: str) -> str:
+    """A dependabot-NAMED harness branch (condition-D shaped, DRE-2100) —
+    still inside the sweepable namespace, never a genuine Dependabot ref."""
+    return (
+        f"{DEPENDABOT_HARNESS_BRANCH_PREFIX}{validate_run_id(run_id)}-{scenario_name}"
+    )
+
+
 def is_harness_ref(ref: Optional[str]) -> bool:
     """True iff `ref` is a branch the harness created (any run id). The
     predicate every sweep decision rides on — it must never match a real
-    agent branch."""
+    agent branch, nor a genuine Dependabot branch."""
     if not ref:
         return False
-    return ref.removeprefix("refs/heads/").startswith(HARNESS_BRANCH_PREFIX)
+    return ref.removeprefix("refs/heads/").startswith(HARNESS_BRANCH_PREFIXES)
 
 
 @dataclass
@@ -88,6 +107,10 @@ class HarnessContext:
     run_id: str
     worker_login: str = ""
     qa_login: str = ""
+    # Second client for reads only the qa App is proven to have (check-runs
+    # — merge-gate.yml's own read path); None = fall back to the worker
+    # client and let a permission refusal surface loudly.
+    gh_qa: object = None
     verdict_timeout: float = 1500.0  # ≥ the critic job's 25-minute budget
     merge_timeout: float = 1200.0
     poll_interval: float = 30.0
@@ -186,11 +209,12 @@ def sweep_leftovers(gh, repo: str, log=print) -> dict:
         except Exception as e:
             log(f"sweep: could not close PR #{pr['number']} ({e})")
 
-    try:
-        stale_branches = gh.matching_refs(repo, HARNESS_BRANCH_PREFIX)
-    except Exception as e:
-        log(f"sweep: could not list branches ({e}) — skipping branch sweep")
-        stale_branches = []
+    stale_branches = []
+    for prefix in HARNESS_BRANCH_PREFIXES:
+        try:
+            stale_branches.extend(gh.matching_refs(repo, prefix))
+        except Exception as e:
+            log(f"sweep: could not list {prefix}* branches ({e}) — skipping")
     for branch in stale_branches:
         try:
             gh.delete_ref(repo, branch)
@@ -244,6 +268,24 @@ def verdict_state(comments, qa_login: str, head_sha: str) -> tuple[str, str]:
     if sha != head_sha:
         return "stale", f"verdict bound to {sha}, head is {head_sha}"
     return token, line
+
+
+def find_real_dependabot_pr(prs) -> Optional[dict]:
+    """The OLDEST open PR that is genuinely Dependabot's, from REST list
+    shapes: dependabot/-named head, NOT the harness's own dependabot-named
+    namespace, and authored by the literal dependabot[bot] (GitHub-reserved
+    suffix — unforgeable; branch names are free text). Reuses merge_gate's
+    own constants so "genuine" means exactly what condition D means."""
+    genuine = [
+        pr
+        for pr in prs
+        if ((pr.get("head") or {}).get("ref") or "").startswith(
+            merge_gate.DEPENDABOT_BRANCH_PREFIX
+        )
+        and not is_harness_ref(pr["head"]["ref"])
+        and ((pr.get("user") or {}).get("login") or "") == merge_gate.DEPENDABOT_LOGIN
+    ]
+    return min(genuine, key=lambda p: p.get("number", 0)) if genuine else None
 
 
 def same_bot(a: Optional[str], b: Optional[str]) -> bool:

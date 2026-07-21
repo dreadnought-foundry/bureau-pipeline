@@ -65,11 +65,10 @@ def _ctx(gh, run_id="gha-1-1"):
 
 
 def _find(gh, fragment):
-    """The PR whose head ref contains `fragment` (driver-side lookup)."""
-    for pr in gh.prs.values():
-        if fragment in pr["head"]["ref"]:
-            return pr
-    return None
+    """The NEWEST PR whose head ref contains `fragment` (driver-side
+    lookup — a swept crashed leftover may share the fragment)."""
+    matches = [pr for pr in gh.prs.values() if fragment in pr["head"]["ref"]]
+    return matches[-1] if matches else None
 
 
 class LegDriver:
@@ -147,6 +146,8 @@ class LegDriver:
         if pr is None or pr["merged"] or pr["state"] != "open":
             return
         n, ref = pr["number"], pr["head"]["ref"]
+        if mode == "no_update":
+            return  # the currency guard never fires — the PR sits behind
         step = self.state.get("skew_step", 0)
         if step == 0:
             updater = WORKER if mode == "wrong_updater" else QA
