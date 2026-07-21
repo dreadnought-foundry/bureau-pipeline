@@ -20,6 +20,12 @@ API_URL = "https://api.github.com"
 _RETRIES = 3
 _BACKOFF_SECONDS = 5
 
+# App installation tokens die exactly one hour after mint. A client given
+# a token_supplier re-mints proactively at 50 minutes — comfortably inside
+# the hour — so a long scenario run never carries a corpse into its late
+# scenarios (run 29795108949: gate_paths 401ed in verify AND cleanup).
+TOKEN_REFRESH_SECONDS = 50 * 60
+
 
 class GitHubError(RuntimeError):
     def __init__(self, status: int, message: str):
@@ -32,21 +38,55 @@ class GitHub:
     mints one client per actor (worker bot, …) — WHICH identity performs
     an action is the thing under test, so it is explicit, never ambient."""
 
-    def __init__(self, token: str, api_url: str = API_URL, opener=None):
+    def __init__(
+        self,
+        token: str,
+        api_url: str = API_URL,
+        opener=None,
+        token_supplier=None,
+        clock=time.monotonic,
+    ):
         self._token = token
         self._api = api_url.rstrip("/")
         # opener(urllib.request.Request) -> (status, bytes); injectable so
         # the retry/error logic is unit-testable without a network.
         self._opener = opener or self._urlopen
+        # token_supplier() -> fresh token; None = the token is static (a
+        # PAT, or an App JWT) and expiry surfaces as the 401 it is.
+        self._supplier = token_supplier
+        self._clock = clock
+        self._minted_at = clock()
 
     @staticmethod
     def _urlopen(req: urllib.request.Request):
         with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
             return resp.status, resp.read()
 
+    def _remint(self) -> bool:
+        """Swap in a fresh token from the supplier; False when the client
+        was built with a static token only."""
+        if not self._supplier:
+            return False
+        self._token = self._supplier()
+        self._minted_at = self._clock()
+        return True
+
     def request(self, method: str, path: str, body: dict | None = None):
         """One REST call, retried through transient failures. Returns the
-        parsed JSON (None for empty responses)."""
+        parsed JSON (None for empty responses). With a token_supplier the
+        token is refreshed before it ages past TOKEN_REFRESH_SECONDS, and
+        once reactively when GitHub answers 401 anyway (the mint-time race
+        no fixed margin can close)."""
+        if self._supplier and self._clock() - self._minted_at >= TOKEN_REFRESH_SECONDS:
+            self._remint()
+        try:
+            return self._attempt(method, path, body)
+        except GitHubError as e:
+            if e.status == 401 and self._remint():
+                return self._attempt(method, path, body)
+            raise
+
+    def _attempt(self, method: str, path: str, body: dict | None = None):
         url = path if path.startswith("http") else f"{self._api}{path}"
         data = json.dumps(body).encode() if body is not None else None
         last_error: Exception | None = None

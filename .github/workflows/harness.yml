@@ -131,6 +131,14 @@ jobs:
           # not guaranteed.
           HARNESS_QA_TOKEN: ${{ steps.qa.outputs.token }}
           HARNESS_QA_LOGIN: ${{ steps.qa.outputs.app-slug }}[bot]
+          # App credentials so the DRIVER can re-mint mid-run: the mint
+          # steps above run once, installation tokens live one hour, and
+          # a full scenario run can outlast it (run 29795108949 401ed
+          # its late scenarios). Same secrets, same single-repo scope.
+          HARNESS_WORKER_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+          HARNESS_WORKER_APP_PRIVATE_KEY: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          HARNESS_QA_APP_ID: ${{ secrets.BUREAU_QA_APP_ID }}
+          HARNESS_QA_APP_PRIVATE_KEY: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
           SCENARIOS: ${{ inputs.scenarios }}
           PYTHONPATH: scripts
