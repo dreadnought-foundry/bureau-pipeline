@@ -46,7 +46,18 @@ HARNESS_BRANCH_PREFIXES = (HARNESS_BRANCH_PREFIX, DEPENDABOT_HARNESS_BRANCH_PREF
 # Where probe files land in the sandbox (merged ones included) — the sweep
 # clears this directory on the default branch, so a run that crashed after
 # its merge but before its cleanup leaves nothing permanent behind.
-PROBE_DIR = "harness_runs"
+# DELIBERATELY not a Python identifier: setuptools flat-layout
+# auto-discovery counts every top-level identifier-named directory as a
+# package, and the sandbox's own `pip install -e .` died on the previous
+# name ("Multiple top-level packages discovered in a flat-layout:
+# ['harness_pkg', 'harness_runs']") — red CI on every probe PR, so the
+# merge gate correctly never merged one (run 29795108949).
+PROBE_DIR = "harness-runs"
+
+# Prior probe homes: swept, never written. Run 29795108949's cleanup died
+# on the token 401 and stranded a harness_runs/ file on the sandbox's
+# default branch — poisoning CI for every branch cut from it until swept.
+LEGACY_PROBE_DIRS = ("harness_runs",)
 
 # Run ids land verbatim in branch names and file paths: lowercase
 # alphanumerics and dashes only, nothing that could escape the namespace
@@ -225,10 +236,15 @@ def sweep_leftovers(gh, repo: str, log=print) -> dict:
 
     try:
         default, _ = gh.default_branch(repo)
-        entries = gh.list_dir(repo, PROBE_DIR, default)
     except Exception as e:
-        log(f"sweep: could not list {PROBE_DIR}/ ({e}) — skipping file sweep")
-        entries = []
+        log(f"sweep: could not resolve the default branch ({e}) — skipping file sweep")
+        default = None
+    entries = []
+    for probe_dir in (PROBE_DIR, *LEGACY_PROBE_DIRS) if default else ():
+        try:
+            entries.extend(gh.list_dir(repo, probe_dir, default))
+        except Exception as e:
+            log(f"sweep: could not list {probe_dir}/ ({e}) — skipping file sweep")
     for entry in entries:
         if entry.get("type") != "file":
             continue

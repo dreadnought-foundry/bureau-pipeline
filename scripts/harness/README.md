@@ -30,7 +30,12 @@ on the tested sha — the record `release-gate.yml` requires before any
 
 Every branch a run creates is `agent/harness-<run-id>-<scenario>` (or
 `dependabot/harness-<run-id>-…` for gate_paths' condition-D probe) and
-every merged probe file lives under `harness_runs/`. Setup sweeps ALL
+every merged probe file lives under `harness-runs/` — deliberately NOT a
+Python identifier, so setuptools flat-layout auto-discovery in the
+sandbox can never claim it as a second top-level package (the old
+`harness_runs` name broke the sandbox's own `pip install -e .`, held its
+CI red on every probe PR, and the gate rightly never merged one — run
+29795108949; the legacy dir is still swept). Setup sweeps ALL
 leftovers matching those namespaces (any run id) — closing PRs, deleting
 branches, removing stray probe files — so a crashed previous run can
 never fail the next one. The sweep predicate can never match a real
