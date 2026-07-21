@@ -2,11 +2,20 @@
 
 End-to-end scenarios against the dedicated sandbox repo
 **`dreadnought-foundry/bureau-harness`**, driven by
-`.github/workflows/harness.yml` (workflow_dispatch, job id `harness`,
-input `pipeline_ref` default `main`). The scenarios mock **nothing
-GitHub-side** — real branches, real PRs, the sandbox's real critic and
-merge-gate stubs, real App identities. Unit tests
-(`tests/test_harness_*.py`) cover only the driver's pure logic.
+`.github/workflows/harness.yml` (job id `harness`; workflow_dispatch with
+input `pipeline_ref` default `main`, plus a `pull_request` trigger on the
+boundary paths — DRE-2103). The scenarios mock **nothing GitHub-side** —
+real branches, real PRs, the sandbox's real critic and merge-gate stubs,
+real App identities. Unit tests (`tests/test_harness_*.py`) cover only
+the driver's pure logic.
+
+The harness is **load-bearing** (DRE-2103): on a boundary-touching PR the
+driver runs from the PR's own head and its red check run holds the merge
+gate (all-checks-green, no branch-protection change); dependabot-triggered
+PR events self-skip clean at the job level (empty Dependabot secrets
+store). A green run stamps a success `integration-harness` commit status
+on the tested sha — the record `release-gate.yml` requires before any
+`v*` tag stands ("agents author, human promotes, harness proves").
 
 ## Layout
 
@@ -21,7 +30,12 @@ merge-gate stubs, real App identities. Unit tests
 
 Every branch a run creates is `agent/harness-<run-id>-<scenario>` (or
 `dependabot/harness-<run-id>-…` for gate_paths' condition-D probe) and
-every merged probe file lives under `harness_runs/`. Setup sweeps ALL
+every merged probe file lives under `harness-runs/` — deliberately NOT a
+Python identifier, so setuptools flat-layout auto-discovery in the
+sandbox can never claim it as a second top-level package (the old
+`harness_runs` name broke the sandbox's own `pip install -e .`, held its
+CI red on every probe PR, and the gate rightly never merged one — run
+29795108949; the legacy dir is still swept). Setup sweeps ALL
 leftovers matching those namespaces (any run id) — closing PRs, deleting
 branches, removing stray probe files — so a crashed previous run can
 never fail the next one. The sweep predicate can never match a real

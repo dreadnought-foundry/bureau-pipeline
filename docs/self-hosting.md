@@ -1,7 +1,8 @@
 # Self-hosting: bureau-pipeline on its own rail
 
-The go-live record for DRE-1929 Option A ("agents author, human promotes" —
-ADR `adr-bureau-pipeline-self-host.md` in the agent-bureau repo).
+The go-live record for DRE-1929 Option A ("agents author, human promotes,
+**harness proves**" — ADR `adr-bureau-pipeline-self-host.md` in the
+agent-bureau repo; the third clause added by DRE-2103).
 
 ## The facts
 
@@ -20,6 +21,22 @@ ADR `adr-bureau-pipeline-self-host.md` in the agent-bureau repo).
   stages the NEXT release.** The human gate is release promotion: the
   operator cuts or re-points the `vN` tag at the soaked sha. Agents author;
   a human promotes.
+- **The harness proves every release (DRE-2103).** The operator cuts `vN`
+  only after a green integration-harness run against the candidate sha —
+  the `pipeline_ref` input on `harness.yml` is how a candidate is tested
+  pre-tag:
+
+  ```bash
+  gh workflow run harness.yml --repo dreadnought-foundry/bureau-pipeline \
+    -f pipeline_ref=<candidate-sha>
+  ```
+
+  A green run stamps a success `integration-harness` commit status on the
+  tested sha; `release-gate.yml` fires on every `v*` tag push and goes
+  loudly red when the tagged commit lacks that stamp
+  (`scripts/release_gate.py`, fail-closed). The harness also gates
+  boundary-touching PRs here via its `pull_request` trigger — the merge
+  gate's all-checks-green rule holds a PR whose harness run is red.
 
 Mechanics of pinning, the canary channel, and the promotion/rollback moves
 live in the README under "Release channel: pinning, canary, promotion".

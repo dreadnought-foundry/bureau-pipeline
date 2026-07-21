@@ -13,8 +13,20 @@
 #
 # NOTE (scope of pipeline_ref): the input pins the DRIVER code under test.
 # The sandbox's stubs consume the reusable workflows at the ref THEY pin —
-# pointing the sandbox itself at a candidate pipeline ref is the wiring
-# card's business.
+# on a PR run the driver comes from the PR's head while the sandbox still
+# rides its own pinned pipeline ref (main, the canary channel).
+#
+# Load-bearing since DRE-2103, two ways:
+#   * PR gate — pull_request on the boundary paths below. merge_gate.py
+#     condition 1 requires EVERY check run on the head sha to finish
+#     green and harness.yml is not a review workflow, so a red run holds
+#     the merge with no branch-protection change
+#     (tests/test_harness_gate_evidence.py).
+#   * Release gate — a green run stamps a success `integration-harness`
+#     commit status on the sha it actually checked out; release-gate.yml
+#     refuses any v* tag whose commit lacks that stamp. The stamp, not
+#     the run record, is the sha-binding: a dispatch run's head_sha is
+#     the DISPATCH ref's tip, not pipeline_ref's.
 name: Integration Harness
 
 on:
@@ -28,6 +40,17 @@ on:
         description: comma-separated scenario names (empty = all discovered)
         required: false
         default: ""
+  pull_request:
+    # The boundary: workflow wiring plus the dispatch/gate scripts the
+    # scenarios exercise end-to-end. Everything else stays silent.
+    paths:
+      - ".github/workflows/**"
+      - "scripts/harness/**"
+      - "scripts/reconcile.py"
+      - "scripts/merge_gate.py"
+      - "scripts/dispatch_pool.py"
+      - "scripts/dedupe_dispatch.py"
+      - "scripts/should_review_pr.py"
 
 # One shared sandbox repo — two concurrent runs would trample each other's
 # branches and PRs. A second dispatch QUEUES; never cancel-in-progress
@@ -39,9 +62,20 @@ concurrency:
 
 permissions:
   contents: read
+  statuses: write  # the tested-sha stamp release-gate.yml reads
 
 jobs:
   harness:
+    # Premortem Q1/Q2 on our own wiring (DRE-2047/2067): dependabot's own
+    # opens/rebases of a .github/workflows/** bump fire pull_request AS
+    # dependabot[bot], and that event gets GitHub's SEPARATE Dependabot
+    # secrets store — for us EMPTY — so the App-token mints below would
+    # crash red with zero scenarios run. The guard sits on the JOB so no
+    # step ever executes: the run concludes `skipped`, which the merge
+    # gate's GREEN_CONCLUSIONS admits — a clean skip, never a red crash
+    # (the pr-review.yml pattern; reconcile's dispatch route reviews
+    # dependabot PRs, and dependency bumps are not harness business).
+    if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # Scenario budget for all three scenarios: each verdict wait is bounded
     # by the critic job's own 25m timeout, dependabot_flow adds one
@@ -50,9 +84,19 @@ jobs:
     # far sooner; this is the slow-but-honest ceiling.
     timeout-minutes: 120
     steps:
+      # The ref under test: pipeline_ref on a dispatch (defaulted to
+      # main); on pull_request the inputs context is EMPTY, so the middle
+      # clause makes the PR's own head the driver checkout — without it
+      # every PR run would silently test main (the DRE-2026 chimera).
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.pipeline_ref || 'main' }}
+          ref: ${{ inputs.pipeline_ref || github.event.pull_request.head.sha || 'main' }}
+
+      # The sha the stamp binds — resolved from the ACTUAL checkout, the
+      # only record a dispatch run has of what pipeline_ref pointed at.
+      - name: Resolve tested sha
+        id: tested
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v6
         with:
@@ -87,8 +131,33 @@ jobs:
           # not guaranteed.
           HARNESS_QA_TOKEN: ${{ steps.qa.outputs.token }}
           HARNESS_QA_LOGIN: ${{ steps.qa.outputs.app-slug }}[bot]
+          # App credentials so the DRIVER can re-mint mid-run: the mint
+          # steps above run once, installation tokens live one hour, and
+          # a full scenario run can outlast it (run 29795108949 401ed
+          # its late scenarios). Same secrets, same single-repo scope.
+          HARNESS_WORKER_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+          HARNESS_WORKER_APP_PRIVATE_KEY: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          HARNESS_QA_APP_ID: ${{ secrets.BUREAU_QA_APP_ID }}
+          HARNESS_QA_APP_PRIVATE_KEY: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
           SCENARIOS: ${{ inputs.scenarios }}
           PYTHONPATH: scripts
         run: |
           python3 -m harness --repo "$HARNESS_REPO" --scenarios "$SCENARIOS"
+
+      # The release gate's record (scripts/release_gate.py reads exactly
+      # this context): success on green, an honest failure on red — a
+      # later green run overwrites it, GitHub keeps the latest status per
+      # context. Cancelled runs proved nothing and stamp nothing.
+      - name: Stamp tested sha with the harness verdict
+        if: success() || failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ steps.tested.outputs.sha }}
+          STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
+            -f state="$STATE" \
+            -f context="integration-harness" \
+            -f description="integration harness: ${STATE}" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

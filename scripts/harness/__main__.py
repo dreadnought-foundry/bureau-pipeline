@@ -13,6 +13,15 @@ Env (harness.yml sets all of these):
                         Absent: those reads fall back to the worker token
                         and a permission refusal surfaces loudly.
   HARNESS_WORKER_LOGIN  informational — the authoring identity
+  HARNESS_WORKER_APP_ID / HARNESS_WORKER_APP_PRIVATE_KEY
+  HARNESS_QA_APP_ID / HARNESS_QA_APP_PRIVATE_KEY
+                        optional — App credentials so the driver can
+                        RE-MINT its installation tokens mid-run: the
+                        workflow's mint steps run once, tokens live one
+                        hour, and a full run can outlast it (run
+                        29795108949 401ed its late scenarios). Absent:
+                        the initial tokens are static and a long run
+                        will 401 past the hour.
   HARNESS_REPO          default --repo
   HARNESS_RUN_ID        default --run-id (else a local one is generated)
   HARNESS_VERDICT_TIMEOUT / HARNESS_MERGE_TIMEOUT / HARNESS_POLL_INTERVAL
@@ -27,9 +36,30 @@ import argparse
 import os
 import sys
 
-from harness import framework
+from harness import app_token, framework
 from harness.github_api import GitHub
 from harness.scenarios import discover
+
+
+def token_supplier(
+    role: str,
+    app_id: str,
+    private_key_pem: str,
+    repo: str,
+    mint=app_token.mint_installation_token,
+    log=print,
+):
+    """A re-mint callable for GitHub(token_supplier=...), or None when the
+    App credentials are not in the env (local PAT runs keep their static
+    token and the old behavior)."""
+    if not app_id or not private_key_pem:
+        return None
+
+    def supply() -> str:
+        log(f"re-minting the {role} App installation token (hourly TTL)")
+        return mint(app_id, private_key_pem, repo)
+
+    return supply
 
 
 def main(argv=None) -> int:
@@ -72,9 +102,32 @@ def main(argv=None) -> int:
     names = wanted or sorted(available)
 
     run_id = framework.validate_run_id(args.run_id)
-    gh = GitHub(token)
+    worker_supplier = token_supplier(
+        "worker",
+        os.environ.get("HARNESS_WORKER_APP_ID", ""),
+        os.environ.get("HARNESS_WORKER_APP_PRIVATE_KEY", ""),
+        args.repo,
+    )
+    gh = GitHub(token, token_supplier=worker_supplier)
+    if not worker_supplier:
+        print(
+            "note: HARNESS_WORKER_APP_ID/_PRIVATE_KEY unset — no token "
+            "re-mint; a run longer than an hour will 401"
+        )
     qa_token = os.environ.get("HARNESS_QA_TOKEN")
-    gh_qa = GitHub(qa_token) if qa_token else gh
+    gh_qa = (
+        GitHub(
+            qa_token,
+            token_supplier=token_supplier(
+                "qa",
+                os.environ.get("HARNESS_QA_APP_ID", ""),
+                os.environ.get("HARNESS_QA_APP_PRIVATE_KEY", ""),
+                args.repo,
+            ),
+        )
+        if qa_token
+        else gh
+    )
     if not qa_token:
         print("note: HARNESS_QA_TOKEN unset — check-runs reads use the worker token")
     print(f"harness run {run_id} on {args.repo}: scenarios {names}")

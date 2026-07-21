@@ -17,9 +17,12 @@ of which reference harness PRs). No permanent harness card, no sandbox
 Linear stubs, zero Linear writes — the harness cannot spam real cards
 because it never addresses one.
 
-The probe change is a single markdown record under harness_runs/ — no
+The probe change is a single markdown record under harness-runs/ — no
 code, so nothing the sandbox's CI could collect, import, or accumulate
-behavior from; the PR body says plainly what it is so the adversarial
+behavior from (the dir name is deliberately NOT a Python identifier:
+setuptools flat-layout discovery claimed the old `harness_runs` as a
+second top-level package and broke the sandbox build, run 29795108949);
+the PR body says plainly what it is so the adversarial
 critic judges a coherent, honest, cardless change (the shape
 review_card_context.py already defines for DRE-less branches).
 """

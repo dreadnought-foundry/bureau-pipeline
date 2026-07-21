@@ -55,5 +55,33 @@ class TestSelfHostingDoc(unittest.TestCase):
         )
 
 
+class TestHarnessProvesPromotion(unittest.TestCase):
+    """DRE-2103: the ADR line grows a third clause — agents author, human
+    promotes, HARNESS PROVES. Both operator-facing docs must carry the
+    clause and the exact pre-tag command (the pipeline_ref dispatch is how
+    a candidate sha earns its green stamp before the tag exists)."""
+
+    PRE_TAG_COMMAND = "gh workflow run harness.yml"
+
+    def setUp(self):
+        self.doc = DOC.read_text()
+        self.readme = (ROOT / "README.md").read_text()
+
+    def test_both_docs_carry_the_harness_proves_clause(self):
+        for text in (self.doc, self.readme):
+            self.assertIn("harness proves", text)
+
+    def test_both_docs_document_the_exact_pre_tag_command(self):
+        for text in (self.doc, self.readme):
+            self.assertIn(self.PRE_TAG_COMMAND, text)
+            self.assertIn("pipeline_ref=", text)
+
+    def test_readme_names_the_release_gate_workflow(self):
+        # The enforcement half: a v* tag with no green stamp goes loudly
+        # red via release-gate.yml — the README promotion section must say
+        # so, or the gate reads as an unexplained surprise.
+        self.assertIn("release-gate.yml", self.readme)
+
+
 if __name__ == "__main__":
     unittest.main()
