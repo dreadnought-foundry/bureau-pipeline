@@ -16,7 +16,7 @@ name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness]
     types: [completed]
 
 permissions:

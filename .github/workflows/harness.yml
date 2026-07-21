@@ -1,0 +1,86 @@
+# Integration harness (DRE-2098): drives end-to-end scenarios against the
+# dedicated sandbox repo dreadnought-foundry/bureau-harness with REAL
+# pipeline behavior — the worker bot authors a PR there, the sandbox's own
+# stubs run the real critic and merge gate, and the driver
+# (scripts/harness/) asserts the outcomes. Nothing GitHub-side is mocked.
+#
+# Tokens are minted from THIS repo's existing App secrets, scoped to the
+# sandbox only (both Apps are installed there — operator card). The qa-bot
+# mint exists for its app-slug (the expected-merger assertion derives from
+# the same App key the gate merges with, merge-gate #57 pattern — never a
+# hardcoded login) and doubles as a pre-flight proof the qa App really is
+# installed on the sandbox before we spend scenario minutes waiting.
+#
+# NOTE (scope of pipeline_ref): the input pins the DRIVER code under test.
+# The sandbox's stubs consume the reusable workflows at the ref THEY pin —
+# pointing the sandbox itself at a candidate pipeline ref is the wiring
+# card's business.
+name: Integration Harness
+
+on:
+  workflow_dispatch:
+    inputs:
+      pipeline_ref:
+        description: bureau-pipeline ref under test (the driver checkout)
+        required: false
+        default: main
+      scenarios:
+        description: comma-separated scenario names (empty = all discovered)
+        required: false
+        default: ""
+
+# One shared sandbox repo — two concurrent runs would trample each other's
+# branches and PRs. A second dispatch QUEUES; never cancel-in-progress
+# (killing a run mid-scenario is exactly the crashed-run mess the driver's
+# sweep exists to mop up).
+concurrency:
+  group: integration-harness-sandbox
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    # Scenario budget: verdict wait (≤25m, the critic job's own timeout) +
+    # merge wait + sweep overhead, with slack for queued sandbox runs.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Mint worker-bot token (sandbox-scoped)
+        id: worker
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-harness
+
+      - name: Mint qa-bot token (identity probe — merger-login source)
+        id: qa
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: bureau-harness
+
+      - name: Run harness scenarios
+        env:
+          HARNESS_REPO: dreadnought-foundry/bureau-harness
+          HARNESS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
+          HARNESS_WORKER_LOGIN: ${{ steps.worker.outputs.app-slug }}[bot]
+          HARNESS_QA_LOGIN: ${{ steps.qa.outputs.app-slug }}[bot]
+          HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          SCENARIOS: ${{ inputs.scenarios }}
+          PYTHONPATH: scripts
+        run: |
+          python3 -m harness --repo "$HARNESS_REPO" --scenarios "$SCENARIOS"
