@@ -1,0 +1,59 @@
+# vN release gate (DRE-2103): harness proves the tag.
+#
+# "Agents author, human promotes, harness proves" — the operator cuts a
+# v* tag only after a green integration-harness run against that exact
+# sha. harness.yml stamps a success `integration-harness` commit status
+# on the sha it actually checked out (the pipeline_ref dispatch is how a
+# candidate earns its stamp pre-tag); this workflow fires on the tag push
+# and goes loudly red when the tagged commit lacks a green stamp. It
+# cannot un-push the tag — the red run is the alarm the operator answers
+# by running the harness and re-pointing (or dropping) the tag.
+#
+# The decision lives in scripts/release_gate.py (unit-tested red and
+# green in tests/test_release_gate.py); this file only gathers GitHub's
+# records and acts on the verdict — the merge-gate.yml thin-caller shape.
+name: Release Gate
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  statuses: read
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # Annotated and lightweight tags disagree about what the push
+      # event's sha dereferences to — rev-parse on the checked-out tag is
+      # the deterministic peel to the commit the stamp lives on.
+      - name: Peel the tag to its commit
+        id: tag
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # `{}` on a fetch blip: release_gate.py fails closed on it — never
+      # promote on unverifiable data (merge_gate's compare-blip pattern).
+      - name: Fetch the combined commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG_SHA}/status" \
+            > combined_status.json || echo '{}' > combined_status.json
+
+      - name: Harness must have proved this sha
+        env:
+          TAG_SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          python3 scripts/release_gate.py \
+            --sha "$TAG_SHA" \
+            --statuses-file combined_status.json

@@ -17,7 +17,7 @@ name: Merge Gate
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, QA Review]
+    workflows: [Pipeline Tests, QA Review, Integration Harness]
     types: [completed]
   issue_comment:
     types: [created]

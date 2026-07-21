@@ -129,17 +129,40 @@ checkout stops threading the input.
 designated canary and stays on `@main`** (no `pipeline_ref`), so every
 merge here soaks on the canary's real traffic before the fleet sees it.
 
-**Promotion** (operator-only, never an agent): after a change has soaked on
-the canary, the operator cuts or re-points the next tag at the merged sha —
+**Promotion** (operator-only, never an agent): agents author, human
+promotes, **harness proves** (DRE-2103). After a change has soaked on the
+canary, the operator first runs the integration harness against the
+candidate sha — the `pipeline_ref` input on `harness.yml` is exactly how a
+candidate is tested pre-tag:
 
 ```bash
-git tag -f v2 <merged-sha> && git push origin v2 --force
+gh workflow run harness.yml --repo dreadnought-foundry/bureau-pipeline \
+  -f pipeline_ref=<candidate-sha>
+```
+
+A green run stamps a success `integration-harness` commit status on the
+sha it checked out (the stamp binds the TESTED sha — a dispatch run's own
+head_sha records only the ref the workflow file was dispatched on). Only
+then does the operator cut or re-point the next tag at that sha —
+
+```bash
+git tag -f v2 <candidate-sha> && git push origin v2 --force
 ```
 
 — then re-points fleet stubs (`@v1` → `@v2` together with
-`pipeline_ref: v2`) repo by repo. Rollback is the same move in reverse:
-re-point the stub back to the previous tag pair. Tags are not PR-reviewable,
-so cutting/moving them is deliberately a human step outside the pipeline.
+`pipeline_ref: v2`) repo by repo. `release-gate.yml` fires on every `v*`
+tag push and goes loudly red when the tagged commit lacks a green harness
+stamp (`scripts/release_gate.py`, fail-closed) — it cannot un-push a tag,
+so a red run is the alarm to run the harness and re-point or drop the tag.
+Rollback is the same move in reverse: re-point the stub back to the
+previous tag pair (already-proved shas keep their stamps). Tags are not
+PR-reviewable, so cutting/moving them is deliberately a human step outside
+the pipeline.
+
+The harness is also a PR gate here: `harness.yml` runs on pull requests
+touching the boundary paths (workflow wiring + the dispatch/gate scripts),
+and the merge gate's all-checks-green rule holds any boundary PR whose
+harness run is red — no branch-protection change involved.
 
 ## Layout
 
