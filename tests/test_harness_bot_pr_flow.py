@@ -42,7 +42,8 @@ WORKER = "agent-bureau-bot[bot]"
 class FakeGitHub:
     """In-memory stand-in exposing the client methods the driver uses,
     returning the same REST shapes the real GitHub API returns. Shared by
-    test_harness_framework.py's sweep tests."""
+    test_harness_framework.py's sweep tests and the sibling scenario
+    suites (dependabot_flow / gate_paths)."""
 
     def __init__(self, default_branch="main"):
         self._default = default_branch
@@ -51,22 +52,35 @@ class FakeGitHub:
         self.files = {}  # (branch, path) -> content
         self.prs = {}  # number -> PR dict (REST shape)
         self.comments = {}  # number -> [comment dict]
+        self.commits = {}  # sha -> REST commit shape (parents/author/committer)
+        self.check_runs = {}  # sha -> [check-run dicts]
         self.on_create_pr = None  # hook(fake, pr) — the test's "pipeline"
+        self.on_poll = None  # hook(fake) — fired on get_pr/list_comments polls
 
     # -- helpers for tests -------------------------------------------------
     def _new_sha(self):
         self._sha_counter += 1
         return f"{self._sha_counter:040x}"
 
-    def seed_pr(self, head, state="open"):
+    def _record_commit(self, sha, parents, login):
+        self.commits[sha] = {
+            "sha": sha,
+            "parents": [{"sha": p} for p in parents],
+            "author": {"login": login},
+            "committer": {"login": login},
+        }
+
+    def seed_pr(self, head, state="open", login=WORKER):
         number = len(self.prs) + 1
         self.prs[number] = {
             "number": number,
             "state": state,
             "merged": False,
             "merged_by": None,
+            "user": {"login": login},
             "head": {"ref": head, "sha": self.branches.get(head, self._new_sha())},
             "base": {"ref": self._default},
+            "mergeable_state": "clean",
             "title": "seeded",
             "body": "",
         }
@@ -74,16 +88,30 @@ class FakeGitHub:
         return number
 
     def merge_as(self, number, login):
-        """Simulate the sandbox merge gate landing the PR as `login`."""
+        """Simulate the sandbox merge gate landing the PR as `login`
+        (`gh pr merge --delete-branch` semantics: the head branch goes)."""
         pr = self.prs[number]
+        head = pr["head"]["ref"]
+        pr["head"]["sha"] = self.branches.get(head, pr["head"]["sha"])
         pr["merged"] = True
         pr["state"] = "closed"
         pr["merged_by"] = {"login": login}
-        head = pr["head"]["ref"]
         for (branch, path), content in list(self.files.items()):
             if branch == head:
                 self.files[(self._default, path)] = content
         self.branches[self._default] = self._new_sha()
+        self.branches.pop(head, None)
+
+    def gate_update_branch(self, number, login=QA):
+        """Simulate merge-gate's DRE-1924 update-branch: merge the base tip
+        into the PR head as `login`; returns the new head (merge commit)."""
+        pr = self.prs[number]
+        head_ref = pr["head"]["ref"]
+        old = self.branches[head_ref]
+        sha = self._new_sha()
+        self._record_commit(sha, [old, self.branches[self._default]], login)
+        self.branches[head_ref] = sha
+        return sha
 
     def post_verdict(self, number, token, sha, login=QA):
         self.comments.setdefault(number, []).append(
@@ -92,6 +120,19 @@ class FakeGitHub:
                 "body": (
                     f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: {token} @{sha}"
                     "\n\n## Summary\nok"
+                ),
+            }
+        )
+
+    def post_human_wait(self, number, login=QA):
+        """The merge gate's DRE-2039 status note, shaped as merge-gate.yml
+        posts it (a status, deliberately NOT verdict-shaped)."""
+        self.comments.setdefault(number, []).append(
+            {
+                "user": {"login": login},
+                "body": (
+                    "⏸️ Merge gate: waiting for human merge — dependabot PR "
+                    "includes a semver-major update"
                 ),
             }
         )
@@ -112,8 +153,14 @@ class FakeGitHub:
         return self.branches.pop(branch, None) is not None
 
     def put_file(self, repo, branch, path, content, message):
+        if branch not in self.branches:
+            # Real contents-API behavior: a push to a deleted branch (e.g.
+            # merged out from under the harness) fails, not silently forks.
+            raise RuntimeError(f"branch not found: {branch}")
+        prev = self.branches[branch]
         self.files[(branch, path)] = content
         sha = self._new_sha()
+        self._record_commit(sha, [prev], WORKER)
         self.branches[branch] = sha
         return sha
 
@@ -141,7 +188,13 @@ class FakeGitHub:
         return pr
 
     def get_pr(self, repo, number):
-        return self.prs[number]
+        if self.on_poll:
+            self.on_poll(self)
+        pr = self.prs[number]
+        ref = pr["head"]["ref"]
+        if pr["state"] == "open" and ref in self.branches:
+            pr["head"]["sha"] = self.branches[ref]  # live head, like REST
+        return pr
 
     def list_open_prs(self, repo):
         return [p for p in self.prs.values() if p["state"] == "open"]
@@ -150,7 +203,23 @@ class FakeGitHub:
         self.prs[number]["state"] = "closed"
 
     def list_comments(self, repo, number):
+        if self.on_poll:
+            self.on_poll(self)
         return list(self.comments.get(number, []))
+
+    def create_comment(self, repo, number, body):
+        comment = {"user": {"login": WORKER}, "body": body}
+        self.comments.setdefault(number, []).append(comment)
+        return comment
+
+    def get_commit(self, repo, sha):
+        return self.commits[sha]
+
+    def list_pr_commits(self, repo, number):
+        return list(self.prs[number].get("commits_payload") or [])
+
+    def list_check_runs(self, repo, sha):
+        return list(self.check_runs.get(sha, []))
 
 
 def _ctx(gh, run_id="gha-1-1"):

@@ -123,6 +123,24 @@ class IdentityWiringTest(unittest.TestCase):
             env.update(step.get("env") or {})
         self.assertEqual(env.get("HARNESS_REPO"), SANDBOX)
 
+    def test_qa_token_is_threaded_to_the_driver(self):
+        # dependabot_flow reads check-runs on the vendor PR's head (the
+        # self-skip evidence) — the qa App's token is the PROVEN reader for
+        # that record (merge-gate.yml's own path); the worker App's checks
+        # permission is not guaranteed.
+        env = {}
+        for step in _steps(_doc()):
+            env.update(step.get("env") or {})
+        self.assertEqual(env.get("HARNESS_QA_TOKEN"), "${{ steps.qa.outputs.token }}")
+
+
+class BudgetTest(unittest.TestCase):
+    def test_job_timeout_budgets_all_three_scenarios(self):
+        # bot_pr_flow alone budgeted 60 minutes; dependabot_flow adds a
+        # reconcile-cron wait (~15 min) plus a critic run, and gate_paths
+        # runs three PR legs. The job cap must cover a slow-but-honest run.
+        self.assertGreaterEqual(_job(_doc()).get("timeout-minutes", 0), 90)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -84,17 +84,37 @@ class NamespaceTest(unittest.TestCase):
 
     def test_real_work_never_matches_the_sweep(self):
         # Deleting a real agent's branch would destroy in-flight card work —
-        # the single most dangerous bug this predicate can have.
+        # the single most dangerous bug this predicate can have. Real
+        # Dependabot branches are just as load-bearing: sweeping one would
+        # kill the vendor PR dependabot_flow exists to consume.
         for ref in (
             "agent/DRE-2098-harness-driver-bot-pr-flow",  # THIS card's branch
             "agent/DRE-123-fix",
             "refs/heads/agent/DRE-9-x",
             "dependabot/pip/pytest-9.1.1",
+            "dependabot/npm_and_yarn/main/lodash-5.0.0",
+            "dependabot/github_actions/actions/checkout-5",
             "repair/" + SHA_A,
             "main",
             "harness-loose-ref",
         ):
             self.assertFalse(framework.is_harness_ref(ref), ref)
+
+    def test_dependabot_named_scenario_branch_is_namespaced_and_sweepable(self):
+        # gate_paths probes merge_gate condition D with a dependabot-NAMED
+        # branch — it must sit inside the harness namespace (sweepable, and
+        # never mistakable for a genuine Dependabot branch).
+        branch = framework.dependabot_scenario_branch("gha-1-1", "gate_paths-named")
+        self.assertTrue(branch.startswith("dependabot/harness-"))
+        self.assertIn("gha-1-1", branch)
+        self.assertTrue(framework.is_harness_ref(branch))
+        self.assertTrue(
+            framework.is_harness_ref("dependabot/harness-oldrun-gate_paths-named")
+        )
+
+    def test_dependabot_scenario_branch_validates_the_run_id(self):
+        with self.assertRaises(ValueError):
+            framework.dependabot_scenario_branch("has space", "gate_paths")
 
 
 class PhaseDisciplineTest(unittest.TestCase):
@@ -275,6 +295,24 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(
             swept, {"branches_deleted": 0, "prs_closed": 0, "files_deleted": 0}
         )
+
+    def test_sweep_covers_dependabot_named_leftovers_but_never_real_ones(self):
+        from test_harness_bot_pr_flow import FakeGitHub
+
+        gh = FakeGitHub(default_branch="main")
+        gh.branches["dependabot/harness-crashed-gate_paths-named"] = SHA_A
+        gh.branches["dependabot/pip/pytest-9.1.1"] = SHA_B
+        crashed = gh.seed_pr(head="dependabot/harness-crashed-gate_paths-named")
+        real = gh.seed_pr(head="dependabot/pip/pytest-9.1.1")
+
+        swept = framework.sweep_leftovers(gh, "o/r", log=lambda *_: None)
+
+        self.assertNotIn("dependabot/harness-crashed-gate_paths-named", gh.branches)
+        self.assertIn("dependabot/pip/pytest-9.1.1", gh.branches)
+        self.assertEqual(gh.prs[crashed]["state"], "closed")
+        self.assertEqual(gh.prs[real]["state"], "open")
+        self.assertEqual(swept["branches_deleted"], 1)
+        self.assertEqual(swept["prs_closed"], 1)
 
 
 if __name__ == "__main__":

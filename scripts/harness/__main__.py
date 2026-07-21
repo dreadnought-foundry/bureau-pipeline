@@ -7,6 +7,11 @@
 Env (harness.yml sets all of these):
   HARNESS_WORKER_TOKEN  required — worker-bot App token, sandbox-scoped
   HARNESS_QA_LOGIN      required — expected merger login (qa App slug)
+  HARNESS_QA_TOKEN      optional — qa-bot App token, sandbox-scoped; the
+                        proven reader for check-runs (merge-gate.yml's own
+                        path — dependabot_flow's self-skip evidence).
+                        Absent: those reads fall back to the worker token
+                        and a permission refusal surfaces loudly.
   HARNESS_WORKER_LOGIN  informational — the authoring identity
   HARNESS_REPO          default --repo
   HARNESS_RUN_ID        default --run-id (else a local one is generated)
@@ -68,12 +73,17 @@ def main(argv=None) -> int:
 
     run_id = framework.validate_run_id(args.run_id)
     gh = GitHub(token)
+    qa_token = os.environ.get("HARNESS_QA_TOKEN")
+    gh_qa = GitHub(qa_token) if qa_token else gh
+    if not qa_token:
+        print("note: HARNESS_QA_TOKEN unset — check-runs reads use the worker token")
     print(f"harness run {run_id} on {args.repo}: scenarios {names}")
 
     results = []
     for name in names:
         ctx = framework.HarnessContext(
             gh=gh,
+            gh_qa=gh_qa,
             repo=args.repo,
             run_id=run_id,
             worker_login=os.environ.get("HARNESS_WORKER_LOGIN", ""),

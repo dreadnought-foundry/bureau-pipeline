@@ -43,9 +43,12 @@ permissions:
 jobs:
   harness:
     runs-on: ubuntu-latest
-    # Scenario budget: verdict wait (≤25m, the critic job's own timeout) +
-    # merge wait + sweep overhead, with slack for queued sandbox runs.
-    timeout-minutes: 60
+    # Scenario budget for all three scenarios: each verdict wait is bounded
+    # by the critic job's own 25m timeout, dependabot_flow adds one
+    # reconcile cron interval (~15m, DRE-2100), and gate_paths runs three
+    # PR legs (concurrent reviews, sequential asserts). Typical runs finish
+    # far sooner; this is the slow-but-honest ceiling.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
         with:
@@ -78,6 +81,11 @@ jobs:
           HARNESS_REPO: dreadnought-foundry/bureau-harness
           HARNESS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
           HARNESS_WORKER_LOGIN: ${{ steps.worker.outputs.app-slug }}[bot]
+          # The qa token is the PROVEN reader for commit check-runs
+          # (merge-gate.yml's own read path) — dependabot_flow's self-skip
+          # evidence rides on it; the worker App's checks permission is
+          # not guaranteed.
+          HARNESS_QA_TOKEN: ${{ steps.qa.outputs.token }}
           HARNESS_QA_LOGIN: ${{ steps.qa.outputs.app-slug }}[bot]
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
           SCENARIOS: ${{ inputs.scenarios }}

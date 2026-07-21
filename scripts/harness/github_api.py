@@ -165,6 +165,21 @@ class GitHub:
         )
         return True
 
+    # ── commits / checks ─────────────────────────────────────────────────
+    def get_commit(self, repo, sha: str) -> dict:
+        """The full commit record — parents (update-branch merge shape) and
+        the author/committer identities GitHub attributes it to."""
+        return self.request("GET", f"/repos/{repo}/commits/{sha}")
+
+    def list_check_runs(self, repo, sha: str) -> list[dict]:
+        """Check runs on a commit (the record merge-gate.yml itself reads —
+        the qa App token is the proven reader for it)."""
+        out = self.request(
+            "GET", f"/repos/{repo}/commits/{sha}/check-runs?per_page=100"
+        )
+        runs = out.get("check_runs") if isinstance(out, dict) else None
+        return runs if isinstance(runs, list) else []
+
     # ── pull requests ────────────────────────────────────────────────────
     def create_pr(self, repo, head, base, title, body) -> dict:
         return self.request(
@@ -184,10 +199,23 @@ class GitHub:
     def close_pr(self, repo, number: int) -> None:
         self.request("PATCH", f"/repos/{repo}/pulls/{number}", {"state": "closed"})
 
+    def list_pr_commits(self, repo, number: int) -> list[dict]:
+        """The PR's commit list — carries Dependabot's machine-readable
+        update-type trailer (the semver signal merge_gate condition D reads)."""
+        return (
+            self.request("GET", f"/repos/{repo}/pulls/{number}/commits?per_page=100")
+            or []
+        )
+
     def list_comments(self, repo, number: int) -> list[dict]:
         return (
             self.request(
                 "GET", f"/repos/{repo}/issues/{number}/comments?per_page=100"
             )
             or []
+        )
+
+    def create_comment(self, repo, number: int, body: str) -> dict:
+        return self.request(
+            "POST", f"/repos/{repo}/issues/{number}/comments", {"body": body}
         )

@@ -1,4 +1,4 @@
-# Integration harness (DRE-2098)
+# Integration harness (DRE-2098, scenarios 2-3 DRE-2100)
 
 End-to-end scenarios against the dedicated sandbox repo
 **`dreadnought-foundry/bureau-harness`**, driven by
@@ -19,15 +19,16 @@ merge-gate stubs, real App identities. Unit tests
 
 ## Namespacing and self-cleaning
 
-Every branch a run creates is `agent/harness-<run-id>-<scenario>` and
+Every branch a run creates is `agent/harness-<run-id>-<scenario>` (or
+`dependabot/harness-<run-id>-…` for gate_paths' condition-D probe) and
 every merged probe file lives under `harness_runs/`. Setup sweeps ALL
-leftovers matching that namespace (any run id) — closing PRs, deleting
+leftovers matching those namespaces (any run id) — closing PRs, deleting
 branches, removing stray probe files — so a crashed previous run can
 never fail the next one. The sweep predicate can never match a real
-`agent/DRE-n-*` branch (unit-pinned). Cleanup always runs, and a cleanup
-failure fails the scenario: leaving the sandbox unusable IS a failure.
-`harness.yml` holds a no-cancel concurrency group, so two runs never
-share the sandbox.
+`agent/DRE-n-*` branch or a genuine `dependabot/<ecosystem>/…` branch
+(unit-pinned). Cleanup always runs, and a cleanup failure fails the
+scenario: leaving the sandbox unusable IS a failure. `harness.yml` holds
+a no-cancel concurrency group, so two runs never share the sandbox.
 
 ## The Linear side (decided per the card)
 
@@ -46,11 +47,19 @@ the harness cannot spam real cards because it never addresses one.
 
 * Both Apps (worker bot + qa-bot) installed on `bureau-harness`; this
   repo's `BUREAU_APP_*` / `BUREAU_QA_APP_*` secrets mint sandbox-scoped
-  tokens.
+  tokens (the qa token is also threaded to the driver as
+  `HARNESS_QA_TOKEN` — the proven reader for commit check-runs,
+  merge-gate.yml's own path).
 * The pipeline stubs (qa-review on `pull_request`, merge-gate on its
   `workflow_run` list) with the sandbox's own secrets, plus at least one
   CI workflow that reports a check run on PR heads — the merge gate
   fail-closes to `wait` when no non-review checks exist.
+* For `dependabot_flow` (DRE-2100): a reconcile stub on its ~15-min cron
+  (the workflow_dispatch review route under test) and a stale pinned
+  dependency that keeps a genuine Dependabot PR filed — chosen
+  major-stale so the gate parks it and the fixture persists between
+  runs. `@dependabot rebase` / `@dependabot recreate` comments
+  regenerate activity when needed.
 
 `pipeline_ref` pins the **driver** checkout. Which pipeline ref the
 sandbox's stubs consume is pinned in the sandbox's own stub files — the
@@ -67,3 +76,29 @@ asserts the merger is the qa-bot (author ≠ merger, `[bot]`-suffix
 tolerant). Cleanup deletes the branch and the merged probe file
 (best-effort on protected defaults) and asserts the default branch is
 readable with no harness PRs left open.
+
+## Scenario `dependabot_flow` (DRE-2100)
+
+Consumes the sandbox's REAL open Dependabot PR (never closes it — it is
+the vendor's standing fixture): asserts the dependabot-actor
+`pull_request` review run self-skipped clean (a `skipped` check run on
+the head, never a red crash — DRE-2067), waits for the reconcile
+dispatch route's sha-bound verdict (budgeting one cron interval —
+DRE-2047/2053), and audits the receipt lifecycle (1..cap worker-bot
+receipts per head; past-cap = looping sweep; zero receipts on an
+untouched head = the receipted route was bypassed — DRE-2049/2071).
+Coverage limits (no conjurable Dependabot PR, no on-demand critic crash,
+App-bot `@dependabot` commands not vendor-guaranteed) are documented in
+the scenario module itself.
+
+## Scenario `gate_paths` (DRE-2100)
+
+Merge-gate semantics with three synthesized PRs: a behind-base probe
+(the gate must update-branch **as the qa-bot** and the synchronize
+actor must pass the review allowlists — no lockout, then a normal
+merge); a worker-authored `dependabot/harness-…` probe (condition D →
+the waiting-for-human state posted exactly once, PR never touched); and
+a stale-verdict race (a push right after a bound APPROVE must hold the
+merge until a fresh verdict binds the new head). When the real
+Dependabot PR is observable, its gate arm (major → human/untouched,
+provable minor/patch + APPROVE → qa-bot auto-merge) is asserted too.
