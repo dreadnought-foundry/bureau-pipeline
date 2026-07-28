@@ -38,8 +38,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import model_fallback as mf  # noqa: E402
 
 FABLE = "claude-fable-5"
-OPUS = "claude-opus-4-8"
+OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
+# Rotated OUT of the ladder (Opus 5 replaced it) but still recognizable, so a
+# death marker stamped before the rotation keeps its attribution.
+RETIRED_OPUS = "claude-opus-4-8"
 
 
 def fixed_clock(t):
@@ -54,6 +57,18 @@ class LadderShapeTest(unittest.TestCase):
 
     def test_ladder_entries_are_all_known_models(self):
         self.assertTrue(set(mf.LADDER) <= mf.KNOWN_MODELS)
+
+    def test_retired_model_stays_recognizable_but_unselectable(self):
+        # A card dispatched before the Opus 5 rotation can still carry
+        # `model-error: claude-opus-4-8`. If the retired id stopped being a
+        # KNOWN model, last_error_model() would silently return None and the
+        # console would lose attribution for that death — so it stays known
+        # while being removed from the selectable ladder.
+        self.assertIn(RETIRED_OPUS, mf.KNOWN_MODELS)
+        self.assertNotIn(RETIRED_OPUS, mf.LADDER)
+        self.assertEqual(
+            mf.last_error_model([mf.error_marker(RETIRED_OPUS)]), RETIRED_OPUS
+        )
 
 
 class AvailabilityClassificationTest(unittest.TestCase):
