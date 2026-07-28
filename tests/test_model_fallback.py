@@ -315,13 +315,41 @@ class AgentsRegistryAlignment(unittest.TestCase):
         with open(os.path.join(root, "agents.yaml")) as f:
             return {a["name"]: a for a in yaml.safe_load(f)["agents"]}
 
+    def _declared_ladders(self):
+        return {
+            name: [step["model"] for step in a["ladder"]]
+            for name, a in self._agents().items()
+            if isinstance(a.get("ladder"), list) and len(a["ladder"]) > 1
+        }
+
     def test_engineer_and_planner_ladder_matches_registry(self):
-        agents = self._agents()
+        declared = self._declared_ladders()
         for role in ("engineer", "planner"):
-            ladder_models = [step["model"] for step in agents[role].get("ladder", [])]
             self.assertEqual(
-                ladder_models, mf.LADDER,
-                f"{role}: agents.yaml ladder {ladder_models} != mf.LADDER {mf.LADDER}",
+                declared[role], mf.LADDER,
+                f"{role}: agents.yaml ladder {declared[role]} != mf.LADDER {mf.LADDER}",
+            )
+
+    def test_no_declared_ladder_references_a_retired_model(self):
+        """EVERY agent that declares a ladder — not just engineer/planner — must
+        draw from the CURRENT ladder, in ladder order.
+
+        Checking only engineer/planner by name is what let the Opus 5 rotation
+        land with `repairer` still pinned to claude-opus-4-8: no test ever looked
+        at that agent. A subsequence check (rather than equality) is deliberate —
+        an agent may legitimately declare a SHORTER ladder (database-architect
+        skips Fable), but none may name a model that has rotated out."""
+        for name, models in sorted(self._declared_ladders().items()):
+            retired = [m for m in models if m not in mf.LADDER]
+            self.assertEqual(
+                retired, [],
+                f"{name}: agents.yaml ladder names {retired}, "
+                f"not in the current mf.LADDER {mf.LADDER}",
+            )
+            positions = [mf.LADDER.index(m) for m in models]
+            self.assertEqual(
+                positions, sorted(positions),
+                f"{name}: agents.yaml ladder {models} is out of LADDER order",
             )
 
 
