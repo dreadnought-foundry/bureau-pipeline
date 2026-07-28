@@ -211,12 +211,20 @@ def _is_available(model, probe, clock):
 # Selection                                                                    #
 # --------------------------------------------------------------------------- #
 
-def select(role: str = "engineer", *, probe=None, clock=None) -> str:
+def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> str:
     """The model the next attempt should use: the first AVAILABLE model walking
     the ordered ladder best→worst.
 
     Shared by BOTH engineer and planner — `role` is accepted for call-site
     symmetry and heartbeats but does NOT change the ladder.
+
+    `ladder` is the ordered model id list to walk (best→worst); it defaults to
+    the module-level ``LADDER``. The console passes the ladder it read from
+    ``agents.yaml`` so the SINGLE source of truth (the YAML) drives the order
+    while this function provides the SINGLE shared walk. The kwarg lives here
+    rather than in the console's vendored copy so that copy can be diffed
+    against this file with no allowed exceptions — an exception is a hole a
+    drift check cannot see through.
 
     `probe(model) -> bool` and `clock() -> float` are injectable; the defaults
     do a real minimal /v1/messages probe and use a monotonic clock. Degrade
@@ -229,8 +237,11 @@ def select(role: str = "engineer", *, probe=None, clock=None) -> str:
         probe = _probe_real
     if clock is None:
         clock = time.monotonic
+    walk = list(ladder) if ladder else LADDER
+    if not walk:
+        walk = LADDER
 
-    for model in LADDER:
+    for model in walk:
         available = _is_available(model, probe, clock)
         if available:
             return model
@@ -239,7 +250,7 @@ def select(role: str = "engineer", *, probe=None, clock=None) -> str:
 
     # Nothing probed available — don't block the build. Fall through to the
     # last (lowest-ranked, broadest-availability) ladder model.
-    return LADDER[-1]
+    return walk[-1]
 
 
 # --------------------------------------------------------------------------- #
