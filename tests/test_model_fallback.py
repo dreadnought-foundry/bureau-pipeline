@@ -361,6 +361,43 @@ class CallerSuppliedLadderTest(unittest.TestCase):
                     mf.LADDER[0],
                 )
 
+    def test_a_bare_string_is_not_walked_character_by_character(self):
+        # A YAML scalar (`ladder: claude-opus-5`) instead of a sequence. A str is
+        # truthy and iterable, so an unguarded walk selects a single LETTER as
+        # the model id and hands it to the run — silently. Fall back instead.
+        for probe in (lambda m: True, lambda m: False):
+            with self.subTest(probe=probe):
+                mf.clear_availability_cache()
+                got = mf.select("engineer", probe=probe, ladder=OPUS)
+                self.assertIn(got, mf.LADDER, f"selected {got!r}, not a real model")
+
+    def test_raw_agents_yaml_ladder_shape_is_accepted(self):
+        # agents.yaml stores `ladder:` as a list of {model:, reason:} mappings.
+        # The docstring points callers at that file, so this shape must work
+        # rather than raise — select() is contracted never to block a build.
+        raw = [{"model": SONNET, "reason": "x"}, {"model": OPUS, "reason": "y"}]
+        self.assertEqual(
+            mf.select("engineer", probe=lambda m: True, ladder=raw), SONNET
+        )
+
+    def test_unusable_entries_are_dropped_and_an_empty_result_falls_back(self):
+        mf.clear_availability_cache()
+        self.assertEqual(
+            mf.select("engineer", probe=lambda m: True, ladder=[None, 42, {}]),
+            mf.LADDER[0],
+        )
+        mf.clear_availability_cache()
+        self.assertEqual(
+            mf.select("engineer", probe=lambda m: True, ladder=[None, SONNET]),
+            SONNET,
+        )
+
+    def test_a_generator_ladder_is_materialised_once(self):
+        self.assertEqual(
+            mf.select("engineer", probe=lambda m: True, ladder=(m for m in [SONNET])),
+            SONNET,
+        )
+
 
 class AgentsRegistryAlignment(unittest.TestCase):
     """The ladder must agree with agents.yaml so the console roster and the
@@ -374,10 +411,38 @@ class AgentsRegistryAlignment(unittest.TestCase):
             return {a["name"]: a for a in yaml.safe_load(f)["agents"]}
 
     def _declared_ladders(self):
+        """Every agent that declares a ladder — INCLUDING a one-entry one.
+
+        An earlier version filtered on `len(...) > 1`, which silently excluded
+        `fixer` (the only single-entry ladder) and made a retired id there
+        invisible to the whole suite. A guard whose filter is narrower than the
+        data it guards is the same defect it exists to prevent, one level up.
+        """
+        out = {}
+        for name, a in self._agents().items():
+            ladder = a.get("ladder")
+            if not isinstance(ladder, list) or not ladder:
+                continue
+            models = []
+            for i, step in enumerate(ladder):
+                self.assertIsInstance(
+                    step, dict, f"{name}: ladder[{i}] is not a mapping"
+                )
+                self.assertIn(
+                    "model", step, f"{name}: ladder[{i}] has no `model:` key"
+                )
+                models.append(step["model"])
+            out[name] = models
+        return out
+
+    def _declared_models(self):
+        """Every agent's top-level `model:` — the field the console's agent
+        editor rewrites, and the one no test looked at until an Opus 5 tile was
+        found saving the retired id."""
         return {
-            name: [step["model"] for step in a["ladder"]]
+            name: a["model"]
             for name, a in self._agents().items()
-            if isinstance(a.get("ladder"), list) and len(a["ladder"]) > 1
+            if isinstance(a.get("model"), str)
         }
 
     def test_engineer_and_planner_ladder_matches_registry(self):
@@ -397,17 +462,38 @@ class AgentsRegistryAlignment(unittest.TestCase):
         at that agent. A subsequence check (rather than equality) is deliberate —
         an agent may legitimately declare a SHORTER ladder (database-architect
         skips Fable), but none may name a model that has rotated out."""
-        for name, models in sorted(self._declared_ladders().items()):
+        declared = self._declared_ladders()
+        # The single-entry ladder is the case the old filter dropped. Pin its
+        # presence so the filter can never quietly narrow again.
+        self.assertIn("fixer", declared, "single-entry ladders must be covered")
+        for name, models in sorted(declared.items()):
             retired = [m for m in models if m not in mf.LADDER]
             self.assertEqual(
                 retired, [],
                 f"{name}: agents.yaml ladder names {retired}, "
                 f"not in the current mf.LADDER {mf.LADDER}",
             )
+            self.assertEqual(
+                len(set(models)), len(models),
+                f"{name}: agents.yaml ladder {models} repeats a model",
+            )
             positions = [mf.LADDER.index(m) for m in models]
             self.assertEqual(
                 positions, sorted(positions),
                 f"{name}: agents.yaml ladder {models} is out of LADDER order",
+            )
+
+    def test_no_agent_pins_a_rotated_out_model_in_its_bare_model_field(self):
+        """`model:` is a SEPARATE field from `ladder:`, and it is the one the
+        console's agent editor rewrites — so it is the field a bad write lands
+        in. Checking only `ladder:` left the whole mutation path unguarded."""
+        declared = self._declared_models()
+        self.assertTrue(declared, "no agent declares a bare model: field")
+        for name, model in sorted(declared.items()):
+            self.assertIn(
+                model, mf.LADDER,
+                f"{name}: agents.yaml `model: {model}` is not in the current "
+                f"mf.LADDER {mf.LADDER}",
             )
 
 
