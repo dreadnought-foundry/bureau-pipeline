@@ -31,12 +31,12 @@ agents:
     # Ordered preference ladder, best→worst (DRE-1490). Selection probes
     # availability at runtime and uses the first AVAILABLE model — shared by
     # engineer AND planner, no role hardcodes a model. Fable 5 currently 404s
-    # so this resolves to Opus 4.8; it self-heals to Fable when re-enabled.
+    # so this resolves to Opus 5; it self-heals to Fable when re-enabled.
     model: claude-fable-5
     ladder:
       - model: claude-fable-5
         reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
-      - model: claude-opus-4-8
+      - model: claude-opus-5
         reason: "first fallback — effective default today while Fable is unavailable"
       - model: claude-sonnet-4-6
         reason: "last resort if both Fable and Opus are unavailable"
@@ -59,7 +59,7 @@ agents:
     ladder:
       - model: claude-fable-5
         reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
-      - model: claude-opus-4-8
+      - model: claude-opus-5
         reason: "first fallback — effective default today while Fable is unavailable"
       - model: claude-sonnet-4-6
         reason: "last resort if both Fable and Opus are unavailable"
@@ -82,9 +82,9 @@ agents:
     # satisfy the roster schema — NOTHING routes a Linear label here, so it can
     # never be auto-dispatched (label routing resolves only planner/devops/
     # frontend, else engineer; see scripts/model_fallback.py + validate_card.py).
-    model: claude-opus-4-8
+    model: claude-opus-5
     ladder:
-      - model: claude-opus-4-8
+      - model: claude-opus-5
         reason: "preferred — strongest reasoning for schema/migration correctness"
       - model: claude-sonnet-4-6
         reason: "fallback if Opus is unavailable"
@@ -102,7 +102,7 @@ agents:
     ladder:
       - model: claude-fable-5
         reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
-      - model: claude-opus-4-8
+      - model: claude-opus-5
         reason: "first fallback — effective default today while Fable is unavailable"
       - model: claude-sonnet-4-6
         reason: "last resort if both Fable and Opus are unavailable"
@@ -116,7 +116,7 @@ agents:
   - name: fixer
     role: Fix agent
     category: operations
-    model: claude-opus-4-8
+    model: claude-opus-5
     ladder:
       - attempt: 3
         model: claude-fable-5
@@ -155,12 +155,12 @@ agents:
     category: product
     # Same ordered preference ladder as the engineer (DRE-1490) — both roles
     # walk it best→worst and use the first AVAILABLE model. Fable 5 currently
-    # 404s so this resolves to Opus 4.8; it self-heals to Fable when re-enabled.
+    # 404s so this resolves to Opus 5; it self-heals to Fable when re-enabled.
     model: claude-fable-5
     ladder:
       - model: claude-fable-5
         reason: "preferred — latest/best; skipped at runtime while it 404s (2026-06-14)"
-      - model: claude-opus-4-8
+      - model: claude-opus-5
         reason: "first fallback — effective default today while Fable is unavailable"
       - model: claude-sonnet-4-6
         reason: "last resort if both Fable and Opus are unavailable"

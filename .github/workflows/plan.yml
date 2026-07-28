@@ -80,13 +80,13 @@ jobs:
 
       # Model selection: the SAME ordered preference ladder as the engineer
       # (DRE-1490). select() walks the shared ladder best→worst —
-      # claude-fable-5, then claude-opus-4-8, then claude-sonnet-4-6 (see
+      # claude-fable-5, then claude-opus-5, then claude-sonnet-4-6 (see
       # model_fallback.py / agents.yaml) — and returns the first AVAILABLE
       # model. Availability is probed via a minimal /v1/messages call using the
       # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
       # skip; any other response, including 429, ⇒ choose it; an inconclusive
       # probe falls through to the next known-good model. Fable 5 currently 404s
-      # so this resolves to Opus 4.8 and self-heals to Fable when re-enabled —
+      # so this resolves to Opus 5 and self-heals to Fable when re-enabled —
       # no code change. Mirrors the engineer Select-model step in agent-task.yml;
       # reuses the same selector. The chosen id is recorded in a heartbeat
       # comment so the board shows which model each plan attempt used.

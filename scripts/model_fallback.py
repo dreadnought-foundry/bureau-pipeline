@@ -5,7 +5,7 @@ hold-cap markers from DRE-1354.
 
 The ladder is best-first with runtime availability detection. Today
 `claude-fable-5` is 404 on our subscriptions, so `select` resolves to
-`claude-opus-4-8`; it self-heals to Fable the moment Anthropic re-enables it,
+`claude-opus-5`; it self-heals to Fable the moment Anthropic re-enables it,
 with NO code change (the next probe after the cache TTL sees it available and
 `select` returns it again). Ref DRE-1490.
 
@@ -20,7 +20,7 @@ cards hit needs-human holds.
 
 The model is now chosen by a SINGLE ordered ladder shared by both roles:
 
-    LADDER = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"]   # best→worst
+    LADDER = ["claude-fable-5", "claude-opus-5", "claude-sonnet-4-6"]   # best→worst
 
 `select()` walks the ladder top→bottom and returns the FIRST AVAILABLE model.
 Availability is probed at runtime via a minimal `/v1/messages` POST
@@ -56,8 +56,15 @@ import re
 import time
 
 FABLE = "claude-fable-5"
-OPUS = "claude-opus-4-8"
+OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
+
+# Models that have rotated OUT of the ladder. NOT selectable — kept only so a
+# marker stamped before the rotation stays attributable. `last_error_model`
+# validates a marker's payload against KNOWN_MODELS, so dropping a retired id
+# outright would make an in-flight card's death silently resolve to None and
+# the console would lose the attribution rather than report it.
+RETIRED_MODELS = {"claude-opus-4-8"}
 
 # The ordered preference ladder, best → worst. Used by BOTH engineer and
 # planner — no role hardcodes a model. select() returns the first available
@@ -65,8 +72,10 @@ SONNET = "claude-sonnet-4-6"
 # work realistically wants Sonnet-or-better.)
 LADDER: list[str] = [FABLE, OPUS, SONNET]
 
-# Every known model id, so we can validate a marker's payload and the ladder.
-KNOWN_MODELS = {FABLE, OPUS, SONNET}
+# Every model id we recognize when validating a marker's payload. This is a
+# SUPERSET of the ladder: the ladder is what we may select, this is what we can
+# still read. Retired ids belong here and nowhere else.
+KNOWN_MODELS = {FABLE, OPUS, SONNET} | RETIRED_MODELS
 
 # Cache availability results so we don't probe on every dispatch. ~12 min keeps
 # latency negligible across a burst of cards while picking up an Anthropic
