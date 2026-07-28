@@ -304,6 +304,64 @@ class CliTest(unittest.TestCase):
         self.assertEqual(role_of("repo:atlas"), "engineer")
 
 
+class CallerSuppliedLadderTest(unittest.TestCase):
+    """`select(ladder=...)` walks a caller-supplied order instead of the module
+    LADDER.
+
+    Folded up from the console's vendored copy of this module, which had carried
+    it as its ONE intentional local delta. The console reads the ladder out of
+    bureau-pipeline/agents.yaml and needs THIS walk to drive it, so the YAML
+    stays the single source of order while this function stays the single source
+    of algorithm. Keeping the kwarg only downstream meant the copy could never be
+    compared to upstream byte-for-byte, so drift in the copy stayed invisible —
+    which is exactly how it ended up three deltas deep instead of one.
+
+    The kwarg is additive: omitting it must behave exactly as before."""
+
+    def setUp(self):
+        mf.clear_availability_cache()
+
+    def tearDown(self):
+        mf.clear_availability_cache()
+
+    def test_supplied_ladder_drives_the_walk(self):
+        # Reverse order: Sonnet is best here, so it wins despite Fable being up.
+        self.assertEqual(
+            mf.select("engineer", probe=lambda m: True,
+                      ladder=[SONNET, OPUS, FABLE]),
+            SONNET,
+        )
+
+    def test_supplied_ladder_still_skips_a_confirmed_404(self):
+        avail = {SONNET: False, OPUS: True, FABLE: True}
+        self.assertEqual(
+            mf.select("engineer", probe=lambda m: avail[m],
+                      ladder=[SONNET, OPUS, FABLE]),
+            OPUS,
+        )
+
+    def test_supplied_ladder_falls_through_to_its_own_last_entry(self):
+        # Not LADDER[-1] — the caller's last entry, or the console would fall
+        # back to a model outside the ladder it actually asked for.
+        self.assertEqual(
+            mf.select("engineer", probe=lambda m: False,
+                      ladder=[SONNET, OPUS, FABLE]),
+            FABLE,
+        )
+
+    def test_omitting_the_kwarg_is_unchanged(self):
+        self.assertEqual(mf.select("engineer", probe=lambda m: True), mf.LADDER[0])
+
+    def test_empty_or_none_ladder_falls_back_to_the_module_ladder(self):
+        for empty in ([], None):
+            with self.subTest(ladder=empty):
+                mf.clear_availability_cache()
+                self.assertEqual(
+                    mf.select("engineer", probe=lambda m: True, ladder=empty),
+                    mf.LADDER[0],
+                )
+
+
 class AgentsRegistryAlignment(unittest.TestCase):
     """The ladder must agree with agents.yaml so the console roster and the
     runtime selection never drift (the registry contract test, DRE-1335)."""
