@@ -33,10 +33,18 @@ Run: cd bureau-pipeline && python3 -m pytest tests/ -v
 """
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "scripts")
+)
+
+import should_review_pr  # noqa: E402
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
@@ -110,12 +118,25 @@ class TestReusableQaReviewSelfSkip:
     def test_dependabot_branch_entry_path_is_preserved(self):
         """A NON-dependabot actor on a dependabot/ head (a human push, the
         merge-gate's qa-bot update-branch synchronize) has normal secrets —
-        its event-driven review must still start (DRE-2039), so the guard
-        must not delete the branch clause."""
-        assert (
-            "startsWith(github.event.pull_request.head.ref, 'dependabot/')"
-            in _job_if("qa-review.yml", "review")
+        its event-driven review must still start (DRE-2039).
+
+        DRE-2250 removed the head-ref clauses from the job gate, so this is no
+        longer expressed as the presence of a `dependabot/` branch clause. The
+        invariant is unchanged and now stronger: nothing in the gate can
+        exclude such a run, and the decision helper reviews it. Asserting the
+        outcome instead of one spelling of the condition is also what stops
+        this test from breaking on the next unrelated gate edit.
+        """
+        cond = _job_if("qa-review.yml", "review")
+        # Only the ACTOR may stop a run — never the branch it sits on.
+        assert "head.ref" not in cond, (
+            "a head-ref clause in the gate can exclude a legitimate human "
+            "push to a dependabot/ head; the actor guard is the only "
+            f"exclusion this job may make. Got: {cond!r}"
         )
+        assert should_review_pr.should_review(
+            "dependabot/pip/pip-minor-patch-1a2b3c4"
+        ), "the decision helper must still review dependabot branches (DRE-2039)"
 
 
 class TestReusableVerifySelfSkip:

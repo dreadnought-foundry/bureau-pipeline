@@ -61,10 +61,6 @@ class ShouldReviewTest(unittest.TestCase):
     def test_uppercase_agent_branch_still_reviewed(self):
         self.assertTrue(should_review_pr.should_review("agent/DRE-9-x"))
 
-    def test_chore_deps_without_card_still_skipped(self):
-        # Case-insensitivity must not over-match: no card ref, still skip.
-        self.assertFalse(should_review_pr.should_review("chore/deps"))
-
     def test_card_in_branch_normalizes_lowercase_to_uppercase(self):
         # Linear identifiers are uppercase; `dre-123` must resolve to card
         # DRE-123, so the extractor normalizes before anything uses it.
@@ -105,19 +101,36 @@ class ShouldReviewTest(unittest.TestCase):
             )
         )
 
-    # --- chrome-only PRs: STILL skippable -------------------------------
+    # --- DRE-2250: every PR is reviewed; no branch is "chrome-only" ------
+    #
+    # These four previously asserted False. That was the DRE-1888 policy:
+    # infer triviality from the branch name and skip. The inference was wrong
+    # often enough to matter — on 2026-07-29 all five open PRs across the
+    # fleet were substantive work sitting on hand-named branches, reviewed by
+    # nobody, with nothing going red. The assertions are inverted rather than
+    # deleted so the behaviour change stays visible in the diff.
 
-    def test_chore_branch_without_card_is_skipped(self):
-        self.assertFalse(should_review_pr.should_review("chore/bump-deps"))
+    def test_chore_branch_without_card_is_reviewed(self):
+        self.assertTrue(should_review_pr.should_review("chore/bump-deps"))
 
-    def test_docs_branch_without_card_is_skipped(self):
-        self.assertFalse(should_review_pr.should_review("docs/readme-typo"))
+    def test_docs_branch_without_card_is_reviewed(self):
+        self.assertTrue(should_review_pr.should_review("docs/readme-typo"))
 
-    def test_empty_branch_is_skipped(self):
-        self.assertFalse(should_review_pr.should_review(""))
+    def test_hand_named_branches_are_reviewed(self):
+        """The exact shapes that were silently skipping (DRE-2250)."""
+        for branch in (
+            "fix/opus5-console-write-path",
+            "model/fold-ladder-kwarg-upstream",
+            "db/work",
+        ):
+            self.assertTrue(should_review_pr.should_review(branch), branch)
 
-    def test_none_branch_is_skipped(self):
-        self.assertFalse(should_review_pr.should_review(None))
+    def test_unknown_branch_fails_open_toward_review(self):
+        """When the head ref is missing or unreadable, review. The two failure
+        directions are not symmetric: a needless review costs tokens, a missed
+        one ships unreviewed code."""
+        self.assertTrue(should_review_pr.should_review(""))
+        self.assertTrue(should_review_pr.should_review(None))
 
     # --- card extraction matches the pipeline's DRE-N convention --------
 
@@ -159,10 +172,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0)
         self.assertIn("review=true", p.stdout)
 
-    def test_cli_exit_1_and_review_false_on_chrome_branch(self):
+    def test_cli_exit_0_on_a_branch_that_used_to_be_called_chrome(self):
+        # DRE-2250: was exit 1 / review=false. The CLI's skip path is kept
+        # (exit 1, review=false) so the workflow contract is unchanged and a
+        # future explicit opt-out has somewhere to land — nothing reaches it
+        # today.
         p = self._run("chore/bump-deps")
-        self.assertEqual(p.returncode, 1)
-        self.assertIn("review=false", p.stdout)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("review=true", p.stdout)
 
     def test_cli_exit_0_and_review_true_on_lowercase_card_branch(self):
         # DRE-2003: the lowercase shape that silently bypassed the critic.
