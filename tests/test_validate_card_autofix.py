@@ -110,7 +110,8 @@ class InferRepoTest(unittest.TestCase):
         self.assertEqual(
             validate_card.VALID_SLUGS,
             {"atlas", "deltasolv", "vericorr", "agent-bureau",
-             "agent-bureau-demo", "bureau-pipeline"},  # DRE-1929 self-host
+             "agent-bureau-demo", "bureau-pipeline",  # DRE-1929 self-host
+             "portico"},  # DRE-2086 docs-platform → portico rename
         )
 
 
