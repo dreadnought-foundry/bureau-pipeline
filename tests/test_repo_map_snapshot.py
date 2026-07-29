@@ -66,6 +66,38 @@ class RepoMapSnapshotTest(unittest.TestCase):
             validate_card._FALLBACK_REPO_MAP["bureau-pipeline"],
             "dreadnought-foundry/bureau-pipeline")
 
+    def test_portico_is_a_routable_slug(self):
+        # DRE-2086: the docs-platform repo was renamed `portico` (2026-07-27);
+        # `repo:portico` cards must validate and route. Both of the gate's
+        # copies (snapshot + fallback literal) must know it, or dispatch works
+        # only until the first SSM/snapshot read blip.
+        self.assertEqual(_snapshot()["portico"], "dreadnought-foundry/portico")
+        self.assertIn("portico", validate_card.VALID_SLUGS)
+        self.assertEqual(
+            validate_card._FALLBACK_REPO_MAP["portico"],
+            "dreadnought-foundry/portico")
+
+    def test_portico_card_is_routable_at_the_gate(self):
+        # The behavior the ~50 waiting cards need: a `repo:portico` card passes
+        # the Todo gate's validation, AND the slug is routable — `slug in
+        # VALID_SLUGS` is the exact check reconcile's stranded watchdog uses to
+        # flag NO ROUTE and the gate's bounce guard uses to reject an inferred
+        # slug. A Portico-project card must also INFER to the routable slug
+        # (identity prefix), not bounce as unknown.
+        self.assertEqual(
+            validate_card.missing("", ["repo:portico", "agent:engineer"]), [])
+        slug, source = validate_card.infer_repo([], "Portico: Docs")
+        self.assertEqual(slug, "portico")
+        self.assertIn(slug, validate_card.VALID_SLUGS)
+
+    def test_docs_platform_is_not_a_valid_slug(self):
+        # DRE-2086: the OLD slug must stay invalid — no alias. A stale
+        # `docs-platform` card must fail loudly (NO ROUTE / bounce), never
+        # route somewhere surprising.
+        self.assertNotIn("docs-platform", _snapshot())
+        self.assertNotIn("docs-platform", validate_card.VALID_SLUGS)
+        self.assertNotIn("docs-platform", validate_card._FALLBACK_REPO_MAP)
+
     # --- the DERIVE works -----------------------------------------------------
 
     def test_valid_slugs_are_the_snapshot_keys(self):
