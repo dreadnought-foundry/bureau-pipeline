@@ -44,6 +44,7 @@ SCRIPT = ROOT / "scripts" / "merge_gate.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import merge_gate  # noqa: E402
+import should_review_pr  # noqa: E402
 
 HEAD = "aa11" * 10
 STALE = "bb22" * 10
@@ -339,13 +340,28 @@ class CriticReachabilityTest(unittest.TestCase):
     REACHABLE for dependabot PRs — otherwise the gate waits forever."""
 
     def test_qa_review_job_starts_on_dependabot_branches(self):
+        """The invariant is REACHABILITY, not the spelling of the condition.
+
+        DRE-2250 removed the head-ref allowlist from the job gate, so this no
+        longer checks for a `dependabot/` clause. It checks the thing that
+        actually matters: nothing in the gate excludes a run on the basis of
+        its branch, so a dependabot head reaches the critic and the merge gate
+        gets the verdict it waits on.
+        """
         doc = yaml.safe_load(QA_REVIEW.read_text())
-        cond = doc["jobs"]["review"]["if"]
-        self.assertIn(
-            "startsWith(github.event.pull_request.head.ref, 'dependabot/')",
-            cond,
-            "qa-review's job gate never starts for dependabot/** — the "
-            "merge gate would wait forever on a verdict that can't exist",
+        cond = " ".join((doc["jobs"]["review"]["if"] or "").split())
+        self.assertNotIn(
+            "head.ref", cond,
+            "qa-review's job gate must not exclude any branch — a head-ref "
+            "allowlist that forgets dependabot/** leaves the merge gate "
+            "waiting forever on a verdict that can't exist",
+        )
+        self.assertTrue(
+            should_review_pr.should_review(
+                "dependabot/pip/pip-minor-patch-1a2b3c4"
+            ),
+            "the decision helper must review dependabot branches — the merge "
+            "gate's minor/patch auto-merge requires a bound critic APPROVE",
         )
 
 

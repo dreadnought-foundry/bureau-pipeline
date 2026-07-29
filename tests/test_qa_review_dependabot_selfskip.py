@@ -33,10 +33,18 @@ Run: cd bureau-pipeline && python3 -m pytest tests/ -v
 """
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "scripts")
+)
+
+import should_review_pr  # noqa: E402
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
@@ -87,9 +95,13 @@ class TestReusableQaReviewSelfSkip:
         satisfy the branch disjuncts (DRE-1888 broadened them). The guard
         must AND against the whole entry expression."""
         cond = _job_if("qa-review.yml", "review")
-        assert cond.startswith(GUARD + " &&"), (
-            f"the guard must be the leading && conjunct of the review job's "
-            f"if — got: {cond!r}"
+        # DRE-2250 removed the branch/event disjuncts, so the guard is now the
+        # ENTIRE condition — the strongest possible form of "no entry path
+        # dodges it". Still reject an OR'd or trailing guard, and still allow
+        # a future extra conjunct.
+        assert cond == GUARD or cond.startswith(GUARD + " &&"), (
+            f"the guard must be the review job's whole `if:` or its leading "
+            f"&& conjunct — an OR'd guard would be vacuous. Got: {cond!r}"
         )
 
     def test_workflow_dispatch_reviews_unaffected(self):
@@ -103,19 +115,38 @@ class TestReusableQaReviewSelfSkip:
             "only — workflow_dispatch runs initiate as github-actions and "
             "must review dependabot PRs with full secrets"
         )
-        assert "github.event_name == 'workflow_dispatch'" in cond, (
-            "the workflow_dispatch entry path must remain"
+        # DRE-2250 dropped the explicit `event_name == 'workflow_dispatch'`
+        # disjunct: with no event allowlist left, a dispatch run satisfies the
+        # gate on the guard's first disjunct. Assert the ROUTE (nothing
+        # excludes a non-pull_request event), not the deleted clause.
+        assert "head.ref" not in cond and "event_name ==" not in cond, (
+            f"nothing in the gate may exclude a workflow_dispatch review — "
+            f"which events reach this reusable is the caller stub's call, "
+            f"not this file's. Got: {cond!r}"
         )
 
     def test_dependabot_branch_entry_path_is_preserved(self):
         """A NON-dependabot actor on a dependabot/ head (a human push, the
         merge-gate's qa-bot update-branch synchronize) has normal secrets —
-        its event-driven review must still start (DRE-2039), so the guard
-        must not delete the branch clause."""
-        assert (
-            "startsWith(github.event.pull_request.head.ref, 'dependabot/')"
-            in _job_if("qa-review.yml", "review")
+        its event-driven review must still start (DRE-2039).
+
+        DRE-2250 removed the head-ref clauses from the job gate, so this is no
+        longer expressed as the presence of a `dependabot/` branch clause. The
+        invariant is unchanged and now stronger: nothing in the gate can
+        exclude such a run, and the decision helper reviews it. Asserting the
+        outcome instead of one spelling of the condition is also what stops
+        this test from breaking on the next unrelated gate edit.
+        """
+        cond = _job_if("qa-review.yml", "review")
+        # Only the ACTOR may stop a run — never the branch it sits on.
+        assert "head.ref" not in cond, (
+            "a head-ref clause in the gate can exclude a legitimate human "
+            "push to a dependabot/ head; the actor guard is the only "
+            f"exclusion this job may make. Got: {cond!r}"
         )
+        assert should_review_pr.should_review(
+            "dependabot/pip/pip-minor-patch-1a2b3c4"
+        ), "the decision helper must still review dependabot branches (DRE-2039)"
 
 
 class TestReusableVerifySelfSkip:

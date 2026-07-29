@@ -23,6 +23,8 @@ import sys
 import tempfile
 import unittest
 
+import yaml
+
 REPO = os.path.join(os.path.dirname(__file__), "..")
 WF_DIR = os.path.join(REPO, ".github", "workflows")
 SCRIPTS = os.path.join(REPO, "scripts")
@@ -45,7 +47,9 @@ class RepairBranchIsReviewedTest(unittest.TestCase):
     def test_agent_and_card_branches_unchanged(self):
         self.assertTrue(should_review_pr.should_review("agent/DRE-1-x"))
         self.assertTrue(should_review_pr.should_review("fix/DRE-2-y"))
-        self.assertFalse(should_review_pr.should_review("chore/bump-deps"))
+        # Was assertFalse. DRE-2250 stopped inferring triviality from the
+        # branch name — a chore/ branch is now reviewed like everything else.
+        self.assertTrue(should_review_pr.should_review("chore/bump-deps"))
 
     def test_cli_reviews_repair_branch(self):
         res = subprocess.run(
@@ -57,11 +61,26 @@ class RepairBranchIsReviewedTest(unittest.TestCase):
         self.assertIn("review=true", res.stdout)
 
     def test_qa_review_job_starts_for_repair_heads(self):
-        self.assertIn(
-            "startsWith(github.event.pull_request.head.ref, 'repair/')",
-            src("qa-review.yml"),
-            "qa-review's job gate must let repair/* PRs start the critic",
+        """ADR guardrail 1: a red-main repair PR must never dodge the critic.
+
+        DRE-2250 removed the head-ref allowlist from the job gate, so this
+        asserts reachability instead of a `repair/` clause — the gate must
+        exclude no branch, and the decision helper must review a repair head.
+        Checking the outcome rather than one spelling also means an unrelated
+        edit to the gate can't quietly break the guardrail while the string
+        still matches.
+        """
+        cond = " ".join(
+            (yaml.safe_load(src("qa-review.yml"))["jobs"]["review"].get("if")
+             or "").split()
         )
+        self.assertNotIn(
+            "head.ref", cond,
+            "the review job's gate must not exclude branches — a repair/ head "
+            "left out of an allowlist would merge a fix to a broken main with "
+            "no adversarial review",
+        )
+        self.assertTrue(should_review_pr.should_review(f"repair/{SHA}"))
 
 
 class RepairContextWiringTest(unittest.TestCase):
