@@ -73,16 +73,34 @@ class TestPolicyLivesInExactlyOnePlace:
         so the qa-bot mint crashes red with zero review. Only a job-level `if:`
         is evaluated early enough to prevent that, so this one stays."""
         cond = _job_if("qa-review.yml", "review")
-        assert cond.startswith(DEPENDABOT_GUARD + " &&"), (
-            f"the dependabot mechanical guard must remain the leading "
-            f"conjunct of the review job's if — got: {cond!r}"
+        # It is the whole condition today. Tolerate a future additional
+        # conjunct, but never the guard being OR'd away or demoted — either
+        # would let a dependabot-actor'd run reach the mint and crash.
+        assert cond == DEPENDABOT_GUARD or cond.startswith(
+            DEPENDABOT_GUARD + " &&"
+        ), (
+            f"the dependabot mechanical guard must be the review job's whole "
+            f"`if:` or its leading conjunct — got: {cond!r}"
         )
+
+    def test_gate_is_the_mechanical_guard_and_nothing_else(self):
+        """The gate should carry the dependabot guard alone.
+
+        The event allowlist went too: this is a REUSABLE workflow, and which
+        events call it is the caller stub's decision, not this file's. A
+        second-guessing clause here can only ever subtract from what a stub
+        asked for — silently, since a job that never starts writes no verdict.
+        """
+        assert _job_if("qa-review.yml", "review") == DEPENDABOT_GUARD
 
     def test_workflow_dispatch_route_survives(self):
         """The manual/reconcile-driven review route must keep working — it is
         the only way to review a dependabot PR, and the door a human uses to
-        review anything on demand."""
-        assert "workflow_dispatch" in _job_if("qa-review.yml", "review")
+        review anything on demand. Nothing in the gate may exclude it."""
+        cond = _job_if("qa-review.yml", "review")
+        # The guard scopes its actor check to pull_request, so a
+        # workflow_dispatch run satisfies it on the first disjunct.
+        assert "github.event_name != 'pull_request'" in cond
 
     def test_verify_gate_is_not_widened_by_this_change(self):
         """Scope pin: this card changes WHO GETS REVIEWED, not who gets

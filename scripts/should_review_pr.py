@@ -63,18 +63,36 @@ def card_in_branch(branch: str | None) -> str | None:
 
 
 def should_review(branch: str | None) -> bool:
-    """True iff the critic should adversarially review this PR's branch.
+    """True — the critic reviews every pull request (DRE-2250).
 
-    Review when the branch is an agent branch (legacy convention, unchanged),
-    a red-main repair branch (DRE-1927 — cardless agent work that must never
-    dodge the critic), a dependabot branch (DRE-2039 — the merge gate's
-    minor/patch auto-merge requires a bound critic APPROVE), OR it carries a
-    linked Linear card (operator-routed card PRs — DRE-1888). Skip only
-    truly chrome-only branches with no linked card.
+    This function is the ONE place review policy lives. qa-review.yml's job
+    gate is mechanical only; a rule about WHICH PRs deserve review goes here,
+    where it can be unit-tested.
+
+    Why there is no longer a skip path: the old rule inferred triviality from
+    the branch name — review `agent/`, `repair/`, `dependabot/`, or anything
+    carrying a `DRE-<n>` card ref; skip the rest as "chrome-only". The
+    inference was wrong in the expensive direction. Substantive work routinely
+    lands on a branch named for the change rather than the card (`fix/…`,
+    `model/…`, `db/…`), and each of those merged with no adversarial verdict
+    AND no signal that one was missing — the PR simply looked green. On
+    2026-07-29 that described all five open PRs across the fleet; the one
+    reviewed by hand carried three real defects.
+
+    The rule had already been widened twice for this same reason (DRE-1888 for
+    operator card branches, DRE-2003 for lowercase refs). Each widening kept
+    the guess and moved the boundary. Removing the guess ends the class.
+
+    The cost is real and deliberate: the critic now runs on genuinely trivial
+    PRs too. That is the cheaper mistake — a needless review costs tokens; a
+    missed one has already shipped a regression (DRE-1825).
+
+    If a skip is ever wanted again, do NOT reintroduce it as a branch-name
+    rule. Make it an explicit signal a human sets and can see (a PR label), so
+    opting out is a visible choice rather than an accident of what someone
+    happened to call their branch.
     """
-    if branch and branch.startswith(("agent/", "repair/", "dependabot/")):
-        return True
-    return card_in_branch(branch) is not None
+    return True
 
 
 def main(argv: list[str]) -> int:
@@ -83,17 +101,15 @@ def main(argv: list[str]) -> int:
     print(f"review={'true' if review else 'false'}")
     if review:
         card = card_in_branch(branch)
-        if branch.startswith("agent/"):
-            why = "agent branch"
-        elif branch.startswith("repair/"):
-            why = "red-main repair branch"
-        elif branch.startswith("dependabot/"):
-            why = "dependabot branch"
-        else:
-            why = f"linked card {card}"
-        print(f"will review {branch!r} ({why})")
+        print(
+            f"will review {branch!r}"
+            + (f" (linked card {card})" if card else "")
+        )
         return 0
-    print(f"skipping {branch!r}: chrome-only PR, no linked card")
+    # Unreachable today — every PR is reviewed. Kept so the workflow's
+    # exit-code contract (0 review / 1 skip) still holds if an explicit
+    # opt-out is ever added, and so a skip can never be silent when it is.
+    print(f"skipping {branch!r}")
     return 1
 
 

@@ -46,26 +46,30 @@ on:
 
 jobs:
   review:
-    # Review every CARD PR, not just agent-dispatched ones (DRE-1888).
-    #   • agent/DRE-N-*               — normal pipeline work (unchanged)
-    #   • fix/DRE-N-*, feat/DRE-N-*…  — operator-routed card PRs (the ones the
-    #     pipeline's repo-scoped agent tokens can't author, so the operator
-    #     opens them by hand); these used to SKIP the critic and merge with no
-    #     adversarial verdict — now they pass the same gate.
-    #   • repair/<failing-sha>        — red-main auto-repair PRs (DRE-1927):
-    #     cardless agent fixes to a broken main; the critic gets a repair
-    #     context block (original failing log + test-touch flag) below.
-    # A branch with a linked Linear card (DRE-<n>, the signal linear-sync uses
-    # to close the loop) is real product work and gets reviewed; a truly
-    # chrome-only branch (no linked card) is still skipped below by the
-    # "Decide review" step, which is the authoritative gate (should_review_pr.py).
-    # This broadened `if:` just lets the job START for the same set of branches;
-    # the Python step is the single source of truth for the decision.
-    #   • dependabot/**               — dependency PRs (DRE-2039): the merge
-    #     gate auto-merges a grouped minor/patch bump ONLY on a SHA-bound
-    #     critic APPROVE, so the critic must actually run here.
+    # NO REVIEW POLICY LIVES HERE (DRE-2250). This gate decides only whether
+    # the job may START; whether the critic actually reviews is decided in ONE
+    # place, the "Decide review" step (should_review_pr.py).
     #
-    # DEPENDABOT SELF-SKIP (DRE-2067, leading conjunct): a pull_request run
+    # It used to list branch prefixes — agent/, repair/, dependabot/, and
+    # anything containing DRE- — which was the same rule should_review_pr.py
+    # already applied, written a second time in a second language. Two effects,
+    # both bad:
+    #
+    #   • Anything the list didn't name (fix/…, model/…, db/…) never started
+    #     the job, so no verdict was ever written and NOTHING went red. The PR
+    #     just looked green. All five open fleet PRs sat that way on
+    #     2026-07-29; the one reviewed by hand had three real defects.
+    #   • The two copies drifted. DRE-2003: contains() here was
+    #     case-insensitive, the Python regex was not, so a lowercase
+    #     ops/dre-N- branch started the job and then decided review=false —
+    #     a silent bypass that cost three re-pushed security PRs.
+    #
+    # Keep this gate MECHANICAL. A condition belongs here only if it must be
+    # evaluated before the first step runs; anything about WHICH PRs deserve
+    # review belongs in should_review_pr.py, where it can be unit-tested.
+    #
+    # DEPENDABOT SELF-SKIP (DRE-2067, leading conjunct) — mechanical, and the
+    # reason this gate still exists at all: a pull_request run
     # triggered by dependabot[bot] gets GitHub's separate Dependabot secrets
     # store (empty for us), so the qa-bot token mint below crashes red with
     # zero review. DRE-2047 guarded only this repo's own stub — fleet stubs
@@ -79,12 +83,7 @@ jobs:
     # event_name disjunct untouched. NOT pull_request_target — full secrets
     # are never attached to a dependabot-triggered event.
     if: >
-      (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]') &&
-      (github.event_name == 'workflow_dispatch' ||
-      startsWith(github.event.pull_request.head.ref, 'agent/') ||
-      startsWith(github.event.pull_request.head.ref, 'repair/') ||
-      startsWith(github.event.pull_request.head.ref, 'dependabot/') ||
-      contains(github.event.pull_request.head.ref, 'DRE-'))
+      (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
