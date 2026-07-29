@@ -54,6 +54,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from collections.abc import Mapping
 
 FABLE = "claude-fable-5"
 OPUS = "claude-opus-5"
@@ -211,12 +212,54 @@ def _is_available(model, probe, clock):
 # Selection                                                                    #
 # --------------------------------------------------------------------------- #
 
-def select(role: str = "engineer", *, probe=None, clock=None) -> str:
+def _normalize_ladder(ladder) -> list[str]:
+    """Coerce a caller-supplied ladder into a list of model-id strings.
+
+    Returns [] for anything unusable so `select` can fall back to LADDER rather
+    than raise — this function sits on the dispatch path of every card, and the
+    module's contract is to degrade, never to block a build.
+
+    Two shapes are handled deliberately:
+
+      * A bare string. `ladder: claude-opus-5` in YAML is a scalar, not a
+        sequence, and a str is both truthy and iterable — walked unguarded it
+        selects a single LETTER as the model id and hands it to the run.
+      * agents.yaml's own `ladder:`, a list of {model:, reason:} mappings. The
+        docstring points callers at that file, so accepting the shape it
+        actually stores costs nothing and removes a TypeError from the hot path.
+
+    Entries that are neither a string nor a mapping with a string `model` are
+    dropped rather than fatal — one malformed row must not strand a dispatch.
+    """
+    if ladder is None or isinstance(ladder, (str, bytes)):
+        return []
+    try:
+        entries = list(ladder)
+    except TypeError:  # not iterable at all
+        return []
+    out: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            out.append(entry)
+        elif isinstance(entry, Mapping) and isinstance(entry.get("model"), str):
+            out.append(entry["model"])
+    return out
+
+
+def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> str:
     """The model the next attempt should use: the first AVAILABLE model walking
     the ordered ladder best→worst.
 
     Shared by BOTH engineer and planner — `role` is accepted for call-site
     symmetry and heartbeats but does NOT change the ladder.
+
+    `ladder` is the ordered model id list to walk (best→worst); it defaults to
+    the module-level ``LADDER``. The console passes the ladder it read from
+    ``agents.yaml`` so the SINGLE source of truth (the YAML) drives the order
+    while this function provides the SINGLE shared walk. The kwarg lives here
+    rather than in the console's vendored copy so that copy can be diffed
+    against this file with no allowed exceptions — an exception is a hole a
+    drift check cannot see through.
 
     `probe(model) -> bool` and `clock() -> float` are injectable; the defaults
     do a real minimal /v1/messages probe and use a monotonic clock. Degrade
@@ -229,8 +272,9 @@ def select(role: str = "engineer", *, probe=None, clock=None) -> str:
         probe = _probe_real
     if clock is None:
         clock = time.monotonic
+    walk = _normalize_ladder(ladder) or LADDER
 
-    for model in LADDER:
+    for model in walk:
         available = _is_available(model, probe, clock)
         if available:
             return model
@@ -239,7 +283,7 @@ def select(role: str = "engineer", *, probe=None, clock=None) -> str:
 
     # Nothing probed available — don't block the build. Fall through to the
     # last (lowest-ranked, broadest-availability) ladder model.
-    return LADDER[-1]
+    return walk[-1]
 
 
 # --------------------------------------------------------------------------- #
