@@ -165,6 +165,7 @@ _FALLBACK_REPO_MAP = {
     "agent-bureau": "dreadnought-foundry/agent-bureau",
     "agent-bureau-demo": "dreadnought-foundry/agent-bureau-demo",
     "bureau-pipeline": "dreadnought-foundry/bureau-pipeline",
+    "portico": "dreadnought-foundry/portico",
 }
 
 
