@@ -353,6 +353,42 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     return data["issues"]["nodes"]
 
 
+# Live-snapshot re-check for NO-ROUTE claims (DRE-2260). Fleet repos pin the
+# reusable workflows to a release tag, so THIS checkout's routing snapshot
+# (validate_card.VALID_SLUGS — the bundled repo-map.json, or its fallback
+# literal) can predate a repo's onboarding: atlas's and deltasolv's v4 sweeps
+# called live `portico` cards "not on the dispatch rail" and parked nine of
+# them needs-human, which made fix_dispatch_blocked() skip them and silently
+# disabled unstick_conflicts for the life of each card (DRE-2180 sat five
+# hours on a conflicted PR mid-build). A pinned sweep cannot tell "not on the
+# rail" from "onboarded after my pin", so before any NO-ROUTE claim about a
+# labeled card, flag_stranded re-checks the slug against the CANONICAL
+# snapshot: config/repo-map.json at bureau-pipeline@main, the published
+# mirror of the relay's SSM map (public repo, raw read needs no scopes).
+_CANONICAL_SNAPSHOT_ENDPOINT = (
+    "repos/dreadnought-foundry/bureau-pipeline/contents/config/repo-map.json?ref=main"
+)
+
+
+def live_rail_slugs() -> frozenset[str] | None:
+    """The slug set of the canonical routing snapshot at bureau-pipeline@main,
+    or None when it can't be read/parsed. The silent gh() is fine here — None
+    is this caller's own fallback (defer the claim, per flag_stranded), and it
+    must never collapse to an empty set, which would read as "flag everything".
+    """
+    raw = gh(
+        "api", "-H", "Accept: application/vnd.github.raw+json",
+        _CANONICAL_SNAPSHOT_ENDPOINT,
+    )
+    try:
+        parsed = json.loads(raw) if raw else None
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, dict) or not parsed:
+        return None
+    return frozenset(str(slug).lower() for slug in parsed)
+
+
 def flag_stranded() -> set[str]:
     """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
 
@@ -362,16 +398,27 @@ def flag_stranded() -> set[str]:
           dispatch can EVER start a run. Flagged within one sweep, however
           fresh the card. Every repo's sweep checks this (an off-map card
           belongs to no sweep's `mine`); the once-ever gate makes whichever
-          sweep gets there first the only one that speaks.
+          sweep gets there first the only one that speaks. Because fleet
+          sweeps run PINNED checkouts whose snapshot can predate an
+          onboarding (DRE-2260), a labeled slug is claimed unroutable only
+          after the canonical @main snapshot confirms it: slug present
+          there → stale pin, leave the card to a current sweep; snapshot
+          unreadable → defer the claim to a later sweep. Only a label-less
+          card — unroutable under ANY snapshot — needs no confirmation.
       (b) NO RUN — a dispatchable card of THIS sweep's repo with zero run
           receipts (the DRE-2032 🧠/⏳ proof-of-life comments; agent-task
           and plan both post them at run start) after WATCHDOG_MINUTES —
           or after a prior Todo-redispatch receipt, which resets updatedAt
-          every cycle and would otherwise hide the strand forever. A card
-          with ANY receipt started a run once (live or dead) and is never
-          flagged: started-then-died is the dead-run requeue's case.
+          every cycle and would otherwise hide the strand forever.
           Epics past Planning are containers — no run ever targets them,
           so their receipt-less state is normal, not a strand.
+
+    A card with ANY receipt started a run once (live or dead) and is never
+    flagged by EITHER class: started-then-died is the dead-run requeue's
+    case, and a stale-pinned sweep computes routable=False for a repo it
+    has never heard of — parking a mid-build card would disable
+    unstick_conflicts for its whole life (DRE-2260/DRE-2180, flagged 16s
+    after a live ⏳ receipt).
 
     Flagging = one plain-English comment (🚨 + WATCHDOG_TAG) naming the
     reason, plus HOLD_LABEL — no state move, no cancel. A false positive
@@ -383,6 +430,8 @@ def flag_stranded() -> set[str]:
     can skip them — their fetched labels predate the hold label.
     """
     flagged: set[str] = set()
+    live: frozenset[str] | None = None
+    live_fetched = False  # one canonical-snapshot read per sweep, and only if needed
     for card in active_cards(WATCHDOG_LANES):
         ident, state = card["identifier"], card["state"]["name"]
         if held(card):
@@ -397,9 +446,9 @@ def flag_stranded() -> set[str]:
         bodies = linear_ops.comment_bodies(ident)
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
+        if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
+            continue  # a run DID start (either class) — the dead-run machinery owns it now
         if routable:
-            if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
-                continue  # a run DID start — the dead-run machinery owns it now
             redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
             if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
                 continue  # young — give the dispatch time to start a run
@@ -411,11 +460,31 @@ def flag_stranded() -> set[str]:
                 "human to unblock the pipeline."
             )
         else:
+            live_confirmed = ""
+            if slug is not None:
+                if not live_fetched:
+                    live, live_fetched = live_rail_slugs(), True
+                if live is None:
+                    print(
+                        f"watchdog: {ident} repo '{slug}' unknown to this "
+                        "snapshot and the canonical snapshot is unreadable — "
+                        "deferring the no-route claim to a later sweep"
+                    )
+                    continue  # can't tell dead route from stale pin — don't guess
+                if slug in live:
+                    print(
+                        f"watchdog: {ident} repo '{slug}' onboarded after this "
+                        "checkout's snapshot — left to a current sweep"
+                    )
+                    continue  # a stale pin, not a dead route (DRE-2260)
+                live_confirmed = " and from the canonical snapshot at bureau-pipeline@main"
+            snapshot = ", ".join(sorted(validate_card.VALID_SLUGS))
             reason = (
                 f"repo '{slug or 'none — no repo label'}' isn't on the dispatch "
                 "rail — no agent can ever pick this card up, so it must be "
                 "hand-built (or the repo onboarded to the routing map first). "
-                f"Labeled '{HOLD_LABEL}' for a human."
+                f"Absent from this sweep's routing snapshot [{snapshot}]"
+                f"{live_confirmed}. Labeled '{HOLD_LABEL}' for a human."
             )
         linear_ops.cmd_comment(ident, f"🚨 {WATCHDOG_TAG}: {reason}")
         linear_ops.add_label(ident, HOLD_LABEL)
