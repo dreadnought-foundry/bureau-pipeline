@@ -15,6 +15,13 @@ Checks (card must carry **Repo:** atlas, any owner-prefix form):
               capped by the shared dead-run cap (DRE-2034)
   In Review   stale >1h: PR merged -> Done; else re-trigger merge-gate
 
+No-checks watchdog (DRE-2261): every open, non-draft agent/* PR whose head
+commit has ZERO check runs after NO_CHECKS_MINUTES gets ONE plain-English
+comment on its linked card — regardless of the card's park state, because a
+human-parked card suppresses every repair without raising a hand (DRE-2180
+sat invisible five hours; portico PR #21 thirteen days). Alert-only: never
+dispatches, so the DRE-2024 fix-loop cannot come back.
+
 Stranded-card watchdog (DRE-1993): every card/epic in Planning / Todo /
 In Progress whose repo has no route in the routing snapshot, or (this repo's
 cards) with no run receipt after 30 minutes, gets ONE plain-English comment
@@ -1202,6 +1209,124 @@ def retrigger_dead_heads() -> None:
                "-f", f"sha={new}")
 
 
+# No-checks watchdog (DRE-2261). A PR the pipeline cannot see: 30 minutes,
+# the same reasoning as WATCHDOG_MINUTES — long enough for GitHub's check
+# spin-up lag and the 15-minute lost-event re-push (retrigger_dead_heads) to
+# get their chance first, short enough that a human hears within a sweep or
+# two instead of the five hours DRE-2180 sat / thirteen days portico PR #21
+# sat. False positive cost is one comment on the card, nothing else.
+NO_CHECKS_MINUTES = int(os.environ.get("NO_CHECKS_MINUTES", "30"))
+NO_CHECKS_TAG = "no-checks-watchdog"
+
+
+def flag_no_checks_prs() -> None:
+    """DRE-2261 watchdog: report an open agent PR the pipeline cannot see.
+
+    A conflicted PR emits no workflow events at all — GitHub cannot build
+    its test-merge commit, so CI, the critic, and the merge gate silently
+    never run: no red check, no verdict, no failed run. unstick_conflicts
+    is the repair, but it (correctly) stands down on a human-parked card
+    (fix_dispatch_blocked, DRE-2024 — that gate STAYS), and nothing else
+    ever looked: parking suppressed the repair without raising a hand.
+    DRE-2180 sat that way five hours; portico PR #21 thirteen days.
+
+    Noticing is not dispatching. This backstop only ALERTS — one comment on
+    the linked card per PR (the NO_CHECKS_TAG + "PR #N:" marker is the
+    idempotency key, the flag_stranded pattern), naming the PR, branch,
+    mergeStateStatus, and how long it has been silent, plus the card's park
+    state — reported parked or not, because parked IS the invisible case.
+    Deliberately NO hold label: on an unparked card that label would stand
+    down unstick_conflicts and CREATE the very invisibility this alarms on.
+
+    Checks merely queued/in progress mean the pipeline CAN see the PR — only
+    a head commit with zero check runs at all counts. Unreadable check-run /
+    commit reads skip the PR (DRE-2034: a 403 is not "zero checks"). The
+    non-DIRTY zero-checks class normally never reaches the threshold —
+    retrigger_dead_heads re-pushes at 15 minutes, which resets the head
+    commit's clock here — so this fires exactly when every repair path has
+    silently failed or been stood down.
+
+    A watchdog must never take the sweep down with it: any unexpected
+    per-PR (or listing) failure is recorded on the fail-loudly rail — red
+    run, medic — and the sweep continues (the DRE-2035 isolation
+    discipline, applied at the backstop level).
+    """
+    try:
+        prs = json.loads(gh(
+            "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+            "--json", "number,headRefName,headRefOid,mergeStateStatus,isDraft",
+        ) or "[]")
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"no-checks watchdog: PR listing failed: {e}")
+        print(f"ERROR: no-checks watchdog: PR listing failed: {e}", file=sys.stderr)
+        return
+    for pr in prs:
+        try:
+            _flag_one_silent_pr(pr)
+        except Exception as e:  # noqa: BLE001 — isolate the one PR, sweep the rest
+            _write_failures.append(
+                f"no-checks watchdog on PR #{pr.get('number')}: {e}"
+            )
+            print(
+                f"ERROR: no-checks watchdog on PR #{pr.get('number')}: {e}",
+                file=sys.stderr,
+            )
+
+
+def _flag_one_silent_pr(pr: dict) -> None:
+    """Evaluate ONE open PR for flag_no_checks_prs and report if silent."""
+    if not pr["headRefName"].startswith("agent/") or pr.get("isDraft"):
+        return
+    sha = pr.get("headRefOid") or ""
+    if not sha:
+        return
+    statuses = gh("api", f"repos/{REPO}/commits/{sha}/check-runs",
+                  "--jq", "[.check_runs[].status]")
+    if not statuses:
+        return  # unreadable — never alarm on a fabricated empty (DRE-2034)
+    try:
+        if json.loads(statuses):
+            return  # check runs exist (completed or in flight) — visible
+    except ValueError:
+        return
+    commit = json.loads(gh("api", f"repos/{REPO}/git/commits/{sha}") or "{}")
+    when = (commit.get("committer") or {}).get("date")
+    if not when or age_minutes(when) < NO_CHECKS_MINUTES:
+        return  # fresh head — spin-up and the re-push repair go first
+    card = branch_card(pr["headRefName"])
+    if not card:
+        print(
+            f"WARNING: no-checks: PR #{pr['number']} "
+            f"({pr['headRefName']}) carries no card id — nowhere to report"
+        )
+        return
+    # ":"-terminated so #21's marker never substring-matches #210's.
+    marker = f"{NO_CHECKS_TAG} PR #{pr['number']}:"
+    if any(marker in b for b in linear_ops.comment_bodies(card)):
+        return  # reported once already — idempotent forever
+    park_note = (
+        "The card is human-parked (Plan Review / needs-human), so every "
+        "automatic repair is standing down on purpose (DRE-2024) — the PR "
+        "stays frozen until a human acts on the card."
+        if card_parked_for_human(card) else
+        "The card is NOT human-parked — the repair backstops should be "
+        "acting; if this alert recurs, check the fix-agent rail."
+    )
+    silent = age_minutes(when)
+    linear_ops.cmd_comment(card, (
+        f"🚨 {marker} open PR #{pr['number']} "
+        f"(branch {pr['headRefName']}, mergeStateStatus "
+        f"{pr.get('mergeStateStatus')}) has had ZERO completed check "
+        f"runs on its head commit for {silent:.0f} minutes — the "
+        "pipeline cannot see it: no CI, no critic verdict, no merge "
+        f"gate will ever fire on this commit. {park_note}"
+    ))
+    print(
+        f"no-checks: PR #{pr['number']} ({pr['headRefName']}) silent "
+        f"{silent:.0f}m — reported on {card}"
+    )
+
+
 def fix_approved_but_red() -> None:
     """Dead-zone repair: a PR with critic APPROVE but a failed CI check has
     no automatic fixer — agent-fix's trigger is a REQUEST_CHANGES comment,
@@ -1781,6 +1906,7 @@ def main(
         for backstop in (
             unstick_conflicts,
             retrigger_dead_heads,
+            flag_no_checks_prs,
             fix_approved_but_red,
             retry_dead_fix_runs,
             review_dependabot_prs,
