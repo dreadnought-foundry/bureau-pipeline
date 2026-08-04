@@ -65,6 +65,25 @@ def _pin_valid_slugs(monkeypatch):
     )
 
 
+# The canonical @main snapshot the NO-ROUTE adjudication re-checks (DRE-2260).
+# Pinned to the same set as _pin_valid_slugs so the off-map cards above
+# (ghost-product) still adjudicate as truly off-rail — hermetically, with no
+# live gh fetch from the test run. Individual DRE-2260 tests override it.
+_LIVE_SNAPSHOT = frozenset({"agent-bureau", "atlas", "bureau-pipeline"})
+
+# The real fetcher, captured before the autouse pin below replaces the module
+# attribute — the parse tests exercise it directly against a stubbed gh().
+_REAL_LIVE_RAIL_SLUGS = getattr(reconcile, "live_rail_slugs", None)
+
+
+@pytest.fixture(autouse=True)
+def _pin_live_snapshot(monkeypatch):
+    # raising=False: harmless before the attribute exists (the RED commit).
+    monkeypatch.setattr(
+        reconcile, "live_rail_slugs", lambda: _LIVE_SNAPSHOT, raising=False
+    )
+
+
 def _iso(minutes_ago: float) -> str:
     return (datetime.now(UTC) - timedelta(minutes=minutes_ago)).isoformat().replace(
         "+00:00", "Z"
@@ -231,6 +250,131 @@ def test_other_repos_routable_cards_left_to_their_own_sweep():
     assert flagged == set()
     comment.assert_not_called()
     add_label.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# DRE-2260: a stale sweep must never park live work
+#
+# THE BUG (live incident, 2026-08-04): atlas's and deltasolv's sweeps ride the
+# v4 release tag, whose routing snapshot predates portico's onboarding
+# (DRE-2086), so both computed routable=False for every portico card and the
+# NO-ROUTE branch parked nine of them needs-human — including DRE-2180, which
+# an engineer agent was actively building (🧠 + ⏳ receipts on the card) and
+# which then sat five hours on a conflicted PR because HOLD_LABEL makes
+# unstick_conflicts skip the card silently. Two defects: the proof-of-life
+# guard only covered the NO-RUN class, and a pinned sweep was allowed to
+# adjudicate a slug it had never heard of.
+# --------------------------------------------------------------------------
+def test_no_route_card_with_run_receipt_never_flagged():
+    """Proof-of-life must cover the NO-ROUTE class too: the repo is absent
+    from this sweep's VALID_SLUGS, but a 🧠 receipt says an agent IS building
+    — flagging would park live work and disable the conflict backstop."""
+    card = _card(labels=("repo:ghost-product",), minutes_stale=999)
+    flagged, comment, add_label = _run_watchdog(
+        [card],
+        bodies=["🧠 model-attempt: claude-fable-5 — engineer agent starting."],
+    )
+    assert flagged == set()
+    comment.assert_not_called()
+    add_label.assert_not_called()
+
+
+def test_slug_onboarded_after_this_snapshot_left_alone(monkeypatch):
+    """A sweep only makes a NO-ROUTE claim about a slug it can actually
+    adjudicate: portico is missing from THIS sweep's pinned snapshot but
+    present in the canonical @main map — onboarded after the pin, not off
+    the rail. Left alone entirely."""
+    monkeypatch.setattr(
+        reconcile, "live_rail_slugs", lambda: _LIVE_SNAPSHOT | {"portico"}
+    )
+    card = _card(labels=("repo:portico",), minutes_stale=999)
+    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    assert flagged == set()
+    comment.assert_not_called()
+    add_label.assert_not_called()
+
+
+def test_unreadable_live_snapshot_defers_no_route(monkeypatch):
+    """When the canonical map can't be read, the sweep cannot tell 'dead
+    route' from 'stale pin' — it must defer to a later sweep (15 minutes
+    away), never convert a transient read failure into a permanent false
+    park."""
+    monkeypatch.setattr(reconcile, "live_rail_slugs", lambda: None)
+    card = _card(labels=("repo:ghost-product",), minutes_stale=999)
+    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    assert flagged == set()
+    comment.assert_not_called()
+    add_label.assert_not_called()
+
+
+def test_label_less_card_needs_no_live_snapshot(monkeypatch):
+    """A card with NO repo label can never route however fresh any snapshot
+    is — the unreadable-map deferral must not swallow this class."""
+    monkeypatch.setattr(reconcile, "live_rail_slugs", lambda: None)
+    card = _card(labels=(), minutes_stale=999)
+    flagged, comment, _ = _run_watchdog([card], bodies=[])
+    assert flagged == {"DRE-1978"}
+    assert "hand-built" in comment.call_args.args[1]
+
+
+def test_no_route_reason_names_the_snapshot_read():
+    """When NO-ROUTE does fire, the comment names the slug set this sweep
+    was reading, so a stale pin is diagnosable from the card itself."""
+    card = _card(labels=("repo:ghost-product",), minutes_stale=999)
+    _, comment, _ = _run_watchdog([card], bodies=[])
+    body = comment.call_args.args[1]
+    for slug in ("agent-bureau", "atlas", "bureau-pipeline"):
+        assert slug in body, f"reason must name the snapshot ({slug} missing)"
+
+
+def test_dre_2180_regression_stale_sweep_never_parks_a_live_build():
+    """The incident, byte-for-byte: this sweep's slug set has no `portico`
+    (the autouse pins — snapshot AND fallback both predate the onboarding),
+    the card is In Progress, a 🧠 model-attempt and a ⏳ phase receipt are
+    already posted, and the sweep arrives seconds later. Expected: no flag,
+    no comment, no label."""
+    card = _card(
+        identifier="DRE-2180",
+        state="In Progress",
+        labels=("repo:portico",),
+        minutes_stale=0.3,
+    )
+    flagged, comment, add_label = _run_watchdog(
+        [card],
+        bodies=[
+            "🧠 model-attempt: claude-fable-5 — engineer agent starting. "
+            "Run: https://github.com/dreadnought-foundry/portico/actions/runs/222",
+            "⏳ 1/5 spec read, plan formed",
+        ],
+    )
+    assert flagged == set()
+    comment.assert_not_called()
+    add_label.assert_not_called()
+
+
+def test_live_rail_slugs_reads_the_canonical_snapshot(monkeypatch):
+    """live_rail_slugs() fetches config/repo-map.json from bureau-pipeline
+    @main (the published mirror of the relay's SSM map) and returns its slug
+    keys, lowercased."""
+    seen = []
+
+    def fake_gh(*args):
+        seen.append(args)
+        return '{"portico": "dreadnought-foundry/portico", "Atlas": "EveryBite/atlas"}'
+
+    monkeypatch.setattr(reconcile, "gh", fake_gh)
+    assert _REAL_LIVE_RAIL_SLUGS() == frozenset({"portico", "atlas"})
+    joined = " ".join(seen[0])
+    assert "dreadnought-foundry/bureau-pipeline" in joined
+    assert "config/repo-map.json" in joined
+
+
+@pytest.mark.parametrize("raw", ["", "not json", "[]", "{}"])
+def test_live_rail_slugs_unreadable_is_none(monkeypatch, raw):
+    """Empty/garbage/non-dict answers all mean 'could not read' — None, the
+    defer signal, never an empty slug set (which would flag everything)."""
+    monkeypatch.setattr(reconcile, "gh", lambda *a: raw)
+    assert _REAL_LIVE_RAIL_SLUGS() is None
 
 
 # --------------------------------------------------------------------------
