@@ -13,6 +13,14 @@
 # branches (ops/..., chore/...) auto-Done NOTHING: the operator closes those
 # cards by hand, which was already the real behavior for operator work.
 #
+# Operator/demo guard (six false closes in portico — DRE-2242 ×2, DRE-2241,
+# DRE-2218, DRE-2253, DRE-2252, cascading to epic DRE-2169): an agent branch
+# pointing at a `no-code` operator card or a `DEMO:`-titled card defeated the
+# intent above — merging the RUNBOOK/report closed a card whose real
+# acceptance is live AWS work or demo evidence. `card-done` (linear_ops.py)
+# now checks the card's labels/title and refuses those two classes: the merge
+# is commented on the card, the state is left for the operator/evidence.
+#
 # Reusable workflow: permissions live in the calling stub.
 name: Linear Sync (reusable)
 
@@ -73,9 +81,12 @@ jobs:
             echo "card references in PR titles/bodies never transition cards; hand-named branches are closed by the operator"
             exit 0
           fi
-          python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Done"
-          python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-            "✅ Merged: $PR_URL"
+          # card-done, NOT a bare `state Done`: the no-code/DEMO guard lives
+          # inside it (the six portico false closes — see header). Ordinary
+          # code cards go Done + "✅ Merged" comment exactly as before; a
+          # skipped card still gets the merge commented so the state never
+          # lies in either direction.
+          python3 .bureau-pipeline/scripts/linear_ops.py card-done "$CARD" "$PR_URL"
           # Event-driven promotion: this Done may have just unblocked
           # dependent Backlog children — promote them NOW instead of making
           # them wait for the drifting cron sweep ("*/15" delivers 78-100 min

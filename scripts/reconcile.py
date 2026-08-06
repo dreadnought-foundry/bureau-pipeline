@@ -1955,6 +1955,33 @@ def main(
         print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
 
         if merged:
+            # Same guard as linear-sync's card-done (the six portico false
+            # closes — DRE-2242 ×2, DRE-2241, DRE-2218, DRE-2253, DRE-2252):
+            # for a `no-code` operator card or a `DEMO:`-titled card the merge
+            # is not the work, and this backstop must not re-close one sweep
+            # later what linear-sync deliberately left open. The marker
+            # comment posts at most once (card-done normally already did);
+            # the card then sits here, correctly open, until the operator
+            # closes it by hand.
+            skip = linear_ops.auto_done_skip_reason(
+                card.get("title") or "",
+                [l["name"] for l in (card.get("labels") or {}).get("nodes", [])],
+            )
+            if skip is not None:
+                print(
+                    f"AUTO-DONE SKIPPED for {ident}: {skip} — the operator "
+                    "closes this card by hand (see linear_ops.auto_done_skip_reason)."
+                )
+                if not linear_ops.count_comments(
+                    ident, linear_ops.MERGED_NOT_CLOSED_MARKER
+                ):
+                    linear_ops.cmd_comment(
+                        ident,
+                        linear_ops.merged_not_closed_comment(
+                            f"https://github.com/{REPO}/pull/{pr['number']}", skip
+                        ),
+                    )
+                continue
             linear_ops.cmd_state(ident, "Done")
             linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
         elif state == "Todo" and not is_open:
