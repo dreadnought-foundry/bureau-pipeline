@@ -14,6 +14,14 @@ Subcommands:
                                        move ONLY if current state is in the csv
                                        (guards against dragging Done cards back)
   comment <DRE-N> <body>               add a comment to a card
+  card-done <DRE-N> <pr-url>           linear-sync's merge→Done seam: move the
+                                       card whose OWN agent branch merged to
+                                       Done and comment the PR link — UNLESS
+                                       the card is operator-closed (`no-code`
+                                       label) or closes-on-evidence (`DEMO:`
+                                       title), in which case the merge is
+                                       commented but the state is left alone
+                                       (the six portico false closes)
   subissue <DRE-N(parent)> <title> <description-file>
                                        create a child issue (Backlog) under an epic.
                                        Inlines the file's CONTENTS (never a path),
@@ -246,6 +254,107 @@ def cmd_comment(identifier: str, body: str) -> None:
         {"input": {"issueId": issue["id"], "body": body}},
     )
     print(f"commented on {identifier}")
+
+
+# --- Auto-Done guard: operator cards and demo cards ---------------------------
+#
+# Six false card-closes in portico, one mechanism (2026-07/08): the merge→Done
+# path closes the card whose own agent/DRE-<n>- branch merged, but for two card
+# classes the MERGE is not the WORK:
+#
+#   * `no-code` operator cards — their substance is live AWS work (a deploy, a
+#     migration, a key in Secrets Manager). An agent merges the RUNBOOK and the
+#     card closes as if the AWS work happened: DRE-2242 closed TWICE while zero
+#     CloudFront key groups existed in any account; DRE-2241 closed while the
+#     security exposure it existed to close was still open; DRE-2218 (Operator
+#     Milestone 2) closed when its runbook merged, before any migration ran.
+#   * `DEMO:`-titled cards — their acceptance criteria say the card closes only
+#     when every end-state claim in docs/demos/phase-N.md is a PASS. No merge
+#     event can read a verdict inside a markdown file: DRE-2253 and DRE-2252
+#     closed while their reports said "NOT demonstrated" in those words.
+#
+# The false closes cascade: epic DRE-2169 closed via --close-epics because all
+# its children (falsely) read Done. Guarding the CHILD transitions fixes the
+# epic cascade with no change to the epic logic.
+#
+# BOTH auto-Done paths — linear-sync's `card-done` and reconcile's merged-PR
+# backstop — consult this one function, so the close cannot sneak back in
+# through either path without deleting the guard itself. The linear-sync.yml
+# header's promise ("hand-named branches auto-Done NOTHING: the operator closes
+# those cards by hand") was defeated whenever an agent branch pointed at an
+# operator card; this restores it for the card classes where it matters.
+
+NO_CODE_LABEL = "no-code"  # standards/card-quality.md: operator-work cards
+
+# Title must START with `DEMO:` (case-insensitive, leading whitespace allowed).
+# Anchored on purpose: a card that merely MENTIONS demos — in its body or
+# mid-title ("Update demo docs", "Record the demo: phase 3") — is an ordinary
+# code card and still auto-closes.
+_DEMO_TITLE_RE = re.compile(r"^\s*demo:", re.IGNORECASE)
+
+# Shared marker for the "merged but deliberately left open" card comment:
+# card-done posts it at merge time; reconcile's backstop greps for it
+# (count_comments) so the note lands exactly once however many sweeps pass
+# while the operator finishes the live work.
+MERGED_NOT_CLOSED_MARKER = "Merged — card deliberately left open"
+
+
+def auto_done_skip_reason(title: str, labels: list[str]) -> str | None:
+    """Why a merged PR must NOT auto-Done this card, or None to proceed.
+
+    Pure (no I/O) so tests pin it directly. Takes the card's TITLE and label
+    names only — never the PR title/body (prose is not provenance, DRE-2027)
+    and never the card body (a body that mentions demos is not a demo card).
+    """
+    if NO_CODE_LABEL in [l.lower() for l in labels]:
+        return (
+            f"this card carries the '{NO_CODE_LABEL}' label — its deliverable "
+            "is live operator work (a deploy, a migration, a secret), which a "
+            "merged runbook PR does not perform"
+        )
+    if _DEMO_TITLE_RE.match(title or ""):
+        return (
+            "this card is 'DEMO:'-titled — it closes only on evidence (every "
+            "end-state claim in its demo report a PASS), which a merge event "
+            "cannot attest"
+        )
+    return None
+
+
+def merged_not_closed_comment(pr_url: str, reason: str) -> str:
+    """The card comment for a merge that deliberately does NOT close the card:
+    the merge stays visible on the card without the state lying."""
+    return (
+        f"🔒 {MERGED_NOT_CLOSED_MARKER}: {pr_url}\n\n"
+        f"This PR merged, but {reason}. This card is operator-closed / "
+        "closes-on-evidence and was deliberately NOT auto-closed — close it "
+        "by hand when the real work is done."
+    )
+
+
+def cmd_card_done(identifier: str, pr_url: str) -> None:
+    """linear-sync's merge→Done seam, guard included (see block comment above).
+
+    Ordinary code cards: → Done + "✅ Merged" comment, byte-identical to the
+    old inline `state`/`comment` pair. `no-code` / `DEMO:` cards: comment the
+    merge, leave the state alone, and say so LOUDLY in the job log.
+    """
+    issue = get_issue(identifier)
+    reason = auto_done_skip_reason(issue.get("title") or "", _label_names(issue))
+    if reason is not None:
+        banner = "=" * 72
+        print(banner)
+        print(f"AUTO-DONE SKIPPED for {identifier}: {reason}.")
+        print(
+            "The merge was commented on the card; its state is untouched. "
+            "(Six false closes in portico: DRE-2242 x2, DRE-2241, DRE-2218, "
+            "DRE-2253, DRE-2252.)"
+        )
+        print(banner)
+        cmd_comment(identifier, merged_not_closed_comment(pr_url, reason))
+        return
+    cmd_state(identifier, "Done")
+    cmd_comment(identifier, f"✅ Merged: {pr_url}")
 
 
 # --- Sub-issue body / dependency guards (DRE-1715) ---------------------------
@@ -676,6 +785,7 @@ if __name__ == "__main__":
             "state": cmd_state,
             "advance": cmd_advance,
             "comment": cmd_comment,
+            "card-done": cmd_card_done,
             "set-description": set_description,
             "subissue": cmd_subissue,
             "create": cmd_create,
