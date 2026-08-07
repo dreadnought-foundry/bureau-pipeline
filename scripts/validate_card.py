@@ -158,6 +158,13 @@ _SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "config" / "repo-map.j
 # never hard-fails CI on a transient read error — it degrades to the last-known
 # slug set. The divergence test pins this literal to the on-disk snapshot, so it
 # can't silently rot.
+#
+# GENERATED REGION: do not hand-edit the literal. Edit config/repo-map.json,
+# then run `python3 scripts/sync_fallback_map.py` to regenerate it (`--check`
+# in CI fails if the two drift). The marker phrases below are the same ones
+# agent-bureau's scripts/sync_repo_mirrors.py splices on, so its onboarding
+# tool can update this region cross-repo.
+# --- BEGIN generated repo mirror (from config/repo-map.json) ---
 _FALLBACK_REPO_MAP = {
     "atlas": "EveryBite/atlas",
     "deltasolv": "DeltaSolv/deltasolv",
@@ -167,6 +174,7 @@ _FALLBACK_REPO_MAP = {
     "bureau-pipeline": "dreadnought-foundry/bureau-pipeline",
     "portico": "dreadnought-foundry/portico",
 }
+# --- END generated repo mirror ---
 
 
 def _load_repo_map() -> dict[str, str]:

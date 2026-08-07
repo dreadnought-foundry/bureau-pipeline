@@ -134,8 +134,9 @@ class RepoMapSnapshotTest(unittest.TestCase):
             validate_card._FALLBACK_REPO_MAP,
             _snapshot(),
             "validate_card._FALLBACK_REPO_MAP has drifted from config/repo-map.json — "
-            "update the fallback literal to match the snapshot (they are the gate's "
-            "two copies of the routing map and must agree).",
+            "run `python3 scripts/sync_fallback_map.py` to regenerate the fallback "
+            "literal from the snapshot (they are the gate's two copies of the "
+            "routing map and must agree).",
         )
 
     def test_loaded_map_equals_snapshot_when_file_present(self):
