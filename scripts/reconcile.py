@@ -77,6 +77,9 @@ from datetime import UTC, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
+# DRE-2291: ONE source for the head-bound review check's name — the sweep
+# must read the same record qa-review.yml writes.
+from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
 import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 
 REPO = os.environ["REPO"]
@@ -1688,9 +1691,9 @@ STALE_VERDICT_TAG = "stale-verdict-watchdog"
 _REVIEW_CRASH_CONCLUSIONS = ("failure", "timed_out", "cancelled")
 
 
-def _review_checks_at_head(sha: str) -> list[tuple[str, str]] | None:
-    """[(status, conclusion)] of the review-named check runs at `sha`, or
-    None when the read fails (DRE-2034: a 403 parsed as emptiness is not
+def _review_checks_at_head(sha: str) -> list[tuple[str, ...]] | None:
+    """[(status, conclusion, name)] of the review-named check runs at `sha`,
+    or None when the read fails (DRE-2034: a 403 parsed as emptiness is not
     "no crashed review" — act on nothing, never on fabricated data).
 
     Name-based (endswith "review"), like fix_approved_but_red's exclusion
@@ -1698,16 +1701,40 @@ def _review_checks_at_head(sha: str) -> list[tuple[str, str]] | None:
     because the blast radius is tiny and safe: a PR-authored check named
     "…review" can at worst earn one bounded review dispatch and a comment —
     never a merge (the gate verifies origin itself) and never a build agent.
+
+    The name rides along since DRE-2291 so callers can prefer the
+    head-bound record over the run's own event-attributed check.
     """
     out = gh("api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
              '[.check_runs[] | select(.name | endswith("review")) '
-             '| [.status, (.conclusion // "")]]')
+             '| [.status, (.conclusion // ""), .name]]')
     if not out:
         return None
     try:
-        return [(str(s), str(c)) for s, c in json.loads(out)]
+        rows = json.loads(out)
+        return [tuple(str(f) for f in row) for row in rows]
     except (ValueError, TypeError):
         return None
+
+
+def _authoritative_review_checks(
+    checks: list[tuple[str, ...]],
+) -> list[tuple[str, ...]]:
+    """The checks that actually speak for this head (DRE-2291).
+
+    qa-review's own `call / review` is created against the RUN's head, so a
+    workflow_dispatch re-review never touches it: the superseded
+    pull_request run's CANCELLED check sits on the commit forever, saying
+    the review died long after a dispatched one succeeded. The head-bound
+    check qa-review now publishes is written against the reviewed sha on
+    every trigger, so where it exists it is the review's outcome and the
+    run-attributed checks are stale noise.
+
+    Falls back to everything when no head-bound check is present, so every
+    head reviewed before DRE-2291 shipped behaves exactly as before.
+    """
+    bound = [c for c in checks if len(c) > 2 and c[2] == HEAD_REVIEW_CHECK_NAME]
+    return bound or list(checks)
 
 
 def _post_rereview_receipt(pr: dict) -> None:
@@ -1871,14 +1898,18 @@ def recover_crashed_reviews() -> None:
             checks = _review_checks_at_head(sha)
             if checks is None:
                 continue  # unreadable — never act on fabricated data (DRE-2034)
-            if any(status != "completed" for status, _ in checks):
+            # DRE-2291: where the head carries the review's own bound check,
+            # that IS the outcome — a run-attributed check the dispatch
+            # cancelled must not keep speaking for this commit.
+            checks = _authoritative_review_checks(checks)
+            if any(status != "completed" for status, *_ in checks):
                 print(
                     f"crashed-review: PR #{pr['number']} head {sha[:8]} has a "
                     "review still running — leaving alone (dispatching would "
                     "cancel it)"
                 )
                 continue
-            if any(c in _REVIEW_CRASH_CONCLUSIONS for _, c in checks):
+            if any(c in _REVIEW_CRASH_CONCLUSIONS for _, c, *_rest in checks):
                 if in_flight is None:
                     in_flight = _review_dispatch_in_flight()
                 if in_flight:
