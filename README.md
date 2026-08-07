@@ -35,9 +35,15 @@ There is **no propose-first hard stop**. An earlier design (a read-only
 `propose.yml` pass, a `proposed` marker, and relay propose-vs-execute routing)
 was built, then **shelved and retired** — it stalled overnight automation and
 asked the CEO to approve technical approaches he can't evaluate. The
-`propose.yml` workflow and its marker are gone; the relay routing was canceled
-and never deployed. Only the `Plan Review` lane and the console "needs you"
-surfacing are reused.
+`propose.yml` workflow and its marker are gone. The relay routing WAS
+deployed, though, and ran for about six weeks: it dispatched every ordinary
+standalone card as `agent-propose`, an event type no workflow in the fleet
+consumed, so those cards were logged as handled and silently never built
+(DRE-1980; removed by agent-bureau PR #2008). The `fast-track` label was the
+hand-workaround for that bug — the way to route a card past the dead gate —
+not a convention: standalone cards do not need it, and nobody should re-add
+it. Only the `Plan Review` lane and the console "needs you" surfacing are
+reused from the propose design.
 
 ## How a product repo consumes this
 
