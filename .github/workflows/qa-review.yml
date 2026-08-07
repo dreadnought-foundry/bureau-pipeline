@@ -33,8 +33,17 @@ on:
       # installation with its own independent quota, so card dispatch and code
       # review no longer compete. (qa-bot is also a non-author of agent PRs, so
       # its formal APPROVE review in sync_review_state.py now succeeds instead
-      # of being rejected as a self-approval.) These are required here now; the
-      # dispatch-bot secrets are no longer used by this workflow.
+      # of being rejected as a self-approval.)
+      #
+      # The dispatch-bot secrets came back for ONE call (DRE-2291): the
+      # head-bound review check. The qa-bot App carries checks:READ
+      # (`GET /apps/agent-bureau-qa-bot`, verified 2026-08-07), so its token
+      # physically cannot create a check run; the dispatch App carries
+      # checks:write. That is one API write per review, not the critic's
+      # review workload, so the DRE-1921 quota split stands. They remain
+      # optional here so a repo that has not provisioned them still passes
+      # required-secret validation and still posts its verdict comment — the
+      # mint step then fails loudly rather than failing silently.
       BUREAU_APP_ID:
         required: false
       BUREAU_APP_PRIVATE_KEY:
@@ -684,6 +693,58 @@ jobs:
           if [ "$REAL" = "true" ] && head -1 /tmp/qa-verdict.md | grep -q "VERDICT: APPROVE"; then
             python3 .bureau-pipeline/scripts/sync_review_state.py "${{ github.repository }}" "$PR" || true
           fi
+
+      # ── Head-bound review check (DRE-2291) ────────────────────────────────
+      # GitHub attributes a workflow_dispatch run to the DEFAULT BRANCH, so
+      # this job's own `call / review` check run lands on main's tip and
+      # NOTHING lands on the pull request. The manual re-run is the
+      # documented remedy and the one reconcile itself dispatches (DRE-2047,
+      # DRE-2282) — it posts a fresh verdict comment while the PR head still
+      # carries the dead check from the run the dispatch cancelled
+      # (`concurrency: cancel-in-progress` in every stub). Verified on
+      # agent-bureau PR #2007: three dispatched reviews wrote their check
+      # onto commit 87eb0999 (main) while head 14934d98 stayed CANCELLED
+      # under a genuine APPROVE.
+      #
+      # Publishing our own check run, explicitly bound to the sha Resolve PR
+      # captured, makes the outcome land on the PR whatever fired the run —
+      # and makes the self-inflicted cancellation harmless: the superseding
+      # review overwrites the same record, and the check's summary names the
+      # run and trigger that produced it, so it stays detectable too.
+      #
+      # The conclusion states the VERDICT, not the job's liveness:
+      # `call / review` goes GREEN on REQUEST_CHANGES (it only means the job
+      # finished), which is exactly the false green that got two
+      # REQUEST_CHANGES PRs hand-merged (DRE-1825 → DRE-1895).
+      #
+      # NOT a merge credential: merge_gate.py's review condition stays the
+      # qa-bot verdict COMMENT bound to the head (DRE-1990), and it excludes
+      # review-origin checks by verified suite origin (DRE-1994). This check
+      # can only ever hold a merge, never grant one.
+      - name: Mint dispatch-bot token (checks:write — qa-bot has checks:read)
+        id: checks_app
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - name: Publish review check on the reviewed head
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
+        env:
+          GH_TOKEN: ${{ steps.checks_app.outputs.token }}
+          # Same expression the verdict step uses — one source for "did a
+          # genuine review run", so the comment and the check can never
+          # disagree about it.
+          REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+        run: |
+          python3 .bureau-pipeline/scripts/publish_review_check.py \
+            --repo "${{ github.repository }}" \
+            --sha "${{ steps.pr.outputs.sha }}" \
+            --verdict-file /tmp/qa-verdict.md \
+            --real "$REAL" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --event "${{ github.event_name }}"
 
       # Fail the job loudly AFTER the neutral comment is posted, so the
       # infra failure is visibly red and the medic picks it up. A genuine
