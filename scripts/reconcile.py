@@ -22,6 +22,14 @@ human-parked card suppresses every repair without raising a hand (DRE-2180
 sat invisible five hours; portico PR #21 thirteen days). Alert-only: never
 dispatches, so the DRE-2024 fix-loop cannot come back.
 
+Crashed-review recovery (DRE-2282): an open agent PR whose review CRASHED
+(FAILURE review check, no verdict at the head — the critic fails its job on
+purpose and the medic correctly skips it, DRE-1921) gets ONE re-dispatch of
+the review stub per head sha, receipted like the dependabot retries
+(DRE-2071); a head that caps out, or one whose only verdict binds an older
+sha with nothing running, is reported once on its card in plain English.
+Never merges, never starts a build agent.
+
 Stranded-card watchdog (DRE-1993): every card/epic in Planning / Todo /
 In Progress whose repo has no route in the routing snapshot, or (this repo's
 cards) with no run receipt after 30 minutes, gets ONE plain-English comment
@@ -1479,13 +1487,14 @@ def is_dependabot_pr(pr: dict) -> bool:
     return login.removeprefix("app/").removesuffix("[bot]") == "dependabot"
 
 
-def dependabot_receipt_count(pr: dict) -> int:
-    """How many WORKER-BOT receipts cover the PR's current head — the
-    per-sha dispatch count the DEPENDABOT_RECEIPT_CAP bounds (DRE-2071).
-    Forged receipts by other authors are invisible (DRE-1998 discipline):
-    a forger can neither suppress a review nor exhaust the retry budget —
-    the worst achieved is one extra review. Receipts bound to a superseded
-    sha don't count either: a rebase re-arms a fresh budget."""
+def _worker_receipt_count(pr: dict, tag: str) -> int:
+    """How many WORKER-BOT receipts carrying `tag` cover the PR's current
+    head — the per-sha dispatch count the receipt caps bound (DRE-2071,
+    generalised for DRE-2282). Forged receipts by other authors are
+    invisible (DRE-1998 discipline): a forger can neither suppress a review
+    nor exhaust the retry budget — the worst achieved is one extra review.
+    Receipts bound to a superseded sha don't count either: a new head
+    re-arms a fresh budget."""
     sha = pr.get("headRefOid") or ""
     if not sha:
         return 0
@@ -1493,9 +1502,15 @@ def dependabot_receipt_count(pr: dict) -> int:
         1
         for c in pr.get("comments", [])
         if is_worker_bot_comment(c)
-        and DEPENDABOT_DISPATCH_TAG in (c.get("body") or "")
+        and tag in (c.get("body") or "")
         and sha in (c.get("body") or "")
     )
+
+
+def dependabot_receipt_count(pr: dict) -> int:
+    """The DEPENDABOT_RECEIPT_CAP's per-sha count (DRE-2071) — see
+    _worker_receipt_count for the counting discipline."""
+    return _worker_receipt_count(pr, DEPENDABOT_DISPATCH_TAG)
 
 
 def _review_dispatch_in_flight() -> bool:
@@ -1635,6 +1650,282 @@ def review_dependabot_prs() -> None:
             f"dependabot: {deferred} eligible PR(s) deferred past the "
             f"per-sweep dispatch cap ({DEPENDABOT_DISPATCH_CAP}) — the next "
             f"sweep picks them up oldest-first (DRE-2049)"
+        )
+
+
+# Crashed-review recovery for agent PRs (DRE-2282). A PR whose critic
+# CRASHED — as opposed to returning a verdict — has green CI, a FAILURE
+# review check, and no verdict: nothing anywhere goes red for a human, and
+# two CORRECT behaviours combine into a permanent stall. The critic retries
+# twice internally then deliberately fails its job "for medic visibility";
+# the medic then skips a crashed critic ON PURPOSE (the DRE-1921 fix for
+# the medic↔critic infra-crash loop that burned the App quota on
+# 2026-06-28 — that skip STAYS). Live incident 2026-08-07: portico's
+# critic token stopped authenticating and EIGHT PRs (#128, #141, #144,
+# #145, #149, #150, #151, #152) sat green-CI/no-verdict until a human
+# hand-dispatched qa-review.yml for each. recover_crashed_reviews() below
+# automates exactly that hand remedy, bounded per head sha the same way
+# DEPENDABOT_RECEIPT_CAP bounds dependabot retries (DRE-2071): the crashed
+# review earns ONE re-dispatch, a new commit re-arms, and a head that caps
+# out is REPORTED in the flag_no_checks_prs shape instead of looped on.
+CRASHED_REVIEW_DISPATCH_TAG = "crashed-review-redispatch"
+#: Automatic re-dispatches per head sha. ONE on purpose: the original
+#: review already ran and crashed once (often twice, counting the critic's
+#: internal retries), so a second sweep dispatch failing too is an outage,
+#: not a flake — escalate, never loop (the DRE-1921 quota lesson).
+CRASHED_REVIEW_RETRY_CAP = 1
+#: Per-sweep dispatch pacing (the DRE-2049 lesson): the 2026-08-07 outage
+#: crashed eight reviews at once, and every re-dispatch is a full critic
+#: run — an unpaced sweep would burst-drain the LLM quota. Oldest PR
+#: first; the tail waits for the next ~15-min sweep.
+CRASHED_REVIEW_SWEEP_CAP = 3
+REVIEWER_DOWN_TAG = "reviewer-down"
+STALE_VERDICT_TAG = "stale-verdict-watchdog"
+#: Review-check conclusions that mean "concluded without ever posting a
+#: verdict" — the same set fix_approved_but_red treats as failed. A green
+#: review always posts its verdict before its job completes (DRE-1994), so
+#: any of these with no bound verdict is the crash case.
+_REVIEW_CRASH_CONCLUSIONS = ("failure", "timed_out", "cancelled")
+
+
+def _review_checks_at_head(sha: str) -> list[tuple[str, str]] | None:
+    """[(status, conclusion)] of the review-named check runs at `sha`, or
+    None when the read fails (DRE-2034: a 403 parsed as emptiness is not
+    "no crashed review" — act on nothing, never on fabricated data).
+
+    Name-based (endswith "review"), like fix_approved_but_red's exclusion
+    on this same surface. DRE-1994's forged-name caveat is accepted here
+    because the blast radius is tiny and safe: a PR-authored check named
+    "…review" can at worst earn one bounded review dispatch and a comment —
+    never a merge (the gate verifies origin itself) and never a build agent.
+    """
+    out = gh("api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
+             '[.check_runs[] | select(.name | endswith("review")) '
+             '| [.status, (.conclusion // "")]]')
+    if not out:
+        return None
+    try:
+        return [(str(s), str(c)) for s, c in json.loads(out)]
+    except (ValueError, TypeError):
+        return None
+
+
+def _post_rereview_receipt(pr: dict) -> None:
+    """Post the per-sha re-dispatch receipt on the PR (as the worker bot —
+    the sweep's default GH_TOKEN). A failed post is recorded, not raised:
+    the dispatch DID happen; the next sweep merely re-dispatches one extra
+    review, and the red run tells medic why."""
+    body = (
+        f"🔁 {CRASHED_REVIEW_DISPATCH_TAG} @{pr['headRefOid']}: the review "
+        "run for this head crashed (an infra failure — it never produced a "
+        "verdict, so this is NOT a code rejection), and the reconcile sweep "
+        f"re-dispatched {review_workflow()} (DRE-2282). At most "
+        f"{CRASHED_REVIEW_RETRY_CAP} automatic re-dispatch per head sha — a "
+        "new commit re-arms a fresh budget; past the cap the stall is "
+        "reported on the Linear card instead of retried."
+    )
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", "pr", "comment", str(pr["number"]), "--repo", REPO, "--body", body],
+        capture_output=True, text=True, check=False,
+    )
+    if p.returncode != 0:
+        err = (
+            f"re-review receipt on PR #{pr['number']} failed "
+            f"rc={p.returncode}: {p.stderr.strip()[:400]}"
+        )
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+
+
+def _report_reviewer_down(pr: dict, receipts: int) -> None:
+    """Cap spent = a real outage, not a flake: ONE plain-English report on
+    the linked card per head sha (the flag_no_checks_prs shape — the
+    TAG + "PR #N @sha:" marker is the idempotency key). Report-only: no
+    hold label, no state move, and above all no dispatch — the budget is
+    spent and looping past it is the DRE-1921 quota burn."""
+    card = branch_card(pr["headRefName"])
+    print(
+        f"ERROR: crashed-review: PR #{pr['number']} head "
+        f"{pr['headRefOid'][:8]} — the review crashed and {receipts} "
+        f"re-dispatch(es) crashed too (cap {CRASHED_REVIEW_RETRY_CAP}); "
+        "the reviewer is down and a human must fix it",
+        file=sys.stderr,
+    )
+    if not card:
+        print(
+            f"WARNING: crashed-review: PR #{pr['number']} "
+            f"({pr['headRefName']}) carries no card id — nowhere to report"
+        )
+        return
+    marker = f"{REVIEWER_DOWN_TAG} PR #{pr['number']} @{pr['headRefOid']}:"
+    if any(marker in b for b in linear_ops.comment_bodies(card)):
+        return  # reported once for this head already — idempotent forever
+    linear_ops.cmd_comment(card, (
+        f"🚨 {marker} the adversarial reviewer is DOWN for open PR "
+        f"#{pr['number']} (branch {pr['headRefName']}). Its review run "
+        f"crashed on this commit and the sweep's {receipts} automatic "
+        "re-dispatch(es) crashed too — an infrastructure outage, NOT a "
+        "code rejection of the PR. CI is green but no verdict can post, "
+        "so the merge gate will never fire on this commit. A human must "
+        "fix the reviewer (check the critic's auth/token and its run "
+        "logs), then push a new commit to the PR or dispatch "
+        f"{review_workflow()} by hand — either re-arms the review."
+    ))
+    print(
+        f"crashed-review: PR #{pr['number']} reviewer-down reported on {card}"
+    )
+
+
+def _report_stale_verdict(pr: dict) -> None:
+    """A PR whose newest verdict binds an OLDER sha than its head, with no
+    review running or dispatched, is invisible the same way a crashed one
+    is: the merge gate rightly ignores the stale verdict (DRE-1990), no
+    check is red, and nothing re-reviews on its own (#128 carried an
+    APPROVE two commits behind its head through the 2026-08-07 outage).
+    ONE report per head, same marker discipline as _report_reviewer_down."""
+    card = branch_card(pr["headRefName"])
+    if not card:
+        print(
+            f"WARNING: stale-verdict: PR #{pr['number']} "
+            f"({pr['headRefName']}) carries no card id — nowhere to report"
+        )
+        return
+    sha = pr["headRefOid"]
+    marker = f"{STALE_VERDICT_TAG} PR #{pr['number']} @{sha}:"
+    if any(marker in b for b in linear_ops.comment_bodies(card)):
+        return  # reported once for this head already — idempotent forever
+    bodies = critic_comment_bodies(pr)
+    first_line = bodies[-1].splitlines()[0] if bodies and bodies[-1] else ""
+    m = re.search(r"@([0-9a-f]{40})", first_line)
+    old = f"an older commit ({m.group(1)[:8]})" if m else "an older commit"
+    linear_ops.cmd_comment(card, (
+        f"🚨 {marker} open PR #{pr['number']} (branch {pr['headRefName']}) "
+        f"has its newest review verdict bound to {old}, not to the current "
+        f"head ({sha[:8]}), and no review is running or queued. The merge "
+        "gate rightly ignores stale verdicts, so nothing will re-review or "
+        "merge this PR on its own — a fresh review of the current commit "
+        "is needed. This is NOT a code rejection."
+    ))
+    print(f"stale-verdict: PR #{pr['number']} reported on {card}")
+
+
+def recover_crashed_reviews() -> None:
+    """DRE-2282 backstop: un-park agent PRs whose critic CRASHED, bounded.
+
+    For every open, non-draft, non-DIRTY agent/* PR with no verdict bound
+    to its current head (has_verdict, DRE-1990):
+
+      * review check still queued/in_progress at the head, or a
+        workflow_dispatch review run in flight anywhere → LEAVE ALONE.
+        The review stub is cancel-in-progress per PR, so dispatching over
+        a live review would cancel it and manufacture the very crash being
+        recovered (the DRE-2032 watchdog-kills-its-patient class);
+        _review_dispatch_in_flight is deliberately repo-wide and
+        fail-closed, exactly as on the dependabot path.
+      * crashed review check (completed failure/timed_out/cancelled) →
+        ONE re-dispatch of the review stub per head sha, receipted by a
+        worker-bot PR comment (CRASHED_REVIEW_RETRY_CAP, the
+        DEPENDABOT_RECEIPT_CAP shape — DRE-2071). A new commit changes the
+        sha and re-arms the budget. The cap is per HEAD, never per sweep:
+        the count lives in the sha-bound receipts, so repeated sweeps can
+        never accumulate dispatches the way the DRE-1921 loop did.
+      * cap spent → the outage is REPORTED, once per head, on the linked
+        card in plain English (_report_reviewer_down) — never looped on.
+      * no crashed check but the newest verdict binds an older sha →
+        reported once per head (_report_stale_verdict).
+
+    Dispatches are paced per sweep (CRASHED_REVIEW_SWEEP_CAP, oldest PR
+    first — the DRE-2049 burst lesson) and the deferred tail is logged,
+    never silently dropped. DIRTY PRs belong to unstick_conflicts; a PR
+    with unreadable check runs is skipped (DRE-2034). This path never
+    merges, never fires repository_dispatch, and never dispatches a fix or
+    build agent — the only workflow it may start is the review stub, i.e.
+    the same hand remedy the 2026-08-07 outage needed eight times over.
+    The medic's deliberate skip of crashed critics (DRE-1921) is untouched.
+
+    A backstop must never take the sweep down with it: per-PR failures are
+    recorded on the fail-loudly rail and the sweep continues (the DRE-2035
+    isolation discipline)."""
+    try:
+        prs = json.loads(gh(
+            "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+            "--json", "number,headRefName,headRefOid,mergeStateStatus,isDraft,comments",
+        ) or "[]")
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"crashed-review recovery: PR listing failed: {e}")
+        print(f"ERROR: crashed-review recovery: PR listing failed: {e}", file=sys.stderr)
+        return
+    in_flight = None  # lazy — one workflow_dispatch listing per sweep, only if needed
+    eligible = []  # crashed heads with retry budget, dispatched paced below
+    for pr in prs:
+        try:
+            if not (pr.get("headRefName") or "").startswith("agent/") or pr.get("isDraft"):
+                continue
+            if pr.get("mergeStateStatus") == "DIRTY":
+                continue  # unstick_conflicts owns conflicted PRs; the fix re-arms
+            sha = pr.get("headRefOid") or ""
+            if not sha:
+                continue
+            if has_verdict(pr):
+                continue  # a current-head verdict settles the PR — healthy
+            checks = _review_checks_at_head(sha)
+            if checks is None:
+                continue  # unreadable — never act on fabricated data (DRE-2034)
+            if any(status != "completed" for status, _ in checks):
+                print(
+                    f"crashed-review: PR #{pr['number']} head {sha[:8]} has a "
+                    "review still running — leaving alone (dispatching would "
+                    "cancel it)"
+                )
+                continue
+            if any(c in _REVIEW_CRASH_CONCLUSIONS for _, c in checks):
+                if in_flight is None:
+                    in_flight = _review_dispatch_in_flight()
+                if in_flight:
+                    print(
+                        f"crashed-review: PR #{pr['number']} head {sha[:8]} — "
+                        "a workflow_dispatch review run is still in flight; "
+                        "waiting, never double-dispatching"
+                    )
+                    continue
+                receipts = _worker_receipt_count(pr, CRASHED_REVIEW_DISPATCH_TAG)
+                if receipts >= CRASHED_REVIEW_RETRY_CAP:
+                    _report_reviewer_down(pr, receipts)
+                    continue
+                eligible.append(pr)
+                continue
+            # No crashed review at this head and nothing in flight at it:
+            # a verdict bound to a SUPERSEDED sha is the remaining
+            # invisible stall (#128's shape). Report-only.
+            if critic_comment_bodies(pr):
+                if in_flight is None:
+                    in_flight = _review_dispatch_in_flight()
+                if in_flight:
+                    continue  # a live dispatch may be posting the fresh verdict
+                _report_stale_verdict(pr)
+        except Exception as e:  # noqa: BLE001 — isolate the one PR, sweep the rest
+            _write_failures.append(
+                f"crashed-review recovery on PR #{pr.get('number')}: {e}"
+            )
+            print(
+                f"ERROR: crashed-review recovery on PR #{pr.get('number')}: {e}",
+                file=sys.stderr,
+            )
+    eligible.sort(key=lambda p: p["number"])  # oldest first — drain in arrival order
+    for pr in eligible[:CRASHED_REVIEW_SWEEP_CAP]:
+        print(
+            f"crashed-review: PR #{pr['number']} head {pr['headRefOid'][:8]} — "
+            f"review crashed with no verdict; re-dispatching {review_workflow()} "
+            f"(1/{CRASHED_REVIEW_RETRY_CAP} for this head)"
+        )
+        if _nudge(review_workflow(), pr["number"]):
+            _post_rereview_receipt(pr)
+    deferred = len(eligible) - CRASHED_REVIEW_SWEEP_CAP
+    if deferred > 0:
+        print(
+            f"crashed-review: {deferred} eligible PR(s) deferred past the "
+            f"per-sweep dispatch cap ({CRASHED_REVIEW_SWEEP_CAP}) — the next "
+            "sweep picks them up oldest-first (DRE-2049)"
         )
 
 
@@ -1910,6 +2201,7 @@ def main(
             fix_approved_but_red,
             retry_dead_fix_runs,
             review_dependabot_prs,
+            recover_crashed_reviews,
             check_dependabot_capacity,
         ):
             try:
