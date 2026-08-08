@@ -24,9 +24,15 @@ works regardless of branch protection):
     `wait`, fail-closed: never merge past an unverifiable base, and never
     mutate the branch on unverifiable data either.
 
-Condition 0 is evaluated FIRST — the same position the old shell BEHIND
-fast-path held (before any verdict logic): green checks and a bound
-APPROVE on a stale branch prove nothing about the merged result.
+Condition 0 was originally evaluated FIRST (the old shell fast-path's
+position). DRE-2274 (incident 2026-08-07) moved it LAST: evaluating
+currency before the other conditions meant ANY gate wake on ANY
+behind-main PR pushed a merge-main into the branch — cancelling in-flight
+critic runs via the concurrency group and granting red-CI PRs free
+updates. `update` now means exactly "merge-ready except freshness". The
+DRE-1924 invariant is untouched: green checks and a bound APPROVE on a
+stale branch still prove nothing about the merged result, and a stale
+head is still never merged — only WHEN the gate pushes the update moved.
 """
 
 import json
@@ -105,13 +111,17 @@ class CurrencyDecisionTest(unittest.TestCase):
                              f"status={status!r}: {decision.reason}")
             self.assertIn("currency", decision.reason)
 
-    def test_staleness_evaluated_before_checks_and_verdicts(self):
-        """Condition 0 holds the old shell fast-path's position: it fires
-        before CI/verdict evaluation — a stale branch is updated even while
-        its (meaningless) checks are red or its verdict is missing, so CI
-        runs once on the merged result instead of twice."""
-        self.assertEqual(decide("diverged", checks=RED_CI).action, "update")
-        self.assertEqual(decide("diverged", comments=[]).action, "update")
+    def test_staleness_no_longer_preempts_checks_and_verdicts(self):
+        """DRE-2274: the OLD expectation here (stale + red CI → update,
+        stale + no verdict → update) was precisely the incident bug — an
+        eager update on every wake pushed merge-main over in-flight critic
+        runs and gave red-CI PRs free updates (2026-08-07: 4 pushes on one
+        PR in 15 minutes, 9 of 10 critic runs dead). Currency is now
+        evaluated LAST: a stale branch with red checks gets the checks
+        outcome (the fix loop), and a missing verdict gets the critic's
+        `wait` — an in-flight review is never invalidated by a gate push."""
+        self.assertEqual(decide("diverged", checks=RED_CI).action, "wait")
+        self.assertEqual(decide("diverged", comments=[]).action, "wait")
 
     def test_wait_on_unknown_currency_beats_green_and_approve(self):
         self.assertEqual(decide(None).action, "wait")
