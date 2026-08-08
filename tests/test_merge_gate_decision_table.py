@@ -559,5 +559,170 @@ def test_every_delta_row_names_its_sanction():
             ), f"[{row.id}] delta rationale names no sanctioned change"
 
 
+# ── DRE-2274: UPDATE-ON-DEMAND — currency is evaluated LAST ──────────────
+#
+# Incident 2026-08-07 (portico): currency ran SECOND (right after condition
+# D), so ANY gate evaluation of ANY behind-main PR immediately returned
+# `decision=update` and pushed a merge-main into the branch — even while the
+# PR's critic was mid-run (the push cancels it via the concurrency group)
+# and even while its CI was red. With 7 open PRs and 3 quick merges to main,
+# one PR took 4 pushes in 15 minutes, 9 of 10 critic runs were
+# cancelled/crashed, and the Claude account drained.
+#
+# The fix: `update` is returned ONLY when every other condition would allow
+# a merge — update means exactly "merge-ready except freshness". The
+# DRE-1924 invariant (never merge a behind-main head) and the fail-closed
+# compare (None → wait, checked before any merge) are untouched; only WHEN
+# the gate pushes the update changed.
+
+STALE_HEAD_2 = "cc33" * 10  # the head after a gate update-branch push
+
+# A genuine Dependabot semver-major commit (the machine-readable trailer
+# dependabot/fetch-metadata parses) — condition D's `human` input.
+DEPENDABOT_MAJOR_COMMIT = {
+    "sha": "c" * 40,
+    "commit": {"message": (
+        "Bump requests from 2.32.0 to 3.0.0\n\n---\n"
+        "updated-dependencies:\n- dependency-name: requests\n"
+        "  dependency-type: direct:production\n"
+        "  update-type: version-update:semver-major\n...\n"
+    )},
+}
+
+
+def decide_2274(compare, checks=None, comments=None, head_sha=HEAD, **kw):
+    """merge_gate.decide with the decision table's defaults (green CI,
+    APPROVE bound to HEAD) and an explicit compare status."""
+    return merge_gate.decide(
+        head_sha=head_sha,
+        qa_login=QA_LOGIN,
+        check_runs=list(GREEN_CI) if checks is None else checks,
+        comments=[CRITIC_OK] if comments is None else comments,
+        review_suites=REVIEW_SUITES,
+        compare_status=compare,
+        **kw,
+    )
+
+
+class UpdateOnDemandTest(unittest.TestCase):
+    """DRE-2274: the gate updates a stale branch only when the PR is
+    otherwise merge-ready — never as a side effect of merely being woken."""
+
+    def test_stale_with_no_verdict_waits_not_updates(self):
+        """An in-flight critic run is never cancelled by a gate push: a
+        stale branch whose head has NO bound verdict yet gets the critic
+        condition's `wait`, not `update` — the eager update-on-wake was
+        exactly what cancelled 9 of 10 critic runs on 2026-08-07 (the push
+        cancels the running review via the concurrency group)."""
+        d = decide_2274("behind", comments=[])
+        self.assertEqual(d.action, "wait", d.reason)
+        self.assertIn("no critic verdict yet", d.reason)
+
+    def test_stale_with_red_checks_gets_the_checks_outcome(self):
+        """A stale PR with red CI no longer gets a free update — it routes
+        to the existing fix loop via the checks condition's `wait`, instead
+        of the gate pushing merge-main into a branch whose own CI is
+        already failing (a 2026-08-07 herd member)."""
+        red = [run("unit"), run("lint", conclusion="failure")]
+        d = decide_2274("behind", checks=red)
+        self.assertEqual(d.action, "wait", d.reason)
+        self.assertIn("not green", d.reason)
+
+    def test_stale_with_pending_checks_gets_the_checks_outcome(self):
+        """Pending flavor of the same kill: a stale PR whose checks are
+        still running waits for THEM — the gate must not push an update
+        that would restart the very CI it is waiting on."""
+        pending = [run("unit"),
+                   run("deploy", status="in_progress", conclusion=None)]
+        d = decide_2274("diverged", checks=pending)
+        self.assertEqual(d.action, "wait", d.reason)
+        self.assertIn("not green", d.reason)
+
+    def test_stale_with_request_changes_holds_not_updates(self):
+        """A standing REQUEST_CHANGES on a stale branch is the fix loop's
+        signal — the gate holds; it never spends an update push on a PR the
+        critic has rejected."""
+        d = decide_2274(
+            "behind",
+            comments=[comment(QA_LOGIN, critic("REQUEST_CHANGES", HEAD))],
+        )
+        self.assertEqual(d.action, "hold", d.reason)
+        self.assertIn("not APPROVE", d.reason)
+
+    def test_stale_and_otherwise_merge_ready_is_the_one_update(self):
+        """THE one legitimate update: green checks, APPROVE bound to the
+        current head, verifier satisfied — everything but freshness passes,
+        so the branch is updated and CI re-runs on the merged result. The
+        reason line says the PR was otherwise merge-ready."""
+        d = decide_2274("behind")
+        self.assertEqual(d.action, "update", d.reason)
+        self.assertIn("otherwise merge-ready", d.reason)
+        self.assertIn("behind", d.reason)
+        # Verifier PASS at head is equally merge-ready.
+        d = decide_2274(
+            "diverged",
+            comments=[CRITIC_OK, comment(QA_LOGIN, verifier("PASS", HEAD))],
+        )
+        self.assertEqual(d.action, "update", d.reason)
+
+    def test_current_and_all_green_still_merges(self):
+        """Unchanged: a current branch with everything green merges."""
+        d = decide_2274("ahead")
+        self.assertEqual(d.action, "merge", d.reason)
+
+    def test_unverifiable_compare_still_waits_fail_closed(self):
+        """Unchanged fail-closed semantics: compare None (the workflow's
+        `{}` blip substitute) waits even with everything else green — the
+        currency check still stands BEFORE any merge can be returned."""
+        d = decide_2274(None)
+        self.assertEqual(d.action, "wait", d.reason)
+        self.assertIn("currency", d.reason)
+
+    def test_dependabot_major_stale_is_human_d_still_first(self):
+        """Condition D stays FIRST, untouched: a stale Dependabot major is
+        `human` — no update attempted, the gate posts the honest state and
+        does nothing (DRE-2039)."""
+        d = decide_2274(
+            "behind",
+            head_branch="dependabot/pip/requests-3.0.0",
+            pr_author="dependabot[bot]",
+            pr_commits=[DEPENDABOT_MAJOR_COMMIT],
+        )
+        self.assertEqual(d.action, "human", d.reason)
+
+    def test_herd_simulation_one_update_per_readiness_cycle(self):
+        """THE HERD (acceptance criterion): a PR is approved at head1, then
+        main moves 3 times in quick succession — compare goes stale and
+        stays stale across every gate wake. The old order produced one
+        update push PER WAKE (4 pushes on one PR in 15 minutes on
+        2026-08-07, each cancelling the critic run the previous push had
+        triggered). Now the sequence yields exactly ONE update: after the
+        gate's own push the verdict no longer binds the new head, so every
+        subsequent wake is `wait` (a fresh review is in flight) — N quick
+        merges to main cost at most one update push per readiness cycle."""
+        approve_h1 = [comment(QA_LOGIN, critic("APPROVE", HEAD))]
+
+        # Wake 1: main moved; the PR is otherwise merge-ready → the one
+        # legitimate update push. The gate's push makes head1 → head2.
+        actions = [decide_2274("behind", comments=approve_h1).action]
+
+        # Wakes 2 and 3: main moved twice more while the branch (now at
+        # head2) is still stale — but the APPROVE binds head1, so the PR is
+        # NOT merge-ready and the gate must wait for the fresh review it
+        # already triggered, never push over it.
+        for _ in range(2):
+            actions.append(
+                decide_2274(
+                    "behind", comments=approve_h1, head_sha=STALE_HEAD_2
+                ).action
+            )
+
+        self.assertEqual(
+            actions.count("update"), 1,
+            f"expected exactly ONE update across the herd, got {actions}",
+        )
+        self.assertEqual(actions, ["update", "wait", "wait"])
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
