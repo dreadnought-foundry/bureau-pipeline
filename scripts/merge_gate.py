@@ -8,7 +8,18 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The conditions (all must pass, evaluated in this order):
+The conditions (all must pass), evaluated D → 1 → 2 → 3 → 0 — branch
+currency LAST (DRE-2274). Currency originally ran right after D, which
+meant ANY gate evaluation of ANY behind-main PR immediately returned
+`decision=update` and pushed a merge-main into the branch — even while
+the PR's critic was mid-run (the push cancels it via the concurrency
+group) and even while its CI was red. On 2026-08-07 (portico), 7 open
+PRs and 3 quick merges to main produced 4 pushes on one PR in 15
+minutes, cancelled/crashed 9 of 10 critic runs, and drained the Claude
+account. `update` now means exactly: MERGE-READY EXCEPT FRESHNESS — it
+is returned only when every other condition would allow a merge and the
+branch is stale. The condition labels below keep their historical
+numbers; only the evaluation order moved.
 
 D. DEPENDABOT POLICY (DRE-2039) — applies ONLY to `dependabot/**`
    branches; agent/repair branches skip straight to condition 0 even if
@@ -45,8 +56,18 @@ D. DEPENDABOT POLICY (DRE-2039) — applies ONLY to `dependabot/**`
    untested shell `mergeStateStatus == BEHIND` fast-path, which GitHub
    only reports when branch protection's "require branches to be up to
    date" toggle is already on — the compare record works regardless.
-   Evaluated FIRST (the old fast-path's position): green checks and a
-   bound APPROVE on a stale branch prove nothing about the merged result.
+   Evaluated LAST (DRE-2274 — it originally held the old fast-path's
+   FIRST position): a green-but-stale branch still proves nothing about
+   the merged result and is still never merged (the DRE-1924 invariant
+   is untouched), but the gate spends an update push only on a PR that
+   is otherwise merge-ready. Eager updating on every wake was the
+   critic-strangling herd: a stale PR whose verdict is missing now gets
+   the critic condition's `wait` (an in-flight review is never
+   invalidated by a gate-initiated push), and a stale PR with red CI
+   gets the checks outcome (the fix loop), not a free update. The
+   fail-closed arm above is unchanged and still stands before any merge
+   can be returned: everything passes → unverifiable compare waits,
+   stale updates, current merges.
 
 1. CI — every check run on the PR's head SHA has completed green
    (conclusion success/skipped/neutral). The REVIEW workflow's own check
@@ -126,8 +147,9 @@ wait vs hold vs update vs human: `wait` means the gate expects a future
 event to change the answer (CI finishing, a fresh review of the current
 head); `hold` means an explicit negative verdict is standing
 (REQUEST_CHANGES, Verifier FAIL) and only a new verdict lifts it; `update`
-means the branch is stale and the workflow should update it from its base
-(CI then re-runs on the merged result); `human` means the gate will NEVER
+means the PR is otherwise MERGE-READY but the branch is stale (DRE-2274)
+and the workflow should update it from its base (CI then re-runs on the
+merged result); `human` means the gate will NEVER
 merge this PR (a dependabot major / unprovable semver level — DRE-2039):
 the workflow posts that state once and stops. None of the four merges.
 """
@@ -201,7 +223,7 @@ def _verdict_re(marker: str) -> re.Pattern:
 
 @dataclass
 class Decision:
-    action: str  # merge | wait | hold
+    action: str  # merge | update | wait | hold | human
     reason: str
     notes: list = field(default_factory=list)
 
@@ -313,15 +335,17 @@ def evaluate_currency(compare_status) -> Optional[Decision]:
     """Condition 0 (DRE-1924). None = head contains the base's tip,
     proceed. Stale → `update` (the workflow updates the branch; CI re-runs
     on the merged result). Unknown → `wait` — never merge past an
-    unverifiable base, and never mutate the branch on unverifiable data."""
+    unverifiable base, and never mutate the branch on unverifiable data.
+    Called LAST in decide() (DRE-2274), so `update` here is only ever
+    reached on a PR that is otherwise merge-ready."""
     if compare_status in CURRENT_STATUSES:
         return None
     if compare_status in STALE_STATUSES:
         return Decision(
             "update",
-            f"branch is {compare_status} relative to its base — its green "
-            "was earned against an older base; update the branch and "
-            "re-run CI on the merged result",
+            f"otherwise merge-ready, but the branch is {compare_status} "
+            "relative to its base — its green was earned against an older "
+            "base; update the branch and re-run CI on the merged result",
         )
     return Decision(
         "wait",
@@ -424,7 +448,7 @@ def decide(
     pr_author: str = "",
     pr_commits=(),
 ) -> Decision:
-    """The whole gate: conditions D → 0 → 1 → 2 → 3, first blocker wins.
+    """The whole gate: conditions D → 1 → 2 → 3 → 0, first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
     `compare_status` is the branch-currency record (DRE-1924); the default
@@ -433,12 +457,13 @@ def decide(
     the defaults reproduce the pre-DRE-2039 behavior exactly. Condition D
     runs FIRST: a major must come out `human` untouched — updating its
     branch or waiting on reviews would misreport a PR the gate will never
-    merge."""
+    merge. Condition 0 (currency) runs LAST (DRE-2274): `update` means
+    merge-ready except freshness, so an in-flight critic review is never
+    cancelled by a gate-initiated push and a red-CI PR routes to the fix
+    loop instead of collecting free updates. The final path once
+    everything else passes: unverifiable compare → wait; stale → update;
+    current → merge (DRE-1924's never-merge-a-stale-head holds)."""
     blocked = evaluate_dependabot(head_branch, pr_author, pr_commits)
-    if blocked:
-        return blocked
-
-    blocked = evaluate_currency(compare_status)
     if blocked:
         return blocked
 
@@ -453,6 +478,13 @@ def decide(
 
     verifier_body = latest_verdict_comment(comments, qa_login, VERIFIER_MARKER)
     blocked, note = evaluate_verifier(first_line(verifier_body), head_sha)
+    if blocked:
+        return blocked
+
+    # Everything else would allow a merge — only now is freshness judged
+    # (DRE-2274): unverifiable → wait (fail-closed, before any merge),
+    # stale → the one legitimate update, current → merge.
+    blocked = evaluate_currency(compare_status)
     if blocked:
         return blocked
 

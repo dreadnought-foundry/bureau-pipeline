@@ -10,6 +10,10 @@ PR:
   qa-bot — and the resulting synchronize event's actor must pass the
   review allowlists (DRE-2037): a fresh verdict binds the updated head
   and the PR merges. A lockout here is exactly the 2026-07-12 class.
+  Timeline note (DRE-2274): the update is ON-DEMAND — the gate pushes it
+  only once the PR is otherwise merge-ready (CI green + a bound APPROVE
+  on the pre-update head), never eagerly on the first wake, so the first
+  observable head move happens AFTER the initial critic verdict lands.
 
   NAMED leg (dependabot/harness-…-gate_paths-named): a worker-authored PR
   on a dependabot-NAMED branch, also behind base. Condition D (DRE-2039)
@@ -376,10 +380,14 @@ class GatePaths(framework.Scenario):
                 )
             return pr if (pr["head"]["sha"] != h1 or pr.get("merged")) else None
 
+        # DRE-2274: the update is on-demand — the gate pushes it only once
+        # the PR is otherwise merge-ready, i.e. AFTER the critic's bound
+        # APPROVE lands on h1 — so this first wait must budget for the
+        # verdict too, not just the gate's own latency.
         moved = wait_until(
             f"the gate updating the behind-base PR #{number}",
             poll_moved,
-            timeout=ctx.merge_timeout,
+            timeout=ctx.verdict_timeout + ctx.merge_timeout,
             interval=ctx.poll_interval,
             clock=ctx.clock,
             sleep=ctx.sleep,
