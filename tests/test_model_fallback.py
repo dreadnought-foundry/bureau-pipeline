@@ -497,5 +497,102 @@ class AgentsRegistryAlignment(unittest.TestCase):
             )
 
 
+class FableIsNotABuildModelTest(unittest.TestCase):
+    """Fable is excluded from the workhorse ladder by POLICY, not availability.
+
+    Live incident 2026-08-09: Anthropic enabled `claude-fable-5` on our
+    subscription, so the availability probe stopped 404ing it and the best-first
+    ladder promoted EVERY build agent in the fleet onto the priciest model (~2x
+    Opus per token) with no code change and no human decision. The subscription's
+    rolling usage window drained, agents began dying `is_error` mid-run, and
+    three good Portico cards were requeued and parked needs-human.
+
+    So the guard is not "skip Fable while it 404s" — that guard passed the whole
+    time. It is "a stronger model becoming AVAILABLE must never silently promote
+    itself onto the build path": the ladder starts at Opus and does not contain
+    Fable at all, and no build role can reach it even with every probe green.
+    Fable stays a KNOWN model (attribution) and is reserved for the advisory /
+    reviewer role the config-driven redesign will introduce.
+    """
+
+    BUILD_ROLES = ("engineer", "planner", "devops", "frontend")
+
+    def setUp(self):
+        mf.clear_availability_cache()
+
+    def tearDown(self):
+        mf.clear_availability_cache()
+
+    def test_ladder_starts_at_opus(self):
+        # The workhorse ladder is Opus-first: the model a healthy build agent
+        # gets when everything is up.
+        self.assertEqual(mf.LADDER[0], OPUS)
+
+    def test_ladder_does_not_contain_fable(self):
+        # Not "Fable last" — absent. Anything still in the ladder is one
+        # availability flip away from being selected.
+        self.assertNotIn(FABLE, mf.LADDER)
+
+    def test_no_build_role_selects_fable_when_everything_is_available(self):
+        # The exact incident condition: the probe reports EVERY model up.
+        for role in self.BUILD_ROLES:
+            with self.subTest(role=role):
+                mf.clear_availability_cache()
+                self.assertNotEqual(
+                    mf.select(role, probe=lambda m: True), FABLE,
+                    f"{role} selected Fable with every model available",
+                )
+
+    def test_every_build_role_selects_opus_when_everything_is_available(self):
+        for role in self.BUILD_ROLES:
+            with self.subTest(role=role):
+                mf.clear_availability_cache()
+                self.assertEqual(mf.select(role, probe=lambda m: True), OPUS)
+
+    def test_fable_is_not_reachable_at_any_availability(self):
+        # Whatever the probe says about the ladder's own models — all up, all
+        # down, only-Fable-up — the answer is never Fable, because Fable is not
+        # on the walk. The fall-through case matters most: "nothing available"
+        # must land on Sonnet, never escalate.
+        for avail in (
+            {OPUS: True, SONNET: True},
+            {OPUS: False, SONNET: True},
+            {OPUS: True, SONNET: False},
+            {OPUS: False, SONNET: False},
+        ):
+            with self.subTest(avail=avail):
+                mf.clear_availability_cache()
+                got = mf.select("engineer", probe=lambda m: avail.get(m, True))
+                self.assertNotEqual(got, FABLE)
+                self.assertIn(got, mf.LADDER)
+
+    def test_fable_stays_known_so_in_flight_markers_still_attribute(self):
+        # Same reasoning as RETIRED_MODELS: cards in flight right now carry
+        # `model-error: claude-fable-5` / `model-attempt: claude-fable-5`.
+        # Dropping the id would make last_error_model() return None and the
+        # console would lose the attribution rather than report it. Only
+        # SELECTABILITY changed.
+        self.assertIn(FABLE, mf.KNOWN_MODELS)
+        self.assertEqual(mf.last_error_model([mf.error_marker(FABLE)]), FABLE)
+
+    def test_cli_select_does_not_return_fable_with_everything_available(self):
+        # The workflows call the CLI, not select() — assert the real entry
+        # point. The stub probe comes from BUREAU_FAKE_AVAILABLE: no network.
+        env = dict(os.environ)
+        env["BUREAU_FAKE_AVAILABLE"] = json.dumps(
+            {FABLE: True, OPUS: True, SONNET: True}
+        )
+        script = os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "model_fallback.py"
+        )
+        for role in self.BUILD_ROLES:
+            with self.subTest(role=role):
+                out = subprocess.run(
+                    [sys.executable, script, "select", role],
+                    capture_output=True, text=True, env=env,
+                ).stdout.strip()
+                self.assertEqual(out, OPUS)
+
+
 if __name__ == "__main__":
     unittest.main()
