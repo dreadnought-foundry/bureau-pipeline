@@ -452,6 +452,79 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
         ]
         self.assertEqual(mc.new_models(catalog), [])
 
+    def test_a_model_we_have_already_seen_is_not_rediscovered(self):
+        # "New" means new to US: an id already recorded in the committed
+        # snapshot is not a discovery, however it got there. Without this the
+        # weekly watch would re-alert on every model Anthropic offers that we
+        # simply do not run — noise that trains the alert into wallpaper.
+        catalog = [
+            {"id": "claude-nova-9", "display_name": None, "created_at": None},
+            {"id": "claude-relic-2", "display_name": None, "created_at": None},
+        ]
+        known = set(mf.KNOWN_MODELS) | {"claude-relic-2"}
+        self.assertEqual(
+            [e["id"] for e in mc.new_models(catalog, known_ids=known)],
+            ["claude-nova-9"],
+        )
+
+    def test_the_title_is_deterministic_so_the_card_dedupes(self):
+        # linear_ops.py find-open matches an EXACT title. Two runs seeing the
+        # same set of models in a different order must produce the SAME title,
+        # or the weekly watch mints a duplicate card every Monday.
+        a = [
+            {"id": "claude-nova-9", "display_name": None, "created_at": None},
+            {"id": "claude-aria-2", "display_name": None, "created_at": None},
+        ]
+        self.assertEqual(mc.new_model_title(a), mc.new_model_title(list(reversed(a))))
+
+    def test_a_long_finding_still_makes_a_readable_title(self):
+        entries = [
+            {"id": f"claude-model-{i}", "display_name": None, "created_at": None}
+            for i in range(12)
+        ]
+        title = mc.new_model_title(entries)
+        self.assertLess(len(title), 160, f"unreadable card title: {title}")
+        # The body stays complete even when the title elides.
+        body = mc.new_model_body(entries)
+        for entry in entries:
+            self.assertIn(entry["id"], body)
+
+    def test_the_workflow_compares_against_the_previous_snapshot(self):
+        # The snapshot refresh runs FIRST, so comparing the new catalog against
+        # the file it just wrote would find nothing, ever. The baseline is the
+        # snapshot as it stood BEFORE the refresh.
+        drift = (WORKFLOWS / "model-drift.yml").read_text()
+        self.assertIn("--baseline", drift, "check-new has no previous-state baseline")
+
+    def test_the_baseline_suppresses_a_model_already_recorded(self):
+        payload = {"data": [{"id": "claude-nova-9", "display_name": "Nova 9",
+                             "created_at": "2026-09-01T00:00:00Z"}]}
+        with tempfile.TemporaryDirectory() as td:
+            baseline = Path(td) / "previous.json"
+            baseline.write_text(json.dumps(
+                {"source": "x", "models": [{"id": "claude-nova-9",
+                                            "display_name": "Nova 9",
+                                            "created_at": None,
+                                            "in_catalog": True}]}
+            ))
+            env = dict(os.environ, BUREAU_FAKE_CATALOG=json.dumps(payload))
+
+            def run(*args):
+                return subprocess.run(
+                    [sys.executable, str(ROOT / "scripts" / "model_catalog.py"),
+                     "check-new", *args],
+                    capture_output=True, text=True, env=env,
+                )
+
+            # Control: with no baseline this model IS a discovery…
+            self.assertEqual(run().returncode, 3)
+            # …and with the baseline that already records it, it is not.
+            proc = run("--baseline", str(baseline))
+            self.assertEqual(
+                proc.returncode, 0,
+                f"an already-recorded model must not re-alert: {proc.stdout}",
+            )
+
     def test_the_discovery_target_is_the_advisory_ladder(self):
         self.assertEqual(mc.discovery_policy()["on_new_model"], ADVISORY)
 
