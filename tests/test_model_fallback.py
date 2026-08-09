@@ -411,8 +411,15 @@ class CallerSuppliedLadderTest(unittest.TestCase):
 
 
 class AgentsRegistryAlignment(unittest.TestCase):
-    """The ladder must agree with agents.yaml so the console roster and the
-    runtime selection never drift (the registry contract test, DRE-1335)."""
+    """The ladders must agree with the CANONICAL config so the console roster
+    and the runtime selection never drift (the registry contract, DRE-1335).
+
+    DRE-2316 moved the canonical declaration OUT of agents.yaml and into
+    config/models.yaml: the registry's `model:` is now a generated mirror and
+    its 5x copy-pasted `ladder:` block is gone. So these read the config, and
+    check the registry against it rather than the other way round. The
+    generated-region mechanics (markers, regeneration, the drift gate) live in
+    tests/test_model_config.py."""
 
     def _agents(self):
         import yaml
@@ -421,124 +428,112 @@ class AgentsRegistryAlignment(unittest.TestCase):
         with open(os.path.join(root, "agents.yaml")) as f:
             return {a["name"]: a for a in yaml.safe_load(f)["agents"]}
 
-    def _declared_ladders(self):
-        """Every agent that declares a ladder — INCLUDING a one-entry one.
+    def _config(self):
+        import yaml
 
-        An earlier version filtered on `len(...) > 1`, which silently excluded
-        `fixer` (the only single-entry ladder) and made a retired id there
-        invisible to the whole suite. A guard whose filter is narrower than the
-        data it guards is the same defect it exists to prevent, one level up.
-        """
+        root = os.path.join(os.path.dirname(__file__), "..")
+        with open(os.path.join(root, "config", "models.yaml")) as f:
+            return yaml.safe_load(f)
+
+    def _configured_ladders(self):
+        """agent name -> its ordered model ids, resolved through the config's
+        named ladders. EVERY agent is covered — including the review tier that
+        used to bypass selection entirely, and the single-entry `fixer` ladder
+        an earlier `len(...) > 1` filter silently dropped."""
+        cfg = self._config()
         out = {}
-        for name, a in self._agents().items():
-            ladder = a.get("ladder")
-            if not isinstance(ladder, list) or not ladder:
-                continue
-            models = []
-            for i, step in enumerate(ladder):
-                self.assertIsInstance(
-                    step, dict, f"{name}: ladder[{i}] is not a mapping"
-                )
-                self.assertIn(
-                    "model", step, f"{name}: ladder[{i}] has no `model:` key"
-                )
-                models.append(step["model"])
-            out[name] = models
+        for name, ladder in cfg["agents"].items():
+            self.assertIn(ladder, cfg["ladders"], f"{name}: unknown ladder {ladder!r}")
+            out[name] = [rung["model"] for rung in cfg["ladders"][ladder]]
         return out
 
     def _declared_models(self):
         """Every agent's top-level `model:` — the field the console's agent
         editor rewrites, and the one no test looked at until an Opus 5 tile was
-        found saving the retired id."""
+        found saving the retired id. It is now GENERATED from the config, so a
+        bad write is caught by the drift gate as well as by this test."""
         return {
             name: a["model"]
             for name, a in self._agents().items()
             if isinstance(a.get("model"), str)
         }
 
-    def test_engineer_and_planner_ladder_matches_registry(self):
-        declared = self._declared_ladders()
+    def test_engineer_and_planner_ladder_matches_config(self):
+        declared = self._configured_ladders()
         for role in ("engineer", "planner"):
             self.assertEqual(
                 declared[role], mf.LADDER,
-                f"{role}: agents.yaml ladder {declared[role]} != mf.LADDER {mf.LADDER}",
+                f"{role}: config ladder {declared[role]} != mf.LADDER {mf.LADDER}",
             )
 
-    def test_no_declared_ladder_references_a_retired_model(self):
-        """EVERY agent that declares a ladder — not just engineer/planner — must
-        draw from the CURRENT ladder, in ladder order.
+    def test_no_configured_ladder_references_a_retired_model(self):
+        """EVERY agent's ladder must draw from KNOWN, selectable models.
 
         Checking only engineer/planner by name is what let the Opus 5 rotation
-        land with `repairer` still pinned to claude-opus-4-8: no test ever looked
-        at that agent. A subsequence check (rather than equality) is deliberate —
-        an agent may legitimately declare a SHORTER ladder, but none may name a
-        model that has rotated out.
-
-        There are no carve-outs, deliberately: an attempt-gated escalation is
-        still a build path, so "this one agent may name an off-ladder model"
-        would reopen exactly the door this file exists to shut."""
-        declared = self._declared_ladders()
-        # The single-entry ladder is the case the old filter dropped. Pin its
-        # presence so the filter can never quietly narrow again.
+        land with `repairer` still pinned to claude-opus-4-8: no test ever
+        looked at that agent. There are no carve-outs, deliberately — an
+        attempt-gated escalation is still a build path, so "this one agent may
+        name an off-ladder model" would reopen exactly the door this file
+        exists to shut."""
+        declared = self._configured_ladders()
         self.assertIn("fixer", declared, "single-entry ladders must be covered")
         for name, models in sorted(declared.items()):
-            retired = [m for m in models if m not in mf.LADDER]
+            unknown = [m for m in models if m not in mf.KNOWN_MODELS]
             self.assertEqual(
-                retired, [],
-                f"{name}: agents.yaml ladder names {retired}, "
-                f"not in the current mf.LADDER {mf.LADDER}",
+                unknown, [], f"{name}: ladder names unknown models {unknown}"
+            )
+            retired = [m for m in models if m in mf.RETIRED_MODELS]
+            self.assertEqual(
+                retired, [], f"{name}: ladder names retired models {retired}"
             )
             self.assertEqual(
                 len(set(models)), len(models),
-                f"{name}: agents.yaml ladder {models} repeats a model",
-            )
-            positions = [mf.LADDER.index(m) for m in models]
-            self.assertEqual(
-                positions, sorted(positions),
-                f"{name}: agents.yaml ladder {models} is out of LADDER order",
+                f"{name}: ladder {models} repeats a model",
             )
 
     def test_the_fix_escalation_is_framing_not_a_pricier_model(self):
         """agent-fix's attempt-3 escalation stays on the workhorse ladder.
 
         It used to hardcode `--model claude-fable-5` in the workflow and mirror
-        that id in the registry. A capped per-PR escalation is smaller than the
-        fleet-wide default that drained the subscription, but it is still a
-        build path reaching for the priciest model without a human in the loop.
-        The escalation is now framing only — same model, "re-derive from
-        scratch" context."""
-        fixer = self._agents()["fixer"]
-        # Bounded: a single attempt-gated step, not a default.
-        self.assertEqual([s.get("attempt") for s in fixer["ladder"]], [3])
-        self.assertIn(fixer["model"], mf.LADDER)
-        for step in fixer["ladder"]:
-            self.assertIn(step["model"], mf.LADDER)
+        that id in the registry; then `--model claude-opus-5`. A capped per-PR
+        escalation is smaller than the fleet-wide default that drained the
+        subscription, but it is still a build path reaching for a model without
+        a human in the loop. The escalation is framing only — same ladder as
+        every other build agent, "re-derive from scratch" context — and the
+        workflow no longer pins an id at all."""
+        cfg = self._config()
+        self.assertEqual(
+            cfg["agents"]["fixer"], cfg["default_ladder"],
+            "the fixer must ride the same workhorse ladder as every build agent",
+        )
+        self.assertEqual(self._configured_ladders()["fixer"], mf.LADDER)
 
-    def test_agent_fix_workflow_hardcodes_no_off_ladder_model(self):
+    def test_agent_fix_workflow_hardcodes_no_model(self):
         """agents.yaml's header requires a workflow model change to update the
         registry in the SAME PR — so read the workflow, not just the registry.
-        A `--model` the ladder doesn't contain is drift by definition, and it
-        is the shape the registry alone cannot see."""
+        A pinned `--model` is drift by construction now: it cannot be changed by
+        editing config/models.yaml, which is the shape the registry alone
+        cannot see."""
         with open(AGENT_FIX_WF) as f:
             src = f.read()
-        pinned = set(re.findall(r"--model (claude-[a-z0-9.-]+)", src))
-        self.assertTrue(pinned, "agent-fix.yml pins no model at all")
         self.assertEqual(
-            sorted(m for m in pinned if m not in mf.LADDER), [],
-            f"agent-fix.yml pins {sorted(pinned)}, not all on {mf.LADDER}",
+            re.findall(r"--model (claude-[a-z0-9.-]+)", src), [],
+            "agent-fix.yml must take its model from config/models.yaml",
         )
+        self.assertIn("model_fallback.py select fixer", src)
 
     def test_no_agent_pins_a_rotated_out_model_in_its_bare_model_field(self):
-        """`model:` is a SEPARATE field from `ladder:`, and it is the one the
-        console's agent editor rewrites — so it is the field a bad write lands
-        in. Checking only `ladder:` left the whole mutation path unguarded."""
+        """`model:` is the field the console's agent editor rewrites, so it is
+        the field a bad write lands in. It must be the top of that agent's
+        configured ladder — nothing retired, nothing off-config."""
         declared = self._declared_models()
+        configured = self._configured_ladders()
         self.assertTrue(declared, "no agent declares a bare model: field")
         for name, model in sorted(declared.items()):
-            self.assertIn(
-                model, mf.LADDER,
-                f"{name}: agents.yaml `model: {model}` is not in the current "
-                f"mf.LADDER {mf.LADDER}",
+            self.assertEqual(
+                model, configured[name][0],
+                f"{name}: agents.yaml `model: {model}` is not the top of its "
+                f"configured ladder {configured[name]}",
             )
 
 
