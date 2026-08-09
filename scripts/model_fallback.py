@@ -18,24 +18,39 @@ when the YAML is missing/unreadable — a truncated checkout must not strand a
 dispatch. Do not hand-edit it: run `python3 scripts/sync_model_config.py`
 (`--check` fails CI on drift).
 
-The default ladder is best-first and is the WORKHORSE ladder: what every build
-agent (engineer, frontend, devops, planner, fixer, repairer) runs on. It starts
-at `claude-opus-5` and falls back to `claude-sonnet-4-6`. Ref DRE-1490. The
-review tier (critic, verifier, medic) walks its own ladder — those three used to
-bypass selection with a `--model` string pinned in the workflow YAML, which no
-config edit could change.
+TWO ROLE KINDS (DRE-2317)
+-------------------------
+Every role is classified in that config as one of exactly two KINDS, and a role
+is assigned a kind — never a raw ladder name:
 
-`claude-fable-5` is NOT on it, and its absence is a policy decision, not an
-availability one (2026-08-09). Fable costs ~2x Opus per token; when Anthropic
-enabled it on our subscription the probe stopped returning 404, the best-first
-ladder promoted the whole fleet onto it in a single TTL window, the
-subscription's rolling usage drained, and agents started dying `is_error`
-mid-run. A stronger model becoming AVAILABLE must never silently promote itself
-onto the build path — that is a spend decision, and it belongs to a human
-editing this ladder, not to a probe. Fable is reserved for an advisory/reviewer
-role; it is still a KNOWN model so existing markers attribute, but nothing
-selects it. Availability detection remains: it decides how far DOWN the ladder
-we walk, never how far up.
+  * `workhorse` — high-volume build work (engineer, frontend, devops,
+    database-architect, planner, fixer, repairer). Hundreds of turns per card:
+    this is the HOT PATH, and it gets the cost-appropriate model. Today
+    `claude-opus-5`, falling back to `claude-sonnet-4-6`.
+  * `advisory` — bounded consults at decision points (critic, verifier, medic).
+    The critic gates EVERY unattended merge, so it is the correctness backstop
+    for a pipeline where no human reads a diff. It gets the STRONGEST model.
+
+Before this the allocation was exactly inverted: the critic ran on the cheapest
+model we had while build agents walked a ladder topped by the most expensive
+one. A build failure is loud; a shallow review is silent.
+
+`claude-fable-5` is the advisory model and is absent from every workhorse
+ladder by POLICY, not availability (2026-08-09). Fable costs ~2x Opus per
+token; when Anthropic enabled it on our subscription the probe stopped
+returning 404, the best-first ladder promoted the whole fleet onto it in a
+single TTL window, the subscription's rolling usage drained, and agents started
+dying `is_error` mid-run. AVAILABILITY IS NOT PERMISSION: a stronger model
+becoming available must never promote itself onto the build path — that is a
+spend decision belonging to a human editing config/models.yaml, not to a probe.
+Availability detection only decides how far DOWN a ladder we walk, never how
+far up.
+
+`policy_errors()` below turns that from a convention into a validated
+invariant: a config that puts the advisory model on a build ladder, demotes the
+critic to a build kind, or declares `on_new_model: workhorse` is REJECTED — the
+selector degrades to the last-known-good mirror rather than honour it, and
+`sync_model_config.py --check` fails CI red.
 
 Why this replaced DRE-1354's per-role pair
 -------------------------------------------
@@ -92,6 +107,22 @@ FABLE = "claude-fable-5"
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
 
+# The two role kinds (DRE-2317). A role is assigned one of THESE, never a
+# ladder name — the indirection is what stops a future edit from inventing a
+# third ladder and quietly putting build work on the strongest model.
+WORKHORSE_KIND = "workhorse"
+ADVISORY_KIND = "advisory"
+ROLE_KINDS = (WORKHORSE_KIND, ADVISORY_KIND)
+
+# The roles that MUST stay advisory: they are the correctness backstop for a
+# pipeline where no human reads a diff. Demoting either is a config error.
+BACKSTOP_ROLES = ("critic", "verifier")
+
+# What `discovery.on_new_model` may say. `workhorse` is deliberately absent —
+# auto-promoting a newly seen model onto the build path IS the 2026-08-09
+# incident, so the schema rejects it rather than trusting a reviewer to notice.
+DISCOVERY_TARGETS = (ADVISORY_KIND, "none")
+
 # The canonical model config, bundled in this checkout (never a runtime lookup —
 # the workflows that read it hold no cloud credentials and no private-repo
 # token). config/README.md documents that constraint.
@@ -109,9 +140,13 @@ _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "models.yaml"
 # --- BEGIN generated model config (from config/models.yaml) ---
 _FALLBACK_MODEL_CONFIG = {
     "default_ladder": "workhorse",
+    "kinds": {
+        "workhorse": "workhorse",
+        "advisory": "advisory",
+    },
     "ladders": {
         "workhorse": ["claude-opus-5", "claude-sonnet-4-6"],
-        "reviewer": ["claude-sonnet-4-6"],
+        "advisory": ["claude-fable-5", "claude-opus-5"],
     },
     "agents": {
         "engineer": "workhorse",
@@ -119,14 +154,15 @@ _FALLBACK_MODEL_CONFIG = {
         "database-architect": "workhorse",
         "devops": "workhorse",
         "fixer": "workhorse",
-        "critic": "reviewer",
-        "verifier": "reviewer",
         "planner": "workhorse",
-        "medic": "reviewer",
         "repairer": "workhorse",
+        "critic": "advisory",
+        "verifier": "advisory",
+        "medic": "advisory",
     },
+    "discovery": {"on_new_model": "advisory", "alert": True},
     "retired": ["claude-opus-4-8"],
-    "excluded": ["claude-fable-5"],
+    "excluded": [],
 }
 # --- END generated model config ---
 
@@ -134,7 +170,15 @@ _FALLBACK_MODEL_CONFIG = {
 def _normalize_config(raw) -> dict | None:
     """Coerce a parsed config document into the plain-id shape above, or None if
     it is unusable. Ladder rungs may be bare ids or `{model:, reason:}` mappings
-    (the canonical file uses the latter so each rung carries its justification)."""
+    (the canonical file uses the latter so each rung carries its justification);
+    a kind may be a bare ladder name or a `{ladder:, …}` mapping.
+
+    Normalization deliberately does NOT repair a policy violation — an agent
+    pointed at something that is not a kind is carried through verbatim so
+    `policy_errors` can REJECT the document. Silently dropping the entry would
+    fall the role back to the default ladder and hide the exact class of edit
+    DRE-2317 exists to catch.
+    """
     if not isinstance(raw, Mapping) or not isinstance(raw.get("ladders"), Mapping):
         return None
 
@@ -154,35 +198,157 @@ def _normalize_config(raw) -> dict | None:
     default = str(raw.get("default_ladder") or "")
     if default not in ladders:
         default = next(iter(ladders))
-    agents = {
-        str(name): str(ladder)
-        for name, ladder in (raw.get("agents") or {}).items()
-        if str(ladder) in ladders
+
+    kinds: dict[str, str] = {}
+    for name, spec in (raw.get("kinds") or {}).items():
+        if isinstance(spec, Mapping):
+            ladder = spec.get("ladder")
+        else:
+            ladder = spec
+        kinds[str(name)] = str(ladder) if ladder is not None else ""
+
+    agents = {str(name): str(kind) for name, kind in (raw.get("agents") or {}).items()}
+
+    raw_discovery = raw.get("discovery") or {}
+    discovery = {
+        "on_new_model": str(raw_discovery.get("on_new_model") or "").strip().lower(),
+        "alert": bool(raw_discovery.get("alert")),
     }
     return {
         "default_ladder": default,
+        "kinds": kinds,
         "ladders": ladders,
         "agents": agents,
+        "discovery": discovery,
         "retired": ids(raw.get("retired")),
         "excluded": ids(raw.get("excluded")),
     }
 
 
+# --------------------------------------------------------------------------- #
+# Policy validation — the schema half of "availability is not permission"      #
+# --------------------------------------------------------------------------- #
+
+def policy_errors(config) -> list[str]:
+    """Every way this config would put the strongest model on the build path,
+    as plain-English strings. Empty list = the config is admissible.
+
+    Accepts either a raw parsed `config/models.yaml` document or the normalized
+    shape, so the CI check, the tests and the runtime loader all judge by ONE
+    set of rules. It is a pure function: no I/O, no network, no import cycle.
+
+    The rules, each one an edit that would recreate the 2026-08-09 outage:
+
+      1. Exactly the two kinds exist, each naming a real ladder, and the two
+         ladders are different — build work and advisory work cannot share one.
+      2. Every role is assigned a KIND (not a ladder name, not an invented
+         third thing).
+      3. The critic and the verifier are advisory. They gate unattended merges;
+         a demotion is the inversion this policy removes.
+      4. No model on the advisory ladder ABOVE its workhorse fallback appears
+         on any workhorse ladder. This is the incident condition: the strongest
+         model must be unreachable from the build path at every availability.
+      5. `default_ladder` is the workhorse ladder, so an unrecognized role
+         lands on the cheap side of the fence.
+      6. `discovery.on_new_model` is `advisory` or `none`. `workhorse` — a
+         newly seen model auto-joining the build path — is rejected outright,
+         and `discovery.alert` must be true: discovery is never silent.
+    """
+    cfg = _normalize_config(config)
+    if cfg is None:
+        return ["config declares no usable ladders"]
+
+    errors: list[str] = []
+    kinds, ladders = cfg["kinds"], cfg["ladders"]
+
+    if sorted(kinds) != sorted(ROLE_KINDS):
+        return [
+            f"kinds: must declare exactly {list(ROLE_KINDS)}, got {sorted(kinds)} — "
+            "every role is workhorse or advisory, and nothing else"
+        ]
+    for kind, ladder in kinds.items():
+        if ladder not in ladders:
+            errors.append(f"kinds.{kind}: unknown ladder {ladder!r}")
+    if errors:
+        return errors
+    if kinds[WORKHORSE_KIND] == kinds[ADVISORY_KIND]:
+        errors.append(
+            "kinds: the build path and the advisory path must be different "
+            "ladders — sharing one puts the strongest model on the hot path"
+        )
+
+    for role, kind in cfg["agents"].items():
+        if kind not in kinds:
+            errors.append(
+                f"agents.{role}: {kind!r} is not a role kind — roles are assigned "
+                f"{list(ROLE_KINDS)}, never a ladder name"
+            )
+    for role in BACKSTOP_ROLES:
+        assigned = cfg["agents"].get(role)
+        if assigned is not None and assigned != ADVISORY_KIND:
+            errors.append(
+                f"agents.{role}: must be {ADVISORY_KIND!r} (it gates unattended "
+                f"merges), got {assigned!r}"
+            )
+
+    workhorse_models = set(ladders.get(kinds[WORKHORSE_KIND], []))
+    advisory = ladders.get(kinds[ADVISORY_KIND], [])
+    # Everything on the advisory ladder above its LAST rung is advisory-only:
+    # the last rung is the deliberate fallback onto the workhorse model.
+    for model in advisory[:-1]:
+        if model in workhorse_models:
+            errors.append(
+                f"ladders: {model} is the advisory model and must not appear on a "
+                "build ladder — availability is not permission (2026-08-09)"
+            )
+    if cfg["default_ladder"] != kinds[WORKHORSE_KIND]:
+        errors.append(
+            f"default_ladder: must be the {WORKHORSE_KIND} ladder so an "
+            "unrecognized role never reaches the advisory model"
+        )
+
+    target = cfg["discovery"]["on_new_model"]
+    if target not in DISCOVERY_TARGETS:
+        errors.append(
+            f"discovery.on_new_model: {target!r} is not allowed (choose one of "
+            f"{list(DISCOVERY_TARGETS)}). A newly seen model joining the "
+            "workhorse ladder with no human deciding IS the 2026-08-09 incident."
+        )
+    if not cfg["discovery"]["alert"]:
+        errors.append("discovery.alert: must be true — discovery is never silent")
+    return errors
+
+
 def _load_config() -> dict:
-    """The model config: the bundled YAML when readable, else the generated
-    literal above. Degrades, never raises — this sits on the dispatch path of
-    every card, and a config we cannot parse must not block a build."""
+    """The model config: the bundled YAML when readable AND admissible, else the
+    generated literal above. Degrades, never raises — this sits on the dispatch
+    path of every card, and a config we cannot parse must not block a build.
+
+    A config that PARSES but violates policy is refused the same way: the fleet
+    keeps running the last-known-good ladders and says so on stderr, rather than
+    adopting the thing the policy exists to prevent.
+    """
     try:
         import yaml  # PyYAML ships in the runner image; absence is degradable
 
-        parsed = _normalize_config(yaml.safe_load(_CONFIG_PATH.read_text()))
+        raw = yaml.safe_load(_CONFIG_PATH.read_text())
+        parsed = _normalize_config(raw)
         if parsed:
-            return parsed
-        print(
-            f"model_fallback: model config {_CONFIG_PATH} empty/unusable; "
-            "using last-known-good fallback",
-            file=sys.stderr,
-        )
+            violations = policy_errors(raw)
+            if not violations:
+                return parsed
+            print(
+                f"model_fallback: REFUSING model config {_CONFIG_PATH} — "
+                + "; ".join(violations)
+                + "; using last-known-good fallback",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"model_fallback: model config {_CONFIG_PATH} empty/unusable; "
+                "using last-known-good fallback",
+                file=sys.stderr,
+            )
     except Exception as exc:  # missing / unreadable / malformed / no PyYAML
         print(
             f"model_fallback: could not read model config {_CONFIG_PATH} "
@@ -198,9 +364,19 @@ CONFIG = _load_config()
 # returns the first available entry walking a ladder top→bottom.
 LADDERS: dict[str, list[str]] = CONFIG["ladders"]
 
-# agent/role name → ladder name. No role hardcodes a model: the critic,
-# verifier and medic resolve theirs here too (DRE-2316).
-AGENT_LADDERS: dict[str, str] = CONFIG["agents"]
+# Role kind → ladder name (DRE-2317): `workhorse` → the build ladder,
+# `advisory` → the strongest model. Exactly two entries, enforced by
+# policy_errors.
+KINDS: dict[str, str] = CONFIG["kinds"]
+
+# agent/role name → role KIND. No role hardcodes a model, and no role names a
+# ladder directly: the critic, verifier and medic resolve theirs here too
+# (DRE-2316), through the kind they are classified as (DRE-2317).
+AGENT_KINDS: dict[str, str] = CONFIG["agents"]
+
+# What happens to a model id we see but do not configure: `advisory` (may be
+# proposed for the advisory ladder by a human) or `none`. Never `workhorse`.
+DISCOVERY: dict = CONFIG["discovery"]
 
 # The default (WORKHORSE) ladder — what any unrecognized role falls back to, and
 # what every build agent walks. FABLE is deliberately absent (2026-08-09): it is
@@ -231,11 +407,19 @@ KNOWN_MODELS = (
 )
 
 
+def kind_for(role: str) -> str:
+    """The role KIND — `workhorse` or `advisory` — an agent/role is classified
+    as. An unknown name is WORKHORSE: an unrecognized role must land on the
+    cheap side of the fence, never on the advisory model."""
+    kind = AGENT_KINDS.get(role or "", "")
+    return kind if kind in KINDS else WORKHORSE_KIND
+
+
 def ladder_for(role: str) -> list[str]:
-    """The ordered ladder an agent/role walks, from the config. An unknown name
-    gets the default ladder — select() must never block a build on a role it
-    does not recognize."""
-    return LADDERS.get(AGENT_LADDERS.get(role or "", ""), LADDER)
+    """The ordered ladder an agent/role walks: role → KIND → ladder. An unknown
+    name gets the workhorse (default) ladder — select() must never block a
+    build on a role it does not recognize, and must never promote one."""
+    return LADDERS.get(KINDS.get(kind_for(role), ""), LADDER)
 
 # Cache availability results so we don't probe on every dispatch. ~12 min keeps
 # latency negligible across a burst of cards while picking up an Anthropic
@@ -436,14 +620,117 @@ def _normalize_ladder(ladder) -> list[str]:
     return out
 
 
+# Why a rung was passed over, in the words the heartbeat carries. The two
+# outcomes are deliberately distinguishable: a CONFIRMED 404 means the model is
+# gone for us, an inconclusive probe means we could not tell and refused to
+# gamble the run on it.
+_SKIP_UNAVAILABLE = "probe reported it unavailable (404 / not found)"
+_SKIP_INCONCLUSIVE = "probe inconclusive — could not confirm it is up"
+
+
+def select_with_reasons(
+    role: str = "engineer", *, probe=None, clock=None, ladder=None
+) -> dict:
+    """The full selection DECISION, not just the answer (DRE-2317).
+
+    Returns::
+
+        {"role":…, "kind": "workhorse"|"advisory", "ladder": [ids…],
+         "model": chosen, "skipped": [{"model":…, "reason":…}, …],
+         "degraded": bool, "exhausted": bool}
+
+    `skipped` lists every rung ABOVE the chosen one and why it was passed over.
+    Recording the selection alone was never enough: a run that quietly dropped
+    from the strongest model to the next rung looked identical to one that had
+    the strongest model all along. That is the silent half of the 2026-08-09
+    failure, and for an ADVISORY role it means a weakened critic nobody saw.
+
+    `degraded` is True whenever anything above the chosen model was skipped.
+    `exhausted` is True when NOTHING probed available and we fell through to the
+    lowest rung rather than block the build.
+    """
+    if probe is None:
+        probe = _probe_real
+    if clock is None:
+        clock = time.monotonic
+    walk = _normalize_ladder(ladder) or ladder_for(role)
+
+    skipped: list[dict[str, str]] = []
+    for model in walk:
+        available = _is_available(model, probe, clock)
+        if available:
+            return {
+                "role": role,
+                "kind": kind_for(role),
+                "ladder": list(walk),
+                "model": model,
+                "skipped": skipped,
+                "degraded": bool(skipped),
+                "exhausted": False,
+            }
+        skipped.append(
+            {
+                "model": model,
+                "reason": _SKIP_UNAVAILABLE if available is False else _SKIP_INCONCLUSIVE,
+            }
+        )
+
+    # Nothing probed available — don't block the build. Fall through to the
+    # last (lowest-ranked, broadest-availability) ladder model, and say so.
+    return {
+        "role": role,
+        "kind": kind_for(role),
+        "ladder": list(walk),
+        "model": walk[-1],
+        "skipped": skipped[:-1],
+        "degraded": True,
+        "exhausted": True,
+    }
+
+
+def selection_note(decision: Mapping) -> str:
+    """The one-line, human-readable record of a decision: which model ran and
+    why anything above it was skipped.
+
+    ONE line, always — it rides a `$GITHUB_OUTPUT` assignment and a Linear
+    heartbeat comment, and a second line would break both.
+
+    A degraded decision is prefixed `DEGRADED` so the workflow can turn it into
+    a `::warning::` with a shell `case`. That prefix is the alert half of the
+    policy: if an advisory role ever falls off the strongest model — because it
+    is unavailable, or because an advisory budget was introduced and exhausted —
+    the run says so out loud instead of shipping a quietly cheaper critic.
+    """
+    model = decision.get("model")
+    role = decision.get("role") or "agent"
+    kind = decision.get("kind") or WORKHORSE_KIND
+    head = "DEGRADED " if decision.get("degraded") else ""
+    note = f"{head}model-policy: {model} chosen for {role} ({kind} kind)"
+    skipped = list(decision.get("skipped") or [])
+    if skipped:
+        note += " — skipped " + "; ".join(
+            f"{s['model']} ({s['reason']})" for s in skipped
+        )
+    else:
+        note += " — top of the ladder, nothing above it was skipped"
+    if decision.get("exhausted"):
+        note += " — no rung probed available; fell through to the lowest rung"
+    return " ".join(note.split())
+
+
 def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> str:
     """The model the next attempt should use: the first AVAILABLE model walking
     that agent's ordered ladder best→worst.
 
     `role` is an agent/role name from config/models.yaml (`engineer`, `planner`,
-    `critic`, `verifier`, `medic`, …). All the build roles share the workhorse
-    ladder; the review tier has its own. An unrecognized name gets the default
-    ladder rather than an error.
+    `critic`, `verifier`, `medic`, …). Every build role is classified
+    `workhorse` and walks that ladder; the advisory roles walk theirs. An
+    unrecognized name gets the workhorse ladder rather than an error.
+
+    This is the answer only. `select_with_reasons()` returns the whole decision
+    — including why each higher rung was skipped — and every workflow records
+    that note; this wrapper stays for callers (and the console's vendored copy)
+    that just want the id.
 
     `ladder` is an explicit ordered model id list to walk (best→worst),
     overriding the config lookup. The console passes the ladder it read from the
@@ -460,22 +747,7 @@ def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> st
     (lowest, most-likely-up) known-good model rather than block the build or
     return a model just confirmed 404.
     """
-    if probe is None:
-        probe = _probe_real
-    if clock is None:
-        clock = time.monotonic
-    walk = _normalize_ladder(ladder) or ladder_for(role)
-
-    for model in walk:
-        available = _is_available(model, probe, clock)
-        if available:
-            return model
-        # available is False (confirmed 404) or None (inconclusive) → keep
-        # walking; never return a model just confirmed gone.
-
-    # Nothing probed available — don't block the build. Fall through to the
-    # last (lowest-ranked, broadest-availability) ladder model.
-    return walk[-1]
+    return select_with_reasons(role, probe=probe, clock=clock, ladder=ladder)["model"]
 
 
 # --------------------------------------------------------------------------- #
@@ -543,18 +815,30 @@ def _fake_probe_from_env():
 def main(argv: list[str]) -> int:
     """CLI for the workflows — the entry point every agent workflow calls.
 
-      select [<agent>]             print the model the next attempt should use
+      select [<agent>] [--explain-file <path>]
+                                   print the model the next attempt should use
                                    (walks that agent's ladder from
-                                   config/models.yaml, probes availability)
+                                   config/models.yaml, probes availability) and,
+                                   with --explain-file, write the one-line
+                                   selection note beside it
       role-of <label,label,...>    print engineer|planner|devops|frontend from
                                    a card's labels
 
     `select` probes the live API using the CLAUDE token in the env. `<agent>` is
     a name from config/models.yaml (`engineer`, `planner`, `critic`, `verifier`,
-    `medic`, `fixer`, `repairer`, …); an unknown name walks the default
-    ladder."""
+    `medic`, `fixer`, `repairer`, …); an unknown name walks the workhorse
+    ladder.
+
+    STDOUT IS ONLY THE MODEL ID — every workflow does `MODEL=$(… select …)`.
+    The note (which model ran, and why anything above it was skipped) goes to
+    the `--explain-file` path and to stderr, so adding it can never corrupt the
+    captured id. A degraded selection's note starts with `DEGRADED`, which is
+    what the workflows turn into a `::warning::`."""
     if not argv:
-        print("usage: model_fallback.py select [<agent>] | role-of <labels>")
+        print(
+            "usage: model_fallback.py select [<agent>] [--explain-file <path>] "
+            "| role-of <labels>"
+        )
         return 2
     cmd, *rest = argv
     if cmd == "role-of":
@@ -562,11 +846,30 @@ def main(argv: list[str]) -> int:
         print(_role_from_labels([l.strip() for l in labels if l.strip()]))
         return 0
     if cmd == "select":
-        role = rest[0] if rest else "engineer"
+        explain_path = None
+        args: list[str] = []
+        pending = list(rest)
+        while pending:
+            arg = pending.pop(0)
+            if arg == "--explain-file":
+                explain_path = pending.pop(0) if pending else None
+            else:
+                args.append(arg)
         # Ignore a legacy comments-file 2nd arg if the workflow still passes one
         # — selection no longer reads card history; availability drives it.
+        role = args[0] if args else "engineer"
         clear_availability_cache()
-        print(select(role, probe=_fake_probe_from_env()))
+        decision = select_with_reasons(role, probe=_fake_probe_from_env())
+        note = selection_note(decision)
+        print(decision["model"])
+        print(note, file=sys.stderr)
+        if explain_path:
+            try:
+                with open(explain_path, "w") as fh:
+                    fh.write(note + "\n")
+            except OSError as exc:  # a note we cannot write must not kill a run
+                print(f"model_fallback: could not write {explain_path} ({exc})",
+                      file=sys.stderr)
         return 0
     print(f"unknown command {cmd!r}")
     return 2

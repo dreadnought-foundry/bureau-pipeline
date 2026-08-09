@@ -33,6 +33,13 @@ import argparse
 import sys
 from pathlib import Path
 
+# The policy rules live in ONE place (model_fallback.policy_errors) and are
+# imported here rather than restated: two copies of "what a legal config is"
+# drift the day one side gains a rule, and the whole point of DRE-2317 is that
+# the rule cannot be edited away by accident.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from model_fallback import policy_errors as _policy_errors  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "models.yaml"
 FALLBACK_TARGET = ROOT / "scripts" / "model_fallback.py"
@@ -52,7 +59,15 @@ REPAIR_COMMAND = "python3 scripts/sync_model_config.py"
 
 def load_config(path: Path = CONFIG) -> dict:
     """The canonical config, normalized to plain ids: ladders as ordered model
-    id lists, agents as name → ladder name, retired/excluded as id lists."""
+    id lists, kinds as kind → ladder name, agents as role → KIND,
+    retired/excluded as id lists.
+
+    Schema validation runs here and is FATAL. The rules live in
+    ``model_fallback.policy_errors`` — one definition, shared by the CI check,
+    the runtime loader and the tests — so a config that would put the strongest
+    model back on the build path (`on_new_model: workhorse` above all) fails
+    the check before any mirror is even rendered.
+    """
     import yaml
 
     raw = yaml.safe_load(path.read_text())
@@ -70,18 +85,37 @@ def load_config(path: Path = CONFIG) -> dict:
                 raise SystemExit(f"{path}: bad ladder rung {rung!r}")
         return out
 
+    violations = _policy_errors(raw)
+    if violations:
+        raise SystemExit(
+            f"{path}: rejected by model policy (DRE-2317)\n  - "
+            + "\n  - ".join(violations)
+        )
+
     ladders = {str(name): ids(rungs) for name, rungs in raw["ladders"].items()}
     default = str(raw.get("default_ladder") or next(iter(ladders)))
     if default not in ladders:
         raise SystemExit(f"{path}: default_ladder {default!r} is not a ladder")
+    kinds = {}
+    for name, spec in (raw.get("kinds") or {}).items():
+        ladder = spec.get("ladder") if isinstance(spec, dict) else spec
+        if str(ladder) not in ladders:
+            raise SystemExit(f"{path}: kind {name!r} names unknown ladder {ladder!r}")
+        kinds[str(name)] = str(ladder)
     agents = {str(k): str(v) for k, v in (raw.get("agents") or {}).items()}
-    for name, ladder in agents.items():
-        if ladder not in ladders:
-            raise SystemExit(f"{path}: agent {name!r} names unknown ladder {ladder!r}")
+    for name, kind in agents.items():
+        if kind not in kinds:
+            raise SystemExit(f"{path}: agent {name!r} names unknown kind {kind!r}")
+    discovery = raw.get("discovery") or {}
     return {
         "default_ladder": default,
+        "kinds": kinds,
         "ladders": ladders,
         "agents": agents,
+        "discovery": {
+            "on_new_model": str(discovery.get("on_new_model") or "").strip().lower(),
+            "alert": bool(discovery.get("alert")),
+        },
         "retired": ids(raw.get("retired")),
         "excluded": ids(raw.get("excluded")),
     }
@@ -97,15 +131,24 @@ def render_literal(cfg: dict) -> str:
     region is a byte-for-byte no-op."""
     lines = ["_FALLBACK_MODEL_CONFIG = {"]
     lines.append(f'    "default_ladder": "{cfg["default_ladder"]}",')
+    lines.append('    "kinds": {')
+    for name, ladder in cfg["kinds"].items():
+        lines.append(f'        "{name}": "{ladder}",')
+    lines.append("    },")
     lines.append('    "ladders": {')
     for name, models in cfg["ladders"].items():
         rendered = ", ".join(f'"{m}"' for m in models)
         lines.append(f'        "{name}": [{rendered}],')
     lines.append("    },")
     lines.append('    "agents": {')
-    for name, ladder in cfg["agents"].items():
-        lines.append(f'        "{name}": "{ladder}",')
+    for name, kind in cfg["agents"].items():
+        lines.append(f'        "{name}": "{kind}",')
     lines.append("    },")
+    lines.append(
+        '    "discovery": {"on_new_model": '
+        f'"{cfg["discovery"]["on_new_model"]}", "alert": '
+        f'{bool(cfg["discovery"]["alert"])}}},'
+    )
     for key in ("retired", "excluded"):
         rendered = ", ".join(f'"{m}"' for m in cfg[key])
         lines.append(f'    "{key}": [{rendered}],')
@@ -114,12 +157,21 @@ def render_literal(cfg: dict) -> str:
 
 
 def render_registry_model(cfg: dict, agent: str) -> str:
-    """The generated body of one agent's ``model:`` region in agents.yaml: the
-    top of that agent's configured ladder, with the ladder named inline so the
-    roster still reads as documentation."""
-    ladder = cfg["agents"].get(agent) or cfg["default_ladder"]
+    """The generated body of one agent's model region in agents.yaml: the role
+    KIND it is classified as, plus the top of that kind's ladder, with the
+    ladder named inline so the roster still reads as documentation.
+
+    The `kind:` line is what makes the workhorse/advisory split visible in the
+    console roster — the roster is the surface a human reads to ask "what is
+    the critic running on, and why is it allowed to be the expensive one?"
+    """
+    kind = cfg["agents"].get(agent) or ""
+    ladder = cfg["kinds"].get(kind) or cfg["default_ladder"]
     models = cfg["ladders"][ladder]
-    return f"    model: {models[0]}  # top of the `{ladder}` ladder"
+    return (
+        f"    kind: {kind}\n"
+        f"    model: {models[0]}  # top of the `{ladder}` ladder"
+    )
 
 
 # --------------------------------------------------------------------------- #

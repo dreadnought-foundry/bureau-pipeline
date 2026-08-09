@@ -11,12 +11,65 @@ Neither is ever a runtime lookup.
 
 ---
 
-# `models.yaml` — the ONE model config (DRE-2316)
+# `models.yaml` — the ONE model config (DRE-2316 / DRE-2317)
 
 `models.yaml` is **the only file a human edits to change which model an agent
-uses**. It declares named, ordered fallback **ladders** (best → worst), assigns
-every agent to one, and lists the ids that stay *readable but not selectable*
-(retired ids, and ids excluded by cost policy).
+uses**. It declares named, ordered fallback **ladders** (best → worst), classes
+every agent as one of two **role kinds**, and lists the ids that stay *readable
+but not selectable* (retired ids, and ids excluded by cost policy).
+
+## Two role kinds — workhorse and advisory
+
+| kind | who | model | why |
+|---|---|---|---|
+| `workhorse` | engineer, frontend, devops, database-architect, planner, fixer, repairer | cost-appropriate (today Opus) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
+| `advisory` | critic, verifier, medic | the **strongest** model (today Fable) | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. |
+
+The allocation used to be exactly inverted — the cheapest model judging the most
+expensive one's work — and the priciest model sat on the hot path where it could
+drain the account. Both halves are fixed by the split, and the second half is
+also the structural cost fix: **the strongest model is never on the build path,
+so it cannot be consumed at build volume.**
+
+A role is assigned a **kind**, never a ladder name. That indirection is what
+stops a future edit from inventing a third ladder and quietly putting build work
+on the strongest model.
+
+## Availability is not permission
+
+On 2026-08-09 Anthropic enabled `claude-fable-5`, the availability probe stopped
+returning 404, and a best-first ladder promoted the **entire fleet** onto it
+inside one TTL window with no human deciding anything. Usage drained and agents
+started dying mid-run.
+
+So the rule, now enforced by schema validation in
+`model_fallback.policy_errors()` rather than by convention:
+
+- the advisory model must not appear on any build ladder — a config that puts it
+  there is **refused**: `sync_model_config.py --check` fails CI red, and the
+  selector keeps running the last-known-good ladders instead of honouring it;
+- the critic and verifier must stay `advisory`;
+- `default_ladder` must be the workhorse ladder, so an unrecognized role lands on
+  the cheap side of the fence;
+- `discovery.on_new_model` may be `advisory` or `none`. **`workhorse` is
+  rejected** — a newly seen model auto-joining the build path *is* the incident.
+  `discovery.alert` must be true: the weekly `model-drift` workflow opens one
+  Linear card for a human whenever the API offers a model this file does not
+  name.
+
+## Every run says which model it used, and why anything above it was skipped
+
+`model_fallback.py select <agent> --explain-file <path>` writes a one-line note
+next to the selected id: the model, its kind, and every higher rung that was
+skipped with the reason (confirmed unavailable vs. an inconclusive probe). Every
+agent workflow records that note in its step summary and, on card-driven runs,
+in the `model-attempt:` heartbeat on the Linear card.
+
+A note that starts with `DEGRADED` becomes a `::warning::`. That is the alert
+half of the policy: if an advisory role ever falls off the strongest model —
+because it is unavailable, or because an advisory budget is introduced and
+exhausted — the fallback is the **workhorse** model and the run says so. A
+silently weakened critic is the exact failure this policy exists to prevent.
 
 ## Who reads it
 

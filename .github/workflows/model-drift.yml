@@ -6,11 +6,14 @@
 # Opus 5, and the same rotation missed one agent's pin with CI green throughout.
 # This job replaces the eyeball with a weekly read of the live model list.
 #
-# It does exactly two things, both of them safe:
+# It does exactly three things, all of them safe:
 #   1. refreshes models.json — DATA ONLY, the seam the console reads so
 #      agent-bureau needs no Anthropic credential and no second transport;
 #   2. opens ONE Linear card when the pinned ladder has something newer
-#      available, for a HUMAN to decide.
+#      available, for a HUMAN to decide;
+#   3. opens ONE Linear card when the catalog offers a model config/models.yaml
+#      has never named (DRE-2317). That discovery may join the ADVISORY ladder
+#      at most — never the build path — and only when a human edits the config.
 #
 # It does NOT change the ladder. Adoption stays a deliberate one-line human
 # edit, because a new model can ship breaking API changes (Opus 5 turned
@@ -119,6 +122,44 @@ jobs:
             echo "already open as $EXISTING — not duplicating"
           else
             python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/drift-body.md"
+          fi
+
+      # Discovery (DRE-2317): a model id the catalog offers that
+      # config/models.yaml has never named. The policy for one of those is
+      # `discovery.on_new_model: advisory` — it may be proposed for the
+      # ADVISORY ladder and nothing else, and `on_new_model: workhorse` is
+      # rejected by schema validation because a new model joining the BUILD
+      # path unattended is the 2026-08-09 outage. This step reports; a human
+      # decides. Exit 3 = something we have never configured.
+      - name: Check the catalog for models we have never configured
+        id: discovery
+        run: |
+          set +e
+          python3 scripts/model_catalog.py check-new models.json \
+            --title-file "$RUNNER_TEMP/new-model-title.txt" \
+            --body-file "$RUNNER_TEMP/new-model-body.md"
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "new=false" >> "$GITHUB_OUTPUT" ;;
+            3) echo "new=true"  >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+
+      # The ALERT half of the discovery policy — never silent. Same exact-title
+      # idempotency as the drift card: next week's identical finding matches the
+      # open card instead of minting a duplicate.
+      - name: Open ONE new-model alert card (idempotent)
+        if: steps.discovery.outputs.new == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          TITLE=$(cat "$RUNNER_TEMP/new-model-title.txt")
+          EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
+          if [ -n "$EXISTING" ]; then
+            echo "already open as $EXISTING — not duplicating"
+          else
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/new-model-body.md"
           fi
 
       # DATA ONLY, and proven so: stage exactly one path, then refuse to commit

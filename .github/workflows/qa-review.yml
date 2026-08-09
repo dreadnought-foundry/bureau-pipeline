@@ -370,13 +370,24 @@ jobs:
             --branch "$BRANCH" \
             --pr-body-file /tmp/cardctx-pr-body.txt
 
-      # Model selection for the critic (DRE-2316). This step exists because
-      # the critic used to carry a pinned Sonnet id twice in this file: nothing
-      # a human could edit changed it, and the agent registry could not see it.
-      # The id now comes from config/models.yaml (agent `critic`, the
-      # `reviewer` ladder) through the SAME availability-probing ladder walk the
+      # Model selection for the critic (DRE-2316 / DRE-2317). This step exists
+      # because the critic used to carry a pinned Sonnet id twice in this file:
+      # nothing a human could edit changed it, and the agent registry could not
+      # see it. The id now comes from config/models.yaml (agent `critic`, the
+      # ADVISORY ladder) through the SAME availability-probing ladder walk the
       # build agents use — the config is a file in the .bureau-pipeline checkout
       # above, never a runtime lookup (these runners hold no cloud credentials).
+      #
+      # The critic is ADVISORY, so it gets the STRONGEST model we run. It gates
+      # every unattended merge in a pipeline where no human reads a diff: a
+      # build failure is loud, a shallow review is silent. Advisory work is
+      # bounded (one review per PR), which is what makes the strongest model
+      # affordable — it is never on the high-volume build path.
+      #
+      # --explain-file records WHY anything above the chosen model was skipped.
+      # If the critic ever falls off the strongest model the note starts with
+      # DEGRADED and this step raises a ::warning:: — a silently weakened critic
+      # is precisely the failure DRE-2317 exists to prevent.
       - name: Select model
         id: model
         if: steps.decide.outputs.review == 'true'
@@ -385,9 +396,17 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
-          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select critic)
+          WHY_FILE="$RUNNER_TEMP/model-why.txt"
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select critic \
+            --explain-file "$WHY_FILE")
+          WHY=$(cat "$WHY_FILE")
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "why=$WHY" >> "$GITHUB_OUTPUT"
           echo "selected model: $MODEL (agent: critic)"
+          echo "$WHY" >> "$GITHUB_STEP_SUMMARY"
+          # Never silent: an advisory role that did not get the STRONGEST
+          # model is the silently-weakened critic DRE-2317 exists to prevent.
+          case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
       - name: Critic review
         id: critic

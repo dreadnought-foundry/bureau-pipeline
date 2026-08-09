@@ -1,4 +1,4 @@
-# models.yaml — the ONE model config for the whole fleet (DRE-2316).
+# models.yaml — the ONE model config for the whole fleet (DRE-2316/DRE-2317).
 #
 # THIS IS THE ONLY FILE A HUMAN EDITS to change which model an agent runs on.
 # Everything else that names a model is GENERATED from this file, between
@@ -6,8 +6,8 @@
 #
 #   * scripts/model_fallback.py  — `_FALLBACK_MODEL_CONFIG` (the degrade path
 #                                  used only when this file is unreadable)
-#   * agents.yaml                — each agent's `model:` line (the console
-#                                  roster's contract)
+#   * agents.yaml                — each agent's `model:` / `kind:` lines (the
+#                                  console roster's contract)
 #
 # Regenerate with:  python3 scripts/sync_model_config.py
 # CI fails red on drift (`--check`, pinned by tests/test_model_config.py).
@@ -18,46 +18,100 @@
 # public `.bureau-pipeline` checkout the workflow already does, so this file
 # travels with the code and is live fleet-wide the moment it merges to @main.
 #
+# THE RULE: AVAILABILITY IS NOT PERMISSION (DRE-2317)
+# ---------------------------------------------------
+# On 2026-08-09 Anthropic enabled `claude-fable-5` on our subscription, the
+# availability probe stopped returning 404, and a best-first ladder promoted
+# the ENTIRE FLEET onto it inside one TTL window with no human deciding
+# anything. The rolling session usage drained and agents started dying
+# is_error mid-run. A model becoming AVAILABLE must never promote itself onto
+# the build path: membership on a ladder is a SPEND DECISION and it is made
+# here, by a human, in a reviewed PR. The probe decides how far DOWN a ladder
+# we walk, never how far up.
+#
 # Schema
 # ------
+#   kinds          the TWO role kinds, each naming the ladder its roles walk.
+#                  A role is assigned a KIND, never a raw ladder name — that
+#                  is what stops a future edit from inventing a third ladder
+#                  and quietly putting build work on the strongest model.
+#                    workhorse — high-volume build work, hundreds of turns per
+#                                card. The HOT PATH. Cost-appropriate model.
+#                    advisory  — bounded consults at decision points (the
+#                                critic gates every unattended merge). The
+#                                STRONGEST model, and never on the hot path.
 #   ladders        named, ordered preference ladders, best → worst. Selection
 #                  (scripts/model_fallback.py `select`) walks a ladder top→bottom
-#                  and returns the first AVAILABLE model. Availability is probed
-#                  at runtime and decides how far DOWN a ladder we walk — NEVER
-#                  how far up. A model that is not on a ladder is never selected,
-#                  however available it becomes. Membership here is the spend
-#                  decision, and it belongs to a human editing this file.
+#                  and returns the first AVAILABLE model. A model that is not on
+#                  a ladder is never selected, however available it becomes.
 #   default_ladder the ladder used for any agent/role not named below (select()
-#                  never blocks a build on an unknown name).
-#   agents         agent/role name → ladder name. The names match agents.yaml
-#                  `name:` entries; the four label-routed build roles
+#                  never blocks a build on an unknown name). It MUST be the
+#                  workhorse ladder: an unrecognized role lands on the cheap
+#                  side of the fence, never on the advisory model.
+#   agents         agent/role name → KIND. The names match agents.yaml `name:`
+#                  entries; the four label-routed build roles
 #                  (engineer/frontend/devops/planner) are also the role strings
 #                  the workflows pass to `model_fallback.py select`.
+#   discovery      what happens to a model id the system SEES but this file
+#                  does not name. `on_new_model` may be `advisory` (it may join
+#                  the advisory ladder, after a human edits this file) or
+#                  `none`. `workhorse` is REJECTED by schema validation — that
+#                  value is precisely the incident. `alert` must be true: a
+#                  newly discovered model always raises a card for a human.
 #   retired        ids that have rotated OUT of every ladder. READABLE, never
 #                  selectable — `model-attempt:` / `model-error:` markers on
 #                  in-flight cards must keep attributing, and dropping an id
 #                  would resolve those deaths to None instead of reporting them.
-#   excluded       ids that are available but excluded by POLICY (cost/quota).
-#                  Same read-not-select treatment as `retired`.
+#   excluded       ids that are available but excluded from EVERY ladder by
+#                  POLICY (cost/quota). Same read-not-select treatment as
+#                  `retired`.
+
+kinds:
+  # THE HOT PATH. Hundreds of turns per card, every card, every repo — this is
+  # what consumes the shared rolling session window, so it gets the
+  # cost-appropriate model, and the strongest model is structurally barred from
+  # it (schema validation rejects a config that puts the advisory model here).
+  workhorse:
+    ladder: workhorse
+    roles: >-
+      build agents — engineer, frontend, devops, database-architect, planner,
+      fixer, repairer
+
+  # THE BACKSTOP. Bounded consults at decision points: one review per PR, one
+  # verification, one diagnosis per failed run. Low volume, high stakes — the
+  # critic gates EVERY unattended merge in a pipeline where no human reads a
+  # diff, so a shallow review is a silent failure. It gets the strongest model.
+  advisory:
+    ladder: advisory
+    roles: critic, verifier, medic
 
 ladders:
-  # The WORKHORSE ladder: what every build agent runs on (engineer, frontend,
-  # devops, planner, database-architect, fixer, repairer). Opus-first since
-  # 2026-08-09 — see `excluded` below for why Fable is not on it.
+  # The WORKHORSE ladder: what every build agent runs on. Opus-first since
+  # 2026-08-09. `claude-fable-5` is absent by POLICY, not availability, and
+  # validation now enforces that absence rather than trusting the next edit.
   workhorse:
     - model: claude-opus-5
       reason: "preferred — the workhorse build model (2026-08-09)"
     - model: claude-sonnet-4-6
       reason: "fallback if Opus is unavailable"
 
-  # The REVIEW tier: critic, verifier, medic. These read and judge rather than
-  # build, and they run on every PR — Sonnet is the deliberate cost/latency
-  # choice, unchanged by DRE-2316 (which moved WHERE it is declared, not WHAT
-  # it is). Before that move the id was pinned in five places across three
-  # workflow files and no config edit could change it.
-  reviewer:
-    - model: claude-sonnet-4-6
-      reason: "review/diagnosis tier — runs on every PR; cost and latency win"
+  # The ADVISORY ladder: the strongest model we run, for the roles that judge
+  # rather than build. Fable is ~2x Opus per token, which is affordable
+  # precisely because advisory work is bounded — it is never on the hot path.
+  advisory:
+    - model: claude-fable-5
+      reason: >-
+        the strongest model we can run. The critic is the correctness backstop
+        for unattended merges and the verifier is the scenario gate; both are
+        bounded consults, so the price per token buys the review no human is
+        doing (DRE-2317).
+    - model: claude-opus-5
+      reason: >-
+        the LOUD fallback. If the strongest model is unavailable — or an
+        advisory budget is ever introduced and exhausted — advisory work drops
+        to the WORKHORSE model and the run says so: the selection note is
+        prefixed DEGRADED and the workflow raises a ::warning::. A silently
+        weakened critic is the exact failure DRE-2317 exists to prevent.
 
 default_ladder: workhorse
 
@@ -67,26 +121,34 @@ agents:
   database-architect: workhorse
   devops: workhorse
   # Attempt 3 of a fix is a FRESH-EYES escalation, not a MODEL escalation:
-  # same ladder, new framing (re-derive from scratch). It used to hardcode a
+  # same kind, new framing (re-derive from scratch). It used to hardcode a
   # pricier model — an attempt-gated escalation is still a build path.
   fixer: workhorse
-  critic: reviewer
-  verifier: reviewer
   planner: workhorse
-  medic: reviewer
   # The red-main repair agent is an engineer-tier fixer.
   repairer: workhorse
+  # The three that judge rather than build. The critic gates every unattended
+  # merge; the verifier is the scenario gate for UI/multi-system PRs; the medic
+  # diagnoses a failed run once. All bounded consults — all advisory.
+  critic: advisory
+  verifier: advisory
+  medic: advisory
+
+discovery:
+  # A model id we SEE but do not name here may, at most, be proposed for the
+  # ADVISORY ladder — and only a human editing this file actually puts it
+  # there. `workhorse` is rejected by schema validation: that value IS the
+  # 2026-08-09 incident, written down as config.
+  on_new_model: advisory
+  # Never silent. A newly discovered model always opens a card for a human.
+  alert: true
 
 retired:
   - model: claude-opus-4-8
     reason: "rotated out when Opus 5 landed; kept readable so old markers attribute"
 
-excluded:
-  - model: claude-fable-5
-    reason: >-
-      Off every build ladder on 2026-08-09 by COST/QUOTA POLICY, not
-      availability. When Anthropic enabled it on our subscription the probe
-      stopped 404ing, the best-first ladder promoted the whole fleet onto it
-      (~2x Opus per token) in one TTL window, the rolling usage drained and
-      agents began dying is_error mid-run. Re-enabling it upstream must NOT put
-      it back on a ladder — that is a human spend decision made in this file.
+# Nothing is excluded from every ladder today. Fable used to live here (off all
+# ladders on cost policy, 2026-08-09); DRE-2317 gave it the one home where its
+# price buys something — the advisory ladder — and made its absence from the
+# build path a validated invariant instead of a convention.
+excluded: []

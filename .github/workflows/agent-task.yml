@@ -226,16 +226,22 @@ jobs:
             "${{ github.event.client_payload.identifier }}"
 
       # Model selection: the shared WORKHORSE ladder with runtime availability
-      # detection (DRE-1490). select() walks it best→worst — claude-opus-5,
-      # then claude-sonnet-4-6 (see model_fallback.py / agents.yaml) — and
-      # returns the first AVAILABLE model. Availability is probed via a minimal
-      # /v1/messages call using the CLAUDE token already in the env (no new
-      # secret): a 404 / not-found ⇒ skip; any other response, including 429, ⇒
-      # choose it; an inconclusive probe falls through to the next known-good
-      # model. The probe decides how far DOWN the ladder to walk, never how far
-      # up: claude-fable-5 is off the ladder on cost/quota policy (2026-08-09)
-      # and no availability change puts it back. The chosen id is recorded in a
-      # heartbeat comment so the board shows which model each attempt used.
+      # detection (DRE-1490). Build roles are classified `workhorse` in
+      # config/models.yaml (DRE-2317) and select() walks that ladder best→worst
+      # — claude-opus-5, then claude-sonnet-4-6 — returning the first AVAILABLE
+      # model. Availability is probed via a minimal /v1/messages call using the
+      # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
+      # skip; any other response, including 429, ⇒ choose it; an inconclusive
+      # probe falls through to the next known-good model. The probe decides how
+      # far DOWN the ladder to walk, never how far up: the ADVISORY model (the
+      # strongest one, reserved for the critic/verifier/medic) is unreachable
+      # from this ladder at any availability — that is the 2026-08-09 incident,
+      # pinned by tests/test_model_policy.py.
+      #
+      # --explain-file records WHY anything above the chosen model was skipped.
+      # The selection alone was never enough: a run that quietly dropped a rung
+      # looked identical to one that got its first choice. The note rides the
+      # heartbeat comment below, and a DEGRADED note also raises a ::warning::.
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -245,9 +251,16 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
-          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select "$ROLE")
+          WHY_FILE="$RUNNER_TEMP/model-why.txt"
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select "$ROLE" \
+            --explain-file "$WHY_FILE")
+          WHY=$(cat "$WHY_FILE")
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "why=$WHY" >> "$GITHUB_OUTPUT"
           echo "selected model: $MODEL (role: $ROLE)"
+          echo "$WHY" >> "$GITHUB_STEP_SUMMARY"
+          # Never silent: a run that did NOT get the top of its ladder says so.
+          case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
       # Assemble the agent's context = the role's shared standards + role brief
       # (DRE-1646). The build agents run headless and cannot load Skills, so
@@ -300,7 +313,7 @@ jobs:
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ github.event.client_payload.identifier }}" \
-            "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting. ${{ steps.model.outputs.why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Implement card
         id: claude

@@ -465,9 +465,14 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             path = tree / "config" / "models.yaml"
             cfg = yaml.safe_load(path.read_text())
             advisory = cfg["kinds"]["advisory"]["ladder"]
-            cfg["ladders"][advisory] = list(reversed(cfg["ladders"][advisory]))
+            # A human moving the advisory tier in a reviewed PR is the
+            # SANCTIONED path — what policy validation blocks is the reverse
+            # direction (the strongest model landing on a build ladder).
+            cfg["ladders"][advisory] = [{"model": SONNET, "reason": "one-file edit"}]
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
-            self.assertEqual(_cli_select(tree, "critic"), OPUS)
+            self.assertEqual(_cli_select(tree, "critic"), SONNET)
+            # …and the build fleet is untouched by that edit.
+            self.assertEqual(_cli_select(tree, "engineer"), OPUS)
 
     def test_selector_degrades_to_the_mirror_when_the_config_is_unreadable(self):
         # The config ships in the public .bureau-pipeline checkout, so it is

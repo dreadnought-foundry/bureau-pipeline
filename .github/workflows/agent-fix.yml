@@ -304,12 +304,20 @@ jobs:
         run: |
           if [ "$MODE" = "conflict" ]; then
             echo "model_arg=" >> "$GITHUB_OUTPUT"
+            echo "why=model-policy: conflict mode — no model pin (action default)" >> "$GITHUB_OUTPUT"
             echo "conflict mode — no model pin (action default)"
             exit 0
           fi
-          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select fixer)
+          WHY_FILE="$RUNNER_TEMP/model-why.txt"
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select fixer \
+            --explain-file "$WHY_FILE")
+          WHY=$(cat "$WHY_FILE")
           echo "model_arg=--model $MODEL" >> "$GITHUB_OUTPUT"
+          echo "why=$WHY" >> "$GITHUB_OUTPUT"
           echo "selected model: $MODEL (agent: fixer)"
+          echo "$WHY" >> "$GITHUB_STEP_SUMMARY"
+          # Never silent: a run that did NOT get the top of its ladder says so.
+          case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
       # DRE-1996: the branch name is agent-chosen (agent/* refs, and git
       # refnames may contain $ and backticks) and the escalation preamble
