@@ -258,6 +258,45 @@ _ERROR_MARKER_RE = re.compile(
 # HTTP status (Anthropic's 404 body says "not_found_error" / "not available").
 _UNAVAILABLE_HINTS = ("not_found_error", "not available", "not found")
 
+# Anthropic API constants — the version every request pins, and the beta header
+# the subscription OAuth token requires.
+ANTHROPIC_VERSION = "2023-06-01"
+OAUTH_BETA = "oauth-2025-04-20"
+
+
+# --------------------------------------------------------------------------- #
+# Auth (the ONE seam every Anthropic call in this repo goes through)           #
+# --------------------------------------------------------------------------- #
+
+def auth_headers() -> dict[str, str] | None:
+    """Anthropic auth + version headers from the workflow env, or None when
+    there is no credential at all.
+
+    Two token shapes, in precedence order — an API key wins when both are set:
+      * `ANTHROPIC_API_KEY`         -> `x-api-key`
+      * `CLAUDE_CODE_OAUTH_TOKEN`   -> `Authorization: Bearer` plus the
+                                       `anthropic-beta: oauth-2025-04-20`
+                                       header the subscription token needs.
+
+    Extracted from `_probe_real` (DRE-2236) so the availability probe and the
+    model catalog share ONE block rather than two copies that drift the day one
+    side gains a header. Returning None (rather than raising) keeps the
+    callers' degrade paths intact: the probe treats "no token" as inconclusive
+    and the catalog returns empty — neither blocks a dispatch.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if not api_key and not oauth:
+        return None
+
+    headers = {"anthropic-version": ANTHROPIC_VERSION}
+    if api_key:
+        headers["x-api-key"] = api_key
+    else:
+        headers["authorization"] = f"Bearer {oauth}"
+        headers["anthropic-beta"] = OAUTH_BETA
+    return headers
+
 
 # --------------------------------------------------------------------------- #
 # Availability detection                                                       #
@@ -283,7 +322,8 @@ def _probe_real(model: str) -> bool:
     """Probe one model's availability via a minimal /v1/messages POST.
 
     Uses the CLAUDE token already in the workflow env (ANTHROPIC_API_KEY, or the
-    subscription OAuth token CLAUDE_CODE_OAUTH_TOKEN) — no new secret. Returns
+    subscription OAuth token CLAUDE_CODE_OAUTH_TOKEN) via the shared
+    `auth_headers()` seam — no new secret, one auth block. Returns
     True (AVAILABLE) on any non-404 response and on an inconclusive probe
     (network error / no token), so we never block a build on the probe. Only a
     definite 404 / not-found returns False.
@@ -294,22 +334,12 @@ def _probe_real(model: str) -> bool:
     import urllib.error
     import urllib.request
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
-    if not api_key and not oauth:
+    headers = auth_headers()
+    if headers is None:
         # No token to probe with → inconclusive → treat as available so the
         # ladder degrades to best-first without blocking.
         return True
-
-    headers = {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
-    }
-    if api_key:
-        headers["x-api-key"] = api_key
-    else:
-        headers["authorization"] = f"Bearer {oauth}"
-        headers["anthropic-beta"] = "oauth-2025-04-20"
+    headers = {"content-type": "application/json", **headers}
 
     payload = json.dumps(
         {

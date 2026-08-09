@@ -1,0 +1,147 @@
+# Model drift watch (DRE-2236) — discover models from the API, alert on drift,
+# NEVER auto-adopt.
+#
+# We used to learn about model changes by eye: on 2026-07-28 the console showed
+# "Opus 4.8" on every board card while the pipeline was already dispatching
+# Opus 5, and the same rotation missed one agent's pin with CI green throughout.
+# This job replaces the eyeball with a weekly read of the live model list.
+#
+# It does exactly two things, both of them safe:
+#   1. refreshes models.json — DATA ONLY, the seam the console reads so
+#      agent-bureau needs no Anthropic credential and no second transport;
+#   2. opens ONE Linear card when the pinned ladder has something newer
+#      available, for a HUMAN to decide.
+#
+# It does NOT change the ladder. Adoption stays a deliberate one-line human
+# edit, because a new model can ship breaking API changes (Opus 5 turned
+# thinking on by default and 400s when thinking is disabled above `high`
+# effort) and can double the bill (Fable 5 is ~2x Opus per token — the reason
+# Fable is off the workhorse ladder). The commit step below stages one path and
+# then PROVES the staged set, so this workflow is structurally incapable of
+# adopting anything.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — the schedule initiates as `github-actions`; the snapshot commit
+#      is pushed with the bureau App token, so the resulting push (and the
+#      Pipeline Tests run it triggers) is attributed to agent-bureau-bot, an
+#      identity every gate here already admits.
+#   Q2 secrets — a schedule-triggered run in this repo reads the repo's normal
+#      secrets store (never the separate Dependabot store), so the Anthropic
+#      and Linear credentials resolve.
+#   Q3 re-run — the snapshot write is idempotent (an unchanged catalog is a
+#      byte-identical file and no commit) and the card lookup is by exact
+#      title, so a re-run mints nothing new. A DECLINED finding should be
+#      parked in Backlog rather than Canceled: `find-open` ignores terminal
+#      cards, so cancelling one invites a fresh card next week.
+#   Q4 command limits — `linear_ops.py find-open` matches an EXACT title among
+#      non-terminal cards; drift_title() is generated deterministically from
+#      the finding so the match holds week to week.
+#   Q5 our crash — no receipts, no markers, nothing to unstick: a run that dies
+#      anywhere simply repeats next week (or on workflow_dispatch).
+name: Model drift
+
+on:
+  schedule:
+    # Weekly, Monday 06:17 UTC. Off the hour on purpose — GitHub delays
+    # scheduled jobs hardest at :00, and nothing here is time-critical.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: model-drift
+      cancel-in-progress: false
+    steps:
+      # The App token, not github.token: a push made with GITHUB_TOKEN does not
+      # trigger workflows, so the snapshot commit would land on main with the
+      # test suite never running against it.
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # ONE live API call per run. Both credential shapes are passed; the shared
+      # auth seam (model_fallback.auth_headers) picks x-api-key or the OAuth
+      # bearer. No credential, or any network/parse failure, degrades to an
+      # empty catalog: the step warns, leaves the existing snapshot alone, and
+      # the run stays green — a catalog outage is not an incident.
+      - name: Refresh the catalog snapshot
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python3 scripts/model_catalog.py snapshot models.json
+
+      # Drift is checked against the file just written — no second API call,
+      # and on an outage it degrades to the last good snapshot rather than to
+      # a false "no drift". Exit 3 = something newer than what we pin.
+      - name: Check the pinned ladder against the catalog
+        id: drift
+        run: |
+          set +e
+          python3 scripts/model_catalog.py check-drift models.json \
+            --title-file "$RUNNER_TEMP/drift-title.txt" \
+            --body-file "$RUNNER_TEMP/drift-body.md"
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "drift=false" >> "$GITHUB_OUTPUT" ;;
+            3) echo "drift=true"  >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+
+      # ONE card per finding. The title encodes pinned → newest, so the
+      # exact-title lookup matches the card an earlier run already opened and
+      # the weekly schedule never duplicates it.
+      - name: Open ONE drift card (idempotent)
+        if: steps.drift.outputs.drift == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          TITLE=$(cat "$RUNNER_TEMP/drift-title.txt")
+          EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
+          if [ -n "$EXISTING" ]; then
+            echo "already open as $EXISTING — not duplicating"
+          else
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/drift-body.md"
+          fi
+
+      # DATA ONLY, and proven so: stage exactly one path, then refuse to commit
+      # if anything else is staged. This is the structural guarantee that a
+      # scheduled job can never move a model pin.
+      - name: Commit the snapshot (models.json only)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          git add models.json
+          STAGED=$(git diff --cached --name-only)
+          if [ -z "$STAGED" ]; then
+            echo "catalog unchanged — nothing to commit"
+            exit 0
+          fi
+          if [ "$STAGED" != "models.json" ]; then
+            echo "::error::refusing to commit — staged more than the snapshot: $STAGED"
+            exit 1
+          fi
+          git -c user.name="agent-bureau-bot[bot]" \
+              -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
+              commit -m "chore(models): refresh the catalog snapshot
+
+          Generated by .github/workflows/model-drift.yml (DRE-2236). Data only —
+          the ladder is unchanged; adoption is a human edit."
+          git push origin HEAD:main
