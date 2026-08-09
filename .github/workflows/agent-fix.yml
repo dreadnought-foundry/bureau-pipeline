@@ -163,7 +163,6 @@ jobs:
             {
               echo "go=true"; echo "number=$PR"; echo "branch=$BRANCH"
               echo "card=$CARD"; echo "attempt=$ATTEMPT"
-              echo "model_arg="
               echo "escalation=MODE: merge-conflict resolution ONLY. The critic has not requested changes — do NOT rework the diff. Merge the default branch into this branch, resolve conflicts preserving BOTH sides' intent (renumber this branch's alembic migration to main's-head + 1 if that is the conflict). A GENERATED lockfile in conflict (package-lock.json, yarn.lock, pnpm-lock.yaml, poetry.lock, Cargo.lock) must NEVER be hand-merged — hand-merging one eats the whole turn budget: take the default branch's copy (git checkout origin/<default-branch> -- <lockfile>) and regenerate it from this branch's manifest with the package manager (e.g. npm install). Then run local checks and push. Commit message: \"merge: resolve conflicts with main (round $ATTEMPT)\". Nothing else."
             } >> "$GITHUB_OUTPUT"
             if [ "$RESOLVED" -ge 5 ]; then
@@ -184,14 +183,12 @@ jobs:
             echo "go=true"; echo "number=$PR"; echo "branch=$BRANCH"
             echo "card=$CARD"; echo "attempt=$ATTEMPT"
           } >> "$GITHUB_OUTPUT"
-          # All three attempts ride the workhorse model (Opus 5, the engineer
-          # tier). Attempt 3 escalates the FRAMING, not the model — re-derive
-          # the fix from scratch instead of patching the last one, because
-          # same-model retries share blind spots. It used to escalate to
-          # claude-fable-5; Fable came off every build path on 2026-08-09 on
-          # cost/quota policy (see agents.yaml and scripts/model_fallback.py),
-          # and an attempt-gated escalation is still a build path. Then hold.
-          echo "model_arg=--model claude-opus-5" >> "$GITHUB_OUTPUT"
+          # All three attempts ride the workhorse ladder. Attempt 3 escalates
+          # the FRAMING, not the model — re-derive the fix from scratch instead
+          # of patching the last one, because same-model retries share blind
+          # spots. The id itself is NOT pinned here: the "Select model" step
+          # below resolves it from config/models.yaml (DRE-2316), because this
+          # step runs before the .bureau-pipeline checkout. Then hold.
           if [ "$ATTEMPT" -eq 3 ]; then
             echo "escalation=ESCALATION CONTEXT: Two previous fix attempts failed to satisfy the critic. Do NOT assume their approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in /tmp/fix-blocker.txt rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
           else
@@ -284,6 +281,35 @@ jobs:
           python3 .bureau-pipeline/scripts/assemble_context.py assemble fix \
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of fix context"
+
+      # Model selection for the fixer (DRE-2316). The id used to be pinned as
+      # an output of the Resolve-PR step above, where no config edit could
+      # reach it; it now comes from config/models.yaml (agent `fixer`, the
+      # workhorse ladder) via the shared availability-probing walk. It lives
+      # here rather than up there because the pipeline scripts are only
+      # checked out further up this job.
+      #
+      # Conflict-resolution rounds are unchanged: they pass NO model arg and
+      # ride the action's default. That path is a mechanical merge, not a
+      # re-derivation, and pinning it would be a spend change this card is not
+      # making.
+      - name: Select model
+        id: model
+        if: steps.pr.outputs.go == 'true'
+        env:
+          # The probe authenticates with the same CLAUDE token the fixer uses.
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          MODE: ${{ steps.pr.outputs.mode }}
+        run: |
+          if [ "$MODE" = "conflict" ]; then
+            echo "model_arg=" >> "$GITHUB_OUTPUT"
+            echo "conflict mode — no model pin (action default)"
+            exit 0
+          fi
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select fixer)
+          echo "model_arg=--model $MODEL" >> "$GITHUB_OUTPUT"
+          echo "selected model: $MODEL (agent: fixer)"
 
       # DRE-1996: the branch name is agent-chosen (agent/* refs, and git
       # refnames may contain $ and backticks) and the escalation preamble
@@ -379,7 +405,7 @@ jobs:
           allowed_bots: "agent-bureau-qa-bot,github-actions"
           claude_args: |
             --max-turns 60
-            ${{ steps.pr.outputs.model_arg }}
+            ${{ steps.model.outputs.model_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
             ${{ steps.safe.outputs.escalation }}

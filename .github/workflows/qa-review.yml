@@ -370,6 +370,25 @@ jobs:
             --branch "$BRANCH" \
             --pr-body-file /tmp/cardctx-pr-body.txt
 
+      # Model selection for the critic (DRE-2316). This step exists because
+      # the critic used to carry a pinned Sonnet id twice in this file: nothing
+      # a human could edit changed it, and the agent registry could not see it.
+      # The id now comes from config/models.yaml (agent `critic`, the
+      # `reviewer` ladder) through the SAME availability-probing ladder walk the
+      # build agents use — the config is a file in the .bureau-pipeline checkout
+      # above, never a runtime lookup (these runners hold no cloud credentials).
+      - name: Select model
+        id: model
+        if: steps.decide.outputs.review == 'true'
+        env:
+          # The probe authenticates with the same CLAUDE token the critic uses.
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: |
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select critic)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "selected model: $MODEL (agent: critic)"
+
       - name: Critic review
         id: critic
         if: steps.decide.outputs.review == 'true'
@@ -388,7 +407,7 @@ jobs:
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
             --max-turns 40
-            --model claude-sonnet-4-6
+            --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — the bureau
@@ -525,7 +544,7 @@ jobs:
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
             --max-turns 40
-            --model claude-sonnet-4-6
+            --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — the bureau

@@ -1,9 +1,13 @@
 """agents.yaml is the consumer contract for the console roster (DRE-1335):
-every agent workflow has an entry, and budgets/models match the workflow
-text they describe — drift here means the console lies about the fleet."""
+every agent workflow has an entry, and budgets match the workflow text they
+describe — drift here means the console lies about the fleet.
+
+The MODEL half of that contract moved to config/models.yaml (DRE-2316): the
+registry's `model:` is a generated mirror of it, and the workflow no longer
+carries the id at all, so the check here is that the workflow SELECTS from the
+config rather than pinning a string."""
 
 import os
-import re
 import unittest
 
 import yaml
@@ -23,13 +27,27 @@ class AgentsRegistryTest(unittest.TestCase):
                            "plan.yml", "medic.yml"}
         self.assertEqual(agent_workflows, covered & agent_workflows)
 
-    def test_models_and_turns_match_workflow_text(self):
+    def test_turns_match_workflow_text(self):
         for a in load():
             src = open(os.path.join(ROOT, a["workflow"])).read()
-            self.assertIn(a["model"], src,
-                          f"{a['name']}: model {a['model']} not in {a['workflow']}")
             self.assertIn(f"--max-turns {a['maxTurns']}", src,
                           f"{a['name']}: maxTurns {a['maxTurns']} not in {a['workflow']}")
+
+    def test_workflows_resolve_the_model_through_the_config(self):
+        """The roster's `model:` is a GENERATED mirror of config/models.yaml
+        (DRE-2316) — so it is no longer a literal to grep for in the workflow.
+
+        The old assertion (`model` appears verbatim in the workflow source) is
+        exactly what a hardcoded `--model claude-sonnet-4-6` satisfied, which is
+        how the critic/verifier/medic bypassed selection while this test stayed
+        green. The contract now: the workflow SELECTS, and pins nothing."""
+        for a in load():
+            src = open(os.path.join(ROOT, a["workflow"])).read()
+            self.assertIn("model_fallback.py select", src,
+                          f"{a['name']}: {a['workflow']} does not select a model")
+            self.assertNotRegex(
+                src, r"--model\s+claude-",
+                f"{a['name']}: {a['workflow']} hardcodes a model id")
 
     def test_every_agent_has_a_valid_category(self):
         # category groups the roster in the console by business function

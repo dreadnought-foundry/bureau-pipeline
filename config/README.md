@@ -1,3 +1,60 @@
+# `config/` — the data files the pipeline reads at run time
+
+Two canonical files live here. Both exist for the same reason: the workflows
+that read them run in a product repo's GitHub Actions with **no AWS credentials**
+and **no token for a private repo**, so anything they need must be a file in the
+public `bureau-pipeline` checkout they already do (`.bureau-pipeline` @ `main`).
+Neither is ever a runtime lookup.
+
+- **`models.yaml`** — which model each agent runs on (see below).
+- **`repo-map.json`** — the relay's routing snapshot (see further below).
+
+---
+
+# `models.yaml` — the ONE model config (DRE-2316)
+
+`models.yaml` is **the only file a human edits to change which model an agent
+uses**. It declares named, ordered fallback **ladders** (best → worst), assigns
+every agent to one, and lists the ids that stay *readable but not selectable*
+(retired ids, and ids excluded by cost policy).
+
+## Who reads it
+
+- **The CI path.** `scripts/model_fallback.py` loads this file and `select()`
+  walks the ladder it names for that agent, returning the first model a runtime
+  availability probe says is up. Every agent workflow — build agents *and* the
+  critic, verifier and medic — takes its `--model` from that step. No workflow
+  pins a model id; a test reads the workflow files and fails if one does.
+- **The console roster**, indirectly: `agents.yaml`'s per-agent `model:` line is
+  a **generated** mirror of this file.
+
+## Generated mirrors and the drift gate
+
+Every copy sits between explicit `BEGIN generated …` / `END generated …`
+markers and is produced by one script:
+
+```
+python3 scripts/sync_model_config.py          # regenerate the mirrors
+python3 scripts/sync_model_config.py --check  # CI: exit 1 if any mirror is stale
+```
+
+The mirrors are `agents.yaml`'s `model:` lines and
+`model_fallback._FALLBACK_MODEL_CONFIG` — a last-known-good literal used **only**
+when the YAML is unreadable, so a truncated checkout degrades instead of
+stranding a dispatch. `tests/test_model_config.py` pins the markers, the
+byte-for-byte regeneration, the red `--check`, and that editing this file alone
+changes what the fleet selects.
+
+## Changing a model
+
+Edit `models.yaml`, run the sync script, commit both. Merging to `main` is
+**instantly live fleet-wide** — treat it as a production change. Remember that
+availability decides how far *down* a ladder we walk, never how far up: a model
+that is not on a ladder is never selected, however available it becomes. Ladder
+membership is the spend decision, and it is made here.
+
+---
+
 # `repo-map.json` — the gate's routing snapshot (DRE-1626)
 
 `repo-map.json` is the bureau pipeline's bundled copy of the **canonical routing

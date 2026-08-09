@@ -182,6 +182,23 @@ jobs:
           python3 .bureau-pipeline/scripts/sanitize_untrusted.py \
             line RAW_HEAD_BRANCH head_branch
 
+      # Model selection for the medic (DRE-2316). It used to carry a pinned
+      # Sonnet id right here — one no config edit could change and no test
+      # could see. The id now comes from config/models.yaml (agent `medic`, the
+      # `reviewer` ladder) via the shared availability-probing ladder walk,
+      # read out of the .bureau-pipeline checkout above (never a runtime
+      # lookup — these runners hold no cloud credentials).
+      - name: Select model
+        id: model
+        env:
+          # The probe authenticates with the same CLAUDE token the medic uses.
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: |
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select medic)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "selected model: $MODEL (agent: medic)"
+
       - name: Diagnosis agent
         uses: anthropics/claude-code-action@v1
         env:
@@ -197,7 +214,7 @@ jobs:
           allowed_bots: "*"
           claude_args: |
             --max-turns 40
-            --model claude-sonnet-4-6
+            --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — the shared bureau
