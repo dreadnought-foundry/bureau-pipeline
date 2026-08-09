@@ -472,6 +472,13 @@ def drift_body(findings) -> str:
         "Adoption is a deliberate human edit of the ladder in "
         "`scripts/model_fallback.py` and `agents.yaml`, in one reviewed PR — "
         "do not automate it. This watch only makes the drift visible.",
+        "",
+        "## If we decide against it",
+        "",
+        "Park this card in Backlog rather than cancelling it. The weekly watch "
+        "dedupes against OPEN cards with this exact title, so a cancelled card "
+        "invites an identical one next Monday; a parked one keeps it quiet "
+        "until something genuinely newer ships.",
     ]
     return "\n".join(lines) + "\n"
 

@@ -541,6 +541,9 @@ def test_cli_check_drift_exits_3_and_writes_one_card(monkeypatch, tmp_path):
     assert OPUS in body and "claude-opus-10" in body
     assert "2027-02-01" in body, "the body shows created_at, the ranking basis"
     assert "do not" in body.lower(), "the body must say adoption is a human edit"
+    # find-open ignores terminal cards, so a CANCELLED finding comes back as a
+    # fresh card next Monday — the body has to tell the reader to park it.
+    assert "backlog" in body.lower()
 
 
 def test_cli_drift_title_is_stable_for_the_same_finding():
