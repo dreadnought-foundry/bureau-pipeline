@@ -370,13 +370,26 @@ def new_models(catalog, known_ids=None) -> list[dict]:
     return found
 
 
+# How many ids a title spells out before it elides. The body always lists them
+# all; the title has to stay readable on a Linear board.
+_TITLE_IDS = 3
+
+
 def new_model_title(entries) -> str:
     """A title that encodes the FINDING, not the run date — the same
     idempotency contract drift_title() has: `linear_ops.py find-open` matches it
     exactly, so next week's identical finding updates nothing and duplicates
-    nothing."""
-    ids = ", ".join(e["id"] for e in entries)
-    return f"New model available (advisory decision): {ids}"
+    nothing.
+
+    The ids are SORTED, not taken in catalog order: `/v1/models` order is the
+    vendor's business, and a re-ordered response must not mint a second card
+    for a finding we already have open.
+    """
+    ids = sorted(e["id"] for e in entries)
+    shown = ", ".join(ids[:_TITLE_IDS])
+    if len(ids) > _TITLE_IDS:
+        shown += f" +{len(ids) - _TITLE_IDS} more"
+    return f"New model available (advisory decision): {shown}"
 
 
 def new_model_body(entries) -> str:
@@ -654,10 +667,11 @@ def _cmd_snapshot(path: str) -> int:
 
 
 def _parse_card_args(argv: list[str]):
-    """`[<snapshot>] [--title-file <p>] [--body-file <p>]` → the three values.
-    Shared by both card-opening commands so they cannot drift apart."""
+    """`[<snapshot>] [--title-file <p>] [--body-file <p>] [--baseline <p>]` →
+    the four values. Shared by both card-opening commands so they cannot drift
+    apart. `--baseline` is only meaningful to check-new."""
     source = None
-    title_file = body_file = None
+    title_file = body_file = baseline = None
     rest = list(argv)
     while rest:
         arg = rest.pop(0)
@@ -665,15 +679,17 @@ def _parse_card_args(argv: list[str]):
             title_file = rest.pop(0) if rest else None
         elif arg == "--body-file":
             body_file = rest.pop(0) if rest else None
+        elif arg == "--baseline":
+            baseline = rest.pop(0) if rest else None
         elif source is None:
             source = arg
-    return source, title_file, body_file
+    return source, title_file, body_file, baseline
 
 
 def _cmd_check_drift(argv: list[str]) -> int:
     """Compare LADDER against a catalog. Exit 3 = drift found (the workflow's
     signal to open ONE card), exit 0 = current or nothing to compare."""
-    source, title_file, body_file = _parse_card_args(argv)
+    source, title_file, body_file, _ = _parse_card_args(argv)
 
     if source:
         catalog = snapshot_catalog(load_snapshot(source))
@@ -706,10 +722,17 @@ def _cmd_check_drift(argv: list[str]) -> int:
 
 
 def _cmd_check_new(argv: list[str]) -> int:
-    """Report models the catalog offers that config/models.yaml has never named.
+    """Report models the catalog offers that we have never seen or configured.
     Exit 3 = at least one (the workflow's signal to open ONE alert card), exit
-    0 = nothing new or nothing to compare. Adopts nothing, writes no config."""
-    source, title_file, body_file = _parse_card_args(argv)
+    0 = nothing new or nothing to compare. Adopts nothing, writes no config.
+
+    `--baseline <snapshot>` is the record of what we had ALREADY seen — read
+    before the weekly refresh rewrites it. Without it "new" would mean "not on
+    a ladder", which is every model Anthropic offers that we simply do not run:
+    a weekly re-alert that trains the alert into wallpaper. With it, "new"
+    means what the card means — an id the system is seeing for the first time.
+    """
+    source, title_file, body_file, baseline = _parse_card_args(argv)
 
     if source:
         catalog = snapshot_catalog(load_snapshot(source))
@@ -721,7 +744,16 @@ def _cmd_check_new(argv: list[str]) -> int:
         print("catalog empty — no discovery check possible")
         return 0
 
-    found = new_models(catalog)
+    known = set(KNOWN_MODELS)
+    if baseline:
+        # EVERY id in the baseline, `in_catalog` or not: a model we saw once and
+        # that has since rotated out is not a discovery when it reappears.
+        known |= {
+            entry["id"]
+            for entry in load_snapshot(baseline).get("models", [])
+            if isinstance(entry, Mapping) and isinstance(entry.get("id"), str)
+        }
+    found = new_models(catalog, known_ids=known)
     if not found:
         print("no unconfigured models in the catalog")
         return 0

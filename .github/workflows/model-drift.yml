@@ -79,6 +79,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The snapshot as it stands BEFORE the refresh — the record of every model
+      # we had already seen. Discovery compares the fresh catalog against THIS;
+      # comparing it against the file the next step overwrites would find
+      # nothing, ever. Copied, not stashed in git, so the commit step below
+      # still stages exactly one path.
+      - name: Keep the previous snapshot as the discovery baseline
+        run: cp models.json "$RUNNER_TEMP/previous-models.json" || echo '{}' > "$RUNNER_TEMP/previous-models.json"
+
       # ONE live API call per run. Both credential shapes are passed; the shared
       # auth seam (model_fallback.auth_headers) picks x-api-key or the OAuth
       # bearer. No credential, or any network/parse failure, degrades to an
@@ -136,6 +144,7 @@ jobs:
         run: |
           set +e
           python3 scripts/model_catalog.py check-new models.json \
+            --baseline "$RUNNER_TEMP/previous-models.json" \
             --title-file "$RUNNER_TEMP/new-model-title.txt" \
             --body-file "$RUNNER_TEMP/new-model-body.md"
           rc=$?
