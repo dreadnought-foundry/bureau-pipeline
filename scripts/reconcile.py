@@ -75,6 +75,7 @@ import time
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
@@ -578,15 +579,19 @@ def pr_for(identifier: str) -> dict | None:
     near-miss identifiers out (DRE-1034 vs DRE-10345), and among matches the
     highest PR number wins — the newest attempt; an older merged PR must not
     shadow a newer open one and flip the card to Done.
+
+    Attribution and the newest-wins rule come from card_pr, the ONE predicate
+    the run's own Report step now shares (DRE-2316) — this sweep and that step
+    disagreeing about whether a card has a PR is the bug that requeued
+    DRE-2316 onto a second agent.
     """
-    fields = "number,headRefName,state,comments,headRefOid"
+    fields = "number,url,headRefName,state,comments,headRefOid"
 
     def newest_match(out: str) -> dict | None:
-        matches = [
+        return card_pr.newest([
             pr for pr in json.loads(out or "[]")
-            if re.search(rf"\b{identifier}\b", pr["headRefName"])
-        ]
-        return max(matches, key=lambda pr: pr["number"]) if matches else None
+            if card_pr.matches_card(pr.get("headRefName"), identifier)
+        ])
 
     found = newest_match(gh_read(
         "pr", "list", "--repo", REPO, "--state", "all", "--limit", "30",
@@ -2279,8 +2284,14 @@ def main(
             _read_failures.append(str(e))
             print(f"ERROR: pr_for {ident}: {e}", file=sys.stderr)
             continue
-        merged = pr is not None and pr["state"] == "MERGED"
-        is_open = pr is not None and pr["state"] == "OPEN"
+        # card_pr.has_work_pr is the ONE "this card produced a PR" predicate
+        # (DRE-2316): OPEN or MERGED. Every no-PR branch below is reachable
+        # only when it is False, so a merged PR can never read as a dead run
+        # here — the mistake the run's own Report step made ten seconds after
+        # PR #137 merged.
+        has_pr = card_pr.has_work_pr(pr)
+        merged = has_pr and card_pr.pr_state(pr) == card_pr.MERGED
+        is_open = has_pr and card_pr.pr_state(pr) == card_pr.OPEN
         print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
 
         if merged:
