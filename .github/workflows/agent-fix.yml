@@ -2,8 +2,8 @@
 # merge gate finds a conflict), dispatch a fixing agent on the same branch.
 # The push re-triggers CI and QA Review automatically (App-token pushes fire
 # events), so the loop closes itself: fix → re-review → APPROVE → merge.
-# Two separate budgets per PR: 3 review-fix attempts (Fable 5 escalation on
-# the third), and 5 conflict-resolution rounds — conflict churn from main
+# Two separate budgets per PR: 3 review-fix attempts (the third re-derives the
+# fix with fresh eyes), and 5 conflict-resolution rounds — conflict churn from main
 # moving must not consume the review budget. Either exhausted → human hold.
 #
 # Reusable workflow: concurrency + permissions live in the calling stub.
@@ -120,8 +120,8 @@ jobs:
           fi
 
           # Two separate budgets. Review-fix attempts (critic findings or
-          # failing CI) are capped at 3 with a Fable 5 escalation on the
-          # last one. Conflict resolutions (the branch raced main) are a
+          # failing CI) are capped at 3, the last one a fresh-eyes
+          # re-derivation. Conflict resolutions (the branch raced main) are a
           # different failure class with its own counter — a burst of wave
           # merges can conflict the same PR several times in minutes, and
           # that churn must not consume the review budget (PR #13 nearly
@@ -134,7 +134,7 @@ jobs:
           # pushed since it landed. A conflict arriving while a pushed fix
           # awaits re-review must route to conflict mode — otherwise it burns
           # review attempts on a fix the critic never saw (PR #25 hit
-          # budget-exhaustion this way with an unreviewed Fable 5 fix).
+          # budget-exhaustion this way with a fix the critic never saw).
           LAST_VERDICT_IDX=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
             --jq '[to_entries[] | select(.value.user.login == "agent-bureau-qa-bot[bot]") | select(.value.body | contains("QA Critic"))] | last | .key // -1')
           # DRE-1995: the push marker (and the two attempt counters below) are
@@ -184,21 +184,23 @@ jobs:
             echo "go=true"; echo "number=$PR"; echo "branch=$BRANCH"
             echo "card=$CARD"; echo "attempt=$ATTEMPT"
           } >> "$GITHUB_OUTPUT"
-          # Attempts 1-2: Opus 5 (the engineer tier). Attempt 3: Fable 5 with
-          # fresh-eyes framing (same-model retries share blind spots). Then hold.
+          # All three attempts ride the workhorse model (Opus 5, the engineer
+          # tier). Attempt 3 escalates the FRAMING, not the model — re-derive
+          # the fix from scratch instead of patching the last one, because
+          # same-model retries share blind spots. It used to escalate to
+          # claude-fable-5; Fable came off every build path on 2026-08-09 on
+          # cost/quota policy (see agents.yaml and scripts/model_fallback.py),
+          # and an attempt-gated escalation is still a build path. Then hold.
+          echo "model_arg=--model claude-opus-5" >> "$GITHUB_OUTPUT"
           if [ "$ATTEMPT" -eq 3 ]; then
-            {
-              echo "model_arg=--model claude-fable-5"
-              echo "escalation=ESCALATION CONTEXT: Two previous fix attempts by another model failed to satisfy the critic. Do NOT assume their approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in /tmp/fix-blocker.txt rather than forcing a bad fix."
-            } >> "$GITHUB_OUTPUT"
+            echo "escalation=ESCALATION CONTEXT: Two previous fix attempts failed to satisfy the critic. Do NOT assume their approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in /tmp/fix-blocker.txt rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
           else
-            echo "model_arg=--model claude-opus-5" >> "$GITHUB_OUTPUT"
             echo "escalation=" >> "$GITHUB_OUTPUT"
           fi
           if [ "$ATTEMPTS" -ge 3 ]; then
             echo "go=false" >> "$GITHUB_OUTPUT"
             gh pr comment "$PR" --repo ${{ github.repository }} \
-              --body "🛑 Fix budget exhausted ($ATTEMPTS attempts, including a Fable 5 escalation) — holding for a human decision."
+              --body "🛑 Fix budget exhausted ($ATTEMPTS attempts, including a fresh-eyes re-derivation) — holding for a human decision."
             echo "held=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -218,7 +220,7 @@ jobs:
           if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
             MSG="🛑 Five conflict-resolution rounds couldn't keep this PR mergeable — main keeps moving under it. Needs a human decision."
           else
-            MSG="🛑 Three fix attempts (two standard + one Fable 5 escalation) couldn't satisfy the critic — this card needs a human decision. See PR for the full review trail."
+            MSG="🛑 Three fix attempts (two standard + one fresh-eyes re-derivation) couldn't satisfy the critic — this card needs a human decision. See PR for the full review trail."
           fi
           python3 .bureau-pipeline/scripts/linear_ops.py comment "${{ steps.pr.outputs.card }}" "$MSG"
 
@@ -263,7 +265,7 @@ jobs:
             MSG="🔀 Conflict-resolution agent dispatched (round ${{ steps.pr.outputs.attempt }}/5) — merging main into PR #${{ steps.pr.outputs.number }}."
           else
             NOTE=""
-            [ "${{ steps.pr.outputs.attempt }}" = "3" ] && NOTE=" — escalated to Fable 5"
+            [ "${{ steps.pr.outputs.attempt }}" = "3" ] && NOTE=" — fresh-eyes re-derivation"
             MSG="🔧 Fix agent dispatched (attempt ${{ steps.pr.outputs.attempt }}/3$NOTE) — addressing critic findings on PR #${{ steps.pr.outputs.number }}."
           fi
           [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment \

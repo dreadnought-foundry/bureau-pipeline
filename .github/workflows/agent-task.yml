@@ -225,17 +225,17 @@ jobs:
           python3 .bureau-pipeline/scripts/dedupe_dispatch.py gate \
             "${{ github.event.client_payload.identifier }}"
 
-      # Model selection: ordered preference ladder with runtime availability
-      # detection (DRE-1490). select() walks the shared ladder best→worst —
-      # claude-fable-5, then claude-opus-5, then claude-sonnet-4-6 (see
-      # model_fallback.py / agents.yaml) — and returns the first AVAILABLE
-      # model. Availability is probed via a minimal /v1/messages call using the
-      # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
-      # skip; any other response, including 429, ⇒ choose it; an inconclusive
-      # probe falls through to the next known-good model. Fable 5 currently 404s
-      # so this resolves to Opus 5 and self-heals to Fable when Anthropic
-      # re-enables it — no code change. The chosen id is recorded in a heartbeat
-      # comment so the board shows which model each attempt used.
+      # Model selection: the shared WORKHORSE ladder with runtime availability
+      # detection (DRE-1490). select() walks it best→worst — claude-opus-5,
+      # then claude-sonnet-4-6 (see model_fallback.py / agents.yaml) — and
+      # returns the first AVAILABLE model. Availability is probed via a minimal
+      # /v1/messages call using the CLAUDE token already in the env (no new
+      # secret): a 404 / not-found ⇒ skip; any other response, including 429, ⇒
+      # choose it; an inconclusive probe falls through to the next known-good
+      # model. The probe decides how far DOWN the ladder to walk, never how far
+      # up: claude-fable-5 is off the ladder on cost/quota policy (2026-08-09)
+      # and no availability change puts it back. The chosen id is recorded in a
+      # heartbeat comment so the board shows which model each attempt used.
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -483,7 +483,7 @@ jobs:
             # hung (reconcile sweep), and — new in DRE-1354 — is_error (an
             # API/model death mid-run). dead_run.decide() unifies requeue-vs-hold
             # and, for an is_error death, records a 'model-error:' marker so the
-            # requeue's next attempt selects the ALTERNATE model (Opus↔Fable)
+            # requeue's next attempt selects the NEXT model down the ladder
             # instead of re-dying on the same one. is_error deaths now COUNT
             # toward the cap (previously they failed the job and the medic re-ran
             # on the same model, bypassing it — DRE-1300 looped 18×).

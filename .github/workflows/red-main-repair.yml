@@ -21,9 +21,8 @@
 #     repair onto the bucket with the most headroom, away from whichever
 #     bucket card dispatch is draining.
 #
-# Model: ordered preference ladder with runtime availability detection
-# (model_fallback.py, engineer role) — claude-fable-5, then claude-opus-4-8,
-# then claude-sonnet-4-6.
+# Model: the workhorse ladder with runtime availability detection
+# (model_fallback.py, engineer role) — claude-opus-5, then claude-sonnet-4-6.
 #
 # Reusable workflow: the workflow_run trigger list (which CI workflows to
 # watch) and permissions live in the calling stub; the stub's github.token
@@ -274,10 +273,10 @@ jobs:
             echo "no .github/bureau/setup.sh — skipping product setup"
           fi
 
-      # Ordered preference ladder with runtime availability detection
-      # (DRE-1490): claude-fable-5 → claude-opus-4-8 → claude-sonnet-4-6.
-      # The repair agent is an engineer-tier fixer, so it walks the
-      # engineer ladder.
+      # The workhorse ladder with runtime availability detection (DRE-1490):
+      # claude-opus-5 → claude-sonnet-4-6. The repair agent is an
+      # engineer-tier fixer, so it walks the engineer ladder. claude-fable-5
+      # is off it on cost/quota policy (2026-08-09), not availability.
       - name: Select model
         id: model
         if: steps.decide.outputs.go == 'true'

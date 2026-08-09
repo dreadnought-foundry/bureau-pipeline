@@ -3,11 +3,22 @@
 detection (DRE-1490, stdlib only). Plus the preserved is_error heartbeat +
 hold-cap markers from DRE-1354.
 
-The ladder is best-first with runtime availability detection. Today
-`claude-fable-5` is 404 on our subscriptions, so `select` resolves to
-`claude-opus-5`; it self-heals to Fable the moment Anthropic re-enables it,
-with NO code change (the next probe after the cache TTL sees it available and
-`select` returns it again). Ref DRE-1490.
+The ladder is best-first with runtime availability detection, and it is the
+WORKHORSE ladder: what every build agent (engineer, frontend, devops, planner,
+repairer) runs on. It starts at `claude-opus-5` and falls back to
+`claude-sonnet-4-6`. Ref DRE-1490.
+
+`claude-fable-5` is NOT on it, and its absence is a policy decision, not an
+availability one (2026-08-09). Fable costs ~2x Opus per token; when Anthropic
+enabled it on our subscription the probe stopped returning 404, the best-first
+ladder promoted the whole fleet onto it in a single TTL window, the
+subscription's rolling usage drained, and agents started dying `is_error`
+mid-run. A stronger model becoming AVAILABLE must never silently promote itself
+onto the build path — that is a spend decision, and it belongs to a human
+editing this ladder, not to a probe. Fable is reserved for an advisory/reviewer
+role; it is still a KNOWN model so existing markers attribute, but nothing
+selects it. Availability detection remains: it decides how far DOWN the ladder
+we walk, never how far up.
 
 Why this replaced DRE-1354's per-role pair
 -------------------------------------------
@@ -20,7 +31,7 @@ cards hit needs-human holds.
 
 The model is now chosen by a SINGLE ordered ladder shared by both roles:
 
-    LADDER = ["claude-fable-5", "claude-opus-5", "claude-sonnet-4-6"]   # best→worst
+    LADDER = ["claude-opus-5", "claude-sonnet-4-6"]                     # best→worst
 
 `select()` walks the ladder top→bottom and returns the FIRST AVAILABLE model.
 Availability is probed at runtime via a minimal `/v1/messages` POST
@@ -34,8 +45,10 @@ secret):
     never return a model just confirmed 404.
 
 Availability is CACHED with a short TTL (in-process) so we don't probe on every
-dispatch. Auto-recovery falls out for free: when Fable stops 404ing, the next
-probe after the TTL sees it available and `select` returns it again.
+dispatch. Recovery within the ladder falls out for free: when a skipped ladder
+model comes back, the next probe after the TTL sees it and `select` returns it
+again. That recovery is bounded by the ladder's CONTENTS — it can restore a
+model we already chose to run on, never add one we didn't.
 
 What's preserved from DRE-1354
 ------------------------------
@@ -67,15 +80,24 @@ SONNET = "claude-sonnet-4-6"
 # the console would lose the attribution rather than report it.
 RETIRED_MODELS = {"claude-opus-4-8"}
 
-# The ordered preference ladder, best → worst. Used by BOTH engineer and
+# The ordered WORKHORSE ladder, best → worst. Used by BOTH engineer and
 # planner — no role hardcodes a model. select() returns the first available
 # entry walking top→bottom. (Haiku is intentionally not here: engineer/planner
 # work realistically wants Sonnet-or-better.)
-LADDER: list[str] = [FABLE, OPUS, SONNET]
+#
+# FABLE is deliberately absent (2026-08-09). It is excluded by POLICY — cost and
+# subscription quota, ~2x Opus per token — not by availability, so re-enabling it
+# upstream must NOT put it back here. Membership of this list is the spend
+# decision; the probe only decides how far down we walk. Fable stays in
+# KNOWN_MODELS below so existing markers still attribute.
+LADDER: list[str] = [OPUS, SONNET]
 
 # Every model id we recognize when validating a marker's payload. This is a
 # SUPERSET of the ladder: the ladder is what we may select, this is what we can
-# still read. Retired ids belong here and nowhere else.
+# still read. Retired ids belong here and nowhere else — and so does FABLE,
+# which left the ladder on cost policy while cards in flight still carry
+# `model-attempt:`/`model-error: claude-fable-5`. Dropping it would resolve
+# those deaths to None and lose the attribution rather than report it.
 KNOWN_MODELS = {FABLE, OPUS, SONNET} | RETIRED_MODELS
 
 # Cache availability results so we don't probe on every dispatch. ~12 min keeps
