@@ -395,7 +395,13 @@ jobs:
           WF_NAME: ${{ github.event.workflow_run.name }}
           BRANCH: ${{ steps.decide.outputs.branch }}
         run: |
-          PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
+          # Shared predicate (DRE-2316): `gh pr list` defaults to --state open,
+          # so a repair PR that merged before this step ran read as "no PR" and
+          # this branch failed the run for the medic over work that had already
+          # landed. card_pr.py queries --state all and matches the head ref
+          # exactly (a repair/* ref carries no card id to anchor on).
+          PR_INFO=$(python3 .bureau-pipeline/scripts/card_pr.py find --branch "$BRANCH" || true)
+          PR_URL=$(printf '%s' "$PR_INFO" | cut -f2)
           if [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
             echo "repair PR opened: $PR_URL — the critic and the merge gate own it from here (author ≠ merger)."
           elif [ -f /tmp/repair-escalation.txt ] && [ -s /tmp/repair-escalation.txt ]; then

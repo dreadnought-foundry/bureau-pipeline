@@ -43,6 +43,14 @@ def report_step() -> str:
     return m.group(1)
 
 
+def report_code() -> str:
+    """The report step with `#` comment lines stripped: the comments quote the
+    old, broken command deliberately — that history is why the fix is there."""
+    return "\n".join(
+        line for line in report_step().splitlines() if not line.lstrip().startswith("#")
+    )
+
+
 class ReportPrAttributionTest(unittest.TestCase):
     def test_branch_resolved_separately(self):
         step = report_step()
@@ -62,7 +70,7 @@ class ReportPrAttributionTest(unittest.TestCase):
         # both mis-attributed (DRE-1343) and went blind to merged PRs
         # (DRE-2316).
         step = report_step()
-        self.assertNotIn("gh pr list", step)
+        self.assertNotIn("gh pr list", report_code())
         self.assertIn("card_pr.py", step)
         # And the claim itself must be made from what the predicate returned.
         claim = step.find("PR opened: $PR_URL")

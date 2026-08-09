@@ -393,9 +393,16 @@ jobs:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
         run: |
           BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
+          # card_pr.py is the ONE PR-existence predicate (DRE-2316): --state
+          # all (a PR that just MERGED is still a PR), \b-anchored to this
+          # card (DRE-1343/2025). Exit 3 = the answer was UNREADABLE, which is
+          # not "no PR" — feed the gate a non-empty marker so an API blip can
+          # never be reported as a silent death (DRE-2034).
           PR_URL=""
-          if [ -n "$BRANCH" ]; then
-            PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
+          if PR_INFO=$(python3 .bureau-pipeline/scripts/card_pr.py find "$CARD" --branch "$BRANCH"); then
+            PR_URL=$(printf '%s' "$PR_INFO" | cut -f2)
+          else
+            PR_URL="unreadable"
           fi
           EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
@@ -417,14 +424,28 @@ jobs:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          # Resolve the card's branch FIRST and guard on it: an empty --head
-          # filter makes `gh pr list` return the repo's most recent open PR,
-          # which once attributed another card's PR to a dead run and sent it
-          # to In QA with a false "PR opened" receipt (DRE-1343, 2026-06-12).
+          # Resolve the card's branch FIRST: an empty --head filter makes
+          # `gh pr list` return the repo's most recent open PR, which once
+          # attributed another card's PR to a dead run and sent it to In QA
+          # with a false "PR opened" receipt (DRE-1343, 2026-06-12).
           BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
+          # Then ask card_pr.py — the ONE PR-existence predicate the reconcile
+          # sweep shares (DRE-2316). It queries --state all, so a PR that
+          # MERGED seconds ago is visible; this step used to run a bare
+          # `gh pr list --head` (default: OPEN only), which on 2026-08-08 read
+          # DRE-2316's PR #137 — merged ten seconds earlier — as NO PR, posted
+          # "agent died with no PR", and requeued shipped work onto a second
+          # agent. It also confirms the head ref against this card, so the
+          # DRE-1343 mis-attribution cannot return through the new seam.
+          # Exit 3 means UNREADABLE (403 / rate limit / network) — NOT "no PR"
+          # (DRE-2034); that branch defers instead of declaring a death.
+          PR_STATE=""
           PR_URL=""
-          if [ -n "$BRANCH" ]; then
-            PR_URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
+          if PR_INFO=$(python3 .bureau-pipeline/scripts/card_pr.py find "$CARD" --branch "$BRANCH"); then
+            PR_STATE=$(printf '%s' "$PR_INFO" | cut -f1)
+            PR_URL=$(printf '%s' "$PR_INFO" | cut -f2)
+          else
+            PR_STATE="UNREADABLE"
           fi
 
           # Did the run die with an API/model error (is_error)? (DRE-1354)
@@ -437,7 +458,15 @@ jobs:
             IS_ERROR=true
           fi
 
-          if [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
+          if [ "$PR_STATE" = "MERGED" ]; then
+            # The work SHIPPED while this run was finishing (DRE-2316: PR #137
+            # merged at 22:22:19, this step ran at 22:22:29). Report it and
+            # change nothing: linear-sync's merge→Done owns the card's state,
+            # and the reconcile sweep re-closes it if that ever failed. The one
+            # thing this branch must never do is treat a merged PR as a death.
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+              "🤖 PR already merged: $PR_URL — this card's work shipped while the run was finishing; no requeue. Run: $RUN_URL"
+          elif [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
             python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In QA" "In Progress,Todo"
@@ -477,6 +506,17 @@ jobs:
             # DRE-1885 building-card guard would re-route this In Progress →
             # Backlog move to Todo and reintroduce that loop.
             python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
+          elif [ "$PR_STATE" = "UNREADABLE" ]; then
+            # GitHub would not tell us whether a PR exists (403, rate limit,
+            # network). "Could not tell" is NOT "no PR" — parsing a failed read
+            # as emptiness is what yanked healthy cards around on 2026-06-28
+            # (DRE-2034). Post the receipt, move nothing, count nothing: the
+            # reconcile sweep re-asks off the run's real conclusion, with the
+            # existing cap. Deliberately below the blocker/escalation branches
+            # — an honest note the agent wrote is better evidence than a failed
+            # lookup.
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+              "⚠️ Could not read this card's PR state from GitHub (API error), so this run is NOT being recorded as a dead agent — the reconcile sweep will re-check. Run: $RUN_URL"
           else
             # No PR and no blocker. Three death classes share ONE hold cap,
             # counted by the 'dead-run-requeue' tag (DRE-1403): silent (here),

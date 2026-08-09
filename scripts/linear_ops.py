@@ -154,6 +154,123 @@ def _label_names(issue: dict) -> list[str]:
     ]
 
 
+def _clobbered_terminal_state(identifier: str, target_id: str) -> dict | None:
+    """Read our own write back out of Linear's issue history and return the
+    TERMINAL state it overwrote, if it overwrote one.
+
+    Linear records `fromState` on every state transition, so the entry we just
+    created answers the only question a pre-write check cannot: what the card
+    ACTUALLY was at the instant of the mutation. Newest entry whose `toState`
+    is the state we just set is ours.
+    """
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             history(last: 10) { nodes {
+               createdAt fromState { id name type } toState { id name type }
+             } } } }""",
+        {"id": identifier},
+    )
+    nodes = (((data.get("issue") or {}).get("history") or {}).get("nodes")) or []
+    for node in reversed(nodes):  # newest last in Linear's history(last: n)
+        if ((node.get("toState") or {}).get("id")) != target_id:
+            continue
+        frm = node.get("fromState") or {}
+        return frm if frm.get("type") in _TERMINAL_TYPES else None
+    return None
+
+
+def _set_state(identifier: str, issue_id: str, state_id_value: str) -> None:
+    gql(
+        """mutation($id: String!, $input: IssueUpdateInput!) {
+             issueUpdate(id: $id, input: $input) { success } }""",
+        {"id": issue_id, "input": {"stateId": state_id_value}},
+    )
+
+
+def guarded_state_write(
+    identifier: str,
+    issue: dict,
+    target_id: str,
+    target_type: str,
+    state_name: str,
+) -> bool:
+    """Write a card's state with the tightest terminal guard Linear allows.
+
+    Returns True if the write happened, False if it was refused.
+
+    THIS IS NOT ATOMIC, and nothing here claims it is. Linear's GraphQL API
+    offers no compare-and-set: `issueUpdate` takes only `(id, input)`, and
+    `IssueUpdateInput` has no expected-version / if-match / updatedAt
+    precondition field (schema introspected 2026-08-09 — stateId, title,
+    labels… and nothing conditional). There is no conditional-update mutation
+    either. So a check-then-act window is unavoidable; what this does is make
+    it as small as the API permits and make LOSING it survivable:
+
+      1. RE-READ the card immediately before the mutation and refuse if it has
+         become terminal. The DRE-1877 guard already refused a terminal card —
+         but it decided from a read taken BEFORE the caller's own work, so the
+         window was seconds wide. DRE-2316 lost it by 280 ms: linear-sync set
+         DRE-2316 Done on the PR #137 merge at 22:22:30.349, and the dead-run
+         requeue — which had read "In Review" — wrote Todo at 22:22:30.629.
+         The card then dispatched a second agent onto shipped work. After (1)
+         the window is one API round trip.
+
+      2. READ THE WRITE BACK. Linear's issue history records the `fromState`
+         of the transition we just made, so a Done that landed inside the
+         RESIDUAL window is visible after the fact — and we put it back.
+
+    THE RESIDUAL, stated honestly: between the re-read in (1) and the mutation
+    a concurrent terminal transition can still land. (2) is a compensating
+    write, not prevention: the card really does flap Done → ours → Done, and
+    anything that reacts to the intermediate state (the relay dispatches on a
+    Todo transition) has already reacted by the time we repair it. What (2)
+    buys is that the FINISHED state is the one that survives, instead of a Done
+    card sitting silently in Todo. Closing the window completely needs a
+    primitive Linear does not expose.
+
+    The read-back is best effort: it verifies a write that already succeeded,
+    so an unreadable history degrades to "narrowed window, no repair" (printed
+    loudly) rather than failing the transition.
+    """
+    terminal_target = target_type in _TERMINAL_TYPES
+    if not terminal_target:
+        # (1) The pre-write re-read. Skipped for a terminal target: closing a
+        # card is always allowed, so there is nothing to refuse.
+        fresh = get_issue(identifier)
+        fresh_state = (fresh.get("state") or {}).get("type")
+        fresh_name = (fresh.get("state") or {}).get("name", fresh_state)
+        if fresh_state in _TERMINAL_TYPES:
+            print(
+                f"{identifier} became {fresh_name!r} (terminal) between this "
+                f"transition's decision and its write — refusing to move it to "
+                f"{state_name!r}; a finished card is ground truth and is never "
+                f"reopened by an automated transition."
+            )
+            return False
+    _set_state(identifier, issue["id"], target_id)
+    if terminal_target:
+        return True
+    # (2) The read-back repair.
+    try:
+        clobbered = _clobbered_terminal_state(identifier, target_id)
+    except Exception as e:  # noqa: BLE001 — best-effort verification of a done write
+        print(
+            f"WARNING: {identifier} → {state_name} written, but the verification "
+            f"read failed ({e}) — a terminal state that landed in the residual "
+            f"race window would go unrepaired."
+        )
+        return True
+    if clobbered:
+        _set_state(identifier, issue["id"], clobbered["id"])
+        print(
+            f"{identifier} was {clobbered.get('name')!r} (terminal) at the instant "
+            f"of the write — the move to {state_name!r} raced a finished card and "
+            f"lost. Restored {clobbered.get('name')!r}. A finished card is ground "
+            f"truth (DRE-1877/DRE-2316)."
+        )
+    return True
+
+
 def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
     # `--park` (passed by the DELIBERATE park callers: the agent-task blocker
     # branch + both dead-run/hung HOLD-cap paths) opts a Backlog move out of the
@@ -172,6 +289,11 @@ def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
     # route through here, so guarding the seam fixes every one of them at once.
     # Forward/terminal moves (→ Done, → Canceled, Done→Done idempotency) are
     # always allowed; only un-completing a terminal card is refused.
+    #
+    # This first check is an EARLY OUT on a read that is already stale by the
+    # time we act on it — DRE-2316 lost that race by 280 ms. The load-bearing
+    # guard is in guarded_state_write() below, which re-reads immediately
+    # before the mutation and repairs a terminal state it clobbered anyway.
     current_type = (issue.get("state") or {}).get("type")
     current_name = (issue.get("state") or {}).get("name", current_type)
     if current_type in _TERMINAL_TYPES and target_type not in _TERMINAL_TYPES:
@@ -205,12 +327,12 @@ def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
         and not deliberate_park
         and _HOLD_LABEL not in [n.lower() for n in _label_names(issue)]
     ):
-        todo_id, _ = state_id_and_type(issue["team"]["id"], "Todo")
-        gql(
-            """mutation($id: String!, $input: IssueUpdateInput!) {
-                 issueUpdate(id: $id, input: $input) { success } }""",
-            {"id": issue["id"], "input": {"stateId": todo_id}},
-        )
+        todo_id, todo_type = state_id_and_type(issue["team"]["id"], "Todo")
+        # Same guarded write as the ordinary path: the reroute is a write like
+        # any other, and an unguarded one would simply become the new way to
+        # clobber a card that went Done mid-decision (DRE-2316).
+        if not guarded_state_write(identifier, issue, todo_id, todo_type, "Todo"):
+            return
         print(
             f"{identifier} is {current_name!r} (building) — re-queued to 'Todo' "
             f"instead of {state_name!r}; an actively-building card is never parked "
@@ -218,12 +340,8 @@ def cmd_state(identifier: str, state_name: str, *flags: str) -> None:
             f"Todo. Pass --park (or stamp 'needs-human') for a deliberate hold."
         )
         return
-    gql(
-        """mutation($id: String!, $input: IssueUpdateInput!) {
-             issueUpdate(id: $id, input: $input) { success } }""",
-        {"id": issue["id"], "input": {"stateId": target_id}},
-    )
-    print(f"{identifier} → {state_name}")
+    if guarded_state_write(identifier, issue, target_id, target_type, state_name):
+        print(f"{identifier} → {state_name}")
 
 
 def cmd_advance(identifier: str, to_state: str, from_states_csv: str) -> None:
@@ -235,13 +353,13 @@ def cmd_advance(identifier: str, to_state: str, from_states_csv: str) -> None:
             f"{identifier} is in {issue['state']['name']!r}, not in {from_states_csv!r} — not advancing"
         )
         return
-    sid = state_id(issue["team"]["id"], to_state)
-    gql(
-        """mutation($id: String!, $input: IssueUpdateInput!) {
-             issueUpdate(id: $id, input: $input) { success } }""",
-        {"id": issue["id"], "input": {"stateId": sid}},
-    )
-    print(f"{identifier} → {to_state}")
+    sid, stype = state_id_and_type(issue["team"]["id"], to_state)
+    # The from-states csv is checked against the read ABOVE, so this seam has
+    # the same check-then-act race cmd_state had: agent-task's PR path runs
+    # `advance <card> "In QA" "In Progress,Todo"`, and a card that goes Done in
+    # between would be dragged back into In QA. Same guarded write (DRE-2316).
+    if guarded_state_write(identifier, issue, sid, stype, to_state):
+        print(f"{identifier} → {to_state}")
 
 
 def set_description(identifier: str, body: str) -> None:

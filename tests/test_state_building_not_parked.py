@@ -61,6 +61,11 @@ class _FakeLinear:
         q = " ".join(query.split())
         if "issue(id: $id) { id identifier title team" in q:
             return {"issue": self._issue}
+        if "history" in q:
+            # cmd_state reads its own write back to catch a terminal state it
+            # clobbered inside the race window (DRE-2316). Nothing races in
+            # this suite, so the history carries no transition of ours.
+            return {"issue": {"history": {"nodes": []}}}
         if "workflowStates" in q:
             return {
                 "workflowStates": {

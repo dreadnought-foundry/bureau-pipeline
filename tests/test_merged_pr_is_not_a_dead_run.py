@@ -228,12 +228,20 @@ def report_step() -> str:
     return m.group(1)
 
 
+def report_code() -> str:
+    """The report step with its `#` comment lines stripped — the comments
+    quote the old broken command on purpose (that history is the point)."""
+    return "\n".join(
+        line for line in report_step().splitlines() if not line.lstrip().startswith("#")
+    )
+
+
 def test_report_step_uses_the_shared_predicate():
     assert "card_pr.py" in report_step()
 
 
 def test_report_step_no_longer_calls_gh_pr_list_directly():
-    assert "gh pr list" not in report_step()
+    assert "gh pr list" not in report_code()
 
 
 def test_report_step_has_a_merged_branch_that_never_declares_a_death():
