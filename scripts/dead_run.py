@@ -28,6 +28,14 @@ prior count. The reconcile sweep's authoritative run-status check (DRE-2032)
 owns the requeue once the run has actually CONCLUDED without a PR: dead-run
 handling as today, never over a live run.
 
+The cap is a budget, and a human can REFILL it: `linear_ops.py unpark <CARD>`
+clears the hold label, posts a `dead-run-budget-reset` marker, and returns the
+card to Todo. The prior dead count is then only the `dead-run-requeue` comments
+AFTER that marker (linear_ops.count_comments(..., since=RESET_TAG)) — so a card
+held for a reason that was never about the card (a fleet-wide model outage;
+DRE-2308/2309/2310) gets a genuinely fresh set of attempts instead of re-holding
+on its first death forever.
+
 This module is the no-I/O core that decides — given the prior dead count and the
 death class — whether to REQUEUE (→ Todo) or HOLD (→ Backlog + needs-human), and
 what comment(s) to post. The workflow does the Linear writes; the decision is
@@ -41,6 +49,28 @@ import sys
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
 REQUEUE_CAP = 2  # requeue at most twice (attempts 1,2,3), then hold
+
+# The un-park marker. A held card that a human releases (`linear_ops.py unpark`)
+# gets this comment, and the death count is only the DEAD_TAG comments AFTER the
+# most recent one — see linear_ops.count_comments(..., since=RESET_TAG).
+#
+# THE TRAP IT CLOSES: nothing used to reset the count, and the HOLD comment
+# below itself contains DEAD_TAG (it is the last death's own receipt). So a
+# card a human un-parked still carried its entire exhausted history and
+# re-held on its very FIRST subsequent death — no fresh budget, ever. Three
+# good portico cards (DRE-2308/2309/2310) landed there after a fleet-wide
+# model misconfiguration killed their runs: ~6 matching comments each, for
+# deaths that said nothing about the cards. Same bug class the fix loop
+# already closed in DRE-2018 (fix_dead_run.consecutive_prior_deaths counts
+# deaths since the last successful push).
+#
+# THE STRING MATTERS: counting is substring-based, so RESET_TAG must not
+# contain DEAD_TAG (every reset would register as a death) and DEAD_TAG must
+# not contain RESET_TAG (every death would wipe the budget it is spending).
+# "dead-run-budget-reset" vs "dead-run-requeue" share only the "dead-run-"
+# stem — neither is a substring of the other. tests/test_dead_run_budget_reset
+# pins both directions; do not rename either string without re-checking it.
+RESET_TAG = "dead-run-budget-reset"
 
 # model_fallback writes the same prefix; kept in sync via the shared constant.
 ERROR_MARKER_PREFIX = "model-error:"
@@ -141,6 +171,22 @@ def decide(
             f"fresh attempt (dead run {prior_dead + 1}/{cap + 1})."
             f"{run_suffix}{error_marker_line}"
         ],
+    )
+
+
+def reset_comment(note: str = "") -> str:
+    """The un-park receipt: it starts this card's death budget over.
+
+    MUST NOT contain DEAD_TAG — it is posted on the way back INTO the working
+    lanes, and a self-counting reset would hand the card a budget of two
+    instead of three (and, with the cap at 1, none at all).
+    """
+    tail = f" Operator note: {note}" if note else ""
+    return (
+        f"♻️ {RESET_TAG}: un-parked by a human — the '{HOLD_LABEL}' label is "
+        f"cleared and the card is back in Todo with a FULL set of attempts "
+        f"({REQUEUE_CAP + 1}). Agent deaths recorded above this line no longer "
+        f"count toward the hold cap; only deaths after it do.{tail}"
     )
 
 

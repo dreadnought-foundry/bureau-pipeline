@@ -42,10 +42,22 @@ Subcommands:
                                        with exactly this title, else nothing —
                                        red-main-repair's escalation dedup
   children <DRE-N>                     print the number of child issues
+  count-comments <DRE-N> <needle> [--since <marker>]
+                                       print how many comments contain <needle>.
+                                       With --since, only those AFTER the most
+                                       recent comment containing <marker> — how
+                                       the dead-run cap honours a budget reset
   add-label <DRE-N> <label-name>       attach a label (creating it if needed),
                                        idempotent — used for the human-hold
   remove-label <DRE-N> <label-name>    detach a label, idempotent — a no-op if
                                        absent (generic; mirrors add-label)
+  unpark <DRE-N> [note]                the operator's release for a card held
+                                       by the dead-run cap: clear 'needs-human',
+                                       post the dead-run-budget-reset marker,
+                                       and return the card to Todo — in that
+                                       order, so the re-dispatched run reads a
+                                       FRESH death budget instead of the
+                                       exhausted history that held it
   description <DRE-N>                   print the card's raw description to
                                        stdout (the authoritative **Design:**
                                        source the visual-QA stage reads)
@@ -60,6 +72,9 @@ import os
 import re
 import sys
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
 
 API = "https://api.linear.app/graphql"
 
@@ -129,7 +144,7 @@ _TERMINAL_TYPES = ("completed", "canceled")
 # The hold label a DELIBERATE human-hold stamps on a card before parking it in
 # Backlog (DRE-1403). Its presence is the native "a human owns this now" signal
 # that exempts a Backlog park from the building-card reroute below.
-_HOLD_LABEL = "needs-human"
+_HOLD_LABEL = dead_run.HOLD_LABEL  # "needs-human"
 
 
 def _label_names(issue: dict) -> list[str]:
@@ -646,23 +661,54 @@ def cmd_children(identifier: str) -> None:
     print(len(data["issue"]["children"]["nodes"]))
 
 
-def count_comments(identifier: str, needle: str) -> int:
+def count_comments(identifier: str, needle: str, *, since: str | None = None) -> int:
     """How many comments on the card contain `needle`. Used by agent-task's
-    dead-run requeue cap (an agent ending with no PR and no blocker note)."""
+    dead-run requeue cap (an agent ending with no PR and no blocker note).
+
+    `since` — count only the comments AFTER the most recent one containing this
+    marker. THE ONE definition of reset-aware counting; every death count in the
+    pipeline routes through here, so the cap cannot drift between the two
+    reconcile sites and the in-run Report step.
+
+    Why it exists: the dead-run cap is counted by substring-matching comments,
+    and nothing reset the count — not even a human un-parking the card. The hold
+    comment itself carries `dead-run-requeue`, so a released card walked back in
+    with its whole exhausted history and re-held on its FIRST subsequent death
+    (DRE-2308/2309/2310, held by a fleet-wide model misconfiguration that had
+    nothing to do with the cards). `linear_ops.py unpark` posts
+    `dead_run.RESET_TAG` and this argument makes the counter honour it.
+
+    Substring counting means the two markers must never contain one another —
+    see dead_run.RESET_TAG's note and the tests that pin both directions.
+
+    The fetch window (`comments(last: 50)`) is unchanged: `since` changes WHICH
+    of those comments count, never HOW MANY are read. With `since=None` (the
+    generic uses: MERGED_NOT_CLOSED_MARKER, the bad-blocker tag) the behaviour is
+    byte-identical to before.
+    """
     data = gql(
         """query($id: String!) { issue(id: $id) {
              comments(last: 50) { nodes { body } } } }""",
         {"id": identifier},
     )
-    return sum(
-        1
-        for c in data["issue"]["comments"]["nodes"]
-        if needle in (c.get("body") or "")
-    )
+    bodies = [(c.get("body") or "") for c in data["issue"]["comments"]["nodes"]]
+    if since:
+        # Oldest→newest, so the LAST marker in the list is the most recent reset.
+        for i in range(len(bodies) - 1, -1, -1):
+            if since in bodies[i]:
+                bodies = bodies[i + 1:]
+                break
+    return sum(1 for body in bodies if needle in body)
 
 
-def cmd_count_comments(identifier: str, needle: str) -> None:
-    print(count_comments(identifier, needle))
+def cmd_count_comments(identifier: str, needle: str, *flags: str) -> None:
+    """`count-comments <DRE-N> <needle> [--since <marker>]` — see count_comments."""
+    since = None
+    if "--since" in flags:
+        i = flags.index("--since")
+        if i + 1 < len(flags):
+            since = flags[i + 1]
+    print(count_comments(identifier, needle, since=since))
 
 
 def comment_bodies(identifier: str) -> list[str]:
@@ -761,6 +807,33 @@ def remove_label(identifier: str, label_name: str) -> None:
     print(f"{identifier} − label {label_name!r}")
 
 
+def cmd_unpark(identifier: str, note: str = "") -> None:
+    """Release a held card back into the pipeline WITH a fresh death budget.
+
+    Three writes, in this order, and the order is the point:
+
+      1. remove the `needs-human` hold label (idempotent),
+      2. post the `dead-run-budget-reset` marker,
+      3. move the card to Todo.
+
+    The marker MUST land before the Todo move: the Todo transition is what
+    re-dispatches the card, and the run it starts reads the death count. Post
+    it after, and the fresh run races the reset and can still read the old,
+    exhausted history.
+
+    Step 3 is a plain transition, never `--park` — `--park` exists only to opt a
+    deliberate Backlog HOLD out of the DRE-1885 building-card reroute, which is
+    the exact opposite of what this does.
+
+    Idempotent enough to re-run: a card without the label just skips step 1, and
+    a second marker simply becomes the new reset point.
+    """
+    remove_label(identifier, _HOLD_LABEL)
+    cmd_comment(identifier, dead_run.reset_comment(note))
+    cmd_state(identifier, "Todo")
+    print(f"{identifier} un-parked — death budget reset, back in Todo")
+
+
 def cmd_description(identifier: str) -> None:
     """Print a card's raw description (markdown) to stdout.
 
@@ -792,6 +865,7 @@ if __name__ == "__main__":
             "find-open": cmd_find_open,
             "children": cmd_children,
             "count-comments": cmd_count_comments,
+            "unpark": cmd_unpark,
             "dump-comments": cmd_dump_comments,
             "add-label": add_label,
             "remove-label": remove_label,

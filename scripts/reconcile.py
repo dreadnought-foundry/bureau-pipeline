@@ -75,6 +75,7 @@ import time
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
@@ -103,9 +104,14 @@ EPIC_ACTIVE_STATES = ("Todo", "In Progress")
 # requeued at most REQUEUE_CAP times. After that it is parked in Backlog with
 # HOLD_LABEL so neither the relay nor this sweep re-dispatch it into the same
 # wall. Both paths count the shared DEAD_TAG so the cap is unified. A human
-# splits/fixes the card and removes the label to retry.
-HOLD_LABEL = "needs-human"
-DEAD_TAG = "dead-run-requeue"
+# splits/fixes the card and releases it with `linear_ops.py unpark <CARD>`,
+# which posts RESET_TAG — every death count below is taken SINCE that marker, so
+# a released card gets a genuinely fresh budget instead of re-holding on its
+# first death (DRE-2308/2309/2310, held by a fleet-wide model misconfiguration).
+# Aliases, not copies: the strings live once, in dead_run.
+HOLD_LABEL = dead_run.HOLD_LABEL
+DEAD_TAG = dead_run.DEAD_TAG
+RESET_TAG = dead_run.RESET_TAG
 REQUEUE_CAP = int(os.environ.get("DEAD_RUN_CAP", "2"))
 
 # Per-card isolation for the dependency gate (DRE-2035). One bad "Blocked by:"
@@ -2343,7 +2349,8 @@ def main(
                 if agent_run_alive(ident):
                     print(f"live: {ident} agent run still going — leaving alone")
                     continue
-                dead = linear_ops.count_comments(ident, DEAD_TAG)
+                # since=RESET_TAG: only deaths after the last un-park count.
+                dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
                 if dead >= REQUEUE_CAP:
                     linear_ops.add_label(ident, HOLD_LABEL)
                     # --park: a deliberate HOLD-cap park (DRE-1403). Without it
@@ -2386,7 +2393,8 @@ def main(
             # same shared DEAD_TAG counter): uncapped, a card whose PR keeps
             # reading as gone laps In QA → Todo → In Progress → In QA forever,
             # burning an agent run per lap (DRE-2034).
-            dead = linear_ops.count_comments(ident, DEAD_TAG)
+            # since=RESET_TAG: only deaths after the last un-park count.
+            dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
             if dead >= REQUEUE_CAP:
                 linear_ops.add_label(ident, HOLD_LABEL)
                 # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as
