@@ -1,9 +1,13 @@
 """agents.yaml is the consumer contract for the console roster (DRE-1335):
-every agent workflow has an entry, and budgets/models match the workflow
-text they describe — drift here means the console lies about the fleet."""
+every agent workflow has an entry, and budgets match the workflow text they
+describe — drift here means the console lies about the fleet.
+
+The MODEL half of that contract moved to config/models.yaml (DRE-2316): the
+registry's `model:` is a generated mirror of it, and the workflow no longer
+carries the id at all, so the check here is that the workflow SELECTS from the
+config rather than pinning a string."""
 
 import os
-import re
 import unittest
 
 import yaml

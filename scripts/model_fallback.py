@@ -1,12 +1,29 @@
 #!/usr/bin/env python3
-"""Model selection: ordered preference ladder with runtime availability
-detection (DRE-1490, stdlib only). Plus the preserved is_error heartbeat +
-hold-cap markers from DRE-1354.
+"""Model selection: ordered preference ladders with runtime availability
+detection (DRE-1490). Plus the preserved is_error heartbeat + hold-cap markers
+from DRE-1354.
 
-The ladder is best-first with runtime availability detection, and it is the
-WORKHORSE ladder: what every build agent (engineer, frontend, devops, planner,
-repairer) runs on. It starts at `claude-opus-5` and falls back to
-`claude-sonnet-4-6`. Ref DRE-1490.
+WHERE THE LADDERS COME FROM (DRE-2316)
+--------------------------------------
+`config/models.yaml` in this repo is the ONE file a human edits to change which
+model an agent runs on, and this module READS it — no Python constant is
+maintained separately. The config is a FILE in the public bureau-pipeline
+checkout the product-repo workflows already do (`.bureau-pipeline` @main),
+because those workflows have NO AWS credentials and NO private-repo token; it
+can never be a runtime lookup. Same constraint, same shape as
+`config/repo-map.json` (see config/README.md).
+
+`_FALLBACK_MODEL_CONFIG` below is a GENERATED mirror of that file, used ONLY
+when the YAML is missing/unreadable — a truncated checkout must not strand a
+dispatch. Do not hand-edit it: run `python3 scripts/sync_model_config.py`
+(`--check` fails CI on drift).
+
+The default ladder is best-first and is the WORKHORSE ladder: what every build
+agent (engineer, frontend, devops, planner, fixer, repairer) runs on. It starts
+at `claude-opus-5` and falls back to `claude-sonnet-4-6`. Ref DRE-1490. The
+review tier (critic, verifier, medic) walks its own ladder — those three used to
+bypass selection with a `--model` string pinned in the workflow YAML, which no
+config edit could change.
 
 `claude-fable-5` is NOT on it, and its absence is a policy decision, not an
 availability one (2026-08-09). Fable costs ~2x Opus per token; when Anthropic
@@ -29,11 +46,11 @@ failures routed INTO a 404 wall — the planner's primary IS Fable (404 on the
 first attempt) and the engineer's error-retry bounced to Fable→404→dead. Good
 cards hit needs-human holds.
 
-The model is now chosen by a SINGLE ordered ladder shared by both roles:
+The model is now chosen by a SINGLE ordered ladder shared by both roles (the
+`workhorse` ladder in config/models.yaml, best→worst).
 
-    LADDER = ["claude-opus-5", "claude-sonnet-4-6"]                     # best→worst
-
-`select()` walks the ladder top→bottom and returns the FIRST AVAILABLE model.
+`select()` walks the role's ladder top→bottom and returns the FIRST AVAILABLE
+model.
 Availability is probed at runtime via a minimal `/v1/messages` POST
 (max_tokens:1) using the CLAUDE token already in the workflow env (no new
 secret):
@@ -66,39 +83,159 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 from collections.abc import Mapping
+from pathlib import Path
 
 FABLE = "claude-fable-5"
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
 
-# Models that have rotated OUT of the ladder. NOT selectable — kept only so a
+# The canonical model config, bundled in this checkout (never a runtime lookup —
+# the workflows that read it hold no cloud credentials and no private-repo
+# token). config/README.md documents that constraint.
+_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "models.yaml"
+
+# Last-known-good fallback: the config as of this commit. `_load_config` reads
+# the on-disk YAML FIRST (so changing a model is a data edit to one file); this
+# literal is used ONLY when that file is missing/unreadable/malformed, so a
+# truncated checkout degrades to the last-known ladders instead of stranding a
+# dispatch.
+#
+# GENERATED REGION: do not hand-edit. Edit config/models.yaml, then run
+# `python3 scripts/sync_model_config.py` to regenerate it (`--check` in CI fails
+# if the two drift).
+# --- BEGIN generated model config (from config/models.yaml) ---
+_FALLBACK_MODEL_CONFIG = {
+    "default_ladder": "workhorse",
+    "ladders": {
+        "workhorse": ["claude-opus-5", "claude-sonnet-4-6"],
+        "reviewer": ["claude-sonnet-4-6"],
+    },
+    "agents": {
+        "engineer": "workhorse",
+        "frontend": "workhorse",
+        "database-architect": "workhorse",
+        "devops": "workhorse",
+        "fixer": "workhorse",
+        "critic": "reviewer",
+        "verifier": "reviewer",
+        "planner": "workhorse",
+        "medic": "reviewer",
+        "repairer": "workhorse",
+    },
+    "retired": ["claude-opus-4-8"],
+    "excluded": ["claude-fable-5"],
+}
+# --- END generated model config ---
+
+
+def _normalize_config(raw) -> dict | None:
+    """Coerce a parsed config document into the plain-id shape above, or None if
+    it is unusable. Ladder rungs may be bare ids or `{model:, reason:}` mappings
+    (the canonical file uses the latter so each rung carries its justification)."""
+    if not isinstance(raw, Mapping) or not isinstance(raw.get("ladders"), Mapping):
+        return None
+
+    def ids(rungs) -> list[str]:
+        out: list[str] = []
+        for rung in rungs or []:
+            if isinstance(rung, str):
+                out.append(rung)
+            elif isinstance(rung, Mapping) and isinstance(rung.get("model"), str):
+                out.append(rung["model"])
+        return out
+
+    ladders = {str(n): ids(r) for n, r in raw["ladders"].items()}
+    ladders = {n: m for n, m in ladders.items() if m}
+    if not ladders:
+        return None
+    default = str(raw.get("default_ladder") or "")
+    if default not in ladders:
+        default = next(iter(ladders))
+    agents = {
+        str(name): str(ladder)
+        for name, ladder in (raw.get("agents") or {}).items()
+        if str(ladder) in ladders
+    }
+    return {
+        "default_ladder": default,
+        "ladders": ladders,
+        "agents": agents,
+        "retired": ids(raw.get("retired")),
+        "excluded": ids(raw.get("excluded")),
+    }
+
+
+def _load_config() -> dict:
+    """The model config: the bundled YAML when readable, else the generated
+    literal above. Degrades, never raises — this sits on the dispatch path of
+    every card, and a config we cannot parse must not block a build."""
+    try:
+        import yaml  # PyYAML ships in the runner image; absence is degradable
+
+        parsed = _normalize_config(yaml.safe_load(_CONFIG_PATH.read_text()))
+        if parsed:
+            return parsed
+        print(
+            f"model_fallback: model config {_CONFIG_PATH} empty/unusable; "
+            "using last-known-good fallback",
+            file=sys.stderr,
+        )
+    except Exception as exc:  # missing / unreadable / malformed / no PyYAML
+        print(
+            f"model_fallback: could not read model config {_CONFIG_PATH} "
+            f"({exc}); using last-known-good fallback",
+            file=sys.stderr,
+        )
+    return _normalize_config(_FALLBACK_MODEL_CONFIG) or dict(_FALLBACK_MODEL_CONFIG)
+
+
+CONFIG = _load_config()
+
+# Named ordered ladders, best → worst, straight from the config. select()
+# returns the first available entry walking a ladder top→bottom.
+LADDERS: dict[str, list[str]] = CONFIG["ladders"]
+
+# agent/role name → ladder name. No role hardcodes a model: the critic,
+# verifier and medic resolve theirs here too (DRE-2316).
+AGENT_LADDERS: dict[str, str] = CONFIG["agents"]
+
+# The default (WORKHORSE) ladder — what any unrecognized role falls back to, and
+# what every build agent walks. FABLE is deliberately absent (2026-08-09): it is
+# excluded by POLICY — cost and subscription quota, ~2x Opus per token — not by
+# availability, so re-enabling it upstream must NOT put it back. Membership is
+# the spend decision and it is made in config/models.yaml; the probe only
+# decides how far down we walk. (Haiku is intentionally absent too: build work
+# realistically wants Sonnet-or-better.)
+LADDER: list[str] = LADDERS[CONFIG["default_ladder"]]
+
+# Models that have rotated OUT of every ladder. NOT selectable — kept only so a
 # marker stamped before the rotation stays attributable. `last_error_model`
 # validates a marker's payload against KNOWN_MODELS, so dropping a retired id
 # outright would make an in-flight card's death silently resolve to None and
 # the console would lose the attribution rather than report it.
-RETIRED_MODELS = {"claude-opus-4-8"}
-
-# The ordered WORKHORSE ladder, best → worst. Used by BOTH engineer and
-# planner — no role hardcodes a model. select() returns the first available
-# entry walking top→bottom. (Haiku is intentionally not here: engineer/planner
-# work realistically wants Sonnet-or-better.)
-#
-# FABLE is deliberately absent (2026-08-09). It is excluded by POLICY — cost and
-# subscription quota, ~2x Opus per token — not by availability, so re-enabling it
-# upstream must NOT put it back here. Membership of this list is the spend
-# decision; the probe only decides how far down we walk. Fable stays in
-# KNOWN_MODELS below so existing markers still attribute.
-LADDER: list[str] = [OPUS, SONNET]
+RETIRED_MODELS = set(CONFIG["retired"])
 
 # Every model id we recognize when validating a marker's payload. This is a
-# SUPERSET of the ladder: the ladder is what we may select, this is what we can
-# still read. Retired ids belong here and nowhere else — and so does FABLE,
+# SUPERSET of the ladders: the ladders are what we may select, this is what we
+# can still read. Retired ids belong here and nowhere else — and so does FABLE,
 # which left the ladder on cost policy while cards in flight still carry
 # `model-attempt:`/`model-error: claude-fable-5`. Dropping it would resolve
 # those deaths to None and lose the attribution rather than report it.
-KNOWN_MODELS = {FABLE, OPUS, SONNET} | RETIRED_MODELS
+KNOWN_MODELS = (
+    {m for models in LADDERS.values() for m in models}
+    | RETIRED_MODELS
+    | set(CONFIG["excluded"])
+)
+
+
+def ladder_for(role: str) -> list[str]:
+    """The ordered ladder an agent/role walks, from the config. An unknown name
+    gets the default ladder — select() must never block a build on a role it
+    does not recognize."""
+    return LADDERS.get(AGENT_LADDERS.get(role or "", ""), LADDER)
 
 # Cache availability results so we don't probe on every dispatch. ~12 min keeps
 # latency negligible across a burst of cards while picking up an Anthropic
@@ -246,9 +383,10 @@ def _normalize_ladder(ladder) -> list[str]:
       * A bare string. `ladder: claude-opus-5` in YAML is a scalar, not a
         sequence, and a str is both truthy and iterable — walked unguarded it
         selects a single LETTER as the model id and hands it to the run.
-      * agents.yaml's own `ladder:`, a list of {model:, reason:} mappings. The
-        docstring points callers at that file, so accepting the shape it
-        actually stores costs nothing and removes a TypeError from the hot path.
+      * config/models.yaml's own ladder shape, a list of {model:, reason:}
+        mappings. Callers (and the console) read ladders out of YAML, so
+        accepting the shape it actually stores costs nothing and removes a
+        TypeError from the hot path.
 
     Entries that are neither a string nor a mapping with a string `model` are
     dropped rather than fatal — one malformed row must not strand a dispatch.
@@ -270,18 +408,20 @@ def _normalize_ladder(ladder) -> list[str]:
 
 def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> str:
     """The model the next attempt should use: the first AVAILABLE model walking
-    the ordered ladder best→worst.
+    that agent's ordered ladder best→worst.
 
-    Shared by BOTH engineer and planner — `role` is accepted for call-site
-    symmetry and heartbeats but does NOT change the ladder.
+    `role` is an agent/role name from config/models.yaml (`engineer`, `planner`,
+    `critic`, `verifier`, `medic`, …). All the build roles share the workhorse
+    ladder; the review tier has its own. An unrecognized name gets the default
+    ladder rather than an error.
 
-    `ladder` is the ordered model id list to walk (best→worst); it defaults to
-    the module-level ``LADDER``. The console passes the ladder it read from
-    ``agents.yaml`` so the SINGLE source of truth (the YAML) drives the order
-    while this function provides the SINGLE shared walk. The kwarg lives here
-    rather than in the console's vendored copy so that copy can be diffed
-    against this file with no allowed exceptions — an exception is a hole a
-    drift check cannot see through.
+    `ladder` is an explicit ordered model id list to walk (best→worst),
+    overriding the config lookup. The console passes the ladder it read from the
+    registry so the SINGLE source of truth drives the order while this function
+    provides the SINGLE shared walk. The kwarg lives here rather than in the
+    console's vendored copy so that copy can be diffed against this file with no
+    allowed exceptions — an exception is a hole a drift check cannot see
+    through.
 
     `probe(model) -> bool` and `clock() -> float` are injectable; the defaults
     do a real minimal /v1/messages probe and use a monotonic clock. Degrade
@@ -294,7 +434,7 @@ def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> st
         probe = _probe_real
     if clock is None:
         clock = time.monotonic
-    walk = _normalize_ladder(ladder) or LADDER
+    walk = _normalize_ladder(ladder) or ladder_for(role)
 
     for model in walk:
         available = _is_available(model, probe, clock)
@@ -371,17 +511,20 @@ def _fake_probe_from_env():
 
 
 def main(argv: list[str]) -> int:
-    """CLI for the workflow.
+    """CLI for the workflows — the entry point every agent workflow calls.
 
-      select [<role>]              print the model the next attempt should use
-                                   (walks the ladder, probes availability)
-      role-of <label,label,...>    print engineer|planner from labels
+      select [<agent>]             print the model the next attempt should use
+                                   (walks that agent's ladder from
+                                   config/models.yaml, probes availability)
+      role-of <label,label,...>    print engineer|planner|devops|frontend from
+                                   a card's labels
 
-    `select` probes the live API using the CLAUDE token in the env. The role
-    arg is accepted (and labels still resolve a role for the heartbeat) but does
-    not change the ladder — both roles share it."""
+    `select` probes the live API using the CLAUDE token in the env. `<agent>` is
+    a name from config/models.yaml (`engineer`, `planner`, `critic`, `verifier`,
+    `medic`, `fixer`, `repairer`, …); an unknown name walks the default
+    ladder."""
     if not argv:
-        print("usage: model_fallback.py select [<role>] | role-of <labels>")
+        print("usage: model_fallback.py select [<agent>] | role-of <labels>")
         return 2
     cmd, *rest = argv
     if cmd == "role-of":

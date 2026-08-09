@@ -273,10 +273,11 @@ jobs:
             echo "no .github/bureau/setup.sh — skipping product setup"
           fi
 
-      # The workhorse ladder with runtime availability detection (DRE-1490):
-      # claude-opus-5 → claude-sonnet-4-6. The repair agent is an
-      # engineer-tier fixer, so it walks the engineer ladder. claude-fable-5
-      # is off it on cost/quota policy (2026-08-09), not availability.
+      # The ladder with runtime availability detection (DRE-1490), resolved for
+      # the `repairer` agent from config/models.yaml (DRE-2316) — it is an
+      # engineer-tier fixer, so that config puts it on the workhorse ladder.
+      # Selecting by its OWN name rather than "engineer" is what lets a human
+      # move this one agent without touching the build fleet.
       - name: Select model
         id: model
         if: steps.decide.outputs.go == 'true'
@@ -284,9 +285,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
-          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select engineer)
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select repairer)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
-          echo "selected model: $MODEL"
+          echo "selected model: $MODEL (agent: repairer)"
 
       # The repair agent works to the fix-role context: the engineering
       # standard (the discipline floor) + comms + untrusted-content, read

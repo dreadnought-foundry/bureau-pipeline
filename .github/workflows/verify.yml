@@ -204,6 +204,25 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of verifier context"
 
+      # Model selection for the verifier (DRE-2316). It used to carry a pinned
+      # Sonnet id twice in this file — one no config edit could change and the
+      # agent registry could not see. The id now comes
+      # from config/models.yaml (agent `verifier`, the `reviewer` ladder) via
+      # the same availability-probing ladder walk the build agents use, read
+      # out of the .bureau-pipeline checkout above (never a runtime lookup —
+      # these runners hold no cloud credentials).
+      - name: Select model
+        id: model
+        if: steps.scope.outputs.in_scope == 'true'
+        env:
+          # The probe authenticates with the same CLAUDE token the verifier uses.
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: |
+          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select verifier)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "selected model: $MODEL (agent: verifier)"
+
       - name: Verifier run
         id: verifier
         if: steps.scope.outputs.in_scope == 'true'
@@ -225,7 +244,7 @@ jobs:
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
             --max-turns 60
-            --model claude-sonnet-4-6
+            --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
@@ -336,7 +355,7 @@ jobs:
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
             --max-turns 60
-            --model claude-sonnet-4-6
+            --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
