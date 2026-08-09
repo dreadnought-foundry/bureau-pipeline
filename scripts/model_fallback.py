@@ -424,6 +424,12 @@ def ladder_for(role: str) -> list[str]:
 # Cache availability results so we don't probe on every dispatch. ~12 min keeps
 # latency negligible across a burst of cards while picking up an Anthropic
 # re-enable within one TTL window (auto-recovery).
+#
+# The cache is IN-PROCESS, which also makes it per-account by construction:
+# accounts are per-repo, not one fleet-wide pool (bureau-pipeline's critic ran
+# green right through the 2026-08-09 incident while two other repos' agents
+# died). A shared health cache would let one repo's exhaustion decide another
+# repo's model. Any future budget accounting must keep that property.
 AVAILABILITY_TTL_SECONDS = 12 * 60
 
 # Comment markers (machine-parseable; also human-readable on the Linear card).

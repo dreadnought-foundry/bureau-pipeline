@@ -68,8 +68,17 @@ in the `model-attempt:` heartbeat on the Linear card.
 A note that starts with `DEGRADED` becomes a `::warning::`. That is the alert
 half of the policy: if an advisory role ever falls off the strongest model —
 because it is unavailable, or because an advisory budget is introduced and
-exhausted — the fallback is the **workhorse** model and the run says so. A
-silently weakened critic is the exact failure this policy exists to prevent.
+exhausted — the fallback is the **workhorse** model (the advisory ladder's last
+rung, by construction) and the run says so. A silently weakened critic is the
+exact failure this policy exists to prevent.
+
+No budget accounting exists today, and none is introduced here. If one is ever
+added it must be **per-account**: accounts are per repo, not one fleet-wide
+pool — on 2026-08-09 this repo's critic ran green while two other repos' agents
+died. The availability cache is in-process, so it already has that property.
+
+The wider design is recorded in `architecture/decisions/adr-model-policy.md` in
+**agent-bureau** (PR #2026).
 
 ## Who reads it
 
