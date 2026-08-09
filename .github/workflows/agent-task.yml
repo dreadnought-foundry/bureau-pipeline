@@ -495,8 +495,16 @@ jobs:
             # receipt, move nothing, count nothing; the reconcile sweep
             # requeues off the run's real conclusion (DRE-2032), with the
             # existing cap.
+            #
+            # --since "dead-run-budget-reset": the cap is a BUDGET, and a human
+            # can refill it. Nothing used to reset the count — and the hold
+            # comment itself carries the 'dead-run-requeue' tag — so a card an
+            # operator released (label cleared, Backlog → Todo) walked back in
+            # with its whole exhausted history and re-held on its very first
+            # subsequent death. `linear_ops.py unpark <CARD>` posts the reset
+            # marker; only deaths AFTER it count here.
             DEAD=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
-              "$CARD" "dead-run-requeue" || echo 0)
+              "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
             ERR_FLAGS=""
             if [ "$IS_ERROR" = "true" ]; then
               ERR_FLAGS="--is-error --error-model $MODEL_USED"
