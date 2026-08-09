@@ -78,18 +78,18 @@ jobs:
         if: steps.gate.outputs.bounced != 'true'
         run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      # Model selection: the SAME ordered preference ladder as the engineer
-      # (DRE-1490). select() walks the shared ladder best→worst —
-      # claude-fable-5, then claude-opus-5, then claude-sonnet-4-6 (see
-      # model_fallback.py / agents.yaml) — and returns the first AVAILABLE
+      # Model selection: the SAME workhorse ladder as the engineer (DRE-1490).
+      # select() walks it best→worst — claude-opus-5, then claude-sonnet-4-6
+      # (see model_fallback.py / agents.yaml) — and returns the first AVAILABLE
       # model. Availability is probed via a minimal /v1/messages call using the
       # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
       # skip; any other response, including 429, ⇒ choose it; an inconclusive
-      # probe falls through to the next known-good model. Fable 5 currently 404s
-      # so this resolves to Opus 5 and self-heals to Fable when re-enabled —
-      # no code change. Mirrors the engineer Select-model step in agent-task.yml;
-      # reuses the same selector. The chosen id is recorded in a heartbeat
-      # comment so the board shows which model each plan attempt used.
+      # probe falls through to the next known-good model. The probe decides how
+      # far DOWN the ladder to walk, never how far up: claude-fable-5 is off the
+      # ladder on cost/quota policy (2026-08-09), not availability. Mirrors the
+      # engineer Select-model step in agent-task.yml; reuses the same selector.
+      # The chosen id is recorded in a heartbeat comment so the board shows
+      # which model each plan attempt used.
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true'
@@ -251,7 +251,7 @@ jobs:
       # (DRE-1354). Unlike agent-task, a plan death has no PR/requeue path — the
       # medic re-runs the SAME workflow_run on attempt 2. That rerun re-evaluates
       # the Select-model step, which reads this `model-error:` marker and swings
-      # to the ALTERNATE model (Fable→Opus) instead of re-dying on the dead one.
+      # to the NEXT model down the ladder instead of re-dying on the dead one.
       # check_agent_result.py owns is_error detection (single source of truth);
       # dead_run.error_marker writes the marker the selector parses.
       - name: Record is_error death

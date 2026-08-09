@@ -11,13 +11,18 @@ primary IS Fable (404 on the first attempt) and the engineer's error-retry
 bounced to Fable→404→dead. Good cards hit needs-human holds.
 
 DRE-1490 replaces the per-role pair with a SINGLE ordered preference ladder
-(best→worst: Fable, Opus, Sonnet) shared by both roles. `select` walks the
-ladder top→bottom and returns the first AVAILABLE model, where availability is
-probed at runtime (a minimal /v1/messages call): a 404 / not-found means
-UNAVAILABLE (skip); ANY other response — including 429 (rate-limited) — means
-AVAILABLE (choose it). Results are cached with a short TTL so we don't probe on
-every dispatch, and auto-recovery is free: when Fable stops 404ing the next
-probe after the TTL sees it available and `select` returns it again.
+shared by both roles. `select` walks the ladder top→bottom and returns the first
+AVAILABLE model, where availability is probed at runtime (a minimal
+/v1/messages call): a 404 / not-found means UNAVAILABLE (skip); ANY other
+response — including 429 (rate-limited) — means AVAILABLE (choose it). Results
+are cached with a short TTL so we don't probe on every dispatch, and recovery
+within the ladder is free: when a skipped model comes back, the next probe after
+the TTL sees it available and `select` returns it again.
+
+The ladder is Opus-first and Fable is not on it (2026-08-09). Fable's absence is
+a COST/QUOTA policy, not an outage — see FableIsNotABuildModelTest at the foot
+of this file for the incident that made it one. Availability decides how far
+DOWN the ladder we walk; ladder membership is a human decision.
 
 These tests drive the ladder walk with a STUBBED availability function — no real
 network. The is_error heartbeat helpers (attempt_marker/error_marker) and the
@@ -27,6 +32,7 @@ hold-cap regression (dead_run.py) are preserved and re-asserted here.
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -44,6 +50,10 @@ SONNET = "claude-sonnet-4-6"
 # death marker stamped before the rotation keeps its attribution.
 RETIRED_OPUS = "claude-opus-4-8"
 
+AGENT_FIX_WF = os.path.join(
+    os.path.dirname(__file__), "..", ".github", "workflows", "agent-fix.yml"
+)
+
 
 def fixed_clock(t):
     """A deterministic monotonic clock for cache-TTL tests."""
@@ -53,7 +63,8 @@ def fixed_clock(t):
 class LadderShapeTest(unittest.TestCase):
     def test_ladder_is_best_first(self):
         # Best → worst. The ladder is the contract; both roles share it.
-        self.assertEqual(mf.LADDER, [FABLE, OPUS, SONNET])
+        # Fable is deliberately absent — see FableIsNotABuildModelTest.
+        self.assertEqual(mf.LADDER, [OPUS, SONNET])
 
     def test_ladder_entries_are_all_known_models(self):
         self.assertTrue(set(mf.LADDER) <= mf.KNOWN_MODELS)
@@ -105,51 +116,48 @@ class SelectLadderTest(unittest.TestCase):
     def tearDown(self):
         mf.clear_availability_cache()
 
-    def test_fable_unavailable_returns_opus_for_engineer(self):
-        avail = {FABLE: False, OPUS: True, SONNET: True}
+    def test_top_of_ladder_available_returns_it_for_engineer(self):
+        avail = {OPUS: True, SONNET: True}
         self.assertEqual(
             mf.select("engineer", probe=lambda m: avail[m]), OPUS
         )
 
-    def test_fable_unavailable_returns_opus_for_planner(self):
+    def test_top_of_ladder_available_returns_it_for_planner(self):
         # No role hardcodes a model — both walk the same ladder.
-        avail = {FABLE: False, OPUS: True, SONNET: True}
+        avail = {OPUS: True, SONNET: True}
         self.assertEqual(
             mf.select("planner", probe=lambda m: avail[m]), OPUS
         )
 
-    def test_all_available_returns_fable_best_first(self):
+    def test_all_available_returns_opus_best_first(self):
+        # Fable probes available too (Anthropic enabled it, 2026-08-09) and is
+        # still not chosen: it is not on the walk. See FableIsNotABuildModelTest.
         avail = {FABLE: True, OPUS: True, SONNET: True}
-        self.assertEqual(mf.select("engineer", probe=lambda m: avail[m]), FABLE)
-        self.assertEqual(mf.select("planner", probe=lambda m: avail[m]), FABLE)
+        self.assertEqual(mf.select("engineer", probe=lambda m: avail[m]), OPUS)
+        self.assertEqual(mf.select("planner", probe=lambda m: avail[m]), OPUS)
 
-    def test_fable_and_opus_unavailable_returns_sonnet(self):
-        avail = {FABLE: False, OPUS: False, SONNET: True}
+    def test_opus_unavailable_returns_sonnet(self):
+        avail = {OPUS: False, SONNET: True}
         self.assertEqual(mf.select("engineer", probe=lambda m: avail[m]), SONNET)
-
-    def test_fable_never_returned_while_it_404s(self):
-        avail = {FABLE: False, OPUS: True, SONNET: True}
-        for role in ("engineer", "planner"):
-            self.assertNotEqual(mf.select(role, probe=lambda m: avail[m]), FABLE)
 
     def test_all_unavailable_falls_through_to_last_known_good(self):
         # Degrade safely: if NOTHING probes available, never block a build —
         # fall through to the last (lowest) known-good model rather than return
         # nothing or a model just confirmed gone.
-        avail = {FABLE: False, OPUS: False, SONNET: False}
+        avail = {OPUS: False, SONNET: False}
         chosen = mf.select("engineer", probe=lambda m: avail[m])
         self.assertEqual(chosen, SONNET)
         self.assertIn(chosen, mf.LADDER)
 
     def test_probe_exception_treated_as_inconclusive_falls_through(self):
         # A probe that raises (network error/timeout) must not block the build
-        # and must not return a model just confirmed 404. Here Fable raises
-        # (inconclusive → skip) and Opus is available → Opus.
+        # and must not return a model just confirmed 404. Here Opus raises
+        # (inconclusive → skip) and Sonnet is available → Sonnet.
         def probe(m):
-            if m == FABLE:
+            if m == OPUS:
                 raise TimeoutError("probe network error")
             return True
-        self.assertEqual(mf.select("engineer", probe=probe), OPUS)
+        self.assertEqual(mf.select("engineer", probe=probe), SONNET)
 
 
 class CachingTest(unittest.TestCase):
@@ -168,43 +176,46 @@ class CachingTest(unittest.TestCase):
 
         def probe(m):
             calls.append(m)
-            return {FABLE: False, OPUS: True, SONNET: True}[m]
+            return {OPUS: False, SONNET: True}[m]
 
         t = [1000.0]
-        # First select: Fable probed (False) then Opus probed (True) → 2 calls.
+        # First select: Opus probed (False) then Sonnet probed (True) → 2 calls.
         self.assertEqual(
-            mf.select("engineer", probe=probe, clock=fixed_clock(t)), OPUS
+            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET
         )
         first = list(calls)
-        self.assertIn(FABLE, first)
         self.assertIn(OPUS, first)
+        self.assertIn(SONNET, first)
         # Second select within the TTL: nothing new probed — served from cache.
         self.assertEqual(
-            mf.select("planner", probe=probe, clock=fixed_clock(t)), OPUS
+            mf.select("planner", probe=probe, clock=fixed_clock(t)), SONNET
         )
         self.assertEqual(calls, first, "probe re-called within TTL window")
 
     def test_auto_recovery_after_ttl_when_higher_model_returns(self):
-        state = {FABLE: False, OPUS: True, SONNET: True}
+        # Recovery is bounded by the ladder's CONTENTS: it can restore a model
+        # we already chose to run on, never add one we didn't (which is how an
+        # enabled Fable promoted the whole fleet on 2026-08-09).
+        state = {OPUS: False, SONNET: True}
 
         def probe(m):
             return state[m]
 
         t = [1000.0]
-        # Fable 404s → Opus chosen.
+        # Opus unavailable → Sonnet chosen.
         self.assertEqual(
-            mf.select("engineer", probe=probe, clock=fixed_clock(t)), OPUS
+            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET
         )
-        # Fable comes back online.
-        state[FABLE] = True
-        # Still within TTL: cached "Fable unavailable" → still Opus.
+        # Opus comes back online.
+        state[OPUS] = True
+        # Still within TTL: cached "Opus unavailable" → still Sonnet.
         self.assertEqual(
-            mf.select("engineer", probe=probe, clock=fixed_clock(t)), OPUS
+            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET
         )
-        # Advance past the TTL: next probe sees Fable available → Fable.
+        # Advance past the TTL: next probe sees Opus available → Opus.
         t[0] += mf.AVAILABILITY_TTL_SECONDS + 1
         self.assertEqual(
-            mf.select("engineer", probe=probe, clock=fixed_clock(t)), FABLE
+            mf.select("engineer", probe=probe, clock=fixed_clock(t)), OPUS
         )
 
     def test_clear_cache_forces_reprobe(self):
@@ -280,16 +291,16 @@ class CliTest(unittest.TestCase):
             capture_output=True, text=True, env=env,
         ).stdout.strip()
 
-    def test_cli_select_skips_unavailable_fable(self):
+    def test_cli_select_skips_an_unavailable_top_of_ladder(self):
         self.assertEqual(
-            self._select("engineer", {FABLE: False, OPUS: True, SONNET: True}),
-            OPUS,
+            self._select("engineer", {OPUS: False, SONNET: True}),
+            SONNET,
         )
 
-    def test_cli_select_returns_fable_when_available(self):
+    def test_cli_select_returns_top_of_ladder_when_available(self):
         self.assertEqual(
             self._select("planner", {FABLE: True, OPUS: True, SONNET: True}),
-            FABLE,
+            OPUS,
         )
 
     def test_cli_role_of_labels(self):
@@ -460,8 +471,12 @@ class AgentsRegistryAlignment(unittest.TestCase):
         Checking only engineer/planner by name is what let the Opus 5 rotation
         land with `repairer` still pinned to claude-opus-4-8: no test ever looked
         at that agent. A subsequence check (rather than equality) is deliberate —
-        an agent may legitimately declare a SHORTER ladder (database-architect
-        skips Fable), but none may name a model that has rotated out."""
+        an agent may legitimately declare a SHORTER ladder, but none may name a
+        model that has rotated out.
+
+        There are no carve-outs, deliberately: an attempt-gated escalation is
+        still a build path, so "this one agent may name an off-ladder model"
+        would reopen exactly the door this file exists to shut."""
         declared = self._declared_ladders()
         # The single-entry ladder is the case the old filter dropped. Pin its
         # presence so the filter can never quietly narrow again.
@@ -482,6 +497,36 @@ class AgentsRegistryAlignment(unittest.TestCase):
                 positions, sorted(positions),
                 f"{name}: agents.yaml ladder {models} is out of LADDER order",
             )
+
+    def test_the_fix_escalation_is_framing_not_a_pricier_model(self):
+        """agent-fix's attempt-3 escalation stays on the workhorse ladder.
+
+        It used to hardcode `--model claude-fable-5` in the workflow and mirror
+        that id in the registry. A capped per-PR escalation is smaller than the
+        fleet-wide default that drained the subscription, but it is still a
+        build path reaching for the priciest model without a human in the loop.
+        The escalation is now framing only — same model, "re-derive from
+        scratch" context."""
+        fixer = self._agents()["fixer"]
+        # Bounded: a single attempt-gated step, not a default.
+        self.assertEqual([s.get("attempt") for s in fixer["ladder"]], [3])
+        self.assertIn(fixer["model"], mf.LADDER)
+        for step in fixer["ladder"]:
+            self.assertIn(step["model"], mf.LADDER)
+
+    def test_agent_fix_workflow_hardcodes_no_off_ladder_model(self):
+        """agents.yaml's header requires a workflow model change to update the
+        registry in the SAME PR — so read the workflow, not just the registry.
+        A `--model` the ladder doesn't contain is drift by definition, and it
+        is the shape the registry alone cannot see."""
+        with open(AGENT_FIX_WF) as f:
+            src = f.read()
+        pinned = set(re.findall(r"--model (claude-[a-z0-9.-]+)", src))
+        self.assertTrue(pinned, "agent-fix.yml pins no model at all")
+        self.assertEqual(
+            sorted(m for m in pinned if m not in mf.LADDER), [],
+            f"agent-fix.yml pins {sorted(pinned)}, not all on {mf.LADDER}",
+        )
 
     def test_no_agent_pins_a_rotated_out_model_in_its_bare_model_field(self):
         """`model:` is a SEPARATE field from `ladder:`, and it is the one the
