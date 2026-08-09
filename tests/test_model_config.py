@@ -124,6 +124,12 @@ def _canonical(path: Path = CONFIG) -> dict:
         return yaml.safe_load(f)
 
 
+def _ladder_for_role(cfg: dict, role: str) -> list:
+    """The ordered ladder a role walks: role → KIND → ladder. Roles are
+    assigned a KIND (workhorse/advisory), never a raw ladder name (DRE-2317)."""
+    return _ladder_models(cfg["ladders"][cfg["kinds"][cfg["agents"][role]]["ladder"]])
+
+
 def _ladder_models(entries) -> list:
     """A canonical ladder is a list of {model:, reason:} rungs — the readable
     shape agents.yaml used to carry. Return just the ordered model ids."""
@@ -155,19 +161,19 @@ class CanonicalConfigTest(unittest.TestCase):
                 len(set(models)), len(models), f"ladder {name} repeats a model"
             )
 
-    def test_every_registry_agent_is_assigned_a_ladder(self):
+    def test_every_registry_agent_is_assigned_a_kind(self):
         # The registry and the config cover the same fleet: an agent added to
-        # one and not the other is exactly the drift this card removes.
+        # one and not the other is exactly the drift this card removes. Since
+        # DRE-2317 the assignment is a KIND (workhorse/advisory), which is what
+        # keeps a role from being pointed at an arbitrary ladder.
         cfg = _canonical()
         self.assertEqual(
             sorted(cfg["agents"]),
             sorted(_agents_registry()),
             "config/models.yaml `agents:` must name every agents.yaml agent",
         )
-        for name, ladder in cfg["agents"].items():
-            self.assertIn(
-                ladder, cfg["ladders"], f"{name}: unknown ladder {ladder!r}"
-            )
+        for name, kind in cfg["agents"].items():
+            self.assertIn(kind, cfg["kinds"], f"{name}: unknown kind {kind!r}")
 
     def test_workhorse_ladder_is_opus_first_and_fable_free(self):
         # The 2026-08-09 policy survives the move: builds start at Opus and
@@ -177,12 +183,12 @@ class CanonicalConfigTest(unittest.TestCase):
         self.assertEqual(workhorse[0], OPUS)
         self.assertNotIn(FABLE, workhorse)
 
-    def test_review_agents_share_one_ladder(self):
+    def test_review_agents_share_one_kind(self):
         # critic/verifier/medic were the three that bypassed selection with a
-        # hardcoded string. They are one tier and must read as one tier.
+        # hardcoded string. They read and judge rather than build — one kind.
         cfg = _canonical()
         tiers = {cfg["agents"][name] for name in ("critic", "verifier", "medic")}
-        self.assertEqual(len(tiers), 1, f"review agents split across {tiers}")
+        self.assertEqual(tiers, {"advisory"}, f"review agents split across {tiers}")
 
     def test_retired_and_excluded_ids_are_readable_not_selectable(self):
         # `model-attempt:`/`model-error:` markers on in-flight cards must keep
@@ -193,7 +199,11 @@ class CanonicalConfigTest(unittest.TestCase):
             _ladder_models(cfg.get("excluded") or [])
         )
         self.assertIn(RETIRED_OPUS, readable)
-        self.assertIn(FABLE, readable)
+        # FABLE is no longer read-only: DRE-2317 put it on the ADVISORY ladder,
+        # off every build ladder. Its attribution comes from being selectable
+        # there, and tests/test_model_policy.py pins that it stays off the hot
+        # path at every availability.
+        self.assertIn(FABLE, mf.KNOWN_MODELS)
         for name, rungs in cfg["ladders"].items():
             for model in _ladder_models(rungs):
                 self.assertNotIn(
@@ -228,10 +238,10 @@ class SelectResolvesFromConfigTest(unittest.TestCase):
 
     def test_ladder_for_resolves_each_agents_assignment(self):
         cfg = _canonical()
-        for name, ladder in cfg["agents"].items():
+        for name in cfg["agents"]:
             self.assertEqual(
                 mf.ladder_for(name),
-                _ladder_models(cfg["ladders"][ladder]),
+                _ladder_for_role(cfg, name),
                 f"{name}: ladder_for() != its config assignment",
             )
 
@@ -247,7 +257,7 @@ class SelectResolvesFromConfigTest(unittest.TestCase):
         # The regression this card exists to prevent: the critic must not
         # silently ride the build ladder (or vice versa).
         cfg = _canonical()
-        reviewer = _ladder_models(cfg["ladders"][cfg["agents"]["critic"]])
+        reviewer = _ladder_for_role(cfg, "critic")
         for name in ("critic", "verifier", "medic"):
             with self.subTest(agent=name):
                 mf.clear_availability_cache()
@@ -318,7 +328,7 @@ class GeneratedMirrorTest(unittest.TestCase):
         cfg = _canonical()
         for name, agent in _agents_registry().items():
             with self.subTest(agent=name):
-                top = _ladder_models(cfg["ladders"][cfg["agents"][name]])[0]
+                top = _ladder_for_role(cfg, name)[0]
                 self.assertEqual(
                     agent["model"], top,
                     f"{name}: agents.yaml model: {agent['model']} != {top}",
@@ -346,6 +356,14 @@ class GeneratedMirrorTest(unittest.TestCase):
             {n: _ladder_models(r) for n, r in cfg["ladders"].items()},
         )
         self.assertEqual(mirror["agents"], dict(cfg["agents"]))
+        # The kinds and the discovery policy are mirrored too — the degrade
+        # path must carry the POLICY, not just the ladders (DRE-2317).
+        self.assertEqual(
+            mirror["kinds"], {k: v["ladder"] for k, v in cfg["kinds"].items()}
+        )
+        self.assertEqual(
+            mirror["discovery"]["on_new_model"], cfg["discovery"]["on_new_model"]
+        )
 
     def test_regeneration_of_todays_config_is_a_noop(self):
         with tempfile.TemporaryDirectory() as td:
@@ -446,9 +464,15 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             tree = _copy_tree(Path(td))
             path = tree / "config" / "models.yaml"
             cfg = yaml.safe_load(path.read_text())
-            cfg["agents"]["critic"] = cfg["default_ladder"]
+            advisory = cfg["kinds"]["advisory"]["ladder"]
+            # A human moving the advisory tier in a reviewed PR is the
+            # SANCTIONED path — what policy validation blocks is the reverse
+            # direction (the strongest model landing on a build ladder).
+            cfg["ladders"][advisory] = [{"model": SONNET, "reason": "one-file edit"}]
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
-            self.assertEqual(_cli_select(tree, "critic"), OPUS)
+            self.assertEqual(_cli_select(tree, "critic"), SONNET)
+            # …and the build fleet is untouched by that edit.
+            self.assertEqual(_cli_select(tree, "engineer"), OPUS)
 
     def test_selector_degrades_to_the_mirror_when_the_config_is_unreadable(self):
         # The config ships in the public .bureau-pipeline checkout, so it is
@@ -457,7 +481,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             tree = _copy_tree(Path(td))
             (tree / "config" / "models.yaml").write_text("{{ not yaml\n")
             self.assertEqual(_cli_select(tree, "engineer"), OPUS)
-            self.assertEqual(_cli_select(tree, "critic"), SONNET)
+            self.assertEqual(_cli_select(tree, "critic"), FABLE)
 
 
 class WorkflowModelPinTest(unittest.TestCase):

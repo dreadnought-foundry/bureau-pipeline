@@ -24,11 +24,22 @@ WHY IT DOES NOT AUTO-UPGRADE (do not "improve" this into auto-adoption)
     takes breaking changes unattended, overnight, across every repo.
   * COST. Fable 5 is $10/$50 per MTok vs Opus $5/$25 — "newest and best" can
     double the bill with nobody deciding to. That is exactly the incident that
-    took Fable off the workhorse ladder on 2026-08-09.
+    took Fable off the workhorse ladder on 2026-08-09; DRE-2317 gave it the one
+    home where the price buys something (the bounded ADVISORY roles) and made
+    its absence from the build path a validated invariant.
 
-Adoption is a deliberate one-line human edit to LADDER + agents.yaml. Nothing
-in this module writes either file; the drift workflow only writes models.json
-and opens a Linear card for a human.
+DISCOVERY (DRE-2317)
+--------------------
+`new_models()` reports ids the catalog offers that config/models.yaml has never
+named, and `check-new` opens ONE alert card for them. A discovery may be
+proposed for the ADVISORY ladder at most — never the build path — and only a
+human editing the config actually adopts it. `discovery.on_new_model:
+workhorse` is not an expressible policy: schema validation rejects it.
+
+Adoption is a deliberate human edit to config/models.yaml (the ONE model
+config), regenerating the mirrors with scripts/sync_model_config.py. Nothing in
+this module writes that file; the drift workflow only writes models.json and
+opens a Linear card for a human.
 
 RANKING: `created_at`, NEVER THE ID
 -----------------------------------
@@ -56,8 +67,10 @@ from datetime import datetime, timezone
 
 # The ONE auth seam (extracted from model_fallback's probe by this card): both
 # the availability probe and this catalog build their headers here, so a change
-# to how we authenticate can never apply to only half the calls.
-from model_fallback import KNOWN_MODELS, LADDER, auth_headers  # noqa: F401
+# to how we authenticate can never apply to only half the calls. DISCOVERY is
+# the policy for a model id we SEE but do not configure (DRE-2317): advisory,
+# or nothing — never the build path.
+from model_fallback import DISCOVERY, KNOWN_MODELS, LADDER, auth_headers  # noqa: F401
 
 CATALOG_URL = "https://api.anthropic.com/v1/models"
 
@@ -314,6 +327,140 @@ def _resolve_pin(pinned: str, catalog) -> datetime | None:
 
 
 # --------------------------------------------------------------------------- #
+# Discovery — a model we have never configured (DRE-2317)                      #
+# --------------------------------------------------------------------------- #
+
+def discovery_policy() -> dict:
+    """What may happen to a model id the system sees that config/models.yaml
+    does not name: ``{"on_new_model": "advisory"|"none", "alert": bool}``.
+
+    Read from the config, never decided here. `workhorse` is not an expressible
+    value — schema validation rejects it (`model_fallback.policy_errors`),
+    because a newly available model joining the BUILD path with no human
+    deciding is exactly the 2026-08-09 outage.
+    """
+    return dict(DISCOVERY)
+
+
+def new_models(catalog, known_ids=None) -> list[dict]:
+    """Catalog entries whose id this pipeline has never been configured with,
+    newest first.
+
+    "Known" is the full read set — every ladder plus the retired and excluded
+    ids — so a model we deliberately rotated out is not rediscovered every
+    week. A DATED SNAPSHOT of a known alias (`claude-opus-5-20260801`) is the
+    same model, not a discovery.
+
+    Data only: this reports, it never adopts. Adoption is a human edit of
+    config/models.yaml, and the only ladder a discovery may be proposed for is
+    the advisory one.
+    """
+    if known_ids is None:
+        known_ids = KNOWN_MODELS
+    known = set(known_ids)
+    found = [
+        entry
+        for entry in catalog or []
+        if isinstance(entry, Mapping)
+        and isinstance(entry.get("id"), str)
+        and entry["id"] not in known
+        and not any(_is_dated_snapshot_of(entry["id"], alias) for alias in known)
+    ]
+    found.sort(key=created_at, reverse=True)
+    return found
+
+
+# How many ids a title spells out before it elides. The body always lists them
+# all; the title has to stay readable on a Linear board.
+_TITLE_IDS = 3
+
+
+def new_model_title(entries) -> str:
+    """A title that encodes the FINDING, not the run date — the same
+    idempotency contract drift_title() has: `linear_ops.py find-open` matches it
+    exactly, so next week's identical finding updates nothing and duplicates
+    nothing.
+
+    The ids are SORTED, not taken in catalog order: `/v1/models` order is the
+    vendor's business, and a re-ordered response must not mint a second card
+    for a finding we already have open.
+    """
+    ids = sorted(e["id"] for e in entries)
+    shown = ", ".join(ids[:_TITLE_IDS])
+    if len(ids) > _TITLE_IDS:
+        shown += f" +{len(ids) - _TITLE_IDS} more"
+    return f"New model available (advisory decision): {shown}"
+
+
+def new_model_body(entries) -> str:
+    """The alert card: a model exists that we do not run, here is what may
+    happen to it, and here is what may NOT."""
+    target = discovery_policy().get("on_new_model", "none")
+    lines = [
+        "The Anthropic API is offering a model this pipeline has never been "
+        "configured with. This card is a decision for a human — nothing has "
+        "been changed automatically.",
+        "",
+        "**Repo:** bureau-pipeline",
+        "",
+        "## What is new",
+        "",
+    ]
+    for entry in entries:
+        label = entry.get("display_name") or entry["id"]
+        lines.append(
+            f"- `{entry['id']}` — {label}, created {entry.get('created_at')}"
+        )
+    lines += [
+        "",
+        "## What may happen to it",
+        "",
+    ]
+    if target == "advisory":
+        lines += [
+            "At most, it may join the **advisory** ladder in "
+            "`config/models.yaml` — the bounded consults at decision points "
+            "(critic, verifier, medic), which is where the strongest model "
+            "belongs because the critic gates every unattended merge.",
+            "",
+            "It may **never** join the workhorse ladder — the build path. A "
+            "newly available model promoting itself onto high-volume build "
+            "work is precisely the 2026-08-09 outage: the probe stopped "
+            "returning 404, a best-first ladder moved the entire fleet in one "
+            "TTL window, the rolling session usage drained, and agents began "
+            "dying mid-run. Availability is not permission.",
+        ]
+    else:
+        lines += [
+            "Nothing automatic. The discovery policy in `config/models.yaml` "
+            "is `none`: this card exists so a human knows the model exists.",
+            "",
+            "It may **never** join the workhorse ladder — the build path — "
+            "without a deliberate, reviewed edit to `config/models.yaml`.",
+        ]
+    lines += [
+        "",
+        "## Before adopting anything",
+        "",
+        "- A new model can ship breaking API changes. Opus 5 vs 4.8 turned "
+        "thinking ON by default (so `max_tokens` caps thinking + response "
+        "together and tight requests truncate mid-answer) and returns 400 when "
+        "thinking is disabled above `high` effort.",
+        "- Cost is a decision, not a default. Ladder membership is the spend "
+        "decision and it is made by a human editing `config/models.yaml`, in "
+        "one reviewed PR. Schema validation rejects a config that puts an "
+        "advisory-tier model on a build ladder.",
+        "",
+        "## If we decide against it",
+        "",
+        "Park this card in Backlog rather than cancelling it. The watch dedupes "
+        "against OPEN cards with this exact title, so a cancelled card invites "
+        "an identical one next Monday; a parked one keeps it quiet.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+# --------------------------------------------------------------------------- #
 # models.json — the committed snapshot the console reads                       #
 # --------------------------------------------------------------------------- #
 
@@ -463,15 +610,17 @@ def drift_body(findings) -> str:
         "together and tight requests truncate mid-answer) and returns 400 when "
         "thinking is disabled above `high` effort.",
         "- Cost is a decision, not a default. Fable 5 is $10/$50 per MTok "
-        "against Opus at $5/$25 — the reason Fable is off the workhorse ladder.",
+        "against Opus at $5/$25 — the reason it rides the bounded advisory "
+        "ladder and never the build path.",
         "- Ranking here is by the API's `created_at`. Model ids do not sort: "
         "`claude-opus-10` sorts before `claude-opus-5` as a string.",
         "",
         "## If we decide to adopt",
         "",
         "Adoption is a deliberate human edit of the ladder in "
-        "`scripts/model_fallback.py` and `agents.yaml`, in one reviewed PR — "
-        "do not automate it. This watch only makes the drift visible.",
+        "`config/models.yaml` — the one model config — in a reviewed PR, "
+        "regenerating the mirrors with `scripts/sync_model_config.py`. Do not "
+        "automate it. This watch only makes the drift visible.",
         "",
         "## If we decide against it",
         "",
@@ -517,11 +666,12 @@ def _cmd_snapshot(path: str) -> int:
     return 0
 
 
-def _cmd_check_drift(argv: list[str]) -> int:
-    """Compare LADDER against a catalog. Exit 3 = drift found (the workflow's
-    signal to open ONE card), exit 0 = current or nothing to compare."""
+def _parse_card_args(argv: list[str]):
+    """`[<snapshot>] [--title-file <p>] [--body-file <p>] [--baseline <p>]` →
+    the four values. Shared by both card-opening commands so they cannot drift
+    apart. `--baseline` is only meaningful to check-new."""
     source = None
-    title_file = body_file = None
+    title_file = body_file = baseline = None
     rest = list(argv)
     while rest:
         arg = rest.pop(0)
@@ -529,8 +679,17 @@ def _cmd_check_drift(argv: list[str]) -> int:
             title_file = rest.pop(0) if rest else None
         elif arg == "--body-file":
             body_file = rest.pop(0) if rest else None
+        elif arg == "--baseline":
+            baseline = rest.pop(0) if rest else None
         elif source is None:
             source = arg
+    return source, title_file, body_file, baseline
+
+
+def _cmd_check_drift(argv: list[str]) -> int:
+    """Compare LADDER against a catalog. Exit 3 = drift found (the workflow's
+    signal to open ONE card), exit 0 = current or nothing to compare."""
+    source, title_file, body_file, _ = _parse_card_args(argv)
 
     if source:
         catalog = snapshot_catalog(load_snapshot(source))
@@ -562,6 +721,58 @@ def _cmd_check_drift(argv: list[str]) -> int:
     return 3
 
 
+def _cmd_check_new(argv: list[str]) -> int:
+    """Report models the catalog offers that we have never seen or configured.
+    Exit 3 = at least one (the workflow's signal to open ONE alert card), exit
+    0 = nothing new or nothing to compare. Adopts nothing, writes no config.
+
+    `--baseline <snapshot>` is the record of what we had ALREADY seen — read
+    before the weekly refresh rewrites it. Without it "new" would mean "not on
+    a ladder", which is every model Anthropic offers that we simply do not run:
+    a weekly re-alert that trains the alert into wallpaper. With it, "new"
+    means what the card means — an id the system is seeing for the first time.
+    """
+    source, title_file, body_file, baseline = _parse_card_args(argv)
+
+    if source:
+        catalog = snapshot_catalog(load_snapshot(source))
+    else:
+        clear_catalog_cache()
+        catalog = fetch_catalog(fetch=_fake_catalog_from_env())
+
+    if not catalog:
+        print("catalog empty — no discovery check possible")
+        return 0
+
+    known = set(KNOWN_MODELS)
+    if baseline:
+        # EVERY id in the baseline, `in_catalog` or not: a model we saw once and
+        # that has since rotated out is not a discovery when it reappears.
+        known |= {
+            entry["id"]
+            for entry in load_snapshot(baseline).get("models", [])
+            if isinstance(entry, Mapping) and isinstance(entry.get("id"), str)
+        }
+    found = new_models(catalog, known_ids=known)
+    if not found:
+        print("no unconfigured models in the catalog")
+        return 0
+
+    title = new_model_title(found)
+    print(title)
+    print(
+        f"::warning::{title} — it may join the advisory ladder at most, "
+        "never the build path (DRE-2317)"
+    )
+    if title_file:
+        with open(title_file, "w") as fh:
+            fh.write(title + "\n")
+    if body_file:
+        with open(body_file, "w") as fh:
+            fh.write(new_model_body(found))
+    return 3
+
+
 def main(argv: list[str]) -> int:
     """CLI for the drift workflow.
 
@@ -570,17 +781,26 @@ def main(argv: list[str]) -> int:
       check-drift [<snapshot>] [--title-file <p>] [--body-file <p>]
                                         report tiers with something newer
                                         available; exit 3 when there are any
+      check-new [<snapshot>] [--title-file <p>] [--body-file <p>]
+                                        report models the config has never
+                                        named; exit 3 when there are any
 
-    Neither command touches LADDER or agents.yaml. Adoption is a human edit.
+    No command touches a ladder, config/models.yaml or agents.yaml. Adoption is
+    a human edit, and a discovery may be proposed for the ADVISORY ladder only.
     """
     if not argv:
-        print("usage: model_catalog.py snapshot [<path>] | check-drift [<snapshot>]")
+        print(
+            "usage: model_catalog.py snapshot [<path>] | check-drift "
+            "[<snapshot>] | check-new [<snapshot>]"
+        )
         return 2
     cmd, *rest = argv
     if cmd == "snapshot":
         return _cmd_snapshot(rest[0] if rest else "models.json")
     if cmd == "check-drift":
         return _cmd_check_drift(rest)
+    if cmd == "check-new":
+        return _cmd_check_new(rest)
     print(f"unknown command {cmd!r}")
     return 2
 

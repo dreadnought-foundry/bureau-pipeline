@@ -21,13 +21,21 @@
 #               (product = planning/spec; development = building & code review;
 #               operations = devops, fixes, verification, pipeline health;
 #               marketing/sales reserved for future agents — no entries yet)
-#   model     — GENERATED: the top of the agent's ladder in config/models.yaml.
+#   kind      — GENERATED: the role kind from config/models.yaml (DRE-2317).
+#               `workhorse` = high-volume build work, the hot path, a
+#               cost-appropriate model. `advisory` = bounded consults at
+#               decision points (critic, verifier, medic) — the STRONGEST
+#               model, because the critic gates every unattended merge and a
+#               shallow review is a silent failure. A role is assigned a KIND,
+#               never a ladder, and the advisory model is unreachable from any
+#               build ladder at any availability.
+#   model     — GENERATED: the top of that kind's ladder in config/models.yaml.
 #               Selection walks that ladder at runtime and uses the first
 #               AVAILABLE model (DRE-1490); the probe decides how far DOWN a
 #               ladder to walk, never how far up — a model that is not ON a
-#               ladder is never selected, however available it becomes. Fable
-#               left the workhorse ladder on 2026-08-09 for that reason —
-#               cost/quota policy, not availability.
+#               ladder is never selected, however available it becomes.
+#               Availability is not permission: that is what put the whole
+#               fleet on Fable on 2026-08-09 with nobody deciding.
 #   trigger   — what starts a run (relay dispatch / GitHub event / sweep)
 #   maxTurns  — hard turn budget passed via claude_args
 #   maxBudget — advisory dollars per run (console display; not enforced)
@@ -43,6 +51,7 @@ agents:
     # agent — no role hardcodes a model. Selection probes availability at
     # runtime and uses the first AVAILABLE entry.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
@@ -61,6 +70,7 @@ agents:
     # /graphql, the **Design:** fidelity convention). Routed by an agent:frontend
     # label; runs on the shared agent-task.yml like the engineer.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card (label agent:frontend) → Todo → relay repository_dispatch (agent-execute)"
@@ -83,6 +93,7 @@ agents:
     # never be auto-dispatched (label routing resolves only planner/devops/
     # frontend, else engineer; see scripts/model_fallback.py + validate_card.py).
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Operator-launched (interactive Claude Code / VS Code task); CI auto-dispatch not yet wired"
@@ -96,6 +107,7 @@ agents:
     role: DevOps
     category: operations
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card (label agent:devops) → Todo → relay repository_dispatch (agent-execute)"
@@ -114,6 +126,7 @@ agents:
     # agent-fix.yml; an attempt-gated escalation is still a build path, and the
     # workflow now selects from config/models.yaml like every other agent.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "workflow_dispatch — merge-gate DIRTY path, conflict sweep, approved-but-red sweep, critic REQUEST_CHANGES"
@@ -127,7 +140,8 @@ agents:
     role: QA Critic
     category: development
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    model: claude-sonnet-4-6  # top of the `reviewer` ladder
+    kind: advisory
+    model: claude-fable-5  # top of the `advisory` ladder
     # END generated model
     trigger: "agent PR opened/updated (head agent/*) or workflow_dispatch re-review"
     maxTurns: 40
@@ -140,7 +154,8 @@ agents:
     role: Verifier
     category: operations
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    model: claude-sonnet-4-6  # top of the `reviewer` ladder
+    kind: advisory
+    model: claude-fable-5  # top of the `advisory` ladder
     # END generated model
     trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
     maxTurns: 60
@@ -155,6 +170,7 @@ agents:
     # Same workhorse ladder as the engineer (DRE-1490) — both roles walk it
     # best→worst and use the first AVAILABLE model.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear epic (label agent:planner) → Todo → relay repository_dispatch (agent-plan)"
@@ -168,7 +184,8 @@ agents:
     role: Pipeline Medic
     category: operations
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    model: claude-sonnet-4-6  # top of the `reviewer` ladder
+    kind: advisory
+    model: claude-fable-5  # top of the `advisory` ladder
     # END generated model
     trigger: "workflow_run failed twice (attempt 1 auto-retries without an agent)"
     maxTurns: 40
@@ -182,6 +199,7 @@ agents:
     category: operations
     # Engineer ladder (DRE-1490): the repair agent is an engineer-tier fixer.
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "workflow_run — default-branch CI conclusion=failure (event-driven; no polling; ≤2 attempts per failing SHA)"
