@@ -1,0 +1,29 @@
+{
+  "source": "https://api.anthropic.com/v1/models",
+  "models": [
+    {
+      "id": "claude-fable-5",
+      "display_name": null,
+      "created_at": null,
+      "in_catalog": false
+    },
+    {
+      "id": "claude-opus-4-8",
+      "display_name": null,
+      "created_at": null,
+      "in_catalog": false
+    },
+    {
+      "id": "claude-opus-5",
+      "display_name": null,
+      "created_at": null,
+      "in_catalog": false
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "display_name": null,
+      "created_at": null,
+      "in_catalog": false
+    }
+  ]
+}
