@@ -44,6 +44,15 @@ is untouched — a non-qa-bot comment carrying a perfect id is still
 invisible. CI still re-runs on the merged result and condition 0 still
 refuses to merge a stale head, so nothing about DRE-1924 changes.
 
+KNOWN RESIDUAL, named rather than left to be discovered: the compare
+record's `files[]` carries no FILE MODE, so a change that flips only a
+mode (chmod +x) leaves the filename, status and blob sha identical and
+therefore does not move the id. A push doing nothing but that would carry
+its verdict. It is bounded — no code changes, CI still re-runs on the
+merged result, condition 0 still refuses a stale head, and a fresh review
+would show the mode line in the diff — and it cannot be closed from this
+record, which has no mode field to hash.
+
 FAIL CLOSED, ALWAYS. `content_id()` returns None — never a partial hash —
 whenever the compare record is not provably complete. None means "no
 content binding; fall back to today's SHA binding", which is the strictly
@@ -86,13 +95,25 @@ MAX_COMPARE_FILES = 300
 #: 0 takes on an unverifiable status.
 COMPARE_STATUSES = frozenset({"ahead", "behind", "diverged", "identical"})
 
-#: The field the producers append after the bound SHA:
+#: The field the producers append after the bound SHA, as the LAST thing
+#: on the verdict line:
 #:   🔎 QA Critic — VERDICT: APPROVE @<40-hex> content:<64-hex>
-#: Anchored on both ends so a truncated or over-long value reads as NO
-#: field rather than as a partial one. It cannot disturb merge_gate's
+#:
+#: Anchored to END OF LINE on purpose, not merely `\b`-delimited. The
+#: middle of that line is `head -1` of a file the critic AGENT wrote, and
+#: the critic reads an attacker-authored diff — so a prompt injection could
+#: try to make it emit its own `content:<id>` earlier on the line, naming
+#: the fingerprint of code it intends to push next. The producers append
+#: this field LAST, so the end-anchored match always reads the WORKFLOW's
+#: id and never the agent's. A future producer that appends anything after
+#: it makes this read nothing at all — the fail-closed direction (back to
+#: SHA binding).
+#:
+#: The 64-hex run is exact, so a truncated or over-long value reads as NO
+#: field rather than a partial one. It cannot disturb merge_gate's
 #: `_SHA_RE` (a search for `@<40-hex>`) or its anchored `_verdict_re`,
 #: and carries no second `@<40-hex>` (trap 2).
-_CONTENT_RE = re.compile(r"\bcontent:([0-9a-f]{64})\b")
+_CONTENT_RE = re.compile(r"\bcontent:([0-9a-f]{64})\s*$")
 
 #: Field separators for the canonical form. \x00 cannot appear in a path,
 #: a status or a blob sha, so no two distinct file sets can serialise to
