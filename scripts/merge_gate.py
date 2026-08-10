@@ -438,6 +438,26 @@ def evaluate_checks(check_runs, review_suites=frozenset()) -> Optional[Decision]
     return None
 
 
+def commit_shas(pr_commits) -> frozenset:
+    """The sha set of a `GET pulls/{pr}/commits` payload — the carry's
+    condition 4 record.
+
+    One implementation (DRE-2340, trap 4): the gate, the review-skip
+    (should_review_pr) and the In QA sweep (reconcile) all read the same
+    payload shape, and a hand-rolled second copy is exactly how the three
+    drifted into disagreeing about the same state. A blip substitute (`[]`),
+    a payload that is not a list at all, or a shapeless entry contributes
+    nothing, so the set comes out empty and carries_content refuses — fail
+    closed, never a crash on the decision path.
+    """
+    if not isinstance(pr_commits, (list, tuple)):
+        return frozenset()
+    return frozenset(
+        c.get("sha") for c in pr_commits
+        if isinstance(c, dict) and c.get("sha")
+    )
+
+
 def carries_content(
     line: str, sha: str, head_content_id: Optional[str], pr_commit_shas
 ) -> bool:
@@ -585,10 +605,7 @@ def decide(
     if blocked:
         return blocked
 
-    pr_commit_shas = frozenset(
-        c.get("sha") for c in pr_commits
-        if isinstance(c, dict) and c.get("sha")
-    )
+    pr_commit_shas = commit_shas(pr_commits)
     # Verdicts honoured across a head change, collected as they are read so
     # the carry can be reported wherever the decision lands.
     carried = []

@@ -714,7 +714,11 @@ def critic_comment_bodies(pr: dict) -> list[str]:
     ]
 
 
-def has_verdict(pr: dict, head_content_id: str | None = None) -> bool:
+def has_verdict(
+    pr: dict,
+    head_content_id: str | None = None,
+    pr_commit_shas=frozenset(),
+) -> bool:
     """True iff the latest qa-bot-authored QA Critic comment is a verdict
     that BINDS the PR's current head — by SHA (`@<full-sha>`, DRE-1990) or,
     when the head has moved but the PR's own contribution has not, by
@@ -729,10 +733,23 @@ def has_verdict(pr: dict, head_content_id: str | None = None) -> bool:
     one-time re-review path for APPROVEs posted before DRE-1990 shipped.
 
     `head_content_id` is the id of the PR's own contribution at its current
-    head (head_content_id_for). Omitted or None = SHA binding only, which
-    is exactly the pre-DRE-2340 answer. The binding itself is read through
-    merge_gate / verdict_content — trap 4: there is ONE implementation, and
-    DRE-1998 already had to fix an independent copy of a verdict read once.
+    head (head_content_id_for), and `pr_commit_shas` the sha set of the PR's
+    own commit record (pr_commit_shas_for) — together the four conditions
+    merge_gate.carries_content applies, applied BY that function. Omitted =
+    SHA binding only, which is exactly the pre-DRE-2340 answer.
+
+    Both records, not just the content id (the review finding on this PR):
+    a sweep that carried on content alone disagreed with the gate on any
+    content-preserving head rewrite — the gate refused the carry for want
+    of condition 4, so it waited for a fresh review, while this sweep read
+    the PR as healthy and nudged the GATE instead of qa-review. Nothing
+    ordered the review, every 15 minutes, forever. Applying the same four
+    conditions routes that state back to qa-review, and one fresh review
+    unsticks it with no human in the loop.
+
+    The binding itself is read through merge_gate / verdict_content — trap
+    4: there is ONE implementation, and DRE-1998 already had to fix an
+    independent copy of a verdict read once.
     """
     bodies = critic_comment_bodies(pr)
     if not bodies:
@@ -743,8 +760,8 @@ def has_verdict(pr: dict, head_content_id: str | None = None) -> bool:
         return False
     if sha == (pr.get("headRefOid") or ""):
         return True
-    return bool(head_content_id) and (
-        merge_gate.verdict_content_id(line) == head_content_id
+    return merge_gate.carries_content(
+        line, sha, head_content_id, pr_commit_shas
     )
 
 
@@ -772,18 +789,51 @@ def head_content_id_for(pr: dict) -> str | None:
     return verdict_content.content_id(payload)
 
 
+def pr_commit_shas_for(pr: dict) -> frozenset:
+    """The sha set of the PR's own commit record — the carry's condition 4,
+    read exactly as merge-gate.yml reads it (DRE-2340).
+
+    Costs one read, and like head_content_id_for it is paid ONLY on the
+    stale-sha path that already pays a compare read; the common case (a
+    verdict bound to the head) spends nothing. An unreadable record yields
+    the empty set, which carries_content refuses — fail closed, and the
+    sweep then routes the nudge to qa-review (a fresh review), never to a
+    gate that would wait for one nobody ordered.
+    """
+    number = pr.get("number")
+    if not number:
+        return frozenset()
+    raw = gh("api", f"repos/{REPO}/pulls/{number}/commits?per_page=100")
+    if not raw:
+        return frozenset()  # unreadable — never act on fabricated data
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return frozenset()
+    return merge_gate.commit_shas(payload)
+
+
 def verdict_bound(pr: dict) -> bool:
     """has_verdict, resolving the content binding from GitHub's own compare
-    record when the SHA binding is stale (DRE-2340).
+    and commit records when the SHA binding is stale (DRE-2340).
 
     Without this the sweep would fight the gate: after a gate-initiated
     `update-branch` the standing verdict still binds the PR's content, the
     gate is about to merge on it, and reconcile would spend a re-review (In
     QA nudge) or report a false "a fresh review is needed" on the card
-    (crashed-review recovery) roughly every 15 minutes."""
+    (crashed-review recovery) roughly every 15 minutes.
+
+    Both records are resolved because the gate applies both; a sweep that
+    honoured a carry the gate refuses reports a stalled PR as healthy (see
+    has_verdict). The content id is resolved first and short-circuits: no
+    id means no carry under any commit record, so the second read is never
+    paid on the common truncated/blipped compare."""
     if has_verdict(pr):
         return True
-    return has_verdict(pr, head_content_id_for(pr))
+    head_content_id = head_content_id_for(pr)
+    if not head_content_id:
+        return False
+    return has_verdict(pr, head_content_id, pr_commit_shas_for(pr))
 
 
 def redispatch(card: dict) -> bool:

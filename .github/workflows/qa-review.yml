@@ -127,9 +127,11 @@ jobs:
       # content id equal to this head's, the critic has already read exactly
       # this diff — the head moved only because the gate merged the base in.
       # Portico PR #205 paid for that six times in 47 minutes. The records
-      # come from GitHub (the comments listing and the compare record); a
-      # blip in either reads as "no proof" and the review runs, so the
-      # expensive mistake stays the safe direction.
+      # come from GitHub (the comments listing, the compare record and the
+      # PR's commit record — all three the gate reads, so the skip can
+      # never be wider than the carry); a blip in any reads as "no proof"
+      # and the review runs, so the expensive mistake stays the safe
+      # direction.
       - name: Decide review
         id: decide
         env:
@@ -162,10 +164,19 @@ jobs:
           # verdict.
           gh api "repos/${{ github.repository }}/issues/$PR/comments" > /tmp/decide-comments.json 2>/dev/null \
             || echo '[]' > /tmp/decide-comments.json
+          # The gate's carry condition 4: the reviewed commit is still in
+          # THIS PR's own commit record. Same call shape merge-gate.yml
+          # uses (`per_page=100`), because the skip must be a strict subset
+          # of the carry — skipping a review the gate then refuses to
+          # honour deadlocks the PR with nobody left to order one. `[]`
+          # blip substitute = no proof = review, this step's direction.
+          gh api "repos/${{ github.repository }}/pulls/$PR/commits?per_page=100" > /tmp/decide-commits.json 2>/dev/null \
+            || echo '[]' > /tmp/decide-commits.json
           set +e
           OUT=$(python3 .bureau-pipeline/scripts/should_review_pr.py "$HEAD_REF" \
             --comments-file /tmp/decide-comments.json \
             --compare-file /tmp/decide-compare.json \
+            --pr-commits-file /tmp/decide-commits.json \
             --qa-login "$QA_LOGIN")
           set -e
           echo "$OUT"

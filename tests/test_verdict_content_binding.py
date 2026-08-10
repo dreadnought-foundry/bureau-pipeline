@@ -55,6 +55,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -964,11 +965,14 @@ class ProducerWiringTest(unittest.TestCase):
 # ── 5. stop paying for the re-review, through ONE implementation ─────────
 class ShouldReviewSkipTest(unittest.TestCase):
     """should_review() returns False when the latest qa-bot critic verdict
-    is an APPROVE whose content id equals the current head's."""
+    is an APPROVE the GATE would carry — all four conditions, including the
+    reviewed commit still being in the PR's own commit record."""
 
-    def call(self, comments, cid=CID, branch="agent/DRE-2340-x"):
+    def call(self, comments, cid=CID, branch="agent/DRE-2340-x",
+             commits=PR_COMMITS):
         return should_review_pr.should_review(
-            branch, comments=comments, qa_login=QA_LOGIN, head_content_id=cid
+            branch, comments=comments, qa_login=QA_LOGIN, head_content_id=cid,
+            pr_commit_shas=merge_gate.commit_shas(commits),
         )
 
     def test_skips_a_carried_approve(self):
@@ -1010,12 +1014,62 @@ class ShouldReviewSkipTest(unittest.TestCase):
         self.assertTrue(should_review_pr.should_review("agent/DRE-1-x"))
         self.assertTrue(self.call([], cid=CID))
 
+    def test_reviews_when_the_reviewed_sha_left_the_commit_record(self):
+        """Condition 4, the review finding on this PR. A content-preserving
+        head rewrite (`git commit --amend`, a rebase onto an unmoved base,
+        `@dependabot rebase`) keeps the content id and drops the reviewed
+        commit from the PR's record. The GATE refuses that carry — so the
+        skip must too, or the review the gate waits for is never ordered."""
+        self.assertTrue(
+            self.call([comment(QA_LOGIN, critic_line("APPROVE", REVIEWED, CID))],
+                      commits=[{"sha": HEAD}])
+        )
+
+    def test_reviews_when_the_commit_record_is_unreadable(self):
+        """The `[]` blip substitute is not proof of anything — review."""
+        self.assertTrue(
+            self.call([comment(QA_LOGIN, critic_line("APPROVE", REVIEWED, CID))],
+                      commits=[])
+        )
+
     def test_carried_sha_is_reported_for_the_republished_check(self):
         sha = should_review_pr.carried_approve(
             [comment(QA_LOGIN, critic_line("APPROVE", REVIEWED, CID))],
-            QA_LOGIN, CID,
+            QA_LOGIN, CID, merge_gate.commit_shas(PR_COMMITS),
         )
         self.assertEqual(sha, REVIEWED)
+
+
+class SkipReadsTheGatesRecordsTest(unittest.TestCase):
+    """The skip decides on the SAME records the gate decides on, or the
+    subset relation holds only in the unit tests. qa-review.yml's "Decide
+    review" step must fetch all three."""
+
+    def setUp(self):
+        self.step = next(
+            s for s in yaml.safe_load(QA_REVIEW_YML.read_text())
+            ["jobs"]["review"]["steps"]
+            if "should_review_pr.py" in (s.get("run") or "")
+        )
+
+    def test_the_commit_record_is_fetched_and_passed(self):
+        self.assertIn("/commits?per_page=100", self.step["run"])
+        self.assertIn("--pr-commits-file", self.step["run"])
+
+    def test_the_commit_fetch_fails_soft_to_no_carry(self):
+        """A blip must mean "review" (cheap), never a red run or a carry on
+        unverifiable data — the `[]` substitute merge-gate.yml also writes."""
+        fetch = next(ln for ln in self.step["run"].splitlines()
+                     if "/commits?per_page=100" in ln)
+        idx = self.step["run"].splitlines().index(fetch)
+        self.assertIn("|| echo '[]'",
+                      self.step["run"].splitlines()[idx + 1])
+
+    def test_it_fetches_what_the_gate_fetches(self):
+        """Same call shape as merge-gate.yml, so neither can read a record
+        the other cannot."""
+        gate = MERGE_GATE_YML.read_text()
+        self.assertIn("/commits?per_page=100", gate)
 
 
 class OneImplementationTest(unittest.TestCase):
@@ -1051,13 +1105,43 @@ class OneImplementationTest(unittest.TestCase):
                 if "hashlib" in inspect.getsource(m)]
         self.assertEqual(hits, [], "content_id must be computed in one module")
 
+    def test_both_readers_call_the_gates_carry_predicate(self):
+        """The review finding on this PR: satisfying "one implementation"
+        in LETTER (no re-declared marker, no second regex) while restating
+        the gate's condition chain by hand is what let the three readers
+        disagree. The predicate itself must be the shared thing."""
+        for fn in (should_review_pr.carried_approve, reconcile.has_verdict):
+            self.assertIn(
+                "carries_content", inspect.getsource(fn),
+                f"{fn.__qualname__} restates the gate's carry instead of "
+                "calling merge_gate.carries_content",
+            )
+
+    def test_the_commit_record_is_read_the_same_way_everywhere(self):
+        """Condition 4's record too — a hand-rolled sha set is the same
+        drift one level down."""
+        for fn in (should_review_pr.main, reconcile.pr_commit_shas_for):
+            self.assertIn("commit_shas", inspect.getsource(fn))
+
+    def test_the_shared_reader_fails_closed_on_any_shape(self):
+        """Three callers now feed it raw JSON off the wire, so a shapeless
+        payload must yield "no proof" — never an exception on the path that
+        decides whether a review happens."""
+        for payload in ([], {}, None, 5, "commits", [None], [{}], [[]],
+                        [{"sha": None}]):
+            self.assertEqual(merge_gate.commit_shas(payload), frozenset(),
+                             f"{payload!r} produced a carry record")
+
 
 class ReconcileBindingTest(unittest.TestCase):
     """reconcile.has_verdict honours the same carry, so the In QA sweep
     stops re-nudging a review for a PR whose verdict still binds."""
 
+    SHAS = merge_gate.commit_shas(PR_COMMITS)
+
     def pr(self, head, bodies, base="main"):
         return {
+            "number": 205,
             "headRefOid": head,
             "baseRefName": base,
             "comments": [{"author": {"login": GH_QA_LOGIN}, "body": b}
@@ -1066,16 +1150,32 @@ class ReconcileBindingTest(unittest.TestCase):
 
     def test_carried_verdict_counts(self):
         pr = self.pr(HEAD, [critic_line("APPROVE", REVIEWED, CID)])
-        self.assertTrue(reconcile.has_verdict(pr, CID))
+        self.assertTrue(reconcile.has_verdict(pr, CID, self.SHAS))
 
     def test_stale_verdict_without_a_content_id_still_does_not_count(self):
         pr = self.pr(HEAD, [critic_line("APPROVE", REVIEWED)])
-        self.assertFalse(reconcile.has_verdict(pr, CID))
+        self.assertFalse(reconcile.has_verdict(pr, CID, self.SHAS))
 
     def test_mismatched_content_id_does_not_count(self):
         pr = self.pr(HEAD, [critic_line("APPROVE", REVIEWED, CID)])
-        self.assertFalse(reconcile.has_verdict(pr, OTHER_CID))
+        self.assertFalse(reconcile.has_verdict(pr, OTHER_CID, self.SHAS))
         self.assertFalse(reconcile.has_verdict(pr))
+
+    def test_a_rewritten_head_does_not_count_and_routes_to_a_review(self):
+        """The review finding on this PR. The reviewed commit has left the
+        PR's record (amend / rebase), so the GATE will not carry — it waits
+        for a fresh review. If the sweep read this PR as healthy it would
+        nudge the gate, which waits again: a permanent stall no human sees
+        until they unstick it by hand. False here routes the In QA nudge to
+        qa-review instead, and one fresh review clears it."""
+        pr = self.pr(HEAD, [critic_line("APPROVE", REVIEWED, CID)])
+        self.assertFalse(
+            reconcile.has_verdict(pr, CID, frozenset({HEAD}))
+        )
+
+    def test_an_unreadable_commit_record_does_not_count(self):
+        pr = self.pr(HEAD, [critic_line("APPROVE", REVIEWED, CID)])
+        self.assertFalse(reconcile.has_verdict(pr, CID, frozenset()))
 
     def test_head_bound_verdict_needs_no_content_id(self):
         pr = self.pr(HEAD, [critic_line("APPROVE", HEAD)])
@@ -1083,17 +1183,48 @@ class ReconcileBindingTest(unittest.TestCase):
 
     def test_forged_carry_is_invisible_to_reconcile_too(self):
         pr = {
+            "number": 205,
             "headRefOid": HEAD,
             "baseRefName": "main",
             "comments": [{"author": {"login": "agent-bureau-bot"},
                           "body": critic_line("APPROVE", REVIEWED, CID)}],
         }
-        self.assertFalse(reconcile.has_verdict(pr, CID))
+        self.assertFalse(reconcile.has_verdict(pr, CID, self.SHAS))
 
     def test_the_sweep_requests_the_base_ref_it_needs(self):
         """Without baseRefName in the listing there is no compare to
         compute, and the carry silently never fires."""
         self.assertIn("baseRefName", inspect.getsource(reconcile.pr_for))
+
+    def test_the_sweep_reads_the_commit_record_the_gate_reads(self):
+        """Condition 4 needs `pulls/{pr}/commits`, and the PR number to ask
+        for it — both must be in the listing the sweep already makes."""
+        src = inspect.getsource(reconcile.pr_commit_shas_for)
+        self.assertIn("/commits", src)
+        self.assertIn("number", inspect.getsource(reconcile.pr_for))
+
+    def test_no_content_id_spends_no_commit_read(self):
+        """The truncated/blipped compare is the common no-carry case; it
+        must not pay for a record that cannot change the answer."""
+        pr = self.pr(HEAD, [critic_line("APPROVE", REVIEWED, CID)])
+        with mock.patch.object(reconcile, "head_content_id_for",
+                               return_value=None), \
+             mock.patch.object(reconcile, "pr_commit_shas_for") as commits:
+            self.assertFalse(reconcile.verdict_bound(pr))
+        commits.assert_not_called()
+
+    def test_verdict_bound_resolves_both_records(self):
+        pr = self.pr(HEAD, [critic_line("APPROVE", REVIEWED, CID)])
+        with mock.patch.object(reconcile, "head_content_id_for",
+                               return_value=CID), \
+             mock.patch.object(reconcile, "pr_commit_shas_for",
+                               return_value=self.SHAS):
+            self.assertTrue(reconcile.verdict_bound(pr))
+        with mock.patch.object(reconcile, "head_content_id_for",
+                               return_value=CID), \
+             mock.patch.object(reconcile, "pr_commit_shas_for",
+                               return_value=frozenset({HEAD})):
+            self.assertFalse(reconcile.verdict_bound(pr))
 
 
 # ── 6. the PR #205 replay ────────────────────────────────────────────────
@@ -1112,23 +1243,43 @@ class Portico205ScenarioTest(unittest.TestCase):
 
     HEADS = ["%040x" % (0x205 + i) for i in range(7)]
 
-    def _simulate(self, content_ids):
+    def _simulate(self, content_ids, rewrite_at=None):
         """Walk the heads. At each one, ask should_review_pr whether the
         critic must run; run it if so (posting a bound verdict), then ask
-        the gate what it decides. Returns (review count, last decision)."""
+        the gate what it decides, on THAT SAME state. Returns (review
+        count, last decision).
+
+        `rewrite_at` replays a content-preserving head REWRITE at that
+        index — an amend, a rebase onto an unmoved base, `@dependabot
+        rebase`: the new head carries the same content, and every earlier
+        commit leaves the PR's record. That is the state on which the three
+        readers used to disagree.
+        """
         comments = []
         reviews = 0
         decision = None
         commits = []
-        for head, cid in zip(self.HEADS, content_ids):
-            commits.append({"sha": head})
-            if should_review_pr.should_review(
+        for i, (head, cid) in enumerate(zip(self.HEADS, content_ids)):
+            if i == rewrite_at:
+                commits = [{"sha": head}]  # the old commits are gone
+            else:
+                commits.append({"sha": head})
+            shas = merge_gate.commit_shas(commits)
+            review = should_review_pr.should_review(
                 "agent/DRE-2329-orphan-user-audit",
                 comments=comments, qa_login=QA_LOGIN, head_content_id=cid,
-            ):
+                pr_commit_shas=shas,
+            )
+            if review:
                 reviews += 1
                 comments.append(
                     comment(QA_LOGIN, critic_line("APPROVE", head, cid))
+                )
+            elif not self._gate_carries(comments, head, cid, shas):
+                self.fail(
+                    f"head {head[-3:]}: the review was SKIPPED but the gate "
+                    "will not carry the verdict — nothing will ever order "
+                    "the review it waits for (permanent stall)"
                 )
             decision = merge_gate.decide(
                 head_sha=head, qa_login=QA_LOGIN, check_runs=GREEN_CI,
@@ -1136,6 +1287,16 @@ class Portico205ScenarioTest(unittest.TestCase):
                 pr_commits=commits, head_content_id=cid,
             )
         return reviews, decision
+
+    @staticmethod
+    def _gate_carries(comments, head, cid, shas) -> bool:
+        """Does condition 2 accept the standing verdict at this head?"""
+        line = merge_gate.first_line(
+            merge_gate.latest_verdict_comment(
+                comments, QA_LOGIN, merge_gate.CRITIC_MARKER
+            )
+        )
+        return merge_gate.evaluate_critic(line, head, cid, shas) is None
 
     def test_one_critic_run_not_seven(self):
         reviews, decision = self._simulate([CID] * 7)
@@ -1159,6 +1320,50 @@ class Portico205ScenarioTest(unittest.TestCase):
         reviews, decision = self._simulate([None] * 7)
         self.assertEqual(reviews, 7)
         self.assertEqual(decision.action, "merge")
+
+    def test_a_content_preserving_rewrite_earns_a_review_not_a_stall(self):
+        """The review finding on this PR, as a scenario.
+
+        A rebase/amend keeps the content id and drops every earlier commit
+        from the PR's record. The skip used to fire anyway (it checked
+        three of the gate's four conditions), the gate refused the carry
+        for want of the fourth, and reconcile — missing it too — nudged the
+        gate rather than the review. Nothing ordered a review; the PR sat
+        until a human noticed. The rewrite must cost exactly ONE extra
+        review, and the PR must reach `merge`."""
+        reviews, decision = self._simulate([CID] * 7, rewrite_at=3)
+        self.assertEqual(reviews, 2, "the rewritten head earns one review")
+        self.assertEqual(decision.action, "merge", decision.reason)
+
+    def test_the_skip_is_a_subset_of_the_carry_on_every_state(self):
+        """The invariant behind the fix, stated directly and swept over the
+        whole cross product: wherever should_review says False, the gate's
+        condition 2 must return None (carry) on that same state. A skip the
+        gate will not honour is a deadlock — no other actor orders the
+        review the gate is waiting for."""
+        states = [
+            (bodies, head_cid, shas)
+            for bodies in ([], [critic_line("APPROVE", REVIEWED, CID)],
+                           [critic_line("APPROVE", REVIEWED)],
+                           [critic_line("APPROVE", HEAD, CID)],
+                           [critic_line("REQUEST_CHANGES", REVIEWED, CID)],
+                           [critic_line("APPROVE", FOREIGN, CID)])
+            for head_cid in (CID, OTHER_CID, None)
+            for shas in (merge_gate.commit_shas(PR_COMMITS),
+                         frozenset({HEAD}), frozenset())
+        ]
+        for bodies, head_cid, shas in states:
+            comments = [comment(QA_LOGIN, b) for b in bodies]
+            with self.subTest(bodies=bodies, cid=head_cid, shas=sorted(shas)):
+                skipped = not should_review_pr.should_review(
+                    "agent/DRE-2340-x", comments=comments, qa_login=QA_LOGIN,
+                    head_content_id=head_cid, pr_commit_shas=shas,
+                )
+                if skipped:
+                    self.assertTrue(
+                        self._gate_carries(comments, HEAD, head_cid, shas),
+                        "review skipped on a state the gate will not carry",
+                    )
 
 
 class SkipRepublishesTheHeadBoundCheckTest(unittest.TestCase):
