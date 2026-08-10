@@ -122,22 +122,68 @@ jobs:
       # chrome-only PR with no linked card is skipped here — every later step
       # is guarded on steps.decide.outputs.review so the job ends green-skip
       # without burning critic inference.
+      # DRE-2340: the gate's own binding is also the ONE proof that a
+      # re-review is pointless. When the latest qa-bot APPROVE carries a
+      # content id equal to this head's, the critic has already read exactly
+      # this diff — the head moved only because the gate merged the base in.
+      # Portico PR #205 paid for that six times in 47 minutes. The records
+      # come from GitHub (the comments listing, the compare record and the
+      # PR's commit record — all three the gate reads, so the skip can
+      # never be wider than the carry); a blip in any reads as "no proof"
+      # and the review runs, so the expensive mistake stays the safe
+      # direction.
       - name: Decide review
         id: decide
         env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          # The same App identity the verdict is posted under, so the
+          # authorship filter here is the one merge-gate enforces.
+          QA_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
         run: |
           if [ "$EVENT" = "workflow_dispatch" ]; then
             echo "review=true" >> "$GITHUB_OUTPUT"
             echo "workflow_dispatch — reviewing on request"
             exit 0
           fi
-          if python3 .bureau-pipeline/scripts/should_review_pr.py "$HEAD_REF"; then
-            echo "review=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "review=false" >> "$GITHUB_OUTPUT"
+          # Every read here is fail-SOFT: this step decides whether to
+          # SPEND a review, and an API blip must degrade to "review it"
+          # (the cheap mistake), never to a red run that reviews nothing.
+          # `{}` / `[]` both yield no proof of a carry.
+          SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null || true)
+          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName 2>/dev/null || true)
+          echo '{}' > /tmp/decide-compare.json
+          if [ -n "$SHA" ] && [ -n "$BASE" ]; then
+            gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/decide-compare.json 2>/dev/null \
+              || echo '{}' > /tmp/decide-compare.json
           fi
+          # Same call shape merge-gate.yml uses, so the skip and the gate
+          # read the same record and can never disagree about the standing
+          # verdict.
+          gh api "repos/${{ github.repository }}/issues/$PR/comments" > /tmp/decide-comments.json 2>/dev/null \
+            || echo '[]' > /tmp/decide-comments.json
+          # The gate's carry condition 4: the reviewed commit is still in
+          # THIS PR's own commit record. Same call shape merge-gate.yml
+          # uses (`per_page=100`), because the skip must be a strict subset
+          # of the carry — skipping a review the gate then refuses to
+          # honour deadlocks the PR with nobody left to order one. `[]`
+          # blip substitute = no proof = review, this step's direction.
+          gh api "repos/${{ github.repository }}/pulls/$PR/commits?per_page=100" > /tmp/decide-commits.json 2>/dev/null \
+            || echo '[]' > /tmp/decide-commits.json
+          set +e
+          OUT=$(python3 .bureau-pipeline/scripts/should_review_pr.py "$HEAD_REF" \
+            --comments-file /tmp/decide-comments.json \
+            --compare-file /tmp/decide-compare.json \
+            --pr-commits-file /tmp/decide-commits.json \
+            --qa-login "$QA_LOGIN")
+          set -e
+          echo "$OUT"
+          echo "$OUT" | grep -E '^(review|carried_sha|content_id)=' >> "$GITHUB_OUTPUT" || true
+          # The head the decision was made about — the skip path re-publishes
+          # the review check against exactly this commit.
+          echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Resolve PR
         if: steps.decide.outputs.review == 'true'
@@ -159,6 +205,18 @@ jobs:
           # critic never saw.
           SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          # DRE-2340: the CONTENT this review is about to read — the
+          # three-dot diff of the SAME sha captured above, hashed by
+          # scripts/verdict_content.py. Fetched here rather than reused
+          # from the decide step so the id can never describe a different
+          # commit than the one the verdict binds. No id (a truncated
+          # 300-file record, or an API blip → `{}`) means the verdict binds
+          # the SHA alone, exactly as before this card.
+          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/qa-compare.json 2>/dev/null \
+            || echo '{}' > /tmp/qa-compare.json
+          CONTENT=$(python3 .bureau-pipeline/scripts/verdict_content.py --compare-file /tmp/qa-compare.json 2>/dev/null || true)
+          echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
 
       # Assemble the critic's context = the standards it reviews AGAINST
       # (engineering + architecture) plus the comms standard for its verdict
@@ -682,6 +740,10 @@ jobs:
           # DRE-1990: the commit this review actually looked at, captured at
           # review start by the Resolve PR step.
           REVIEWED_SHA: ${{ steps.pr.outputs.sha }}
+          # DRE-2340: the CONTENT it read, for the same commit. Empty when
+          # the compare record could not be hashed — the verdict line is
+          # then composed exactly as it is today.
+          CONTENT_ID: ${{ steps.pr.outputs.content }}
           # A genuine review ran iff either gate saw a real verdict.
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
         run: |
@@ -696,7 +758,14 @@ jobs:
             # likewise treated as stale — an open PR with an old-format
             # APPROVE needs one re-review nudge (reconcile's In QA sweep now
             # re-triggers qa-review for verdicts not bound to the head).
-            { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md) @${REVIEWED_SHA}"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
+            # DRE-2340: ` content:<64-hex>` is appended when the reviewed
+            # commit's three-dot diff could be hashed, so a gate-initiated
+            # base merge (which changes the head but nothing this PR
+            # contributes) no longer destroys the verdict. Absent → the
+            # line is byte-identical to today's, and the verdict binds the
+            # SHA alone. The `:+` form is deliberate: it is safe under
+            # `set -u` when CONTENT_ID is unset.
+            { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md) @${REVIEWED_SHA}${CONTENT_ID:+ content:$CONTENT_ID}"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
           else
             # The critic CRASHED on both attempts (is_error / no verdict). Do
             # NOT post REQUEST_CHANGES — that false reject churns good PRs into
@@ -759,9 +828,18 @@ jobs:
       # qa-bot verdict COMMENT bound to the head (DRE-1990), and it excludes
       # review-origin checks by verified suite origin (DRE-1994). This check
       # can only ever hold a merge, never grant one.
+      #
+      # The SKIP path needs the same mint (DRE-2340). When the review is
+      # skipped because the standing verdict still binds this head's
+      # content, the skip is silent on the pull request by design — the
+      # existing verdict must stay the latest comment — so the CHECK is the
+      # only place the new head can show an honest review status. Without
+      # it the head carries nothing and every consumer (gh pr checks, the
+      # console, reconcile's crashed-review backstop, a human) reads
+      # "unreviewed", which is exactly what it is not.
       - name: Mint dispatch-bot token (checks:write — qa-bot has checks:read)
         id: checks_app
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
+        if: always() && !cancelled() && (steps.decide.outputs.review == 'true' || steps.decide.outputs.carried_sha != '')
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
@@ -781,6 +859,31 @@ jobs:
             --sha "${{ steps.pr.outputs.sha }}" \
             --verdict-file /tmp/qa-verdict.md \
             --real "$REAL" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --event "${{ github.event_name }}"
+
+      - name: Re-publish the review check for a carried verdict
+        # Ordered AFTER the ordinary publish step on purpose: that one is
+        # the head-bound record's primary writer (DRE-2291) and stays the
+        # first `publish_review_check.py` step in this file.
+        if: always() && !cancelled() && steps.decide.outputs.review != 'true' && steps.decide.outputs.carried_sha != ''
+        env:
+          GH_TOKEN: ${{ steps.checks_app.outputs.token }}
+          CARRIED_SHA: ${{ steps.decide.outputs.carried_sha }}
+        run: |
+          # No review ran, so there is no /tmp/qa-verdict.md — the verdict
+          # being carried is an APPROVE by construction (should_review_pr
+          # carries nothing else), and the check states the conclusion of
+          # THAT verdict, naming the commit it was earned on. `--real true`
+          # is honest here: a genuine review DID run, on CARRIED_SHA, and
+          # its verdict provably still describes this head's content.
+          printf 'VERDICT: APPROVE\n' > /tmp/qa-carried-verdict.md
+          python3 .bureau-pipeline/scripts/publish_review_check.py \
+            --repo "${{ github.repository }}" \
+            --sha "${{ steps.decide.outputs.head_sha }}" \
+            --verdict-file /tmp/qa-carried-verdict.md \
+            --real true \
+            --carried-from "$CARRIED_SHA" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --event "${{ github.event_name }}"
 

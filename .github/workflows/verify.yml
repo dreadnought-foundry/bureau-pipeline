@@ -104,6 +104,20 @@ jobs:
           # Captured BEFORE the run starts — fail-closed on mid-run pushes.
           SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          # DRE-2340: the CONTENT this verify is about to exercise — the
+          # three-dot diff of that same sha, hashed by
+          # scripts/verdict_content.py. It lets a PASS survive a
+          # gate-initiated base merge that changes nothing this PR
+          # contributes. Carrying only the critic would trade the livelock
+          # for a VERIFIER DEADLOCK: a present-but-stale verifier verdict
+          # HOLDs (DRE-1990/DRE-1991 asymmetry) and no gate wake lifts it.
+          # No id (truncated 300-file record, or an API blip → `{}`) means
+          # the verdict binds the SHA alone, exactly as before.
+          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/verify-compare.json 2>/dev/null \
+            || echo '{}' > /tmp/verify-compare.json
+          CONTENT=$(python3 .bureau-pipeline/scripts/verdict_content.py --compare-file /tmp/verify-compare.json 2>/dev/null || true)
+          echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
 
       # ── Scope gate: run ONLY on multi-system or UI cards ──────────────────
       # The Verifier is expensive (it boots the app and drives a real E2E/
@@ -471,6 +485,9 @@ jobs:
           # DRE-1990: the commit this verify actually ran, captured at run
           # start by the Resolve PR step.
           REVIEWED_SHA: ${{ steps.pr.outputs.sha }}
+          # DRE-2340: the CONTENT it exercised, for that same commit.
+          # Empty = the verdict line is composed exactly as it is today.
+          CONTENT_ID: ${{ steps.pr.outputs.content }}
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
         run: |
           if [ "$REAL" = "true" ]; then
@@ -482,7 +499,12 @@ jobs:
             # SHA is missing or no longer the PR head — code pushed after a
             # PASS never rides it into main. Pre-DRE-1990 verifier verdicts
             # (no @sha) are treated the same: hold until a fresh verify.
-            { echo "🧪 QA Verifier — $(head -1 /tmp/verify-verdict.md) @${REVIEWED_SHA}"; echo; tail -n +2 /tmp/verify-verdict.md; } > /tmp/verify-comment.md
+            # DRE-2340: ` content:<64-hex>` is appended when the verified
+            # commit's three-dot diff could be hashed, so a gate-initiated
+            # base merge no longer demotes the PASS to a HOLD. Absent → the
+            # line is byte-identical to today's. The `:+` form is safe
+            # under `set -u` when CONTENT_ID is unset.
+            { echo "🧪 QA Verifier — $(head -1 /tmp/verify-verdict.md) @${REVIEWED_SHA}${CONTENT_ID:+ content:$CONTENT_ID}"; echo; tail -n +2 /tmp/verify-verdict.md; } > /tmp/verify-comment.md
           else
             # The Verifier CRASHED on both attempts (is_error / no verdict). Do
             # NOT post FAIL — a false reject churns good PRs into the fix loop.

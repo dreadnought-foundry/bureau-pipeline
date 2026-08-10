@@ -172,12 +172,20 @@ jobs:
           gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" > /tmp/check-runs.json
           # DRE-1924: the branch-currency record — GitHub's own compare of
           # the PR's base against its current head (works with or without
-          # the branch-protection up-to-date toggle). Trimmed to the status
-          # field the script reads. A blip must fail CLOSED: `{}` → status
-          # unknown → the gate waits; it never merges past an unverifiable
-          # base and never updates the branch on unverifiable data.
+          # the branch-protection up-to-date toggle).
+          # DRE-2340: passed WHOLE, no longer trimmed to `{status}`. The
+          # same record's `files[]` is the three-dot diff — the PR's own
+          # contribution — from which merge_gate.py computes this head's
+          # content id, so a verdict survives a gate-initiated base merge
+          # that changes nothing the PR changes. Computing it inside the
+          # script means no extra API call and no way to hand the gate an
+          # id for a different head.
+          # A blip must fail CLOSED: `{}` → status unknown AND no content
+          # id → the gate waits, carries nothing, never merges past an
+          # unverifiable base and never updates the branch on unverifiable
+          # data.
           BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
-          gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" --jq '{status: .status}' > /tmp/compare.json 2>/dev/null \
+          gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/compare.json 2>/dev/null \
             || echo '{}' > /tmp/compare.json
           # A transient comments-API failure must read as "no verdicts yet"
           # (the gate waits, fail-closed) — the same tolerance the inline
@@ -227,6 +235,40 @@ jobs:
             | tee /tmp/gate-decision
           # Fail-closed on shape drift: no `decision=merge` line, no merge.
           DECISION=$(grep -m1 '^decision=' /tmp/gate-decision | cut -d= -f2-)
+
+          # DRE-2340: when a verdict was honoured ACROSS a head change, say
+          # so on the PR. Nobody here reads diffs, so the audit trail has
+          # to explain itself — today `decision=update` echoes to the run
+          # log and exits silently, which is why portico #205's six merge
+          # commits have nothing in the timeline explaining them.
+          # Idempotent on the CONTENT ID (one record per readiness cycle,
+          # not per head), checked against the comments record already
+          # fetched above — the same shape the `human` arm uses. The needle
+          # is the NOTE's own ASCII marker, not the bare content id: the
+          # verdict comment carries that id too, so matching on it alone
+          # would read as "already posted" every single time and the record
+          # would never appear.
+          # Deliberately carries NO verdict-shaped text: it is a status
+          # note, never an approval credential, and it must not re-wake
+          # this workflow's own issue_comment leg.
+          CARRIED=$(grep -m1 '^carried=' /tmp/gate-decision | cut -d= -f2-)
+          CARRIED_ID=$(grep -m1 '^carried_content_id=' /tmp/gate-decision | cut -d= -f2-)
+          # Posted through the issue-comments API rather than the gh pr
+          # helper: this arm sits BEFORE the update/human/merge arms (a
+          # carry can end in any of them) and the dependabot suite pins the
+          # FIRST pr-comment call in this block to the human-decision arm.
+          # Identical result either way.
+          CARRY_MARK="carried verdict content:$CARRIED_ID"
+          if [ -n "$CARRIED" ] && ! grep -q "$CARRY_MARK" /tmp/comments.json; then
+            printf '%s\n\n%s\n\n%s\n' \
+              "♻️ Merge gate: $CARRY_MARK — the standing review verdict was carried across a branch update." \
+              "Reviewed at $CARRIED; current head $SHA. This branch's own changes are byte-identical to what was reviewed: the head moved only because the gate merged $BASE in, and that merge touched nothing this pull request changes." \
+              "Any change to this pull request's own diff changes the fingerprint above and the verdict dies (DRE-2340). CI still re-runs on the merged result, and a branch behind its base is still never merged." \
+              > /tmp/carry-note.md
+            gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+              -F body=@/tmp/carry-note.md >/dev/null || true
+          fi
+
           # DRE-1924: a stale branch is updated, never merged blind — CI
           # re-runs on the merged result and the gate re-evaluates when it
           # completes (a fresh SHA-bound review follows too, since the

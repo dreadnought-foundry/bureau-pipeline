@@ -79,10 +79,15 @@ import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
+# DRE-2340: ONE implementation of the verdict binding — the sweep must read
+# a verdict exactly the way the gate does (DRE-1998 had to fix an
+# independent copy once already).
+import merge_gate  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
 import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
+import verdict_content  # noqa: E402 — the content-binding algorithm
 
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
@@ -585,7 +590,10 @@ def pr_for(identifier: str) -> dict | None:
     disagreeing about whether a card has a PR is the bug that requeued
     DRE-2316 onto a second agent.
     """
-    fields = "number,url,headRefName,state,comments,headRefOid"
+    # baseRefName: the content binding (DRE-2340) compares base...head —
+    # without it verdict_bound has nothing to compare and the carry never
+    # fires, so the In QA sweep would re-review every carried head.
+    fields = "number,url,headRefName,state,comments,headRefOid,baseRefName"
 
     def newest_match(out: str) -> dict | None:
         return card_pr.newest([
@@ -706,25 +714,126 @@ def critic_comment_bodies(pr: dict) -> list[str]:
     ]
 
 
-def has_verdict(pr: dict) -> bool:
+def has_verdict(
+    pr: dict,
+    head_content_id: str | None = None,
+    pr_commit_shas=frozenset(),
+) -> bool:
     """True iff the latest qa-bot-authored QA Critic comment is a verdict
-    BOUND to the PR's CURRENT head commit — the verdict line ends
-    `@<full-sha>` (DRE-1990); forged/non-qa-bot comments are invisible
+    that BINDS the PR's current head — by SHA (`@<full-sha>`, DRE-1990) or,
+    when the head has moved but the PR's own contribution has not, by
+    CONTENT (DRE-2340). Forged/non-qa-bot comments are invisible
     (DRE-1998).
 
-    A stale binding (verdict for an older commit) or a legacy/neutral
-    comment with no SHA is NOT a verdict: merge-gate ignores those
-    fail-closed, so nudging merge-gate would spin forever. Returning False
-    routes the In QA re-nudge to qa-review instead, producing a fresh,
-    bound verdict — this is also the automatic one-time re-review path for
-    APPROVEs posted before DRE-1990 shipped.
+    An unbound verdict (legacy/neutral comment with no SHA) or one bound to
+    an older commit whose content no longer matches is NOT a verdict:
+    merge-gate ignores those fail-closed, so nudging merge-gate would spin
+    forever. Returning False routes the In QA re-nudge to qa-review
+    instead, producing a fresh, bound verdict — this is also the automatic
+    one-time re-review path for APPROVEs posted before DRE-1990 shipped.
+
+    `head_content_id` is the id of the PR's own contribution at its current
+    head (head_content_id_for), and `pr_commit_shas` the sha set of the PR's
+    own commit record (pr_commit_shas_for) — together the four conditions
+    merge_gate.carries_content applies, applied BY that function. Omitted =
+    SHA binding only, which is exactly the pre-DRE-2340 answer.
+
+    Both records, not just the content id (the review finding on this PR):
+    a sweep that carried on content alone disagreed with the gate on any
+    content-preserving head rewrite — the gate refused the carry for want
+    of condition 4, so it waited for a fresh review, while this sweep read
+    the PR as healthy and nudged the GATE instead of qa-review. Nothing
+    ordered the review, every 15 minutes, forever. Applying the same four
+    conditions routes that state back to qa-review, and one fresh review
+    unsticks it with no human in the loop.
+
+    The binding itself is read through merge_gate / verdict_content — trap
+    4: there is ONE implementation, and DRE-1998 already had to fix an
+    independent copy of a verdict read once.
     """
     bodies = critic_comment_bodies(pr)
     if not bodies:
         return False
-    first_line = bodies[-1].splitlines()[0] if bodies[-1] else ""
-    m = re.search(r"@([0-9a-f]{40})", first_line)
-    return bool(m) and m.group(1) == (pr.get("headRefOid") or "")
+    line = merge_gate.first_line(bodies[-1])
+    sha = merge_gate.verdict_sha(line)
+    if not sha:
+        return False
+    if sha == (pr.get("headRefOid") or ""):
+        return True
+    return merge_gate.carries_content(
+        line, sha, head_content_id, pr_commit_shas
+    )
+
+
+def head_content_id_for(pr: dict) -> str | None:
+    """The content id of the PR's own contribution at its current head, or
+    None when it cannot be proved (DRE-2340).
+
+    Costs one compare read, so callers ask for it ONLY when the cheap SHA
+    binding has already failed — the common case (a verdict bound to the
+    head) spends nothing. `baseRefName` must be in the PR listing's --json
+    fields or there is nothing to compare against and the carry silently
+    never fires; verdict_bound() is the paired reader.
+    """
+    base = pr.get("baseRefName")
+    head = pr.get("headRefOid")
+    if not base or not head:
+        return None
+    raw = gh("api", f"repos/{REPO}/compare/{base}...{head}")
+    if not raw:
+        return None  # unreadable — never act on fabricated data (DRE-2034)
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return None
+    return verdict_content.content_id(payload)
+
+
+def pr_commit_shas_for(pr: dict) -> frozenset:
+    """The sha set of the PR's own commit record — the carry's condition 4,
+    read exactly as merge-gate.yml reads it (DRE-2340).
+
+    Costs one read, and like head_content_id_for it is paid ONLY on the
+    stale-sha path that already pays a compare read; the common case (a
+    verdict bound to the head) spends nothing. An unreadable record yields
+    the empty set, which carries_content refuses — fail closed, and the
+    sweep then routes the nudge to qa-review (a fresh review), never to a
+    gate that would wait for one nobody ordered.
+    """
+    number = pr.get("number")
+    if not number:
+        return frozenset()
+    raw = gh("api", f"repos/{REPO}/pulls/{number}/commits?per_page=100")
+    if not raw:
+        return frozenset()  # unreadable — never act on fabricated data
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return frozenset()
+    return merge_gate.commit_shas(payload)
+
+
+def verdict_bound(pr: dict) -> bool:
+    """has_verdict, resolving the content binding from GitHub's own compare
+    and commit records when the SHA binding is stale (DRE-2340).
+
+    Without this the sweep would fight the gate: after a gate-initiated
+    `update-branch` the standing verdict still binds the PR's content, the
+    gate is about to merge on it, and reconcile would spend a re-review (In
+    QA nudge) or report a false "a fresh review is needed" on the card
+    (crashed-review recovery) roughly every 15 minutes.
+
+    Both records are resolved because the gate applies both; a sweep that
+    honoured a carry the gate refuses reports a stalled PR as healthy (see
+    has_verdict). The content id is resolved first and short-circuits: no
+    id means no carry under any commit record, so the second read is never
+    paid on the common truncated/blipped compare."""
+    if has_verdict(pr):
+        return True
+    head_content_id = head_content_id_for(pr)
+    if not head_content_id:
+        return False
+    return has_verdict(pr, head_content_id, pr_commit_shas_for(pr))
 
 
 def redispatch(card: dict) -> bool:
@@ -1601,7 +1710,8 @@ def review_dependabot_prs() -> None:
     head."""
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
-        "--json", "number,headRefName,headRefOid,author,mergeStateStatus,comments",
+        "--json", "number,headRefName,headRefOid,baseRefName,author,"
+        "mergeStateStatus,comments",
     ) or "[]")
     eligible = []
     in_flight = None  # lazy — fetched once, only when a receipt needs its outcome
@@ -1614,7 +1724,7 @@ def review_dependabot_prs() -> None:
             continue
         if not pr.get("headRefOid"):
             continue  # no sha to bind a receipt to — retry next sweep
-        if has_verdict(pr):
+        if verdict_bound(pr):
             continue
         receipts = dependabot_receipt_count(pr)
         if receipts == 0:
@@ -1833,9 +1943,10 @@ def _report_stale_verdict(pr: dict) -> None:
     if any(marker in b for b in linear_ops.comment_bodies(card)):
         return  # reported once for this head already — idempotent forever
     bodies = critic_comment_bodies(pr)
-    first_line = bodies[-1].splitlines()[0] if bodies and bodies[-1] else ""
-    m = re.search(r"@([0-9a-f]{40})", first_line)
-    old = f"an older commit ({m.group(1)[:8]})" if m else "an older commit"
+    reviewed = merge_gate.verdict_sha(
+        merge_gate.first_line(bodies[-1]) if bodies else ""
+    )
+    old = f"an older commit ({reviewed[:8]})" if reviewed else "an older commit"
     linear_ops.cmd_comment(card, (
         f"🚨 {marker} open PR #{pr['number']} (branch {pr['headRefName']}) "
         f"has its newest review verdict bound to {old}, not to the current "
@@ -1887,7 +1998,8 @@ def recover_crashed_reviews() -> None:
     try:
         prs = json.loads(gh(
             "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
-            "--json", "number,headRefName,headRefOid,mergeStateStatus,isDraft,comments",
+            "--json", "number,headRefName,headRefOid,baseRefName,"
+            "mergeStateStatus,isDraft,comments",
         ) or "[]")
     except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
         _write_failures.append(f"crashed-review recovery: PR listing failed: {e}")
@@ -1904,8 +2016,8 @@ def recover_crashed_reviews() -> None:
             sha = pr.get("headRefOid") or ""
             if not sha:
                 continue
-            if has_verdict(pr):
-                continue  # a current-head verdict settles the PR — healthy
+            if verdict_bound(pr):
+                continue  # a verdict still binding this head settles the PR
             checks = _review_checks_at_head(sha)
             if checks is None:
                 continue  # unreadable — never act on fabricated data (DRE-2034)
@@ -2385,7 +2497,7 @@ def main(
                         f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
                     )
         elif state == "In QA" and is_open:
-            if has_verdict(pr):
+            if verdict_bound(pr):
                 if _nudge(gate_workflow(), pr["number"]):
                     linear_ops.cmd_comment(
                         ident,

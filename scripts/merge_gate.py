@@ -100,8 +100,46 @@ D. DEPENDABOT POLICY (DRE-2039) — applies ONLY to `dependabot/**`
      status) or STALE (≠ the current head) is NO verdict — fail-closed,
      the gate waits for a fresh review. Code pushed after a genuine
      APPROVE must not ride that approval into main (PRs #13/#25 did).
+   - CONTENT BINDING (DRE-2340): a verdict whose SHA is stale STILL binds
+     when the PR's own contribution is provably unchanged — see the note
+     below. Everything else about the SHA arm is untouched.
    - The SHA check runs BEFORE the APPROVE check, so a stale
      REQUEST_CHANGES reads as "no verdict — wait", not "hold".
+
+CONTENT BINDING (DRE-2340) — what a branch update may NOT destroy.
+Conditions 0 and 2 are each right and together they livelocked: the gate
+updates a stale branch, the update moves the head, the head move unbinds
+the verdict the gate was waiting for, and the critic re-reviews a branch
+that is stale again before it finishes. Portico PR #205 (2026-08-09) earned
+seven APPROVE verdicts in 47 minutes and threw six away — six complete,
+fully paid-for reviews — because `main` took 30 commits from other work in
+that window. DRE-2274 (currency evaluated LAST) converted that waste rather
+than removing it; the order is right and does not move again.
+
+So a verdict now also binds the CONTENT it was earned against: the sha256
+of the three-dot compare record's `files[]` (scripts/verdict_content.py,
+which documents the two properties this rests on). When the verdict's SHA
+is no longer the head, it binds ONLY when ALL of:
+
+  1. the verdict line carries a `content:<64-hex>` id, and
+  2. the gate computed a non-None id for the CURRENT head (from the same
+     compare payload condition 0 reads — no extra API call, and no chance
+     of being handed an id for a different head), and
+  3. the two ids are equal, and
+  4. the verdict's SHA appears in the PR's own commit record
+     (--pr-commits-file) — proof the reviewed commit is still in THIS PR's
+     history and was not rewritten away. Record unavailable → no carry.
+
+Anything else is today's `wait` (critic) / `hold` (verifier), unchanged.
+The guarantee is intact: you cannot add code without changing content, so
+any change to the PR's own diff kills the verdict; the id comes from
+GitHub's own record, not from anything the author writes; authorship still
+filters first. The one thing given up, stated plainly: after a clean base
+merge the critic no longer re-reads its own unchanged diff in the light of
+the new base. That residual is bounded — every commit on the base carried
+its own bound APPROVE, and interaction risk is what CI on the merged result
+exists to catch (DRE-1924's own motivating `asana` incident was a CI catch,
+not a critic catch).
 
 3. QA Verifier — scope-gated stage; it may simply never have run:
    - ABSENT verdict → not a gate (falls through).
@@ -135,11 +173,17 @@ Contract with merge-gate.yml:
     record, DRE-1924), --review-workflows (optional comma-separated
     allowlist of review workflow paths), --head-branch / --pr-author /
     --pr-commits-file (the raw REST payload of GET pulls/{pr}/commits) —
-    the dependabot-policy record (DRE-2039), all three optional; omitted =
+    the dependabot-policy record (DRE-2039) AND the content-binding
+    commit record (DRE-2340 condition 4), all three optional; omitted =
     the pre-DRE-2039 behavior for every caller that never passes them.
+    The compare payload must NOT be trimmed (DRE-2340): its `files[]` is
+    what the head's content id is computed from.
   stdout: zero or more `note=` lines, then exactly one `decision=` line
     (merge | update | wait | hold | human) and one `reason=` line (plain
-    English).
+    English), then — only when a verdict was honoured across a head change
+    — a `carried=` line naming the reviewed commits and a
+    `carried_content_id=` line, which the workflow turns into the PR
+    comment that explains the carry.
   exit 0 = decided; exit 2 = malformed input (the job fails loudly and
     nothing merges — never fail open).
 
@@ -162,6 +206,11 @@ import re
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
+
+# The verdict↔content binding lives in ONE module (DRE-2340, trap 4):
+# should_review_pr and reconcile read it from here too, so the gate, the
+# review-skip and the sweep can never drift about what a verdict binds.
+from verdict_content import content_id, verdict_content_id  # noqa: F401
 
 CRITIC_MARKER = "QA Critic"
 VERIFIER_MARKER = "QA Verifier"
@@ -226,6 +275,15 @@ class Decision:
     action: str  # merge | update | wait | hold | human
     reason: str
     notes: list = field(default_factory=list)
+    #: Verdicts honoured across a head change (DRE-2340), as
+    #: "critic@<reviewed-sha>" / "verifier@<reviewed-sha>". Empty on every
+    #: ordinary decision. The workflow posts a PR comment when it is not —
+    #: today `decision=update` posts nothing at all, which is why PR #205's
+    #: six merge commits look inexplicable on the timeline.
+    carried: list = field(default_factory=list)
+    #: The head content id the carry was proved against; None when nothing
+    #: was carried.
+    content_id: Optional[str] = None
 
 
 def first_line(body: Optional[str]) -> str:
@@ -380,9 +438,61 @@ def evaluate_checks(check_runs, review_suites=frozenset()) -> Optional[Decision]
     return None
 
 
-def evaluate_critic(line: str, head_sha: str) -> Optional[Decision]:
+def commit_shas(pr_commits) -> frozenset:
+    """The sha set of a `GET pulls/{pr}/commits` payload — the carry's
+    condition 4 record.
+
+    One implementation (DRE-2340, trap 4): the gate, the review-skip
+    (should_review_pr) and the In QA sweep (reconcile) all read the same
+    payload shape, and a hand-rolled second copy is exactly how the three
+    drifted into disagreeing about the same state. A blip substitute (`[]`),
+    a payload that is not a list at all, or a shapeless entry contributes
+    nothing, so the set comes out empty and carries_content refuses — fail
+    closed, never a crash on the decision path.
+    """
+    if not isinstance(pr_commits, (list, tuple)):
+        return frozenset()
+    return frozenset(
+        c.get("sha") for c in pr_commits
+        if isinstance(c, dict) and c.get("sha")
+    )
+
+
+def carries_content(
+    line: str, sha: str, head_content_id: Optional[str], pr_commit_shas
+) -> bool:
+    """DRE-2340: does a verdict for an OLDER commit still bind this head?
+
+    True only when all four conditions hold (see the module docstring):
+    the line carries a content id, the gate computed one for the current
+    head, they are equal, and the reviewed commit is still in this PR's own
+    commit record. Every unprovable case is False — the caller then takes
+    today's stale-verdict path, unchanged.
+    """
+    if not head_content_id:
+        return False  # truncated / blipped compare record → SHA binding only
+    carried = verdict_content_id(line)
+    if not carried or carried != head_content_id:
+        return False
+    if not pr_commit_shas:
+        return False  # `[]` blip substitute — never carry on unverifiable data
+    return sha in pr_commit_shas
+
+
+def evaluate_critic(
+    line: str,
+    head_sha: str,
+    head_content_id: Optional[str] = None,
+    pr_commit_shas=frozenset(),
+) -> Optional[Decision]:
     """Condition 2, given the first line of the latest counted critic
-    comment ('' if none). None = APPROVE bound to head, proceed."""
+    comment ('' if none). None = APPROVE bound to head, proceed.
+
+    The `sha == head_sha` path is unchanged, byte for byte — it is the
+    common path. `head_content_id` / `pr_commit_shas` default to the
+    no-content-binding case, which reproduces the pre-DRE-2340 behavior
+    exactly for every caller that never passes them.
+    """
     if not line:
         return Decision("wait", "no critic verdict yet — wait")
     sha = verdict_sha(line)
@@ -393,7 +503,9 @@ def evaluate_critic(line: str, head_sha: str) -> Optional[Decision]:
             f"neutral status) — treated as NO verdict; waiting for a fresh "
             f"review of {head_sha}",
         )
-    if sha != head_sha:
+    if sha != head_sha and not carries_content(
+        line, sha, head_content_id, pr_commit_shas
+    ):
         return Decision(
             "wait",
             f"critic verdict is for {sha} but head is now {head_sha} — stale; "
@@ -404,10 +516,22 @@ def evaluate_critic(line: str, head_sha: str) -> Optional[Decision]:
     return None
 
 
-def evaluate_verifier(line: str, head_sha: str) -> tuple[Optional[Decision], str]:
+def evaluate_verifier(
+    line: str,
+    head_sha: str,
+    head_content_id: Optional[str] = None,
+    pr_commit_shas=frozenset(),
+) -> tuple[Optional[Decision], str]:
     """Condition 3, given the first line of the latest counted verifier
     comment ('' if none). Returns (decision-or-None, advisory note);
-    None = not a gate / satisfied, proceed."""
+    None = not a gate / satisfied, proceed.
+
+    Carries exactly like the critic (DRE-2340, trap 1: carrying only the
+    critic would trade the livelock for a VERIFIER DEADLOCK on any repo in
+    verifier scope — a present-but-stale verifier verdict HOLDs, and a hold
+    is not lifted by a fresh gate wake). The present-but-stale HOLD
+    asymmetry is preserved for every case where the ids do not match.
+    """
     if not line:
         return None, "no verifier verdict (verify out of scope / not run) — not a gate"
     sha = verdict_sha(line)
@@ -420,7 +544,9 @@ def evaluate_verifier(line: str, head_sha: str) -> tuple[Optional[Decision], str
             ),
             "",
         )
-    if sha != head_sha:
+    if sha != head_sha and not carries_content(
+        line, sha, head_content_id, pr_commit_shas
+    ):
         return (
             Decision(
                 "hold",
@@ -447,6 +573,7 @@ def decide(
     head_branch: str = "",
     pr_author: str = "",
     pr_commits=(),
+    head_content_id: Optional[str] = None,
 ) -> Decision:
     """The whole gate: conditions D → 1 → 2 → 3 → 0, first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
@@ -462,7 +589,14 @@ def decide(
     cancelled by a gate-initiated push and a red-CI PR routes to the fix
     loop instead of collecting free updates. The final path once
     everything else passes: unverifiable compare → wait; stale → update;
-    current → merge (DRE-1924's never-merge-a-stale-head holds)."""
+    current → merge (DRE-1924's never-merge-a-stale-head holds).
+
+    `head_content_id` is the content-binding record (DRE-2340) — the id of
+    the PR's own contribution at the CURRENT head, computed by main() from
+    the same compare payload condition 0 reads. None (the default, and the
+    fail-closed direction on a truncated or blipped record) means verdicts
+    bind the head SHA alone, exactly as before this card. `pr_commits`
+    doubles as the carry's condition 4."""
     blocked = evaluate_dependabot(head_branch, pr_author, pr_commits)
     if blocked:
         return blocked
@@ -471,26 +605,60 @@ def decide(
     if blocked:
         return blocked
 
-    critic_body = latest_verdict_comment(comments, qa_login, CRITIC_MARKER)
-    blocked = evaluate_critic(first_line(critic_body), head_sha)
-    if blocked:
-        return blocked
+    pr_commit_shas = commit_shas(pr_commits)
+    # Verdicts honoured across a head change, collected as they are read so
+    # the carry can be reported wherever the decision lands.
+    carried = []
 
-    verifier_body = latest_verdict_comment(comments, qa_login, VERIFIER_MARKER)
-    blocked, note = evaluate_verifier(first_line(verifier_body), head_sha)
+    critic_line = first_line(
+        latest_verdict_comment(comments, qa_login, CRITIC_MARKER)
+    )
+    blocked = evaluate_critic(
+        critic_line, head_sha, head_content_id, pr_commit_shas
+    )
     if blocked:
         return blocked
+    critic_sha = verdict_sha(critic_line)
+    if critic_sha and critic_sha != head_sha:
+        carried.append(f"critic@{critic_sha}")
+
+    verifier_line = first_line(
+        latest_verdict_comment(comments, qa_login, VERIFIER_MARKER)
+    )
+    blocked, note = evaluate_verifier(
+        verifier_line, head_sha, head_content_id, pr_commit_shas
+    )
+    if blocked:
+        return blocked
+    verifier_sha = verdict_sha(verifier_line)
+    if verifier_sha and verifier_sha != head_sha:
+        carried.append(f"verifier@{verifier_sha}")
+
+    def _decided(decision: Decision) -> Decision:
+        """Attach the carry record to whatever the gate finally decides —
+        the PR gets its explanation whether the head merges now or is
+        updated first."""
+        if carried:
+            decision.carried = carried
+            decision.content_id = head_content_id
+        return decision
 
     # Everything else would allow a merge — only now is freshness judged
     # (DRE-2274): unverifiable → wait (fail-closed, before any merge),
     # stale → the one legitimate update, current → merge.
     blocked = evaluate_currency(compare_status)
     if blocked:
-        return blocked
+        return _decided(blocked)
 
-    decision = Decision(
-        "merge", f"CI green + critic APPROVE bound to {head_sha} — merge as qa-bot"
-    )
+    if carried:
+        reason = (
+            f"CI green + critic APPROVE bound to {critic_sha or head_sha}, "
+            f"carried to head {head_sha}: the PR's own changes are unchanged "
+            f"(content:{head_content_id}) — merge as qa-bot"
+        )
+    else:
+        reason = f"CI green + critic APPROVE bound to {head_sha} — merge as qa-bot"
+    decision = _decided(Decision("merge", reason))
     if note:
         decision.notes.append(note)
     return decision
@@ -511,9 +679,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "— the verified-origin record for the review-run "
                              "exclusion (DRE-1994)")
     parser.add_argument("--compare-file", required=True,
-                        help="REST payload of GET compare/{base}...{head_sha} "
-                             "(the status field suffices) — the branch-"
-                             "currency record (DRE-1924)")
+                        help="raw REST payload of GET "
+                             "compare/{base}...{head_sha} — the branch-"
+                             "currency record (DRE-1924, .status) AND the "
+                             "head's content-binding record (DRE-2340, "
+                             ".files[]). Must NOT be trimmed to .status")
     parser.add_argument("--review-workflows",
                         default=",".join(DEFAULT_REVIEW_WORKFLOWS),
                         help="comma-separated paths of the review workflow "
@@ -530,8 +700,10 @@ def build_parser() -> argparse.ArgumentParser:
                              ".user.login, e.g. dependabot[bot]")
     parser.add_argument("--pr-commits-file", default=None,
                         help="raw REST payload of GET pulls/{pr}/commits — "
-                             "carries Dependabot's update-type metadata; an "
-                             "empty list is fail-closed (wait)")
+                             "carries Dependabot's update-type metadata "
+                             "(DRE-2039) and proves a carried verdict's "
+                             "commit is still in this PR's history "
+                             "(DRE-2340); an empty list is fail-closed")
     return parser
 
 
@@ -591,6 +763,12 @@ def main(argv=None) -> int:
         _die("compare payload is not an object")
     # `{}` (the workflow's blip substitute) yields None → wait, fail-closed.
     compare_status = payload.get("status")
+    # DRE-2340: the head's content id comes from the payload the gate has
+    # ALREADY read — no new API call on the decision path, and no way for
+    # the caller to hand the gate an id computed for a different head. A
+    # trimmed, truncated (300-file cap) or blipped record yields None, and
+    # None means verdicts bind the head SHA alone, exactly as before.
+    head_content_id = content_id(payload)
 
     pr_commits = []
     if args.pr_commits_file:
@@ -605,11 +783,18 @@ def main(argv=None) -> int:
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
+        head_content_id,
     )
     for note in decision.notes:
         print(f"note={note}")
     print(f"decision={decision.action}")
     print(f"reason={decision.reason}")
+    # DRE-2340: only when a verdict was honoured across a head change. The
+    # workflow turns these two lines into the PR comment that explains it —
+    # nobody reads diffs here, so the audit trail has to explain itself.
+    if decision.carried:
+        print(f"carried={','.join(decision.carried)}")
+        print(f"carried_content_id={decision.content_id}")
     return 0
 
 

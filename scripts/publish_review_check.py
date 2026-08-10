@@ -178,11 +178,33 @@ def _existing_check_id(repo: str, sha: str) -> int | None:
     return runs[0]["id"] if runs else None
 
 
-def publish(*, repo: str, sha: str, real: bool, verdict: str,
-            run_url: str, event: str) -> int:
-    """Create or update the head-bound check. 0 on success."""
-    conclusion, title, summary = decide(real, verdict)
-    detail = (
+def detail_body(*, sha: str, summary: str, run_url: str, event: str,
+                carried_from: str = "") -> str:
+    """The check's summary body.
+
+    `carried_from` (DRE-2340) names the commit a CARRIED verdict was
+    actually earned on. The critic did not re-run on this head: the head
+    moved only because the gate merged the base branch in, and the PR's own
+    contribution is byte-identical to the diff that verdict was earned
+    against. The check still has to say something honest about this
+    commit — a head showing NO review status reads as "unreviewed" to every
+    consumer (`gh pr checks`, the console, a human), which is exactly what
+    it is not."""
+    if carried_from:
+        return (
+            f"{summary}\n\n"
+            f"Head commit: `{sha}`\n"
+            f"Reviewed commit: `{carried_from}`\n"
+            f"Triggering event: `{event}`\n"
+            f"Review run: {run_url}\n\n"
+            "The reviewer did NOT re-read this commit. Its verdict was "
+            "carried from the reviewed commit above because this pull "
+            "request's own changes are unchanged — the head moved only by "
+            "merging the base branch in, which touched nothing this pull "
+            "request changes (DRE-2340). Any change to the pull request's "
+            "own diff kills that verdict and forces a fresh review."
+        )
+    return (
         f"{summary}\n\n"
         f"Reviewed commit: `{sha}`\n"
         f"Triggering event: `{event}`\n"
@@ -192,6 +214,14 @@ def publish(*, repo: str, sha: str, real: bool, verdict: str,
         "automatic one does. A run cancelled by a newer review of the same "
         "pull request is superseded here, not left speaking for the head."
     )
+
+
+def publish(*, repo: str, sha: str, real: bool, verdict: str,
+            run_url: str, event: str, carried_from: str = "") -> int:
+    """Create or update the head-bound check. 0 on success."""
+    conclusion, title, summary = decide(real, verdict)
+    detail = detail_body(sha=sha, summary=summary, run_url=run_url,
+                         event=event, carried_from=carried_from)
     payload = json.dumps({
         "name": CHECK_NAME,
         "head_sha": sha,
@@ -240,6 +270,10 @@ def main(argv: list[str]) -> int:
                     help="check_critic_result.py's verdict: true|false")
     ap.add_argument("--run-url", default="")
     ap.add_argument("--event", default="")
+    ap.add_argument("--carried-from", default="",
+                    help="the commit a CARRIED verdict was earned on "
+                         "(DRE-2340) — set only on the review-skip path, "
+                         "where the reviewer did not re-read this head")
     args = ap.parse_args(argv)
     try:
         with open(args.verdict_file) as f:
@@ -253,6 +287,7 @@ def main(argv: list[str]) -> int:
         verdict=verdict,
         run_url=args.run_url,
         event=args.event,
+        carried_from=args.carried_from,
     )
 
 
