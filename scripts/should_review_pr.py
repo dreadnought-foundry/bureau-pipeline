@@ -30,18 +30,38 @@ Decision (branch-name only, so it runs as cheaply as the old `if:` guard):
   • branch carries a `DRE-<n>` reference   → review   (operator-routed card PR)
   • otherwise (no linked card)             → skip     (chrome-only)
 
+DRE-2340 adds the one skip that is not a guess: when the latest qa-bot
+critic verdict is an APPROVE whose CONTENT id equals the current head's,
+the critic has already read exactly this diff and re-reading it would
+produce the same verdict. That is not an inference from a branch name — it
+is the gate's own binding, read through the gate's own parsing (see
+scripts/verdict_content.py). Six of PR #205's seven reviews were that
+case.
+
 Called from qa-review.yml's "Decide review" step:
 
-    python3 should_review_pr.py "<head-branch>"
+    python3 should_review_pr.py "<head-branch>" \
+      [--comments-file <issues/{pr}/comments>] \
+      [--compare-file <compare/{base}...{head}>] [--qa-login <login>]
 
-Exit 0 → review (run the critic). Exit 1 → skip. Also prints `review=true|false`
-on stdout for the workflow to capture as a step output.
+Exit 0 → review (run the critic). Exit 1 → skip. Prints `review=true|false`
+on stdout for the workflow to capture as a step output, plus `carried_sha=`
+and `content_id=` on a skip so the workflow can re-publish the head-bound
+review check against the commit the verdict was earned on.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
 import sys
+
+# ONE implementation of the verdict read (DRE-2340, trap 4): the gate's.
+# A second copy here would drift the way reconcile's did (DRE-1998), and
+# this one decides whether a paid review happens at all.
+import merge_gate
+from verdict_content import content_id
 
 # Same pattern linear-sync.yml / merge-gate.yml use to pull the card from a
 # branch ref — keep these in lockstep so "has a linked card" means exactly
@@ -62,8 +82,43 @@ def card_in_branch(branch: str | None) -> str | None:
     return m.group(0).upper() if m else None
 
 
-def should_review(branch: str | None) -> bool:
-    """True — the critic reviews every pull request (DRE-2250).
+def carried_approve(comments, qa_login: str, head_content_id: str | None) -> str | None:
+    """The reviewed SHA of a standing APPROVE that still binds this head's
+    CONTENT, or None (DRE-2340).
+
+    Read entirely through merge_gate: same authorship filter (DRE-1987 — a
+    forged comment is invisible, so it can never suppress a review), same
+    anchored verdict parsing, same content field. A verdict already bound
+    to the head by SHA is NOT a carry — that head has been reviewed and
+    nothing is about to re-review it anyway.
+    """
+    if not head_content_id or not qa_login or not comments:
+        return None
+    line = merge_gate.first_line(
+        merge_gate.latest_verdict_comment(
+            comments, qa_login, merge_gate.CRITIC_MARKER
+        )
+    )
+    if not line:
+        return None
+    if merge_gate.verdict_token(line, merge_gate.CRITIC_MARKER) != "APPROVE":
+        return None
+    sha = merge_gate.verdict_sha(line)
+    if not sha:
+        return None
+    if merge_gate.verdict_content_id(line) != head_content_id:
+        return None
+    return sha
+
+
+def should_review(
+    branch: str | None,
+    comments=None,
+    qa_login: str = "",
+    head_content_id: str | None = None,
+) -> bool:
+    """True — the critic reviews every pull request (DRE-2250), unless a
+    standing APPROVE already binds this head's content (DRE-2340).
 
     This function is the ONE place review policy lives. qa-review.yml's job
     gate is mechanical only; a rule about WHICH PRs deserve review goes here,
@@ -91,13 +146,61 @@ def should_review(branch: str | None) -> bool:
     rule. Make it an explicit signal a human sets and can see (a PR label), so
     opting out is a visible choice rather than an accident of what someone
     happened to call their branch.
+
+    THE ONE SKIP (DRE-2340). The branch name is still never consulted. The
+    skip fires only on the gate's own binding: the latest qa-bot critic
+    verdict is an APPROVE, and the CONTENT id it carries equals the id the
+    caller computed for the current head — i.e. the PR's own contribution
+    is byte-identical to the diff that verdict was earned on, and only a
+    base merge (or an empty commit) moved the head. Re-reviewing would
+    spend a full critic run to re-read an unchanged diff and re-issue the
+    same verdict; on portico PR #205 that happened six times in 47
+    minutes. This is not a guess about triviality — it is a proof about
+    content, and every unprovable case returns True.
     """
-    return True
+    return carried_approve(comments, qa_login, head_content_id) is None
+
+
+def _load(path: str | None, fallback):
+    """A payload file, or the fallback on anything unreadable. An
+    unreadable record must mean "no proof of a carry" (→ review), never a
+    crashed review job."""
+    if not path:
+        return fallback
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"should_review_pr: cannot read {path}: {e}", file=sys.stderr)
+        return fallback
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("branch", nargs="?", default="",
+                    help="the PR's head branch ref")
+    ap.add_argument("--comments-file", default=None,
+                    help="raw REST payload of GET issues/{pr}/comments — the "
+                         "standing verdict record (DRE-2340)")
+    ap.add_argument("--compare-file", default=None,
+                    help="raw REST payload of GET compare/{base}...{head} — "
+                         "the current head's content record (DRE-2340)")
+    ap.add_argument("--qa-login", default="",
+                    help="trusted verdict author, e.g. "
+                         "agent-bureau-qa-bot[bot]; omitted = no carry")
+    return ap
 
 
 def main(argv: list[str]) -> int:
-    branch = argv[0] if argv else ""
-    review = should_review(branch)
+    args = build_parser().parse_args(argv)
+    branch = args.branch
+    comments = _load(args.comments_file, [])
+    head_content_id = content_id(_load(args.compare_file, {}))
+    carried = carried_approve(comments, args.qa_login, head_content_id)
+    review = should_review(
+        branch, comments=comments, qa_login=args.qa_login,
+        head_content_id=head_content_id,
+    )
     print(f"review={'true' if review else 'false'}")
     if review:
         card = card_in_branch(branch)
@@ -106,10 +209,18 @@ def main(argv: list[str]) -> int:
             + (f" (linked card {card})" if card else "")
         )
         return 0
-    # Unreachable today — every PR is reviewed. Kept so the workflow's
-    # exit-code contract (0 review / 1 skip) still holds if an explicit
-    # opt-out is ever added, and so a skip can never be silent when it is.
-    print(f"skipping {branch!r}")
+    # DRE-2340: the only skip there is. Emit what the workflow needs to
+    # re-publish the head-bound review check against the reviewed commit —
+    # a skip is silent on the PR (the standing verdict stays the latest
+    # comment), so the CHECK is the only place the head can show an honest
+    # review status.
+    print(f"carried_sha={carried}")
+    print(f"content_id={head_content_id}")
+    print(
+        f"skipping {branch!r} — the standing APPROVE for {carried} still "
+        "binds this head's content; re-reviewing would re-read an unchanged "
+        "diff (DRE-2340)"
+    )
     return 1
 
 

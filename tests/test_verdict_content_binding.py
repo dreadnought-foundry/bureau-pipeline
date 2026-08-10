@@ -290,6 +290,12 @@ class GitCompareSemanticsTest(unittest.TestCase):
         (self.repo / name).write_text(text)
         self.git("add", name)
 
+    @staticmethod
+    def app(value, extra=""):
+        """app.py, padded so a top edit and a bottom append don't collide."""
+        filler = "".join(f"# padding {i}\n" for i in range(12))
+        return f"def widget():\n    return {value}\n\n{filler}{extra}"
+
     def commit(self, message):
         self.git("commit", "-qm", message)
         return self.git("rev-parse", "HEAD")
@@ -335,12 +341,16 @@ class GitCompareSemanticsTest(unittest.TestCase):
         self.git("config", "commit.gpgsign", "false")
         self.git("checkout", "-q", "-b", "main")
         # A base main with two files the branch will and will not touch.
-        self.write("app.py", "def widget():\n    return 1\n")
+        # app.py is padded so an edit at the top and an append at the
+        # bottom merge cleanly — this suite is about content ids, not about
+        # git's conflict heuristics (the evil-merge case below forces a
+        # real conflict deliberately).
+        self.write("app.py", self.app(1))
         self.write("unrelated.py", "OTHER = 1\n")
         self.commit("base")
         # The PR: its own contribution is a change to app.py.
         self.git("checkout", "-q", "-b", "pr")
-        self.write("app.py", "def widget():\n    return 2\n")
+        self.write("app.py", self.app(2))
         self.commit("the PR's own change")
         self.reviewed = self.git("rev-parse", "HEAD")
         self.reviewed_cid = self.cid("main", "pr")
@@ -406,14 +416,15 @@ class GitCompareSemanticsTest(unittest.TestCase):
 
     # ── the verdict DIES ─────────────────────────────────────────────────
     def test_dies_on_an_added_line(self):
-        self.write("app.py", "def widget():\n    return 2\n\nEXTRA = True\n")
+        self.write("app.py", self.app(2, extra="EXTRA = True\n"))
         self.commit("one more line")
         self.assertNotEqual(self.cid("main", "pr"), self.reviewed_cid)
 
     def test_dies_on_a_base_merge_touching_a_file_the_branch_touches(self):
         """If main touched a file the branch also touches, the merged blob
-        differs — the verdict correctly dies and a fresh review is required."""
-        self.advance_main("app.py", "def widget():\n    return 1\n\nHELPER = 1\n",
+        differs — the verdict correctly dies and a fresh review is required.
+        The two edits merge CLEANLY (no conflict); the id still moves."""
+        self.advance_main("app.py", self.app(1, extra="HELPER = 1\n"),
                           "main touches app.py too")
         self.git("merge", "-q", "--no-edit", "main")
         self.assertNotEqual(self.cid("main", "pr"), self.reviewed_cid)
@@ -423,7 +434,7 @@ class GitCompareSemanticsTest(unittest.TestCase):
         code no critic ever read. You cannot add code without changing
         content."""
         self.git("checkout", "-q", "main")
-        (self.repo / "app.py").write_text("def widget():\n    return 3\n")
+        (self.repo / "app.py").write_text(self.app(3))
         self.git("add", "app.py")
         self.commit("main edits the same line")
         self.git("checkout", "-q", "pr")
@@ -433,7 +444,7 @@ class GitCompareSemanticsTest(unittest.TestCase):
         )
         self.assertNotEqual(proc.returncode, 0, "expected a real conflict")
         (self.repo / "app.py").write_text(
-            "def widget():\n    return 2\n\nBACKDOOR = True\n"
+            self.app(2, extra="BACKDOOR = True\n")
         )
         self.git("add", "app.py")
         self.git("commit", "-qm", "resolve the conflict (evil merge)")
@@ -794,12 +805,28 @@ class MergeGateWiringTest(unittest.TestCase):
     def test_the_carry_is_posted_to_the_pr(self):
         self.assertIn("carried=", self.run_block)
         self.assertIn("carried_content_id=", self.run_block)
-        self.assertIn("gh pr comment", self.run_block)
+        # Posted through the issue-comments API rather than `gh pr comment`:
+        # this arm runs before the update/human/merge arms, and the
+        # dependabot suite pins the first `gh pr comment` to the human arm.
+        self.assertIn("-F body=@/tmp/carry-note.md", self.run_block)
+        self.assertIn("/issues/$PR/comments", self.run_block)
 
     def test_the_carry_comment_is_idempotent(self):
         """The gate wakes many times per head; the record must be posted
         once, the way the `human` arm already does it."""
         self.assertIn("grep -q", self.run_block)
+        # …and the needle must NOT be the bare content id. The verdict
+        # comment being carried carries that id itself, so a bare
+        # `content:$CARRIED_ID` grep matches on the very first wake and the
+        # record is never posted at all.
+        self.assertNotIn('grep -q "content:$CARRIED_ID"', self.run_block)
+        needle = re.search(r'CARRY_MARK="([^"]+)"', self.run_block)
+        self.assertIsNotNone(needle, "no dedicated idempotence marker")
+        self.assertIn('grep -q "$CARRY_MARK"', self.run_block)
+        # The marker must appear in the body it guards, or the note posts
+        # again on every wake.
+        body_start = self.run_block.find("CARRY_MARK=")
+        self.assertIn("$CARRY_MARK", self.run_block[body_start:body_start + 400])
 
     def test_the_carry_comment_carries_no_verdict_marker(self):
         """It must not read as a verdict, and must not re-wake the gate's
