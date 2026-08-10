@@ -251,8 +251,16 @@ jobs:
           # Deliberately carries NO verdict-shaped text: it is a status
           # note, never an approval credential, and it must not re-wake
           # this workflow's own issue_comment leg.
-          CARRIED=$(grep -m1 '^carried=' /tmp/gate-decision | cut -d= -f2-)
-          CARRIED_ID=$(grep -m1 '^carried_content_id=' /tmp/gate-decision | cut -d= -f2-)
+          # `carried=` is OPTIONAL — merge_gate.py emits it only when a
+          # verdict was actually carried. Absent, grep exits 1, and under
+          # this step's `set -euo pipefail` that status escapes the command
+          # substitution and kills the STEP — before the update/human/merge
+          # arms run. It took the whole fleet's gate down on 2026-08-10
+          # (green 02:38:52, dead from 02:46:16). `|| true` makes absence
+          # read as empty, which is exactly what `[ -n "$CARRIED" ]` below
+          # already expects. Any future optional field needs the same.
+          CARRIED=$(grep -m1 '^carried=' /tmp/gate-decision | cut -d= -f2- || true)
+          CARRIED_ID=$(grep -m1 '^carried_content_id=' /tmp/gate-decision | cut -d= -f2- || true)
           # Posted through the issue-comments API rather than the gh pr
           # helper: this arm sits BEFORE the update/human/merge arms (a
           # carry can end in any of them) and the dependabot suite pins the
