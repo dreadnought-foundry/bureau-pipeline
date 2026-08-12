@@ -1645,9 +1645,17 @@ def _release_card(pr: dict, note: str) -> None:
     card = branch_card(pr.get("headRefName") or "")
     if not card:
         return
-    linear_ops.remove_label(card, HOLD_LABEL)
-    linear_ops.cmd_advance(card, "In QA", PARKED_STATE)
-    linear_ops.cmd_comment(card, note)
+    # The dispatch and its receipt already happened; a Linear outage here must
+    # be recorded (the run goes red, medic sees it) and must NOT abort the
+    # remaining backstops in this sweep.
+    try:
+        linear_ops.remove_label(card, HOLD_LABEL)
+        linear_ops.cmd_advance(card, "In QA", PARKED_STATE)
+        linear_ops.cmd_comment(card, note)
+    except Exception as e:  # noqa: BLE001 — any Linear/transport error
+        err = f"releasing {card} after an operator decision failed: {e}"
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
 
 
 def _report_decision_near_miss(pr: dict, thread: list) -> None:
@@ -1724,7 +1732,12 @@ def restart_answered_blockers() -> None:
         # Consumed? Any worker-bot comment newer than the decision means the
         # loop already moved on it — this sweep's receipt, a fix attempt, a
         # push marker. Only an UNANSWERED-side-newest decision restarts.
-        after = thread[thread.index(decision) + 1:]
+        # Located by IDENTITY, not list.index: dicts compare by value, so an
+        # operator who re-posts the same answer verbatim would otherwise be
+        # measured against their FIRST copy — receipted, and silently
+        # unanswerable a second time.
+        at = next(i for i, c in enumerate(thread) if c is decision)
+        after = thread[at + 1:]
         if any(
             (c.get("user") or {}).get("login") == WORKER_REST_LOGIN for c in after
         ):

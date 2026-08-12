@@ -179,6 +179,18 @@ class NoRestartTest(unittest.TestCase):
         ]
         self.assertEqual(self.dispatches(consumed), [])
 
+    def test_a_repeated_verbatim_answer_re_arms_the_restart(self):
+        # The operator, seeing nothing happen, re-posts the SAME sentence.
+        # That is a newer decision and must buy another dispatch — the
+        # receipt is measured against THAT copy, not the first one.
+        again = [
+            rest(WORKER, BLOCKER),
+            rest(HUMAN, DECISION),
+            rest(WORKER, f"🔓 {reconcile.DECISION_RESTART_TAG}: re-dispatched."),
+            rest(HUMAN, DECISION),
+        ]
+        self.assertEqual(len(self.dispatches(again)), 1)
+
     def test_decision_older_than_the_latest_blocker_is_not_dispatched(self):
         stale = [
             rest(WORKER, BLOCKER),
