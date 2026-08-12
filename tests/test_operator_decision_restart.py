@@ -262,6 +262,54 @@ class NearMissNoticeTest(unittest.TestCase):
         self.assertEqual(sweep([_pr()], quiet)[1], [])
 
 
+class PreFilterTest(unittest.TestCase):
+    """The per-PR thread fetch is the sweep's only cost — a PR with nothing
+    decision-shaped in it must not pay it."""
+
+    def api_calls(self, pr):
+        seen = []
+
+        def gh(*args):
+            if args[:2] == ("run", "list"):
+                return "[]"
+            if args[:2] == ("pr", "list"):
+                return json.dumps([pr])
+            if args[0] == "api":
+                seen.append(args)
+                return json.dumps([rest(WORKER, BLOCKER), rest(HUMAN, DECISION)])
+            return ""
+
+        with mock.patch.object(reconcile, "gh", side_effect=gh), \
+             mock.patch.object(reconcile, "gh_dispatch"), \
+             mock.patch.object(reconcile, "_post_pr_note"), \
+             mock.patch.object(reconcile, "linear_ops", mock.MagicMock()):
+            reconcile.restart_answered_blockers()
+        return seen
+
+    def graphql(self, *bodies):
+        # gh pr list --json comments is GraphQL-backed: author.login, no
+        # "[bot]" suffix (the shape is_worker_bot_comment documents).
+        return [{"author": {"login": login}, "body": body} for login, body in bodies]
+
+    def test_quiet_pr_is_not_fetched(self):
+        pr = dict(_pr(), comments=self.graphql(
+            ("agent-bureau-bot", "🔧 Fix attempt 1 pushed — CI re-running."),
+        ))
+        self.assertEqual(self.api_calls(pr), [])
+
+    def test_blocked_pr_is_fetched(self):
+        pr = dict(_pr(), comments=self.graphql(("agent-bureau-bot", BLOCKER)))
+        self.assertEqual(len(self.api_calls(pr)), 1)
+
+    def test_decision_mention_is_fetched(self):
+        pr = dict(_pr(), comments=self.graphql((HUMAN, DECISION)))
+        self.assertEqual(len(self.api_calls(pr)), 1)
+
+    def test_missing_comments_field_fails_open(self):
+        # "We could not see" is not "there is nothing there".
+        self.assertEqual(len(self.api_calls(_pr())), 1)
+
+
 class SweepWiringTest(unittest.TestCase):
     def test_full_sweep_runs_the_backstop(self):
         with mock.patch.object(reconcile, "unstick_conflicts"), \

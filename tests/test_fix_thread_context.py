@@ -14,7 +14,9 @@ scripts/fix_context.py distills it into .bureau-pipeline/fix-thread.md:
     opens with 🛑) — attempt N must know what attempt N-1 concluded;
   * HUMAN comments posted strictly AFTER the latest 🛑 blocker — the newest
     one whose first line opens with "**Operator decision**" is THE decision
-    (it overrides the blocker); the rest are context;
+    (it overrides the blocker); the rest are context. (DRE-2409 widened WHICH
+    phrasings read as a decision — see tests/test_operator_decision_intent.py;
+    the identity and ordering rules pinned below are unchanged.)
   * ordering is exposed mechanically: the rendered file states whether the
     newest relevant item is an operator decision (override) or the blocker
     itself (unanswered — hold, don't re-derive).

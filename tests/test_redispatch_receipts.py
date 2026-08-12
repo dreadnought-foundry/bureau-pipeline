@@ -136,6 +136,10 @@ def _sweep_mocks(extra=None):
         # path, not the fix-retry backstop's own gh calls (covered by
         # test_reconcile_retries_dead_fix_runs.py).
         "retry_dead_fix_runs": MagicMock(),
+        # DRE-2409 added the answered-blocker restart backstop; same
+        # treatment (its own coverage lives in
+        # test_operator_decision_restart.py).
+        "restart_answered_blockers": MagicMock(),
         # DRE-2047 added the dependabot review backstop; same treatment
         # (its own coverage lives in test_dependabot_review_dispatch.py).
         "review_dependabot_prs": MagicMock(),
