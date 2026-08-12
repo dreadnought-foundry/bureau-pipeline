@@ -292,11 +292,27 @@ class QaReviewWiringTest(unittest.TestCase):
 
     def test_linear_bookkeeping_stays_guarded_on_card_presence(self):
         # The verdict's Linear comment must no-op cleanly for a cardless PR.
+        #
+        # Asserts the INVARIANT, not the shell shape. The old form pinned the
+        # one-line `[ -n "$CARD" ] && ...` spelling, so rewriting the guard as
+        # an `if` block failed a test whose stated contract was still perfectly
+        # satisfied. A test that breaks on a refactor it should not care about
+        # teaches people to edit the test rather than read it; this one breaks
+        # only if the guard actually goes away. The behavioural proof is in
+        # test_qa_review_model_note.py, which EXECUTES the block with CARD="".
         post = _step("post")["run"]
-        self.assertRegex(
-            post, r'\[ -n "\$CARD" \] && .*linear_ops\.py.* comment',
-            "the Linear card comment must stay guarded on a non-empty CARD",
-        )
+        calls = [ln for ln in post.splitlines()
+                 if "linear_ops.py" in ln and "comment" in ln]
+        self.assertTrue(calls, "the Linear verdict comment call disappeared")
+        for call in calls:
+            with self.subTest(call=call.strip()[:60]):
+                before = post[:post.index(call)]
+                # Both spellings qualify: `[ -n "$CARD" ] &&` and
+                # `if [ -n "$CARD" ]; then`.
+                self.assertRegex(
+                    before, r'\[ -n "\$CARD" \]',
+                    "the Linear card comment is not guarded on a non-empty CARD",
+                )
 
 
 class LiveExtractionTest(unittest.TestCase):

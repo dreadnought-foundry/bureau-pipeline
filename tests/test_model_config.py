@@ -56,6 +56,7 @@ import model_fallback as mf  # noqa: E402
 
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
+SONNET5 = "claude-sonnet-5"
 FABLE = "claude-fable-5"
 RETIRED_OPUS = "claude-opus-4-8"
 
@@ -481,7 +482,11 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             tree = _copy_tree(Path(td))
             (tree / "config" / "models.yaml").write_text("{{ not yaml\n")
             self.assertEqual(_cli_select(tree, "engineer"), OPUS)
-            self.assertEqual(_cli_select(tree, "critic"), FABLE)
+            # Hardcoded on purpose: the mirror is GENERATED from models.yaml, so
+            # asserting it against a literal is the canary that catches a mirror
+            # change nobody meant. Moved fable-5 -> sonnet-5 on 2026-08-12 with
+            # the advisory ladder itself.
+            self.assertEqual(_cli_select(tree, "critic"), SONNET5)
 
 
 class WorkflowModelPinTest(unittest.TestCase):
