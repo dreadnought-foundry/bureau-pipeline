@@ -31,16 +31,41 @@ import merge_gate  # noqa: E402
 from harness import framework  # noqa: E402
 
 
-def _verdict_comment(token: str, sha: str, login: str = "agent-bureau-qa-bot[bot]"):
-    """A comment shaped exactly like qa-review.yml's Post step emits."""
+def _verdict_comment(token: str, sha: str, login: str = "agent-bureau-qa-bot[bot]",
+                     content: str | None = None):
+    """A comment shaped exactly like qa-review.yml's Post step emits.
+
+    `content` appends the DRE-2340 ` content:<64-hex>` suffix the verdict line
+    carries when the reviewed commit's three-dot diff could be hashed.
+    """
+    suffix = f" content:{content}" if content else ""
     return {
         "user": {"login": login},
-        "body": f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: {token} @{sha}\n\n## Summary\nok",
+        "body": (f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: {token} @{sha}{suffix}"
+                 "\n\n## Summary\nok"),
+    }
+
+
+def _carry_receipt(content: str, reviewed: str, head: str,
+                   login: str = "agent-bureau-qa-bot[bot]"):
+    """The receipt merge-gate posts when it honours a verdict across a head
+    change — byte-shaped like the real one in merge-gate.yml."""
+    return {
+        "user": {"login": login},
+        "body": (
+            f"♻️ Merge gate: carried verdict content:{content} — the standing "
+            "review verdict was carried across a branch update.\n\n"
+            f"Reviewed at {reviewed}; current head {head}. This branch's own "
+            "changes are byte-identical to what was reviewed.\n"
+        ),
     }
 
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
+SHA_C = "c" * 40
+CONTENT_A = "1" * 64
+CONTENT_B = "2" * 64
 QA = "agent-bureau-qa-bot[bot]"
 
 
@@ -251,6 +276,92 @@ class VerdictStateTest(unittest.TestCase):
     def test_no_comments_at_all(self):
         state, _ = framework.verdict_state([], QA, SHA_A)
         self.assertEqual(state, "none")
+
+    # -- DRE-2340: a CARRIED verdict still covers this head -------------------
+    #
+    # The gate no longer requires the verdict's sha to equal the head. When a
+    # base merge moves the head without changing what the PR itself
+    # contributes, the standing verdict carries and the gate posts a receipt
+    # saying so. `verdict_state` answers "does the latest verdict COVER this
+    # head?", so it has to understand that — otherwise the harness calls a
+    # legitimate merge a stale one. Which it did: from 2026-08-10 02:39 (#140
+    # reaching main) gate_paths failed its stale and skew legs on EVERY run,
+    # for every PR in the repo, and the red was inherited by changes that had
+    # nothing to do with verdict binding.
+    #
+    # The receipt is the evidence, deliberately. Recomputing the content id
+    # here would re-implement the gate's own judgment and could agree with a
+    # bug in it; matching the gate's PUBLISHED reason means an unexplained
+    # carry still fails, which is the property worth keeping.
+
+    def test_a_carried_verdict_covers_the_new_head(self):
+        comments = [
+            _verdict_comment("APPROVE", SHA_B, content=CONTENT_A),
+            _carry_receipt(content=CONTENT_A, reviewed=SHA_B, head=SHA_A),
+        ]
+        state, detail = framework.verdict_state(comments, QA, SHA_A)
+        self.assertEqual(state, "APPROVE",
+                         f"a carried verdict read as {state}: {detail}")
+        self.assertIn("carried", detail.lower())
+
+    def test_a_receipt_for_a_DIFFERENT_content_id_does_not_carry(self):
+        # The push changed what the PR contributes, so the verdict must die.
+        comments = [
+            _verdict_comment("APPROVE", SHA_B, content=CONTENT_A),
+            _carry_receipt(content=CONTENT_B, reviewed=SHA_B, head=SHA_A),
+        ]
+        state, _ = framework.verdict_state(comments, QA, SHA_A)
+        self.assertEqual(state, "stale")
+
+    def test_a_receipt_for_a_DIFFERENT_head_does_not_carry(self):
+        comments = [
+            _verdict_comment("APPROVE", SHA_B, content=CONTENT_A),
+            _carry_receipt(content=CONTENT_A, reviewed=SHA_B, head=SHA_C),
+        ]
+        state, _ = framework.verdict_state(comments, QA, SHA_A)
+        self.assertEqual(state, "stale")
+
+    def test_a_stale_verdict_with_no_receipt_is_still_stale(self):
+        # The pre-2340 behaviour, unchanged: no receipt, no carry.
+        state, _ = framework.verdict_state(
+            [_verdict_comment("APPROVE", SHA_B, content=CONTENT_A)], QA, SHA_A
+        )
+        self.assertEqual(state, "stale")
+
+    def test_a_forged_receipt_from_another_author_does_not_carry(self):
+        # The receipt is a gate credential and anyone can comment on a PR.
+        comments = [
+            _verdict_comment("APPROVE", SHA_B, content=CONTENT_A),
+            _carry_receipt(content=CONTENT_A, reviewed=SHA_B, head=SHA_A,
+                           login="mallory"),
+        ]
+        state, _ = framework.verdict_state(comments, QA, SHA_A)
+        self.assertEqual(state, "stale",
+                         "a receipt from a non-gate author carried a verdict")
+
+    def test_a_verdict_with_no_content_id_never_carries(self):
+        # Pre-2340 verdicts carry a sha and nothing else. A receipt cannot
+        # rescue one — there is nothing to match it against.
+        comments = [
+            _verdict_comment("APPROVE", SHA_B),
+            _carry_receipt(content=CONTENT_A, reviewed=SHA_B, head=SHA_A),
+        ]
+        state, _ = framework.verdict_state(comments, QA, SHA_A)
+        self.assertEqual(state, "stale")
+
+    def test_a_receipt_spelling_the_missing_id_does_not_carry(self):
+        # Found by mutation: without the explicit `if not content_id` guard,
+        # the needle for a content-less verdict becomes the literal
+        # "content:None" — so a receipt carrying that exact text would carry a
+        # verdict that binds nothing but a sha. Exotic, but it is a forged
+        # credential and the guard costs one line.
+        comments = [
+            _verdict_comment("APPROVE", SHA_B),
+            _carry_receipt(content="None", reviewed=SHA_B, head=SHA_A),
+        ]
+        state, _ = framework.verdict_state(comments, QA, SHA_A)
+        self.assertEqual(state, "stale",
+                         "a receipt spelling the absent content id carried it")
 
 
 class SameBotTest(unittest.TestCase):
