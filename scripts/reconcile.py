@@ -77,6 +77,7 @@ from datetime import UTC, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
+import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 # DRE-2340: ONE implementation of the verdict binding — the sweep must read
@@ -1568,6 +1569,215 @@ def retry_dead_fix_runs() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
+# Answered-blocker restart (DRE-2409). The escalate-by-exception exit door
+# only opened halfway: a recognised operator decision reached the NEXT fix
+# dispatch, but nothing ever fired one. The REQUEST_CHANGES comment that
+# triggers agent-fix is consumed by the run that held, merge-gate dispatches
+# only for conflicts, and the card is parked — so both live incidents
+# (portico #132 / DRE-2199, agent-bureau #2034 / DRE-2399) needed a hand
+# `workflow_dispatch` on top of a correctly-phrased answer. This sweep is the
+# missing half: the answer itself restarts the loop.
+DECISION_RESTART_TAG = "fix-restart-on-operator-decision"
+# The worker bot in REST shape. fix_context reads GitHub's REST payload
+# (user.login carries the "[bot]" suffix and user.type says Bot vs User),
+# unlike the GraphQL-backed `gh pr list --json comments` the sibling sweeps
+# read — which is exactly why this sweep re-fetches the thread over REST
+# rather than guessing humanity from a login string.
+WORKER_REST_LOGIN = f"{WORKER_BOT_LOGIN}[bot]"
+
+
+def _post_pr_note(pr_number: int, body: str) -> bool:
+    """Post a PR comment as the worker bot (the sweep's default GH_TOKEN).
+    A failed post is recorded, never raised — same shape as the dependabot
+    receipt: the caller's dispatch already happened."""
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", "pr", "comment", str(pr_number), "--repo", REPO, "--body", body],
+        capture_output=True, text=True, check=False,
+    )
+    if p.returncode != 0:
+        err = (
+            f"PR note on #{pr_number} failed rc={p.returncode}: "
+            f"{p.stderr.strip()[:400]}"
+        )
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return False
+    return True
+
+
+def _thread_worth_fetching(pr: dict) -> bool:
+    """Cheap pre-filter before the per-PR REST fetch: only a PR that already
+    shows a fix-loop blocker or ANY mention of the decision phrase can have
+    an answer (or a near miss) to find.
+
+    Reads the GraphQL-backed comments the PR list already carries. Fails
+    OPEN — a payload with no `comments` key at all is fetched rather than
+    skipped, because "we could not see" is not "there is nothing there"."""
+    if "comments" not in pr:
+        return True
+    for c in pr["comments"] or []:
+        body = c.get("body") or ""
+        if is_worker_bot_comment(c) and body.lstrip().startswith(
+            fix_context.BLOCKER_PREFIX
+        ):
+            return True
+        if fix_context.mentions_decision(body):
+            return True
+    return False
+
+
+def _pr_thread(pr_number: int) -> list:
+    """The PR's comments in REST shape — the payload fix_context parses."""
+    raw = gh("api", "--paginate", "--slurp",
+             f"repos/{REPO}/issues/{pr_number}/comments?per_page=100")
+    try:
+        return fix_context.flatten_pages(json.loads(raw or "[]"))
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"restart sweep: unreadable thread on PR #{pr_number}: {e}")
+        return []
+
+
+def _release_card(pr: dict, note: str) -> None:
+    """Take the PR's card out of the human queue: the operator HAS acted, so
+    leaving needs-human + Plan Review on it would keep every other repair
+    sweep standing down (DRE-2024) and keep the card in the CEO's queue
+    claiming it still needs them."""
+    card = branch_card(pr.get("headRefName") or "")
+    if not card:
+        return
+    # The dispatch and its receipt already happened; a Linear outage here must
+    # be recorded (the run goes red, medic sees it) and must NOT abort the
+    # remaining backstops in this sweep.
+    try:
+        linear_ops.remove_label(card, HOLD_LABEL)
+        linear_ops.cmd_advance(card, "In QA", PARKED_STATE)
+        linear_ops.cmd_comment(card, note)
+    except Exception as e:  # noqa: BLE001 — any Linear/transport error
+        err = f"releasing {card} after an operator decision failed: {e}"
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+
+
+def _report_decision_near_miss(pr: dict, thread: list) -> None:
+    """Fail LOUDLY on a near miss (DRE-2409). A human comment that mentions
+    an operator decision but does not parse as one is the exact case that
+    burned both incidents — and silence is indistinguishable from "the
+    operator has not answered yet". One notice per new near miss: the sweep's
+    own notice is a worker-bot comment, so a newer near miss re-arms it."""
+    near = fix_context.near_misses(thread, WORKER_REST_LOGIN)
+    if not near:
+        return
+    near_ids = {id(c) for c in near}
+    newest = max(i for i, c in enumerate(thread) if id(c) in near_ids)
+    told = max(
+        (
+            i
+            for i, c in enumerate(thread)
+            if (c.get("user") or {}).get("login") == WORKER_REST_LOGIN
+            and fix_context.NEAR_MISS_TAG in (c.get("body") or "")
+        ),
+        default=-1,
+    )
+    if newest < told:
+        return
+    print(
+        f"near miss: PR #{pr['number']} has {len(near)} comment(s) that "
+        "mention an operator decision but do not parse — saying so on the PR"
+    )
+    _post_pr_note(pr["number"], fix_context.near_miss_notice(near))
+
+
+def restart_answered_blockers() -> None:
+    """DRE-2409: re-dispatch the fix agent for a held PR whose latest fix-loop
+    blocker now carries an operator decision after it.
+
+    The decision is read by fix_context — the SAME predicate the fix agent's
+    own thread render uses, so "the sweep saw an answer" and "the fixer sees
+    an answer" can never disagree. Everything that grants the answer its
+    authority is unchanged: a non-bot human author, newer than the latest
+    worker-bot 🛑 blocker.
+
+    This sweep deliberately does NOT consult fix_dispatch_blocked. The card is
+    human-parked precisely BECAUSE the loop escalated, and DRE-2024's gate
+    exists to stop identical doomed re-runs — an operator decision is new
+    input and the human act that gate is waiting for. Runaway is bounded by
+    the receipt instead: the restart posts a worker-bot comment, and the sweep
+    only fires when NO worker-bot comment is newer than the decision, so each
+    answer buys exactly one dispatch (a further answer re-arms it).
+
+    DIRTY PRs are released but not dispatched — unstick_conflicts owns
+    conflicted PRs, and un-parking the card is what lets it act on the next
+    sweep. Otherwise the house pattern: back off while a fix run is in flight,
+    one dispatch per sweep."""
+    busy = json.loads(gh(
+        "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
+        "--limit", "10", "--json", "status",
+    ) or "[]")
+    if any(r["status"] in ("queued", "in_progress") for r in busy):
+        return
+    prs = json.loads(gh(
+        "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+        "--json", "number,headRefName,mergeStateStatus,comments",
+    ) or "[]")
+    for pr in prs:
+        if not pr["headRefName"].startswith("agent/"):
+            continue
+        if not _thread_worth_fetching(pr):
+            continue
+        thread = _pr_thread(pr["number"])
+        decision = fix_context.operator_decision(thread, WORKER_REST_LOGIN)
+        if decision is None:
+            _report_decision_near_miss(pr, thread)
+            continue
+        # Consumed? Any worker-bot comment newer than the decision means the
+        # loop already moved on it — this sweep's receipt, a fix attempt, a
+        # push marker. Only an UNANSWERED-side-newest decision restarts.
+        # Located by IDENTITY, not list.index: dicts compare by value, so an
+        # operator who re-posts the same answer verbatim would otherwise be
+        # measured against their FIRST copy — receipted, and silently
+        # unanswerable a second time.
+        at = next(i for i, c in enumerate(thread) if c is decision)
+        after = thread[at + 1:]
+        if any(
+            (c.get("user") or {}).get("login") == WORKER_REST_LOGIN for c in after
+        ):
+            continue
+        if pr.get("mergeStateStatus") == "DIRTY":
+            print(
+                f"answered blocker: PR #{pr['number']} is DIRTY — releasing "
+                "the card and leaving the dispatch to the conflict sweep"
+            )
+            _post_pr_note(pr["number"], (
+                f"🔓 {DECISION_RESTART_TAG}: your decision was picked up. This "
+                "PR is conflicted with the default branch, so the conflict "
+                "sweep resolves it first and the fix loop follows (DRE-2409)."
+            ))
+            _release_card(pr, (
+                f"🔓 Your answer on PR #{pr['number']} was picked up — this "
+                "card is out of your queue. The PR needs a merge conflict "
+                "resolved first; the pipeline does that on its own."
+            ))
+            continue
+        print(
+            f"answered blocker: PR #{pr['number']} has an operator decision "
+            "newer than its latest blocker — restarting the fix loop"
+        )
+        gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
+                    "-f", f"pr_number={pr['number']}")
+        _post_pr_note(pr["number"], (
+            f"🔓 {DECISION_RESTART_TAG}: an operator decision landed after the "
+            "last blocker, so the reconcile sweep re-dispatched the fix agent "
+            "(DRE-2409) — no hand dispatch needed. One restart per answer; a "
+            "further decision comment re-arms it."
+        ))
+        _release_card(pr, (
+            f"🔓 Your answer on PR #{pr['number']} was picked up — the fix "
+            "agent is running again and this card is out of your queue. "
+            "Nothing more needed from you."
+        ))
+        return  # one dispatch per sweep; the busy-guard handles the rest
+
+
 # Dependabot review routing (DRE-2047). A workflow run triggered by
 # dependabot[bot]'s pull_request events receives GitHub's separate Dependabot
 # secrets store — EMPTY for us — plus a read-only token, so the critic stub's
@@ -2354,6 +2564,7 @@ def main(
             flag_no_checks_prs,
             fix_approved_but_red,
             retry_dead_fix_runs,
+            restart_answered_blockers,
             review_dependabot_prs,
             recover_crashed_reviews,
             check_dependabot_capacity,

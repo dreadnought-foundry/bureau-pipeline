@@ -17,12 +17,19 @@ payload), it selects, identity-filters, and renders into one markdown file:
     opens with 🛑. Attempt N reads what attempt N-1 concluded instead of
     rediscovering it.
   * THE OPERATOR DECISION — the newest HUMAN-authored comment posted
-    strictly AFTER the latest blocker whose first line opens with
-    "**Operator decision**". Human means GitHub's server-assigned
-    user.type != "Bot" and a non-null user: the qa-bot, the worker bot,
-    github-actions, and deleted accounts can never decide (DRE-1988/1995 —
-    authorship decides meaning). Markers are ANCHORED like the DRE-1992
-    verdict markers: quoting or mentioning one mid-prose selects nothing.
+    strictly AFTER the latest blocker whose first line LEADS with the
+    phrase "operator decision" (DRE-2409: matched by intent, not by an
+    exact byte string — see is_decision_body). Human means GitHub's
+    server-assigned user.type != "Bot" and a non-null user: the qa-bot,
+    the worker bot, github-actions, and deleted accounts can never decide
+    (DRE-1988/1995 — authorship decides meaning). The phrase is ANCHORED
+    like the DRE-1992 verdict markers: quoting or mentioning it mid-prose
+    selects nothing.
+  * NEAR MISSES — human comments newer than the latest blocker that
+    MENTION the phrase but do not parse as a decision (DRE-2409). A near
+    miss is the exact shape that burned both live incidents, and it is
+    reported rather than swallowed: silence is indistinguishable from
+    "the operator has not answered yet".
   * HUMAN CONTEXT — other non-bot comments newer than the latest blocker.
   * ORDERING, stated mechanically: the render carries exactly one status
     line — STATUS_OVERRIDE when a decision answers the latest blocker
@@ -43,7 +50,9 @@ Contract with agent-fix.yml:
   argv: --comments-file (raw REST payload of
     GET /repos/{repo}/issues/{pr}/comments — a flat array, or the
     array-of-pages `gh api --paginate --slurp` emits), --worker-login,
-    --out (the markdown file the fix prompt reads).
+    --out (the markdown file the fix prompt reads); or --answer-format
+    alone, which prints ANSWER_FORMAT (the copy-pasteable instructions
+    every parking blocker comment quotes) and exits.
   exit 0 = rendered; exit 2 = malformed input (loud, never a silent
     absence — a missing thread file is exactly the deadlock this fixes).
 """
@@ -52,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from typing import Optional
 
@@ -61,7 +71,52 @@ BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
 END = "===== END UNTRUSTED CARD TEXT ====="
 
 BLOCKER_PREFIX = "🛑"
-DECISION_PREFIX = "**Operator decision**"
+
+# The decision marker, matched by INTENT (DRE-2409). It used to be the exact
+# byte string "**Operator decision**" at the head of the first line, so the
+# closing asterisks had to sit immediately after the word "decision" — a
+# perfectly natural "**Operator decision — the blocker is answered.**" did not
+# match, silently, and the loop held again with the same message (portico #132
+# / DRE-2199, 2026-08-11; agent-bureau #2034 / DRE-2399, 2026-08-12; two
+# people, two hand dispatches). The strictness bought nothing: authorship
+# (non-bot human) and ordering (newer than the latest blocker) carry all the
+# authority, and both are unchanged.
+#
+# What is tolerated: leading whitespace and markdown emphasis/heading/list
+# markers, any case, and the rest of the sentence continuing on that same
+# line. What is NOT: a blockquote (">" is deliberately absent from the strip
+# set — quoting someone else's decision is not issuing one), the phrase below
+# the first line, or a mid-prose mention. Those are near misses (see
+# near_misses) and get reported, never silently ignored.
+DECISION_PHRASE = "operator decision"
+_DECISION_LEAD_RE = re.compile(r"^[\s#*_\-]+")
+# The lookahead, not \b: "__Operator decision__" ends on an underscore, which
+# IS a word character, so \b would reject the italic/bold-underscore form.
+# "Operator decisions are mine to make" is still not a decision.
+_DECISION_RE = re.compile(r"^operator\s+decision(?![0-9A-Za-z])", re.IGNORECASE)
+_DECISION_MENTION_RE = re.compile(r"operator\s+decision", re.IGNORECASE)
+
+# The copy-pasteable answer, quoted by every blocker comment that parks a PR
+# (DRE-2409 AC: the operator must never need to know a parser exists) and by
+# the near-miss notice. Shell-safe on purpose — it is embedded inside
+# double-quoted `gh pr comment --body "..."` strings in agent-fix.yml, so it
+# carries no backtick, no dollar sign, no double quote and no backslash
+# (pinned by tests/test_operator_decision_intent.py).
+DECISION_EXAMPLE = "**Operator decision** — <your answer here>"
+ANSWER_FORMAT = (
+    "**How to answer this** — comment on this PR from your own account with a "
+    "first line that STARTS with the words Operator decision, then your "
+    "answer. Copy this line and replace the placeholder:\n"
+    "\n"
+    f"    {DECISION_EXAMPLE}\n"
+    "\n"
+    "Bold, plain, or a '## Operator decision' heading all work, in any case, "
+    "and the rest of your answer can continue on that same line or below it. "
+    "The comment has to be newer than this one and written by a person, not a "
+    "bot. The fix loop picks it up and restarts itself — no dispatch needed."
+)
+
+NEAR_MISS_TAG = "operator-decision-near-miss"
 
 STATUS_OVERRIDE = (
     "STATUS: an operator decision ANSWERS the latest blocker — implement "
@@ -76,6 +131,20 @@ STATUS_UNANSWERED = (
 def first_line(body: Optional[str]) -> str:
     body = body or ""
     return body.splitlines()[0] if body else ""
+
+
+def is_decision_body(body: Optional[str]) -> bool:
+    """True when this comment body READS as an operator decision: its first
+    line's leading phrase is "operator decision" (DRE-2409). See the
+    DECISION_PHRASE block above for exactly what is tolerated and why."""
+    lead = _DECISION_LEAD_RE.sub("", first_line(body))
+    return bool(_DECISION_RE.match(lead))
+
+
+def mentions_decision(body: Optional[str]) -> bool:
+    """True when a body mentions the decision phrase anywhere — the cheap
+    pre-filter for "is there anything decision-shaped here at all?"."""
+    return bool(_DECISION_MENTION_RE.search(body or ""))
 
 
 def _is_worker(c: dict, worker_login: str) -> bool:
@@ -123,14 +192,55 @@ def _humans_after_latest_blocker(comments, worker_login: str) -> list:
 
 def operator_decision(comments, worker_login: str) -> Optional[dict]:
     """THE decision: the newest human comment after the latest blocker whose
-    first line opens with the decision marker. None when the blocker is the
-    newest relevant item (unanswered) — a decision the loop escalated PAST
-    (an even newer blocker exists) is stale and selects nothing."""
+    first line reads as a decision (is_decision_body). None when the blocker
+    is the newest relevant item (unanswered) — a decision the loop escalated
+    PAST (an even newer blocker exists) is stale and selects nothing."""
     decision = None
     for c in _humans_after_latest_blocker(comments, worker_login):
-        if first_line(c.get("body")).startswith(DECISION_PREFIX):
+        if is_decision_body(c.get("body")):
             decision = c
     return decision
+
+
+def near_misses(comments, worker_login: str) -> list:
+    """Human comments after the latest blocker that MENTION the decision
+    phrase but do not parse as one (DRE-2409).
+
+    This is the shape that burned both live incidents, so it is never
+    silent: the render carries a notice, and the reconcile sweep posts one
+    on the PR. Bot comments are excluded — the loop's own blocker quotes the
+    answer format back at the operator and must not flag itself."""
+    return [
+        c
+        for c in _humans_after_latest_blocker(comments, worker_login)
+        if mentions_decision(c.get("body")) and not is_decision_body(c.get("body"))
+    ]
+
+
+def _safe_login(c: dict) -> str:
+    user = c.get("user") or {}
+    login = re.sub(r"[^A-Za-z0-9._\-\[\]]", "", user.get("login") or "")[:40]
+    return login or "(deleted account)"
+
+
+def _safe_when(c: dict) -> str:
+    return re.sub(r"[^0-9A-Za-z:.\-+]", "", c.get("created_at") or "")[:40] or "?"
+
+
+def near_miss_notice(near: list) -> str:
+    """The plain-English notice for near-miss comments (DRE-2409 AC6).
+
+    Names only GitHub's own server-assigned fields — author login and
+    timestamp — and NEVER the bodies: they are attacker-writable, and
+    re-publishing one is the amplification DRE-1996 forbids."""
+    who = "; ".join(f"{_safe_login(c)} at {_safe_when(c)}" for c in near)
+    return (
+        f"⚠️ {NEAR_MISS_TAG}: {len(near)} comment(s) here mention an operator "
+        "decision but do not read as one, so this PR is still held and the "
+        "fix loop has not restarted.\n\n"
+        f"Not recognised: {who}\n\n"
+        f"{ANSWER_FORMAT}"
+    )
 
 
 def human_context(comments, worker_login: str) -> list:
@@ -202,6 +312,15 @@ def render(comments, worker_login: str) -> str:
             "",
         ]
 
+    near = near_misses(comments, worker_login)
+    if near:
+        out += [
+            "## Near-miss operator decisions (DRE-2409)",
+            "",
+            near_miss_notice(near),
+            "",
+        ]
+
     if context:
         out += [
             "## Other human comments after the latest blocker (context only, "
@@ -214,12 +333,12 @@ def render(comments, worker_login: str) -> str:
     return "\n".join(out)
 
 
-def _load_comments(path: str) -> list:
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+def flatten_pages(data) -> list:
+    """One comment list from either payload shape (DRE-2030), shared with the
+    reconcile sweep so both read the thread identically: a flat array, or the
+    array-of-pages `gh api --paginate --slurp` emits."""
     if not isinstance(data, list):
         raise ValueError("comments payload must be a JSON array")
-    # `gh api --paginate --slurp` emits an array of pages; flatten one level.
     if data and all(isinstance(page, list) for page in data):
         data = [c for page in data for c in page]
     if not all(isinstance(c, dict) for c in data):
@@ -227,12 +346,39 @@ def _load_comments(path: str) -> list:
     return data
 
 
+def _load_comments(path: str) -> list:
+    with open(path, encoding="utf-8") as fh:
+        return flatten_pages(json.load(fh))
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--comments-file", required=True)
-    parser.add_argument("--worker-login", required=True)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--comments-file")
+    parser.add_argument("--worker-login")
+    parser.add_argument("--out")
+    # The blocker comments that park a PR quote this (DRE-2409): ONE source
+    # for the answer format, read by the workflow at comment time.
+    parser.add_argument("--answer-format", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.answer_format:
+        print(ANSWER_FORMAT)
+        return 0
+    missing = [
+        flag
+        for flag, value in (
+            ("--comments-file", args.comments_file),
+            ("--worker-login", args.worker_login),
+            ("--out", args.out),
+        )
+        if not value
+    ]
+    if missing:
+        print(
+            f"fix_context: missing required argument(s): {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         comments = _load_comments(args.comments_file)
