@@ -262,14 +262,53 @@ def sweep_leftovers(gh, repo: str, log=print) -> dict:
     return swept
 
 
+#: The gate's carry receipt (DRE-2340), as posted by merge-gate.yml. A verdict
+#: whose sha no longer matches the head still COVERS that head when the gate
+#: published one of these for it — see `verdict_state`.
+CARRY_MARKER = "Merge gate: carried verdict content:"
+
+
+def carried_to_head(comments, qa_login: str, head_sha: str,
+                    content_id: str | None) -> bool:
+    """Did the gate publish a receipt carrying `content_id` onto `head_sha`?
+
+    Author-checked with the same `same_bot` rule every other credential in
+    here uses: the receipt is what lets a verdict outlive its sha, so a
+    receipt anyone could forge would be a merge anyone could force.
+    """
+    if not content_id:
+        return False  # a pre-DRE-2340 verdict binds a sha and nothing else
+    needle = f"{CARRY_MARKER}{content_id}"
+    for c in comments or ():
+        if not same_bot((c.get("user") or {}).get("login"), qa_login):
+            continue
+        body = c.get("body") or ""
+        if needle in body and head_sha in body:
+            return True
+    return False
+
+
 def verdict_state(comments, qa_login: str, head_sha: str) -> tuple[str, str]:
     """Classify the latest qa-authored critic comment relative to
     `head_sha`, using the real gate's own parsing:
 
       none            — no qa-authored verdict comment at all
       neutral         — critic could-not-run status (no structured verdict)
-      stale           — a verdict, but bound to a different (or no) sha
-      APPROVE / REQUEST_CHANGES / … — a verdict bound to THIS head
+      stale           — a verdict that does not cover this head
+      APPROVE / REQUEST_CHANGES / … — a verdict that COVERS this head
+
+    "Covers" is not "bound to". Since DRE-2340 a verdict survives a head change
+    when the PR's own three-dot diff is byte-identical — a gate-initiated base
+    merge moves the head without touching what the PR contributes — and the
+    gate publishes a receipt saying so. Reading only the sha made this function
+    call those legitimate merges stale: gate_paths failed its stale and skew
+    legs on every run from 2026-08-10 until this was fixed, red for every PR in
+    the repo regardless of what it changed.
+
+    The RECEIPT is the evidence, deliberately. Recomputing the content id here
+    would re-implement the gate's judgment and could agree with a bug in it;
+    requiring the gate's published reason means an unexplained carry still
+    reads as stale, which is the property the scenario exists to protect.
     """
     body = merge_gate.latest_verdict_comment(
         comments, qa_login, merge_gate.CRITIC_MARKER
@@ -282,6 +321,10 @@ def verdict_state(comments, qa_login: str, head_sha: str) -> tuple[str, str]:
         return "neutral", line
     sha = merge_gate.verdict_sha(line)
     if sha != head_sha:
+        content_id = merge_gate.verdict_content_id(line)
+        if carried_to_head(comments, qa_login, head_sha, content_id):
+            return token, (f"{line} — carried to {head_sha} on "
+                           f"content:{content_id}")
         return "stale", f"verdict bound to {sha}, head is {head_sha}"
     return token, line
 
