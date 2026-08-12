@@ -141,7 +141,7 @@ agents:
     category: development
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
-    model: claude-fable-5  # top of the `advisory` ladder
+    model: claude-sonnet-5  # top of the `advisory` ladder
     # END generated model
     trigger: "agent PR opened/updated (head agent/*) or workflow_dispatch re-review"
     maxTurns: 40
@@ -155,7 +155,7 @@ agents:
     category: operations
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
-    model: claude-fable-5  # top of the `advisory` ladder
+    model: claude-sonnet-5  # top of the `advisory` ladder
     # END generated model
     trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
     maxTurns: 60
@@ -185,7 +185,7 @@ agents:
     category: operations
     # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
     kind: advisory
-    model: claude-fable-5  # top of the `advisory` ladder
+    model: claude-sonnet-5  # top of the `advisory` ladder
     # END generated model
     trigger: "workflow_run failed twice (attempt 1 auto-retries without an agent)"
     maxTurns: 40

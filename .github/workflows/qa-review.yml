@@ -746,6 +746,17 @@ jobs:
           CONTENT_ID: ${{ steps.pr.outputs.content }}
           # A genuine review ran iff either gate saw a real verdict.
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+          # The selected model + its one-line reason, carried on the LINEAR copy
+          # of the verdict below. Passed as ENV, never interpolated into the
+          # script body: Actions substitutes `${{ }}` as literal text before
+          # bash parses the line, so a note containing `$(...)` or a backtick
+          # inside a double-quoted string WOULD be executed. Proven, not
+          # assumed — tests/test_qa_review_model_note.py runs this block with a
+          # hostile note and asserts nothing executes. An env var expands to
+          # its value and its value is never re-parsed, which is the whole
+          # point of the indirection.
+          MODEL_ID: ${{ steps.model.outputs.model }}
+          MODEL_WHY: ${{ steps.model.outputs.why }}
         run: |
           if [ "$REAL" = "true" ]; then
             # A real verdict (APPROVE or REQUEST_CHANGES with findings) from a
@@ -785,7 +796,18 @@ jobs:
             gh pr comment "$PR" --body-file /tmp/qa-comment.md && break
             echo "comment attempt $i failed; retrying in $((i*10))s"; sleep $((i*10))
           done
-          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-comment.md)" || true
+          # DRE-2317 follow-on: carry the SELECTED MODEL on the Linear copy of
+          # the verdict so quality-per-model is queryable without scraping run
+          # logs (which expire at ~90 days). Deliberately NOT a separate 🧠
+          # heartbeat like agent-task.yml's: the critic fires on every PR push,
+          # so a per-run comment would add hundreds of Linear comments per repo.
+          # The PR copy stays byte-identical — merge-gate parses it.
+          if [ -n "$CARD" ]; then
+            { cat /tmp/qa-comment.md
+              printf '\n\n🧠 model: %s — %s\n' "$MODEL_ID" "$MODEL_WHY"
+            } > /tmp/qa-linear.md
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-linear.md)" || true
+          fi
 
           # DRE-1874: reconcile the FORMAL review state with the verdict. When
           # the critic earlier said REQUEST_CHANGES, claude-code-action submits

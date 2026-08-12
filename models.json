@@ -24,6 +24,12 @@
       "display_name": null,
       "created_at": null,
       "in_catalog": false
+    },
+    {
+      "id": "claude-sonnet-5",
+      "display_name": null,
+      "created_at": null,
+      "in_catalog": false
     }
   ]
 }

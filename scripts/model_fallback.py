@@ -146,7 +146,7 @@ _FALLBACK_MODEL_CONFIG = {
     },
     "ladders": {
         "workhorse": ["claude-opus-5", "claude-sonnet-4-6"],
-        "advisory": ["claude-fable-5", "claude-opus-5"],
+        "advisory": ["claude-sonnet-5", "claude-opus-5"],
     },
     "agents": {
         "engineer": "workhorse",
@@ -162,7 +162,7 @@ _FALLBACK_MODEL_CONFIG = {
     },
     "discovery": {"on_new_model": "advisory", "alert": True},
     "retired": ["claude-opus-4-8"],
-    "excluded": [],
+    "excluded": ["claude-fable-5"],
 }
 # --- END generated model config ---
 
@@ -253,6 +253,11 @@ def policy_errors(config) -> list[str]:
       6. `discovery.on_new_model` is `advisory` or `none`. `workhorse` — a
          newly seen model auto-joining the build path — is rejected outright,
          and `discovery.alert` must be true: discovery is never silent.
+      7. No `excluded` model appears on ANY ladder. Rule 4 only bars the
+         ADVISORY model from the build path; when the advisory ladder moved off
+         Fable (2026-08-12) that stopped covering Fable, and a config putting it
+         back on the workhorse ladder validated clean. Exclusion is the decision
+         "we do not run this at all" and has to be enforced on its own terms.
     """
     cfg = _normalize_config(config)
     if cfg is None:
@@ -301,6 +306,24 @@ def policy_errors(config) -> list[str]:
                 f"ladders: {model} is the advisory model and must not appear on a "
                 "build ladder — availability is not permission (2026-08-09)"
             )
+    # Rule 7 (2026-08-12): an EXCLUDED model is unreachable from every ladder.
+    #
+    # Rule 4 above bars the advisory model from the build path, which used to
+    # cover Fable because Fable WAS the advisory model. When the advisory ladder
+    # moved to Sonnet 5 on measured cost, Fable became `excluded` — and rule 4
+    # stopped mentioning it, so a config putting Fable straight back on the
+    # workhorse ladder validated clean. That is the 2026-08-09 incident
+    # condition, unguarded. The two rules are deliberately independent: rule 4
+    # is about the build/advisory fence, this is about a model we have decided
+    # not to run at all, wherever it is listed.
+    for name, models in ladders.items():
+        for model in models:
+            if model in set(cfg["excluded"]):
+                errors.append(
+                    f"ladders.{name}: {model} is excluded and must not appear on "
+                    "any ladder — availability is not permission (2026-08-09)"
+                )
+
     if cfg["default_ladder"] != kinds[WORKHORSE_KIND]:
         errors.append(
             f"default_ladder: must be the {WORKHORSE_KIND} ladder so an "
