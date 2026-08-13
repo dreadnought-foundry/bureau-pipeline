@@ -534,7 +534,7 @@ PARKED_STATE = "Plan Review"
 _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
 
 
-# --- branch ownership: ONE definition, three named questions (DRE-2425) ------
+# --- branch ownership: ONE definition, three named questions (DRE-2426) ------
 #
 # "Does automation touch this branch?" used to be hand-written eight times
 # across reconcile.py, merge-gate.yml, agent-fix.yml and linear-sync.yml — and
@@ -575,7 +575,7 @@ def pipeline_owns(head_ref: str | None) -> bool:
 
     The broad question, asked by :func:`flag_unowned_prs`. False means the PR
     is invisible to the entire pipeline: no merge gate, no fix agent, no
-    automatic Done, and — before DRE-2425 — no sweep to notice either.
+    automatic Done, and — before DRE-2426 — no sweep to notice either.
     """
     return _has_prefix(head_ref, PIPELINE_BRANCH_PREFIXES)
 
@@ -1407,7 +1407,7 @@ def retrigger_dead_heads() -> None:
 NO_CHECKS_MINUTES = int(os.environ.get("NO_CHECKS_MINUTES", "30"))
 NO_CHECKS_TAG = "no-checks-watchdog"
 
-# --- unowned-branch watchdog (DRE-2425) --------------------------------------
+# --- unowned-branch watchdog (DRE-2426) --------------------------------------
 # A PR on a hand-named branch gets NO merge gate, NO fix agent and NO automatic
 # Done — and, until this sweep, no notice either, because every backstop in
 # this file skipped it exactly the same way. Four PRs sat up to ten hours like
@@ -1443,11 +1443,31 @@ def comment_on_pr(number: int, body: str) -> None:
     gh("pr", "comment", str(number), "--repo", REPO, "--body", body)
 
 
+def _suggested_rename(ref: str, card: str | None) -> str:
+    """The `agent/…` name that would put this PR back on the rail.
+
+    The card id is taken OUT of the ref's tail before it is put back in front:
+    `fix/DRE-2405-dev-loads-ws-ingest` (agent-bureau #2041, one of the four
+    strandings) must suggest `agent/DRE-2405-dev-loads-ws-ingest`, not the
+    doubled `agent/DRE-2405-DRE-2405-dev-loads-ws-ingest` a blind recombination
+    produces. A ref that NAMES a card in the wrong position is precisely the
+    case this notice exists for, so a suggestion that is itself still unowned
+    would fail the one reader it was written for.
+    """
+    slug = ref.split("/", 1)[-1] if "/" in ref else ref
+    if not card:
+        return "agent/DRE-<n>-<slug>"
+    # Only THIS card's id, anywhere in the tail and in any case — a second,
+    # different DRE-N in the slug is someone's deliberate cross-reference.
+    slug = re.sub(re.escape(card), "", slug, flags=re.IGNORECASE)
+    slug = re.sub(r"[-_]{2,}", "-", slug).strip("-_")
+    return f"agent/{card}-{slug}" if slug else f"agent/{card}-<slug>"
+
+
 def _unowned_notice(pr: dict) -> str:
     ref = pr["headRefName"]
     card = branch_card(ref)
-    slug = ref.split("/", 1)[-1] if "/" in ref else ref
-    want = f"agent/{card}-{slug}" if card else "agent/DRE-<n>-<slug>"
+    want = _suggested_rename(ref, card)
     names = (
         f"This branch names **{card}**, but not in the position the pipeline reads."
         if card else
@@ -1471,7 +1491,7 @@ def _unowned_notice(pr: dict) -> str:
 
 
 def flag_unowned_prs(now: str | None = None) -> None:
-    """DRE-2425 watchdog: report open PRs no automation will ever touch.
+    """DRE-2426 watchdog: report open PRs no automation will ever touch.
 
     The gap this closes is not that hand-named branches exist — they are a
     legitimate choice — but that choosing one was INVISIBLE. Every other

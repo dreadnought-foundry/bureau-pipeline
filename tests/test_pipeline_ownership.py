@@ -1,5 +1,5 @@
 """One rule for "does the pipeline own this branch", and a sweep for what it
-does not own (DRE-2425).
+does not own (DRE-2426).
 
 THE INCIDENT, 2026-08-12. Four PRs sat for up to ten hours with real
 REQUEST_CHANGES verdicts and nothing coming: agent-bureau #2035, #2036, #2041
@@ -51,13 +51,21 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 RECONCILE_SRC = ROOT / "scripts" / "reconcile.py"
 
 
+def _shell_gate_prefixes(workflow: str) -> set[str]:
+    """The branch prefixes a workflow's `case "$BRANCH" in …)` accepts."""
+    text = (WORKFLOWS / workflow).read_text()
+    m = re.search(r'case "\$BRANCH" in ([^)]+)\)', text)
+    assert m is not None, f"{workflow}: no branch case statement"
+    return {p.strip().rstrip("*") for p in m.group(1).split("|")}
+
+
 # ---------------------------------------------------------------- the one rule
 
 class OwnershipRuleTest(unittest.TestCase):
     """`pipeline_owns` is the single answer to "will automation touch this?"."""
 
     def test_agent_branches_are_owned(self):
-        for ref in ("agent/DRE-2425-x", "agent/DRE-1-a", "AGENT/DRE-9-b"):
+        for ref in ("agent/DRE-2426-x", "agent/DRE-1-a", "AGENT/DRE-9-b"):
             with self.subTest(ref=ref):
                 self.assertTrue(reconcile.pipeline_owns(ref))
 
@@ -120,34 +128,51 @@ class NoHandCopiedPrefixTest(unittest.TestCase):
         )
 
     def test_the_shell_gates_agree_with_the_python_rule(self):
-        # YAML cannot import, so the prefixes are pinned here instead. A gate
-        # that quietly adds or drops a prefix diverges from every sweep.
+        # YAML cannot import, so the comparison happens here — against the
+        # CONSTANTS, not against literals copied beside them. Editing either
+        # side alone now fails this test, which is the whole point: a ninth
+        # hand-maintained copy of the answer is the bug, even in a test.
         cases = {
-            "merge-gate.yml": {"agent/", "repair/", "dependabot/"},
-            "agent-fix.yml": {"agent/", "repair/"},
+            "merge-gate.yml": set(reconcile.PIPELINE_BRANCH_PREFIXES),
+            "agent-fix.yml": set(reconcile.FIX_BRANCH_PREFIXES),
         }
         for name, expected in cases.items():
             with self.subTest(workflow=name):
-                text = (WORKFLOWS / name).read_text()
-                m = re.search(r'case "\$BRANCH" in ([^)]+)\)', text)
-                self.assertIsNotNone(m, f"{name}: no branch case statement")
-                found = {p.strip().rstrip("*") for p in m.group(1).split("|")}
+                found = _shell_gate_prefixes(name)
                 self.assertEqual(
                     found, expected,
-                    f"{name}'s branch gate drifted from the documented set. "
-                    "If this is deliberate, update PIPELINE_BRANCH_PREFIXES "
-                    "and this test together — never one alone.",
+                    f"{name}'s branch gate drifted from the Python rule. "
+                    "If this is deliberate, change the constant in "
+                    "reconcile.py and the gate together — never one alone.",
                 )
 
     def test_every_prefix_the_shell_accepts_is_owned_in_python(self):
         # The direction that actually strands work: a branch the gate merges
-        # but the sweeps ignore.
-        for prefix in ("agent/", "repair/", "dependabot/"):
+        # but the sweeps ignore. Read from the workflow, so a prefix added to
+        # the shell alone is caught rather than assumed.
+        for prefix in sorted(_shell_gate_prefixes("merge-gate.yml")):
             with self.subTest(prefix=prefix):
                 self.assertTrue(
                     reconcile.pipeline_owns(prefix + "whatever-1"),
                     f"{prefix} is merged by the gate but unowned by the sweeps",
                 )
+
+    def test_every_prefix_the_fix_gate_accepts_is_fix_eligible_in_python(self):
+        # `fix_eligible` is the Python mirror of agent-fix.yml's own case
+        # statement — the named answer a future sweep should ask instead of
+        # copying `agent/`|`repair/` out of the workflow by eye.
+        for prefix in sorted(_shell_gate_prefixes("agent-fix.yml")):
+            with self.subTest(prefix=prefix):
+                self.assertTrue(
+                    reconcile.fix_eligible(prefix + "whatever-1"),
+                    f"{prefix} is dispatched to the fix agent by the workflow "
+                    "but fix_eligible() says otherwise",
+                )
+        # Narrow stays narrow: dependabot has no card to work, and Dependabot
+        # recreates its own conflicted PRs — handing it to the fix agent is
+        # the widening this split of predicates exists to prevent.
+        self.assertFalse(reconcile.fix_eligible("dependabot/npm/left-pad-1.0.0"))
+        self.assertTrue(reconcile.pipeline_owns("dependabot/npm/left-pad-1.0.0"))
 
 
 # ------------------------------------------------------------ the new sweep
@@ -192,7 +217,7 @@ class UnownedSweepTest(unittest.TestCase):
         # repair/ and dependabot/ PR as unowned. The merge gate merges all
         # three, so all three must stay silent — the sweep asks the BROAD
         # question on purpose.
-        for ref in ("agent/DRE-2425-x",
+        for ref in ("agent/DRE-2426-x",
                     "repair/" + "a" * 40,
                     "dependabot/npm_and_yarn/left-pad-1.0.0"):
             with self.subTest(ref=ref):
@@ -261,6 +286,43 @@ class UnownedSweepAdversarialTest(UnownedSweepTest):
             reconcile.flag_unowned_prs(now="2026-08-12T18:00:00Z")
         self.assertEqual(len(self.posted), 1,
                          "a later sweep re-reported an already-flagged PR")
+
+    def test_the_rename_it_suggests_is_not_the_doubled_card_id(self):
+        # agent-bureau #2041 verbatim. The ref already NAMES DRE-2405, just
+        # not where the gates read it — so recombining `agent/{card}-{tail}`
+        # blindly suggests `agent/DRE-2405-DRE-2405-dev-loads-ws-ingest`. That
+        # is the one case this notice was built for, and the one case where a
+        # human following it literally lands on a still-unowned name.
+        self.list_prs.return_value = [
+            _pr(2041, "fix/DRE-2405-dev-loads-ws-ingest",
+                updated="2026-08-12T00:00:00Z")]
+        reconcile.flag_unowned_prs(now="2026-08-12T14:00:00Z")
+        body = self.posted[0][1]
+        self.assertIn("`agent/DRE-2405-dev-loads-ws-ingest`", body)
+        self.assertNotIn("DRE-2405-DRE-2405", body)
+
+    def test_every_rename_it_suggests_is_itself_owned(self):
+        # The invariant behind the case above: a notice that hands back a name
+        # the pipeline still skips is worse than no notice at all.
+        for ref in (
+            "fix/DRE-2405-dev-loads-ws-ingest",   # card id in the tail
+            "fix/dev-loads-DRE-2405-ws-ingest",   # card id mid-slug
+            "fix/dre-2405-lowercase",             # card id in lower case
+            "fix/DRE-2405",                       # card id and nothing else
+            "DRE-2405-no-prefix-at-all",          # no `/` to split on
+            "fix/subscriptions-secret-drift",     # no card id at all
+            "hotfix",                             # neither
+        ):
+            with self.subTest(ref=ref):
+                want = reconcile._suggested_rename(ref, reconcile.branch_card(ref))
+                self.assertTrue(
+                    reconcile.pipeline_owns(want),
+                    f"{ref} -> {want}, which the pipeline still skips",
+                )
+                self.assertNotRegex(
+                    want, r"(?i)(DRE-\d+)[-_]\1",
+                    f"{ref} -> {want}: the card id is doubled",
+                )
 
     def test_a_renamed_branch_stops_being_reported(self):
         # The operator does the right thing; the sweep must go quiet.

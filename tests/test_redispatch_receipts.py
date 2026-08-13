@@ -66,7 +66,7 @@ def _dispatch_run_factory(rc: int, calls: list):
         # Read-only listings from OTHER backstops in the same sweep are not
         # this test's business — it asserts what the DISPATCH does. Answer
         # them with an empty result instead of failing, so registering a new
-        # sweep cannot break a test about a different one. (DRE-2425 added the
+        # sweep cannot break a test about a different one. (DRE-2426 added the
         # unowned-branch watchdog, which lists open PRs.)
         if argv[:2] == ["gh", "pr"]:
             return SimpleNamespace(returncode=0, stdout="[]", stderr="")
