@@ -600,6 +600,28 @@ jobs:
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
         run: rm -f /tmp/qa-verdict.md
 
+      # Back off before the retry (DRE-2429), same defect as verify.yml: the
+      # retry ran as the immediately following step, so a deterministic
+      # failure was simply re-issued at once and charged twice. 120s clears
+      # the transient class this retry exists for (token-mint blip, action
+      # startup, an API 5xx) and fits inside the 25-minute job timeout.
+      #
+      # This workflow is NOT rate-limit-prone the way verify.yml was: its
+      # token comes from the qa-bot App, whose installation has its own
+      # separate 5,000 req/hr bucket (DRE-1921) — which is why every QA
+      # Review run on agent-bureau PR #2045 succeeded while Verify died on
+      # installation 123249480. Do not "finish the job" by moving this
+      # workflow onto the dispatch pool; that would take the critic OFF a
+      # healthy dedicated bucket and ONTO the contended one.
+      #
+      # Gated identically to the retry it guards, so a healthy review never
+      # sleeps.
+      - name: Back off before the critic retry
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
+        run: |
+          echo "critic attempt 1 produced no verdict — waiting 120s before the retry"
+          sleep 120
+
       # NOTE: the with block below is intentionally duplicated from the
       # attempt-1 "Critic review" step and MUST be kept in sync with it.
       # GitHub Actions does NOT support YAML anchors / merge keys, so this
