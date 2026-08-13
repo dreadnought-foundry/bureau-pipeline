@@ -353,9 +353,13 @@ def card_repo(card: dict) -> str | None:
     return card_repo_slug(card.get("description") or "")
 
 
-def age_minutes(iso: str) -> float:
+def age_minutes(iso: str, now: str | None = None) -> float:
+    """Minutes since `iso`. `now` (an ISO string) makes the age testable
+    without freezing the clock — every existing caller omits it."""
     then = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    return (datetime.now(UTC) - then).total_seconds() / 60
+    at = (datetime.fromisoformat(now.replace("Z", "+00:00"))
+          if now else datetime.now(UTC))
+    return (at - then).total_seconds() / 60
 
 
 # The nudge loop's lanes — the pre-DRE-1993 sweep, byte-identical. The
@@ -528,6 +532,59 @@ def flag_stranded() -> set[str]:
 # loop-break (bureau-pipeline #50).
 PARKED_STATE = "Plan Review"
 _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
+
+
+# --- branch ownership: ONE definition, three named questions (DRE-2426) ------
+#
+# "Does automation touch this branch?" used to be hand-written eight times
+# across reconcile.py, merge-gate.yml, agent-fix.yml and linear-sync.yml — and
+# the eight copies gave FOUR different answers. On 2026-08-12 four PRs
+# (agent-bureau #2035/#2036/#2041, portico #270) sat up to ten hours holding
+# real REQUEST_CHANGES verdicts because every layer skipped hand-named
+# branches independently, INCLUDING this sweep, which exists to catch exactly
+# that. The operator found them by eye, twice.
+#
+# Three questions, deliberately NOT collapsed into one predicate: merging them
+# would silently widen each caller. `unstick_conflicts` must never hand a
+# dependabot PR to the fix agent (no card to work, and Dependabot recreates
+# its own conflicted PRs), so the narrow questions stay narrow. What changed
+# is that each one is now NAMED and defined here, instead of spelled out at
+# the call site where the next sweep copies it.
+CARD_BRANCH_PREFIXES = ("agent/",)
+FIX_BRANCH_PREFIXES = ("agent/", "repair/")
+PIPELINE_BRANCH_PREFIXES = ("agent/", "repair/", "dependabot/")
+
+
+def _has_prefix(head_ref: str | None, prefixes: tuple[str, ...]) -> bool:
+    return (head_ref or "").lower().startswith(prefixes)
+
+
+def card_branch(head_ref: str | None) -> bool:
+    """A card's OWN branch (`agent/…`) — the narrowest question, and the one
+    every sweep in this file used to ask inline."""
+    return _has_prefix(head_ref, CARD_BRANCH_PREFIXES)
+
+
+def fix_eligible(head_ref: str | None) -> bool:
+    """A branch `agent-fix.yml` will act on: `agent/` or `repair/`."""
+    return _has_prefix(head_ref, FIX_BRANCH_PREFIXES)
+
+
+def pipeline_owns(head_ref: str | None) -> bool:
+    """Will ANY automation touch this branch — merge gate, fix loop, sync?
+
+    The broad question, asked by :func:`flag_unowned_prs`. False means the PR
+    is invisible to the entire pipeline: no merge gate, no fix agent, no
+    automatic Done, and — before DRE-2426 — no sweep to notice either.
+    """
+    return _has_prefix(head_ref, PIPELINE_BRANCH_PREFIXES)
+
+
+#: Lines where the branch test may legitimately be spelled out, for the AST
+#: guard in tests/test_pipeline_ownership.py. Empty on purpose: `_has_prefix`
+#: uses a tuple, not a literal, so nothing needs an exemption. A new entry
+#: here should be argued for, not added to make a test pass.
+PIPELINE_OWNS_DEFINITION_LINES: frozenset[int] = frozenset()
 
 
 def branch_card(head_ref: str) -> str | None:
@@ -1262,7 +1319,7 @@ def unstick_conflicts() -> None:
     ) or "[]")
     pending = []  # agent PRs whose mergeable GitHub hasn't computed yet
     for pr in prs:
-        if not pr["headRefName"].startswith("agent/"):
+        if not card_branch(pr["headRefName"]):
             continue
         status = pr.get("mergeStateStatus")
         if status == "UNKNOWN":
@@ -1315,7 +1372,7 @@ def retrigger_dead_heads() -> None:
         "--json", "number,headRefName,mergeStateStatus,headRefOid",
     ) or "[]")
     for pr in prs:
-        if not pr["headRefName"].startswith("agent/") or pr.get("mergeStateStatus") == "DIRTY":
+        if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
         sha = pr["headRefOid"]
         total = gh("api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq", ".total_count")
@@ -1349,6 +1406,129 @@ def retrigger_dead_heads() -> None:
 # sat. False positive cost is one comment on the card, nothing else.
 NO_CHECKS_MINUTES = int(os.environ.get("NO_CHECKS_MINUTES", "30"))
 NO_CHECKS_TAG = "no-checks-watchdog"
+
+# --- unowned-branch watchdog (DRE-2426) --------------------------------------
+# A PR on a hand-named branch gets NO merge gate, NO fix agent and NO automatic
+# Done — and, until this sweep, no notice either, because every backstop in
+# this file skipped it exactly the same way. Four PRs sat up to ten hours like
+# that on 2026-08-12 holding real REQUEST_CHANGES verdicts; the operator found
+# them by eye. Noticing is not fixing: this reports and does nothing else.
+#
+# Two hours, not thirty minutes: a hand-named branch is a legitimate choice
+# (cardless hotfixes live there), so the sweep waits until the PR has plainly
+# stopped moving rather than greeting every push. The cost of a false positive
+# is one comment; the cost of firing too eagerly is a warning nobody reads,
+# which is the failure this whole card is about.
+UNOWNED_MINUTES = int(os.environ.get("UNOWNED_MINUTES", "120"))
+UNOWNED_MARKER = "unowned-branch-watchdog"
+
+
+def open_prs(limit: int = 50) -> list[dict]:
+    """Open PRs with the fields the watchdogs need.
+
+    Uses the SILENT ``gh`` with an empty-list fallback, the same shape every
+    sibling PR-level backstop uses and the case ``gh``'s own docstring blesses:
+    an unreadable listing means this sweep reports nothing, not that it invents
+    a finding. The sweep only ever ADDS a notice, so a blip costs one delayed
+    warning — and the next sweep is fifteen minutes away.
+    """
+    return json.loads(gh(
+        "pr", "list", "--repo", REPO, "--state", "open", "--limit", str(limit),
+        "--json", "number,headRefName,isDraft,updatedAt,comments",
+    ) or "[]")
+
+
+def comment_on_pr(number: int, body: str) -> None:
+    """One comment on a PR, through the write path that records failures."""
+    gh("pr", "comment", str(number), "--repo", REPO, "--body", body)
+
+
+def _suggested_rename(ref: str, card: str | None) -> str:
+    """The `agent/…` name that would put this PR back on the rail.
+
+    The card id is taken OUT of the ref's tail before it is put back in front:
+    `fix/DRE-2405-dev-loads-ws-ingest` (agent-bureau #2041, one of the four
+    strandings) must suggest `agent/DRE-2405-dev-loads-ws-ingest`, not the
+    doubled `agent/DRE-2405-DRE-2405-dev-loads-ws-ingest` a blind recombination
+    produces. A ref that NAMES a card in the wrong position is precisely the
+    case this notice exists for, so a suggestion that is itself still unowned
+    would fail the one reader it was written for.
+    """
+    slug = ref.split("/", 1)[-1] if "/" in ref else ref
+    if not card:
+        return "agent/DRE-<n>-<slug>"
+    # Only THIS card's id, anywhere in the tail and in any case — a second,
+    # different DRE-N in the slug is someone's deliberate cross-reference.
+    slug = re.sub(re.escape(card), "", slug, flags=re.IGNORECASE)
+    slug = re.sub(r"[-_]{2,}", "-", slug).strip("-_")
+    return f"agent/{card}-{slug}" if slug else f"agent/{card}-<slug>"
+
+
+def _unowned_notice(pr: dict) -> str:
+    ref = pr["headRefName"]
+    card = branch_card(ref)
+    want = _suggested_rename(ref, card)
+    names = (
+        f"This branch names **{card}**, but not in the position the pipeline reads."
+        if card else
+        "This branch carries no card id."
+    )
+    return (
+        f"⚠️ `{UNOWNED_MARKER}` — nothing is coming for this PR.\n\n"
+        f"`{ref}` is not an `agent/` branch, so the pipeline skips it at every "
+        f"layer:\n\n"
+        f"* **no merge gate** — it will never be merged automatically\n"
+        f"* **no fix agent** — a REQUEST_CHANGES verdict here is nobody's work\n"
+        f"* **no automatic Done** — the card stays open after you merge\n\n"
+        f"{names} All three gates read the head ref, anchored: "
+        f"`^agent/DRE-<n>-<slug>`.\n\n"
+        f"Either rename to `{want}` and the pipeline takes over, or expect to "
+        f"review, merge and close this by hand. Both are fine — this notice "
+        f"exists so the choice is deliberate rather than discovered hours "
+        f"later.\n\n"
+        f"_Posted once per PR. Renaming the branch silences it._"
+    )
+
+
+def flag_unowned_prs(now: str | None = None) -> None:
+    """DRE-2426 watchdog: report open PRs no automation will ever touch.
+
+    The gap this closes is not that hand-named branches exist — they are a
+    legitimate choice — but that choosing one was INVISIBLE. Every other
+    backstop in this file asks ``card_branch()`` and moves on, so the PR that
+    most needs a human is the one nothing mentions.
+    """
+    prs = open_prs()  # deliberately un-caught: fail closed, never "all clear"
+    for pr in prs:
+        try:
+            _flag_one_unowned_pr(pr, now=now)
+        except Exception as e:  # noqa: BLE001 — isolate one PR, sweep the rest
+            _write_failures.append(
+                f"unowned watchdog on PR #{pr.get('number')}: {e}"
+            )
+            print(
+                f"ERROR: unowned watchdog on PR #{pr.get('number')}: {e}",
+                file=sys.stderr,
+            )
+
+
+def _flag_one_unowned_pr(pr: dict, now: str | None = None) -> None:
+    """Evaluate ONE open PR and report it if the pipeline owns nothing here."""
+    if pipeline_owns(pr.get("headRefName")):
+        return  # automation has it — every other backstop applies
+    if pr.get("isDraft"):
+        return  # a draft is work in progress, not a stranding
+    updated = pr.get("updatedAt")
+    if not updated or age_minutes(updated, now=now) < UNOWNED_MINUTES:
+        return  # still moving; someone may be mid-push
+    bodies = [c.get("body") or "" for c in (pr.get("comments") or [])]
+    if any(UNOWNED_MARKER in b for b in bodies):
+        return  # said once, and once is the point
+    comment_on_pr(pr["number"], _unowned_notice(pr))
+    print(
+        f"unowned: PR #{pr['number']} ({pr['headRefName']}) has no owning "
+        f"automation and has not moved in {UNOWNED_MINUTES}m — reported"
+    )
 
 
 def flag_no_checks_prs() -> None:
@@ -1407,7 +1587,7 @@ def flag_no_checks_prs() -> None:
 
 def _flag_one_silent_pr(pr: dict) -> None:
     """Evaluate ONE open PR for flag_no_checks_prs and report if silent."""
-    if not pr["headRefName"].startswith("agent/") or pr.get("isDraft"):
+    if not card_branch(pr["headRefName"]) or pr.get("isDraft"):
         return
     sha = pr.get("headRefOid") or ""
     if not sha:
@@ -1478,7 +1658,7 @@ def fix_approved_but_red() -> None:
         "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
     ) or "[]")
     for pr in prs:
-        if not pr["headRefName"].startswith("agent/") or pr.get("mergeStateStatus") == "DIRTY":
+        if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
         # qa-bot-authored comments only (DRE-1998): a forged APPROVE must
         # not spawn agent-fix dispatches, and a forged trailing non-APPROVE
@@ -1549,7 +1729,7 @@ def retry_dead_fix_runs() -> None:
         "--json", "number,headRefName,mergeStateStatus,comments",
     ) or "[]")
     for pr in prs:
-        if not pr["headRefName"].startswith("agent/") or pr.get("mergeStateStatus") == "DIRTY":
+        if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
             continue
         worker = [
             c.get("body") or ""
@@ -1720,7 +1900,7 @@ def restart_answered_blockers() -> None:
         "--json", "number,headRefName,mergeStateStatus,comments",
     ) or "[]")
     for pr in prs:
-        if not pr["headRefName"].startswith("agent/"):
+        if not card_branch(pr["headRefName"]):
             continue
         if not _thread_worth_fetching(pr):
             continue
@@ -2219,7 +2399,7 @@ def recover_crashed_reviews() -> None:
     eligible = []  # crashed heads with retry budget, dispatched paced below
     for pr in prs:
         try:
-            if not (pr.get("headRefName") or "").startswith("agent/") or pr.get("isDraft"):
+            if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
                 continue
             if pr.get("mergeStateStatus") == "DIRTY":
                 continue  # unstick_conflicts owns conflicted PRs; the fix re-arms
@@ -2562,6 +2742,7 @@ def main(
             unstick_conflicts,
             retrigger_dead_heads,
             flag_no_checks_prs,
+            flag_unowned_prs,
             fix_approved_but_red,
             retry_dead_fix_runs,
             restart_answered_blockers,
