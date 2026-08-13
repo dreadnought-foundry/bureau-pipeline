@@ -158,7 +158,10 @@ agents:
     model: claude-sonnet-5  # top of the `advisory` ladder
     # END generated model
     trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
-    maxTurns: 60
+    # The FIRST attempt's ceiling (DRE-2429, was 60). The crash retry runs at
+    # 120 — a retry against the ceiling that just killed it cannot succeed —
+    # but the roster reports the budget a verify normally runs under.
+    maxTurns: 80
     maxBudget: 5
     tools: [Bash, Edit, Write, Read, Glob, Grep]
     briefPath: briefs/verifier.md

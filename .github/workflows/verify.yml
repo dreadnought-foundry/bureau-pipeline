@@ -91,7 +91,14 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.pull_request.head.ref, 'agent/'))
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, raised from 30 with the turn budgets (DRE-2429). This job can now
+    # run an 80-turn attempt, a 120s backoff and a 120-turn retry; leaving
+    # the clock at 30 would just convert an error_max_turns crash into a job
+    # TIMEOUT, which is strictly worse — a timeout cancels every remaining
+    # step including the `if: always()` neutral-status post and the loud
+    # failure the medic reads, so the PR would strand with no verdict and no
+    # explanation at all. Still well inside house norms (agent-task: 120).
+    timeout-minutes: 45
     env:
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
@@ -383,7 +390,7 @@ jobs:
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
-            --max-turns 60
+            --max-turns 80
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
@@ -516,8 +523,16 @@ jobs:
           # reconcile's workflow_dispatch runs initiate as the workflow token's
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
+          # STRICTLY LARGER than attempt 1's 80 (DRE-2429). Attempt 1 dying of
+          # error_max_turns is proof that 80 was too low for THIS card; a
+          # retry at the same ceiling re-runs the same review, on the same
+          # diff, into the same wall. --max-turns is a ceiling, not a target,
+          # so a verify that finishes in 18 turns still costs 18 turns — the
+          # bill only moves for the runs that currently die producing nothing.
+          # This is the ONE knob that differs between the two attempts; the
+          # rest of the block is still kept in sync with attempt 1.
           claude_args: |
-            --max-turns 60
+            --max-turns 120
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
