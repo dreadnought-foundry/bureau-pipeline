@@ -466,6 +466,18 @@ jobs:
           # model is the silently-weakened critic DRE-2317 exists to prevent.
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
+      # TURN BUDGET (DRE-2422). 80 here, 120 on the retry below — the retry
+      # MUST stay strictly higher. 40 was sized for an older, terser model;
+      # Sonnet 5 rides it. Portico's critic runs in one hour: 12, 18, 19, 31,
+      # 41(success), 41(error_max_turns). A run that SUCCEEDS at 41 has zero
+      # margin left, and PR #273 (7 files / +1184) fell off — twice, for
+      # $4.05 and no verdict, because the retry re-ran with the SAME ceiling
+      # and error_max_turns is deterministic. This is a CEILING, not a
+      # target: the 12- and 19-turn runs cost exactly what they cost before.
+      # Every sibling already sits higher (verify 60, agent-fix 60,
+      # red-main-repair 100, agent-task 150) — the one agent that must read
+      # the WHOLE diff before it may speak had the tightest budget in the
+      # fleet. Pinned by tests/test_critic_turn_budget.py.
       - name: Critic review
         id: critic
         if: steps.decide.outputs.review == 'true'
@@ -483,7 +495,7 @@ jobs:
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
-            --max-turns 40
+            --max-turns 80
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
@@ -605,6 +617,16 @@ jobs:
       # GitHub Actions does NOT support YAML anchors / merge keys, so this
       # cannot be DRY'd with `&anchor` / `<<: *anchor` — the runner would
       # fail to parse the file, breaking the critic in every consuming repo.
+      #
+      # --max-turns is the ONE intended difference (DRE-2422): 120 here
+      # against attempt 1's 80, and it must stay strictly higher. A retry
+      # exists to change the outcome, and error_max_turns is DETERMINISTIC —
+      # the same review over the same diff with the same ceiling dies at the
+      # same turn. Portico PR #273 proved it: two attempts, both dead at 41
+      # of 40, $4.05 spent, no verdict. A retry that comes back with no more
+      # of the resource it just exhausted is only a second invoice.
+      # Enforced by tests/test_critic_turn_budget.py, which also checks that
+      # nothing ELSE in these two blocks has drifted apart.
       - name: Critic review (retry)
         id: critic_retry
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
@@ -620,7 +642,7 @@ jobs:
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
-            --max-turns 40
+            --max-turns 120
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
