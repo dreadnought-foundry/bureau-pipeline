@@ -406,9 +406,9 @@ class DocstringOnlyPythonChangeTest(unittest.TestCase):
         # edit compares equal and lands in `docs`. That is the intended
         # reading — a comment is prose with no executable effect, exactly
         # like a docstring, and demanding a RED test for one produces the
-        # same vacuous test. (Linter/type-checker pragmas such as `# noqa`
-        # or `# type: ignore` ride this same path; they change tooling
-        # output, never runtime behaviour, and the lint job judges them.)
+        # same vacuous test. (Linter and type-checker pragmas ride this same
+        # path; they change tooling output, never runtime behaviour, and the
+        # lint job is what judges them.)
         self.assertTrue(
             check_tdd_commits.is_docs_only_python_change(
                 "VALUE = 1\n", "# why VALUE is 1\nVALUE = 1\n"
