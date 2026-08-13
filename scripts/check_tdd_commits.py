@@ -18,6 +18,21 @@ The rule (engineering standard: "commit the failing test FIRST"):
     ops  = `.github/` + `config/` + `agents.yaml`.
     Anything unrecognized counts as code — fail-closed, so a new source tree
     can't silently dodge the discipline.
+  • A `.py` file whose change is documentation is docs too (DRE-2409), and
+    that is decided by CONTENT, not by path: parse the commit's parent and
+    child versions, strip every docstring from both, and compare the
+    resulting syntax trees. Identical trees ⇒ nothing executable changed ⇒
+    docs. This repo keeps its architecture narrative in module docstrings,
+    so path-only classification demanded a RED test for a prose paragraph
+    (live: bp #145 / DRE-2409, one commit, `scripts/reconcile.py`, +7/-0) —
+    and the only test you can write for a paragraph is a vacuous one, which
+    the engineering standard separately bans. The rule is ungameable: any
+    real behaviour change moves the AST. It is also NOT a label — a
+    `docs-only` PR label would be a bypass the build agent could award
+    itself. Everything about it stays fail-closed: a file added or deleted
+    by the PR has no counterpart version and is code; source that fails to
+    parse on either side is code; a docstring edit riding beside a real edit
+    is code; non-`.py` paths are never AST-compared.
   • Dependabot-authored PRs are exempt (DRE-2049): a dependency bump has no
     behavior of its own to RED-test — its proof is the whole suite running
     against the bumped pins (the `unit` job installs from the manifest).
@@ -41,6 +56,7 @@ loud, never pass.
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -69,31 +85,112 @@ def is_dependabot_author(login: str | None) -> bool:
     return login.removeprefix("app/").removesuffix("[bot]") == "dependabot"
 
 
-def classify_path(path: str) -> str:
-    """One changed path → 'test' | 'docs' | 'ops' | 'code'."""
+class _DocstringStripper(ast.NodeTransformer):
+    """Drop the leading string expression from every scope that can hold a
+    docstring. What survives is the module's executable shape."""
+
+    def _strip(self, node):
+        self.generic_visit(node)
+        body = getattr(node, "body", None)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            node.body = body[1:]
+        return node
+
+    visit_Module = _strip
+    visit_FunctionDef = _strip
+    visit_AsyncFunctionDef = _strip
+    visit_ClassDef = _strip
+
+
+def _executable_shape(source: str) -> str | None:
+    """Python source → a canonical string of its docstring-free syntax tree,
+    or None if it will not parse. `ast.dump` omits line/column attributes, so
+    inserting prose (which shifts every line below it) leaves the shape
+    untouched — that is the whole point."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError):
+        # ValueError covers source containing null bytes; RecursionError,
+        # pathologically nested expressions. Unparseable ≠ unchanged.
+        return None
+    try:
+        return ast.dump(_DocstringStripper().visit(tree))
+    except RecursionError:
+        return None
+
+
+def is_docs_only_python_change(before: str | None, after: str | None) -> bool:
+    """True iff two versions of a Python file differ ONLY in documentation.
+
+    `before`/`after` are the file's contents on either side of the commit, or
+    None when the file does not exist there (added or deleted by the commit).
+    Missing counterpart, or source that will not parse on either side, is
+    False — the caller then falls through to `code`, which is the fail-closed
+    answer.
+
+    Comments ride the same path as docstrings, by design: `#` comments never
+    reach the AST, so a comment-only edit compares equal and lands in `docs`.
+    That is intended — a comment is prose with no executable effect, exactly
+    like a docstring, and demanding a RED test for one yields the same
+    vacuous test. Pure reformatting compares equal for the same reason and
+    for the same intended reason: it changes nothing that can be tested.
+    Anything that alters behaviour — a literal, an argument, an order of
+    statements — alters the tree and stays `code`."""
+    if before is None or after is None:
+        return False
+    shape_before = _executable_shape(before)
+    if shape_before is None:
+        return False
+    shape_after = _executable_shape(after)
+    if shape_after is None:
+        return False
+    return shape_before == shape_after
+
+
+def classify_path(
+    path: str, before: str | None = None, after: str | None = None
+) -> str:
+    """One changed path → 'test' | 'docs' | 'ops' | 'code'.
+
+    `before`/`after` are the file's two versions across the commit, supplied
+    only for `.py` paths the path rules would otherwise call `code`. Omitting
+    them keeps the pre-DRE-2409 path-only answer, which is the strict one."""
     if path.startswith(_TEST_PREFIXES):
         return "test"
     if path.startswith(_DOCS_PREFIXES) or path.endswith(".md"):
         return "docs"
     if path.startswith(_OPS_PREFIXES) or path in _OPS_FILES:
         return "ops"
+    if path.endswith(".py") and is_docs_only_python_change(before, after):
+        return "docs"
     return "code"
+
+
+def commit_categories(commit) -> set[str]:
+    """Every category one commit touches. A commit may carry a `sources` map
+    {path: (before, after)}; a commit without one classifies by path alone."""
+    sources = commit.get("sources") or {}
+    return {
+        classify_path(p, *sources.get(p, (None, None)))
+        for p in commit["paths"]
+    }
 
 
 def check_commits(commits) -> tuple[bool, str]:
     """Apply the ordering rule to an OLDEST-FIRST list of commit records
     (dicts with `sha`, `subject`, `paths`). Returns (ok, reason)."""
     first_code = next(
-        (i for i, c in enumerate(commits)
-         if any(classify_path(p) == "code" for p in c["paths"])),
+        (i for i, c in enumerate(commits) if "code" in commit_categories(c)),
         None,
     )
     if first_code is None:
         return True, "exempt: no non-test code changed (docs/ops/tests only)"
-    if any(
-        any(classify_path(p) == "test" for p in c["paths"])
-        for c in commits[:first_code]
-    ):
+    if any("test" in commit_categories(c) for c in commits[:first_code]):
         return True, "a test commit precedes the first implementation commit"
     return False, FAILURE_MESSAGE
 
@@ -104,10 +201,31 @@ def _git(*args: str) -> str:
     ).stdout
 
 
+def _blob(rev: str, path: str) -> str | None:
+    """`<rev>:<path>` as text, or None if it isn't there / isn't text.
+
+    Deliberately does NOT raise: a file the commit ADDS has no parent
+    version and a file it DELETES has no child version, and neither is a
+    broken checkout. None flows into is_docs_only_python_change, which
+    answers False, which lands the path on `code`."""
+    p = subprocess.run(
+        ["git", "show", f"{rev}:{path}"], capture_output=True
+    )
+    if p.returncode != 0:
+        return None
+    try:
+        return p.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def pr_commits(base: str, head: str):
-    """The PR's own commits, oldest first, each with its changed paths.
+    """The PR's own commits, oldest first, each with its changed paths and —
+    for the `.py` paths a path-only read would call code — both versions of
+    the file across the commit, so the AST-equivalence rule can see them.
     `base..head` excludes everything already on the base branch, and
-    --no-merges drops merge-from-main commits (not the PR's own work)."""
+    --no-merges drops merge-from-main commits (not the PR's own work).
+    Merges being excluded, `<sha>^` is the one unambiguous parent."""
     shas = _git(
         "rev-list", "--reverse", "--topo-order", "--no-merges",
         f"{base}..{head}",
@@ -118,10 +236,17 @@ def pr_commits(base: str, head: str):
         paths = _git(
             "diff-tree", "--no-commit-id", "--name-only", "-r", sha
         ).split("\n")
+        paths = [p for p in paths if p]
+        sources = {
+            p: (_blob(f"{sha}^", p), _blob(sha, p))
+            for p in paths
+            if p.endswith(".py") and classify_path(p) == "code"
+        }
         commits.append({
             "sha": sha,
             "subject": subject,
-            "paths": [p for p in paths if p],
+            "paths": paths,
+            "sources": sources,
         })
     return commits
 
@@ -142,7 +267,7 @@ def main(argv: list[str]) -> int:
         print(f"git failed: {e.stderr.strip()}", file=sys.stderr)
         return 2
     for c in commits:
-        cats = sorted({classify_path(p) for p in c["paths"]}) or ["empty"]
+        cats = sorted(commit_categories(c)) or ["empty"]
         print(f"{c['sha'][:7]} [{','.join(cats)}] {c['subject']}")
     ok, reason = check_commits(commits)
     print(reason)
