@@ -187,10 +187,24 @@ class UnownedSweepTest(unittest.TestCase):
         self.assertIn("agent/", body, "the fix must name the correct shape")
 
     def test_an_owned_pr_is_never_reported(self):
-        self.list_prs.return_value = [
-            _pr(1, "agent/DRE-2425-x", updated="2026-08-01T00:00:00Z")]
-        reconcile.flag_unowned_prs(now="2026-08-12T14:00:00Z")
-        self.assertEqual(self.posted, [])
+        # Found by mutation: asserting only `agent/` let a version through
+        # that used the NARROW predicate here and cheerfully reported every
+        # repair/ and dependabot/ PR as unowned. The merge gate merges all
+        # three, so all three must stay silent — the sweep asks the BROAD
+        # question on purpose.
+        for ref in ("agent/DRE-2425-x",
+                    "repair/" + "a" * 40,
+                    "dependabot/npm_and_yarn/left-pad-1.0.0"):
+            with self.subTest(ref=ref):
+                self.posted.clear()
+                self.list_prs.return_value = [
+                    _pr(1, ref, updated="2026-08-01T00:00:00Z")]
+                reconcile.flag_unowned_prs(now="2026-08-12T14:00:00Z")
+                self.assertEqual(
+                    self.posted, [],
+                    f"{ref} is merged by the gate — reporting it as unowned "
+                    "would put a false warning on every dependency PR",
+                )
 
     def test_a_fresh_unowned_pr_is_left_alone(self):
         # Someone opening a PR right now is mid-work, not stranded.
@@ -229,15 +243,24 @@ class UnownedSweepTest(unittest.TestCase):
 class UnownedSweepAdversarialTest(UnownedSweepTest):
     """Ways this sweep could become the next thing nobody reads."""
 
-    def test_it_does_not_report_the_same_pr_from_two_repos_sweeps(self):
-        # Every repo runs its own sweep against its own PR list; a PR belongs
-        # to exactly one. Pinned so a future fleet-wide list cannot double-post.
-        self.list_prs.return_value = [
-            _pr(2035, "fix/x", updated="2026-08-12T00:00:00Z")]
-        reconcile.flag_unowned_prs(now="2026-08-12T14:00:00Z")
-        reconcile.flag_unowned_prs(now="2026-08-12T14:30:00Z")
+    def test_a_later_sweep_sees_its_own_notice_and_stays_quiet(self):
+        # The sweep runs every ~15 minutes forever. Idempotence comes from
+        # re-reading the PR's comments, so the second listing must carry the
+        # notice the first one posted — model that rather than replaying a
+        # stale snapshot, or the test proves nothing about the real loop.
+        pr = _pr(2035, "fix/x", updated="2026-08-12T00:00:00Z")
+        self.list_prs.return_value = [pr]
+
+        def record(number, body):
+            self.posted.append((number, body))
+            pr["comments"].append({"body": body})   # what the next listing sees
+
+        with mock.patch.object(reconcile, "comment_on_pr", side_effect=record):
+            reconcile.flag_unowned_prs(now="2026-08-12T14:00:00Z")
+            reconcile.flag_unowned_prs(now="2026-08-12T14:30:00Z")
+            reconcile.flag_unowned_prs(now="2026-08-12T18:00:00Z")
         self.assertEqual(len(self.posted), 1,
-                         "a second sweep re-reported an already-flagged PR")
+                         "a later sweep re-reported an already-flagged PR")
 
     def test_a_renamed_branch_stops_being_reported(self):
         # The operator does the right thing; the sweep must go quiet.
