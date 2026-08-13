@@ -197,10 +197,9 @@ class DependabotExemptionTest(unittest.TestCase):
             self.assertFalse(check_tdd_commits.is_dependabot_author(login))
 
 
-class GitCliTest(unittest.TestCase):
-    """End-to-end against a real (temp) git repo, invoked the way the
-    workflow invokes it: `check_tdd_commits.py <base> <head>`. Exit 0 = pass,
-    1 = discipline violation, 2 = cannot evaluate (fail loud, never pass)."""
+class GitRepoMixin:
+    """A throwaway git repo plus the few helpers the end-to-end tests need.
+    Mixed into each TestCase that drives the real script over real commits."""
 
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
@@ -238,6 +237,12 @@ class GitCliTest(unittest.TestCase):
             [sys.executable, str(SCRIPT), base, head],
             cwd=self.repo, capture_output=True, text=True, env=env,
         )
+
+
+class GitCliTest(GitRepoMixin, unittest.TestCase):
+    """End-to-end against a real (temp) git repo, invoked the way the
+    workflow invokes it: `check_tdd_commits.py <base> <head>`. Exit 0 = pass,
+    1 = discipline violation, 2 = cannot evaluate (fail loud, never pass)."""
 
     def test_test_first_branch_exits_0(self):
         self.git("checkout", "-q", "-b", "agent/DRE-1-x")
@@ -299,6 +304,351 @@ class GitCliTest(unittest.TestCase):
         self.add_commit("scripts/widget.py", "fix(DRE-5): impl first")
         p = self.run_check(author="alice")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+
+# --- fixtures for the AST-equivalence classifier (DRE-2409) --------------
+#
+# One .py file in four versions: a baseline, a prose-only rewrite, a
+# prose-plus-behaviour rewrite, and a behaviour-only rewrite.
+
+_PY_BASE = '''"""Widget.
+
+Old prose.
+"""
+
+VALUE = 1
+
+
+def widget(x):
+    """Return x plus the value."""
+    return x + VALUE
+'''
+
+_PY_PROSE_ONLY = '''"""Widget.
+
+Rewritten prose, several new paragraphs, a worked example, and a note about
+why the module looks the way it does.
+"""
+
+VALUE = 1
+
+
+def widget(x):
+    """Return x plus the value.
+
+    Now with an explanation nobody can test.
+    """
+    return x + VALUE
+'''
+
+_PY_PROSE_AND_CODE = '''"""Widget.
+
+Rewritten prose.
+"""
+
+VALUE = 2
+
+
+def widget(x):
+    """Return x plus the value.
+
+    Now with an explanation nobody can test.
+    """
+    return x + VALUE
+'''
+
+_PY_CODE_ONLY = '''"""Widget.
+
+Old prose.
+"""
+
+VALUE = 1
+
+
+def widget(x):
+    """Return x plus the value."""
+    return x - VALUE
+'''
+
+
+class DocstringOnlyPythonChangeTest(unittest.TestCase):
+    """DRE-2409: this repo keeps its architecture narrative in module
+    DOCSTRINGS, not only in .md files. Classifying by path alone meant a
+    seven-line prose paragraph appended to `scripts/reconcile.py` was read as
+    implementation and a RED test was demanded for it (live: bp #145) — and
+    the only test you can write for a paragraph is a vacuous one, which the
+    engineering standard separately bans.
+
+    The classifier therefore compares the two versions' ABSTRACT SYNTAX TREES
+    with every docstring stripped. Identical trees ⇒ nothing executable
+    changed ⇒ documentation. This is ungameable: any real behaviour change
+    moves the AST. Everything else stays fail-closed to `code`."""
+
+    def test_prose_only_rewrite_is_documentation(self):
+        self.assertTrue(
+            check_tdd_commits.is_docs_only_python_change(_PY_BASE, _PY_PROSE_ONLY)
+        )
+
+    def test_prose_plus_behaviour_is_not_documentation(self):
+        # The hole that would matter: a real edit smuggled in beside a
+        # docstring rewrite must still demand a RED test.
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change(_PY_BASE, _PY_PROSE_AND_CODE)
+        )
+
+    def test_behaviour_only_change_is_not_documentation(self):
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change(_PY_BASE, _PY_CODE_ONLY)
+        )
+
+    def test_comment_only_change_is_documentation(self):
+        # Deliberate: `#` comments never reach the AST, so a comment-only
+        # edit compares equal and lands in `docs`. That is the intended
+        # reading — a comment is prose with no executable effect, exactly
+        # like a docstring, and demanding a RED test for one produces the
+        # same vacuous test. (Linter/type-checker pragmas such as `# noqa`
+        # or `# type: ignore` ride this same path; they change tooling
+        # output, never runtime behaviour, and the lint job judges them.)
+        self.assertTrue(
+            check_tdd_commits.is_docs_only_python_change(
+                "VALUE = 1\n", "# why VALUE is 1\nVALUE = 1\n"
+            )
+        )
+
+    def test_non_docstring_string_literal_change_is_not_documentation(self):
+        # A string that is not in docstring position is data the code uses —
+        # a message, a path, a SQL fragment. It stays `code`.
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change(
+                'MSG = "old"\n', 'MSG = "new"\n'
+            )
+        )
+
+    def test_statement_reordering_is_not_documentation(self):
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change(
+                "a()\nb()\n", "b()\na()\n"
+            )
+        )
+
+    def test_added_file_has_no_base_version_and_is_not_documentation(self):
+        # A file the PR ADDS has no `before`. New source is new behaviour.
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change(None, _PY_BASE)
+        )
+
+    def test_deleted_file_has_no_head_version_and_is_not_documentation(self):
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change(_PY_BASE, None)
+        )
+
+    def test_both_versions_missing_is_not_documentation(self):
+        self.assertFalse(check_tdd_commits.is_docs_only_python_change(None, None))
+
+    def test_unparseable_base_fails_closed_to_code(self):
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change("def (\n", _PY_BASE)
+        )
+
+    def test_unparseable_head_fails_closed_to_code(self):
+        # Also the shape that matters most: a syntax error must never be
+        # waved through as "no AST difference we could find".
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change(_PY_BASE, "def (\n")
+        )
+
+    def test_both_unparseable_fails_closed_to_code(self):
+        self.assertFalse(
+            check_tdd_commits.is_docs_only_python_change("def (\n", "def (\n")
+        )
+
+
+class ClassifyPathWithContentTest(unittest.TestCase):
+    """`classify_path` gains optional before/after source. Without it the
+    path-only rules are unchanged — that default is what every other caller
+    and every pre-DRE-2409 test relies on."""
+
+    def test_python_prose_only_change_classifies_as_docs(self):
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/reconcile.py", _PY_BASE, _PY_PROSE_ONLY
+            ),
+            "docs",
+        )
+
+    def test_python_prose_plus_code_change_stays_code(self):
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/reconcile.py", _PY_BASE, _PY_PROSE_AND_CODE
+            ),
+            "code",
+        )
+
+    def test_no_content_supplied_still_means_code(self):
+        # Regression guard on the fail-closed default: a caller that cannot
+        # produce the two versions gets the old, strict answer.
+        self.assertEqual(
+            check_tdd_commits.classify_path("scripts/reconcile.py"), "code"
+        )
+
+    def test_test_tree_python_stays_test_even_when_prose_only(self):
+        # Path rules are checked first: a docstring tweak under tests/ is
+        # still a test commit, not a docs commit.
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "tests/test_widget.py", _PY_BASE, _PY_PROSE_ONLY
+            ),
+            "test",
+        )
+
+    def test_non_python_file_is_never_ast_compared(self):
+        # Identical content on a non-.py path must not become `docs` — only
+        # Python has an AST we can prove equivalence with.
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/deploy.sh", "echo hi\n", "echo hi\n"
+            ),
+            "code",
+        )
+
+
+class CommitCategoriesTest(unittest.TestCase):
+    """The per-commit rollup the ordering rule consumes. Commits may carry a
+    `sources` map {path: (before, after)}; commits without one behave exactly
+    as they did before DRE-2409."""
+
+    def _commit(self, paths, sources=None, subject="a commit"):
+        rec = {"sha": "f" * 40, "subject": subject, "paths": list(paths)}
+        if sources is not None:
+            rec["sources"] = sources
+        return rec
+
+    def test_prose_only_python_commit_is_docs_and_needs_no_red_test(self):
+        # bp #145 exactly: one commit, one .py file, docstring only.
+        ok, reason = check_tdd_commits.check_commits([
+            self._commit(
+                ["scripts/reconcile.py"],
+                {"scripts/reconcile.py": (_PY_BASE, _PY_PROSE_ONLY)},
+                "docs(DRE-2409): note the restart in the sweep's own summary",
+            ),
+        ])
+        self.assertTrue(ok, reason)
+
+    def test_prose_plus_code_commit_still_demands_a_red_test(self):
+        ok, reason = check_tdd_commits.check_commits([
+            self._commit(
+                ["scripts/reconcile.py"],
+                {"scripts/reconcile.py": (_PY_BASE, _PY_PROSE_AND_CODE)},
+                "feat: prose and behaviour together",
+            ),
+        ])
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
+
+    def test_prose_only_python_beside_a_real_source_file_stays_code(self):
+        # A PR touching a docstring AND a real source file is code.
+        ok, reason = check_tdd_commits.check_commits([
+            self._commit(
+                ["scripts/reconcile.py", "scripts/widget.py"],
+                {
+                    "scripts/reconcile.py": (_PY_BASE, _PY_PROSE_ONLY),
+                    "scripts/widget.py": (_PY_BASE, _PY_CODE_ONLY),
+                },
+                "feat: docstring here, behaviour there",
+            ),
+        ])
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
+
+    def test_commit_without_sources_is_unchanged(self):
+        ok, _ = check_tdd_commits.check_commits([
+            self._commit(["scripts/widget.py"], None, "fix: impl first"),
+        ])
+        self.assertFalse(ok)
+
+
+class AstDocsCliTest(GitRepoMixin, unittest.TestCase):
+    """DRE-2409 end-to-end, over real commits in a real repo — the classifier
+    is only worth anything if `pr_commits` actually hands it both versions."""
+
+    def seed_python(self):
+        self.write("scripts/widget.py", _PY_BASE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "feat: seed widget")
+
+    def test_docstring_only_commit_exits_0(self):
+        # The live shape of bp #145: one commit, one .py file, +7/-0 of prose.
+        self.seed_python()
+        self.git("checkout", "-q", "-b", "agent/DRE-2409-prose")
+        self.write("scripts/widget.py", _PY_PROSE_ONLY)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "docs(DRE-2409): expand the narrative")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("docs", p.stdout)
+
+    def test_docstring_plus_code_commit_exits_1(self):
+        self.seed_python()
+        self.git("checkout", "-q", "-b", "agent/DRE-2409-mixed")
+        self.write("scripts/widget.py", _PY_PROSE_AND_CODE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "docs: prose (and a quiet behaviour change)")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_added_python_file_exits_1(self):
+        # No base version to compare against — new source, RED test required.
+        self.git("checkout", "-q", "-b", "agent/DRE-2409-added")
+        self.write("scripts/brand_new.py", _PY_BASE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "feat: brand new module")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_deleted_python_file_exits_1(self):
+        self.seed_python()
+        self.git("checkout", "-q", "-b", "agent/DRE-2409-deleted")
+        self.git("rm", "-q", "scripts/widget.py")
+        self.git("commit", "-q", "-m", "chore: drop widget")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_unparseable_python_exits_1_not_2(self):
+        # A syntax error must land as a discipline violation, never be
+        # waved through as documentation.
+        self.seed_python()
+        self.git("checkout", "-q", "-b", "agent/DRE-2409-broken")
+        self.write("scripts/widget.py", "def (\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "wip: broken")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_docstring_change_beside_a_real_source_change_exits_1(self):
+        self.seed_python()
+        self.write("scripts/other.py", _PY_BASE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "feat: seed other")
+        self.git("checkout", "-q", "-b", "agent/DRE-2409-two-files")
+        self.write("scripts/widget.py", _PY_PROSE_ONLY)
+        self.write("scripts/other.py", _PY_CODE_ONLY)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "docs: prose here, behaviour there")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_prose_commit_before_a_red_test_still_passes(self):
+        # Ordering is unaffected: a docs-classified .py commit is not the
+        # "first code commit", so a later test → fix pair still reads clean.
+        self.seed_python()
+        self.git("checkout", "-q", "-b", "agent/DRE-2409-order")
+        self.write("scripts/widget.py", _PY_PROSE_ONLY)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "docs: narrative")
+        self.add_commit("tests/test_widget.py", "test(DRE-2409): RED")
+        self.add_commit("scripts/thing.py", "fix(DRE-2409): green")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
 
 class WorkflowWiringTest(unittest.TestCase):
