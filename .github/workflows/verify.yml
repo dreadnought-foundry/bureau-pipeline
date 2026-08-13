@@ -56,6 +56,26 @@ on:
         required: true
       BUREAU_QA_APP_PRIVATE_KEY:
         required: true
+      # Dispatch-pool workers (DRE-2013), wired in here by DRE-2429: the
+      # verifier's github_token used to come from the single original app
+      # (installation 123249480). That bucket sits near its 5,000 req/hr
+      # ceiling in steady state, and claude-code-action authenticates in its
+      # PREFLIGHT — so an exhausted bucket kills the Verifier before the
+      # model is ever reached (agent-bureau PR #2045, four times in one
+      # hour). ALL optional: a repo without these pairs runs on the original
+      # app exactly as before.
+      BUREAU_APP_ID_2:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_2:
+        required: false
+      BUREAU_APP_ID_3:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_3:
+        required: false
+      BUREAU_APP_ID_4:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_4:
+        required: false
 
 jobs:
   verify:
@@ -72,7 +92,19 @@ jobs:
       startsWith(github.event.pull_request.head.ref, 'agent/'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # The secrets context is not readable in a step-level `if:`, so the
+      # dispatch-pool probe mints check slot PRESENCE via these job-env
+      # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
+      # and the pool shrinks (DRE-2013 graceful degradation).
+      BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+      BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+      BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     steps:
+      # Boot token: the ORIGINAL app (pool slot 1). Used for the checkouts,
+      # the PR resolve and the scope gate (a handful of requests) and as
+      # slot 1's /rate_limit probe; the VERIFIER itself — the quota-heavy
+      # part — runs on the selected worker token minted further down.
       - name: Mint bot token
         id: app
         uses: actions/create-github-app-token@v3
@@ -191,13 +223,98 @@ jobs:
         run: |
           echo "Card ${{ steps.pr.outputs.card }} is single-system, non-UI — Verifier does not run. No verdict posted; merge is not gated on a Verifier PASS for this PR."
 
+      # ---- Dispatch-pool worker selection (DRE-2013, wired here by DRE-2429) ----
+      # Four worker-identical GitHub Apps (agent-bureau-bot + -2/-3/-4) give
+      # four independent 5,000 req/hr REST quota buckets. Mint a probe token
+      # per CONFIGURED pool app — absent secrets skip the step and just
+      # shrink the pool; continue-on-error so a broken pool app can never
+      # fail a verify — then let dispatch_pool.py read each bucket's
+      # /rate_limit (that endpoint is quota-exempt, so probing costs nothing)
+      # and pick the app with the MOST remaining core quota. That is the
+      # whole fix for the PR #2045 class: the selector walks away from a
+      # drained bucket on its own, without anyone having to notice.
+      #
+      # Gated on the scope decision (red-main-repair.yml's pattern): an
+      # out-of-scope verify skips the Verifier entirely, so it must not spend
+      # three token mints on a pool it will never use.
+      #
+      # The selector only ever sees app ids + probe tokens, NEVER private
+      # keys, and only outputs WHICH slot to use; the worker mint below maps
+      # that slot to its secret pair explicitly (Actions can't index secrets
+      # dynamically). Slot 1 is the original app and its probe is the boot
+      # token — a repo without the new secrets degrades to a single-app pool
+      # and behaves exactly as before.
+      - name: Mint pool probe token (2)
+        id: probe_2
+        if: steps.scope.outputs.in_scope == 'true' && env.BUREAU_APP_ID_2 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_2 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+      - name: Mint pool probe token (3)
+        id: probe_3
+        if: steps.scope.outputs.in_scope == 'true' && env.BUREAU_APP_ID_3 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_3 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+      - name: Mint pool probe token (4)
+        id: probe_4
+        if: steps.scope.outputs.in_scope == 'true' && env.BUREAU_APP_ID_4 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_4 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
+
+      - name: Select dispatch-pool app
+        id: pool
+        if: steps.scope.outputs.in_scope == 'true'
+        env:
+          BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+          BUREAU_POOL_TOKEN: ${{ steps.app.outputs.token }}
+          BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          BUREAU_POOL_TOKEN_2: ${{ steps.probe_2.outputs.token }}
+          BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          BUREAU_POOL_TOKEN_3: ${{ steps.probe_3.outputs.token }}
+          BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          BUREAU_POOL_TOKEN_4: ${{ steps.probe_4.outputs.token }}
+          # Deterministic fallback key on read failure: the card (PR number
+          # when the branch carries no DRE-N), so a re-run of the same PR
+          # picks the same slot instead of scattering across buckets.
+          BUREAU_POOL_KEY: verify:${{ steps.pr.outputs.card || steps.pr.outputs.number }}
+        run: |
+          python3 .bureau-pipeline/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
+
+      # Worker token: minted from the SELECTED pool app. Explicit per-N map
+      # (Actions can't index secrets dynamically); each clause yields '' when
+      # not selected — or when a selected slot's secrets are unexpectedly
+      # empty — so the chain always falls through to the original app pair.
+      - name: Mint worker token (selected pool app)
+        id: worker
+        if: steps.scope.outputs.in_scope == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
       # Product-specific environment so the agent can actually RUN the app
       # (dev server / DB / toolchains). Optional by design — same setup.sh the
       # engineer uses; a repo that needs nothing ships none.
       - name: Product environment setup (optional)
         if: steps.scope.outputs.in_scope == 'true'
         env:
-          BOT_TOKEN: ${{ steps.app.outputs.token }}
+          BOT_TOKEN: ${{ steps.worker.outputs.token }}
         run: |
           if [ -f .github/bureau/setup.sh ]; then
             bash .github/bureau/setup.sh
@@ -259,7 +376,7 @@ jobs:
         with:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.worker.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
           # push fires synchronize as agent-bureau-qa-bot (DRE-2037). github-actions:
           # reconcile's workflow_dispatch runs initiate as the workflow token's
@@ -356,6 +473,29 @@ jobs:
         if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
         run: rm -f /tmp/verify-verdict.md
 
+      # Back off before the retry (DRE-2429). This step used to not exist:
+      # the retry ran as the immediately following step, and on PR #2045 the
+      # two rate-limit 403s are 1.7 SECONDS apart. A retry that re-issues an
+      # identical request that fast is not a retry — it is the same failed
+      # call charged twice, and it burns another slice of the very bucket
+      # that just refused it.
+      #
+      # 120s, not longer: the failure this retry actually exists for is the
+      # transient class (token-mint blip, action startup, an API 5xx), and
+      # two minutes clears that comfortably. The rate-limit class is fixed
+      # ABOVE, by the pool — an installation bucket resets on a fixed hourly
+      # boundary, so no sleep that fits inside this job's 30-minute timeout
+      # can wait one out. Choosing a bucket with headroom can; sleeping
+      # cannot. Scheduling past the reset instant is DRE-2428 slice 2.
+      #
+      # Gated identically to the retry it guards, so a healthy verify never
+      # sleeps.
+      - name: Back off before the verifier retry
+        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
+        run: |
+          echo "verifier attempt 1 produced no verdict — waiting 120s before the retry"
+          sleep 120
+
       # NOTE: the with block below is intentionally duplicated from the
       # attempt-1 "Verifier run" step and MUST be kept in sync with it. GitHub
       # Actions does not support YAML anchors / merge keys, so this cannot be
@@ -370,7 +510,7 @@ jobs:
         with:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.worker.outputs.token }}
           # qa-bot included for the DRE-1924 skew-guard: merge-gate's update-branch
           # push fires synchronize as agent-bureau-qa-bot (DRE-2037). github-actions:
           # reconcile's workflow_dispatch runs initiate as the workflow token's
