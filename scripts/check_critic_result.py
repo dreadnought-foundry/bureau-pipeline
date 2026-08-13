@@ -29,6 +29,10 @@ VERDICT: value plus the mandated `## Summary` section), and the run must show
 real work (num_turns > 1). Every other is_error is rejected exactly as before,
 so the auth-death fingerprint is untouched.
 
+On any is_error the gate also prints WHY, from the execution file's own
+result record (DRE-2435, see execution_result.py) — a whitelist of scalar
+fields, never the transcript.
+
 Called from qa-review.yml after each critic attempt:
 
     python3 check_critic_result.py <execution-json-path> <verdict-path>
@@ -39,8 +43,15 @@ Exit 0 when a real verdict exists (post it). Exit 1 on crash/no-verdict
 
 from __future__ import annotations
 
-import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from execution_result import (  # noqa: E402
+    load_execution as _load_execution,
+    print_failure_detail,
+)
 
 
 # The only crash whose verdict may still be believed (DRE-2422). Every other
@@ -138,22 +149,6 @@ def verdict_is_real(execution: dict | None, verdict_path: str) -> bool:
     return _verdict_line_present(text)
 
 
-def _load_execution(path: str) -> dict | None:
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    # The action writes either a single result object or a message list
-    # ending with the result record (matches check_agent_result.py).
-    if isinstance(data, list):
-        for entry in reversed(data):
-            if isinstance(entry, dict) and "is_error" in entry:
-                return entry
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def main(argv: list[str]) -> int:
     exec_path, verdict_path = (argv + ["", ""])[:2]
     execution = _load_execution(exec_path)
@@ -169,6 +164,7 @@ def main(argv: list[str]) -> int:
                 "complete verdict, so it stands (DRE-2422). Raise "
                 "--max-turns if this recurs."
             )
+            print_failure_detail(execution, "critic result gate")
         else:
             print("critic result gate: ok — real verdict")
         return 0
@@ -177,6 +173,11 @@ def main(argv: list[str]) -> int:
             "critic result gate: FAIL — execution result has is_error=true "
             f"(subtype={execution.get('subtype')!r})"
         )
+        # DRE-2435: and WHY, in the run's own words. Without this the log
+        # shows only 1 turn / $0 — which reads identically for an expired
+        # token, an overloaded API, a refusal and a bad model id. That
+        # ambiguity sent people credential-hunting for days.
+        print_failure_detail(execution, "critic result gate")
     else:
         print("critic result gate: FAIL — no usable verdict file")
     return 1

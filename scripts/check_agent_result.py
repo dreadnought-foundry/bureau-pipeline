@@ -19,13 +19,25 @@ Exit 0 otherwise. An honest blocker note OR an honest escalation note (the
 agent intentionally stopped to ask the CEO a decision — DRE-1655) is
 working-as-designed; absence of the result file alone is not failure (action
 versions move it) when the run left real evidence (branch, PR, or note).
+
+Whenever the result says is_error, the gate also prints WHY, from the
+execution file's own result record (DRE-2435, see execution_result.py) — a
+whitelist of scalar fields, never the transcript. It prints on the
+--ignore-is-error path too: that is the death the Report step REQUEUES
+silently, so this log line is the only trace it leaves behind.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from execution_result import (  # noqa: E402
+    load_execution as _load_execution,
+    print_failure_detail,
+)
 
 
 def is_error_death(execution: dict | None) -> bool:
@@ -77,22 +89,6 @@ def failure_reason(
     return None
 
 
-def _load_execution(path: str) -> dict | None:
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    # The action writes either a single result object or a message list
-    # ending with the result record.
-    if isinstance(data, list):
-        for entry in reversed(data):
-            if isinstance(entry, dict) and "is_error" in entry:
-                return entry
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def main(argv: list[str]) -> int:
     # Optional trailing --ignore-is-error flag (DRE-1354): the Report step owns
     # the is_error→model-fallback requeue, so the gate should not hard-fail on it
@@ -120,8 +116,15 @@ def main(argv: list[str]) -> int:
     def _has_note(path: str) -> bool:
         return bool(path) and os.path.isfile(path) and os.path.getsize(path) > 0
 
+    execution = _load_execution(exec_path)
+    # DRE-2435: say why the run died before saying what we do about it. This
+    # runs whatever the gate decides — an is_error the Report step requeues
+    # (--ignore-is-error) still leaves the log as its only evidence, and
+    # "1 turn, $0" alone reads identically for an expired token, an
+    # overloaded API, a refusal and a bad model id.
+    print_failure_detail(execution, "agent result gate")
     reason = failure_reason(
-        _load_execution(exec_path),
+        execution,
         branch_exists=bool(branch.strip()),
         pr_exists=bool(pr_url.strip()) and pr_url.strip() != "null",
         blocker_note=bool(blocker_file) and os.path.isfile(blocker_file),
