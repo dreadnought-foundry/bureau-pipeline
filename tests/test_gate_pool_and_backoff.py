@@ -52,6 +52,19 @@ POOL_SLOTS = [2, 3, 4]
 MIN_BACKOFF_SECONDS = 60
 
 _SLEEP_RE = re.compile(r"\bsleep\s+(\d+)\b")
+_MAX_TURNS_RE = re.compile(r"--max-turns\s+(\d+)")
+
+# Neither gate's budget may drop below this. The qa-review turn-budget PR
+# asserts the same literal floor against verify.yml from its side, so the two
+# changes cannot break each other: raising is always safe, lowering is not.
+TURN_BUDGET_FLOOR = 60
+
+# A crashed verify must reach its own crash handling. `timeout-minutes` is a
+# JOB cap: when it fires, the runner cancels every remaining step — including
+# the `if: always()` neutral-status post and the loud failure the medic reads.
+# A timeout is therefore strictly WORSE than a clean error_max_turns, so the
+# budget below has to fit inside the clock with room to spare.
+MIN_JOB_TIMEOUT_MINUTES = 45
 
 
 def load(filename):
@@ -288,6 +301,70 @@ class RetryBacksOffTest(unittest.TestCase):
     def test_qa_review_backs_off_before_the_critic_retry(self):
         self.assert_backoff_between(
             "qa-review.yml", "review", "gate1", "critic_retry"
+        )
+
+
+class VerifyRetryChangesTheTurnBudgetTest(unittest.TestCase):
+    """The turn-budget half of 'a retry must change something'.
+
+    verify.yml ran both attempts at `--max-turns 60`. A verifier that dies of
+    error_max_turns has proved the ceiling is too low for that card, and
+    re-running it against the same ceiling on the same diff dies in the same
+    place — the failure that burned $4.05 on portico #273 for the critic,
+    whose sampled turn counts that hour were 12, 18, 19, 31, 41 (survived
+    with zero margin), 41 (died), 41 (died). One survivor was luck.
+
+    --max-turns is a CEILING, not a target: a run that finishes in 18 turns
+    costs exactly what it costs today. Raising it only moves the bill for
+    runs that currently die having produced nothing at all.
+    """
+
+    WF, JOB = "verify.yml", "verify"
+
+    def budgets(self):
+        """[(step id, max-turns)] for both agent steps, in step order."""
+        out = []
+        for s in steps(self.WF, self.JOB):
+            if "claude-code-action" not in (s.get("uses") or ""):
+                continue
+            found = _MAX_TURNS_RE.findall((s.get("with") or {}).get("claude_args", ""))
+            self.assertEqual(
+                len(found), 1,
+                f"{self.WF}: step {s.get('id')!r} must set --max-turns once",
+            )
+            out.append((s.get("id"), int(found[0])))
+        self.assertEqual(len(out), 2, f"{self.WF}: expected attempt + retry")
+        return out
+
+    def test_the_retry_budget_is_strictly_higher_than_the_first_attempt(self):
+        (first_id, first), (retry_id, retry) = self.budgets()
+        self.assertGreater(
+            retry, first,
+            f"{self.WF}: {retry_id} retries at --max-turns {retry} while "
+            f"{first_id} already failed at {first}. Against error_max_turns "
+            "an identical budget cannot succeed — the retry re-runs the same "
+            "review, on the same diff, into the same ceiling.",
+        )
+
+    def test_neither_budget_drops_below_the_floor(self):
+        for step_id, budget in self.budgets():
+            self.assertGreaterEqual(
+                budget, TURN_BUDGET_FLOOR,
+                f"{self.WF}: {step_id} budget {budget} is below the agreed "
+                f"floor of {TURN_BUDGET_FLOOR}",
+            )
+
+    def test_the_job_clock_can_actually_reach_the_larger_budget(self):
+        # Raising the budget without raising the clock just trades an
+        # error_max_turns crash for a job timeout — and a timeout is worse:
+        # it cancels the neutral-status post, so the PR strands with no
+        # verdict and no explanation instead of a loud, medic-visible one.
+        timeout = load(self.WF)["jobs"][self.JOB].get("timeout-minutes")
+        self.assertIsNotNone(timeout, f"{self.WF}: job must cap its runtime")
+        self.assertGreaterEqual(
+            timeout, MIN_JOB_TIMEOUT_MINUTES,
+            f"{self.WF}: timeout-minutes={timeout} cannot fit an attempt, a "
+            "backoff and a strictly larger retry",
         )
 
 
