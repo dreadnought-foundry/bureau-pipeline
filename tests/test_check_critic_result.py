@@ -98,6 +98,156 @@ class VerdictIsRealTest(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# DRE-2422 — the max-turns exception.
+#
+# Portico PR #273 (2026-08-13) burned $4.05 across two critic attempts and
+# produced no verdict. Both attempts ended:
+#
+#     "subtype": "error_max_turns", "is_error": true, "num_turns": 41
+#
+# `error_max_turns` is a fundamentally different animal from the auth-death
+# this gate was built for. The auth death (2026-06-13, and again in the
+# 2026-08-09 Fable fleet outage) is a CONTENT-FREE crash: ~634ms, 1 turn,
+# $0 inference, nothing written. `error_max_turns` is the opposite — a
+# genuine multi-minute review that did real work and may already have
+# written its finished verdict before the ceiling cut it off.
+#
+# Discarding that verdict throws away a completed review AND the money that
+# bought it. So the gate accepts it — but ONLY under conditions a
+# content-free crash can never satisfy:
+#
+#   * subtype must be exactly `error_max_turns`. EVERY other is_error stays
+#     hard-rejected, so the auth-death fingerprint is untouched.
+#   * the run must show real work (num_turns > 1).
+#   * the verdict must be COMPLETE, not mid-thought: a VERDICT: line
+#     declaring one of the two legal values, plus the `## Summary` section
+#     the critic prompt mandates.
+#
+# The write is what makes this safe to decide: the critic emits the verdict
+# in ONE `Write` tool call as its closing act. A tool call is atomic — it
+# either happened in full or not at all — so there is no half-written
+# verdict to mistake for a finished one. A review cut off mid-thought has
+# no file, or a file with no VERDICT: line; either way it is rejected below
+# and the workflow retries exactly as it does today.
+# ---------------------------------------------------------------------------
+
+# The real shape of the PR #273 failure (portico run 31655143148).
+MAX_TURNS_CRASH = {
+    "subtype": "error_max_turns",
+    "is_error": True,
+    "num_turns": 41,
+    "total_cost_usd": 2.0498711,
+    "duration_ms": 502_000,
+}
+
+# The auth-death fingerprint this gate exists to stop: a dead agent that
+# produced nothing, in ~634ms, for $0. Observed 2026-06-13 and again in the
+# 2026-08-09 Fable fleet outage.
+AUTH_DEATH_CRASH = {
+    "subtype": "success",
+    "is_error": True,
+    "num_turns": 1,
+    "total_cost_usd": 0,
+    "duration_ms": 634,
+}
+
+# What a finished critic verdict actually looks like — VERDICT line, the
+# CEO-facing summary, and the technical section for the fixing agent.
+COMPLETE_VERDICT = """VERDICT: REQUEST_CHANGES
+
+## Summary
+The comment actions land, but resolving a comment doesn't stick — reopen the
+page and the comment looks unresolved again, so people will redo the same work.
+
+## For the fixing agent
+src/comments/resolve.ts:88 — the resolve mutation never persists `resolvedAt`.
+"""
+
+COMPLETE_APPROVE = """VERDICT: APPROVE
+
+## Summary
+The change does what the card asked: comment actions work and resolving one
+keeps its state after a reload.
+"""
+
+
+class MaxTurnsVerdictTest(unittest.TestCase):
+    """A review that hit the turn ceiling AFTER finishing is a real review."""
+
+    # --- accept: the ceiling cut off a COMPLETED review -----------------
+
+    def test_max_turns_with_complete_request_changes_is_real(self):
+        self.assertTrue(real(MAX_TURNS_CRASH, COMPLETE_VERDICT))
+
+    def test_max_turns_with_complete_approve_is_real(self):
+        self.assertTrue(real(MAX_TURNS_CRASH, COMPLETE_APPROVE))
+
+    # --- still reject: nothing content-free may sneak through -----------
+
+    def test_auth_death_with_complete_verdict_is_still_not_real(self):
+        """THE load-bearing guard. A dead agent that somehow has a perfect
+        verdict file next to it must never be read as a review — this is
+        what stopped a crashed Fable critic from approving code during the
+        2026-08-09 fleet outage. Widening the gate for max-turns must not
+        widen it by so much as an inch here."""
+        self.assertFalse(real(AUTH_DEATH_CRASH, COMPLETE_VERDICT))
+        self.assertFalse(real(AUTH_DEATH_CRASH, COMPLETE_APPROVE))
+
+    def test_other_is_error_subtypes_with_complete_verdict_are_not_real(self):
+        for subtype in ("error_during_execution", "error", "success", None):
+            payload = {"is_error": True, "num_turns": 30}
+            if subtype is not None:
+                payload["subtype"] = subtype
+            with self.subTest(subtype=subtype):
+                self.assertFalse(real(payload, COMPLETE_APPROVE))
+
+    def test_max_turns_with_no_verdict_file_is_not_real(self):
+        """PR #273's actual state: the ceiling hit mid-review, nothing
+        written. Must still retry, exactly as today."""
+        self.assertFalse(real(MAX_TURNS_CRASH, verdict_text=None))
+
+    def test_max_turns_with_empty_verdict_is_not_real(self):
+        self.assertFalse(real(MAX_TURNS_CRASH, ""))
+
+    def test_max_turns_stopped_mid_thought_is_not_real(self):
+        """Prose with no VERDICT: line — the review was still thinking."""
+        self.assertFalse(
+            real(MAX_TURNS_CRASH,
+                 "## Notes so far\nStill checking whether the tests are real")
+        )
+
+    def test_max_turns_verdict_line_without_summary_is_not_real(self):
+        """A bare VERDICT: line with none of the mandated body is not a
+        finished verdict — it is a review that stopped mid-thought."""
+        self.assertFalse(real(MAX_TURNS_CRASH, "VERDICT: APPROVE\n"))
+
+    def test_max_turns_with_undeclared_verdict_value_is_not_real(self):
+        """`VERDICT:` must resolve to one of the two legal decisions. A
+        trailing-off or hedged marker is not a decision."""
+        for line in ("VERDICT: ", "VERDICT: MAYBE", "VERDICT: APPROV"):
+            with self.subTest(line=line):
+                self.assertFalse(
+                    real(MAX_TURNS_CRASH, f"{line}\n\n## Summary\nlooks ok")
+                )
+
+    def test_max_turns_with_no_real_work_is_not_real(self):
+        """Belt and braces: a one-turn run did no review, whatever it
+        labels itself."""
+        self.assertFalse(
+            real({"subtype": "error_max_turns", "is_error": True,
+                  "num_turns": 1}, COMPLETE_APPROVE)
+        )
+
+    # --- the clean path is untouched ------------------------------------
+
+    def test_clean_run_still_needs_only_a_verdict_line(self):
+        """The max-turns exception adds a STRICTER bar on the crash path
+        only. A healthy run keeps today's contract — no new way to reject a
+        genuine review, which is the false-reject class DRE-1330 opened."""
+        self.assertTrue(real({"is_error": False}, "VERDICT: APPROVE\nfine"))
+
+
 class CliTest(unittest.TestCase):
     """CLI: exit 0 == real verdict (post it); exit 1 == crash/no-verdict
     (caller must retry, then neutral+fail)."""
@@ -136,6 +286,21 @@ class CliTest(unittest.TestCase):
     def test_cli_exit_0_on_real_request_changes(self):
         p = self._run({"is_error": False}, "VERDICT: REQUEST_CHANGES\nbad")
         self.assertEqual(p.returncode, 0)
+
+    def test_cli_exit_0_on_max_turns_with_complete_verdict(self):
+        """End to end: the workflow step must see exit 0 and post the
+        verdict rather than burning a second $2 attempt (DRE-2422)."""
+        p = self._run(MAX_TURNS_CRASH, COMPLETE_VERDICT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_cli_exit_1_on_auth_death_even_with_complete_verdict(self):
+        p = self._run(AUTH_DEATH_CRASH, COMPLETE_VERDICT)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("is_error", p.stdout + p.stderr)
+
+    def test_cli_exit_1_on_max_turns_with_no_verdict(self):
+        p = self._run(MAX_TURNS_CRASH, verdict_text=None)
+        self.assertEqual(p.returncode, 1)
 
 
 if __name__ == "__main__":
