@@ -30,6 +30,13 @@ the review stub per head sha, receipted like the dependabot retries
 sha with nothing running, is reported once on its card in plain English.
 Never merges, never starts a build agent.
 
+Answered-blocker restart (DRE-2409): a held agent PR whose latest fix-loop 🛑
+blocker now carries a human operator decision after it gets ONE re-dispatch of
+the fix agent, receipted on the PR, and its card released from the human queue
+— the escalate-by-exception exit door used to need a hand `workflow_dispatch`
+on top of the answer. A human comment that mentions an operator decision but
+does not parse as one is reported on the PR instead of held in silence.
+
 Stranded-card watchdog (DRE-1993): every card/epic in Planning / Todo /
 In Progress whose repo has no route in the routing snapshot, or (this repo's
 cards) with no run receipt after 30 minutes, gets ONE plain-English comment
