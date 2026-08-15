@@ -618,10 +618,89 @@ class WorkflowWiringTest(unittest.TestCase):
         size and declined."""
         self.assertIn("--too-large", src())
 
+    def test_the_job_has_wall_clock_for_the_raised_ceiling(self):
+        """A ceiling the job timeout cannot reach is not a raised ceiling.
+
+        A timed-out job is CANCELLED, and a cancelled job skips even its
+        `always()` steps — no verdict comment, no head-bound check, nothing
+        to read. At the ~5-7 seconds a turn portico's completed reviews ran
+        at, the large first attempt alone needs more than 25 minutes.
+        """
+        doc = yaml.safe_load(open(os.path.join(WF_DIR, "qa-review.yml")))
+        timeout = doc["jobs"]["review"]["timeout-minutes"]
+        first = pss.turn_budget("large")[0]
+        self.assertGreaterEqual(timeout, first * 7 / 60)
+
     def test_show_full_output_stays_off(self):
         """Explicit card constraint — the transcript dump is not the
         diagnostic channel (tests/test_execution_failure_detail.py)."""
         self.assertNotIn("show_full_output", src())
+
+
+class OversizedPostStepScenarioTest(unittest.TestCase):
+    """EXECUTE the real post block from qa-review.yml on the oversized path.
+
+    Grepping the YAML proves the branch exists; it does not prove the branch
+    runs. This one does: the step's own `run:` body, with the expressions
+    Actions would substitute, against a temp filesystem and a fake `gh` that
+    records what it was asked to post. (Same discipline as
+    tests/test_qa_review_model_note.py, which caught a shell-level break in
+    this exact step.)
+    """
+
+    def _run_post(self, td, **env_extra):
+        run = wf_step("post")["run"]
+        run = re.sub(r"\$\{\{[^}]*\}\}", "", run)  # env-only step; none survive
+        self.assertNotIn("${{", run)
+        os.mkdir(os.path.join(td, "bin"))
+        log = os.path.join(td, "calls.log")
+        gh = os.path.join(td, "bin", "gh")
+        with open(gh, "w") as f:
+            f.write("#!/usr/bin/env bash\n"
+                    f'printf "gh %s\\n" "$*" >> {log}\n'
+                    "exit 0\n")
+        os.chmod(gh, 0o755)
+        script = os.path.join(td, "post.sh")
+        with open(script, "w") as f:
+            # -u on purpose: the runner does not set it, but an unbound
+            # variable here is a latent break the moment anyone does.
+            f.write("set -euo pipefail\n" + run.replace("/tmp/", td + "/"))
+        env = dict(os.environ, PATH=f"{td}/bin:{os.environ['PATH']}",
+                   CARD="", REAL="false", PR="297",
+                   REVIEWED_SHA="a" * 40, CONTENT_ID="", MODEL_ID="m",
+                   MODEL_WHY="why")
+        env.update(env_extra)
+        proc = subprocess.run(["bash", script], cwd=td, env=env,
+                              capture_output=True, text=True)
+        comment = os.path.join(td, "qa-comment.md")
+        body = open(comment).read() if os.path.exists(comment) else ""
+        return proc, body, open(log).read() if os.path.exists(log) else ""
+
+    def test_the_oversized_branch_posts_the_size_message(self):
+        m = pss.measure(
+            None, {"changedFiles": 480, "additions": 60_000, "deletions": 5_000}
+        )
+        with tempfile.TemporaryDirectory() as td:
+            proc, body, calls = self._run_post(
+                td, STRATEGY="oversized", OVERSIZE_MESSAGE=pss.oversize_message(m)
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("480", body)
+        self.assertRegex(body, r"(?i)split")
+        self.assertNotIn("VERDICT: APPROVE", body)
+        self.assertNotIn("VERDICT: REQUEST_CHANGES", body)
+        self.assertNotIn("auth", body.lower())
+        self.assertIn("gh pr comment", calls)
+
+    def test_a_normal_review_is_untouched_by_the_new_branch(self):
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, "qa-verdict.md"), "w") as f:
+                f.write("VERDICT: APPROVE\n\nLooks good.\n")
+            proc, body, _ = self._run_post(
+                td, STRATEGY="standard", OVERSIZE_MESSAGE="", REAL="true"
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(body.startswith("🔎 QA Critic — VERDICT: APPROVE @"))
 
 
 class PublishCheckOversizeTest(unittest.TestCase):

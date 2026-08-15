@@ -8,11 +8,22 @@ carries the id at all, so the check here is that the workflow SELECTS from the
 config rather than pinning a string."""
 
 import os
+import re
+import sys
 import unittest
 
 import yaml
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+
+import pr_size_strategy as pss  # noqa: E402
+
+# `--max-turns 80`, or the size-step output qa-review.yml selects (DRE-2466).
+_TURNS_RE = re.compile(
+    r"--max-turns\s+(?:(\d+)|\$\{\{\s*steps\.size\.outputs\.(\w+)\s*\}\})"
+)
+_SIZE_OUTPUTS = ("max_turns", "retry_max_turns")
 
 
 def load():
@@ -28,10 +39,25 @@ class AgentsRegistryTest(unittest.TestCase):
         self.assertEqual(agent_workflows, covered & agent_workflows)
 
     def test_turns_match_workflow_text(self):
+        """The roster's budget must be one the workflow actually runs with.
+
+        DRE-2466: qa-review.yml no longer carries its ceiling as a literal —
+        it sizes the diff first and interpolates the budget the strategy
+        selected. An expression is RESOLVED here through the same table the
+        workflow reads (standard strategy, the path a review normally takes),
+        so the console still cannot drift from the workflow; it just can no
+        longer be checked by grepping for a number."""
         for a in load():
             src = open(os.path.join(ROOT, a["workflow"])).read()
-            self.assertIn(f"--max-turns {a['maxTurns']}", src,
-                          f"{a['name']}: maxTurns {a['maxTurns']} not in {a['workflow']}")
+            declared = [
+                int(literal) if literal else pss.turn_budget("standard")[
+                    _SIZE_OUTPUTS.index(name)
+                ]
+                for literal, name in _TURNS_RE.findall(src)
+            ]
+            self.assertIn(a["maxTurns"], declared,
+                          f"{a['name']}: maxTurns {a['maxTurns']} is not a "
+                          f"ceiling {a['workflow']} runs with ({declared})")
 
     def test_workflows_resolve_the_model_through_the_config(self):
         """The roster's `model:` is a GENERATED mirror of config/models.yaml

@@ -94,7 +94,16 @@ jobs:
     if: >
       (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 45, raised from 25 with the file-list strategy (DRE-2466). A large
+    # review deliberately takes more, smaller steps — up to 150 turns on the
+    # first attempt and 200 on the retry — and portico's completed reviews
+    # ran at roughly 5-7 seconds a turn, so 25 minutes could not hold one.
+    # A job that hits its timeout is CANCELLED, and a cancelled job skips
+    # even its `always()` steps: no verdict comment, no head-bound check,
+    # nothing for anyone to read. The wall clock is the real backstop on a
+    # runaway review, so it moves with the ceiling rather than silently
+    # capping it.
+    timeout-minutes: 45
     steps:
       # Mint from the qa-bot App so the critic's GitHub calls draw from the
       # qa-bot installation's SEPARATE 5,000/hr quota — not the dispatch bot's
@@ -217,6 +226,69 @@ jobs:
             || echo '{}' > /tmp/qa-compare.json
           CONTENT=$(python3 .bureau-pipeline/scripts/verdict_content.py --compare-file /tmp/qa-compare.json 2>/dev/null || true)
           echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
+          # DRE-2466: the PR's own size totals, for the review-strategy step
+          # below. The compare record above already carries per-file counts
+          # but caps at 300 files and does not paginate (verdict_content.py
+          # documents the same cap), and under-counting is the direction
+          # that sends a 17k-line diff down the one-pass path that cannot
+          # review it. One extra field read on a call this step already
+          # makes; a blip leaves `{}` and the sizing degrades to the compare
+          # record alone.
+          gh pr view "$PR" --json changedFiles,additions,deletions > /tmp/qa-size.json 2>/dev/null \
+            || echo '{}' > /tmp/qa-size.json
+
+      # ── Review-strategy stage (DRE-2466) ──────────────────────────────────
+      # A pull request four times larger than anything the critic has ever
+      # reviewed used to get the same review a two-file change gets: one
+      # exhaustive `gh pr diff` pass, under the prompt's standing order to
+      # examine the ENTIRE diff. Portico PR #297 (118 files, +16,909/-628)
+      # produced four executions across two run attempts — every one
+      # `subtype: success`, `is_error: false`, none near its turn ceiling,
+      # all finishing in 2-3.5 minutes — for $12.40 and no verdict file. The
+      # PR then merged with this check red and no review at all.
+      #
+      # WHY scale breaks it is NOT established and this step assumes nothing
+      # about it (DRE-2465's gate diagnostics will decide that on the next
+      # occurrence). What is established is that scale is the trigger, so the
+      # STRATEGY changes with size:
+      #   • standard  → today's behavior, byte for byte
+      #   • large     → review from the changed-file list with targeted
+      #                 per-file reads, exhaustive over the files actually
+      #                 reviewed, turn ceiling raised to match
+      #   • oversized → decline honestly, name the size, ask for a split, and
+      #                 spend NO inference (the second threshold only)
+      #
+      # The signal is free: /tmp/qa-compare.json is already fetched above for
+      # the content id, and /tmp/qa-size.json is one extra field read on a
+      # `gh pr view` the same step already makes. Thresholds and their
+      # derivation from this repo's own review history live in
+      # scripts/pr_size_strategy.py; tests/test_critic_size_strategy.py pins
+      # the selection either side of both of them.
+      #
+      # The `||` fallback is load-bearing: claude_args interpolates
+      # max_turns, so an unwritten output would hand the action a bare
+      # `--max-turns`. The script itself never exits non-zero, and this is
+      # the belt to that pair of braces.
+      - name: Size the diff and pick the review strategy
+        id: size
+        if: steps.decide.outputs.review == 'true'
+        run: |
+          python3 .bureau-pipeline/scripts/pr_size_strategy.py \
+            --compare-file /tmp/qa-compare.json \
+            --pr-json-file /tmp/qa-size.json \
+            --pr "${{ steps.pr.outputs.number }}" \
+          || {
+            echo "::warning::PR sizing failed — falling back to the standard one-pass review"
+            {
+              echo "strategy=standard"
+              echo "files=0"
+              echo "lines=0"
+              echo "review_files=0"
+              echo "review_lines=0"
+              echo "max_turns=80"
+              echo "retry_max_turns=120"
+            } >> "$GITHUB_OUTPUT"
+          }
 
       # Assemble the critic's context = the standards it reviews AGAINST
       # (engineering + architecture) plus the comms standard for its verdict
@@ -245,7 +317,11 @@ jobs:
       # error + a guaranteed fallback context), so it can never wedge the gate.
       - name: Plan visual QA
         id: vqplan
-        if: steps.decide.outputs.review == 'true'
+        # DRE-2466: nothing downstream of an oversized PR runs, and this
+        # stage can pull an npm install + a browser download behind it. A
+        # fast failure that first spends five minutes rendering screens is
+        # not a fast failure.
+        if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -466,21 +542,30 @@ jobs:
           # model is the silently-weakened critic DRE-2317 exists to prevent.
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
-      # TURN BUDGET (DRE-2422). 80 here, 120 on the retry below — the retry
-      # MUST stay strictly higher. 40 was sized for an older, terser model;
-      # Sonnet 5 rides it. Portico's critic runs in one hour: 12, 18, 19, 31,
-      # 41(success), 41(error_max_turns). A run that SUCCEEDS at 41 has zero
-      # margin left, and PR #273 (7 files / +1184) fell off — twice, for
-      # $4.05 and no verdict, because the retry re-ran with the SAME ceiling
-      # and error_max_turns is deterministic. This is a CEILING, not a
-      # target: the 12- and 19-turn runs cost exactly what they cost before.
-      # Every sibling already sits higher (verify 60, agent-fix 60,
+      # TURN BUDGET (DRE-2422, sized per strategy by DRE-2466). The size step
+      # above selects it: 80/120 on a standard review — unchanged, byte for
+      # byte — and 150/200 when the file-list strategy is in play, because
+      # that path deliberately takes more, smaller steps. The retry MUST stay
+      # strictly higher on every path. 40 was sized for an older, terser
+      # model; Sonnet 5 rides it. Portico's critic runs in one hour: 12, 18,
+      # 19, 31, 41(success), 41(error_max_turns). A run that SUCCEEDS at 41
+      # has zero margin left, and PR #273 (7 files / +1184) fell off — twice,
+      # for $4.05 and no verdict, because the retry re-ran with the SAME
+      # ceiling and error_max_turns is deterministic. This is a CEILING, not
+      # a target: the 12- and 19-turn runs cost exactly what they cost
+      # before. Every sibling already sits higher (verify 60, agent-fix 60,
       # red-main-repair 100, agent-task 150) — the one agent that must read
       # the WHOLE diff before it may speak had the tightest budget in the
-      # fleet. Pinned by tests/test_critic_turn_budget.py.
+      # fleet. Pinned by tests/test_critic_turn_budget.py, which resolves
+      # these expressions through scripts/pr_size_strategy.py and asserts the
+      # whole DRE-2422 rule set on EVERY strategy.
+      #
+      # Skipped entirely past the second size threshold (strategy
+      # `oversized`): that PR gets an honest refusal naming its size, not a
+      # fourth invoice for a review that cannot happen.
       - name: Critic review
         id: critic
-        if: steps.decide.outputs.review == 'true'
+        if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
         uses: anthropics/claude-code-action@v1
         # A crash here (is_error / no verdict) must NOT fail-close into a
         # false REQUEST_CHANGES — the gate below detects it and we retry.
@@ -495,7 +580,7 @@ jobs:
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
-            --max-turns 80
+            --max-turns ${{ steps.size.outputs.max_turns }}
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
@@ -505,8 +590,15 @@ jobs:
             the CEO. Hold the diff to those standards.
 
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
-            in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
-            `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
+            in this repo (use `gh pr view ${{ steps.pr.outputs.number }}`;
+            for the diff itself follow the REVIEW STRATEGY block below —
+            GH_TOKEN is in your env).
+
+            REVIEW STRATEGY (DRE-2466 — chosen from this PR's measured diff
+            size; follow it exactly). Fallback if the block below is empty:
+            read the whole diff in one `gh pr diff ${{ steps.pr.outputs.number }}`
+            pass and examine the ENTIRE diff:
+            ${{ steps.size.outputs.strategy_context }}
 
             CARD CONTEXT (DRE-2052 — what this PR implements and how to
             judge check 1; follow it exactly). Fallback if the block below
@@ -551,15 +643,29 @@ jobs:
             Default skeptical: your job is to find reasons NOT to merge. If
             you cannot find any, approve.
 
-            EXHAUSTIVE SINGLE PASS + CONVERGENCE (mandatory): examine the
-            ENTIRE diff and list every blocking finding in THIS verdict — do
-            not ration findings across rounds. If earlier QA Critic verdicts
-            exist on this PR, you are RE-reviewing: verify the prior findings
-            are resolved, review what changed since, and raise a NEW finding
+            CONVERGENCE (mandatory): if earlier QA Critic verdicts exist on
+            this PR, you are RE-reviewing: verify the prior findings are
+            resolved, review what changed since, and raise a NEW finding
             only if (a) the latest changes introduced it, or (b) it is
-            data-loss/security severity. A re-review that unveils yet another
-            pre-existing nit you could have caught earlier is a review
-            failure, not diligence. (Origin: PR #7 took 6 rounds.)
+            data-loss/security severity.
+
+            WRITE THE VERDICT FILE FIRST (DRE-2466). Before you read any
+            code, Write /tmp/qa-verdict.md with exactly this stub:
+
+                VERDICT: REQUEST_CHANGES
+                <!-- QA-REVIEW-INCOMPLETE -->
+                ## Summary
+                This review has not finished.
+
+            Then rewrite the whole file as the review proceeds, so it always
+            reflects what you have found so far. Keep the
+            `<!-- QA-REVIEW-INCOMPLETE -->` line for as long as the review is
+            unfinished, and REMOVE it in your final rewrite — while it is
+            present the gate treats the file as a receipt, not a verdict, so
+            an early exit holds the merge instead of requesting changes
+            nobody found. Never write `VERDICT: APPROVE` before you have
+            finished the whole review. (Origin: four reviews of portico PR
+            #297 ended early and left nothing at all behind.)
 
             Write your verdict to /tmp/qa-verdict.md in TWO clearly separated
             parts — a business summary the CEO reads, then the technical detail
@@ -593,7 +699,7 @@ jobs:
       # we must retry, never post the crash as REQUEST_CHANGES.
       - name: Gate critic result (attempt 1)
         id: gate1
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
         continue-on-error: true
         run: |
           EXEC_FILE="${{ steps.critic.outputs.execution_file }}"
@@ -609,7 +715,7 @@ jobs:
       # don't burn a whole failed run + rerun cycle on a transient critic
       # crash). Clear any stale verdict so the gate re-evaluates honestly.
       - name: Clear stale verdict before retry
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
         run: rm -f /tmp/qa-verdict.md
 
       # Back off before the retry (DRE-2429), same defect as verify.yml: the
@@ -629,7 +735,7 @@ jobs:
       # Gated identically to the retry it guards, so a healthy review never
       # sleeps.
       - name: Back off before the critic retry
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
         run: |
           echo "critic attempt 1 produced no verdict — waiting 120s before the retry"
           sleep 120
@@ -651,7 +757,7 @@ jobs:
       # nothing ELSE in these two blocks has drifted apart.
       - name: Critic review (retry)
         id: critic_retry
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
         uses: anthropics/claude-code-action@v1
         continue-on-error: true
         with:
@@ -664,7 +770,7 @@ jobs:
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
           claude_args: |
-            --max-turns 120
+            --max-turns ${{ steps.size.outputs.retry_max_turns }}
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
@@ -674,8 +780,15 @@ jobs:
             the CEO. Hold the diff to those standards.
 
             You are an adversarial code reviewer. Review PR #${{ steps.pr.outputs.number }}
-            in this repo (use `gh pr view ${{ steps.pr.outputs.number }}` and
-            `gh pr diff ${{ steps.pr.outputs.number }}`; GH_TOKEN is in your env).
+            in this repo (use `gh pr view ${{ steps.pr.outputs.number }}`;
+            for the diff itself follow the REVIEW STRATEGY block below —
+            GH_TOKEN is in your env).
+
+            REVIEW STRATEGY (DRE-2466 — chosen from this PR's measured diff
+            size; follow it exactly). Fallback if the block below is empty:
+            read the whole diff in one `gh pr diff ${{ steps.pr.outputs.number }}`
+            pass and examine the ENTIRE diff:
+            ${{ steps.size.outputs.strategy_context }}
 
             CARD CONTEXT (DRE-2052 — what this PR implements and how to
             judge check 1; follow it exactly). Fallback if the block below
@@ -720,15 +833,29 @@ jobs:
             Default skeptical: your job is to find reasons NOT to merge. If
             you cannot find any, approve.
 
-            EXHAUSTIVE SINGLE PASS + CONVERGENCE (mandatory): examine the
-            ENTIRE diff and list every blocking finding in THIS verdict — do
-            not ration findings across rounds. If earlier QA Critic verdicts
-            exist on this PR, you are RE-reviewing: verify the prior findings
-            are resolved, review what changed since, and raise a NEW finding
+            CONVERGENCE (mandatory): if earlier QA Critic verdicts exist on
+            this PR, you are RE-reviewing: verify the prior findings are
+            resolved, review what changed since, and raise a NEW finding
             only if (a) the latest changes introduced it, or (b) it is
-            data-loss/security severity. A re-review that unveils yet another
-            pre-existing nit you could have caught earlier is a review
-            failure, not diligence. (Origin: PR #7 took 6 rounds.)
+            data-loss/security severity.
+
+            WRITE THE VERDICT FILE FIRST (DRE-2466). Before you read any
+            code, Write /tmp/qa-verdict.md with exactly this stub:
+
+                VERDICT: REQUEST_CHANGES
+                <!-- QA-REVIEW-INCOMPLETE -->
+                ## Summary
+                This review has not finished.
+
+            Then rewrite the whole file as the review proceeds, so it always
+            reflects what you have found so far. Keep the
+            `<!-- QA-REVIEW-INCOMPLETE -->` line for as long as the review is
+            unfinished, and REMOVE it in your final rewrite — while it is
+            present the gate treats the file as a receipt, not a verdict, so
+            an early exit holds the merge instead of requesting changes
+            nobody found. Never write `VERDICT: APPROVE` before you have
+            finished the whole review. (Origin: four reviews of portico PR
+            #297 ended early and left nothing at all behind.)
 
             Write your verdict to /tmp/qa-verdict.md in TWO clearly separated
             parts — a business summary the CEO reads, then the technical detail
@@ -758,7 +885,7 @@ jobs:
 
       - name: Gate critic result (attempt 2)
         id: gate2
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
         continue-on-error: true
         run: |
           EXEC_FILE="${{ steps.critic_retry.outputs.execution_file }}"
@@ -801,8 +928,27 @@ jobs:
           # point of the indirection.
           MODEL_ID: ${{ steps.model.outputs.model }}
           MODEL_WHY: ${{ steps.model.outputs.why }}
+          # DRE-2466: the size verdict for a PR past the second threshold,
+          # composed by scripts/pr_size_strategy.py so there is exactly ONE
+          # wording and it is the one the tests read. Empty on every other
+          # path. Env, never interpolated into the script body — the same
+          # rule MODEL_WHY above documents.
+          STRATEGY: ${{ steps.size.outputs.strategy }}
+          OVERSIZE_MESSAGE: ${{ steps.size.outputs.oversize_message }}
         run: |
-          if [ "$REAL" = "true" ]; then
+          if [ "${STRATEGY:-}" = "oversized" ]; then
+            # No review was attempted. This message names the actual size and
+            # asks for a split; it must NOT borrow the crash wording below,
+            # which blames a startup/auth failure that did not happen here
+            # (DRE-2465 — a notice that blamed the credential while the
+            # reviewer had actually run cost a day of credential-hunting).
+            # Same neutral shape as the crash path: carries "QA Critic" so
+            # merge-gate treats it as the latest word and it supersedes a
+            # stale APPROVE, carries no "VERDICT: APPROVE" so the gate holds,
+            # and carries no "VERDICT: REQUEST_CHANGES" so the fix agent is
+            # not dispatched to fix findings nobody made.
+            printf '%s\n' "${OVERSIZE_MESSAGE:-}" > /tmp/qa-comment.md
+          elif [ "$REAL" = "true" ]; then
             # A real verdict (APPROVE or REQUEST_CHANGES with findings) from a
             # critic that actually ran — post it verbatim, BOUND to the commit
             # it reviewed (DRE-1990): the verdict line becomes
@@ -919,12 +1065,18 @@ jobs:
           # genuine review run", so the comment and the check can never
           # disagree about it.
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+          # DRE-2466: on the oversized path the head still gets a red check —
+          # nothing was reviewed — but it must say the real reason. The
+          # default no-review summary blames an infrastructure failure, and
+          # here there wasn't one: the workflow read the size and declined.
+          TOO_LARGE: ${{ steps.size.outputs.strategy == 'oversized' && steps.size.outputs.size_phrase || '' }}
         run: |
           python3 .bureau-pipeline/scripts/publish_review_check.py \
             --repo "${{ github.repository }}" \
             --sha "${{ steps.pr.outputs.sha }}" \
             --verdict-file /tmp/qa-verdict.md \
             --real "$REAL" \
+            --too-large "$TOO_LARGE" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --event "${{ github.event_name }}"
 
@@ -959,7 +1111,25 @@ jobs:
       - name: Fail if critic never really ran
         # Only when we actually tried to review — a chrome-only PR (decide
         # said skip) never runs the gates, so it must NOT fail here.
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
         run: |
           echo "::error::QA critic crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
+          exit 1
+
+      # Fail fast past the SECOND size threshold (DRE-2466). Ordered last for
+      # the same reason as the step above: the comment and the head-bound
+      # check are already posted, so the red is visible with its explanation
+      # attached. No inference was spent getting here — the whole point is to
+      # stop paying full price to fail (portico PR #297: four executions,
+      # $12.40, no verdict, PR shipped unreviewed anyway).
+      #
+      # The message names the MEASURED size and asks for a split. It claims
+      # nothing about credentials: the reason is known exactly, and borrowing
+      # the crash wording is what sent people credential-hunting for a day
+      # (DRE-2465).
+      - name: Fail fast — pull request too large to review
+        id: oversize_fail
+        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy == 'oversized'
+        run: |
+          echo "::error::QA critic declined this pull request: ${{ steps.size.outputs.files }} files / ${{ steps.size.outputs.lines }} changed lines is past the reviewable limit. No review was attempted. Split it into smaller pull requests and each part gets a full review."
           exit 1
