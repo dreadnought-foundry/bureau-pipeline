@@ -170,6 +170,21 @@ class SuccessShapedFailureGetsItsOwnMessageTest(unittest.TestCase):
         body = comment_for(RAN_NO_VERDICT).lower()
         self.assertIn("not an authentication", body)
 
+    def test_both_completed_attempts_are_accounted_for(self):
+        # #297 spent $12.40 across four executions and the operator was told
+        # about none of them. One attempt's numbers is not the whole bill.
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            first = {"outcome": "completed_no_verdict", "turns": "29",
+                     "cost": "4.21"}
+            second = {"outcome": "completed_no_verdict", "turns": "42",
+                      "cost": "3.35"}
+            proc, body = run_post(td, second, gate1=first)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            for number in ("29", "4.21", "42", "3.35"):
+                self.assertIn(number, body,
+                              f"attempt numbers {number} went unreported")
+
     def test_a_completed_first_attempt_counts_even_if_the_retry_did_not(self):
         # One clean execution is enough to disprove "it never ran".
         with tempfile.TemporaryDirectory() as raw:
