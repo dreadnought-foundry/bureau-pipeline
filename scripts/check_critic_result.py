@@ -39,12 +39,29 @@ so a review that ends early leaves something readable behind. A file still
 carrying that marker is a receipt, not a verdict — it is never real, on any
 path, and its partial content is printed to the run log instead.
 
+DRE-2465: and on the NO-VERDICT path it says what it found instead. Two
+things were missing there. First, "no usable verdict file" covers three
+different situations — the file is absent, the file is empty, or the file has
+content but no line that starts with `VERDICT:` (a critic that wrote
+`**VERDICT: APPROVE**` in bold lands in the third and looks exactly like one
+that wrote nothing). The workflow rm -f's the file between attempts and the
+runner is then destroyed, so if the log does not say which, nobody can ever
+find out. Second, a run that ended `is_error: false` got no numbers at all,
+and the operator was told it had died at startup: portico PR #297 ran four
+times to completion for $12.40 under that notice. Both are printed now, and
+the run's own turns/cost also leave here as step outputs so the neutral PR
+comment can describe the run instead of asserting a crash.
+
 Called from qa-review.yml after each critic attempt:
 
-    python3 check_critic_result.py <execution-json-path> <verdict-path>
+    python3 check_critic_result.py <execution-json-path> <verdict-path> \
+        [--github-output <path>]
 
 Exit 0 when a real verdict exists (post it). Exit 1 on crash/no-verdict
-(retry, then neutral + loud fail).
+(retry, then neutral + loud fail). With --github-output, appends
+`outcome=ok|crash|completed_no_verdict|unknown` plus `turns=` and `cost=`
+(numbers only, and only when the run ended cleanly) to that file. The flag is
+optional: verify.yml calls this same gate without it.
 """
 
 from __future__ import annotations
@@ -55,7 +72,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from execution_result import (  # noqa: E402
+    completion_scalars,
     load_execution as _load_execution,
+    print_completion_detail,
     print_failure_detail,
 )
 
@@ -90,6 +109,27 @@ def verdict_is_unfinished(text: str) -> bool:
         line.strip() == INCOMPLETE_MARKER
         for line in text.splitlines()[:_MARKER_SCAN_LINES]
     )
+
+
+# The token a near-miss verdict is a near miss OF. `_verdict_line_present`
+# wants it at the start of a stripped line; a critic that bolded it, prefixed
+# it, or buried it in prose wrote a review and still fails the gate.
+_VERDICT_TOKEN = "VERDICT"
+
+
+def _read_verdict(path: str) -> bytes | None:
+    """The verdict file's raw bytes, or None when there is no file to read.
+
+    Bytes, not text: the critic writes this file after reading a pull request
+    written by anyone, and a decode error is not a reason for the gate to
+    exit with a traceback instead of a verdict. Callers decode with
+    errors="replace" — the file is only ever inspected, never echoed.
+    """
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 def _verdict_line_present(text: str) -> bool:
@@ -164,11 +204,10 @@ def verdict_is_real(execution: dict | None, verdict_path: str) -> bool:
     crashed = execution is not None and execution.get("is_error") is True
     if crashed and not _crash_may_keep_its_verdict(execution):
         return False
-    try:
-        with open(verdict_path) as f:
-            text = f.read()
-    except OSError:
+    raw = _read_verdict(verdict_path)
+    if raw is None:
         return False
+    text = raw.decode("utf-8", "replace")
     if not text.strip():
         return False
     if verdict_is_unfinished(text):
@@ -185,11 +224,104 @@ def verdict_is_real(execution: dict | None, verdict_path: str) -> bool:
     return _verdict_line_present(text)
 
 
+def verdict_file_report(verdict_path: str) -> list[str]:
+    """What the gate FOUND where the verdict should have been.
+
+    Booleans and a byte count — never a byte of the file itself. The critic
+    writes it having just read a pull request authored by anyone, so its
+    content is untrusted and stays out of a log that is public on a public
+    repo (same discipline as execution_result.py's field whitelist).
+
+    Three situations hide behind one message today, and /tmp/qa-verdict.md is
+    deleted between attempts, so the log is the only place the difference can
+    ever be recorded: absent, empty, or present with content that simply
+    never starts a line with `VERDICT:`.
+    """
+    raw = _read_verdict(verdict_path)
+    if raw is None:
+        return ["  existed: no"]
+    text = raw.decode("utf-8", "replace")
+    lines = [
+        "  existed: yes",
+        f"  bytes: {len(raw)}",
+        f"  non-blank: {'yes' if text.strip() else 'no'}",
+    ]
+    if not _verdict_line_present(text):
+        near = _VERDICT_TOKEN in text
+        lines.append(
+            f"  near-miss (a {_VERDICT_TOKEN!r} token is present but no line "
+            f"starts with '{_VERDICT_TOKEN}:'): {'yes' if near else 'no'}"
+        )
+    return lines
+
+
+def print_verdict_file_report(verdict_path: str, prefix: str) -> None:
+    print(f"{prefix}: what was at {verdict_path}:")
+    for line in verdict_file_report(verdict_path):
+        print(line)
+
+
+def outcome(execution: dict | None, real: bool) -> str:
+    """One word for what happened, for the workflow to pick its message from.
+
+    * `ok` — a genuine verdict; nothing to explain.
+    * `crash` — is_error: true. The auth/startup death the neutral notice was
+      written for, and still the only thing that notice may describe.
+    * `completed_no_verdict` — the run ENDED CLEANLY and left nothing usable
+      (portico PR #297). Blaming a credential for this is what cost a day.
+    * `unknown` — no execution record at all. We cannot prove it ran, so we
+      do not claim it did; the workflow keeps the crash wording here.
+    """
+    if real:
+        return "ok"
+    if execution is None:
+        return "unknown"
+    if execution.get("is_error") is True:
+        return "crash"
+    return "completed_no_verdict"
+
+
+def write_step_outputs(path: str, execution: dict | None, real: bool) -> None:
+    """Append `outcome`/`turns`/`cost` to a $GITHUB_OUTPUT file.
+
+    Numbers only, straight from completion_scalars' whitelist: $GITHUB_OUTPUT
+    is line-oriented, so a value carrying a newline would write a step output
+    of its own — `real=true` among them. A float cannot.
+    """
+    lines = [f"outcome={outcome(execution, real)}"]
+    scalars = completion_scalars(execution)
+    turns = scalars.get("num_turns")
+    cost = scalars.get("total_cost_usd")
+    if turns is not None:
+        lines.append(f"turns={int(turns)}")
+    if cost is not None:
+        # Two decimals: this ends up in a sentence a human reads, not in an
+        # invoice.
+        lines.append(f"cost={float(cost):.2f}")
+    try:
+        with open(path, "a") as f:
+            f.write("".join(f"{line}\n" for line in lines))
+    except OSError as exc:
+        # A gate that cannot write its outputs still has a verdict to report.
+        print(f"critic result gate: could not write step outputs: {exc}")
+
+
 def main(argv: list[str]) -> int:
-    exec_path, verdict_path = (argv + ["", ""])[:2]
+    args, output_path = [], None
+    rest = list(argv)
+    while rest:
+        arg = rest.pop(0)
+        if arg == "--github-output":
+            output_path = rest.pop(0) if rest else None
+        else:
+            args.append(arg)
+    exec_path, verdict_path = (args + ["", ""])[:2]
     execution = _load_execution(exec_path)
     crashed = execution is not None and execution.get("is_error") is True
-    if verdict_is_real(execution, verdict_path):
+    real = verdict_is_real(execution, verdict_path)
+    if output_path:
+        write_step_outputs(output_path, execution, real)
+    if real:
         if crashed:
             # Say so out loud: the run is red in the Actions UI but its
             # verdict counted. Anyone reading the log needs to see why.
@@ -216,7 +348,23 @@ def main(argv: list[str]) -> int:
         print_failure_detail(execution, "critic result gate")
     else:
         print("critic result gate: FAIL — no usable verdict file")
-    _print_unfinished_verdict(verdict_path)
+        # DRE-2465. WHICH no-verdict: absent, empty, or content that never
+        # starts a line with VERDICT: — the file is deleted before the retry,
+        # so nothing else will ever record the difference.
+        print_verdict_file_report(verdict_path, "critic result gate")
+        _print_unfinished_verdict(verdict_path)
+        if execution is not None:
+            print(
+                "critic result gate: the reviewer authenticated and did real "
+                "work — this is NOT an auth/startup failure and rotating a "
+                "credential will not fix it (DRE-2465)"
+            )
+            print_completion_detail(execution, "critic result gate")
+        else:
+            print(
+                "critic result gate: no execution record was found either, "
+                "so whether the reviewer ran at all is unknown"
+            )
     return 1
 
 
@@ -235,11 +383,10 @@ def _print_unfinished_verdict(verdict_path: str) -> None:
     is the critic's own output, which the passing path posts verbatim as a
     PR comment; logging it exposes nothing new.
     """
-    try:
-        with open(verdict_path) as f:
-            text = f.read()
-    except OSError:
+    raw = _read_verdict(verdict_path)
+    if raw is None:
         return
+    text = raw.decode("utf-8", "replace")
     if not verdict_is_unfinished(text):
         return
     print(
