@@ -36,16 +36,32 @@ TWO THINGS THIS FILE PINS:
 `--max-turns` is a CEILING, not a target. Runs that finish in 12 or 19 turns
 cost exactly what they cost today; raising it changes the bill only for runs
 that would otherwise have died producing nothing.
+
+DRE-2466 UPDATE. The ceiling is no longer a literal in the YAML: the workflow
+sizes the PR first and the ceiling comes from `scripts/pr_size_strategy.py`,
+so a file-list review of a 17k-line diff gets the turns that work needs while
+a two-file change keeps today's budget. Every assertion below now runs
+against EVERY strategy in that table rather than against one literal — the
+properties DRE-2422 pinned are strictly harder to break, not easier.
 """
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
-WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+REPO = Path(__file__).resolve().parents[1]
+WORKFLOWS = REPO / ".github" / "workflows"
+sys.path.insert(0, str(REPO / "scripts"))
+
+import pr_size_strategy as pss  # noqa: E402
+
+# The size step's outputs, in the order pr_size_strategy.turn_budget()
+# returns them. The workflow interpolates these into claude_args.
+_TURN_OUTPUTS = ("max_turns", "retry_max_turns")
 
 # The observed high-water mark for a critic run that actually finished.
 OBSERVED_CEILING_HIT = 41
@@ -66,21 +82,49 @@ def _claude_args(workflow: str, job: str, step_id: str) -> str:
     )
 
 
-def _max_turns(workflow: str, job: str, step_id: str) -> int:
+# `--max-turns 80` (a literal) or `--max-turns ${{ steps.size.outputs.X }}`
+# (DRE-2466 — the budget the size step selected for this PR).
+_TURNS_RE = re.compile(
+    r"--max-turns\s+(?:(\d+)|\$\{\{\s*steps\.size\.outputs\.(\w+)\s*\}\})"
+)
+
+
+def _max_turns(workflow: str, job: str, step_id: str, strategy: str) -> int:
+    """The ceiling this step actually runs with, on the given strategy.
+
+    A literal is taken as written. An expression is RESOLVED through the
+    same table the workflow reads at run time, so these assertions keep
+    pinning effective values rather than the presence of a placeholder —
+    an indirection that hid the real number would retire the guard.
+    """
     args = _claude_args(workflow, job, step_id)
-    m = re.search(r"--max-turns\s+(\d+)", args)
+    m = _TURNS_RE.search(args)
     assert m, f"{workflow}:{step_id} declares no --max-turns: {args!r}"
-    return int(m.group(1))
+    if m.group(1):
+        return int(m.group(1))
+    name = m.group(2)
+    assert name in _TURN_OUTPUTS, (
+        f"{workflow}:{step_id} takes its ceiling from an unknown size-step "
+        f"output {name!r} — this test can no longer tell what the critic "
+        f"actually runs with"
+    )
+    return pss.turn_budget(strategy)[_TURN_OUTPUTS.index(name)]
+
+
+@pytest.fixture(params=sorted(pss.TURN_BUDGET))
+def strategy(request) -> str:
+    """Every review strategy the workflow can select (DRE-2466)."""
+    return request.param
 
 
 @pytest.fixture
-def attempt1() -> int:
-    return _max_turns("qa-review.yml", "review", "critic")
+def attempt1(strategy) -> int:
+    return _max_turns("qa-review.yml", "review", "critic", strategy)
 
 
 @pytest.fixture
-def retry() -> int:
-    return _max_turns("qa-review.yml", "review", "critic_retry")
+def retry(strategy) -> int:
+    return _max_turns("qa-review.yml", "review", "critic_retry", strategy)
 
 
 class TestCriticTurnBudget:
@@ -147,7 +191,7 @@ class TestCriticTurnBudget:
         apart is the bug that comment warns about."""
         a1 = _claude_args("qa-review.yml", "review", "critic")
         rt = _claude_args("qa-review.yml", "review", "critic_retry")
-        strip = lambda s: re.sub(r"--max-turns\s+\d+", "--max-turns N", s)  # noqa: E731
+        strip = lambda s: _TURNS_RE.sub("--max-turns N", s)  # noqa: E731
         assert strip(a1) == strip(rt), (
             "the critic attempt-1 and retry claude_args have drifted apart "
             "beyond their turn budget — the file's own comment requires "
