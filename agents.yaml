@@ -149,6 +149,12 @@ agents:
     # in one hour came in at 12, 18, 19, 31, 41(success) and 41(dead), and
     # PR #273 died at the ceiling twice for $4.05 and no verdict. A ceiling
     # sitting on top of the distribution blocks every large PR.
+    #
+    # This is the STANDARD-review ceiling, which is what a review normally
+    # runs under. Since DRE-2466 qa-review.yml sizes the diff first and a
+    # PR past the file-list threshold runs at 150/200 instead
+    # (scripts/pr_size_strategy.py) — a rare path by design, so the roster
+    # keeps reporting the ordinary one.
     maxTurns: 80
     # Advisory display only. Raised with the ceiling so the console does not
     # show a $3 run for an agent observed at $2.05 in 41 turns.

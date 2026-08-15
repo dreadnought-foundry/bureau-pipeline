@@ -103,14 +103,30 @@ def _verdict_word(verdict: str) -> str:
     return ""
 
 
-def decide(real: bool, verdict: str) -> tuple[str, str, str]:
+def decide(real: bool, verdict: str, too_large: str = "") -> tuple[str, str, str]:
     """(conclusion, title, summary) for the head-bound check.
 
     `real` is check_critic_result.py's answer to "did a genuine review
     run". A crash, or a verdict body with no readable VERDICT: line, fails
     CLOSED — the check goes red and says why in plain English rather than
     guessing at an outcome nobody produced.
+
+    `too_large` (DRE-2466) is the measured size when the review was declined
+    before it started. The head still gets a red check — nothing has been
+    reviewed — but it must say the real reason: the default no-review
+    summary blames an infrastructure failure, and a notice that blames the
+    wrong thing cost a day of credential-hunting once already (DRE-2465).
     """
+    if too_large:
+        return (
+            "failure",
+            "Review skipped — pull request too large",
+            f"This pull request is too large to review ({too_large}). No "
+            "review was attempted, so there are no findings and this is NOT "
+            "a code rejection. Split it into smaller pull requests — each "
+            "one independently reviewable — and every part gets a full "
+            "review.",
+        )
     if not real:
         return (
             "failure",
@@ -217,9 +233,10 @@ def detail_body(*, sha: str, summary: str, run_url: str, event: str,
 
 
 def publish(*, repo: str, sha: str, real: bool, verdict: str,
-            run_url: str, event: str, carried_from: str = "") -> int:
+            run_url: str, event: str, carried_from: str = "",
+            too_large: str = "") -> int:
     """Create or update the head-bound check. 0 on success."""
-    conclusion, title, summary = decide(real, verdict)
+    conclusion, title, summary = decide(real, verdict, too_large)
     detail = detail_body(sha=sha, summary=summary, run_url=run_url,
                          event=event, carried_from=carried_from)
     payload = json.dumps({
@@ -270,6 +287,10 @@ def main(argv: list[str]) -> int:
                     help="check_critic_result.py's verdict: true|false")
     ap.add_argument("--run-url", default="")
     ap.add_argument("--event", default="")
+    ap.add_argument("--too-large", default="",
+                    help="the measured size when the review was declined "
+                         "before it started (DRE-2466), e.g. "
+                         "'480 files, 65,000 changed lines'")
     ap.add_argument("--carried-from", default="",
                     help="the commit a CARRIED verdict was earned on "
                          "(DRE-2340) — set only on the review-skip path, "
@@ -288,6 +309,7 @@ def main(argv: list[str]) -> int:
         run_url=args.run_url,
         event=args.event,
         carried_from=args.carried_from,
+        too_large=args.too_large,
     )
 
 

@@ -33,6 +33,12 @@ On any is_error the gate also prints WHY, from the execution file's own
 result record (DRE-2435, see execution_result.py) — a whitelist of scalar
 fields, never the transcript.
 
+SECOND EXCEPTION-SHAPED RULE, DRE-2466: the critic now writes its verdict
+file FIRST as a stub carrying INCOMPLETE_MARKER and rewrites it as it goes,
+so a review that ends early leaves something readable behind. A file still
+carrying that marker is a receipt, not a verdict — it is never real, on any
+path, and its partial content is printed to the run log instead.
+
 DRE-2465: and on the NO-VERDICT path it says what it found instead. Two
 things were missing there. First, "no usable verdict file" covers three
 different situations — the file is absent, the file is empty, or the file has
@@ -79,6 +85,31 @@ _MAX_TURNS_SUBTYPE = "error_max_turns"
 
 # The two decisions a critic is allowed to reach.
 _LEGAL_VERDICTS = ("APPROVE", "REQUEST_CHANGES")
+
+#: The critic now writes its verdict file FIRST, as a stub, and rewrites it
+#: as the review proceeds (DRE-2466) — so a run that ends early leaves
+#: something behind instead of the nothing portico PR #297 left four times.
+#: This marker is the stub's own header line and the CONTRACT with the
+#: prompt: while it is present the review has NOT finished, and the final
+#: rewrite removes it. Both critic prompts in qa-review.yml quote this exact
+#: string (pinned by tests/test_critic_size_strategy.py) — without the rule
+#: below, the stub would post as a REQUEST_CHANGES with no findings and wake
+#: the fix agent, which is the false-reject class DRE-1330/1332 opened.
+INCOMPLETE_MARKER = "<!-- QA-REVIEW-INCOMPLETE -->"
+
+#: Only the stub's own header counts. A verdict REVIEWING this gate may
+#: quote the marker in its findings section, and an honest review of this
+#: file must not void itself by mentioning it.
+_MARKER_SCAN_LINES = 5
+
+
+def verdict_is_unfinished(text: str) -> bool:
+    """True while the critic's own stub marker still heads the file."""
+    return any(
+        line.strip() == INCOMPLETE_MARKER
+        for line in text.splitlines()[:_MARKER_SCAN_LINES]
+    )
+
 
 # The token a near-miss verdict is a near miss OF. `_verdict_line_present`
 # wants it at the start of a stripped line; a critic that bolded it, prefixed
@@ -178,6 +209,12 @@ def verdict_is_real(execution: dict | None, verdict_path: str) -> bool:
         return False
     text = raw.decode("utf-8", "replace")
     if not text.strip():
+        return False
+    if verdict_is_unfinished(text):
+        # The review started and did not finish. That file is a receipt, not
+        # a verdict: posting it would request changes nobody found (the
+        # #1441/#1442 churn), and on the max-turns path it is precisely what
+        # DRE-2422's keep-the-verdict exception must not rescue.
         return False
     if crashed:
         # Higher bar on the crash path only. Failing it lands exactly where
@@ -315,6 +352,7 @@ def main(argv: list[str]) -> int:
         # starts a line with VERDICT: — the file is deleted before the retry,
         # so nothing else will ever record the difference.
         print_verdict_file_report(verdict_path, "critic result gate")
+        _print_unfinished_verdict(verdict_path)
         if execution is not None:
             print(
                 "critic result gate: the reviewer authenticated and did real "
@@ -328,6 +366,35 @@ def main(argv: list[str]) -> int:
                 "so whether the reviewer ran at all is unknown"
             )
     return 1
+
+
+#: How much of an unfinished verdict reaches the log. Enough to read the
+#: findings the review did reach; not a transcript dump (show_full_output
+#: stays off — tests/test_execution_failure_detail.py).
+_UNFINISHED_LOG_CHARS = 4_000
+
+
+def _print_unfinished_verdict(verdict_path: str) -> None:
+    """Show what an unfinished review DID find (DRE-2466).
+
+    The verdict cannot be posted — it declares itself unfinished — but the
+    partial findings are the only surviving evidence of how far the review
+    got, and portico PR #297 was diagnosed entirely from run records. This
+    is the critic's own output, which the passing path posts verbatim as a
+    PR comment; logging it exposes nothing new.
+    """
+    raw = _read_verdict(verdict_path)
+    if raw is None:
+        return
+    text = raw.decode("utf-8", "replace")
+    if not verdict_is_unfinished(text):
+        return
+    print(
+        "critic result gate: the review left an UNFINISHED verdict "
+        f"({len(text)} chars) — it wrote the stub and never replaced it. "
+        "Partial content follows; it is NOT posted as a verdict."
+    )
+    print(text[:_UNFINISHED_LOG_CHARS])
 
 
 if __name__ == "__main__":
