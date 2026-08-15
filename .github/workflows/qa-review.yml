@@ -598,7 +598,12 @@ jobs:
         run: |
           EXEC_FILE="${{ steps.critic.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
-          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md; then
+          # --github-output (DRE-2465): the gate also writes `outcome` and,
+          # for a run that ended cleanly, `turns`/`cost` — numbers only, so a
+          # hostile execution record cannot forge a second step output. The
+          # neutral comment is composed from these instead of assuming a crash.
+          # Kept identical in the attempt-2 gate below.
+          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT"; then
             echo "real=true" >> "$GITHUB_OUTPUT"
           else
             echo "real=false" >> "$GITHUB_OUTPUT"
@@ -763,7 +768,10 @@ jobs:
         run: |
           EXEC_FILE="${{ steps.critic_retry.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
-          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md; then
+          # --github-output (DRE-2465): identical to the attempt-1 gate above.
+          # Both attempts must report, or a retry that ran to completion after
+          # a first attempt that crashed silently keeps the crash wording.
+          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT"; then
             echo "real=true" >> "$GITHUB_OUTPUT"
           else
             echo "real=false" >> "$GITHUB_OUTPUT"
@@ -790,6 +798,20 @@ jobs:
           CONTENT_ID: ${{ steps.pr.outputs.content }}
           # A genuine review ran iff either gate saw a real verdict.
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+          # DRE-2465: what each attempt ACTUALLY did, so the neutral comment
+          # describes the run instead of asserting a credential failure. Each
+          # gate writes `outcome` (ok / crash / completed_no_verdict /
+          # unknown) and, only for a run that ended cleanly, `turns` + `cost`
+          # as bare numbers. Numbers, not text, is the safety property: these
+          # reach a double-quoted shell string below, exactly like MODEL_WHY,
+          # and tests/test_qa_review_no_verdict_message.py proves a hostile
+          # value is data. Empty when a gate did not run.
+          A1_OUTCOME: ${{ steps.gate1.outputs.outcome }}
+          A1_TURNS: ${{ steps.gate1.outputs.turns }}
+          A1_COST: ${{ steps.gate1.outputs.cost }}
+          A2_OUTCOME: ${{ steps.gate2.outputs.outcome }}
+          A2_TURNS: ${{ steps.gate2.outputs.turns }}
+          A2_COST: ${{ steps.gate2.outputs.cost }}
           # The selected model + its one-line reason, carried on the LINEAR copy
           # of the verdict below. Passed as ENV, never interpolated into the
           # script body: Actions substitutes `${{ }}` as literal text before
@@ -802,6 +824,26 @@ jobs:
           MODEL_ID: ${{ steps.model.outputs.model }}
           MODEL_WHY: ${{ steps.model.outputs.why }}
         run: |
+          # DRE-2465: has this PR earned the "the reviewer never ran" notice?
+          # That sentence is a claim about a credential and it may only be
+          # made when an attempt actually died. portico PR #297 posted it
+          # four times over four completed executions (117 turns, ~$12.40)
+          # and an operator rotated a healthy token twice chasing it. ONE
+          # attempt that ended cleanly is enough to disprove it, so both
+          # gates are consulted; the retry's numbers win when both ran. Empty
+          # RAN means crash, or no execution record at all — neither of which
+          # we can describe as a run, so the existing wording stands.
+          RAN=""
+          if [ "${A1_OUTCOME:-}" = "completed_no_verdict" ]; then
+            RAN="the first attempt ran ${A1_TURNS:-?} turns and billed about \$${A1_COST:-?}"
+          fi
+          if [ "${A2_OUTCOME:-}" = "completed_no_verdict" ]; then
+            if [ -n "$RAN" ]; then
+              RAN="$RAN, the retry ${A2_TURNS:-?} turns and about \$${A2_COST:-?}"
+            else
+              RAN="the retry ran ${A2_TURNS:-?} turns and billed about \$${A2_COST:-?}"
+            fi
+          fi
           if [ "$REAL" = "true" ]; then
             # A real verdict (APPROVE or REQUEST_CHANGES with findings) from a
             # critic that actually ran — post it verbatim, BOUND to the commit
@@ -821,6 +863,21 @@ jobs:
             # SHA alone. The `:+` form is deliberate: it is safe under
             # `set -u` when CONTENT_ID is unset.
             { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md) @${REVIEWED_SHA}${CONTENT_ID:+ content:$CONTENT_ID}"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
+          elif [ -n "$RAN" ]; then
+            # DRE-2465, the third branch: the reviewer RAN TO COMPLETION and
+            # left no verdict this gate could read. Same neutral contract as
+            # the crash branch below — "QA Critic" so merge-gate treats it as
+            # the latest verdict and it supersedes any stale APPROVE, and no
+            # "VERDICT: APPROVE" line so merge-gate holds rather than merges —
+            # but it describes what happened instead of blaming the token. The
+            # numbers are the point: they are what tells the operator, in one
+            # line, that rotating a credential will not fix this. What was
+            # actually found in place of the verdict (existed / bytes /
+            # near-miss VERDICT token) is in the run log, printed by the gate.
+            printf '%s\n\n%s\n' \
+              "🔎 QA Critic ran but produced no verdict — re-review needed, this is NOT a code rejection." \
+              "The adversarial reviewer completed its run and then left no verdict we could read — $RAN. This is NOT an authentication or startup failure: it authenticated, did real work, and was billed for it, so no credential needs rotating on the strength of this message. The job's run log records what was found where the verdict should have been. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+              > /tmp/qa-comment.md
           else
             # The critic CRASHED on both attempts (is_error / no verdict). Do
             # NOT post REQUEST_CHANGES — that false reject churns good PRs into
