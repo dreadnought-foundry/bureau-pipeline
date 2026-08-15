@@ -222,6 +222,17 @@ def _pr_ref(pr: str) -> str:
     return digits or "<n>"
 
 
+#: Print ONE file's hunks out of the saved full diff. `index()`, not a
+#: regex: a path is not a pattern (`.` and `+` are ordinary characters in
+#: file names), and the git header line is `diff --git a/P b/P`, so the
+#: match has to bracket the path on both sides. An instruction that silently
+#: prints nothing would burn the very turns this strategy exists to save —
+#: tests/test_critic_size_strategy.py runs this command for real.
+PER_FILE_HUNKS = (
+    "awk -v f=\"<path>\" '/^diff --git /{p = index($0, \" a/\" f \" b/\")} p' "
+    "/tmp/qa-full.diff"
+)
+
 _EXHAUSTIVE = (
     "EXHAUSTIVE (mandatory): list every blocking finding you found in THIS "
     "verdict — do not ration findings across rounds. A re-review that "
@@ -260,8 +271,7 @@ def strategy_context(strategy: str, m: dict, pr: str) -> str:
         "need no line-by-line read — check that the change which produced "
         "them is sane.\n"
         "  4. Review PER FILE, in that order. For one file's hunks:\n"
-        "     `awk -v f=\"<path>\" '/^diff --git /{p=($0 ~ (\" a/\" f \"$\"))} p' "
-        "/tmp/qa-full.diff`\n"
+        f"     `{PER_FILE_HUNKS}`\n"
         "     Grep /tmp/qa-full.diff to locate a file, and Read the file "
         "itself when you need surrounding context.\n"
         "  5. Update /tmp/qa-verdict.md after each file you finish, so the "

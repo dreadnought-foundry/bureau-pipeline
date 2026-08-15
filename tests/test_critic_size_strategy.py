@@ -311,6 +311,39 @@ class StrategyContextTest(unittest.TestCase):
                 self.assertIn("118", block)
                 self.assertIn("17,537", block)
 
+    def test_the_per_file_command_it_hands_the_critic_actually_works(self):
+        """The one instruction in the block that can fail SILENTLY.
+
+        A command that prints nothing looks like a clean file, and the
+        critic would spend the turns this strategy exists to save finding
+        that out. So run it — on a real multi-file diff, for a path
+        containing the regex metacharacters a real path contains.
+        """
+        diff = (
+            "diff --git a/src/app.config.ts b/src/app.config.ts\n"
+            "--- a/src/app.config.ts\n+++ b/src/app.config.ts\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/src/other.ts b/src/other.ts\n"
+            "--- a/src/other.ts\n+++ b/src/other.ts\n"
+            "@@ -1 +1 @@\n-untouched\n+by the filter\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "qa-full.diff")
+            with open(path, "w") as f:
+                f.write(diff)
+            command = pss.PER_FILE_HUNKS.replace(
+                "<path>", "src/app.config.ts"
+            ).replace("/tmp/qa-full.diff", path)
+            out = subprocess.run(["bash", "-c", command],
+                                 capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("+new", out.stdout)
+        self.assertNotIn("by the filter", out.stdout)
+        self.assertTrue(out.stdout.startswith("diff --git a/src/app.config.ts"))
+
+    def test_the_large_block_hands_over_that_exact_command(self):
+        self.assertIn(pss.PER_FILE_HUNKS, self.ctx("large"))
+
     def test_the_block_carries_the_pr_number_it_was_built_for(self):
         self.assertIn("297", self.ctx("large", pr="297"))
 
