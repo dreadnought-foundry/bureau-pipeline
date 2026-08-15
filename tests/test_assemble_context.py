@@ -59,6 +59,7 @@ class MappingTest(unittest.TestCase):
             "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
             "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "vendor-boundaries.md", "console-honesty.md"],
             "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
+            "database-architect": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
             "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md"],
             "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md"],
             "verifier": ["comms.md", "untrusted-content.md", "design.md", "design-parity.md"],
@@ -74,7 +75,7 @@ class MappingTest(unittest.TestCase):
         # role that authors or gates boundary-touching work. verifier/fix/
         # medic run INSIDE an already-designed flow and don't design new
         # vendor interactions — keeping their context lean is deliberate.
-        for role in ("planner", "engineer", "frontend", "devops", "critic"):
+        for role in ("planner", "engineer", "frontend", "devops", "critic", "database-architect"):
             self.assertIn(
                 "vendor-boundaries.md", ac.standards_for(role),
                 f"{role} must receive the vendor-boundaries standard",
@@ -96,7 +97,7 @@ class MappingTest(unittest.TestCase):
                 "console-honesty.md", ac.standards_for(role),
                 f"{role} must receive the console-honesty standard",
             )
-        for role in ("devops", "planner", "verifier", "fix", "medic"):
+        for role in ("devops", "planner", "verifier", "fix", "medic", "database-architect"):
             self.assertNotIn(
                 "console-honesty.md", ac.standards_for(role),
                 f"{role} must not carry the console-honesty standard",
@@ -204,6 +205,32 @@ class RealFilesTest(unittest.TestCase):
                     (yaml_brief or "").endswith(brief),
                     f"{role}: helper brief {brief!r} vs agents.yaml {yaml_brief!r}",
                 )
+
+    def test_every_rostered_agent_with_a_brief_is_wired(self):
+        # The REVERSE of the check above, and the hole database-architect fell
+        # through: that test walks ROLE_BRIEF -> agents.yaml, so an agent
+        # rostered in agents.yaml with a briefPath but MISSING from the helper
+        # maps was invisible to it. assemble_context would then raise KeyError
+        # the moment a route sent that role through -- a latent break that only
+        # surfaces when someone wires the dispatch. Walk roster -> helper too.
+        import yaml
+
+        reg = yaml.safe_load(open(os.path.join(REPO, "agents.yaml")))
+        alias = {"fixer": "fix"}
+        for entry in reg["agents"]:
+            if not entry.get("briefPath"):
+                continue  # brief-less roles (critic/medic) are standards-only
+            role = alias.get(entry["name"], entry["name"])
+            self.assertIn(
+                role, ac.ROLE_BRIEF,
+                f"agents.yaml rosters {entry['name']!r} with a brief but "
+                f"ROLE_BRIEF has no {role!r} key -- assemble_context would KeyError",
+            )
+            self.assertIn(
+                role, ac.ROLE_STANDARDS,
+                f"agents.yaml rosters {entry['name']!r} but ROLE_STANDARDS has "
+                f"no {role!r} key -- standards_for() would KeyError",
+            )
 
 
 if __name__ == "__main__":
