@@ -94,16 +94,35 @@ jobs:
     if: >
       (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
-    # 45, raised from 25 with the file-list strategy (DRE-2466). A large
-    # review deliberately takes more, smaller steps — up to 150 turns on the
-    # first attempt and 200 on the retry — and portico's completed reviews
-    # ran at roughly 5-7 seconds a turn, so 25 minutes could not hold one.
+    # 65, raised from 25 with the file-list strategy (DRE-2466). A large
+    # review deliberately takes more, smaller steps, and the budget has to
+    # hold the WHOLE cycle this job can run — not just the first attempt:
+    #
+    #   attempt 1   150 turns × 7 s  = 17.5 min
+    #   backoff     sleep 120        =  2.0 min   ("Back off before the
+    #                                              critic retry", below)
+    #   retry       200 turns × 7 s  = 23.3 min
+    #                                  ────────
+    #                                  42.8 min
+    #
+    # at the 7 s/turn upper end portico's COMPLETED reviews ran at — plus
+    # roughly 15 minutes the turn arithmetic does not model: token minting,
+    # two checkouts, should_review_pr and the compare-record fetch with its
+    # own retry loop, context assembly, model selection, the verdict-posting
+    # retry loop, and — on a PR carrying a `**Design:**` ref — "Render
+    # affected screens" pulling an `npm ci` plus a chromium download first.
+    # That is ~58 minutes; 65 leaves margin. (45 held the first attempt but
+    # not the cycle, which is why this number is derived, not guessed.)
+    #
     # A job that hits its timeout is CANCELLED, and a cancelled job skips
     # even its `always()` steps: no verdict comment, no head-bound check,
-    # nothing for anyone to read. The wall clock is the real backstop on a
-    # runaway review, so it moves with the ceiling rather than silently
-    # capping it.
-    timeout-minutes: 45
+    # nothing for anyone to read — the exact #297 outcome this card exists
+    # to remove, so it must not come back one size class up. The wall clock
+    # is the real backstop on a runaway review, so it moves with the ceiling
+    # rather than silently capping it.
+    # tests/test_critic_size_strategy.py pins this against the turn budget
+    # and the backoff sleep, so changing either re-opens the arithmetic.
+    timeout-minutes: 65
     steps:
       # Mint from the qa-bot App so the critic's GitHub calls draw from the
       # qa-bot installation's SEPARATE 5,000/hr quota — not the dispatch bot's
@@ -727,7 +746,8 @@ jobs:
       # retry ran as the immediately following step, so a deterministic
       # failure was simply re-issued at once and charged twice. 120s clears
       # the transient class this retry exists for (token-mint blip, action
-      # startup, an API 5xx) and fits inside the 25-minute job timeout.
+      # startup, an API 5xx) and is counted in the job's timeout-minutes
+      # arithmetic above — raising it means raising that too.
       #
       # This workflow is NOT rate-limit-prone the way verify.yml was: its
       # token comes from the qa-bot App, whose installation has its own

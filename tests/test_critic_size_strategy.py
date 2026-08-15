@@ -119,6 +119,33 @@ def src(workflow="qa-review.yml"):
     return open(os.path.join(WF_DIR, workflow)).read()
 
 
+#: The per-turn cost the wall-clock budget is sized against — the upper end
+#: of the 5-7 s/turn portico's COMPLETED reviews ran at. Budgeting on the
+#: fast end would size the job for the runs that were never the problem.
+SECONDS_PER_TURN = 7
+
+#: Minutes the two-attempt turn arithmetic does not model: minting the
+#: qa-bot token, two checkouts, should_review_pr + the compare-record fetch
+#: (its own retry/backoff loop), context assembly, model selection, the
+#: verdict-posting retry loop (4 attempts, 10+20+30 s of sleeps) — and, on a
+#: PR carrying a `**Design:**` ref, "Render affected screens" pulling an
+#: `npm ci` plus a chromium download before it renders anything.
+JOB_OVERHEAD_MINUTES = 15
+
+
+def retry_backoff_seconds(workflow="qa-review.yml", job="review"):
+    """The mandatory sleep between critic attempt 1 and the retry, read from
+    the step itself — the wall-clock budget has to move when it does."""
+    for step in wf_steps(workflow, job):
+        if "Back off before the critic retry" in (step.get("name") or ""):
+            found = re.search(r"\bsleep\s+(\d+)", step.get("run") or "")
+            if not found:
+                raise AssertionError("the retry backoff no longer sleeps — "
+                                     "update this helper")
+            return int(found.group(1))
+    raise AssertionError("the retry backoff step is gone — update this helper")
+
+
 # ── 1. the measurement ─────────────────────────────────────────────────────
 
 class MeasureTest(unittest.TestCase):
@@ -656,13 +683,36 @@ class WorkflowWiringTest(unittest.TestCase):
 
         A timed-out job is CANCELLED, and a cancelled job skips even its
         `always()` steps — no verdict comment, no head-bound check, nothing
-        to read. At the ~5-7 seconds a turn portico's completed reviews ran
-        at, the large first attempt alone needs more than 25 minutes.
+        to read. That is the exact #297 outcome this card exists to remove,
+        so it must not be reintroduced one size class up.
+
+        The wall clock has to hold the WHOLE cycle the job can run, not the
+        first attempt: attempt 1 + the mandatory retry backoff + the retry,
+        at the ~7 s/turn upper end portico's completed reviews ran at, plus
+        the fixed overhead the turn arithmetic does not model. Asserting
+        against the first attempt alone was trivially satisfied (45 ≥ 17.5)
+        and hid a 42.8-minute worst case inside a 45-minute budget.
+
+        Both inputs are READ from the workflow and the budget table, so
+        raising `TURN_BUDGET["large"]` or the backoff sleep re-opens this
+        test rather than silently re-opening the gap.
         """
         doc = yaml.safe_load(open(os.path.join(WF_DIR, "qa-review.yml")))
         timeout = doc["jobs"]["review"]["timeout-minutes"]
-        first = pss.turn_budget("large")[0]
-        self.assertGreaterEqual(timeout, first * 7 / 60)
+        first, retry = pss.turn_budget("large")
+        backoff = retry_backoff_seconds()
+        needed = (
+            (first + retry) * SECONDS_PER_TURN + backoff
+        ) / 60 + JOB_OVERHEAD_MINUTES
+        self.assertGreaterEqual(
+            timeout,
+            needed,
+            f"timeout-minutes: {timeout} cannot hold the large strategy's "
+            f"full cycle ({first}+{retry} turns at {SECONDS_PER_TURN}s + "
+            f"{backoff}s backoff + {JOB_OVERHEAD_MINUTES} min overhead = "
+            f"{needed:.1f} min) — a review that runs long is cancelled and "
+            f"posts nothing",
+        )
 
     def test_show_full_output_stays_off(self):
         """Explicit card constraint — the transcript dump is not the
