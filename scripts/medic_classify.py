@@ -37,10 +37,29 @@ We classify off the run name + its failed-step log text. Only the QA-Review
 workflow can be a *critic* infra-crash (other workflows' rate-limits are real
 failures the medic should still retry/diagnose once).
 
+SECOND CLASS — UPSTREAM 5xx (DRE-2488). On 2026-08-17 GitHub itself was down:
+api.github.com answered `HTTP 503: No server is currently available to service
+your request`, portico's scheduled Reconcile sweeps died on it, the medic
+retried into the same outage, the diagnosis agent fired, and the operator got
+10 red-run emails (5 reconcile + 5 medic) for something nobody in the fleet can
+fix. A GitHub-wide 5xx is not a pipeline failure and must not read as one — so
+it gets the same shape as the critic rate-limit class: no retry (retrying into
+an outage makes it worse; scheduled workflows re-run themselves), no diagnosis
+agent, one `::notice::`, and the medic's own run stays green.
+
+Detection is anchored to the API-ERROR LINE SHAPE — a single log line that
+names `api.github.com` AND carries a 502/503/504 (the `gh` CLI's
+"failed to get runs: HTTP 503: … (https://api.github.com/…)" and an HTTP
+client's "non-200 OK status code: 503"), or the CLI's self-identifying
+"gh: <message> (HTTP 503)" line. Prose that merely mentions 503 — a diff hunk,
+a card body quoted into an agent log — must NOT classify, or a genuine failure
+would be silently swallowed.
+
 CLI:
     python3 medic_classify.py <workflow-name> <log-file>
-prints `infra_crash=true` or `infra_crash=false` (and a human line on stderr);
-exit 0 either way. The caller (medic.yml) reads the stdout line.
+prints two lines — `infra_crash=true|false` (the DRE-1921 gate, unchanged) and
+`class=critic_infra_crash|upstream_5xx|normal` — plus a human line on stderr;
+exit 0 either way. The caller (medic.yml) reads the stdout lines.
 """
 
 from __future__ import annotations
@@ -64,6 +83,59 @@ _INFRA_SIGNATURES = (
     re.compile(r"x-ratelimit-remaining[\"'\s:]+0", re.I),
     re.compile(r"403[^\n]*rate", re.I),
 )
+
+
+# ── upstream 5xx (DRE-2488) ──────────────────────────────────────────────────
+# GitHub's own host. A GitHub API error line always names it; prose quoting a
+# 503 does not. Requiring it ON THE SAME LINE as the status is what keeps a
+# card body or diff hunk that mentions "503" out of this class.
+_GH_API_HOST = "api.github.com"
+
+# The 5xx status shapes we accept on such a line. 502/503/504 only: those are
+# GitHub-side server errors. 500 is deliberately excluded — it is also what a
+# broken request of ours returns, and we must not swallow our own bugs.
+_UPSTREAM_5XX_SHAPES = (
+    # `gh run view`/`gh pr list` style: "failed to get runs: HTTP 503: No
+    # server is currently available to service your request. (https://api…)"
+    re.compile(r"\bHTTP 50[234]\b\s*:", re.I),
+    # HTTP-client wrappers (octokit/go): "non-200 OK status code: 503 Service
+    # Unavailable".
+    re.compile(r"non-200 OK status code:\s*50[234]\b", re.I),
+    # Bare status + reason phrase, e.g. "503 Service Unavailable".
+    re.compile(r"\b50[234]\s+(?:service unavailable|bad gateway|gateway time)", re.I),
+)
+
+# `gh api`'s own error line — "gh: <message> (HTTP 503)" — carries no URL, but
+# the `gh: … (HTTP 50x)` shape is the CLI identifying itself and is not prose.
+_GH_CLI_STATUS_LINE = re.compile(r"\bgh:\s[^\n]*\(HTTP 50[234]\)", re.I)
+
+
+def is_upstream_5xx(log_text: str) -> bool:
+    """True iff the failed run's logs show GitHub itself returning 5xx — an
+    UPSTREAM OUTAGE the medic must back off from (no retry, no diagnosis), not
+    a pipeline failure. Line-anchored on purpose: see the module docstring.
+    """
+    for line in (log_text or "").splitlines():
+        if _GH_CLI_STATUS_LINE.search(line):
+            return True
+        if _GH_API_HOST in line and any(s.search(line) for s in _UPSTREAM_5XX_SHAPES):
+            return True
+    return False
+
+
+def classify(workflow_name: str, log_text: str) -> str:
+    """The failed run's class: `critic_infra_crash` (DRE-1921 — back off, the
+    reviewer was down), `upstream_5xx` (DRE-2488 — GitHub is down, back off),
+    or `normal` (retry once, then diagnose).
+
+    The critic infra-crash is checked FIRST so its established handling (the
+    plain-English "reviewer down" note on the card) is untouched.
+    """
+    if is_critic_infra_crash(workflow_name, log_text):
+        return "critic_infra_crash"
+    if is_upstream_5xx(log_text):
+        return "upstream_5xx"
+    return "normal"
 
 
 def _is_qa_review(workflow_name: str) -> bool:
@@ -97,12 +169,22 @@ def _read(path: str) -> str:
 
 def main(argv: list[str]) -> int:
     workflow_name, log_file = (argv + ["", ""])[:2]
-    crash = is_critic_infra_crash(workflow_name, _read(log_file))
+    log_text = _read(log_file)
+    kind = classify(workflow_name, log_text)
+    crash = kind == "critic_infra_crash"
     print(f"infra_crash={'true' if crash else 'false'}")
+    print(f"class={kind}")
     if crash:
         print(
             "medic classify: QA critic INFRA-CRASH (rate-limit/auth) — backing "
             "off, NOT rerunning (would deepen the limit and loop).",
+            file=sys.stderr,
+        )
+    elif kind == "upstream_5xx":
+        print(
+            "medic classify: UPSTREAM OUTAGE — GitHub's API returned 5xx. "
+            "Backing off: no retry (it would hit the same outage), no "
+            "diagnosis (nobody in the fleet can fix GitHub).",
             file=sys.stderr,
         )
     else:

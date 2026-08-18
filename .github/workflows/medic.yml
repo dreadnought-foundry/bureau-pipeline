@@ -16,6 +16,16 @@
 # plain-English "reviewer down (infra) — not a code rejection" note, and lets a
 # later natural trigger (a new push, the rate-limit window resetting) re-review.
 #
+# SECOND EXCEPTION (DRE-2488): a GitHub-wide 5xx is an UPSTREAM OUTAGE, not a
+# pipeline failure. On 2026-08-17 api.github.com answered "HTTP 503: No server
+# is currently available to service your request"; portico's scheduled
+# Reconcile sweeps died on it, the medic retried into the same outage, the
+# diagnosis agent fired, and the operator got 10 red-run emails for something
+# nobody in the fleet can fix. So on class `upstream_5xx` the medic neither
+# retries (the outage is still there; scheduled workflows like Reconcile re-run
+# themselves) nor diagnoses (GitHub is not ours to fix) — it emits one
+# ::notice:: naming the outage and ENDS GREEN, so no red email goes out.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -59,6 +69,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
+      # DRE-2488: the failure's class — critic_infra_crash | upstream_5xx |
+      # normal. The classifier prints both lines; infra_crash stays as-is so
+      # the DRE-1921 gates below are untouched.
+      class: ${{ steps.c.outputs.class }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -89,7 +103,8 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1 &&
-      needs.classify.outputs.infra_crash != 'true'
+      needs.classify.outputs.infra_crash != 'true' &&
+      needs.classify.outputs.class != 'upstream_5xx'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -134,12 +149,39 @@ jobs:
               "🔌 The code reviewer was temporarily unavailable (an infrastructure rate-limit, not a problem with the work). The pipeline is deliberately NOT retrying right now — retrying would make the rate-limit worse. The review will run again on its own once the limit resets or the next change is pushed. No action needed from you; nothing was rejected." || true
           fi
 
+  # Upstream outage back-off (DRE-2488). GitHub itself answered 5xx, so there
+  # is nothing here to retry or to diagnose: a rerun walks straight back into
+  # the outage, and a diagnosis agent would burn inference to report "GitHub is
+  # down". One ::notice:: naming the outage, then the job ends GREEN — a red
+  # medic run emails the operator about a problem nobody in the fleet can fix,
+  # which is the whole complaint. The affected workflows recover on their own:
+  # scheduled ones (Reconcile) on their next tick, PR ones on the next push.
+  # No attempt gate — a notice is a per-run annotation, not a Linear comment,
+  # so repeating it on a rerun costs nothing and keeps that run green too.
+  upstream_outage:
+    needs: classify
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      needs.classify.outputs.class == 'upstream_5xx'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Note the upstream GitHub outage — no rerun, no diagnosis
+        env:
+          # env, not inline ${{ }} (DRE-1996): keep run-supplied text out of
+          # the shell line.
+          FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          echo "::notice::Upstream GitHub outage — the GitHub API returned 5xx (502/503/504), so ${FAILED_WORKFLOW} could not finish. This is an outage at GitHub, not a pipeline failure: not retrying (the retry hits the same outage) and not diagnosing (nobody here can fix GitHub). The workflow runs again on its own. Failed run: ${RUN_URL}"
+
   diagnose:
     needs: classify
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt >= 2 &&
-      needs.classify.outputs.infra_crash != 'true'
+      needs.classify.outputs.infra_crash != 'true' &&
+      needs.classify.outputs.class != 'upstream_5xx'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
