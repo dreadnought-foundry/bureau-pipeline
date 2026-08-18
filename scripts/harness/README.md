@@ -153,7 +153,11 @@ for hours. So the default sweep (empty `scenarios` input) is exactly the three
 cheap scenarios, and these are selected by name through the same input —
 `--scenarios unverified_claim`. The driver caps each agent at 45 minutes and
 prints what the default sweep skipped, so the cap is never silent. Name at
-most two per dispatch (the job's 120-minute ceiling).
+most two per dispatch (the job's 120-minute ceiling). Two of them outlast the
+hour an App installation token lives, so the credential the agent clones and
+pushes with is asked for at dispatch time (`AgentScenario.live_token` →
+`GitHub.current_token`) rather than copied out at process start — the same
+re-mint the REST client already does for its own calls (run 29795108949).
 
 **The seeded card.** The sandbox has no Linear, and it stays that way: the
 card is dispatched as text, and the agent's clone gets an assembled

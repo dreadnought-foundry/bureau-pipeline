@@ -30,11 +30,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from harness import __main__ as harness_main  # noqa: E402
-from harness import agent_run, agent_scenario, framework, scenarios  # noqa: E402
+from harness import agent_run, agent_scenario, framework  # noqa: E402
+from harness import github_api, scenarios  # noqa: E402
 from harness.scenarios import (  # noqa: E402
     already_live,
     checklist_gaming,
@@ -820,6 +822,122 @@ class WorkerTokenStaysFreshTest(unittest.TestCase):
         finally:
             agent_run.run_agent = original
         self.assertEqual(recorded.get("token"), "pat-token")
+
+
+class TwoScenariosInOneRunTest(unittest.TestCase):
+    """The same freshness, proved through the DRIVER rather than a stubbed
+    client — because the driver loop is where the staleness came from.
+
+    `__main__` reads HARNESS_WORKER_TOKEN once at process start and hands that
+    value to every HarnessContext it builds. harness.yml's own input
+    description tells the operator to name at most two agent scenarios per
+    dispatch, and agent_run caps each agent at 45 minutes, so the recommended
+    usage is exactly the one that carries the second dispatch past the hour an
+    installation token lives. Nothing here stubs the age math: a real GitHub
+    client runs on a fake clock that crosses the refresh threshold between the
+    two scenarios.
+    """
+
+    class _Stub(agent_scenario.AgentScenario):
+        """An agent scenario reduced to its dispatch. The real seed/verify/
+        cleanup phases talk to the live sandbox; what matters here is which
+        token the exercise phase hands the agent, and how much wall clock the
+        surrounding phases burn getting there."""
+
+        def __init__(self, name, faketime, phase_seconds=300.0):
+            self.name = name
+            self.faketime = faketime
+            self.phase_seconds = phase_seconds
+
+        def _burn(self):
+            # setup and cleanup poll the sandbox — real minutes, on the same
+            # clock the token ages against.
+            self.faketime.now += self.phase_seconds
+
+        def setup(self, ctx):
+            ctx.state["identifier"] = agent_scenario.card_identifier(
+                ctx.run_id, self.name
+            )
+            self._burn()
+
+        def card_title(self, ctx):
+            return f"harness card for {self.name}"
+
+        def card_body(self, ctx):
+            return "do the seeded work"
+
+        def cleanup(self, ctx):
+            self._burn()
+
+    def _run_two_scenarios(self):
+        """Two named scenarios through main(). Returns (exit code, the token
+        each dispatch received, the re-mints the supplier was asked for)."""
+        faketime = _FakeTime()
+        tokens = []
+        minted = []
+
+        def fake_run_agent(card, repo, token, **kwargs):
+            tokens.append(token)
+            faketime.now += agent_run.AGENT_TIMEOUT_SECONDS  # the 45-min cap
+            return agent_run.AgentRunResult(returncode=0)
+
+        def fake_mint(app_id, private_key_pem, repo):
+            minted.append(repo)
+            return f"ghs-reminted-{len(minted)}"
+
+        real_token_supplier = harness_main.token_supplier
+
+        def token_supplier(role, app_id, private_key_pem, repo, **_):
+            return real_token_supplier(
+                role, app_id, private_key_pem, repo,
+                mint=fake_mint, log=lambda *_: None,
+            )
+
+        def client(token, **kwargs):
+            # The real client, on the fake clock — the age math is the thing
+            # under test, so it is never stubbed.
+            return github_api.GitHub(token, clock=faketime.clock, **kwargs)
+
+        names = ("first_agent_scenario", "second_agent_scenario")
+        stubs = {name: self._Stub(name, faketime) for name in names}
+        env = {
+            "HARNESS_WORKER_TOKEN": "ghs-minted-at-job-start",
+            "HARNESS_QA_LOGIN": QA,
+            "HARNESS_WORKER_LOGIN": WORKER,
+            "HARNESS_WORKER_APP_ID": "3350400",
+            "HARNESS_WORKER_APP_PRIVATE_KEY": "PEM",
+        }
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+            harness_main, "discover", lambda: stubs
+        ), mock.patch.object(
+            harness_main, "token_supplier", token_supplier
+        ), mock.patch.object(
+            harness_main, "GitHub", client
+        ), mock.patch.object(
+            agent_run, "run_agent", fake_run_agent
+        ):
+            code = harness_main.main(
+                [
+                    "--repo", "dreadnought-foundry/bureau-harness",
+                    "--scenarios", ",".join(names),
+                    "--run-id", "gha-1-1",
+                ]
+            )
+        return code, tokens, minted
+
+    def test_the_second_scenario_dispatches_with_a_reminted_token(self):
+        code, tokens, minted = self._run_two_scenarios()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(tokens), 2, "both scenarios must have dispatched")
+        self.assertEqual(tokens[0], "ghs-minted-at-job-start")
+        self.assertEqual(
+            tokens[1],
+            "ghs-reminted-1",
+            "the second agent run cloned with the token minted at job start — "
+            "over an hour stale by then, so the clone/push 401s and the "
+            "scenario reports an auth error instead of its verdict",
+        )
+        self.assertEqual(len(minted), 1, "one re-mint, not one per dispatch")
 
 
 class DiscoveryStaysStdlibOnlyTest(unittest.TestCase):
