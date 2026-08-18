@@ -752,6 +752,47 @@ class AgentRunPlumbingTest(unittest.TestCase):
         self.assertIn("briefs/engineer.md", body)
 
 
+class DiscoveryStaysStdlibOnlyTest(unittest.TestCase):
+    """Scenario DISCOVERY imports every module in the package, and the default
+    sweep runs on a bare runner with nothing installed (harness.yml only
+    installs test tooling for named scenarios). A module-level third-party
+    import therefore breaks the three cheap scenarios — and with them this
+    repo's merge gate.
+
+    Caught live: run 32093002253 died at `import yaml` in agent_run before a
+    single scenario ran. The local suite could not see it, because the test
+    environment HAS PyYAML.
+    """
+
+    BLOCKED = ("yaml",)
+
+    def test_discovery_survives_without_the_third_party_deps(self):
+        script = (
+            "import importlib.abc, sys\n"
+            "class Deny(importlib.abc.MetaPathFinder):\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            f"        if name.split('.')[0] in {self.BLOCKED!r}:\n"
+            "            raise ImportError('blocked for this test: ' + name)\n"
+            "        return None\n"
+            "sys.meta_path.insert(0, Deny())\n"
+            f"sys.path.insert(0, {str(REPO_ROOT / 'scripts')!r})\n"
+            "from harness.scenarios import discover\n"
+            "print(' '.join(sorted(discover())))\n"
+        )
+        done = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True
+        )
+        self.assertEqual(
+            done.returncode,
+            0,
+            f"discovery needs a third-party module: {done.stderr[-1500:]}",
+        )
+        found = done.stdout.split()
+        for name in list(AGENT_SCENARIOS) + ["bot_pr_flow", "dependabot_flow"]:
+            with self.subTest(scenario=name):
+                self.assertIn(name, found)
+
+
 class HarnessWorkflowWiringTest(unittest.TestCase):
     """harness.yml has to give the agent scenarios what they need — and give
     the DEFAULT sweep nothing it does not use."""
