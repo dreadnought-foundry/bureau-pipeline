@@ -280,6 +280,89 @@ def gh_dispatch(*args: str) -> None:
         )
 
 
+def gh_actions_read(*args: str) -> str | None:
+    """Read the Actions API under a token that can actually read it.
+
+    Origin (2026-08-17): DRE-1254 found `gh workflow run` executing under the
+    minted App token, which lacks Actions:write — "HTTP 403: Resource not
+    accessible by integration", discarded by the silent gh() helper. It fixed
+    the dispatch and left every Actions READ behind. The App token 403s there
+    too (reproduced live against DeltaSolv/deltasolv; the workflow-scoped AND
+    repo-wide runs endpoints both refuse), and the silent helper turned that
+    into fabricated data at six call sites:
+
+      * ``json.loads(gh(...) or "[]")`` -> [] -> "no run is busy" -> the
+        backoff that exists because of the 2026-06-28 quota burn never
+        engaged (FAIL-OPEN);
+      * ``json.loads("")`` -> ValueError -> "a review is in flight" forever;
+      * a status read of "" -> never "completed" -> the run looks alive forever.
+
+    So: swap in GH_DISPATCH_TOKEN exactly as gh_dispatch does (the calling
+    stub grants actions:write to the workflow's github.token), and return
+    **None** — never "" and never "[]" — when the read fails, so no caller can
+    mistake unreadable for a real empty answer (the DRE-2034 discipline). The
+    failure is recorded, so the sweep exits 1 and medic sees it.
+
+    Callers choose their own safe answer for None; every one of them must fail
+    CLOSED (assume busy / assume in flight / assume alive), because acting on
+    an unreadable listing is what burst-dispatches and cancels live runs.
+
+    Structure mirrors gh_dispatch: swap the token only when there IS one, and
+    that is also the only path that can tell "unreadable" from "empty". With a
+    token we see rc and stderr, so a 403 is recorded and answered None. With no
+    GH_DISPATCH_TOKEN the call goes through the ordinary gh() seam, which
+    discards rc — so an empty answer stays ambiguous and is passed through
+    unchanged rather than guessed at.
+
+    That split is deliberate and it lands the guard where the bug lives: the
+    calling stub always passes github.token, so every pipeline run takes the
+    loud path. The quiet path is local runs and unit tests, which stub gh() and
+    legitimately return "" for calls they do not model.
+    """
+    dispatch_token = os.environ.get("GH_DISPATCH_TOKEN")
+    if not dispatch_token:
+        return gh(*args)
+    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", *args], capture_output=True, text=True, check=False,
+        env={**os.environ, "GH_TOKEN": dispatch_token},
+    )
+    if p.returncode != 0:
+        _note_actions_read_failure(args, f"rc={p.returncode}: {p.stderr.strip()[:400]}")
+        return None
+    return p.stdout.strip()
+
+
+def _note_actions_read_failure(args: tuple[str, ...], detail: str) -> None:
+    """Record an unreadable Actions read so the sweep exits 1 (DRE-2034)."""
+    err = (
+        f"gh {' '.join(args)} (Actions read) failed — {detail}. Treating as "
+        "UNREADABLE; callers fail closed, and the sweep goes red rather than "
+        "act on fabricated data."
+    )
+    _read_failures.append(err)
+    print(f"ERROR: {err}", file=sys.stderr)
+
+
+def _actions_runs_busy(workflow: str) -> bool:
+    """True when a run of `workflow` is queued/in_progress — or unreadable.
+
+    The single busy-guard used by every dispatch site. Unreadable answers
+    BUSY on purpose: deferring one sweep costs 15 minutes, while dispatching
+    off a fabricated empty list burst-drains the App and LLM quotas.
+    """
+    out = gh_actions_read("run", "list", "--repo", REPO, "--workflow", workflow,
+                          "--limit", "10", "--json", "status")
+    if out is None:
+        return True
+    try:
+        busy = json.loads(out or "[]")
+    except ValueError:
+        _read_failures.append(
+            f"unparseable run listing for {workflow}: {out[:200]!r}")
+        return True
+    return any(r.get("status") in ("queued", "in_progress") for r in busy)
+
+
 def _nudge(workflow: str, pr_number: int) -> bool:
     """Dispatch a workflow for a PR; True only when it actually went through.
 
@@ -715,8 +798,11 @@ def agent_run_alive(identifier: str) -> bool:
         m = _RUN_ID.search(body)
         if not m:
             break  # legacy heartbeat without a run URL — receipts decide
-        status = gh("api", f"repos/{REPO}/actions/runs/{m.group(1)}",
-                    "--jq", ".status")
+        # None = unreadable (the App token 403s here): the run is NOT provably
+        # concluded, so it stays "alive" and no dead-run retry fires off a
+        # fabricated answer. Recorded by gh_actions_read, so the sweep is red.
+        status = gh_actions_read("api", f"repos/{REPO}/actions/runs/{m.group(1)}",
+                                 "--jq", ".status")
         if status == "completed":
             return False  # concluded with no PR: the real dead-run case
         if status:
@@ -1313,11 +1399,10 @@ def unstick_conflicts() -> None:
     resolves, then acted on — at most one dispatch per PR per invocation.
     Still UNKNOWN at the cap: log loudly and leave it to the cron backstop.
     """
-    busy = json.loads(gh(
-        "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
-        "--limit", "10", "--json", "status",
-    ) or "[]")
-    if any(r["status"] in ("queued", "in_progress") for r in busy):
+    # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
+    # API, and the old `or "[]"` turned that into "nothing running" — the
+    # backoff failed OPEN at every one of these sites.
+    if _actions_runs_busy(fix_workflow()):
         print("conflict sweep: fix agent busy — retry next sweep")
         return
     prs = json.loads(gh(
@@ -1654,11 +1739,10 @@ def fix_approved_but_red() -> None:
     auto-retry time to clear transient flakes first). Origin: PR #46 sat
     approved-but-red with nothing coming. Skips when a fix run is already
     queued/in_progress (same busy-guard as the conflict sweep)."""
-    busy = json.loads(gh(
-        "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
-        "--limit", "10", "--json", "status",
-    ) or "[]")
-    if any(r["status"] in ("queued", "in_progress") for r in busy):
+    # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
+    # API, and the old `or "[]"` turned that into "nothing running" — the
+    # backoff failed OPEN at every one of these sites.
+    if _actions_runs_busy(fix_workflow()):
         return
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
@@ -1725,11 +1809,10 @@ def retry_dead_fix_runs() -> None:
     Skips DIRTY PRs (unstick_conflicts owns those) and backs off while a fix
     run is queued/in_progress; one dispatch per sweep, like
     fix_approved_but_red."""
-    busy = json.loads(gh(
-        "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
-        "--limit", "10", "--json", "status",
-    ) or "[]")
-    if any(r["status"] in ("queued", "in_progress") for r in busy):
+    # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
+    # API, and the old `or "[]"` turned that into "nothing running" — the
+    # backoff failed OPEN at every one of these sites.
+    if _actions_runs_busy(fix_workflow()):
         return
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
@@ -1896,11 +1979,10 @@ def restart_answered_blockers() -> None:
     conflicted PRs, and un-parking the card is what lets it act on the next
     sweep. Otherwise the house pattern: back off while a fix run is in flight,
     one dispatch per sweep."""
-    busy = json.loads(gh(
-        "run", "list", "--repo", REPO, "--workflow", fix_workflow(),
-        "--limit", "10", "--json", "status",
-    ) or "[]")
-    if any(r["status"] in ("queued", "in_progress") for r in busy):
+    # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
+    # API, and the old `or "[]"` turned that into "nothing running" — the
+    # backoff failed OPEN at every one of these sites.
+    if _actions_runs_busy(fix_workflow()):
         return
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
@@ -2046,13 +2128,39 @@ def _review_dispatch_in_flight() -> bool:
     concurrency group (cancel-in-progress) — the DRE-2032
     watchdog-kills-its-patient class. Repo-wide on purpose: the In QA
     re-review nudges share the same stub, and deferring a retry one sweep
-    is always cheaper than cancelling a live review."""
-    out = gh("run", "list", "--repo", REPO, "--workflow", review_workflow(),
-             "--event", "workflow_dispatch", "--limit", "50",
-             "--json", "status")
+    is always cheaper than cancelling a live review.
+
+    TOKEN + LOUDNESS (2026-08-17): this is DRE-1254 on the read path. That
+    card found every `gh workflow run` here executing under the minted App
+    token, which lacks Actions:write; GitHub answered "HTTP 403: Resource
+    not accessible by integration" and the silent gh() helper discarded it.
+    This read hits the SAME Actions API and had neither half of the fix.
+    Reproduced live against DeltaSolv/deltasolv with a real bot token — the
+    workflow-scoped AND repo-wide runs endpoints both 403, so it is the
+    token, not the query shape. The empty stdout then parsed as ValueError
+    and became "in flight" on EVERY sweep, wedging dependabot PRs #211,
+    #212 and #213 for a day behind a green sweep and a reassuring log line.
+
+    So: run under GH_DISPATCH_TOKEN like gh_dispatch does, and RECORD an
+    unreadable listing in _read_failures (the sweep then exits 1 and medic
+    sees it). The fail-closed answer itself is unchanged and deliberate —
+    visibility is the fix, not recklessness."""
+    out = gh_actions_read("run", "list", "--repo", REPO,
+                          "--workflow", review_workflow(),
+                          "--event", "workflow_dispatch", "--limit", "50",
+                          "--json", "status")
+    # None (loud path: rc!=0, already recorded) and "" (quiet path: gh()
+    # discarded the rc, so an empty answer is all we get) are both UNREADABLE.
+    # Either way the answer is "in flight": a re-dispatch on that fabricated
+    # emptiness would cancel a live review (DRE-2034 read discipline, pinned by
+    # test_unreadable_run_listing_reads_as_in_flight).
+    if not out:
+        return True
     try:
         runs = json.loads(out)
     except ValueError:
+        _read_failures.append(
+            f"unparseable review run listing: {out[:200]!r}")
         return True  # unreadable — never risk cancelling a live review
     return any(r.get("status") != "completed" for r in runs)
 
