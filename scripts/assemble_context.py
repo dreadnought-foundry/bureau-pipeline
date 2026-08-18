@@ -63,6 +63,16 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # minus console-honesty — it authors CDK/CI/migrations, not console
     # state surfaces.
     "devops": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
+    # The database architect mirrors the devops set exactly: same discipline
+    # floor and system shape, builds to a card contract, and answers the vendor
+    # premortem (warehouse/ELT work ingests from external sources). No
+    # console-honesty — it authors schema/migrations/models, not console state
+    # surfaces. Like devops it is AUTHOR-ONLY: it never executes against a live
+    # database; the operator runs every migration. Registered here so the role
+    # assembles context the moment a route exists — agents.yaml deliberately
+    # routes no `agent:*` label to it yet, but the brief has existed since
+    # DRE-1335 and standards_for() raised KeyError for it until now.
+    "database-architect": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
     # The planner authors cards (card-quality), sizes them against the
     # engineering floor, writes plan comments the CEO reads (comms), bakes
     # the vendor-boundary answers into boundary-touching cards, and must
@@ -96,6 +106,7 @@ ROLE_BRIEF: dict[str, str | None] = {
     "engineer": "engineer.md",
     "frontend": "frontend.md",
     "devops": "devops.md",
+    "database-architect": "database-architect.md",
     "planner": "planner.md",
     "verifier": "verifier.md",
     "critic": None,
