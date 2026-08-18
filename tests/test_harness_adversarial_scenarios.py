@@ -752,6 +752,76 @@ class AgentRunPlumbingTest(unittest.TestCase):
         self.assertIn("briefs/engineer.md", body)
 
 
+class WorkerTokenStaysFreshTest(unittest.TestCase):
+    """The credential the AGENT clones and pushes with must be as live as the
+    driver's own.
+
+    Run 29795108949 is the incident: App installation tokens die after an hour
+    and a long harness run 401'd its late scenarios. github_api.GitHub answers
+    that for its own requests (proactive re-mint at 50 minutes, reactive on a
+    401) — but a token handed to ANOTHER process (git clone, the agent CLI)
+    cannot ride the reactive retry. Two 45-minute agent scenarios in one
+    dispatch is the documented usage, and it crosses the window: the second
+    one must not clone with a token minted an hour ago.
+    """
+
+    def test_the_client_remints_before_handing_the_token_out(self):
+        from harness import github_api
+
+        minted = ["fresh-1", "fresh-2"]
+        faketime = _FakeTime()
+        gh = github_api.GitHub(
+            "boot-token",
+            token_supplier=lambda: minted.pop(0),
+            clock=faketime.clock,
+        )
+        self.assertEqual(gh.current_token(), "boot-token")
+        faketime.now += github_api.TOKEN_REFRESH_SECONDS + 1
+        self.assertEqual(gh.current_token(), "fresh-1")
+        self.assertEqual(gh.current_token(), "fresh-1", "re-minted twice in a row")
+
+    def test_dispatch_hands_the_agent_the_live_token(self):
+        recorded = {}
+
+        def fake_run_agent(card, **kwargs):
+            recorded.update(kwargs)
+            return agent_run.AgentRunResult(returncode=0)
+
+        gh = HarnessFake()
+        gh.current_token = lambda: "re-minted"
+        ctx = _ctx(gh)
+        ctx.worker_token = "minted-an-hour-ago"
+        scenario = already_live.SCENARIO
+        original = agent_run.run_agent
+        agent_run.run_agent = fake_run_agent
+        try:
+            scenario.dispatch(ctx, agent_run.SeededCard("harness-x", "t", "d", "u"))
+        finally:
+            agent_run.run_agent = original
+        self.assertEqual(recorded.get("token"), "re-minted")
+
+    def test_dispatch_falls_back_to_the_context_token(self):
+        # A local PAT run has no supplier and no re-mint; the frozen token is
+        # then correct and must still reach the agent.
+        recorded = {}
+
+        def fake_run_agent(card, **kwargs):
+            recorded.update(kwargs)
+            return agent_run.AgentRunResult(returncode=0)
+
+        ctx = _ctx(HarnessFake())  # the fake exposes no current_token
+        ctx.worker_token = "pat-token"
+        original = agent_run.run_agent
+        agent_run.run_agent = fake_run_agent
+        try:
+            already_live.SCENARIO.dispatch(
+                ctx, agent_run.SeededCard("harness-x", "t", "d", "u")
+            )
+        finally:
+            agent_run.run_agent = original
+        self.assertEqual(recorded.get("token"), "pat-token")
+
+
 class DiscoveryStaysStdlibOnlyTest(unittest.TestCase):
     """Scenario DISCOVERY imports every module in the package, and the default
     sweep runs on a bare runner with nothing installed (harness.yml only
