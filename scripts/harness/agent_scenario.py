@@ -241,10 +241,26 @@ class AgentScenario(framework.Scenario):
         return agent_run.run_agent(
             card,
             repo=ctx.repo,
-            token=ctx.worker_token,
+            token=self.live_token(ctx),
             pipeline_root=ctx.state.get("pipeline_root", "."),
             log=ctx.log,
         )
+
+    def live_token(self, ctx) -> str:
+        """The credential the agent clones and pushes with, asked for AT
+        DISPATCH TIME.
+
+        `ctx.worker_token` is frozen when the process starts; an App
+        installation token dies after an hour, and two 45-minute agent
+        scenarios in one run cross that window — the second would clone with a
+        corpse (run 29795108949's class). The REST client already knows how to
+        re-mint, so ask it. A client with no supplier (a local PAT run) has
+        nothing to refresh and the frozen token is the right answer.
+        """
+        getter = getattr(ctx.gh, "current_token", None)
+        if callable(getter):
+            return getter() or ctx.worker_token
+        return ctx.worker_token
 
     # ── observables ──────────────────────────────────────────────────────
     def agent_prs(self, ctx) -> list:

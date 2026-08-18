@@ -71,6 +71,19 @@ class GitHub:
         self._minted_at = self._clock()
         return True
 
+    def current_token(self) -> str:
+        """The live token, re-minted first if it is past the refresh window.
+
+        For anything that hands the credential to ANOTHER process — the
+        DRE-2490 agent scenarios' `git clone` and agent CLI — which cannot
+        ride request()'s reactive 401 retry: a long run's later scenarios
+        would otherwise clone with an expired token (run 29795108949's class,
+        one layer out).
+        """
+        if self._supplier and self._clock() - self._minted_at >= TOKEN_REFRESH_SECONDS:
+            self._remint()
+        return self._token
+
     def request(self, method: str, path: str, body: dict | None = None):
         """One REST call, retried through transient failures. Returns the
         parsed JSON (None for empty responses). With a token_supplier the
