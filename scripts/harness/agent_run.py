@@ -38,7 +38,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
+# NO module-level third-party imports. Scenario discovery imports every module
+# in the package, and the DEFAULT sweep runs on a bare runner with nothing pip
+# installed (harness.yml installs test tooling only for named scenarios) — an
+# `import yaml` up here killed the whole default sweep before a scenario ran
+# (run 32093002253). PyYAML is imported inside the one function that needs it,
+# which only the agent scenarios reach; test_harness_adversarial_scenarios.py
+# pins that discovery survives without it.
 
 # The workflow whose prompt is under test, relative to the pipeline checkout.
 AGENT_TASK_WORKFLOW = os.path.join(".github", "workflows", "agent-task.yml")
@@ -101,6 +107,8 @@ def agent_task_prompt(workflow_path) -> str:
     """The `prompt:` input of agent-task.yml's claude-code-action step, read
     from the PARSED workflow — the same read tests/test_presubmit_gate_prompt.py
     makes, so both see the string the agent actually receives."""
+    import yaml  # noqa: PLC0415 — see the import note at the top of the module
+
     with open(workflow_path, encoding="utf-8") as f:
         workflow = yaml.safe_load(f)
     prompts = [
