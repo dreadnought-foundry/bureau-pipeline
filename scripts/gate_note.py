@@ -97,6 +97,9 @@ def post_once(api, marker: str, body: str, author: str, log=print) -> dict:
     already there — nothing written), `posted` (this run's note is the one
     that survives), `deduped` (this run raced, lost the tie-break, and
     removed its own note), or `deferred` (the record was unreadable).
+    Every path prunes to the earliest note, so a run killed mid-flow before
+    its own converge pass heals on the next wake instead of leaving the PR
+    permanently doubled (premortem Q5).
     """
     if marker not in body:
         raise ValueError(
@@ -110,7 +113,11 @@ def post_once(api, marker: str, body: str, author: str, log=print) -> dict:
         log(f"gate-note: comments unreadable ({e}) — deferring to the next wake")
         return {"action": "deferred", "id": None, "deleted": []}
     if standing:
-        return {"action": "standing", "id": standing[0]["id"], "deleted": []}
+        return {
+            "action": "standing",
+            "id": standing[0]["id"],
+            "deleted": _prune(api, standing, log),
+        }
 
     mine = api.create_comment(body)
     mine_id = int(mine["id"])
@@ -127,11 +134,23 @@ def post_once(api, marker: str, body: str, author: str, log=print) -> dict:
         return {"action": "posted", "id": mine_id, "deleted": []}
     seen[mine_id] = mine
 
+    deleted = _prune(api, [seen[i] for i in sorted(seen)], log)
     winner = min(seen)
+    return {
+        "action": "posted" if winner == mine_id else "deduped",
+        "id": winner,
+        "deleted": deleted,
+    }
+
+
+def _prune(api, notes, log) -> list:
+    """Keep the EARLIEST note, remove the rest. The winner is a property of
+    the data (lowest comment id), so concurrent writers pick the same one
+    without coordinating — and a run that dies before pruning is cleaned up
+    by whichever wake comes next."""
     deleted = []
-    for comment_id in sorted(seen):
-        if comment_id == winner:
-            continue
+    for note in notes[1:]:
+        comment_id = int(note["id"])
         try:
             api.delete_comment(comment_id)
             deleted.append(comment_id)
@@ -140,11 +159,7 @@ def post_once(api, marker: str, body: str, author: str, log=print) -> dict:
             # is convergence, not failure — and a cosmetic note must never
             # red the gate run.
             log(f"gate-note: could not remove duplicate {comment_id}: {e}")
-    return {
-        "action": "posted" if winner == mine_id else "deduped",
-        "id": winner,
-        "deleted": deleted,
-    }
+    return deleted
 
 
 class GateComments:
