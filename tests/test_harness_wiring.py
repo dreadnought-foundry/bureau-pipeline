@@ -163,6 +163,7 @@ class PrGateTest(unittest.TestCase):
         "scripts/harness/**",
         "scripts/reconcile.py",
         "scripts/merge_gate.py",
+        "scripts/gate_note.py",
         "scripts/dispatch_pool.py",
         "scripts/dedupe_dispatch.py",
         "scripts/should_review_pr.py",

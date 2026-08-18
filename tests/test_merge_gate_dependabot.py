@@ -278,7 +278,10 @@ class WorkflowWiringTest(unittest.TestCase):
         cls.run_block = runs[0]
 
     def test_workflow_run_leg_wakes_on_dependabot_branches(self):
-        cond = self.doc["jobs"]["evaluate"]["if"]
+        # DRE-2508: the event-leg filter sits on the ENTRY job (`resolve`),
+        # which every leg funnels through — `evaluate` is only reachable via
+        # its resolved PR number (the per-PR concurrency key).
+        cond = self.doc["jobs"]["resolve"]["if"]
         self.assertIn(
             "startsWith(github.event.workflow_run.head_branch, 'dependabot/')",
             cond,
@@ -307,7 +310,7 @@ class WorkflowWiringTest(unittest.TestCase):
 
     def test_human_decision_posts_waiting_state_once_and_never_merges(self):
         human = self.run_block.find('"$DECISION" = "human"')
-        comment = self.run_block.find("gh pr comment")
+        comment = self.run_block.find("gate_note.py")
         merge_guard = self.run_block.find('[ "$DECISION" = "merge" ] || exit 0')
         merge = self.run_block.find("gh pr merge")
         self.assertGreater(human, -1, "no human-decision arm")
@@ -316,11 +319,17 @@ class WorkflowWiringTest(unittest.TestCase):
                            "human arm must exit before the merge guard")
         self.assertGreater(merge, merge_guard)
         self.assertIn("waiting for human merge", self.run_block)
-        # Idempotence: re-evaluations must not spam the PR — the already-
-        # fetched comments record is checked before posting.
-        idem = self.run_block.find('grep -q "Merge gate: waiting for human merge" /tmp/comments.json')
-        self.assertGreater(idem, human, "no idempotence guard on the comment")
-        self.assertLess(idem, comment)
+        # Idempotence: re-evaluations must not spam the PR. DRE-2508 moved
+        # this off the run's own (already stale) comments snapshot — the
+        # grep was check-then-act and two overlapping runs both posted.
+        # scripts/gate_note.py re-reads late, posts, and converges on the
+        # earliest note; tests/test_merge_gate_note_idempotent.py races it.
+        self.assertNotIn(
+            'grep -q "Merge gate: waiting for human merge" /tmp/comments.json',
+            self.run_block,
+            "the human note is guarded by a stale snapshot again (DRE-2508)",
+        )
+        self.assertIn("--marker", self.run_block[human:merge_guard])
 
     def test_dependabot_conflicts_never_dispatch_the_fix_agent(self):
         # Dependabot rebases/recreates its own conflicted PRs; the fix agent

@@ -129,7 +129,9 @@ class ScriptInvocationTest(unittest.TestCase):
         """The #57 event-leg filter is workflow territory (not the script):
         only a qa-bot-authored verdict comment wakes the gate at all."""
         doc = yaml.safe_load(WORKFLOW.read_text())
-        cond = doc["jobs"]["evaluate"]["if"]
+        # DRE-2508: the filter lives on the entry job (`resolve`) now — the
+        # evaluating job is reachable only through its resolved PR number.
+        cond = doc["jobs"]["resolve"]["if"]
         self.assertIn(
             "github.event.comment.user.login == 'agent-bureau-qa-bot[bot]'", cond
         )
