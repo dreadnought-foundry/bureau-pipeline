@@ -219,6 +219,25 @@ class QuietRepoTest(unittest.TestCase):
         self.assertNotIn("create", second.calls)
         self.assertEqual(len(surviving_notes(store)), 1)
 
+    def test_a_crashed_run_left_duplicates_are_swept(self):
+        """Premortem Q5 — what if OUR run dies mid-flow? A run killed between
+        posting and its converge pass leaves two notes standing, and no later
+        wake would ever remove them: the next evaluation sees a standing note
+        and returns. The harness would stay red until a human deleted one.
+        Every wake prunes to the earliest note, so the state self-heals."""
+        store = _Store(seed=[
+            (QA_LOGIN, note_body("crashed")),
+            (QA_LOGIN, note_body("its racing peer")),
+        ])
+        api = _FakeApi(store)
+        result = gate_note.post_once(api, MARKER, note_body(1), QA_LOGIN,
+                                     log=lambda *a: None)
+        self.assertEqual(result["action"], "standing")
+        self.assertNotIn("create", api.calls, "a sweep must not post a third")
+        notes = surviving_notes(store)
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["id"], 100, "the earliest note must survive")
+
     def test_a_body_without_the_marker_is_refused(self):
         """The marker IS the idempotence key: a body that does not carry it
         would re-post on every single wake (the DRE-2340 carry-note trap)."""
