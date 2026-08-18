@@ -137,11 +137,18 @@ def gate_index(items: list) -> int:
     return -1
 
 
-def match_index(items: list, pattern) -> int:
+def submit_index(items: list, pattern) -> int:
+    """Index of the step that actually submits. The LAST match, not the first:
+    the gate step legitimately names the submit action it guards ("before you
+    open the PR", "before you commit and push"), so a first-match search would
+    find the gate and the ordering assertion would pass vacuously. Last-match
+    still catches the regression it exists for — a gate moved AFTER the submit
+    step becomes the last match itself, and gate < submit goes false."""
+    found = -1
     for i, (_, body) in enumerate(items):
         if pattern.search(norm(body)):
-            return i
-    return -1
+            found = i
+    return found
 
 
 def gate_body(items: list, workflow_name: str) -> str:
@@ -223,8 +230,9 @@ class BuildAgentPreSubmitGateTest(unittest.TestCase):
         self.assertRegex(body, NOT_RECALL_RE)
 
     def test_the_gate_precedes_opening_the_pr(self):
+        gate_body(self.items, TASK_WF)  # fail here if the gate is gone at all
         gate = gate_index(self.items)
-        submit = match_index(self.items, TASK_SUBMIT_RE)
+        submit = submit_index(self.items, TASK_SUBMIT_RE)
         self.assertGreaterEqual(submit, 0, "no `gh pr create` step found")
         self.assertLess(
             gate,
@@ -267,8 +275,9 @@ class FixAgentPrePushGateTest(unittest.TestCase):
         self.assertRegex(body, NOT_RECALL_RE)
 
     def test_the_gate_precedes_the_push(self):
+        gate_body(self.items, FIX_WF)  # fail here if the gate is gone at all
         gate = gate_index(self.items)
-        submit = match_index(self.items, FIX_SUBMIT_RE)
+        submit = submit_index(self.items, FIX_SUBMIT_RE)
         self.assertGreaterEqual(submit, 0, "no commit-and-push step found")
         self.assertLess(
             gate,

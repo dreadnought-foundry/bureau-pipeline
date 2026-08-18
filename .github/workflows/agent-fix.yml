@@ -485,6 +485,30 @@ jobs:
                scope: address what the critic and CI raised, nothing else.
             4. Run the repo's local checks (see .github/bureau/overrides.md)
                until green.
+            4b. PRE-PUSH GATE — do this BEFORE you commit and push, never
+               after. Re-read what this PR is accountable for: the critic's
+               findings in .bureau-pipeline/critic-verdict.md, and the card's
+               acceptance criteria as carried in the PR body
+               (gh pr view ${{ steps.pr.outputs.number }} --json body,
+               including any existing "## Unmet criteria" section). Walk those
+               items ONE BY ONE against your actual diff. For each item, prove
+               it by RUNNING A CHECK and reading the output — the test that
+               covers it, a grep of the changed files, a command — never from
+               recall. Any item you cannot prove is either finished NOW, before
+               you push, or recorded in the PR body
+               (gh pr edit ${{ steps.pr.outputs.number }} --body-file <file>)
+               under a heading spelled exactly
+
+               ## Unmet criteria
+
+               with one line per item and the reason it is unmet.
+               Then prove your work actually MOVED:
+               git diff --stat ${{ steps.pr.outputs.head_sha }}..HEAD
+               must show changed files — that sha is the head the critic
+               rejected. If it shows nothing and no criterion moved, do NOT
+               push: write why to /tmp/fix-blocker.txt and stop (step 6). A
+               byte-identical resubmission burns a whole review round and is
+               itself grounds for REQUEST_CHANGES.
             5. Commit with message "fix(${{ steps.pr.outputs.card }}): address review
                findings (attempt ${{ steps.pr.outputs.attempt }})" and push to the
                SAME branch. Do NOT open a new PR. Do NOT force-push.
