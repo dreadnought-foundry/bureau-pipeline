@@ -85,6 +85,31 @@ class UpstreamOutageClassifierTest(unittest.TestCase):
             )
             self.assertTrue(medic_classify.is_upstream_5xx(log), code)
 
+    # ── the negative: 500 is DELIBERATELY not an outage ──────────────────────
+    def test_http_500_is_not_upstream_5xx(self):
+        # 500 is excluded on purpose: it is also what a broken request of OURS
+        # returns. Classifying it as an unfixable GitHub outage would back the
+        # medic off a real bug of ours and silently swallow it — the exact
+        # failure this whole class exists to avoid. Each line below carries the
+        # api.github.com host and a genuine 500 error shape, so it WOULD
+        # classify if `_UPSTREAM_5XX_SHAPES` were widened (e.g. to `50[0-4]`).
+        lines = (
+            "sweep\tSweep\t2026-08-17T03:40:00.0000000Z failed to get runs: "
+            "HTTP 500: Internal Server Error "
+            "(https://api.github.com/repos/dreadnought-foundry/portico/actions/runs)",
+            "sweep\tSweep\t2026-08-17T03:40:01.0000000Z non-200 OK status code: "
+            "500 Internal Server Error "
+            "(https://api.github.com/repos/dreadnought-foundry/portico/issues)",
+            "sweep\tSweep\t2026-08-17T03:40:02.0000000Z "
+            "gh: Internal Server Error (HTTP 500)",
+        )
+        for line in lines:
+            log = line + "\n"
+            self.assertFalse(medic_classify.is_upstream_5xx(log), line)
+            self.assertEqual(
+                medic_classify.classify("Reconcile (reusable)", log), "normal", line
+            )
+
     # ── the negative: prose that mentions 503 is NOT an outage ───────────────
     def test_quoted_503_in_card_body_or_diff_is_not_upstream_5xx(self):
         log = _fixture(QUOTED_503_LOG)
