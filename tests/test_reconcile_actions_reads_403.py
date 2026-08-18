@@ -204,9 +204,10 @@ def test_gh_actions_read_returns_none_and_records_on_403():
     for a real, empty answer. The failure is recorded so the sweep exits 1."""
     before = list(reconcile._read_failures)
     try:
-        with patch.object(
-            reconcile.subprocess, "run", side_effect=_run_stub(1, "", [])
-        ):
+        with patch.dict(os.environ, {"GH_DISPATCH_TOKEN": "ghs_dispatch"}), \
+                patch.object(
+                    reconcile.subprocess, "run", side_effect=_run_stub(1, "", [])
+                ):
             assert reconcile.gh_actions_read("run", "list", "--repo", "x") is None
         new = reconcile._read_failures[len(before):]
         assert new and any("403" in f or "rc=1" in f for f in new), (
@@ -251,7 +252,8 @@ def test_busy_guard_fails_closed_when_the_read_403s(func_name):
 
     before = list(reconcile._read_failures)
     try:
-        with patch.object(reconcile.subprocess, "run", side_effect=fake_run), \
+        with patch.dict(os.environ, {"GH_DISPATCH_TOKEN": "ghs_dispatch"}), \
+                patch.object(reconcile.subprocess, "run", side_effect=fake_run), \
                 patch.object(reconcile, "card_parked_for_human", return_value=False):
             try:
                 getattr(reconcile, func_name)()

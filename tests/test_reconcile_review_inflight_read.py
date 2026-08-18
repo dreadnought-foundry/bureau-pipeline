@@ -108,9 +108,10 @@ def test_unreadable_listing_is_recorded_not_silent():
     before = list(reconcile._read_failures)
     calls: list = []
     try:
-        with patch.object(
-            reconcile.subprocess, "run", side_effect=_run_stub(1, "", calls)
-        ):
+        with patch.dict(os.environ, {"GH_DISPATCH_TOKEN": "ghs_dispatch"}), \
+                patch.object(
+                    reconcile.subprocess, "run", side_effect=_run_stub(1, "", calls)
+                ):
             reconcile._review_dispatch_in_flight()
         new = reconcile._read_failures[len(before):]
         assert new, (
@@ -131,9 +132,10 @@ def test_unreadable_listing_still_answers_in_flight():
     concurrency group (DRE-2032) — visibility is the fix, not recklessness."""
     before = list(reconcile._read_failures)
     try:
-        with patch.object(
-            reconcile.subprocess, "run", side_effect=_run_stub(1, "", [])
-        ):
+        with patch.dict(os.environ, {"GH_DISPATCH_TOKEN": "ghs_dispatch"}), \
+                patch.object(
+                    reconcile.subprocess, "run", side_effect=_run_stub(1, "", [])
+                ):
             assert reconcile._review_dispatch_in_flight() is True, (
                 "an unreadable listing must still answer 'in flight' — never "
                 "risk cancelling a live review"
