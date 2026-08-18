@@ -190,13 +190,24 @@ WATCHDOG_TAG = "stranded-watchdog"
 # being routed. The NO-ROUTE notice even prescribes "so it must be hand-built",
 # so on a card labelled hand-built it tells us to do what we did.
 #
-# This label suppresses flag_stranded and NOTHING ELSE. It is deliberately not
-# a second HOLD_LABEL: hold means "a human owes this card an action" and stands
-# down repairs; hand-built means "no agent was ever coming". Every PR-level
-# backstop below (flag_no_checks_prs, flag_unowned_prs, unstick_conflicts,
-# retrigger_dead_heads, …) keys on the PULL REQUEST, never on card labels, so a
-# hand-built card whose PR wedges is still caught — see
-# test_hand_built_not_stranded.py, which asserts that structurally.
+# This label suppresses two things: flag_stranded's alarm, and — in main()'s
+# nudge loop — the sweep's OWN dispatch on a card with no PR yet. Silencing the
+# alarm alone leaves the engine that raised it running: "Todo, no PR" past 15
+# minutes is the normal state of hand-built work, and the loop answers it with
+# a real repository_dispatch, i.e. a second agent run competing with the human
+# on the same card; "In Progress, no PR" past 3 hours requeues to Todo (feeding
+# that same dispatch next sweep) and, past REQUEUE_CAP, parks the card to
+# Backlog with the hold label — the sweep overriding the human's own placement.
+#
+# It is deliberately not a second HOLD_LABEL: hold means "a human owes this
+# card an action" and stands down repairs; hand-built means "no agent was ever
+# coming". Everything that keys on a PULL REQUEST stays label-blind — the
+# PR-level backstops below (flag_no_checks_prs, flag_unowned_prs,
+# unstick_conflicts, retrigger_dead_heads, …) and the nudge loop's own
+# PR-carrying branches (merged → Done, open PR → In QA + critic). So a
+# hand-built card whose PR wedges is still caught, and once the human opens a
+# PR the sweep shepherds it exactly as before — see
+# test_hand_built_not_stranded.py, which asserts both halves structurally.
 HAND_BUILT_LABEL = "hand-built"
 
 # The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
@@ -219,10 +230,12 @@ def hand_built(card: dict) -> bool:
     """True if the card carries HAND_BUILT_LABEL (DRE-2524).
 
     The work is done by a human or a local agent rather than a dispatched
-    pipeline agent, so "no run receipt" and "no dispatch route" are both the
-    normal state, not evidence of a stall. Read by flag_stranded ONLY — never
-    by a repair or dispatch path, or this would silently become a second,
-    wider hold.
+    pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
+    are all the normal state, not evidence of a stall. Read by exactly two
+    callers, both answering "should the pipeline start or restart an agent on
+    this card": flag_stranded (the alarm) and main()'s nudge loop on a card
+    with no PR (the dispatch that alarm was reporting on). Never read by a
+    PR-keyed repair path, or this would silently become a second, wider hold.
     """
     return any(
         lbl["name"].lower() == HAND_BUILT_LABEL
@@ -2966,6 +2979,22 @@ def main(
         merged = has_pr and card_pr.pr_state(pr) == card_pr.MERGED
         is_open = has_pr and card_pr.pr_state(pr) == card_pr.OPEN
         print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
+
+        if hand_built(card) and not has_pr:
+            # DRE-2524, second half: the label suppresses the sweep's own
+            # dispatch, not just the watchdog's alarm about it. Every no-PR
+            # branch below starts or restarts an agent — Todo redispatches, In
+            # Progress requeues to Todo (which redispatches next sweep) and
+            # then parks to Backlog with HOLD_LABEL. On hand-built work that is
+            # a competing run on a card the label says no run is coming for.
+            # Scoped to `not has_pr` on purpose: once there IS a pull request
+            # the branches below are ordinary PR shepherding (merged → Done,
+            # open → In QA) and stay label-blind like every PR-level backstop.
+            print(
+                f"hand-built: {ident} in {state} with no PR — no dispatched "
+                "run is coming by design, leaving alone"
+            )
+            continue
 
         if merged:
             # Same guard as linear-sync's card-done (the six portico false
