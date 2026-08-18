@@ -77,6 +77,7 @@ from execution_result import (  # noqa: E402
     print_completion_detail,
     print_failure_detail,
 )
+from verdict_cause import verdict_decision  # noqa: E402
 
 
 # The only crash whose verdict may still be believed (DRE-2422). Every other
@@ -147,12 +148,19 @@ def _verdict_is_complete(text: str) -> bool:
     that was cut off mid-thought. A finished verdict declares one of the two
     legal decisions AND carries the `## Summary` section the critic prompt
     mandates. A review still working has neither.
+
+    The decision is read as the WORD after `VERDICT:` (verdict_cause.py), not
+    as the whole rest of the line: since DRE-2489 a rejection also names its
+    blocking cause (`VERDICT: REQUEST_CHANGES cause:defect`), and a
+    whole-line match would read that as an illegal verdict and throw away a
+    completed review — buying a second identical failure, which is exactly
+    what DRE-2422 added this path to stop.
     """
     declared = False
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("VERDICT:"):
-            if stripped.split(":", 1)[1].strip() in _LEGAL_VERDICTS:
+            if verdict_decision(stripped) in _LEGAL_VERDICTS:
                 declared = True
             break
     if not declared:
