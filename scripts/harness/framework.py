@@ -122,6 +122,11 @@ class HarnessContext:
     # — merge-gate.yml's own read path); None = fall back to the worker
     # client and let a permission refusal surface loudly.
     gh_qa: object = None
+    # The worker-bot installation token, for the one thing the REST client
+    # cannot do for a scenario: hand a real build agent a sandbox clone it can
+    # push (DRE-2490). Never logged — agent_run builds every log line from the
+    # repo slug, never from the clone URL.
+    worker_token: str = ""
     verdict_timeout: float = 1500.0  # ≥ the critic job's 25-minute budget
     merge_timeout: float = 1200.0
     poll_interval: float = 30.0
@@ -144,6 +149,13 @@ class Scenario:
     """Base scenario: override any subset of the four phases."""
 
     name = ""
+
+    # True for scenarios that spend a REAL build-agent run (DRE-2490). They
+    # cost model minutes and money, so they are opt-in: the default sweep
+    # (empty `--scenarios`) skips them and they are selected by name. See
+    # __main__.select_names — harness.yml's check run holds this repo's merge
+    # gate, and five agent runs per boundary PR would hold every merge.
+    requires_agent = False
 
     def setup(self, ctx: HarnessContext) -> None: ...
 
