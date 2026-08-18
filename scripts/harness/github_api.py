@@ -194,6 +194,24 @@ class GitHub:
             raise
         return out if isinstance(out, list) else []
 
+    def get_file(self, repo, path, ref) -> str | None:
+        """A file's decoded text at `ref` (a branch name or a sha), or None
+        when it is absent there. What the driver reads to see what a PR's head
+        actually contains."""
+        try:
+            out = self.request(
+                "GET",
+                f"/repos/{repo}/contents/{urllib.parse.quote(path)}?ref="
+                + urllib.parse.quote(ref),
+            )
+        except GitHubError as e:
+            if e.status in (404, 422):
+                return None
+            raise
+        if not isinstance(out, dict) or out.get("encoding") != "base64":
+            return None
+        return base64.b64decode(out.get("content") or "").decode(errors="replace")
+
     def delete_file(self, repo, branch, path, message) -> bool:
         sha = self.get_file_sha(repo, path, branch)
         if not sha:
@@ -231,6 +249,28 @@ class GitHub:
     def get_pr(self, repo, number: int) -> dict:
         return self.request("GET", f"/repos/{repo}/pulls/{number}")
 
+    def list_prs(self, repo, state: str = "all") -> list[dict]:
+        """PRs in any state, newest first — the adversarial scenarios have to
+        see a PR the sandbox's gate already merged (or the agent closed), not
+        only the ones still open."""
+        return (
+            self.request(
+                "GET",
+                f"/repos/{repo}/pulls?state={urllib.parse.quote(state)}"
+                "&sort=created&direction=desc&per_page=100",
+            )
+            or []
+        )
+
+    def list_pr_files(self, repo, number: int) -> list[dict]:
+        """The files a PR contributes: filename + blob sha. The blob sha is
+        the byte-identity evidence — same names AND same blobs means the same
+        diff, which is what portico#316 resubmitted."""
+        return (
+            self.request("GET", f"/repos/{repo}/pulls/{number}/files?per_page=100")
+            or []
+        )
+
     def list_open_prs(self, repo) -> list[dict]:
         # One page of 100 is far beyond anything the sandbox accumulates;
         # the sweep logs what it saw so a silent cap can't hide leftovers.
@@ -259,3 +299,22 @@ class GitHub:
         return self.request(
             "POST", f"/repos/{repo}/issues/{number}/comments", {"body": body}
         )
+
+    # ── issues (the sandbox's carrier for a seeded card, DRE-2490) ───────
+    def create_issue(self, repo, title: str, body: str) -> dict:
+        return self.request(
+            "POST", f"/repos/{repo}/issues", {"title": title, "body": body}
+        )
+
+    def list_issues(self, repo) -> list[dict]:
+        """Open ISSUES only. GitHub's issues endpoint also returns PRs; they
+        carry a `pull_request` key, and a sweep that closed those would close
+        the very PRs the scenarios are asserting on."""
+        out = (
+            self.request("GET", f"/repos/{repo}/issues?state=open&per_page=100")
+            or []
+        )
+        return [i for i in out if "pull_request" not in i]
+
+    def close_issue(self, repo, number: int) -> None:
+        self.request("PATCH", f"/repos/{repo}/issues/{number}", {"state": "closed"})

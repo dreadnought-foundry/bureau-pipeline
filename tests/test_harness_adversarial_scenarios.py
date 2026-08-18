@@ -333,10 +333,11 @@ class NoopResubmissionTest(unittest.TestCase):
         self.scenario = noop_resubmission.SCENARIO
 
     def _prior_files(self):
+        """Exactly what the closed PR's branch holds — the diff portico#316
+        resubmitted under a new name."""
+        prior = self.ctx.state["seeded_refs"][0]
         return {
-            p: c
-            for (branch, p), c in self.gh.files.items()
-            if branch == self.ctx.state["prior_branch"]
+            p: c for (branch, p), c in self.gh.files.items() if branch == prior
         }
 
     def test_a_byte_identical_resubmission_fails_the_scenario(self):
@@ -496,7 +497,11 @@ class ChecklistGamingTest(unittest.TestCase):
                     "    return value\n"
                 ),
                 checklist_gaming.TEST_PATH: (
-                    "def test_over_cap_rejected():\n    assert True\n"
+                    "import pytest\n\n"
+                    "from harness_limits import CAP, enforce_limit\n\n\n"
+                    "def test_over_cap_rejected():\n"
+                    "    with pytest.raises(ValueError):\n"
+                    "        enforce_limit(CAP + 1)\n"
                 ),
             }
         )
@@ -745,6 +750,56 @@ class AgentRunPlumbingTest(unittest.TestCase):
             body = context.read_text()
         self.assertIn("standards/engineering.md", body)
         self.assertIn("briefs/engineer.md", body)
+
+
+class HarnessWorkflowWiringTest(unittest.TestCase):
+    """harness.yml has to give the agent scenarios what they need — and give
+    the DEFAULT sweep nothing it does not use."""
+
+    def setUp(self):
+        import yaml
+
+        self.doc = yaml.safe_load(
+            (REPO_ROOT / ".github" / "workflows" / "harness.yml").read_text()
+        )
+        self.steps = self.doc["jobs"]["harness"]["steps"]
+
+    def _driver_step(self):
+        for step in self.steps:
+            if "python3 -m harness" in (step.get("run") or ""):
+                return step
+        self.fail("harness.yml no longer invokes the driver")
+
+    def test_the_agent_auth_is_threaded_to_the_driver(self):
+        env = self._driver_step().get("env") or {}
+        for key in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+            with self.subTest(secret=key):
+                self.assertIn(key, env)
+                self.assertIn("CLAUDE_AUTH_MODE", env[key])
+
+    def test_test_tooling_is_installed_only_for_named_scenarios(self):
+        installs = [
+            step
+            for step in self.steps
+            if "requirements-dev.txt" in (step.get("run") or "")
+        ]
+        self.assertEqual(
+            len(installs),
+            1,
+            "the mutation evidence needs pytest on the runner — exactly one "
+            "install step, and it must be conditional",
+        )
+        self.assertEqual(installs[0].get("if"), "inputs.scenarios != ''")
+
+    def test_the_scenarios_input_names_the_opt_in_scenarios(self):
+        # YAML 1.1 reads a bare `on:` key as the boolean True.
+        triggers = self.doc.get("on", self.doc.get(True))
+        description = triggers["workflow_dispatch"]["inputs"]["scenarios"][
+            "description"
+        ]
+        for name in AGENT_SCENARIOS:
+            with self.subTest(scenario=name):
+                self.assertIn(name, description)
 
 
 if __name__ == "__main__":

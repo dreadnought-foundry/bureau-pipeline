@@ -37,7 +37,13 @@ on:
         required: false
         default: main
       scenarios:
-        description: comma-separated scenario names (empty = all discovered)
+        description: >-
+          comma-separated scenario names. Empty = the default sweep (the
+          three cheap scenarios). The DRE-2490 adversarial scenarios each
+          spend a REAL build-agent run and are opt-in BY NAME here —
+          noop_resubmission, partial_delivery, checklist_gaming,
+          already_live, unverified_claim. Each is capped at 45 minutes by
+          the driver, so name at most two per dispatch (job timeout below).
         required: false
         default: ""
   pull_request:
@@ -120,9 +126,28 @@ jobs:
           owner: dreadnought-foundry
           repositories: bureau-harness
 
+      # Only the named-scenario path needs test tooling: the DRE-2490
+      # unverified_claim scenario proves a shipped test is non-vacuous by
+      # RUNNING it against a mutant, and that needs pytest on the runner. The
+      # default sweep (empty input, every pull_request run) is stdlib-only and
+      # skips this — a merge-gating workflow does not take a package-registry
+      # dependency it does not use.
+      - name: Install test tooling (named scenarios only)
+        if: inputs.scenarios != ''
+        run: python3 -m pip install --quiet -r requirements-dev.txt
+
       - name: Run harness scenarios
         env:
           HARNESS_REPO: dreadnought-foundry/bureau-harness
+          # The agent scenarios run the SHIPPED agent-task.yml prompt through
+          # the Claude Code CLI against a sandbox clone (scripts/harness/
+          # agent_run.py). Same auth switch agent-task.yml uses; unset on the
+          # default sweep, which never starts an agent. A dependabot-triggered
+          # PR event gets the empty Dependabot secrets store — the job-level
+          # guard above already skips it clean (DRE-2067), so these resolve to
+          # empty only on runs that do not read them.
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           HARNESS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
           HARNESS_WORKER_LOGIN: ${{ steps.worker.outputs.app-slug }}[bot]
           # The qa token is the PROVEN reader for commit check-runs

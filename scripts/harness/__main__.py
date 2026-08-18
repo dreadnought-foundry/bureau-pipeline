@@ -62,6 +62,25 @@ def token_supplier(
     return supply
 
 
+def select_names(available: dict, wanted: list) -> list:
+    """Which scenarios this invocation runs.
+
+    Named scenarios run, whatever they cost. An EMPTY selection means "the
+    default sweep", which deliberately excludes the agent scenarios
+    (DRE-2490): each spends a real build-agent run, and harness.yml runs on
+    every boundary PR with its check run holding the merge gate — five agent
+    runs per PR would hold every merge in this repo for hours. They are opt-in
+    by name through the same `scenarios` dispatch input.
+    """
+    if wanted:
+        return list(wanted)
+    return sorted(
+        name
+        for name, scenario in available.items()
+        if not getattr(scenario, "requires_agent", False)
+    )
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="harness", description=__doc__)
     parser.add_argument(
@@ -99,7 +118,16 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         return 2
-    names = wanted or sorted(available)
+    names = select_names(available, wanted)
+    # Never a silent cap: say which scenarios the default sweep left out and
+    # how to run them.
+    skipped = sorted(set(available) - set(names))
+    if skipped:
+        print(
+            f"note: opt-in agent scenarios not run: {skipped} — select them "
+            "by name (--scenarios / the workflow's `scenarios` input); each "
+            "spends a real build-agent run"
+        )
 
     run_id = framework.validate_run_id(args.run_id)
     worker_supplier = token_supplier(
@@ -141,6 +169,9 @@ def main(argv=None) -> int:
             run_id=run_id,
             worker_login=os.environ.get("HARNESS_WORKER_LOGIN", ""),
             qa_login=qa_login,
+            # The agent scenarios clone the sandbox as the worker bot; every
+            # other scenario ignores this.
+            worker_token=token,
             verdict_timeout=float(os.environ.get("HARNESS_VERDICT_TIMEOUT", 1500)),
             merge_timeout=float(os.environ.get("HARNESS_MERGE_TIMEOUT", 1200)),
             poll_interval=float(os.environ.get("HARNESS_POLL_INTERVAL", 30)),
