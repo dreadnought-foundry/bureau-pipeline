@@ -319,17 +319,33 @@ def gh_actions_read(*args: str) -> str | None:
     loud path. The quiet path is local runs and unit tests, which stub gh() and
     legitimately return "" for calls they do not model.
     """
+    out, detail = _actions_read(args)
+    if detail is not None:
+        _note_actions_read_failure(args, detail)
+    return out
+
+
+def _actions_read(args: tuple[str, ...]) -> tuple[str | None, str | None]:
+    """One Actions read, WITHOUT deciding what its failure means.
+
+    Returns (output, failure detail). `detail` is None on success and on the
+    quiet no-token path; when it is a string the read failed loudly and
+    `output` is None. Split out of gh_actions_read (DRE-2525) for the one
+    caller that must inspect a failure before it is recorded — see
+    _actions_runs_busy, where a 404 can mean "this repo has no such stub"
+    rather than "unreadable". Everyone else keeps the old contract: the
+    failure is recorded the moment it happens.
+    """
     dispatch_token = os.environ.get("GH_DISPATCH_TOKEN")
     if not dispatch_token:
-        return gh(*args)
+        return gh(*args), None
     p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
         ["gh", *args], capture_output=True, text=True, check=False,
         env={**os.environ, "GH_TOKEN": dispatch_token},
     )
     if p.returncode != 0:
-        _note_actions_read_failure(args, f"rc={p.returncode}: {p.stderr.strip()[:400]}")
-        return None
-    return p.stdout.strip()
+        return None, f"rc={p.returncode}: {p.stderr.strip()[:400]}"
+    return p.stdout.strip(), None
 
 
 def _note_actions_read_failure(args: tuple[str, ...], detail: str) -> None:
@@ -343,15 +359,92 @@ def _note_actions_read_failure(args: tuple[str, ...], detail: str) -> None:
     print(f"ERROR: {err}", file=sys.stderr)
 
 
+#: Where a consumer repo's pipeline stubs live. The contents API answers for
+#: the DEFAULT BRANCH when no ref is given — the same branch `gh run list
+#: --workflow` resolves a workflow name against, which is the question here.
+_WORKFLOWS_DIR = ".github/workflows"
+
+
+def workflow_on_default_branch(workflow: str) -> bool | None:
+    """Is `workflow` a file in .github/workflows on REPO's default branch?
+
+    True / False / **None when it cannot be proved either way** (DRE-2525).
+
+    Drawn positively, off the CONTENTS API, rather than by reading gh's error
+    text: `gh run list --workflow X` 404s both when the workflow file is not on
+    the default branch AND when the token may not read that ref, and the two
+    must not be conflated. Asking a different API a different question settles
+    it — the file is either listed or it is not.
+
+    Absence is proved only by a listing that was read, parsed, and does not
+    contain the file. An unreadable, empty, unparseable or non-list answer
+    proves NOTHING and returns None, so the caller carries on to the Actions
+    read and fails closed exactly as it did before: git cannot store an empty
+    directory, so `[]` from a real repo is a failure wearing a success's
+    clothes, not evidence.
+
+    Called ONLY when an Actions read has already failed, so a healthy sweep
+    costs no extra API call and the probe runs at most once per failing
+    workflow per sweep.
+
+    Silent gh() by design — this helper HAS its own fallback (None), and it
+    reads the contents API, not the Actions API the AST guard in
+    test_reconcile_actions_reads_403.py polices.
+    """
+    raw = gh("api", f"repos/{REPO}/contents/{_WORKFLOWS_DIR}")
+    try:
+        entries = json.loads(raw) if raw else None
+    except ValueError:
+        entries = None
+    if not isinstance(entries, list) or not entries:
+        return None  # unreadable/empty — never provable absence
+    return workflow in {
+        e.get("name") for e in entries if isinstance(e, dict)
+    }
+
+
 def _actions_runs_busy(workflow: str) -> bool:
     """True when a run of `workflow` is queued/in_progress — or unreadable.
 
     The single busy-guard used by every dispatch site. Unreadable answers
     BUSY on purpose: deferring one sweep costs 15 minutes, while dispatching
     off a fabricated empty list burst-drains the App and LLM quotas.
+
+    A workflow that is ABSENT from the target repo is a third answer, not a
+    failure (DRE-2525): a consumer may legitimately lack an optional stub, and
+    no run of a file that does not exist can be in flight. bureau-harness has
+    no agent-fix stub, so this guard asked for its runs, got a 404, recorded it
+    as UNREADABLE and took the sweep red — 61 consecutive failed runs over
+    18h37m on 2026-08-18, ~61 emails a day, in the repo that produced 3,074
+    runs in seven days, 23% of all fleet workflow runs, while GitHub spend sat
+    at 90% of budget.
+
+    So a FAILED read is adjudicated before it is recorded: if the workflow file
+    is provably not on the default branch, there was nothing to read and the
+    sweep stays green. Everything else — a revoked permission, a missing scope,
+    an unreadable ref, an absence the contents API could not confirm — is still
+    UNREADABLE: recorded, answered BUSY, sweep red. Collapsing the two would
+    hide a real permission failure, which is the same mistake pointing the
+    other way.
+
+    Deliberately NOT extended to the dispatch sites: if such a repo ever does
+    produce a wedged PR, `gh workflow run` on the missing stub still fails
+    LOUDLY. A repo with no fix agent and a stuck pull request is a real problem
+    and must not be swallowed by this quieting.
     """
-    out = gh_actions_read("run", "list", "--repo", REPO, "--workflow", workflow,
-                          "--limit", "10", "--json", "status")
+    args = ("run", "list", "--repo", REPO, "--workflow", workflow,
+            "--limit", "10", "--json", "status")
+    out, detail = _actions_read(args)
+    if detail is not None:
+        if workflow_on_default_branch(workflow) is False:
+            print(
+                f"busy-guard: {workflow} is not on {REPO}'s default branch — "
+                "this repo has no such stub, so no run of it can be in "
+                "flight. Nothing to check, and nothing to report."
+            )
+            return False
+        _note_actions_read_failure(args, detail)
+        return True
     if out is None:
         return True
     try:
