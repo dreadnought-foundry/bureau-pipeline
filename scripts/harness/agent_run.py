@@ -240,6 +240,9 @@ def run_agent(
 
     started = time.monotonic()
     result = AgentRunResult(workdir=workdir)
+    # The credential rides the clone URL (actions/checkout's own pattern) so
+    # the agent can push the branch it opens its PR from. It lives only in this
+    # throwaway clone's .git/config, on an ephemeral runner, and never in a log.
     clone_url = f"https://x-access-token:{token}@github.com/{repo}.git"
     log(f"agent: cloning {repo} for card {card.identifier}")
     runner(["git", "clone", "--depth", "50", clone_url, workdir], check=True)
