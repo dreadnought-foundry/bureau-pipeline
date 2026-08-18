@@ -50,9 +50,14 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 WF_DIR = os.path.join(ROOT, ".github", "workflows")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
+os.environ.setdefault("LINEAR_API_KEY", "test-key")
+os.environ.setdefault("REPO", "dreadnought-foundry/test")
+os.environ.setdefault("GH_TOKEN", "x")
+
 import check_critic_result  # noqa: E402
 import merge_gate  # noqa: E402
 import publish_review_check  # noqa: E402
+import reconcile  # noqa: E402
 import should_review_pr  # noqa: E402
 import verdict_cause as vc  # noqa: E402
 from verdict_content import verdict_content_id  # noqa: E402
@@ -392,6 +397,35 @@ class TheGateDecidesTheSameWithAndWithoutACauseTest(unittest.TestCase):
         self.assertIn("not APPROVE", d.reason)
 
 
+class TheInQaSweepStillSeesAVerdictTest(unittest.TestCase):
+    """reconcile.has_verdict decides whether the In QA sweep nudges the merge
+    gate or orders a fresh review. A rejection it cannot parse reads as "no
+    verdict", and the sweep re-dispatches a review every 15 minutes forever."""
+
+    def pr(self, line, head=HEAD):
+        # reconcile's comments come from `gh pr list --json comments`, the
+        # GraphQL shape: `author.login`, no "[bot]" suffix.
+        return {
+            "headRefOid": head,
+            "comments": [{
+                "author": {"login": QA_LOGIN.removesuffix("[bot]")},
+                "body": line,
+            }],
+        }
+
+    def test_every_fixture_bound_to_the_head_counts_as_a_verdict(self):
+        for f in FIXTURES + (CARRIED_WITH_CAUSE,):
+            with self.subTest(fixture=f.name):
+                self.assertTrue(reconcile.has_verdict(self.pr(f.line, f.sha)))
+
+    def test_a_carried_rejection_with_a_cause_counts_by_content(self):
+        self.assertTrue(reconcile.has_verdict(
+            self.pr(CARRIED_WITH_CAUSE.line),
+            head_content_id=CONTENT,
+            pr_commit_shas=frozenset({STALE, HEAD}),
+        ))
+
+
 class TheReviewSkipReadsTheCarryTest(unittest.TestCase):
     """should_review_pr shares the gate's carry predicate — the skip must stay
     a strict subset of it, cause tag or no cause tag."""
@@ -434,6 +468,29 @@ class ShellConsumersStillMatchTest(unittest.TestCase):
                     header("REQUEST_CHANGES", cause="defect"), glob))
                 self.assertFalse(
                     fnmatch.fnmatchcase(header("APPROVE"), glob))
+
+    def test_the_fix_agent_trigger_still_fires_on_a_caused_rejection(self):
+        # agent-fix.yml's job-level `if:` uses a GitHub `contains()` over the
+        # comment body — the substring that wakes the fixing agent at all.
+        doc = workflow("agent-fix.yml")
+        conds = " ".join(str(job.get("if", "")) for job in doc["jobs"].values())
+        needle = re.search(r"contains\([^)]*'(VERDICT: REQUEST_CHANGES)'\)", conds)
+        self.assertTrue(needle, "agent-fix.yml no longer triggers on a rejection")
+        for line in (header("REQUEST_CHANGES"),
+                     header("REQUEST_CHANGES", cause="unverified-claim")):
+            self.assertIn(needle.group(1), line)
+
+    def test_the_carried_verdict_repost_resolves_its_verdict(self):
+        # The carried-verdict path writes its own verdict file and republishes
+        # the check from it. Read the literal the workflow writes and put it
+        # through the same parser the step calls.
+        src = "\n".join(run_blocks("qa-review.yml"))
+        written = re.search(
+            r"printf '(VERDICT: [A-Z_]+)\\n' > /tmp/qa-carried-verdict\.md", src)
+        self.assertTrue(written, "the carried-verdict repost no longer writes a verdict")
+        conclusion, title, _ = publish_review_check.decide(True, written.group(1))
+        self.assertEqual(conclusion, "success")
+        self.assertIn("APPROVE", title)
 
     def test_the_approve_substring_consumers_are_unaffected(self):
         # qa-review.yml's sync_review_state guard and reconcile's
