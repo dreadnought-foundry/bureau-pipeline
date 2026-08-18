@@ -690,7 +690,27 @@ jobs:
             parts — a business summary the CEO reads, then the technical detail
             the fixing agent reads:
 
-            - First line exactly: `VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES`
+            - First line: `VERDICT: APPROVE` on its own, or — when you are
+              blocking — `VERDICT: REQUEST_CHANGES cause:<tag>`, the verdict
+              word followed by EXACTLY ONE tag from this fixed vocabulary,
+              spelled exactly as written here and nothing else on the line:
+
+                * `unmet-criteria` — the card's acceptance criteria are not
+                  all satisfied (this covers partial delivery and an
+                  unchanged resubmission)
+                * `defect` — the diff contains a correctness, security or
+                  data-loss problem
+                * `unverified-claim` — the PR asserts something its diff does
+                  not prove (untested logic, a claim nothing executes)
+                * `scope` — the diff does work the card did not ask for, or
+                  targets the wrong thing
+
+              The tag names the BLOCKING reason: when several apply, pick the
+              one your verdict LEADS with. Never invent a tag outside those
+              four and never write more than one. Never put a cause on an
+              APPROVE — that line stays exactly `VERDICT: APPROVE`. (DRE-2489:
+              this one word is how "why do first passes fail?" gets answered
+              by filtering verdict headers instead of by hand.)
             - Then `## Summary` — for the CEO, who is NON-TECHNICAL and reads
               this to make a decision, not to debug. Use plain business
               language:
@@ -886,7 +906,27 @@ jobs:
             parts — a business summary the CEO reads, then the technical detail
             the fixing agent reads:
 
-            - First line exactly: `VERDICT: APPROVE` or `VERDICT: REQUEST_CHANGES`
+            - First line: `VERDICT: APPROVE` on its own, or — when you are
+              blocking — `VERDICT: REQUEST_CHANGES cause:<tag>`, the verdict
+              word followed by EXACTLY ONE tag from this fixed vocabulary,
+              spelled exactly as written here and nothing else on the line:
+
+                * `unmet-criteria` — the card's acceptance criteria are not
+                  all satisfied (this covers partial delivery and an
+                  unchanged resubmission)
+                * `defect` — the diff contains a correctness, security or
+                  data-loss problem
+                * `unverified-claim` — the PR asserts something its diff does
+                  not prove (untested logic, a claim nothing executes)
+                * `scope` — the diff does work the card did not ask for, or
+                  targets the wrong thing
+
+              The tag names the BLOCKING reason: when several apply, pick the
+              one your verdict LEADS with. Never invent a tag outside those
+              four and never write more than one. Never put a cause on an
+              APPROVE — that line stays exactly `VERDICT: APPROVE`. (DRE-2489:
+              this one word is how "why do first passes fail?" gets answered
+              by filtering verdict headers instead of by hand.)
             - Then `## Summary` — for the CEO, who is NON-TECHNICAL and reads
               this to make a decision, not to debug. Use plain business
               language:
@@ -1029,6 +1069,16 @@ jobs:
             # line is byte-identical to today's, and the verdict binds the
             # SHA alone. The `:+` form is deliberate: it is safe under
             # `set -u` when CONTENT_ID is unset.
+            # DRE-2489: a REQUEST_CHANGES verdict's own first line now also
+            # carries ` cause:<tag>`, so the composed header reads
+            # `… VERDICT: REQUEST_CHANGES cause:defect @<sha> content:<id>`.
+            # It rides along in `head -1` and needs nothing here — but note
+            # the ORDER is load-bearing in both directions: the content id
+            # stays LAST (verdict_content.py matches it end-anchored) and the
+            # cause sits before the sha, where merge_gate's `VERDICT:
+            # \s*([A-Z_]+)` has already stopped. Appending anything after the
+            # content id breaks the carry; every parser is pinned against
+            # both formats in tests/test_verdict_cause_tag.py.
             { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md) @${REVIEWED_SHA}${CONTENT_ID:+ content:$CONTENT_ID}"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
           elif [ -n "$RAN" ]; then
             # DRE-2465, the third branch: the reviewer RAN TO COMPLETION and
