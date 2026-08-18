@@ -305,6 +305,154 @@ class ReadBlipTest(unittest.TestCase):
         )
 
 
+# ── the gh shell-out layer, against a stub gh on PATH ──────────────────────
+#
+# The unit tests above inject a fake client, so they prove the DECISION and
+# nothing about the calls. That is the DRE-2479 shape exactly — six Actions
+# reads were broken in a way 2,140 unit tests missed because every one of
+# them stubbed subprocess at rc=0. These drive the real CLI end to end
+# against a `gh` that answers like GitHub does.
+_STUB_GH = r'''#!/usr/bin/env python3
+import json, os, sys
+
+STORE = os.environ["STUB_STORE"]
+MODE = os.environ.get("STUB_MODE", "ok")
+
+
+def load():
+    with open(STORE) as fh:
+        return json.load(fh)
+
+
+def save(state):
+    with open(STORE, "w") as fh:
+        json.dump(state, fh)
+
+
+args = sys.argv[1:]
+assert args[0] == "api", args
+method = args[args.index("--method") + 1] if "--method" in args else "GET"
+path = [a for a in args[1:] if not a.startswith("-") and a != method][0]
+state = load()
+
+if method == "GET":
+    if MODE == "list-fails":
+        print("HTTP 503", file=sys.stderr)
+        sys.exit(1)
+    from urllib.parse import parse_qs, urlparse
+    page = int(parse_qs(urlparse(path).query)["page"][0])
+    print(json.dumps(state["comments"] if page == 1 else []))
+elif method == "POST":
+    if MODE == "create-fails":
+        print("HTTP 422", file=sys.stderr)
+        sys.exit(1)
+    body = json.loads(sys.stdin.read())["body"]
+    comment = {"id": state["next_id"], "user": {"login": state["login"]},
+               "body": body}
+    state["next_id"] += 1
+    state["comments"].append(comment)
+    save(state)
+    print(json.dumps(comment))
+elif method == "DELETE":
+    target = int(path.rsplit("/", 1)[1])
+    keep = [c for c in state["comments"] if c["id"] != target]
+    if len(keep) == len(state["comments"]):
+        print("HTTP 404", file=sys.stderr)
+        sys.exit(1)
+    state["comments"] = keep
+    save(state)
+'''
+
+
+class CliSmokeTest(unittest.TestCase):
+    """scripts/gate_note.py end to end: real argv, real subprocess, real
+    JSON — only GitHub itself is the stub."""
+
+    def setUp(self):
+        import json as _json
+        import os
+        import stat
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        d = Path(self.tmp.name)
+        gh = d / "gh"
+        gh.write_text(_STUB_GH)
+        gh.chmod(gh.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        self.store = d / "store.json"
+        self.body = d / "note.md"
+        self.body.write_text(f"⏸️ {MARKER} — major version bumps are a human call")
+        self.env = dict(os.environ)
+        self.env["PATH"] = f"{d}:{self.env['PATH']}"
+        self.env["STUB_STORE"] = str(self.store)
+        self._json = _json
+
+    def write_store(self, comments=(), login=QA_LOGIN):
+        self.store.write_text(self._json.dumps({
+            "comments": list(comments), "next_id": 200, "login": login,
+        }))
+
+    def read_store(self):
+        return self._json.loads(self.store.read_text())["comments"]
+
+    def run_cli(self, mode="ok"):
+        import subprocess
+
+        env = dict(self.env, STUB_MODE=mode)
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "gate_note.py"),
+             "--repo", "dreadnought-foundry/bureau-harness", "--pr", "225",
+             "--author", QA_LOGIN, "--marker", MARKER,
+             "--body-file", str(self.body)],
+            capture_output=True, text=True, env=env,
+        )
+
+    def test_the_note_is_posted_through_the_comments_api(self):
+        self.write_store()
+        proc = self.run_cli()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("posted", proc.stdout)
+        bodies = [c["body"] for c in self.read_store()]
+        self.assertEqual(len(bodies), 1)
+        self.assertIn(MARKER, bodies[0])
+
+    def test_a_standing_note_is_left_alone(self):
+        self.write_store([
+            {"id": 100, "user": {"login": QA_LOGIN}, "body": f"⏸️ {MARKER} — x"}
+        ])
+        proc = self.run_cli()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("standing", proc.stdout)
+        self.assertEqual([c["id"] for c in self.read_store()], [100])
+
+    def test_leftover_duplicates_are_deleted_through_the_api(self):
+        self.write_store([
+            {"id": 100, "user": {"login": QA_LOGIN}, "body": f"⏸️ {MARKER} — x"},
+            {"id": 101, "user": {"login": QA_LOGIN}, "body": f"⏸️ {MARKER} — x"},
+        ])
+        proc = self.run_cli()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([c["id"] for c in self.read_store()], [100])
+
+    def test_an_unreadable_record_exits_clean_without_posting(self):
+        """A comments-API blip must not red the gate, and must not post a
+        second note over a record it could not check."""
+        self.write_store()
+        proc = self.run_cli(mode="list-fails")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("deferred", proc.stdout)
+        self.assertEqual(self.read_store(), [])
+
+    def test_a_failed_post_is_loud(self):
+        """The WRITE failing is a real failure — the honest state never
+        reached the PR. It must red the run, as `gh pr comment` did."""
+        self.write_store()
+        proc = self.run_cli(mode="create-fails")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("422", proc.stderr)
+
+
 # ── workflow wiring ─────────────────────────────────────────────────────────
 def _doc():
     return yaml.safe_load(WORKFLOW.read_text())
