@@ -189,6 +189,21 @@ class MedicUpstreamOutageWiringTest(unittest.TestCase):
         self.assertNotIn("claude-code-action", body)
         self.assertNotIn("exit 1", body)
 
+    def test_classify_keeps_gh_stderr_so_an_outage_is_visible(self):
+        # During a GitHub outage the medic's OWN `gh run view --log-failed`
+        # is the call most likely to 503 — and gh reports that on stderr. If
+        # the step discarded stderr (and truncated the file on failure), the
+        # classifier would see an empty log, answer `normal`, and the medic
+        # would retry + diagnose straight into the outage. So stderr must land
+        # in the log the classifier reads.
+        step = next(
+            s
+            for s in self.jobs["classify"]["steps"]
+            if s.get("id") == "c"
+        )
+        self.assertIn("2>&1", step["run"])
+        self.assertNotIn("2>/dev/null", step["run"])
+
     def test_gate_expressions_read_the_classify_output(self):
         src = _src()
         self.assertIn("needs.classify.outputs.class", src)
