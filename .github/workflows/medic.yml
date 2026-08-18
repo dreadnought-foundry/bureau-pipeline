@@ -85,9 +85,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Pull the failed run's logs (best-effort — a fetch failure must not
-          # crash the classifier; we default to "not a crash" = normal handling).
+          # crash the classifier; an unreadable log classifies as `normal` =
+          # normal handling). stderr goes into the SAME file on purpose
+          # (DRE-2488): during a GitHub outage this fetch is itself the call
+          # most likely to 503, and gh reports that on stderr — discarding it
+          # left the classifier with an empty log, so the medic retried and
+          # diagnosed straight into the outage.
           gh run view ${{ github.event.workflow_run.id }} --log-failed \
-            --repo ${{ github.repository }} > /tmp/medic-log.txt 2>/dev/null || : > /tmp/medic-log.txt
+            --repo ${{ github.repository }} > /tmp/medic-log.txt 2>&1 || true
           OUT=$(python3 .bureau-pipeline/scripts/medic_classify.py \
             "${{ github.event.workflow_run.name }}" /tmp/medic-log.txt)
           echo "$OUT" >> "$GITHUB_OUTPUT"
