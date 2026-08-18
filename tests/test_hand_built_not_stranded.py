@@ -15,11 +15,23 @@ Both of flag_stranded's strand classes are false alarms on hand-built work:
     advice has already been taken, so firing tells us to do what we did.
 
 FIX UNDER TEST — the `hand-built` label (it already exists in Linear)
-suppresses reconcile.flag_stranded() for that card, BOTH classes, and nothing
-else. The PR-level backstops in the same file (flag_no_checks_prs,
-flag_unowned_prs, unstick_conflicts, retrigger_dead_heads, …) key on the PULL
-REQUEST, never on the card's labels: a hand-built card whose PR wedges must
-still be caught, so the label must not become a second, wider hold.
+suppresses, for that card:
+
+  1. reconcile.flag_stranded(), BOTH strand classes — the alarm; and
+  2. main()'s nudge loop on a card with NO PULL REQUEST — the sweep's own
+     dispatch, which is the thing the alarm was reporting on. Silencing the
+     alarm alone leaves the engine running: 15 minutes into hand-building, a
+     Todo card is re-dispatched (a second, competing agent run), and a stale In
+     Progress card is requeued to Todo — feeding that same dispatch — then
+     parked to Backlog with the hold label once past REQUEUE_CAP, overriding
+     the human's own state placement.
+
+…and NOTHING else. Everything that keys on a PULL REQUEST stays label-blind:
+the PR-level backstops in the same file (flag_no_checks_prs, flag_unowned_prs,
+unstick_conflicts, retrigger_dead_heads, …) and main()'s own PR-carrying
+branches (merged → Done, open PR → In QA). A hand-built card whose PR wedges
+must still be caught, and once a human opens a PR the sweep shepherds it
+exactly as before — so the label must not become a second, wider hold.
 
 Also under test (Layer 0 of the reliability programme): the NO RUN notice used
 to offer a three-way guess — "check the GitHub Actions budget, the LLM quota,
@@ -36,6 +48,7 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 from unittest.mock import patch
 
@@ -282,16 +295,159 @@ def _call_owners(name: str) -> set[str]:
     }
 
 
-def test_only_the_watchdog_consults_the_hand_built_label():
+def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     """Structural guard, not a sentinel: if a later change wires hand-built
-    into a repair or dispatch path, this says so. The label suppresses the
-    stranded watchdog and NOTHING else (DRE-2524)."""
-    assert _call_owners("hand_built") == {"flag_stranded"}
+    into a PR-keyed repair path, this says so.
+
+    Two readers, both in the "would the pipeline start or restart an agent on
+    this card" family: flag_stranded (the alarm) and main (the no-PR dispatch
+    the alarm was reporting on). Every PR-level backstop stays label-blind.
+    """
+    assert _call_owners("hand_built") == {"flag_stranded", "main"}
 
 
 def test_the_owner_sweep_can_actually_see_a_call():
     """Guard the guard: a detector that matches nothing would pass forever."""
     assert _call_owners("held") == {"flag_stranded", "main"}
+
+
+# --------------------------------------------------------------------------
+# 5: the sweep's own dispatch is suppressed too — silencing the ALARM is not
+#    silencing the ENGINE that raised it
+# --------------------------------------------------------------------------
+# main()'s nudge loop acts on exactly the conditions the watchdog was taught to
+# read as "hand-built, leave alone": Todo with no PR past 15 minutes fires a
+# real repository_dispatch, and In Progress with no PR past 3 hours requeues to
+# Todo (which redispatches on the next sweep) and, past REQUEUE_CAP, parks the
+# card to Backlog with the hold label. On hand-built work that is a second,
+# competing agent run on a card the label says no run is coming for — and the
+# park silently overrides the human's own state placement.
+def _sweep_mocks(cards, extra=None):
+    """main() with every unrelated backstop stubbed out, so these tests see
+    only the nudge loop. Mirrors test_human_hold.py's _full_sweep_mocks."""
+    m = {
+        "unstick_conflicts": mock.MagicMock(),
+        "retrigger_dead_heads": mock.MagicMock(),
+        "flag_no_checks_prs": mock.MagicMock(),
+        "flag_unowned_prs": mock.MagicMock(),
+        "fix_approved_but_red": mock.MagicMock(),
+        "retry_dead_fix_runs": mock.MagicMock(),
+        "restart_answered_blockers": mock.MagicMock(),
+        "review_dependabot_prs": mock.MagicMock(),
+        "recover_crashed_reviews": mock.MagicMock(),
+        "check_dependabot_capacity": mock.MagicMock(),
+        "close_finished_epics": mock.MagicMock(),
+        "promote_ready": mock.MagicMock(return_value=0),
+        "flag_stranded": mock.MagicMock(return_value=set()),
+        "active_cards": mock.MagicMock(return_value=list(cards)),
+        "pr_for": mock.MagicMock(return_value=None),  # no PR yet
+        # No dispatched run ever posted a receipt, because none was coming.
+        "agent_run_alive": mock.MagicMock(return_value=False),
+        "redispatch": mock.MagicMock(return_value=True),
+    }
+    if extra:
+        m.update(extra)
+    return m
+
+
+def _run_sweep(cards, extra=None):
+    """Run main() over `cards`; returns a namespace of the mocks a caller
+    asserts on (`redispatch`, `cmd_state`, `cmd_comment`, `add_label`,
+    `cmd_advance`)."""
+    reconcile._write_failures.clear()
+    mocks = _sweep_mocks(cards, extra)
+    with mock.patch.multiple(reconcile, **mocks), mock.patch.object(
+        reconcile.linear_ops, "cmd_state"
+    ) as cmd_state, mock.patch.object(
+        reconcile.linear_ops, "cmd_comment"
+    ) as cmd_comment, mock.patch.object(
+        reconcile.linear_ops, "add_label"
+    ) as add_label, mock.patch.object(
+        reconcile.linear_ops, "cmd_advance"
+    ) as cmd_advance, mock.patch.object(
+        reconcile.linear_ops, "count_comments", return_value=0
+    ):
+        reconcile.main()
+    reconcile._write_failures.clear()
+    return SimpleNamespace(
+        redispatch=mocks["redispatch"],
+        cmd_state=cmd_state,
+        cmd_comment=cmd_comment,
+        add_label=add_label,
+        cmd_advance=cmd_advance,
+    )
+
+
+def test_hand_built_card_stale_in_todo_is_not_redispatched():
+    """The DRE-2524 shape, one layer down: 15 minutes into hand-building, the
+    sweep fires `agent-execute` at the same card. No dispatch is coming BY
+    DESIGN — so the sweep must not be the one to start one."""
+    s = _run_sweep([_card(state="Todo")])
+    s.redispatch.assert_not_called()
+    s.cmd_state.assert_not_called()
+    s.cmd_comment.assert_not_called()
+    s.add_label.assert_not_called()
+
+
+def test_without_the_label_a_stale_todo_card_is_still_redispatched():
+    """Control: the sweep's whole reason for existing still works."""
+    s = _run_sweep([_card(state="Todo", labels=("repo:portico",))])
+    s.redispatch.assert_called_once()
+    assert any(
+        reconcile._TODO_REDISPATCH_NOTE in c.args[1]
+        for c in s.cmd_comment.call_args_list
+    ), "the unlabelled card must still get its re-dispatch receipt"
+
+
+def test_hand_built_card_in_progress_with_no_pr_is_not_requeued():
+    """agent_run_alive() is false on hand-built work by definition — nothing
+    was dispatched to be alive. Requeueing to Todo feeds the redispatch above."""
+    s = _run_sweep([_card(state="In Progress")])
+    s.redispatch.assert_not_called()
+    s.cmd_state.assert_not_called()
+    s.cmd_comment.assert_not_called()
+    s.add_label.assert_not_called()
+
+
+def test_hand_built_card_in_progress_is_not_parked_after_the_requeue_cap():
+    """Past the cap the same branch parks the card in Backlog with the hold
+    label — the sweep overriding a human's own placement on their own work."""
+    s = _run_sweep([_card(state="In Progress")], extra={"REQUEUE_CAP": 0})
+    s.cmd_state.assert_not_called()
+    s.add_label.assert_not_called()
+
+
+def test_without_the_label_a_dead_in_progress_card_is_still_requeued():
+    """Control: the dead-run requeue (DRE-1403/DRE-2032) is untouched."""
+    s = _run_sweep([_card(state="In Progress", labels=("repo:portico",))])
+    s.cmd_state.assert_called_once_with("DRE-2499", "Todo")
+
+
+# The guard is scoped to the NO-PR branches on purpose: once a hand-built card
+# HAS a pull request there is real work to shepherd, and the sweep shepherds it
+# exactly as it does anyone else's — the same label-blindness the PR-level
+# backstops above are held to.
+def test_hand_built_card_with_an_open_pr_is_still_advanced_to_in_qa():
+    open_pr = {"number": 270, "state": "OPEN", "headRefName": "hand/DRE-2499"}
+    s = _run_sweep(
+        [_card(state="In Progress")],
+        extra={
+            "pr_for": mock.MagicMock(return_value=open_pr),
+            "_nudge": mock.MagicMock(return_value=True),
+            "review_workflow": mock.MagicMock(return_value="qa-review.yml"),
+        },
+    )
+    s.cmd_advance.assert_called_once_with("DRE-2499", "In QA", "In Progress")
+
+
+def test_hand_built_card_with_a_merged_pr_is_still_moved_to_done():
+    """The sweep still closes the loop on hand-built work that shipped."""
+    merged = {"number": 270, "state": "MERGED", "headRefName": "hand/DRE-2499"}
+    s = _run_sweep(
+        [_card(state="In Progress")],
+        extra={"pr_for": mock.MagicMock(return_value=merged)},
+    )
+    s.cmd_state.assert_called_once_with("DRE-2499", "Done")
 
 
 # --------------------------------------------------------------------------
