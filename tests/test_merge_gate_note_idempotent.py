@@ -304,7 +304,7 @@ class WorkflowWiringTest(unittest.TestCase):
 
     def test_the_human_arm_delegates_to_the_atomic_poster(self):
         human = self.block.find('"$DECISION" = "human"')
-        poster = self.block.find("gate_note.py")
+        poster = self.block.find("python3 .bureau-pipeline/scripts/gate_note.py")
         self.assertGreater(human, -1, "no human-decision arm")
         self.assertGreater(poster, human, "the human arm no longer posts")
 

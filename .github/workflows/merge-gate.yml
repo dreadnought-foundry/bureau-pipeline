@@ -53,7 +53,24 @@ on:
         required: true
 
 jobs:
-  evaluate:
+  # DRE-2508: the gate's ENTRY job — it answers one question, "which PR did
+  # this event wake me about?", so the evaluating job below can key its
+  # concurrency group on that single identity.
+  #
+  # The group used to be `${{ workflow_run.head_branch || issue.number }}`,
+  # which names a DIFFERENT thing per leg: the branch on the CI leg, the
+  # number on the verdict leg, nothing at all on a dispatch. Two evaluations
+  # of ONE pull request therefore landed in different groups and ran
+  # concurrently — and every check-then-act in the evaluate step (the
+  # waiting-for-human note, the carried-verdict record) is a race the moment
+  # they do. Live on 2026-08-17: twelve gate runs in twenty-five minutes
+  # during a burst of five PRs, two waiting-for-human comments on one PR,
+  # harness red. Resolving the PR here costs one job (~20s) and makes the
+  # key event-independent.
+  #
+  # The event-leg filter lives here now, on the funnel every leg passes
+  # through; `evaluate` is reachable only via this job's resolved number.
+  resolve:
     # issue_comment leg (DRE-1987): only a verdict comment AUTHORED BY the
     # qa-bot App wakes the gate — anyone can type "QA Critic" in a comment.
     # The literal must match the BUREAU_QA_APP bot login; the decision steps
@@ -77,9 +94,59 @@ jobs:
        contains(github.event.comment.body, 'QA Critic') &&
        github.event.comment.user.login == 'agent-bureau-qa-bot[bot]')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pr: ${{ steps.pr.outputs.pr }}
+    steps:
+      # The same App key the gate merges with — no extra identity, and the
+      # PR lookup draws on the qa App's own quota, as every other read here
+      # does. Minting needs nothing from the caller's GITHUB_TOKEN.
+      - name: Mint qa-bot token (author != merger)
+        id: qa
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+
+      - name: Resolve the PR this event is about
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.qa.outputs.token }}
+          EVENT: ${{ github.event_name }}
+          WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          IC_PR: ${{ github.event.issue.number }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Resolve the PR number from whichever event fired. No checkout
+          # here, so the repo is named explicitly.
+          case "$EVENT" in
+            workflow_run)      PR=$(gh pr list --repo "${{ github.repository }}" --head "$WR_BRANCH" --state open --json number --jq '.[0].number' || true) ;;
+            workflow_dispatch) PR=$INPUT_PR ;;
+            *)                 PR=$IC_PR ;;
+          esac
+          if [ -z "${PR:-}" ] || [ "$PR" = "null" ]; then
+            echo "no open PR — nothing to do"
+            PR=""
+          fi
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "resolved PR: ${PR:-<none>}"
+
+  evaluate:
+    needs: resolve
+    # Fail-closed on both counts: a resolve that FAILED (rather than
+    # skipped) must not let the gate evaluate a guessed PR, and an empty
+    # number means the event pointed at nothing to gate. A custom `if`
+    # replaces the implicit success() check, so it is spelled out.
+    if: needs.resolve.result == 'success' && needs.resolve.outputs.pr != ''
+    runs-on: ubuntu-latest
     timeout-minutes: 10
+    # One group per PR, whatever woke the gate — the CI leg, the verdict
+    # leg, and a dispatch all land here (DRE-2508). Never cancel-in-progress:
+    # the queued wake is the one that was going to merge, and dropping it
+    # would leave the PR waiting for reconcile's ~15-minute nudge.
     concurrency:
-      group: merge-gate-${{ github.event.workflow_run.head_branch || github.event.issue.number }}
+      group: merge-gate-pr-${{ needs.resolve.outputs.pr }}
       cancel-in-progress: false
     steps:
       - name: Mint qa-bot token (author != merger)
@@ -101,19 +168,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.qa.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          EVENT: ${{ github.event_name }}
-          WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          IC_PR: ${{ github.event.issue.number }}
-          INPUT_PR: ${{ github.event.inputs.pr_number }}
+          # Resolved by the `resolve` job — the SAME number this job's
+          # concurrency group is keyed on, so the serialization and the
+          # evaluation can never be about different PRs (DRE-2508).
+          PR: ${{ needs.resolve.outputs.pr }}
         run: |
           set -euo pipefail
-          # Resolve the PR number from whichever event fired.
-          case "$EVENT" in
-            workflow_run)      PR=$(gh pr list --head "$WR_BRANCH" --state open --json number --jq '.[0].number' || true) ;;
-            workflow_dispatch) PR=$INPUT_PR ;;
-            *)                 PR=$IC_PR ;;
-          esac
-          [ -z "${PR:-}" ] || [ "$PR" = "null" ] && { echo "no open PR — nothing to do"; exit 0; }
 
           BRANCH=$(gh pr view "$PR" --json headRefName,state --jq .headRefName)
           STATE=$(gh pr view "$PR" --json state --jq .state)
@@ -263,9 +323,13 @@ jobs:
           CARRIED_ID=$(grep -m1 '^carried_content_id=' /tmp/gate-decision | cut -d= -f2- || true)
           # Posted through the issue-comments API rather than the gh pr
           # helper: this arm sits BEFORE the update/human/merge arms (a
-          # carry can end in any of them) and the dependabot suite pins the
-          # FIRST pr-comment call in this block to the human-decision arm.
-          # Identical result either way.
+          # carry can end in any of them). Identical result either way.
+          # This idempotence check is still a read of the snapshot above,
+          # i.e. the same shape DRE-2508 removed from the `human` arm — it
+          # is left alone deliberately (that arm's wiring is pinned by the
+          # DRE-2340 suite, and the record is not asserted once-only
+          # anywhere). What protects it is the per-PR concurrency group on
+          # this job: two evaluations of one PR no longer overlap at all.
           CARRY_MARK="carried verdict content:$CARRIED_ID"
           if [ -n "$CARRIED" ] && ! grep -q "$CARRY_MARK" /tmp/comments.json; then
             printf '%s\n\n%s\n\n%s\n' \
@@ -288,15 +352,31 @@ jobs:
           fi
           # DRE-2039: `human` = the gate will NEVER merge this PR (a
           # dependabot major / unprovable semver level). Post the honest
-          # state ONCE — the already-fetched comments record is the
-          # idempotence check, so re-evaluations don't spam the PR — and
-          # stop. No verdict-shaped text: this is a status note, not an
-          # approval credential.
+          # state ONCE and stop. No verdict-shaped text: this is a status
+          # note, not an approval credential.
+          #
+          # DRE-2508: posted through scripts/gate_note.py, NOT guarded by a
+          # grep over /tmp/comments.json. That record was fetched ~40 lines
+          # above, and checking a stale read before acting is a race: two
+          # gate evaluations of one PR both read before either wrote and
+          # both posted (bureau-pipeline #157, 2026-08-17 — the harness
+          # asserts exactly one and went red). The script re-reads as late
+          # as possible, posts, then converges on the earliest note; it is
+          # also scoped to the gate's OWN login, so a human quoting the
+          # marker no longer silences the honest state. Per-PR
+          # serialization (the concurrency group above) should mean the
+          # overlap never happens — this is the mechanism that holds if it
+          # does, and the one a unit test can actually race.
           if [ "$DECISION" = "human" ]; then
             REASON=$(grep -m1 '^reason=' /tmp/gate-decision | cut -d= -f2-)
-            if ! grep -q "Merge gate: waiting for human merge" /tmp/comments.json; then
-              gh pr comment "$PR" --body "⏸️ Merge gate: waiting for human merge — $REASON"
-            fi
+            HUMAN_MARK="Merge gate: waiting for human merge"
+            printf '⏸️ %s — %s\n' "$HUMAN_MARK" "$REASON" > /tmp/human-note.md
+            python3 .bureau-pipeline/scripts/gate_note.py \
+              --repo "${{ github.repository }}" \
+              --pr "$PR" \
+              --author "$QA_LOGIN" \
+              --marker "$HUMAN_MARK" \
+              --body-file /tmp/human-note.md
             exit 0
           fi
           [ "$DECISION" = "merge" ] || exit 0

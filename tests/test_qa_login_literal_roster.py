@@ -162,9 +162,12 @@ class TriggerGateEqualityTest(unittest.TestCase):
         return doc["jobs"][job]["if"]
 
     def test_merge_gate_issue_comment_leg_requires_qa_login(self):
+        # DRE-2508 moved the filter to the gate's entry job (`resolve`) —
+        # the funnel every leg passes through, and the only route to
+        # `evaluate`.
         self.assertIn(
-            JOB_IF_EQUALITY, self.job_if("merge-gate.yml", "evaluate"),
-            "merge-gate.yml evaluate job-if lost the qa-bot author check — "
+            JOB_IF_EQUALITY, self.job_if("merge-gate.yml", "resolve"),
+            "merge-gate.yml resolve job-if lost the qa-bot author check — "
             "anyone could wake the gate by typing 'QA Critic'",
         )
 

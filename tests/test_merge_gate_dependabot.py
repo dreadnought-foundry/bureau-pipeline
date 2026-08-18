@@ -310,7 +310,7 @@ class WorkflowWiringTest(unittest.TestCase):
 
     def test_human_decision_posts_waiting_state_once_and_never_merges(self):
         human = self.run_block.find('"$DECISION" = "human"')
-        comment = self.run_block.find("gate_note.py")
+        comment = self.run_block.find("python3 .bureau-pipeline/scripts/gate_note.py")
         merge_guard = self.run_block.find('[ "$DECISION" = "merge" ] || exit 0')
         merge = self.run_block.find("gh pr merge")
         self.assertGreater(human, -1, "no human-decision arm")
