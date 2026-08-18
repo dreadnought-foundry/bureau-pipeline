@@ -1,0 +1,6 @@
+agent	Engineer agent	2026-08-18T09:02:11.4412345Z Card: DRE-2488 — Medic classifies GitHub 5xx as an upstream outage
+agent	Engineer agent	2026-08-18T09:02:11.4413001Z On 2026-08-17, portico's scheduled Reconcile sweeps failed because the GitHub API returned `HTTP 503: No server is currently available to service your request` (run 32054736831).
+agent	Engineer agent	2026-08-18T09:02:11.4413552Z The gh CLI's `HTTP 503:` and `non-200 OK status code: 503` phrasings both appear in real outage logs.
+agent	Engineer agent	2026-08-18T09:03:40.7712345Z +        self.assertEqual(resp.status_code, 503)
+agent	Engineer agent	2026-08-18T09:04:02.1912345Z FAILED tests/test_medic_upstream_5xx.py::test_classifies - AssertionError
+agent	Engineer agent	2026-08-18T09:04:02.1919812Z ##[error]Process completed with exit code 1.
