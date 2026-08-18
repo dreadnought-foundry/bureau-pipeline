@@ -181,6 +181,24 @@ WATCHDOG_LANES = ("Planning", "Todo", "In Progress")
 WATCHDOG_MINUTES = int(os.environ.get("WATCHDOG_MINUTES", "30"))
 WATCHDOG_TAG = "stranded-watchdog"
 
+# Hand-built work is not stranded work (DRE-2524). On 2026-08-17 five portico
+# cards (DRE-2499/2500/2501/2505/2507) each collected a 🚨 notice plus the hold
+# label and ALL FIVE were false alarms: the work had been built by hand before
+# the card existed, and the run the watchdog reported as "never started" opened
+# a PR forty minutes later. Both strand classes are wrong on that work — no
+# dispatched run is coming BY DESIGN, and routing is irrelevant when nothing is
+# being routed. The NO-ROUTE notice even prescribes "so it must be hand-built",
+# so on a card labelled hand-built it tells us to do what we did.
+#
+# This label suppresses flag_stranded and NOTHING ELSE. It is deliberately not
+# a second HOLD_LABEL: hold means "a human owes this card an action" and stands
+# down repairs; hand-built means "no agent was ever coming". Every PR-level
+# backstop below (flag_no_checks_prs, flag_unowned_prs, unstick_conflicts,
+# retrigger_dead_heads, …) keys on the PULL REQUEST, never on card labels, so a
+# hand-built card whose PR wedges is still caught — see
+# test_hand_built_not_stranded.py, which asserts that structurally.
+HAND_BUILT_LABEL = "hand-built"
+
 # The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
 # updatedAt every ~15-minute cycle, so a silently-failing dispatch loop never
 # LOOKS WATCHDOG_MINUTES stale — a prior receipt with still no proof-of-life
@@ -193,6 +211,21 @@ def held(card: dict) -> bool:
     or auto-promote it until a human removes the label."""
     return any(
         lbl["name"].lower() == HOLD_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes", [])
+    )
+
+
+def hand_built(card: dict) -> bool:
+    """True if the card carries HAND_BUILT_LABEL (DRE-2524).
+
+    The work is done by a human or a local agent rather than a dispatched
+    pipeline agent, so "no run receipt" and "no dispatch route" are both the
+    normal state, not evidence of a stall. Read by flag_stranded ONLY — never
+    by a repair or dispatch path, or this would silently become a second,
+    wider hold.
+    """
+    return any(
+        lbl["name"].lower() == HAND_BUILT_LABEL
         for lbl in (card.get("labels") or {}).get("nodes", [])
     )
 
@@ -531,6 +564,12 @@ def flag_stranded() -> set[str]:
           Epics past Planning are containers — no run ever targets them,
           so their receipt-less state is normal, not a strand.
 
+    Neither class applies to HAND-BUILT work (DRE-2524): a card labelled
+    HAND_BUILT_LABEL is skipped outright, because no dispatched run is coming
+    by design and routing is irrelevant when nothing is being routed. That
+    label suppresses this watchdog and nothing else — the PR-level backstops
+    further down key on the pull request, not on card labels.
+
     A card with ANY receipt started a run once (live or dead) and is never
     flagged by EITHER class: started-then-died is the dead-run requeue's
     case, and a stale-pinned sweep computes routable=False for a repo it
@@ -554,6 +593,15 @@ def flag_stranded() -> set[str]:
         ident, state = card["identifier"], card["state"]["name"]
         if held(card):
             continue  # already in a human's queue — never spam
+        if hand_built(card):
+            # DRE-2524: neither class applies to work built by hand — no
+            # dispatched run is coming and nothing is being routed.
+            print(
+                f"watchdog: {ident} is labeled '{HAND_BUILT_LABEL}' — no "
+                "dispatched run is expected, so a missing run receipt and an "
+                "off-rail repo are both normal here, not a strand"
+            )
+            continue
         slug = card_repo(card)
         routable = slug is not None and slug in validate_card.VALID_SLUGS
         if routable and slug != REPO_SLUG:
@@ -570,12 +618,18 @@ def flag_stranded() -> set[str]:
             redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
             if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
                 continue  # young — give the dispatch time to start a run
+            # Says what was OBSERVED and nothing more (DRE-2524). The old text
+            # offered three suspects — the Actions budget, the LLM quota, the
+            # relay — with no evidence for any of them, so the reader had to
+            # check all three. One cause or "I don't know"; this is the latter.
             reason = (
-                f"no agent run has started after {WATCHDOG_MINUTES}+ minutes in "
-                f"{state} (no run receipts on the card) — check the GitHub Actions "
-                "budget, the LLM quota, and the relay. If a run is merely queued, "
-                f"remove the '{HOLD_LABEL}' label; otherwise this card needs a "
-                "human to unblock the pipeline."
+                f"no agent run has started. Observed: this card has sat in "
+                f"{state} for {WATCHDOG_MINUTES}+ minutes with no run receipt "
+                "on it — every agent posts one the moment it starts, so as far "
+                "as this sweep can see, nothing has begun. Why it has not "
+                "started is not known from here. If a run is merely queued, "
+                f"remove the '{HOLD_LABEL}' label and it will carry on; "
+                "otherwise this card needs a human to look."
             )
         else:
             live_confirmed = ""
