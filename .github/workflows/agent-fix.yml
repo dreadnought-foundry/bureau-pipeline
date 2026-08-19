@@ -58,7 +58,16 @@ jobs:
        github.event.comment.user.login == 'agent-bureau-qa-bot[bot]' &&
        contains(github.event.comment.body, 'VERDICT: REQUEST_CHANGES'))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The total-runtime cap, raised with the turn budget below (DRE-2533). A
+    # job dies at whichever cap it reaches first, so 150 turns behind a
+    # 45-minute wall is a raise on paper only: the long repair this card
+    # exists to unblock would be cancelled by the clock instead of
+    # error_max_turns — no fix either way, and the inference paid for either
+    # way. agent-task pairs the same 150 turns with 120 minutes, and 45
+    # "murdered legitimately long builds mid-work" there (DRE-2074) at a
+    # smaller ceiling than this job carries. Pinned against agent-task's own
+    # timeout by tests/test_fix_turn_budget.py.
+    timeout-minutes: 120
     steps:
       - name: Mint bot token
         id: app
@@ -422,8 +431,35 @@ jobs:
           # still require qa-bot authorship in the job `if` above). The
           # action strips the [bot] suffix on compare.
           allowed_bots: "agent-bureau-qa-bot,github-actions"
+          # TURN BUDGET (DRE-2533). 60 was never sized for this job — DRE-2422
+          # raised the critic off 40 by listing its siblings ("verify 60,
+          # agent-fix 60, red-main-repair 100, agent-task 150") and used this
+          # number as EVIDENCE without asking whether it fit the repair work.
+          #
+          # Measured 2026-08-19: agent-bureau PR #2063 died at 61 turns / $4.82,
+          # then died AGAIN on re-dispatch at 61 / $5.85 before DRE-2024's
+          # convergence halt correctly refused a third. $10.67 of inference, no
+          # fix, PR blocked. In the same window the one fix run that FINISHED
+          # took 47 turns (portico, $2.51) — thirteen turns of margin under the
+          # old ceiling. By DRE-2422's own standard ("a run that SUCCEEDS at 41
+          # has exactly zero margin left") the fixer was riding its ceiling
+          # exactly as the critic had been.
+          #
+          # 150 is the ENGINEER's budget, and this is a floor rather than a
+          # match: agent-task only has to WRITE the code, while this agent must
+          # first comprehend someone else's diff, read the failing CI, treat the
+          # critic's findings as a spec, prove every acceptance criterion by
+          # running a check, and break nothing already there. It is the most
+          # demanding job in the fleet and held the second-smallest budget.
+          #
+          # A CEILING, not a target: the run that finished in 47 turns costs 47
+          # turns' worth whichever number sits here. This changes the bill only
+          # for runs that today produce nothing at all, and DRE-2024's halt
+          # still bounds a non-converging loop to two attempts per head sha, so
+          # it cannot become an unbounded burn. Pinned by
+          # tests/test_fix_turn_budget.py.
           claude_args: |
-            --max-turns 60
+            --max-turns 150
             ${{ steps.model.outputs.model_arg }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |

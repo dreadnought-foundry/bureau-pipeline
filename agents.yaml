@@ -130,7 +130,10 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "workflow_dispatch — merge-gate DIRTY path, conflict sweep, approved-but-red sweep, critic REQUEST_CHANGES"
-    maxTurns: 60
+    # Mirrors agent-fix.yml's --max-turns (DRE-2533); the roster is the
+    # console's copy of the fleet's budgets and tests/test_agents_registry.py
+    # fails if it drifts from the ceiling the workflow actually runs with.
+    maxTurns: 150
     maxBudget: 9
     tools: [Bash, Edit, Write, Read, Glob, Grep]
     briefPath: null
