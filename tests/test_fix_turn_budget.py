@@ -64,6 +64,14 @@ OBSERVED_SUCCESS = 47
 # else's diff — so this is a FLOOR for the fixer, never a target to sit under.
 ENGINEER_BUDGET = 150
 
+# The engineer's WALL CLOCK (agent-task.yml, job `execute`). A turn ceiling is
+# only half a budget: the job dies at whichever cap it reaches first. 150 turns
+# behind a 45-minute wall converts "died at max-turns, no fix" into "cancelled
+# by timeout, no fix" — the same wasted spend this card exists to stop. Paired
+# with ENGINEER_BUDGET: whatever wall clock the engineer needs to spend 150
+# turns, the strictly larger repair job needs at least as much.
+ENGINEER_WALL_CLOCK = 120
+
 _TURNS_RE = re.compile(r"--max-turns\s+(\d+)")
 
 
@@ -84,6 +92,16 @@ def _max_turns(workflow: str, job: str, step_id: str) -> int:
     m = _TURNS_RE.search(args)
     assert m, f"{workflow}:{step_id} declares no --max-turns: {args!r}"
     return int(m.group(1))
+
+
+def _timeout_minutes(workflow: str, job: str) -> int:
+    doc = yaml.safe_load((WORKFLOWS / workflow).read_text())
+    timeout = doc["jobs"][job].get("timeout-minutes")
+    assert timeout is not None, (
+        f"{workflow} job {job!r} declares no timeout-minutes — GitHub then "
+        f"applies its 360-minute default, which is not a budget anyone chose"
+    )
+    return int(timeout)
 
 
 def test_the_fix_agent_clears_the_observed_success_with_real_headroom():
@@ -122,4 +140,34 @@ def test_the_engineer_budget_this_test_compares_against_is_still_real():
     assert _max_turns("agent-task.yml", "execute", "claude") == ENGINEER_BUDGET, (
         "agent-task's turn budget changed; update ENGINEER_BUDGET here so the "
         "fixer's floor keeps tracking the agent it repairs."
+    )
+
+
+def test_the_fix_job_has_the_wall_clock_to_actually_spend_its_turns():
+    """A turn ceiling the wall clock cannot reach is not a raised budget.
+
+    The job dies at whichever cap comes first. agent-task needs 120 minutes to
+    spend 150 turns — 45 "murdered legitimately long builds mid-work" there
+    (DRE-2074) at a SMALLER ceiling. Leaving agent-fix at 45 with the same 150
+    turns just renames the failure: `error_max_turns, no fix, $X burned`
+    becomes `cancelled by timeout, no fix, $X burned`, and the run commits
+    nothing either way.
+    """
+    wall = _timeout_minutes("agent-fix.yml", "fix")
+    assert wall >= ENGINEER_WALL_CLOCK, (
+        f"agent-fix's job dies at {wall} minutes while budgeted "
+        f"{_max_turns('agent-fix.yml', 'fix', 'claude')} turns; agent-task "
+        f"needs {ENGINEER_WALL_CLOCK} minutes for {ENGINEER_BUDGET}. The "
+        f"repair job is the larger one — a turn ceiling it has no clock to "
+        f"reach is a raise on paper only."
+    )
+
+
+def test_the_engineer_wall_clock_this_test_compares_against_is_still_real():
+    """Pin the wall-clock comparison the same way ENGINEER_BUDGET is pinned.
+    If agent-task's timeout moves, this floor must move with it rather than
+    silently measuring against a number that no longer exists."""
+    assert _timeout_minutes("agent-task.yml", "execute") == ENGINEER_WALL_CLOCK, (
+        "agent-task's job timeout changed; update ENGINEER_WALL_CLOCK here so "
+        "the fixer's wall clock keeps tracking the agent it repairs."
     )
