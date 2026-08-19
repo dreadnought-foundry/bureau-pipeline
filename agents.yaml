@@ -174,10 +174,17 @@ agents:
     model: claude-sonnet-5  # top of the `advisory` ladder
     # END generated model
     trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
-    # The FIRST attempt's ceiling (DRE-2429, was 60). The crash retry runs at
-    # 120 — a retry against the ceiling that just killed it cannot succeed —
-    # but the roster reports the budget a verify normally runs under.
-    maxTurns: 80
+    # The FIRST attempt's ceiling (DRE-2429 set 80, was 60; DRE-2539 raised it
+    # to 120). The crash retry runs at 160 — a retry against the ceiling that
+    # just killed it cannot succeed — but the roster reports the budget a verify
+    # normally runs under.
+    #
+    # 80 sat INSIDE the distribution of real work, not above it. Measured
+    # first-attempt turn counts, agent-bureau 2026-08-19: 7, 61, 65, 81. PR
+    # #2064 needed 81 and died one turn past the line while working normally;
+    # its retry finished the same content in 77, BELOW the ceiling that had
+    # denied it. $3.90 and 14.1 minutes discarded to buy $2.92 of useful work.
+    maxTurns: 120
     maxBudget: 5
     tools: [Bash, Edit, Write, Read, Glob, Grep]
     briefPath: briefs/verifier.md

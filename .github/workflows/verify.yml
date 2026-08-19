@@ -91,14 +91,22 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.pull_request.head.ref, 'agent/'))
     runs-on: ubuntu-latest
-    # 45, raised from 30 with the turn budgets (DRE-2429). This job can now
-    # run an 80-turn attempt, a 120s backoff and a 120-turn retry; leaving
-    # the clock at 30 would just convert an error_max_turns crash into a job
+    # 60, raised from 45 WITH the turn budgets (DRE-2429, again DRE-2539). This
+    # job runs a 120-turn attempt, a 120s backoff and a 160-turn retry; leaving
+    # the clock behind would just convert an error_max_turns crash into a job
     # TIMEOUT, which is strictly worse — a timeout cancels every remaining
     # step including the `if: always()` neutral-status post and the loud
     # failure the medic reads, so the PR would strand with no verdict and no
     # explanation at all. Still well inside house norms (agent-task: 120).
-    timeout-minutes: 45
+    #
+    # The arithmetic, from measurement rather than guesswork: PR #2064's
+    # 81-turn attempt took 14.1 minutes — about 10s/turn. 120 + 160 turns is
+    # ~47 minutes plus the 2-minute backoff, so 45 would have been breached by
+    # the raise itself. Raising turns without the clock is the exact defect the
+    # fix agent caught on DRE-2533 overnight (150 turns behind a 45-minute
+    # wall); here the test caught it before the change landed.
+    # Pinned by tests/test_verify_turn_budget.py.
+    timeout-minutes: 60
     env:
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
@@ -389,8 +397,42 @@ jobs:
           # reconcile's workflow_dispatch runs initiate as the workflow token's
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
+          # TURN BUDGET, attempt 1 (DRE-2539). Was 80, and 80 sat INSIDE the
+          # distribution of real work rather than above it. Measured
+          # first-attempt turn counts on agent-bureau, 2026-08-19:
+          #
+          #     7,  61,  65,  81        ceiling: 80
+          #
+          # PR #2064's first attempt needed 81 and was cut off one turn past the
+          # line while working normally — no rate limit, no infra fault, no
+          # hang: `"subtype": "error_max_turns", "num_turns": 81,
+          # "total_cost_usd": 3.898`, no verdict. Its retry then finished the
+          # SAME content (hash 92d4e99b both times) in 77 turns, BELOW the
+          # ceiling that had just denied it. Two runs on byte-identical input
+          # differed by 4 turns, which is about as wide as the margin 80 left —
+          # so this was a coin flip on every sizeable PR, not a rare overflow.
+          # The 61 and 65 passed with 15 and 19 turns of headroom; one unlucky
+          # exploration from the same fate.
+          #
+          # Cost when it bit: $3.90 and 14.1 minutes of inference discarded to
+          # buy $2.92 of useful work, and verify is the whole critical path —
+          # #2064 took 48m22s from APPROVE to merge, ~47 of it verify across two
+          # GitHub job attempts. CI was 3m55s and never the problem.
+          #
+          # 120 clears the observed maximum by ~40%. A ceiling is free when
+          # unused: the run that finished in 7 turns costs 7 whatever sits here,
+          # and the bill only moves for runs that currently produce nothing.
+          # The retry stays STRICTLY higher (DRE-2429) and the job's wall clock
+          # was raised with both — a turn ceiling the clock cannot reach is a
+          # raise on paper only, and a TIMEOUT is strictly worse than
+          # error_max_turns here because it cancels the `if: always()`
+          # neutral-status post. Pinned by tests/test_verify_turn_budget.py.
+          #
+          # Fourth ceiling found too tight this week: the critic (DRE-2422,
+          # 40 -> 80/120), the fix agent (DRE-2533, 60 -> 150), that job's wall
+          # clock (caught by the pipeline itself overnight), and this one.
           claude_args: |
-            --max-turns 80
+            --max-turns 120
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
@@ -523,7 +565,11 @@ jobs:
           # reconcile's workflow_dispatch runs initiate as the workflow token's
           # actor (DRE-2053 — dependabot review dispatches, DRE-2047).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,dependabot,github-actions
-          # STRICTLY LARGER than attempt 1's 80 (DRE-2429). Attempt 1 dying of
+          # STRICTLY LARGER than attempt 1's 120 (DRE-2429, raised with it by
+          # DRE-2539 — attempt 1 was 80 and that sat inside the distribution of
+          # real work; see the block above). The invariant is what matters, not
+          # either number: a retry that exists to recover from exhausting a
+          # resource must come back with MORE of it. Attempt 1 dying of
           # error_max_turns is proof that 80 was too low for THIS card; a
           # retry at the same ceiling re-runs the same review, on the same
           # diff, into the same wall. --max-turns is a ceiling, not a target,
@@ -532,7 +578,7 @@ jobs:
           # This is the ONE knob that differs between the two attempts; the
           # rest of the block is still kept in sync with attempt 1.
           claude_args: |
-            --max-turns 120
+            --max-turns 160
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
