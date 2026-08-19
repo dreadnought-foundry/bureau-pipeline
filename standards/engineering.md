@@ -21,6 +21,16 @@ is the floor. Every rule here exists because its violation shipped a bug.
   session; never claim a PR is open without the `gh pr create` output in hand.
   Report failures as failures. Never claim "merged"/"deployed" without
   authoritative proof (`gh pr view --json mergedAt`).
+- **A change that contradicts a document updates that document in the SAME PR.**
+  Not a follow-up card, not a TODO. If your change makes a runbook, README or ADR
+  that names the mechanism you touched wrong, fix it in this PR — or say in the PR
+  body why it still holds. Deferring the doc is how the record rots: **~57 of
+  agent-bureau's 102 ADRs describe a platform retired in June, none marked
+  superseded, and every one of them was accurate when written.** Each went stale
+  in a PR that shipped without touching it. A concrete cost: `docs/operator-runbook.md`
+  went stale within a DAY of the code change that outdated it, and an operator
+  following it would have provisioned four secrets, watched them work for eight
+  hours, and had the chain die silently.
 
 ## Test rigor — no vacuous tests
 Every test must FAIL if the behavior it claims to verify is removed. Before the
