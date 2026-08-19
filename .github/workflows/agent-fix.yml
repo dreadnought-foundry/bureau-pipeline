@@ -58,7 +58,16 @@ jobs:
        github.event.comment.user.login == 'agent-bureau-qa-bot[bot]' &&
        contains(github.event.comment.body, 'VERDICT: REQUEST_CHANGES'))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The total-runtime cap, raised with the turn budget below (DRE-2533). A
+    # job dies at whichever cap it reaches first, so 150 turns behind a
+    # 45-minute wall is a raise on paper only: the long repair this card
+    # exists to unblock would be cancelled by the clock instead of
+    # error_max_turns — no fix either way, and the inference paid for either
+    # way. agent-task pairs the same 150 turns with 120 minutes, and 45
+    # "murdered legitimately long builds mid-work" there (DRE-2074) at a
+    # smaller ceiling than this job carries. Pinned against agent-task's own
+    # timeout by tests/test_fix_turn_budget.py.
+    timeout-minutes: 120
     steps:
       - name: Mint bot token
         id: app
