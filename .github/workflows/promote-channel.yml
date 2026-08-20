@@ -1,0 +1,129 @@
+# Automatic channel promotion (DRE-2551, Wave 1 Step 2).
+#
+# "Agents author, human promotes, harness proves" is now "agents author,
+# HARNESS promotes". The tag move was the one human act left in the release
+# path: it happened five times in ten days (2026-07-11 → 07-21) and then
+# stopped, and nothing noticed for a month while main drifted 174 commits past
+# v5. The gate never failed — it was never invoked again.
+#
+# So this workflow adds only the thing that pushes. release-gate.yml still
+# validates the result and is deliberately NOT rewritten; it is good machinery
+# whose trigger was the problem.
+#
+# THE TRAP THIS FILE EXISTS TO AVOID (and why the App token is not optional):
+# GitHub does not trigger workflows from events created with the default
+# GITHUB_TOKEN. A tag moved with it would never fire release-gate.yml, so the
+# channel would advance with its validation silently skipped — every test still
+# green, the gate simply never invoked. That is this wave's exact failure mode,
+# so the move is made with the bot App token and release-gate.yml's trigger is
+# amended to actually match the ref being moved.
+#
+# The decision lives in scripts/promote_channel.py (unit-tested red and green
+# in tests/test_promote_channel.py); this file only gathers GitHub's records
+# and acts on the verdict — the merge-gate.yml thin-caller shape.
+name: Promote Channel
+
+on:
+  workflow_run:
+    workflows: ["Integration Harness"]
+    types: [completed]
+
+# One mover at a time. Two harness runs finishing close together must not race
+# to write the same ref; the ancestry check refuses a backwards move, but only
+# if it reads a settled channel head.
+concurrency:
+  group: promote-channel
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  statuses: read
+
+jobs:
+  promote:
+    # Only a green harness run on main is a promotion candidate. A PR-head run
+    # proved a commit that is not on the trunk, and a red one proved the
+    # opposite of what we want.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # contents:write to move the ref, and — the load-bearing part — an
+      # identity that is NOT the default token, so the push actually fires
+      # release-gate.yml.
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # `{}` on a fetch blip: promote_channel.py fails closed on it — never
+      # promote on unverifiable data.
+      - name: Fetch the candidate's combined commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${CANDIDATE}/status" \
+            > combined_status.json || echo '{}' > combined_status.json
+
+      # base=channel, head=candidate. "ahead" is the only answer that may move
+      # the ref. A missing channel ref is the first promotion, not an error;
+      # anything unreadable stays unknown and fails closed downstream.
+      - name: Compare the candidate against the current channel head
+        id: ancestry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" >/dev/null 2>&1; then
+            echo "status=no-channel-yet" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          STATUS="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/compare/stable...${CANDIDATE}" \
+            --jq '.status' 2>/dev/null || true)"
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide
+        id: decide
+        env:
+          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          # The hold switch (D2). A repository variable: explicit, auditable,
+          # and flippable without a release. UNSET MEANS RUN — autonomy by
+          # default. DRE-2552 alarms if a hold persists, because an un-alarmed
+          # hold recreates the very condition this wave removes.
+          HOLD: ${{ vars.CHANNEL_HOLD }}
+          ANCESTRY: ${{ steps.ancestry.outputs.status }}
+        run: |
+          python3 scripts/promote_channel.py \
+            --sha "$CANDIDATE" \
+            --statuses-file combined_status.json \
+            --ancestry "$ANCESTRY" \
+            --hold "$HOLD"
+
+      # Force, because the channel is a MOVING ref by design — that is what
+      # makes it a staged deploy rather than a frozen pin.
+      - name: Move the channel
+        if: steps.decide.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/stable" \
+            -f sha="${CANDIDATE}" -F force=true \
+          || gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/stable" -f sha="${CANDIDATE}"
+
+      # A no-op is the ordinary outcome and must not read as a failure. The
+      # reason is printed either way so "why did the channel not move?" is
+      # answerable from the run alone.
+      - name: Say what happened
+        run: echo "${{ steps.decide.outputs.reason }}" >> "$GITHUB_STEP_SUMMARY"

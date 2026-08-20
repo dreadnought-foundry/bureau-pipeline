@@ -46,6 +46,20 @@ on:
           the driver, so name at most two per dispatch (job timeout below).
         required: false
         default: ""
+  # DRE-2551: automatic promotion needs a PROVEN commit on the trunk, and
+  # until now nothing ever proved one. The PR trigger stamps the PR head; the
+  # fleet merges with merge commits, so that stamp never transfers to main's
+  # tip and no commit on main has ever carried a harness verdict.
+  #
+  # Deliberately NO paths filter, unlike the PR trigger below. Consumers pin
+  # the whole repo, so every commit on main changes what they get — a channel
+  # that only advances for pipeline-path commits would sit stale on a docs
+  # merge and trip its own staleness alarm. This is the cheap default sweep
+  # (three scenarios), and it is affordable because Step 1 cut the CI burn
+  # first — decision D4, in this order, for this reason.
+  push:
+    branches: [main]
+
   pull_request:
     # The boundary: workflow wiring plus the dispatch/gate scripts the
     # scenarios exercise end-to-end. Everything else stays silent.
@@ -54,7 +68,6 @@ on:
       - "scripts/harness/**"
       - "scripts/reconcile.py"
       - "scripts/merge_gate.py"
-      - "scripts/gate_note.py"
       - "scripts/dispatch_pool.py"
       - "scripts/dedupe_dispatch.py"
       - "scripts/should_review_pr.py"
