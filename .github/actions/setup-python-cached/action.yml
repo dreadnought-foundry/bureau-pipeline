@@ -20,8 +20,18 @@
 #   runs, and nobody can say what fraction of that was pip).
 #
 # So this caches the virtualenv itself, keyed exactly, skips `pip install`
-# outright on a hit, and makes the install a NAMED step so
-# `scripts/ci_minutes_report.py` has a number to report.
+# outright on a hit, and pulls the install out of the test step so its cost
+# is a number of its own.
+#
+# NAME YOUR CALLING STEP. GitHub's jobs API reports a composite action as ONE
+# step, under the CALLER's name — measured on run 32421767876, whose job
+# (96595119245) called this action three times and returned only the caller's
+# step names, never the "Install dependencies (pip install)" below. So that
+# inner name is a log affordance; the label `scripts/ci_minutes_report.py` can
+# attribute minutes to is the one the caller writes. An unnamed `uses:` is
+# reported as "Run ./.github/actions/setup-python-cached", which is as
+# unattributable as the install being buried in the test step was.
+# tests/test_ci_python_plumbing_once.py fails on an unnamed caller here.
 #
 # It does NOT additionally set `cache: pip`. On a hit pip never runs, so
 # restoring its download cache is pure wall-clock; on a miss the download
@@ -254,9 +264,10 @@ runs:
         # the run reads as a code defect. Exact match or a full install —
         # there is no partial credit here.
 
-    # The named step the acceptance criterion is about: today agent-bureau's
-    # pip install happens inside the test step, so ci_minutes_report.py cannot
-    # separate its cost from the suite's. Here it is its own line in the run.
+    # Its own step, so the install is separable from the suite it installs for
+    # — today agent-bureau's pip install happens inside the test step and the
+    # two costs cannot be told apart. This name shows in the LOG; the name the
+    # minutes report reads is the caller's (see the header).
     - name: Install dependencies (pip install)
       id: install
       if: inputs.install == 'true' && steps.restore.outputs.cache-hit != 'true'

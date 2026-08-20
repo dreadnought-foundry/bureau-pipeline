@@ -138,7 +138,8 @@ jobs:
       # asks for install: false — a merge-gating workflow does not take a
       # package-registry dependency it does not use. The install itself is the
       # shared action's job now (DRE-2589), so the pins have one home.
-      - uses: ./.github/actions/setup-python-cached
+      - name: Install test tooling (named scenarios only)
+        uses: ./.github/actions/setup-python-cached
         with:
           python-version: "3.12"
           install: ${{ inputs.scenarios != '' && 'true' || 'false' }}

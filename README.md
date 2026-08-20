@@ -133,13 +133,21 @@ place. Call it instead of writing your own `setup-python` + `pip install` pair:
 ```yaml
 # .github/workflows/ci.yml — CANARY REPOS ONLY (agent-bureau, bureau-pipeline)
 - uses: actions/checkout@v5
-- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-python-cached@main
+- name: Install test tooling (cached)   # name it — see below
+  uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-python-cached@main
   with:
     python-version: "3.12"
     requirements: |
       requirements-dev.txt
 - run: pytest tests        # the venv is on PATH for every later step
 ```
+
+**Name the calling step.** GitHub's jobs API reports a composite action as
+**one** step, under the *caller's* name — measured on run `32421767876`, whose
+job returned only the caller's step names and never the action's own. So the
+minutes report can only attribute cost to the name you write; an unnamed
+`uses:` shows up as "Run ./.github/actions/setup-python-cached". (This holds for
+`setup-node-cached` too.)
 
 It takes requirements **files** and has no way to pass a package name. That is
 the point: a `pip install pytest==9.1.0` in a job is a pin with a second home,

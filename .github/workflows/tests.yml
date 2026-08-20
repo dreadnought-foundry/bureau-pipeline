@@ -24,7 +24,13 @@ jobs:
       # exercised nothing. One install, from the one manifest, cached and
       # skipped on a hit, and measurable because it is its own named step.
       # `./` on purpose: a PR's own run exercises the action from that PR.
-      - uses: ./.github/actions/setup-python-cached
+      #
+      # NAMED, because GitHub's jobs API reports a composite action as ONE
+      # step under the caller's name (measured on run 32421767876). An
+      # unnamed `uses:` would be reported as "Run ./.github/actions/
+      # setup-python-cached", which ci_minutes_report.py cannot attribute.
+      - name: Install test tooling (cached)
+        uses: ./.github/actions/setup-python-cached
         with:
           python-version: "3.12"
           requirements: |
