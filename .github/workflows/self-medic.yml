@@ -8,15 +8,22 @@
 # under its own name is watched — including the scheduled Reconcile sweep and
 # comment-triggered Agent Fix, so the safety net's own failures are diagnosed
 # too. Only Pipeline Medic itself is exempt (a red medic must not loop on
-# itself). No deploy/release workflows exist here — the medic must never
-# auto-retry a deploy. Red-Main Repair is watched, never watching: a
-# repair run's own failure routes through the medic (DRE-1927 guardrail 2 —
-# no new retry loop anywhere).
+# itself). Promote Channel is the one release-moving workflow watched here
+# (DRE-2551), and it is a DELIBERATE exception to "never auto-retry a deploy":
+# the decision is scripts/promote_channel.py, which is pure and fail-closed —
+# it re-reads the harness stamp and the channel ancestry from GitHub every
+# time, refuses anything that is not green-and-strictly-ahead, and returns
+# "already at this sha" as a no-op. A retry therefore either repeats a refusal
+# or re-pushes the same ref to the same commit; it can never promote something
+# the first attempt would not have. Any other deploy/release workflow added
+# later does NOT inherit that exemption. Red-Main Repair is watched, never
+# watching: a repair run's own failure routes through the medic (DRE-1927
+# guardrail 2 — no new retry loop anywhere).
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Promote Channel]
     types: [completed]
 
 permissions:

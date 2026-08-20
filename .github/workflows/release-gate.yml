@@ -14,9 +14,14 @@
 # records and acts on the verdict — the merge-gate.yml thin-caller shape.
 name: Release Gate
 
+# DRE-2551 amendment: `stable` is added because `v*` does not match it, and a
+# gate wired to a ref nobody pushes validates nothing. Promotion is now
+# automatic (promote-channel.yml), so this gate's job widens from "the operator
+# tagged something" to "the channel moved" — it must fire on the moving ref or
+# the promoter's result goes unvalidated.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "stable"]
 
 permissions:
   contents: read

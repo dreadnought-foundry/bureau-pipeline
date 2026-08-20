@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""The vN release gate's DECISION (DRE-2103): harness proves the tag.
+"""The release gate's DECISION (DRE-2103): harness proves the tag.
 
 The promotion contract is "agents author, human promotes, harness proves"
 (ADR adr-bureau-pipeline-self-host + DRE-2103): the operator cuts a `vN`
 tag only after a green integration-harness run against that exact sha.
-release-gate.yml fires on every `v*` tag push, peels the tag to its
+DRE-2551 put a second ref under the same rule — the moving `stable` tag,
+which promote-channel.yml advances with no human involved (and which no
+product repo pins; the `vN` cut stays manual). Automatic promotion is
+exactly why that ref has to reach this gate, so release-gate.yml's trigger
+reads `["v*", "stable"]` and this module judges both identically.
+release-gate.yml fires on every such tag push, peels the tag to its
 commit, fetches the combined commit status (GET
 /repos/{repo}/commits/{sha}/status), and acts on this module's verdict —
 green only when the harness's own stamp reports success on the tagged

@@ -83,5 +83,76 @@ class TestHarnessProvesPromotion(unittest.TestCase):
         self.assertIn("release-gate.yml", self.readme)
 
 
+class TestStableChannelDocumented(unittest.TestCase):
+    """DRE-2551: automatic promotion adds a SECOND ref, and both docs above
+    describe the first one as the human gate.
+
+    `promote-channel.yml` moves `stable` with no operator involved. It does
+    not touch the `vN` cut or any fleet stub — nothing pins `stable` yet. A
+    reader of either doc must be able to learn both halves of that from the
+    doc, because "the harness moves the tag" is one short step from reading
+    as "the fleet now updates itself", which is not what shipped. These pin
+    the correction the same way the DRE-2103 clause above is pinned.
+    """
+
+    # Read from the block that introduces the channel, not from anywhere in
+    # the file: "operator-only" already appears in the README's manual
+    # promotion prose, so a whole-file assertion would pass without the
+    # channel ever being explained.
+    BLOCK_ANCHOR = "promote-channel.yml"
+    BLOCK_CHARS = 1600
+    REQUIRED = (
+        # nothing consumes it — the fleet is not on this ref
+        "no product repo pins",
+        # ...and the cut that the fleet IS on stays a human act
+        "operator-only",
+        "vN",
+    )
+
+    def _block(self, name: str, text: str) -> str:
+        self.assertIn(
+            self.BLOCK_ANCHOR,
+            text,
+            f"{name} never names the workflow that moves the channel — a "
+            f"reader cannot find out the ref moves by itself",
+        )
+        start = text.index(self.BLOCK_ANCHOR)
+        return text[start : start + self.BLOCK_CHARS]
+
+    def _docs(self):
+        return (
+            ("docs/self-hosting.md", DOC.read_text()),
+            ("README.md", (ROOT / "README.md").read_text()),
+        )
+
+    def test_both_docs_name_the_channel_and_its_card(self):
+        for name, text in self._docs():
+            self.assertIn("stable", text, f"{name} never names the channel")
+            self.assertIn("DRE-2551", text, f"{name} never cites the card")
+
+    def test_both_docs_scope_the_channel_where_they_introduce_it(self):
+        for name, text in self._docs():
+            block = self._block(name, text).lower()
+            for phrase in self.REQUIRED:
+                self.assertIn(
+                    phrase.lower(),
+                    block,
+                    f"{name} introduces the automatic channel without saying "
+                    f'"{phrase}" — the fleet-facing promotion step is '
+                    f"unchanged and the doc has to say so",
+                )
+
+    def test_the_engineering_standard_qualifies_its_permanent_gate_claim(self):
+        """standards/engineering.md calls the tag move "a human act and the
+        permanent gate". Still true of `vN`, and now easy to misread with a
+        tag in this repo moving on its own — so the section that makes the
+        claim has to name the exception."""
+        text = (ROOT / "standards" / "engineering.md").read_text()
+        section = text.split("## Self-hosting convention", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("permanent gate", section)
+        self.assertIn("stable", section)
+        self.assertIn("DRE-2551", section)
+
+
 if __name__ == "__main__":
     unittest.main()

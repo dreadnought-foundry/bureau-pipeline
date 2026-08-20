@@ -74,9 +74,58 @@ class TriggerContractTest(unittest.TestCase):
         self.assertTrue(checkouts, "no checkout step")
         self.assertEqual(
             (checkouts[0].get("with") or {}).get("ref"),
-            "${{ inputs.pipeline_ref || github.event.pull_request.head.sha || 'main' }}",
+            "${{ inputs.pipeline_ref || github.event.pull_request.head.sha "
+            "|| github.sha }}",
             "the driver code must come from the ref under test",
         )
+
+
+class PushTriggerTest(unittest.TestCase):
+    """DRE-2551: every merge to main runs the harness, and that run's verdict
+    is what promote-channel.yml turns into a channel move.
+
+    The binding is the stamped sha, so the checkout MUST resolve to the commit
+    that triggered the run. On a push event neither `inputs.pipeline_ref` (only
+    workflow_dispatch/workflow_call) nor `github.event.pull_request.head.sha`
+    (only PR events) resolve, so the last clause is the one that runs — and a
+    mutable branch name there checks out main's tip AT JOB START. When a second
+    PR merges in between (five PRs / twelve gate runs in 25 minutes on
+    2026-08-17), the run stamps a newer sha than its own head_sha,
+    promote-channel.yml finds no stamp on the sha it reads, and the channel
+    silently fails to advance.
+    """
+
+    def _checkout_ref(self):
+        checkouts = [
+            s for s in _steps(_doc())
+            if (s.get("uses") or "").startswith("actions/checkout")
+        ]
+        self.assertTrue(checkouts, "no checkout step")
+        return (checkouts[0].get("with") or {}).get("ref") or ""
+
+    def test_every_merge_to_main_runs_the_harness(self):
+        # No paths filter on purpose: consumers pin the whole repo, so a
+        # docs-only merge changes what they get too.
+        push = _on(_doc()).get("push")
+        self.assertIsInstance(push, dict, "push trigger required")
+        self.assertEqual(list(push.get("branches") or []), ["main"])
+        self.assertNotIn("paths", push)
+
+    def test_push_run_checks_out_its_own_trigger_commit(self):
+        # The fallback clause — the only one a push event can reach.
+        self.assertIn("github.sha", self._checkout_ref())
+
+    def test_checkout_ref_never_falls_back_to_a_mutable_branch_name(self):
+        # The defect this test exists for: `|| 'main'` resolves to whatever
+        # the branch tip is when the job runs, which is not necessarily the
+        # commit GitHub recorded as this run's head_sha.
+        ref = self._checkout_ref()
+        self.assertNotIn(
+            "'main'", ref,
+            "a branch name races the branch tip under concurrent merges — "
+            "resolve to the immutable github.sha instead",
+        )
+        self.assertNotIn('"main"', ref)
 
 
 class ConcurrencyTest(unittest.TestCase):

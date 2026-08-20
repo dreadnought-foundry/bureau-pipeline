@@ -144,9 +144,18 @@ class WorkflowWiringTest(unittest.TestCase):
             for s in (job.get("steps") or [])
         )
 
-    def test_triggers_on_v_tags(self):
+    def test_triggers_on_v_tags_and_the_moving_channel(self):
+        """DRE-2551 widened this trigger, and the widening is load-bearing.
+
+        `v*` tags stay exactly what they were — immutable point releases cut by
+        hand. `stable` is the moving head that promote-channel.yml now advances
+        automatically, and `v*` does not match it. Without `stable` here the
+        promoter would move a ref this gate never validates: the channel would
+        advance with its own gate silently uninvoked, which is the precise
+        failure Wave 1 exists to remove.
+        """
         push = self._on().get("push") or {}
-        self.assertEqual(push.get("tags"), ["v*"])
+        self.assertEqual(push.get("tags"), ["v*", "stable"])
 
     def test_read_only_permissions(self):
         perms = self._doc().get("permissions") or {}
