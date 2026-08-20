@@ -147,31 +147,58 @@ class LiveWorkflowsTest(unittest.TestCase):
 
 
 class SelfHostStubsTest(unittest.TestCase):
-    """This repo is itself a consumer (DRE-1929 self-hosting). Its stubs are
-    the first repo of the fleet fan-out — they must be internally consistent."""
+    """This repo is itself a consumer (DRE-1929 self-hosting), so its own
+    stubs are one of the fleet's seven consumers — and the worked example the
+    remaining six copy. A repo that passes the cap on one promotion path but
+    not another has simply moved the two-caps defect down a level."""
 
     @classmethod
     def setUpClass(cls):
-        cls.stubs = {
+        cls.docs = {
             p.name: yaml.safe_load(p.read_text())
-            for p in sorted(WORKFLOWS.glob("self-*.yml"))
+            for p in sorted(WORKFLOWS.glob("*.yml"))
+        }
+        cls.promoters = {
+            name for name, doc in cls.docs.items() if cwc.promotion_steps(doc)
         }
 
-    def test_stub_caps_are_strings_and_agree_with_each_other(self):
-        """A stub may override the cap, but only with a quoted string (an
-        unquoted `12` is a YAML int and GitHub rejects it against a
-        `type: string` input), and all three of this repo's promotion stubs
-        must carry the SAME value — a stub set is a repo's one cap."""
-        caps = {}
-        for name, doc in self.stubs.items():
-            for job in (doc.get("jobs") or {}).values():
-                if "max_wip" in ((job or {}).get("with") or {}):
-                    value = job["with"]["max_wip"]
-                    self.assertIsInstance(value, str, f"{name}: max_wip must be quoted")
-                    caps[name] = value
-        self.assertLessEqual(
-            len(set(caps.values())), 1, f"self-host stubs disagree on the cap: {caps}"
+    def test_all_three_promotion_stubs_are_detected(self):
+        """The stub sweep must see this repo's three promotion stubs — if it
+        sees none, the all-or-none rule below is vacuously true."""
+        caps = cwc.stub_caps(self.docs, self.promoters)
+        self.assertEqual(
+            {"self-plan.yml", "self-linear-sync.yml", "self-reconcile.yml"},
+            set(caps),
+            caps,
         )
+
+    def test_stubs_are_all_or_none_on_one_value(self):
+        """Live gate: either every promotion stub passes the same cap, or none
+        do and all three inherit the one default."""
+        self.assertEqual([], cwc.check_stubs(self.docs, self.promoters))
+
+    def test_a_partially_repointed_stub_set_is_caught(self):
+        """The fan-out's own failure mode: DRE-2553 repoints a repo's stubs
+        one file at a time, and a half-finished pass gives that repo two caps
+        again. Synthetic, because this repo's real stubs are consistent."""
+        docs = dict(self.docs)
+        docs["self-plan.yml"] = yaml.safe_load(
+            yaml.safe_dump(self.docs["self-plan.yml"])
+        )
+        job = next(iter(docs["self-plan.yml"]["jobs"].values()))
+        job["with"] = {"max_wip": "12"}
+        violations = cwc.check_stubs(docs, self.promoters)
+        self.assertTrue(any("do not" in v for v in violations), violations)
+
+    def test_an_unquoted_stub_cap_is_caught(self):
+        """`max_wip: 12` unquoted is a YAML int; GitHub rejects it against a
+        `type: string` input and the whole call fails to start."""
+        docs = dict(self.docs)
+        for name in ("self-plan.yml", "self-linear-sync.yml", "self-reconcile.yml"):
+            docs[name] = yaml.safe_load(yaml.safe_dump(self.docs[name]))
+            next(iter(docs[name]["jobs"].values()))["with"] = {"max_wip": 12}
+        violations = cwc.check_stubs(docs, self.promoters)
+        self.assertTrue(any("quoted string" in v for v in violations), violations)
 
 
 class ScriptFallbackTest(unittest.TestCase):

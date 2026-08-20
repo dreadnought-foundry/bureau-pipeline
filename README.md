@@ -83,7 +83,7 @@ Division of labor:
 | `on:` triggers (incl. product-specific `workflow_run` lists) | job-level `if:` event filters |
 | workflow-level `concurrency:` | job-level `concurrency:` (merge-gate, reconcile) |
 | `permissions:` (constrains `GITHUB_TOKEN`) | — (jobs inherit the caller's token scope) |
-| `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on reconcile) | `secrets:`/`inputs:` declarations |
+| `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on all three promotion paths) | `secrets:`/`inputs:` declarations |
 
 What the product repo still carries:
 
@@ -104,6 +104,47 @@ tokens may EVER live here, in code or in workflow files**): set
 `LINEAR_API_KEY`, `BUREAU_APP_ID`, `BUREAU_APP_PRIVATE_KEY`,
 `BUREAU_QA_APP_ID`, `BUREAU_QA_APP_PRIVATE_KEY` in each product repo, and
 install both bureau GitHub Apps on its org.
+
+## One WIP cap per repo (DRE-2529)
+
+A repo has ONE work-in-progress cap, and **three** workflows promote Backlog
+children through the dependency gate at it:
+
+| workflow | when it promotes |
+|---|---|
+| `reconcile.yml` | the `*/15` cron sweep (GitHub delivers it 78–100 min apart in practice) |
+| `plan.yml` | the moment an epic is activated |
+| `linear-sync.yml` | the moment a merge marks a card Done |
+
+The last two are the anti-stall fast paths: they exist purely to promote work
+*now* instead of up to ~80 minutes later. They used to hardcode `MAX_WIP=8`
+while `reconcile.yml` took the caller's value — so on a repo capped at 12,
+between 8 and 11 cards in flight both fast paths refused and the cron sweep
+promoted the same card an hour later at 12. The optimisation switched itself
+off exactly inside the band it was built for, and nothing reported it.
+
+All three now take a `max_wip` input. To override the cap, pass it on **all
+three stubs or none** — a half-repointed stub set gives the repo two caps
+again, which is the same defect one level down:
+
+```yaml
+# .github/workflows/reconcile.yml, plan.yml AND linear-sync.yml in the product repo
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@v5
+    with:
+      max_wip: "12"      # quoted — an unquoted 12 is a YAML int and GitHub
+                         # rejects it against a `type: string` input
+    secrets: inherit
+```
+
+A stub that passes nothing inherits the default, which is correct on its own:
+the workflows' declared default is single-sourced from
+`reconcile.DEFAULT_MAX_WIP`, the value the script itself uses when `MAX_WIP`
+is unset or empty. `scripts/check_wip_cap.py` (a Pipeline Tests step) fails
+the build if any workflow re-hardcodes a cap, if a promotion path stops taking
+the input, if the declared default drifts from the script's, or if this repo's
+own stubs disagree with each other.
 
 ## Shared CI plumbing (DRE-2550)
 

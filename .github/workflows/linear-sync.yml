@@ -36,6 +36,19 @@ on:
         type: string
         required: false
         default: main
+      max_wip:
+        # The repo's ONE work-in-progress cap (DRE-2529). The merge handler
+        # below runs the same `reconcile.py --promote-only` the reconcile
+        # sweep runs, so it must promote at the same cap the caller gives
+        # reconcile.yml — it used to hardcode 8, which meant a repo capped at
+        # 12 had this fast path refuse between 8 and 11 in flight while the
+        # cron promoted the very same card an hour later, at 12.
+        # Default single-sourced from reconcile.DEFAULT_MAX_WIP; a stub that
+        # passes nothing inherits a value that is correct on its own.
+        description: WIP cap for the dependency gate's auto-promotion
+        type: string
+        required: false
+        default: "8"
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -71,6 +84,9 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          # The caller's cap, never a literal (DRE-2529). Through env, not
+          # interpolated into the shell line.
+          MAX_WIP: ${{ inputs.max_wip }}
         run: |
           # Own-branch provenance only (DRE-2027): anchored agent/DRE-<n>-
           # with the delimiter required after the number; case-insensitive,
@@ -92,9 +108,10 @@ jobs:
           # them wait for the drifting cron sweep ("*/15" delivers 78-100 min
           # apart in practice). Promotion is pure Linear; the Backlog→Todo
           # transition rides the relay webhook for the actual agent dispatch.
+          # MAX_WIP comes from the step env above — the caller's cap, so this
+          # fast path and the cron sweep never disagree (DRE-2529).
           REPO="$GITHUB_REPOSITORY" \
             REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
-            MAX_WIP=8 \
             python3 .bureau-pipeline/scripts/reconcile.py --promote-only
           # Event-driven epic close: this Done may have been an epic's LAST
           # child — close the parent NOW instead of letting it read "still
