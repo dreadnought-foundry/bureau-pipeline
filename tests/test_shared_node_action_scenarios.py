@@ -529,16 +529,22 @@ class DocumentedExampleMatchesTheAction(unittest.TestCase):
     this session cannot read. If it drifts from the action's real inputs, the
     error surfaces in someone else's repo, on someone else's card."""
 
-    def test_every_input_in_the_readme_example_is_declared(self):
-        declared = set(yaml.safe_load(NODE_ACTION.read_text())["inputs"])
-        text = README.read_text()
+    def setUp(self):
+        self.text = README.read_text()
         self.assertIn(
             "setup-node-cached",
-            text,
+            self.text,
             "the README no longer documents the shared action — Step 4's "
             "operator pass has nothing to copy",
         )
-        block = text.split("setup-node-cached@main", 1)[1].split("```", 1)[0]
+
+    def test_every_input_in_the_readme_example_is_declared(self):
+        declared = set(yaml.safe_load(NODE_ACTION.read_text())["inputs"])
+        # Ref-agnostic on purpose: this test must not be the thing that pins
+        # `@main` as the one correct spelling (it previously did, which is how
+        # an unpinned fleet-facing snippet got documented in the first place).
+        block = re.split(r"setup-node-cached@\S+", self.text, maxsplit=1)[1]
+        block = block.split("```", 1)[0]
         used = set(re.findall(r"^\s{4}([a-z][a-z0-9-]*):", block, re.M))
         self.assertTrue(used, "the README example passes no inputs at all")
         unknown = used - declared
@@ -548,6 +554,49 @@ class DocumentedExampleMatchesTheAction(unittest.TestCase):
             f"not declare — a repo copying it would silently install nothing",
         )
         self.assertIn("working-directory", used, "the example omits the required input")
+
+    def test_the_docs_do_not_offer_main_to_the_whole_fleet(self):
+        """standards/engineering.md: "the fleet consumes tagged releases (`vN`
+        ...), never this repo's live `main`; only agent-bureau and
+        bureau-pipeline ride `@main` as the canary channel."
+
+        A composite action is consumed by the caller's CI on its very next run,
+        so an unpinned fleet-facing snippet means a bad merge here reprograms
+        that repo's CI with no canary soak and no promotion step. The first
+        draft of this README documented exactly that, and the critic caught it
+        on DRE-2550 — so the guard exists rather than the memory of it.
+        """
+        refs = set(re.findall(r"setup-node-cached@(\S+)", self.text))
+        self.assertTrue(refs, "the README documents no ref at all")
+        if "main" in refs:
+            # Allowed, but only where it is explicitly scoped to the canary.
+            self.assertRegex(
+                self.text,
+                r"(?i)canary",
+                "the README shows setup-node-cached@main without ever naming "
+                "the canary restriction — a product repo would copy it",
+            )
+            self.assertTrue(
+                refs - {"main"},
+                "the README offers ONLY @main — every product repo copying it "
+                "would ride live main for its CI plumbing, which is the exact "
+                "risk the release channel exists to remove",
+            )
+
+    def test_the_docs_state_that_no_current_tag_contains_this_action(self):
+        # v1-v5 were cut 2026-07-11..07-21 and predate the action, so a repo
+        # pinning to @v5 today gets an unresolvable ref. Anyone reading the pin
+        # guidance must be told that, or Step 4 fails in four repos at once.
+        # Anchored on the HEADING, not the first mention — the sentence above
+        # cross-references this section by name.
+        self.assertIn("## Shared CI plumbing", self.text)
+        section = self.text.split("## Shared CI plumbing", 1)[1].split("\n## ", 1)[0]
+        self.assertRegex(
+            section,
+            r"(?i)no existing tag|predate",
+            "the pin guidance does not say that no released tag contains this "
+            "action yet — a product repo would pin to a tag without it",
+        )
 
 
 if __name__ == "__main__":
