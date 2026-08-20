@@ -126,6 +126,38 @@ place. Call it instead of writing your own `setup-node` + `npm ci` pair:
   working-directory: console/web
 ```
 
+`.github/actions/setup-python-cached` (DRE-2589) is the same thing for Python:
+it sets up Python and puts a virtualenv of the repo's **pinned** tooling in
+place. Call it instead of writing your own `setup-python` + `pip install` pair:
+
+```yaml
+# .github/workflows/ci.yml — CANARY REPOS ONLY (agent-bureau, bureau-pipeline)
+- uses: actions/checkout@v5
+- name: Install test tooling (cached)   # name it — see below
+  uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-python-cached@main
+  with:
+    python-version: "3.12"
+    requirements: |
+      requirements-dev.txt
+- run: pytest tests        # the venv is on PATH for every later step
+```
+
+**Name the calling step.** GitHub's jobs API reports a composite action as
+**one** step, under the *caller's* name — measured on run `32421767876`, whose
+job returned only the caller's step names and never the action's own. So the
+minutes report can only attribute cost to the name you write; an unnamed
+`uses:` shows up as "Run ./.github/actions/setup-python-cached". (This holds for
+`setup-node-cached` too.)
+
+It takes requirements **files** and has no way to pass a package name. That is
+the point: a `pip install pytest==9.1.0` in a job is a pin with a second home,
+and installing bare names is what made a Dependabot bump exercise nothing
+(DRE-2039). One manifest per repo, installed from that manifest.
+
+`tests/test_ci_python_plumbing_once.py` is the guard: it fails if any workflow
+here runs its own `pip install`, if a pin acquires a second home, or if a job
+runs `pytest` without going through the action.
+
 ### Which ref a repo may use — this is not a style choice
 
 **`@main` is for the canary repos only.** `standards/engineering.md` is explicit:
@@ -141,6 +173,7 @@ stubs do:
 ```yaml
 # .github/workflows/ci.yml in a product repo — pinned, like its stubs
 - uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-node-cached@v6
+- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-python-cached@v6
 ```
 
 Unlike the internal checkouts inside a reusable workflow, this one takes **no
@@ -148,10 +181,10 @@ Unlike the internal checkouts inside a reusable workflow, this one takes **no
 literal, so **repointing it is part of the promotion step**, moved in lockstep
 with the workflow stubs and never left behind on `@main`.
 
-**No existing tag contains this action.** `v1`–`v5` were cut 2026-07-11 →
-2026-07-21 and predate it, so `@v5` would not resolve to it. A product repo
-therefore cannot adopt this until a release containing it is cut — which is why
-Wave 1 sequences external adoption (Step 4) **after** automatic promotion
+**No existing tag contains either action.** `v1`–`v5` were cut 2026-07-11 →
+2026-07-21 and predate them, so `@v5` would not resolve to one. A product repo
+therefore cannot adopt these until a release containing them is cut — which is
+why Wave 1 sequences external adoption (Step 4) **after** automatic promotion
 (Step 2). Adopting earlier would mean either an unpinned reference or a pin to
 a tag that has no action in it.
 
@@ -161,10 +194,19 @@ every run — measured at 89s per web shard in `agent-bureau` against a warm
 npm cache, 16% of that repo's billable CI minutes. This action caches
 `node_modules` itself and skips `npm ci` outright on a hit.
 
+Why it is not just `cache: pip`: same shape. `setup-python`'s own cache stores
+`~/.cache/pip` — the downloads — so a hit still pays the resolve, the wheel
+build and the install. `setup-python-cached` caches the virtualenv itself and
+skips `pip install` outright on a hit. None of agent-bureau's three Python jobs
+used even `cache: pip`, and because their install ran *inside* the test step,
+its cost could not be separated from the suite's at all.
+
 The **cache-break rule lives here and only here**: the key is the lockfile's
-content plus the node version, exact-match, no `restore-keys`. Don't
-reimplement it per repo — a partial `node_modules` hit looks installed while
-holding another lockfile's packages, so the suite fails far from the cause.
+content plus the node version (for Python: every manifest's content plus the
+**resolved** interpreter — a virtualenv is not relocatable across interpreters),
+exact-match, no `restore-keys`. Don't reimplement it per repo — a partial
+`node_modules` hit looks installed while holding another lockfile's packages, so
+the suite fails far from the cause.
 
 Two constraints worth knowing before you rely on it:
 
@@ -247,7 +289,12 @@ so trunk commits have stamps of their own to read. The move is pushed with
 the bot App identity, never `github.token`, precisely so `release-gate.yml`
 (whose trigger now reads `["v*", "stable"]`) actually fires and validates
 it; a repository variable, `CHANNEL_HOLD`, pauses promotion when set to a
-reason, and unset means run. What it deliberately does **not** do:
+reason, and unset means run. **Write that reason as
+`who=<name> since=<ISO date> <why>`** — the staleness alarm below reports a
+held channel back to the CEO, and GitHub will not tell it who set a variable
+or when (that API needs an admin token the workflows do not carry), so a hold
+that skips the convention is reported as a hold nobody will own. What
+automatic promotion deliberately does **not** do:
 
 - **No product repo pins `@stable`.** Nothing consumes this ref. No stub
   was re-pointed, and the pairing rule above is untouched — the fleet is on
@@ -267,6 +314,63 @@ The harness is also a PR gate here: `harness.yml` runs on pull requests
 touching the boundary paths (workflow wiring + the dispatch/gate scripts),
 and the merge gate's all-checks-green rule holds any boundary PR whose
 harness run is red — no branch-protection change involved.
+
+## Channel staleness alarm (DRE-2552)
+
+Every other backstop in this repo watches for something **going wrong**.
+`channel-watch.yml` watches for something **ceasing to happen** — because
+that is the shape of the failure that hid July: the tag move did not break
+and the gate did not fail, the mechanism simply stopped being invoked, and no
+signal existed for "stopped". `main` ran 174 commits past `v5` over 29 days
+and nothing said so.
+
+The watcher runs daily, reads how far `main` is ahead of `stable` and how old
+the channel head is, and raises **one** deduplicated Linear card (the
+`red-main-repair.yml` / `model-drift.yml` pattern) — commenting on it daily
+while the condition lasts rather than minting a new one. It holds
+`contents: read` and cannot move the ref it watches. The decision, with the
+full derivation, is `scripts/channel_watch.py`.
+
+**The threshold, and where it came from.** Measured over `git log
+origin/main` from the first commit (2026-06-11) to 2026-08-20 — 522 commits
+across 70 days, 7.4/day:
+
+| Fact | Value |
+|---|---|
+| gap between commits | p50 0.06h · p90 3.3h · p95 15.2h · p99 62.4h |
+| longest quiet stretch ever | 257.9h = **10.7 days** |
+| commits in a 72h window | median 32, tenth percentile 8 |
+
+- **72 hours + 8 commits, both required.** 99.0% of observed gaps between
+  commits are shorter than 72h, so ordinary quiet never reaches it; a rounder
+  24h sits at the 96.9% mark and would fire most weekends. The **8 commits**
+  is the tenth-percentile count for a 72h window: below it the trunk was
+  unusually quiet and one slow harness run explains the lag, at or above it
+  promotion has *stopped* rather than lagged.
+- **14 days with a single unpromoted commit** — the backstop for a near-idle
+  trunk, which the pair above would miss. Longer than any quiet stretch main
+  has ever had (10.7 days above), so it cannot be ordinary.
+- **A channel with nothing to promote is silent by construction** (`ahead ==
+  0` never alarms). A noisy alarm gets muted, and a muted alarm on the thing
+  protecting the fleet is how we get back to July.
+- **24 hours for a hold.** A hold is true by construction, so this is a noise
+  threshold, not a false-positive one: a switch flipped and cleared inside a
+  working day stays private; one that outlives a day has blocked ~7 commits at
+  this cadence and is a habit forming. A held channel is reported as **held —
+  with who and when** — never as broken; unknown parts are printed as unknown
+  rather than guessed.
+
+**So what if the watcher stops?** Two answers, and only one of them is
+mechanical:
+
+- **A red run is diagnosed.** `Channel Watch` is in the medic's watch list
+  (`self-medic.yml`), like every other runnable workflow here.
+- **A skipped run is reported by the next one.** Each run reads its own last
+  completed run and alarms if it missed more than two ticks.
+- **A watcher that stops for good is not detected by anything in this repo.**
+  Nothing polls for its absence. That is stated rather than papered over —
+  adding a sixth mechanism nobody checks would be Wave 0's mistake at one
+  more level of indirection.
 
 ## Layout
 
