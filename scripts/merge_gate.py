@@ -8,18 +8,34 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The conditions (all must pass), evaluated D → 1 → 2 → 3 → 0 — branch
-currency LAST (DRE-2274). Currency originally ran right after D, which
-meant ANY gate evaluation of ANY behind-main PR immediately returned
-`decision=update` and pushed a merge-main into the branch — even while
-the PR's critic was mid-run (the push cancels it via the concurrency
-group) and even while its CI was red. On 2026-08-07 (portico), 7 open
-PRs and 3 quick merges to main produced 4 pushes on one PR in 15
-minutes, cancelled/crashed 9 of 10 critic runs, and drained the Claude
-account. `update` now means exactly: MERGE-READY EXCEPT FRESHNESS — it
-is returned only when every other condition would allow a merge and the
-branch is stale. The condition labels below keep their historical
-numbers; only the evaluation order moved.
+The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3.
+
+FRESHNESS IS NOT A GATE (DRE-2416, CEO decision 2026-08-20 recorded on
+DRE-2597; the rule lives in agent-bureau's
+`architecture/decisions/adr-one-writer-per-fact.md`). The fleet does not
+require up-to-date branches, and THIS GATE is the single writer of that
+rule — not branch protection, which cannot hold it fleet-wide (the
+reference deployment `EveryBite/atlas` returns 403 on its protection
+endpoint) and which reads `required_status_checks.strict=false` on every
+repo checked anyway. Condition 0 used to be BRANCH CURRENCY (DRE-1924) and
+returned `update`, which re-merged the base into the branch; the new head
+restarted the full CI suite, and on a busy repo the base moved again
+before that suite finished. Portico PR 268 (DRE-2393, 2026-08-12) burned
+four full CI runs in thirteen minutes on unchanged source, all green, and
+still read BLOCKED — one restart per merge to main, on every open branch.
+DRE-2274 (currency evaluated last) had already cut that to one restart per
+readiness cycle; this card removes the restart for the case that never
+needed it. Condition 0 is now CONFLICT: the only state a re-merge can
+actually change.
+
+THE ACCEPTED COST, named rather than left to be discovered: two
+individually-green PRs can break the base together — the `asana` class
+DRE-1924 existed for. It is caught in minutes by the push-to-main run
+going red plus medic.yml filing a repair card
+(`architecture/decisions/adr-red-main-auto-repair.md`), and made rare by
+the disjoint-file-ownership rule. Nothing else about the gate relaxes: red
+CI, a missing verdict, a stale verdict and a standing REQUEST_CHANGES all
+still block exactly as before.
 
 D. DEPENDABOT POLICY (DRE-2039) — applies ONLY to `dependabot/**`
    branches; agent/repair branches skip straight to condition 0 even if
@@ -41,33 +57,28 @@ D. DEPENDABOT POLICY (DRE-2039) — applies ONLY to `dependabot/**`
    `wait`, fail-closed — never judge the semver level on unverifiable
    data, and never post the human state over a blip.
 
-0. BRANCH CURRENCY (DRE-1924) — the PR's head must contain its base
-   branch's tip, per GitHub's own compare record (GET
-   compare/{base}...{head_sha}, status ahead/identical). A stale branch
-   (behind/diverged) earned its green against an older base — the exact
-   "green alone, red together" class that turned main red on 2026-07-11:
-   the Asana connector PR (registered `asana`) and a test PR (asserted
-   `asana` is unknown) were each green on their own branch, red once both
-   landed. Decision `update`: the workflow updates the branch and exits;
-   CI re-runs on the merged result and the gate re-evaluates. An unknown
-   status (compare API blip → the workflow substitutes `{}`) is `wait`,
-   fail-closed — never merge past an unverifiable base, and never fire
-   the update mutation on unverifiable data either. This replaces the
-   untested shell `mergeStateStatus == BEHIND` fast-path, which GitHub
-   only reports when branch protection's "require branches to be up to
-   date" toggle is already on — the compare record works regardless.
-   Evaluated LAST (DRE-2274 — it originally held the old fast-path's
-   FIRST position): a green-but-stale branch still proves nothing about
-   the merged result and is still never merged (the DRE-1924 invariant
-   is untouched), but the gate spends an update push only on a PR that
-   is otherwise merge-ready. Eager updating on every wake was the
-   critic-strangling herd: a stale PR whose verdict is missing now gets
-   the critic condition's `wait` (an in-flight review is never
-   invalidated by a gate-initiated push), and a stale PR with red CI
-   gets the checks outcome (the fix loop), not a free update. The
-   fail-closed arm above is unchanged and still stands before any merge
-   can be returned: everything passes → unverifiable compare waits,
-   stale updates, current merges.
+0. CONFLICT (DRE-2416) — GitHub's own `mergeStateStatus` for the PR. The
+   literal `DIRTY` (a textual merge conflict) is `conflict`: the branch
+   must be reconciled with its base before any answer can change, and
+   `update-branch` cannot resolve a conflict — the FIX AGENT can, so the
+   workflow dispatches it. Every other state proceeds; in particular
+   `UNKNOWN` is GitHub still computing mergeability lazily (DRE-2121,
+   which owns the re-read poll in reconcile), never a conflict — treating
+   it as one would reintroduce the indefinite stall this card removes.
+   This is a faithful move of the shell's `[ "$MSTATE" = "DIRTY" ]` arm
+   into the tested decision, evaluated FIRST so it keeps the position it
+   held in the shell: a conflicted branch reached the fix agent whatever
+   its CI or verdict state, and still does.
+
+   The branch-CURRENCY record (GET compare/{base}...{head_sha}, `.status`)
+   is still read, but it no longer gates anything — a behind/diverged head
+   merges like a current one, and the status is emitted as a `note=` so
+   the run log says plainly that a behind-base head was merged on purpose.
+   An unverifiable status is no longer `wait`: with currency out of the
+   rule set, waiting on a record that decides nothing is pure starvation.
+   The fail-closed direction that DOES still matter for that payload is
+   the CONTENT id (DRE-2340): a blipped or truncated record yields no id,
+   no carry, and a stale verdict then needs a fresh review.
 
 1. CI — every check run on the PR's head SHA has completed green
    (conclusion success/skipped/neutral). The REVIEW workflow's own check
@@ -107,14 +118,17 @@ D. DEPENDABOT POLICY (DRE-2039) — applies ONLY to `dependabot/**`
      REQUEST_CHANGES reads as "no verdict — wait", not "hold".
 
 CONTENT BINDING (DRE-2340) — what a branch update may NOT destroy.
-Conditions 0 and 2 are each right and together they livelocked: the gate
-updates a stale branch, the update moves the head, the head move unbinds
-the verdict the gate was waiting for, and the critic re-reviews a branch
-that is stale again before it finishes. Portico PR #205 (2026-08-09) earned
-seven APPROVE verdicts in 47 minutes and threw six away — six complete,
-fully paid-for reviews — because `main` took 30 commits from other work in
-that window. DRE-2274 (currency evaluated LAST) converted that waste rather
-than removing it; the order is right and does not move again.
+The old conditions 0 and 2 were each right and together they livelocked:
+the gate updated a stale branch, the update moved the head, the head move
+unbound the verdict the gate was waiting for, and the critic re-reviewed a
+branch that was stale again before it finished. Portico PR #205
+(2026-08-09) earned seven APPROVE verdicts in 47 minutes and threw six
+away — six complete, fully paid-for reviews — because `main` took 30
+commits from other work in that window. DRE-2274 (currency evaluated last)
+converted that waste; DRE-2416 removed the gate-initiated update that
+caused it. The carry still matters: a head moves whenever the FIX AGENT
+reconciles a conflicted branch, and that merge must not throw away a
+verdict for a diff it did not touch.
 
 So a verdict now also binds the CONTENT it was earned against: the sha256
 of the three-dot compare record's `files[]` (scripts/verdict_content.py,
@@ -137,7 +151,7 @@ GitHub's own record, not from anything the author writes; authorship still
 filters first. The one thing given up, stated plainly: after a clean base
 merge the critic no longer re-reads its own unchanged diff in the light of
 the new base. That residual is bounded — every commit on the base carried
-its own bound APPROVE, and interaction risk is what CI on the merged result
+its own bound APPROVE, and interaction risk is what CI on the base branch
 exists to catch (DRE-1924's own motivating `asana` incident was a CI catch,
 not a critic catch).
 
@@ -168,18 +182,20 @@ Contract with merge-gate.yml:
     (the raw REST payload of GET /repos/{repo}/issues/{pr}/comments),
     --workflow-runs-file (the raw REST payload of
     GET /repos/{repo}/actions/runs?head_sha={sha} — the verified-origin
-    record for the review-run exclusion), --compare-file (the status of
-    GET /repos/{repo}/compare/{base}...{head_sha} — the branch-currency
-    record, DRE-1924), --review-workflows (optional comma-separated
-    allowlist of review workflow paths), --head-branch / --pr-author /
-    --pr-commits-file (the raw REST payload of GET pulls/{pr}/commits) —
-    the dependabot-policy record (DRE-2039) AND the content-binding
-    commit record (DRE-2340 condition 4), all three optional; omitted =
-    the pre-DRE-2039 behavior for every caller that never passes them.
-    The compare payload must NOT be trimmed (DRE-2340): its `files[]` is
-    what the head's content id is computed from.
+    record for the review-run exclusion), --compare-file (the raw payload
+    of GET /repos/{repo}/compare/{base}...{head_sha} — the content-binding
+    record, DRE-2340; its `.status` is reported as a note and gates
+    nothing, DRE-2416), --merge-state (GitHub's own `mergeStateStatus` for
+    the PR — the conflict record, DRE-2416), --review-workflows (optional
+    comma-separated allowlist of review workflow paths), --head-branch /
+    --pr-author / --pr-commits-file (the raw REST payload of GET
+    pulls/{pr}/commits) — the dependabot-policy record (DRE-2039) AND the
+    content-binding commit record (DRE-2340 condition 4), all optional;
+    omitted = the pre-DRE-2039/2416 behavior for every caller that never
+    passes them. The compare payload must NOT be trimmed (DRE-2340): its
+    `files[]` is what the head's content id is computed from.
   stdout: zero or more `note=` lines, then exactly one `decision=` line
-    (merge | update | wait | hold | human) and one `reason=` line (plain
+    (merge | conflict | wait | hold | human) and one `reason=` line (plain
     English), then — only when a verdict was honoured across a head change
     — a `carried=` line naming the reviewed commits and a
     `carried_content_id=` line, which the workflow turns into the PR
@@ -187,15 +203,15 @@ Contract with merge-gate.yml:
   exit 0 = decided; exit 2 = malformed input (the job fails loudly and
     nothing merges — never fail open).
 
-wait vs hold vs update vs human: `wait` means the gate expects a future
+wait vs hold vs conflict vs human: `wait` means the gate expects a future
 event to change the answer (CI finishing, a fresh review of the current
 head); `hold` means an explicit negative verdict is standing
-(REQUEST_CHANGES, Verifier FAIL) and only a new verdict lifts it; `update`
-means the PR is otherwise MERGE-READY but the branch is stale (DRE-2274)
-and the workflow should update it from its base (CI then re-runs on the
-merged result); `human` means the gate will NEVER
-merge this PR (a dependabot major / unprovable semver level — DRE-2039):
-the workflow posts that state once and stops. None of the four merges.
+(REQUEST_CHANGES, Verifier FAIL) and only a new verdict lifts it;
+`conflict` means the branch cannot merge until it is reconciled with its
+base (DRE-2416) and the workflow dispatches the fix agent; `human` means
+the gate will NEVER merge this PR (a dependabot major / unprovable semver
+level — DRE-2039): the workflow posts that state once and stops. None of
+the four merges.
 """
 
 from __future__ import annotations
@@ -226,11 +242,18 @@ DEFAULT_REVIEW_WORKFLOWS = (
 # Green = completed with a conclusion GitHub treats as non-blocking.
 GREEN_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
 
-# GitHub compare/{base}...{head} status values (DRE-1924): the head is
-# current when it contains the base's tip, stale when the base has commits
-# the head lacks. Anything else is unverifiable → wait, fail-closed.
+# GitHub compare/{base}...{head} status values: the head is current when it
+# contains the base's tip, behind when the base has commits the head lacks.
+# Since DRE-2416 this decides NOTHING — it only shapes the note that records
+# a behind-base merge in the run log.
 CURRENT_STATUSES = frozenset({"ahead", "identical"})
 STALE_STATUSES = frozenset({"behind", "diverged"})
+
+# GitHub's `mergeStateStatus` for a textual merge conflict (DRE-2416). The
+# other states (CLEAN / UNSTABLE / BLOCKED / BEHIND / HAS_HOOKS / DRAFT /
+# UNKNOWN) are not conflicts and never route to the fix agent — matching the
+# shell arm this replaced, which tested this one literal.
+CONFLICTING_MERGE_STATE = "DIRTY"
 
 # Dependabot policy (DRE-2039). The author check anchors the leniency to
 # the real Dependabot App — GitHub reserves the "[bot]" suffix, so no user
@@ -389,27 +412,47 @@ def evaluate_dependabot(head_branch, pr_author, commits) -> Optional[Decision]:
     return None
 
 
-def evaluate_currency(compare_status) -> Optional[Decision]:
-    """Condition 0 (DRE-1924). None = head contains the base's tip,
-    proceed. Stale → `update` (the workflow updates the branch; CI re-runs
-    on the merged result). Unknown → `wait` — never merge past an
-    unverifiable base, and never mutate the branch on unverifiable data.
-    Called LAST in decide() (DRE-2274), so `update` here is only ever
-    reached on a PR that is otherwise merge-ready."""
-    if compare_status in CURRENT_STATUSES:
-        return None
-    if compare_status in STALE_STATUSES:
+def evaluate_conflict(merge_state) -> Optional[Decision]:
+    """Condition 0 (DRE-2416). None = the branch does not conflict with its
+    base, proceed. `DIRTY` → `conflict`: only reconciling the branch can
+    change the answer, and `update-branch` cannot resolve a textual
+    conflict, so the workflow dispatches the fix agent.
+
+    Evaluated FIRST, keeping the position the shell arm held: a conflicted
+    branch reached the fix agent whatever its CI or verdict state. Every
+    other state — including `UNKNOWN`, which is GitHub computing
+    mergeability lazily (DRE-2121) rather than a conflict — proceeds; the
+    default ('' — nothing passed) reproduces the pre-DRE-2416 behavior on
+    this axis for every caller that never passes it.
+    """
+    if (merge_state or "").upper() == CONFLICTING_MERGE_STATE:
         return Decision(
-            "update",
-            f"otherwise merge-ready, but the branch is {compare_status} "
-            "relative to its base — its green was earned against an older "
-            "base; update the branch and re-run CI on the merged result",
+            "conflict",
+            "the branch has a merge conflict with its base — update-branch "
+            "cannot resolve it; the fix agent reconciles the branch and a "
+            "fresh review binds the result",
         )
-    return Decision(
-        "wait",
-        f"branch currency unknown (compare status {compare_status!r}) — "
-        "wait; never merge past an unverifiable base",
-    )
+    return None
+
+
+def currency_note(compare_status) -> Optional[str]:
+    """The audit line for a head that is behind its base (DRE-2416).
+
+    Nobody in this pipeline reads diffs, so a merge that GitHub's own
+    compare record calls `behind` has to say so in the run log. It is a
+    NOTE, never a decision: the fleet does not require up-to-date branches
+    and this gate is the single writer of that rule. None when the head is
+    current (nothing to record) or the status is unverifiable (nothing
+    provable to say).
+    """
+    if compare_status in STALE_STATUSES:
+        return (
+            f"head is {compare_status} relative to its base — merged as it "
+            "stands: the fleet does not require up-to-date branches "
+            "(DRE-2416), and CI on the base branch is what catches a "
+            "green-alone-red-together interaction"
+        )
+    return None
 
 
 def evaluate_checks(check_runs, review_suites=frozenset()) -> Optional[Decision]:
@@ -574,29 +617,37 @@ def decide(
     pr_author: str = "",
     pr_commits=(),
     head_content_id: Optional[str] = None,
+    merge_state: str = "",
 ) -> Decision:
-    """The whole gate: conditions D → 1 → 2 → 3 → 0, first blocker wins.
+    """The whole gate: conditions 0 → D → 1 → 2 → 3, first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
-    `compare_status` is the branch-currency record (DRE-1924); the default
-    (None — unverifiable → wait) is likewise fail-closed. `head_branch` /
-    `pr_author` / `pr_commits` are the dependabot-policy record (DRE-2039);
-    the defaults reproduce the pre-DRE-2039 behavior exactly. Condition D
-    runs FIRST: a major must come out `human` untouched — updating its
-    branch or waiting on reviews would misreport a PR the gate will never
-    merge. Condition 0 (currency) runs LAST (DRE-2274): `update` means
-    merge-ready except freshness, so an in-flight critic review is never
-    cancelled by a gate-initiated push and a red-CI PR routes to the fix
-    loop instead of collecting free updates. The final path once
-    everything else passes: unverifiable compare → wait; stale → update;
-    current → merge (DRE-1924's never-merge-a-stale-head holds).
+    `head_branch` / `pr_author` / `pr_commits` are the dependabot-policy
+    record (DRE-2039); the defaults reproduce the pre-DRE-2039 behavior
+    exactly.
+
+    `merge_state` is the conflict record — GitHub's own `mergeStateStatus`
+    (DRE-2416). Condition 0 runs FIRST, exactly where the shell arm it
+    replaces sat: a conflicted branch routes to the fix agent whatever its
+    CI or verdict state says, and it does so BEFORE condition D so a
+    conflicted Dependabot PR keeps its exemption (Dependabot rebases and
+    recreates its own conflicts; the fix agent has no card to work).
+
+    `compare_status` is the branch-currency record. Since DRE-2416 it
+    decides NOTHING — behind, diverged, unverifiable and current all merge
+    alike; a behind head is recorded as a note so the run log says so. The
+    fleet does not require up-to-date branches and this gate is the single
+    writer of that rule (CEO decision 2026-08-20, DRE-2597).
 
     `head_content_id` is the content-binding record (DRE-2340) — the id of
     the PR's own contribution at the CURRENT head, computed by main() from
-    the same compare payload condition 0 reads. None (the default, and the
-    fail-closed direction on a truncated or blipped record) means verdicts
-    bind the head SHA alone, exactly as before this card. `pr_commits`
-    doubles as the carry's condition 4."""
+    the compare payload. None (the default, and the fail-closed direction
+    on a truncated or blipped record) means verdicts bind the head SHA
+    alone. `pr_commits` doubles as the carry's condition 4."""
+    blocked = evaluate_conflict(merge_state)
+    if blocked:
+        return blocked
+
     blocked = evaluate_dependabot(head_branch, pr_author, pr_commits)
     if blocked:
         return blocked
@@ -636,19 +687,11 @@ def decide(
 
     def _decided(decision: Decision) -> Decision:
         """Attach the carry record to whatever the gate finally decides —
-        the PR gets its explanation whether the head merges now or is
-        updated first."""
+        the PR gets its explanation however the evaluation ends."""
         if carried:
             decision.carried = carried
             decision.content_id = head_content_id
         return decision
-
-    # Everything else would allow a merge — only now is freshness judged
-    # (DRE-2274): unverifiable → wait (fail-closed, before any merge),
-    # stale → the one legitimate update, current → merge.
-    blocked = evaluate_currency(compare_status)
-    if blocked:
-        return _decided(blocked)
 
     if carried:
         reason = (
@@ -661,6 +704,11 @@ def decide(
     decision = _decided(Decision("merge", reason))
     if note:
         decision.notes.append(note)
+    # DRE-2416: freshness is not a gate, but a behind-base merge is
+    # deliberate and the run log has to say so.
+    stale_note = currency_note(compare_status)
+    if stale_note:
+        decision.notes.append(stale_note)
     return decision
 
 
@@ -680,10 +728,14 @@ def build_parser() -> argparse.ArgumentParser:
                              "exclusion (DRE-1994)")
     parser.add_argument("--compare-file", required=True,
                         help="raw REST payload of GET "
-                             "compare/{base}...{head_sha} — the branch-"
-                             "currency record (DRE-1924, .status) AND the "
-                             "head's content-binding record (DRE-2340, "
-                             ".files[]). Must NOT be trimmed to .status")
+                             "compare/{base}...{head_sha} — the head's "
+                             "content-binding record (DRE-2340, .files[]); "
+                             "its .status is reported as a note and gates "
+                             "nothing (DRE-2416). Must NOT be trimmed")
+    parser.add_argument("--merge-state", default="",
+                        help="GitHub's mergeStateStatus for the PR — the "
+                             "conflict record (DRE-2416). DIRTY routes to "
+                             "the fix agent; omitted claims no conflict")
     parser.add_argument("--review-workflows",
                         default=",".join(DEFAULT_REVIEW_WORKFLOWS),
                         help="comma-separated paths of the review workflow "
@@ -761,7 +813,8 @@ def main(argv=None) -> int:
         _die(f"cannot read compare record: {e}")
     if not isinstance(payload, dict):
         _die("compare payload is not an object")
-    # `{}` (the workflow's blip substitute) yields None → wait, fail-closed.
+    # `{}` (the workflow's blip substitute) yields None. Since DRE-2416 that
+    # gates nothing — it just means there is no behind-base note to make.
     compare_status = payload.get("status")
     # DRE-2340: the head's content id comes from the payload the gate has
     # ALREADY read — no new API call on the decision path, and no way for
@@ -783,7 +836,7 @@ def main(argv=None) -> int:
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
-        head_content_id,
+        head_content_id, args.merge_state,
     )
     for note in decision.notes:
         print(f"note={note}")

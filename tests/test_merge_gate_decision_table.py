@@ -559,7 +559,7 @@ def test_every_delta_row_names_its_sanction():
             ), f"[{row.id}] delta rationale names no sanctioned change"
 
 
-# ── DRE-2274: UPDATE-ON-DEMAND — currency is evaluated LAST ──────────────
+# ── DRE-2274 → DRE-2416: the update push, narrowed then removed ─────────
 #
 # Incident 2026-08-07 (portico): currency ran SECOND (right after condition
 # D), so ANY gate evaluation of ANY behind-main PR immediately returned
@@ -567,15 +567,18 @@ def test_every_delta_row_names_its_sanction():
 # PR's critic was mid-run (the push cancels it via the concurrency group)
 # and even while its CI was red. With 7 open PRs and 3 quick merges to main,
 # one PR took 4 pushes in 15 minutes, 9 of 10 critic runs were
-# cancelled/crashed, and the Claude account drained.
+# cancelled/crashed, and the Claude account drained. DRE-2274 narrowed
+# `update` to mean exactly "merge-ready except freshness" — one push per
+# readiness cycle instead of one per wake.
 #
-# The fix: `update` is returned ONLY when every other condition would allow
-# a merge — update means exactly "merge-ready except freshness". The
-# DRE-1924 invariant (never merge a behind-main head) and the fail-closed
-# compare (None → wait, checked before any merge) are untouched; only WHEN
-# the gate pushes the update changed.
+# DRE-2416 removed the remaining push: the fleet does not require up-to-date
+# branches (CEO decision 2026-08-20, DRE-2597) and every push still cost a
+# full CI suite on unchanged source. The rows below keep the DRE-2274 herd
+# simulation — its assertions now read ZERO updates rather than one, which
+# is the same property measured one step further. The freshness decision
+# table proper lives in tests/test_merge_gate_freshness_race.py.
 
-STALE_HEAD_2 = "cc33" * 10  # the head after a gate update-branch push
+STALE_HEAD_2 = "cc33" * 10  # a head the branch moved to after review
 
 # A genuine Dependabot semver-major commit (the machine-readable trailer
 # dependabot/fetch-metadata parses) — condition D's `human` input.
@@ -605,8 +608,9 @@ def decide_2274(compare, checks=None, comments=None, head_sha=HEAD, **kw):
 
 
 class UpdateOnDemandTest(unittest.TestCase):
-    """DRE-2274: the gate updates a stale branch only when the PR is
-    otherwise merge-ready — never as a side effect of merely being woken."""
+    """DRE-2274, re-read after DRE-2416: the gate never pushes an update at
+    all now, so every "not an update" assertion below still holds — and the
+    one row that WAS the legitimate update is now a merge."""
 
     def test_stale_with_no_verdict_waits_not_updates(self):
         """An in-flight critic run is never cancelled by a gate push: a
@@ -649,34 +653,35 @@ class UpdateOnDemandTest(unittest.TestCase):
         self.assertEqual(d.action, "hold", d.reason)
         self.assertIn("not APPROVE", d.reason)
 
-    def test_stale_and_otherwise_merge_ready_is_the_one_update(self):
-        """THE one legitimate update: green checks, APPROVE bound to the
-        current head, verifier satisfied — everything but freshness passes,
-        so the branch is updated and CI re-runs on the merged result. The
-        reason line says the PR was otherwise merge-ready."""
+    def test_stale_and_otherwise_merge_ready_now_merges(self):
+        """DRE-2274's ONE legitimate update, retired by DRE-2416: green
+        checks, APPROVE bound to the current head, verifier satisfied —
+        everything but freshness passes, and freshness is no longer a
+        requirement, so the branch merges as it stands. The behind-ness is
+        recorded as a note instead of paid for with a CI suite."""
         d = decide_2274("behind")
-        self.assertEqual(d.action, "update", d.reason)
-        self.assertIn("otherwise merge-ready", d.reason)
-        self.assertIn("behind", d.reason)
+        self.assertEqual(d.action, "merge", d.reason)
+        self.assertTrue(any("behind" in n for n in d.notes), d.notes)
         # Verifier PASS at head is equally merge-ready.
         d = decide_2274(
             "diverged",
             comments=[CRITIC_OK, comment(QA_LOGIN, verifier("PASS", HEAD))],
         )
-        self.assertEqual(d.action, "update", d.reason)
+        self.assertEqual(d.action, "merge", d.reason)
 
     def test_current_and_all_green_still_merges(self):
         """Unchanged: a current branch with everything green merges."""
         d = decide_2274("ahead")
         self.assertEqual(d.action, "merge", d.reason)
 
-    def test_unverifiable_compare_still_waits_fail_closed(self):
-        """Unchanged fail-closed semantics: compare None (the workflow's
-        `{}` blip substitute) waits even with everything else green — the
-        currency check still stands BEFORE any merge can be returned."""
+    def test_unverifiable_compare_no_longer_blocks(self):
+        """DRE-2416: compare None (the workflow's `{}` blip substitute) used
+        to be fail-closed `wait`. Currency decides nothing now, so waiting
+        on that record would strand a green, approved PR on an API blip —
+        the starvation this card removes. The blip still costs the CONTENT
+        id, which is where fail-closed belongs."""
         d = decide_2274(None)
-        self.assertEqual(d.action, "wait", d.reason)
-        self.assertIn("currency", d.reason)
+        self.assertEqual(d.action, "merge", d.reason)
 
     def test_dependabot_major_stale_is_human_d_still_first(self):
         """Condition D stays FIRST, untouched: a stale Dependabot major is
@@ -690,26 +695,25 @@ class UpdateOnDemandTest(unittest.TestCase):
         )
         self.assertEqual(d.action, "human", d.reason)
 
-    def test_herd_simulation_one_update_per_readiness_cycle(self):
-        """THE HERD (acceptance criterion): a PR is approved at head1, then
-        main moves 3 times in quick succession — compare goes stale and
-        stays stale across every gate wake. The old order produced one
-        update push PER WAKE (4 pushes on one PR in 15 minutes on
-        2026-08-07, each cancelling the critic run the previous push had
-        triggered). Now the sequence yields exactly ONE update: after the
-        gate's own push the verdict no longer binds the new head, so every
-        subsequent wake is `wait` (a fresh review is in flight) — N quick
-        merges to main cost at most one update push per readiness cycle."""
+    def test_herd_simulation_zero_updates(self):
+        """THE HERD: a PR is approved at head1, then main moves 3 times in
+        quick succession — compare goes stale and stays stale across every
+        gate wake. The pre-DRE-2274 order produced one update push PER WAKE
+        (4 pushes on one PR in 15 minutes on 2026-08-07, each cancelling
+        the critic run the previous push had triggered); DRE-2274 cut that
+        to one per readiness cycle. DRE-2416 makes it ZERO — the first wake
+        merges, so the herd never forms and the two later wakes are the
+        already-merged PR's own leftovers (still `wait` on a head no
+        verdict binds — the SHA binding is untouched)."""
         approve_h1 = [comment(QA_LOGIN, critic("APPROVE", HEAD))]
 
-        # Wake 1: main moved; the PR is otherwise merge-ready → the one
-        # legitimate update push. The gate's push makes head1 → head2.
+        # Wake 1: main moved; the PR is merge-ready and freshness is not a
+        # requirement → it merges, at head1, on its own CI.
         actions = [decide_2274("behind", comments=approve_h1).action]
 
-        # Wakes 2 and 3: main moved twice more while the branch (now at
-        # head2) is still stale — but the APPROVE binds head1, so the PR is
-        # NOT merge-ready and the gate must wait for the fresh review it
-        # already triggered, never push over it.
+        # Wakes 2 and 3 model a head that moved for some OTHER reason (a
+        # push, a fix-agent conflict merge): the APPROVE binds head1, so
+        # the gate waits for a fresh review. Unchanged by this card.
         for _ in range(2):
             actions.append(
                 decide_2274(
@@ -718,10 +722,10 @@ class UpdateOnDemandTest(unittest.TestCase):
             )
 
         self.assertEqual(
-            actions.count("update"), 1,
-            f"expected exactly ONE update across the herd, got {actions}",
+            actions.count("update"), 0,
+            f"the gate must never update a branch now, got {actions}",
         )
-        self.assertEqual(actions, ["update", "wait", "wait"])
+        self.assertEqual(actions, ["merge", "wait", "wait"])
 
 
 if __name__ == "__main__":

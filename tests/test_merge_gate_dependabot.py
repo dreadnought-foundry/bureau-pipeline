@@ -111,8 +111,10 @@ class GroupedMinorPatchMergesTest(unittest.TestCase):
         self.assertEqual(d.action, "merge", d.reason)
 
     def test_update_branch_merge_commit_does_not_spoil_the_signal(self):
-        # After the gate's own update-branch (DRE-1924) the PR carries a
-        # metadata-less merge commit alongside Dependabot's — still minor.
+        # A base merge into the branch (the fix agent reconciling a
+        # conflict; historically the gate's own update-branch, DRE-1924)
+        # leaves a metadata-less merge commit alongside Dependabot's —
+        # still minor.
         d = decide(commits=[dependabot_commit("minor"), plain_commit()])
         self.assertEqual(d.action, "merge", d.reason)
 
@@ -134,10 +136,13 @@ class GroupedMinorPatchMergesTest(unittest.TestCase):
         d = decide(commits=[dependabot_commit("minor")], comments=REQUEST_CHANGES)
         self.assertEqual(d.action, "hold")
 
-    def test_minor_on_stale_branch_still_updates_first(self):
-        # Branch currency (condition 0) still applies to mergeable minors.
+    def test_minor_on_stale_branch_merges_without_a_re_merge(self):
+        # DRE-2416: freshness is not a gate for anyone, dependency PRs
+        # included — a behind-base minor with green CI and a bound APPROVE
+        # merges as it stands instead of paying for a re-merge and a fresh
+        # CI suite. Previously `update`.
         d = decide(commits=[dependabot_commit("minor")], compare="behind")
-        self.assertEqual(d.action, "update")
+        self.assertEqual(d.action, "merge", d.reason)
 
 
 class MajorNeverAutoMergesTest(unittest.TestCase):

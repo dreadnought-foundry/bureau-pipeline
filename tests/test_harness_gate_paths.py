@@ -4,13 +4,13 @@ gate_paths proves the merge gate's semantics against real GitHub with
 three synthesized PRs plus an opportunistic look at the real Dependabot
 PR:
 
-  * SKEW-GUARD (DRE-1924/2037): a behind-base PR gets update-branch
-    performed AS the qa-bot, and the resulting synchronize actor passes
-    the allowlists — the re-review completes with a fresh bound verdict
-    and the PR merges (no lockout);
+  * NO RE-MERGE (DRE-2416): a behind-base PR is merged AT THE HEAD IT WAS
+    REVIEWED AT — the gate never merges the base in, so a burst of merges
+    costs no CI restarts on the open branches, and it never leaves a
+    green, approved branch unmerged either;
   * HUMAN PATH (DRE-2039): a worker-authored PR on a dependabot-named
     branch is `human` — the gate posts the honest waiting-for-human state
-    exactly ONCE and never touches the PR (no update-branch, no merge);
+    exactly ONCE and never touches the PR (no branch mutation, no merge);
   * VERDICT BINDING (DRE-1990): a push right after a bound APPROVE makes
     that verdict stale — the gate must NOT merge until a fresh verdict
     binds the new head;
@@ -139,31 +139,27 @@ class LegDriver:
             return
         gh.merge_as(n, QA)
 
-    # -- skew: update as qa-bot, fresh verdict, merge ---------------------
+    # -- skew: behind base, merged untouched (DRE-2416) -------------------
     def _drive_skew(self, gh):
         mode = self.modes["skew"]
         pr = _find(gh, "-skew")
         if pr is None or pr["merged"] or pr["state"] != "open":
             return
         n, ref = pr["number"], pr["head"]["ref"]
-        if mode == "no_update":
-            return  # the currency guard never fires — the PR sits behind
-        step = self.state.get("skew_step", 0)
-        if step == 0:
-            updater = WORKER if mode == "wrong_updater" else QA
-            gh.gate_update_branch(n, login=updater)
-            self.state["skew_step"] = 1
+        if mode == "remerge":
+            # The pre-DRE-2416 gate: merge the base in first. Every such
+            # push restarted the full CI suite on unchanged source.
+            gh.gate_update_branch(n)
+            self.modes["skew"] = "happy"
             return
         if mode == "no_verdict":
-            return  # lockout: the synchronize review never completes
-        if step == 1 and mode == "double_update":
-            gh.gate_update_branch(n)
-            self.state["skew_step"] = 2
-            return
+            return  # the review never binds this head — nothing to merge on
         if not self.state.get("skew_verdict"):
             gh.post_verdict(n, "APPROVE", gh.branches[ref])
             self.state["skew_verdict"] = True
             return
+        if mode == "never_merges":
+            return  # the starvation itself: green + approved, left sitting
         gh.merge_as(n, QA)
 
     # -- real dependabot PR: gate posture ---------------------------------
@@ -316,29 +312,31 @@ class StaleVerdictTest(unittest.TestCase):
         self.assertIn("race", "\n".join(result.errors).lower())
 
 
-class SkewGuardTest(unittest.TestCase):
-    def test_update_never_happening_times_out_as_a_failure(self):
-        result, _ = _run(LegDriver(skew="no_update"))
+class NoRemergeTest(unittest.TestCase):
+    """DRE-2416, both directions of the bug the skew leg now guards."""
+
+    def test_re_merging_the_behind_pr_is_a_failure(self):
+        # The pre-DRE-2416 behaviour: the gate merges the base in before
+        # merging the PR. Every such push cost a full CI suite on
+        # unchanged source and, on a busy base, starved the branch.
+        result, _ = _run(LegDriver(skew="remerge"))
         self.assertFalse(result.ok)
         self.assertEqual(result.failed_phase, "verify")
+        self.assertIn("re-merge", "\n".join(result.errors).lower())
 
-    def test_lockout_after_update_is_a_failure(self):
-        # The DRE-2037 class: update-branch fired, but the qa-bot-actor
-        # synchronize review never completes — no fresh verdict, no merge.
+    def test_never_merging_the_behind_pr_times_out_as_a_failure(self):
+        # The starvation itself: green, approved, merely behind — and left
+        # sitting. The scenario must name it rather than time out mutely.
+        result, _ = _run(LegDriver(skew="never_merges"))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed_phase, "verify")
+        self.assertIn("starvation", "\n".join(result.errors).lower())
+
+    def test_merging_without_a_bound_verdict_is_a_failure(self):
+        # Freshness stopped being a gate; the SHA-bound APPROVE did not.
         result, _ = _run(LegDriver(skew="no_verdict"))
         self.assertFalse(result.ok)
         self.assertEqual(result.failed_phase, "verify")
-
-    def test_update_by_the_wrong_identity_is_a_failure(self):
-        result, _ = _run(LegDriver(skew="wrong_updater"))
-        self.assertFalse(result.ok)
-        self.assertIn("qa-bot", "\n".join(result.errors))
-
-    def test_a_second_update_round_is_tolerated(self):
-        # Base can move again mid-flow (the stale leg merges its probe);
-        # the gate updates again — the chain walk must follow it.
-        result, _ = _run(LegDriver(skew="double_update"))
-        self.assertTrue(result.ok, result.errors)
 
 
 class HumanPathTest(unittest.TestCase):

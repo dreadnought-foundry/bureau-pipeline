@@ -1,43 +1,39 @@
-"""Branch-currency gate (DRE-1924): a stale-but-green PR is updated and
-re-checked, never merged blind.
+"""Branch currency, RETIRED as a gate (DRE-2416) — what the fleet gave up
+when it stopped requiring up-to-date branches, and what still catches it.
 
-Origin (2026-07-11): a semantic merge conflict turned main red. The Asana
-connector PR (registered `asana`) and a test PR (asserted `asana` is
-unknown) were each green on their own branch, but red once both landed —
-neither branch's CI could see the other's change. The gate's only defense
-was the shell `mergeStateStatus == BEHIND` fast-path, and GitHub reports
-BEHIND **only when branch protection's "require branches to be up to date"
-toggle is already on** — off (the default), a stale branch reads CLEAN and
-the gate merged it blind.
+This suite was the DRE-1924 guard: a stale-but-green PR was updated from its
+base and re-checked, never merged blind. That guard is gone. The fleet does
+NOT require up-to-date branches, and the merge gate is the single writer of
+that rule — not branch protection (CEO decision 2026-08-20, recorded on
+DRE-2597; the rule lives in agent-bureau's
+`architecture/decisions/adr-one-writer-per-fact.md`). Two reasons, from
+settings read live that day: `EveryBite/atlas` — the reference deployment —
+returns 403 on its protection endpoint, so a protection-held rule cannot be
+a fleet rule; and `required_status_checks.strict` is `false` on every repo
+checked, so being behind never blocked a merge in the first place.
 
-The fix moves branch currency into scripts/merge_gate.py as condition 0,
-fed by GitHub's own compare record (GET compare/{base}...{head_sha} —
-works regardless of branch protection):
+What the guard cost is why it went. Every gate-initiated update was a new
+head, every new head restarted the full CI suite, and on a busy repo the
+base moved again before that suite finished — portico PR 268 burned four
+green CI runs on unchanged source in thirteen minutes and still read
+BLOCKED (DRE-2393, the DRE-2416 card's measurement). The decision table for
+the replacement lives in tests/test_merge_gate_freshness_race.py; what THIS
+file keeps is the honest record of the trade:
 
-  • status ahead / identical  → the head contains the base's tip: current,
-    fall through to conditions 1-3.
-  • status behind / diverged  → the base has commits the head lacks: the
-    branch's green was earned against an older base. Decision `update` —
-    the workflow updates the branch and exits; CI re-runs on the merged
-    result and the gate re-evaluates when it completes.
-  • anything else (compare API blip → the workflow substitutes `{}`) →
-    `wait`, fail-closed: never merge past an unverifiable base, and never
-    mutate the branch on unverifiable data either.
-
-Condition 0 was originally evaluated FIRST (the old shell fast-path's
-position). DRE-2274 (incident 2026-08-07) moved it LAST: evaluating
-currency before the other conditions meant ANY gate wake on ANY
-behind-main PR pushed a merge-main into the branch — cancelling in-flight
-critic runs via the concurrency group and granting red-CI PRs free
-updates. `update` now means exactly "merge-ready except freshness". The
-DRE-1924 invariant is untouched: green checks and a bound APPROVE on a
-stale branch still prove nothing about the merged result, and a stale
-head is still never merged — only WHEN the gate pushes the update moved.
+  • CurrencyIsNotAGateTest — the inverted decisions, stated explicitly so
+    the retirement is executable rather than prose.
+  • ReproductionTest — the original `asana` incident, still reproduced
+    against a real git repository. It proves the accepted cost is REAL (the
+    two branches are still green alone and red together, and the gate now
+    merges the stale one) and that the catch is CI ON THE BASE BRANCH,
+    which is where the 2026-07-11 incident was actually caught. medic.yml
+    files the repair card off that red run
+    (`architecture/decisions/adr-red-main-auto-repair.md`).
+  • WiringTest — the update mutation is gone from merge-gate.yml, and the
+    conflict arm that replaced it is behind the machine-readable decision.
 """
 
 import json
-import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -81,57 +77,49 @@ def decide(compare_status, checks=None, comments=None):
     )
 
 
-class CurrencyDecisionTest(unittest.TestCase):
-    """Condition 0 of merge_gate.decide — the tested replacement for the
-    untested shell BEHIND fast-path."""
+class CurrencyIsNotAGateTest(unittest.TestCase):
+    """The retirement, decision by decision. Each of these returned
+    `update` or `wait` under DRE-1924/DRE-2274."""
 
-    def test_stale_but_green_is_update_not_merge(self):
-        """THE incident class: checks all green, critic APPROVE bound to the
-        current head — but the branch has diverged from its base. The old
-        gate (no currency input, branch protection off) merged this blind."""
+    def test_stale_but_green_now_merges(self):
+        """THE inversion. The old gate updated this PR and paid for a full
+        CI suite; the new one merges it."""
         for status in ("diverged", "behind"):
-            decision = decide(status)
-            self.assertEqual(decision.action, "update",
-                             f"status={status}: {decision.reason}")
-            self.assertIn(status, decision.reason)
-
-    def test_current_branch_falls_through_to_merge(self):
-        for status in ("ahead", "identical"):
             decision = decide(status)
             self.assertEqual(decision.action, "merge",
                              f"status={status}: {decision.reason}")
 
-    def test_unknown_currency_waits_fail_closed(self):
-        """A compare-API blip (the workflow substitutes `{}` → status None)
-        or an unrecognized status must WAIT — never merge past an
-        unverifiable base, and never fire the update mutation on it."""
-        for status in (None, "", "garbage"):
-            decision = decide(status)
-            self.assertEqual(decision.action, "wait",
-                             f"status={status!r}: {decision.reason}")
-            self.assertIn("currency", decision.reason)
+    def test_current_branch_still_merges(self):
+        for status in ("ahead", "identical"):
+            self.assertEqual(decide(status).action, "merge")
 
-    def test_staleness_no_longer_preempts_checks_and_verdicts(self):
-        """DRE-2274: the OLD expectation here (stale + red CI → update,
-        stale + no verdict → update) was precisely the incident bug — an
-        eager update on every wake pushed merge-main over in-flight critic
-        runs and gave red-CI PRs free updates (2026-08-07: 4 pushes on one
-        PR in 15 minutes, 9 of 10 critic runs dead). Currency is now
-        evaluated LAST: a stale branch with red checks gets the checks
-        outcome (the fix loop), and a missing verdict gets the critic's
-        `wait` — an in-flight review is never invalidated by a gate push."""
+    def test_unknown_currency_no_longer_waits(self):
+        """The `{}` compare blip used to be fail-closed `wait`. With
+        currency out of the rule set there is nothing to fail closed ABOUT
+        — the record's remaining job is the content id (DRE-2340), whose
+        absence still costs the carry, not the merge."""
+        for status in (None, "", "garbage"):
+            self.assertEqual(decide(status).action, "merge",
+                             f"status={status!r} still stalls")
+
+    def test_the_other_conditions_still_beat_a_stale_branch(self):
+        """Non-vacuous twin: dropping currency relaxed currency and nothing
+        else. Red CI still waits, a missing verdict still waits."""
         self.assertEqual(decide("diverged", checks=RED_CI).action, "wait")
         self.assertEqual(decide("diverged", comments=[]).action, "wait")
 
-    def test_wait_on_unknown_currency_beats_green_and_approve(self):
-        self.assertEqual(decide(None).action, "wait")
-
 
 class ReproductionTest(unittest.TestCase):
-    """The exact green-alone-red-together case, reproduced with real git:
-    an Asana-connector branch and a stale test branch, each green on its
-    own tree, red once combined — and the gate decision that now blocks it
-    pre-merge."""
+    """The 2026-07-11 `asana` incident, reproduced with real git: an
+    Asana-connector change on the base and a stale test branch, each green
+    on its own tree, red once combined.
+
+    This is the ACCEPTED COST of DRE-2416, kept executable rather than
+    described. The semantic conflict is still invisible to git and to
+    either branch's own CI; the gate now merges the stale branch; and the
+    breakage surfaces on the BASE BRANCH's own CI run — which is exactly
+    where it surfaced in 2026-07-11, and what medic.yml turns into a repair
+    card."""
 
     def _git(self, repo, *args):
         proc = subprocess.run(
@@ -166,7 +154,7 @@ class ReproductionTest(unittest.TestCase):
             return "behind"
         return "ahead" if ahead else "identical"
 
-    def test_asana_times_stale_test_is_blocked_pre_merge(self):
+    def test_asana_times_stale_test_merges_and_the_base_run_catches_it(self):
         with tempfile.TemporaryDirectory() as td:
             repo = Path(td)
             self._git(repo, "init", "-q")
@@ -207,40 +195,38 @@ class ReproductionTest(unittest.TestCase):
             self._git(repo, "merge", "-q", "--no-edit", "agent/test-pr")
             self.assertFalse(
                 self._suite(repo),
-                "green alone must be RED together — the semantic conflict "
-                "this card exists for",
+                "green alone must be RED together — the cost DRE-2416 accepts",
             )
 
-            # The gate's view of the stale test PR: compare says diverged.
+            # The gate's view of the stale test PR: compare says diverged,
+            # GitHub reports no conflict (the merge above succeeded), so
+            # the gate merges it. The pre-DRE-2416 gate returned `update`.
             status = self._compare_status(repo, "main", "agent/test-pr")
             self.assertEqual(status, "diverged")
+            self.assertEqual(decide(status).action, "merge")
 
-            # Blind (currency-unaware) inputs — green CI, APPROVE bound to
-            # head — would merge; the currency condition turns it into
-            # `update` instead. Blocked pre-merge.
-            self.assertEqual(decide("ahead").action, "merge",
-                             "the blind decision this guard corrects")
-            self.assertEqual(decide(status).action, "update")
-
-            # After the update (base merged into the branch), the branch's
-            # own CI now sees the true merged state and goes red — and a
-            # red check makes the gate wait. Red never reaches main.
-            self._git(repo, "checkout", "-q", "agent/test-pr")
-            self._git(repo, "merge", "-q", "--no-edit", "main")
-            self.assertFalse(self._suite(repo),
-                             "the updated branch must expose the breakage")
-            updated_status = self._compare_status(
-                repo, "main", "agent/test-pr"
+            # THE CATCH: the base branch's own CI run on the merged result
+            # is red — the state `landed` is already in. That red run is
+            # what medic.yml files a repair card from
+            # (adr-red-main-auto-repair.md), within minutes rather than the
+            # CI suite this gate used to spend on every open branch.
+            self._git(repo, "checkout", "-q", "main")
+            self._git(repo, "merge", "-q", "--no-edit", "agent/test-pr")
+            self.assertFalse(
+                self._suite(repo),
+                "the base branch's own run must be the thing that goes red",
             )
-            self.assertEqual(updated_status, "ahead")
-            self.assertEqual(decide(updated_status, checks=RED_CI).action,
-                             "wait")
+
+    def test_the_behind_head_is_recorded_in_the_run_log(self):
+        """Nobody in this pipeline reads diffs, so merging a behind-base
+        head has to say so — the audit line replaces the update push."""
+        notes = decide("behind").notes
+        self.assertTrue(any("behind" in n for n in notes), notes)
 
 
 class CliContractTest(unittest.TestCase):
-    """The workflow-facing contract: --compare-file is a required input,
-    the raw compare payload's status field drives condition 0, and the
-    `{}` blip substitute reads as wait."""
+    """The workflow-facing contract: --compare-file is still required (it
+    is the content-binding record), and its status no longer decides."""
 
     def run_cli(self, compare_payload):
         with tempfile.TemporaryDirectory() as td:
@@ -275,31 +261,32 @@ class CliContractTest(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("--compare-file", proc.stderr)
 
-    def test_diverged_payload_decides_update(self):
+    def test_diverged_payload_decides_merge(self):
         proc = self.run_cli(json.dumps({"status": "diverged"}))
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self.decision(proc), "update")
+        self.assertEqual(self.decision(proc), "merge")
 
     def test_ahead_payload_decides_merge(self):
         proc = self.run_cli(json.dumps({"status": "ahead"}))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self.decision(proc), "merge")
 
-    def test_blip_substitute_decides_wait(self):
+    def test_blip_substitute_decides_merge(self):
         proc = self.run_cli("{}")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self.decision(proc), "wait")
+        self.assertEqual(self.decision(proc), "merge")
 
     def test_malformed_compare_fails_loud_and_never_merges(self):
+        """Unchanged: an unreadable payload is a shape failure, not a
+        decision. The job goes red and nothing merges."""
         proc = self.run_cli("not json")
         self.assertEqual(proc.returncode, 2)
         self.assertNotIn("decision=merge", proc.stdout)
 
 
 class WiringTest(unittest.TestCase):
-    """merge-gate.yml gathers the compare record from GitHub and acts on
-    `decision=update` — and the untested shell BEHIND fast-path is gone
-    (the currency decision lives ONLY in the tested script)."""
+    """merge-gate.yml no longer mutates a branch, and the conflict arm that
+    replaced the update arm sits behind the script's decision."""
 
     def setUp(self):
         doc = yaml.safe_load(WORKFLOW.read_text())
@@ -309,40 +296,35 @@ class WiringTest(unittest.TestCase):
         self.run_block = runs[0]
 
     def test_compare_record_gathered_and_passed(self):
-        """The currency input comes from GitHub's own compare record for
-        the PR's base and current head, written to the exact file the
-        script is handed, with the fail-closed `{}` substitute on a blip."""
+        """The content-binding input still comes from GitHub's own compare
+        record for the PR's base and current head, written to the exact
+        file the script is handed, with the `{}` substitute on a blip."""
         self.assertIn("compare/$BASE...$SHA", self.run_block)
-        m = re.search(r"--compare-file (\S+)", self.run_block)
-        self.assertIsNotNone(m, "workflow does not pass --compare-file")
-        self.assertIn(f"> {m.group(1)}", self.run_block)
+        self.assertIn("--compare-file", self.run_block)
         self.assertIn("echo '{}' >", self.run_block)
 
     def test_base_is_the_prs_own_base_ref(self):
         self.assertIn("baseRefName", self.run_block)
 
-    def test_update_action_wired_behind_the_update_decision(self):
-        """`update-branch` must be reachable only behind the machine-readable
-        `decision=update`, and sit before the merge guard so an update run
-        never falls through to `gh pr merge`."""
-        guard = self.run_block.find('[ "$DECISION" = "update" ]')
-        self.assertGreater(guard, -1, "update decision guard missing")
-        put = self.run_block.find('-X PUT "repos/${{ github.repository }}/pulls/$PR/update-branch"')
-        self.assertGreater(put, guard, "update-branch PUT not behind the guard")
-        merge_guard = self.run_block.find('[ "$DECISION" = "merge" ] || exit 0')
-        self.assertGreater(merge_guard, put,
-                           "update arm must precede the merge guard")
+    def test_no_update_mutation_remains(self):
+        """The DRE-1924 update push is gone — matched on the API path and
+        the mutating verb, not on prose."""
+        self.assertNotIn("/update-branch", self.run_block)
+        self.assertNotIn("-X PUT", self.run_block)
 
-    def test_shell_behind_fast_path_removed(self):
+    def test_shell_behind_fast_path_still_absent(self):
         """BEHIND is reported only when branch protection's up-to-date
-        toggle is already on — the shell fast-path was dead code without it
-        and untested with it. Currency is the script's condition 0 now."""
+        toggle is already on. It was dead code before DRE-1924 and it must
+        not come back now that freshness is not a gate at all."""
         self.assertNotIn('"$MSTATE" = "BEHIND"', self.run_block)
 
     def test_conflict_dispatch_preserved(self):
-        """The DIRTY (textual conflict) arm stays in the shell — update-
-        branch cannot resolve a conflict; the fix agent can."""
-        self.assertIn('"$MSTATE" = "DIRTY"', self.run_block)
+        """The textual-conflict arm survives the move: it is now behind
+        `decision=conflict` (DRE-2416) instead of an inline
+        mergeStateStatus test, and still dispatches the fix agent."""
+        self.assertIn('[ "$DECISION" = "conflict" ]', self.run_block)
+        self.assertIn("mergeStateStatus", self.run_block)
+        self.assertIn('--merge-state "$MSTATE"', self.run_block)
 
     def test_merge_still_behind_qa_bot_token(self):
         """Author != merger: the merge still runs as the qa-bot App (the

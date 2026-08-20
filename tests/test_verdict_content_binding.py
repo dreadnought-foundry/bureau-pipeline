@@ -646,8 +646,9 @@ class DecideCarryTest(unittest.TestCase):
         self.assertIn(CID, d.reason)
 
     def test_the_carry_is_reported_for_the_pr_record(self):
-        """Today `decision=update` posts NOTHING — which is why PR #205's
-        six merge commits look inexplicable. A carry has to explain itself."""
+        """Before this card the gate posted NOTHING when it moved a head —
+        which is why PR #205's six merge commits look inexplicable. A carry
+        has to explain itself."""
         d = self.decide([comment(QA_LOGIN, critic_line("APPROVE", REVIEWED, CID))])
         self.assertTrue(d.carried, "the decision must record the carry")
         self.assertTrue(any(REVIEWED in c for c in d.carried))
@@ -672,14 +673,20 @@ class DecideCarryTest(unittest.TestCase):
         ])
         self.assertEqual(d.action, "wait")
 
-    def test_condition_zero_is_untouched_a_stale_head_still_never_merges(self):
+    def test_a_carried_verdict_still_needs_every_other_condition(self):
         """Trap 5: this card changes what INVALIDATES a verdict, never what
-        PERMITS a merge. A carried verdict on a stale branch is an `update`,
-        and an unverifiable compare is still `wait`."""
+        PERMITS a merge. Condition 0 was branch currency when DRE-2340
+        landed and a carried verdict on a stale branch was an `update`;
+        DRE-2416 retired currency, so the carry now rides into a merge —
+        but ONLY because every other condition passes. An unverifiable
+        compare is the sharp case: it costs the content id, so there is no
+        carry at all and the stale verdict waits for a fresh review."""
         approve = [comment(QA_LOGIN, critic_line("APPROVE", REVIEWED, CID))]
         self.assertEqual(self.decide(approve, compare_status="behind").action,
-                         "update")
-        self.assertEqual(self.decide(approve, compare_status=None).action, "wait")
+                         "merge")
+        self.assertEqual(
+            self.decide(approve, compare_status=None, cid=None).action, "wait"
+        )
 
     def test_red_ci_still_beats_a_carried_approve(self):
         red = [{"name": "unit", "status": "completed", "conclusion": "failure",
@@ -800,14 +807,20 @@ class GateCliTest(unittest.TestCase):
         self.assertEqual(fields.get("decision"), "wait")
         self.assertNotIn("carried", fields)
 
-    def test_widened_payload_still_decides_currency_off_status(self):
+    def test_widened_payload_carries_and_merges_a_behind_head(self):
+        """The widened payload feeds BOTH readings of the same record: the
+        content id (which carries the verdict) and `.status`. Since
+        DRE-2416 the status only notes the behind-ness, so this decides
+        `merge` where it once decided `update`."""
         payload = compare([f("a.py", "1" * 40)], status="behind")
         cid = verdict_content.content_id(payload)
         proc = self.run_cli(
             json.dumps(payload),
             [comment(QA_LOGIN, critic_line("APPROVE", REVIEWED, cid))],
         )
-        self.assertEqual(self.fields(proc).get("decision"), "update")
+        fields = self.fields(proc)
+        self.assertEqual(fields.get("decision"), "merge")
+        self.assertIn(REVIEWED, fields.get("carried", ""))
 
 
 class MergeGateWiringTest(unittest.TestCase):

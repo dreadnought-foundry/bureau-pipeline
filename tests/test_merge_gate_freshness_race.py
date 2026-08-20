@@ -368,9 +368,13 @@ class WiringTest(unittest.TestCase):
         self.run_block = runs[0]
 
     def test_the_update_branch_call_is_gone(self):
-        """THE fix: merge-gate.yml:350 was the freshening call this card
-        removes. Nothing in the gate may re-merge a base into a branch."""
-        self.assertNotIn("update-branch", self.run_block)
+        """THE fix: `gh api -X PUT .../pulls/$PR/update-branch` (the old
+        merge-gate.yml:350) was the freshening call this card removes.
+        Nothing in the gate may re-merge a base into a branch — matched on
+        the API path and the mutating verb, not the prose, so the arm's
+        rationale can still name the API it no longer calls."""
+        self.assertNotIn("/update-branch", self.run_block)
+        self.assertNotIn("-X PUT", self.run_block)
         self.assertNotIn('"$DECISION" = "update"', self.run_block)
 
     def test_merge_state_is_read_once_and_passed_to_the_script(self):
