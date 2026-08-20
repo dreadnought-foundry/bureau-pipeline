@@ -1,0 +1,197 @@
+# Shared node plumbing for the fleet's CI (DRE-2550 — Wave 1, Step 1).
+#
+# Before this action, six repos each carried their own `setup-node` + `npm ci`
+# pair, and agent-bureau carried three of them in one file. Nothing was
+# shared, so the caching strategy — and, more dangerously, the rule that
+# decides when a cache is STALE — existed in six independently-drifting
+# copies. Wave 0 hit that fan-out three times; each "one change" turned out
+# to be six. See architecture/wave-plans/wave-1-the-safety-rail.md §6.
+#
+# What this action adds beyond `setup-node`'s own `cache: npm`:
+#
+#   `cache: npm` caches ~/.npm — the DOWNLOADS. It does not cache
+#   node_modules, so a cache HIT still pays the unpack and link on every
+#   run. Measured on agent-bureau 2026-08-20 (run 32392604408, a push to
+#   main): `npm ci` took 89s against a warm npm cache. Across the last 40
+#   ci.yml runs, node install was 4391s of 452 billable minutes — 16% of
+#   that repo's CI bill, on a private repo where minutes are charged.
+#
+# So this caches node_modules itself, keyed exactly, and skips `npm ci`
+# outright on a hit.
+#
+# HOW CALLERS PIN THIS. The caller's `uses:` line takes a LITERAL ref, so it
+# is pinnable exactly like the reusable-workflow stubs: `@main` for the two
+# canary repos (agent-bureau, bureau-pipeline) and `@vN` for every other repo,
+# per standards/engineering.md — "the fleet consumes tagged releases ... only
+# agent-bureau and bureau-pipeline ride @main as the canary channel". Moving
+# that ref is part of the promotion step. See the README's "Which ref a repo
+# may use".
+#
+# WHAT THIS ACTION MUST NEVER DO: check out dreadnought-foundry/bureau-pipeline.
+# scripts/check_pipeline_ref.py enforces the DRE-2026 rule that every internal
+# checkout threads `pipeline_ref`, but it only scans .github/workflows, and an
+# action cannot receive a `workflow_call` input in the first place — so a
+# checkout in HERE (unlike the outer `uses:` line above) could not be pinned by
+# any mechanism we have. tests/test_shared_node_action.py fails if one appears.
+
+name: Node with a cached install
+description: >-
+  Set up Node and put node_modules in place, with the caching strategy and its
+  cache-break rule declared ONCE for the whole fleet instead of once per repo.
+
+inputs:
+  working-directory:
+    description: >-
+      Directory holding package.json and package-lock.json, relative to the
+      workspace root (e.g. console/web).
+    required: true
+  node-version:
+    description: >-
+      Node version literal (e.g. "24"). Prefer node-version-file wherever the
+      project has a .nvmrc — a file cannot drift from the runtime the way a
+      second copy of the number can. Exactly one of the two is set.
+    required: false
+    default: ""
+  node-version-file:
+    description: >-
+      Path to a .nvmrc / .node-version file. Preferred over node-version.
+    required: false
+    default: ""
+  install:
+    description: >-
+      Install dependencies (and cache them). Set "false" to set up Node only —
+      for a job that lints a workflow file and never runs npm.
+    required: false
+    default: "true"
+
+outputs:
+  cache-hit:
+    description: >-
+      "true" when node_modules was restored from cache and `npm ci` was
+      therefore skipped. This is the value to read when reporting a saving:
+      the install step's own duration is 0 on a hit, which looks like a fast
+      install rather than an absent one.
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute the node_modules cache key
+      id: key
+      # Skipped entirely when nothing will be installed: this step REQUIRES a
+      # lockfile, and a job that only wants node on the PATH need not have
+      # one. Without this condition, `install: false` fails on a repo with no
+      # package-lock.json — found by the scenario table in
+      # tests/test_shared_node_action_scenarios.py, not in production.
+      if: inputs.install == 'true'
+      shell: bash
+      env:
+        # Through env, never interpolated into the shell line — the same rule
+        # the pipeline's own workflows follow for anything caller-supplied.
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        NODE_VERSION: ${{ inputs.node-version }}
+        NODE_VERSION_FILE: ${{ inputs.node-version-file }}
+      run: |
+        set -euo pipefail
+
+        # Anchor at the workspace explicitly. A caller may set a job-level
+        # `defaults.run.working-directory` (agent-bureau's infra-ci.yml does),
+        # and rather than depend on being right about whether job defaults
+        # reach a composite action's steps, this is immune either way.
+        cd "$GITHUB_WORKSPACE"
+
+        lock="$WORKING_DIRECTORY/package-lock.json"
+        if [ ! -f "$lock" ]; then
+          echo "::error::no package-lock.json under '$WORKING_DIRECTORY'" \
+               "— npm ci requires one, so this job would fail later and" \
+               "further from the cause"
+          exit 1
+        fi
+
+        # THE NODE IDENTITY GOES IN THE KEY. The same lockfile installed under
+        # a different node major produces different artefacts — node-gyp
+        # output, and the platform build that esbuild/rollup/sharp and friends
+        # select at install time. A key that omits it hands one job the
+        # binaries another job compiled, which fails as a mystery module-load
+        # error nowhere near the cache.
+        # The VERSION goes in, not where it was read from: a project moving a
+        # literal into a .nvmrc changes how it is pinned, not what gets
+        # installed, and should not pay a cache miss for it.
+        if [ -n "$NODE_VERSION_FILE" ]; then
+          node_id="$(tr -d '[:space:]' < "$NODE_VERSION_FILE")"
+        else
+          node_id="$NODE_VERSION"
+        fi
+        if [ -z "$node_id" ]; then
+          echo "::error::neither node-version nor node-version-file was given" \
+               "— the cache key would ignore the node version and could hand" \
+               "this job another major's compiled binaries"
+          exit 1
+        fi
+
+        # Keyed on the MAJOR as written, which is what the callers pin. Native
+        # module ABI is stable within a node major, so a runner image moving
+        # 24.7 -> 24.8 correctly reuses the cache.
+
+        # THE CACHE-BREAK RULE, in one place for the whole fleet: the key is
+        # the lockfile's content plus the node identity. Change either and the
+        # key changes, so the old entry is simply never matched. Nothing has
+        # to remember to bust anything.
+        #
+        # `cache_version` is the manual escape hatch: bump it to orphan every
+        # entry at once, for the day a cached node_modules is itself the bug.
+        cache_version=v1
+        digest="$(printf '%s\n' "$node_id" | cat - "$lock" | sha256sum | cut -d' ' -f1)"
+
+        # A slug only so a human reading the repo's cache list can tell which
+        # project an entry belongs to. It is not what makes the key correct.
+        slug="$(printf '%s' "$WORKING_DIRECTORY" | tr -c '[:alnum:]' '-' | tr -s '-')"
+        slug="${slug#-}"
+        slug="${slug%-}"
+
+        echo "node identity: $node_id"
+        echo "lockfile:      $lock"
+        echo "key=node-modules-$cache_version-$RUNNER_OS-$RUNNER_ARCH-$slug-$digest" >> "$GITHUB_OUTPUT"
+
+    - name: Restore node_modules
+      id: restore
+      if: inputs.install == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ inputs.working-directory }}/node_modules
+        key: ${{ steps.key.outputs.key }}
+        # NO restore-keys, deliberately. A near-miss node_modules is worse
+        # than an empty one: it looks installed while holding packages from
+        # another lockfile, so the suite fails somewhere far from the cause
+        # and the run reads as a code defect. Exact match or a full install
+        # — there is no partial credit here.
+
+    - name: Set up Node
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        node-version-file: ${{ inputs.node-version-file }}
+        # ~/.npm is only worth restoring when we are about to install. On a
+        # node_modules hit npm never runs, so fetching its download cache is
+        # pure wall-clock — the exact waste this action exists to remove.
+        cache: ${{ (inputs.install == 'true' && steps.restore.outputs.cache-hit != 'true') && 'npm' || '' }}
+        cache-dependency-path: ${{ (inputs.install == 'true' && steps.restore.outputs.cache-hit != 'true') && format('{0}/package-lock.json', inputs.working-directory) || '' }}
+
+    - name: Install dependencies (npm ci)
+      if: inputs.install == 'true' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      # Workspace-anchored for the same reason the key step cd's there: a
+      # caller's job-level `defaults.run.working-directory` must not be able
+      # to turn `infra` into `infra/infra`.
+      working-directory: ${{ github.workspace }}/${{ inputs.working-directory }}
+      # `npm ci`, never `npm install`: it installs the lockfile exactly and
+      # fails if package.json and the lockfile disagree, which is the property
+      # that makes the cache key trustworthy.
+      run: npm ci
+
+    - name: Save node_modules
+      if: inputs.install == 'true' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ inputs.working-directory }}/node_modules
+        key: ${{ steps.key.outputs.key }}

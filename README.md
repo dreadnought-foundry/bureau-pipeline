@@ -88,6 +88,7 @@ Division of labor:
 What the product repo still carries:
 
 - `.github/workflows/ci.yml` (+ any other product CI) — product-specific.
+  Its *plumbing* is not: see **Shared CI plumbing** below.
 - `.github/bureau/overrides.md` — stack, local check commands, migration
   tooling. The engineer/fix/planner agents are instructed to read it.
 - `.github/bureau/setup.sh` — OPTIONAL. Run by agent-task/agent-fix before
@@ -103,6 +104,78 @@ tokens may EVER live here, in code or in workflow files**): set
 `LINEAR_API_KEY`, `BUREAU_APP_ID`, `BUREAU_APP_PRIVATE_KEY`,
 `BUREAU_QA_APP_ID`, `BUREAU_QA_APP_PRIVATE_KEY` in each product repo, and
 install both bureau GitHub Apps on its org.
+
+## Shared CI plumbing (DRE-2550)
+
+Product CI is product-specific — different stacks, different suites — but its
+**plumbing** is not, and six independent copies of it is how a fix reaches one
+repo and not the other five. What lives here is the machinery; what stays in
+the product repo is which suites to run.
+
+`.github/actions/setup-node-cached` sets up Node and puts `node_modules` in
+place. Call it instead of writing your own `setup-node` + `npm ci` pair:
+
+```yaml
+# .github/workflows/ci.yml — CANARY REPOS ONLY (agent-bureau, bureau-pipeline)
+- uses: actions/checkout@v5
+- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-node-cached@main
+  with:
+    working-directory: console/web
+    node-version-file: console/web/.nvmrc   # or node-version: "24"
+- run: npx vitest run
+  working-directory: console/web
+```
+
+### Which ref a repo may use — this is not a style choice
+
+**`@main` is for the canary repos only.** `standards/engineering.md` is explicit:
+*"the fleet consumes tagged releases (`vN`, paired `pipeline_ref`), never this
+repo's live `main`; only agent-bureau and bureau-pipeline ride `@main` as the
+canary channel."* A composite action is no exception — it is consumed by the
+product repo's CI on its very next run, so an unpinned reference means a bad
+merge here reprograms that repo's CI with no canary soak and no promotion step.
+
+**Every other repo pins to the release tag**, exactly as its reusable-workflow
+stubs do:
+
+```yaml
+# .github/workflows/ci.yml in a product repo — pinned, like its stubs
+- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-node-cached@v6
+```
+
+Unlike the internal checkouts inside a reusable workflow, this one takes **no
+`pipeline_ref`** — a `uses:` reference cannot carry an expression. The ref is a
+literal, so **repointing it is part of the promotion step**, moved in lockstep
+with the workflow stubs and never left behind on `@main`.
+
+**No existing tag contains this action.** `v1`–`v5` were cut 2026-07-11 →
+2026-07-21 and predate it, so `@v5` would not resolve to it. A product repo
+therefore cannot adopt this until a release containing it is cut — which is why
+Wave 1 sequences external adoption (Step 4) **after** automatic promotion
+(Step 2). Adopting earlier would mean either an unpinned reference or a pin to
+a tag that has no action in it.
+
+Why it is not just `cache: npm`: `setup-node`'s own cache stores the
+**downloads** (`~/.npm`), so a cache hit still pays the unpack and link on
+every run — measured at 89s per web shard in `agent-bureau` against a warm
+npm cache, 16% of that repo's billable CI minutes. This action caches
+`node_modules` itself and skips `npm ci` outright on a hit.
+
+The **cache-break rule lives here and only here**: the key is the lockfile's
+content plus the node version, exact-match, no `restore-keys`. Don't
+reimplement it per repo — a partial `node_modules` hit looks installed while
+holding another lockfile's packages, so the suite fails far from the cause.
+
+Two constraints worth knowing before you rely on it:
+
+- **Caches are branch-scoped.** A cache saved on a PR branch is invisible to
+  other branches; only `main` populates one for everybody. So a new adopter's
+  own PR run is a MISS by design — the saving appears on the *next* PR.
+- **A composite action must never check out this repo.** The outer `uses:` above
+  is pinnable with a literal tag, but a checkout *inside* the action could not
+  be — it would need `pipeline_ref`, and an action takes no `workflow_call`
+  inputs — so it would escape the release channel entirely.
+  `tests/test_shared_node_action.py` fails if one appears.
 
 ## Release channel: pinning, canary, promotion (DRE-2026)
 
@@ -174,6 +247,11 @@ harness run is red — no branch-protection change involved.
 
 - `.github/workflows/` — the reusable workflows (must live here for
   `workflow_call` to resolve them)
+- `.github/actions/` — composite actions the product repos' own CI calls, for
+  plumbing that should exist once rather than six times (DRE-2550). Pinned by a
+  literal tag in the caller's `uses:` line, moved by the promotion step; NOT by
+  `pipeline_ref`, which is a `workflow_call` input an action cannot receive.
+  For that reason they must never check this repo out — see above.
 - `scripts/linear_ops.py` — Linear CLI (stdlib only); `scripts/reconcile.py`
   imports it as a sibling. Jobs check this repo out into `.bureau-pipeline/`
   inside the product checkout and call
