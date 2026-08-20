@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """The CONTENT a verdict was earned against — one module, one algorithm.
 
-DRE-2340. A QA verdict binds the commit the critic read (DRE-1990), and the
-merge gate updates a branch that is behind its base (DRE-1924). Both are
-right. Together, on a busy repo, they livelock: every gate-initiated
-`update-branch` moves the head, so the verdict bound to the old head stops
-binding, and the critic runs again — against a branch that is stale again
-before the review it triggered can finish. Portico PR #205 (2026-08-09)
-earned seven APPROVE verdicts in 47 minutes and threw six away; `main` took
-30 commits from other work in that window, one every 95 seconds.
+DRE-2340. A QA verdict binds the commit the critic read (DRE-1990), and at
+the time this landed the merge gate also updated a branch that was behind
+its base (DRE-1924). Both were right. Together, on a busy repo, they
+livelocked: every gate-initiated `update-branch` moved the head, so the
+verdict bound to the old head stopped binding, and the critic ran again —
+against a branch that was stale again before the review it triggered could
+finish. Portico PR #205 (2026-08-09) earned seven APPROVE verdicts in 47
+minutes and threw six away; `main` took 30 commits from other work in that
+window, one every 95 seconds.
 
 The fix is to bind the verdict to the CONTENT the critic reviewed rather
-than to the commit SHA that happened to carry it. A gate-initiated merge of
-the base into the branch does not change the PR's own contribution, so it
-must not destroy the verdict.
+than to the commit SHA that happened to carry it. A merge of the base into
+the branch does not change the PR's own contribution, so it must not
+destroy the verdict.
+
+STILL LOAD-BEARING AFTER DRE-2416, which removed the gate's own
+update-branch: the head still moves whenever the FIX AGENT reconciles a
+conflicted branch, and that merge must not throw away a verdict for a diff
+it did not touch. The gate, should_review_pr and reconcile all read this
+one module so they cannot drift about what a verdict binds.
 
 TWO PROPERTIES — the whole design rests on them, so they are proved
 empirically against a real git repository in
@@ -41,17 +48,16 @@ set, changes the id, and kills the verdict. You cannot add code without
 changing content. The id is computed by the GATE, from GitHub's own compare
 record; nothing the PR author controls feeds it, and authorship (DRE-1987)
 is untouched — a non-qa-bot comment carrying a perfect id is still
-invisible. CI still re-runs on the merged result and condition 0 still
-refuses to merge a stale head, so nothing about DRE-1924 changes.
+invisible. CI still re-runs on the merged result, and CI on the base branch
+is the backstop for what a stale head cannot see (DRE-2416).
 
 KNOWN RESIDUAL, named rather than left to be discovered: the compare
 record's `files[]` carries no FILE MODE, so a change that flips only a
 mode (chmod +x) leaves the filename, status and blob sha identical and
 therefore does not move the id. A push doing nothing but that would carry
 its verdict. It is bounded — no code changes, CI still re-runs on the
-merged result, condition 0 still refuses a stale head, and a fresh review
-would show the mode line in the diff — and it cannot be closed from this
-record, which has no mode field to hash.
+merged result, and a fresh review would show the mode line in the diff —
+and it cannot be closed from this record, which has no mode field to hash.
 
 FAIL CLOSED, ALWAYS. `content_id()` returns None — never a partial hash —
 whenever the compare record is not provably complete. None means "no
@@ -140,8 +146,7 @@ def content_id(compare_payload) -> str | None:
 
     `compare_payload` is the raw JSON of
     `GET /repos/{repo}/compare/{base}...{head}` — the record the merge gate
-    already fetches for branch currency, so this costs no API call on the
-    decision path.
+    already fetches, so this costs no API call on the decision path.
 
     The digest covers the sorted, canonicalised
     `(filename, previous_filename or "", status, sha)` tuples of `files[]`:

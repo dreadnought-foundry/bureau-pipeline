@@ -153,12 +153,18 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
 
 
 class QaBotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
-    """DRE-2037: the DRE-1924 merge gate updates a behind PR branch as the
-    qa-bot; that push fires `pull_request: synchronize` on qa-review and
+    """DRE-2037: the DRE-1924 merge gate updated a behind PR branch as the
+    qa-bot; that push fired `pull_request: synchronize` on qa-review and
     verify, so both must admit agent-bureau-qa-bot or every gate-freshened PR
-    gets a crashed critic instead of the fresh review the skew-guard forces.
-    The qa-bot must never author builds, so agent-task and plan must NOT
-    admit it (two-robot authorship separation)."""
+    got a crashed critic instead of a fresh review.
+
+    DRE-2416 removed that push — the gate no longer writes to any branch —
+    so the entries are now DEFENCE IN DEPTH rather than load-bearing. They
+    stay: they cost nothing, and the next qa-bot-authored push (a new gate
+    arm, a sweep) would otherwise crash the review it triggers, which is
+    exactly the 2026-07-12 class. The qa-bot must never author builds, so
+    agent-task and plan must NOT admit it (two-robot authorship
+    separation)."""
 
     def test_qa_review_and_verify_admit_the_qa_bot(self):
         expected = {"qa-review.yml": 2, "verify.yml": 2}
@@ -174,8 +180,8 @@ class QaBotTriggersReviewButNeverAuthorsTest(unittest.TestCase):
                 self.assertIn(
                     QA_BOT, tokens,
                     f"{filename}: allowed_bots={tokens} is missing {QA_BOT} — "
-                    "the merge gate's update-branch push (DRE-1924) triggers "
-                    "this workflow as the qa-bot and crashes it",
+                    "any qa-bot-authored push triggers this workflow as the "
+                    "qa-bot and crashes it (the DRE-2037 class)",
                 )
 
     def test_agent_task_and_plan_exclude_the_qa_bot(self):

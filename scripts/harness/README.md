@@ -122,9 +122,9 @@ the scenario module itself.
 ## Scenario `gate_paths` (DRE-2100)
 
 Merge-gate semantics with three synthesized PRs: a behind-base probe
-(the gate must update-branch **as the qa-bot** and the synchronize
-actor must pass the review allowlists — no lockout, then a normal
-merge); a worker-authored `dependabot/harness-…` probe (condition D →
+(the gate must merge it **at the head it reviewed**, never merging the
+base in first — DRE-2416; the two named failures are moving the head and
+never merging at all); a worker-authored `dependabot/harness-…` probe (condition D →
 the waiting-for-human state posted exactly once, PR never touched); and
 a stale-verdict race (a push right after a bound APPROVE must hold the
 merge until a fresh verdict binds the new head). When the real

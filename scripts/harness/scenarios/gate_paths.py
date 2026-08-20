@@ -5,22 +5,29 @@ critic and merge gate, plus an opportunistic look at the real Dependabot
 PR:
 
   SKEW leg (agent/harness-…-gate_paths-skew): opened behind base (the
-  harness advances the default branch right after branching). The gate's
-  condition 0 (DRE-1924) must UPDATE the branch — performed as the
-  qa-bot — and the resulting synchronize event's actor must pass the
-  review allowlists (DRE-2037): a fresh verdict binds the updated head
-  and the PR merges. A lockout here is exactly the 2026-07-12 class.
-  Timeline note (DRE-2274): the update is ON-DEMAND — the gate pushes it
-  only once the PR is otherwise merge-ready (CI green + a bound APPROVE
-  on the pre-update head), never eagerly on the first wake, so the first
-  observable head move happens AFTER the initial critic verdict lands.
+  harness advances the default branch right after branching). The gate
+  must MERGE it AS IT STANDS — same head it was reviewed at, no base
+  re-merge, no second CI suite (DRE-2416: the fleet does not require
+  up-to-date branches and this gate is the single writer of that rule).
+  The two named failures are the two directions of the same bug: the
+  gate moving the head (the re-merge this card removed, which cost a
+  full CI run per merge to main and starved busy branches — portico PR
+  268, DRE-2393) and the gate never merging at all (the starvation
+  itself).
+
+  RETIRED LIVE COVERAGE, named rather than quietly dropped: this leg
+  used to prove DRE-2037 — that the qa-bot's own update-branch push
+  fired `synchronize` with an actor the review allowlists admit. The
+  gate no longer pushes to any branch, so that path has no live
+  exercise here; the allowlist entries stay as defence in depth and are
+  pinned by tests/test_worker_pool_allowed_bots.py.
 
   NAMED leg (dependabot/harness-…-gate_paths-named): a worker-authored PR
   on a dependabot-NAMED branch, also behind base. Condition D (DRE-2039)
   makes it `human` — the gate posts the honest waiting-for-human state
-  exactly ONCE and touches nothing: no update-branch (despite being
-  behind), no merge. Two observable gate wakes bracket the once-only
-  assertion (the CI workflow_run and this PR's own critic comment).
+  exactly ONCE and touches nothing: no branch mutation, no merge. Two
+  observable gate wakes bracket the once-only assertion (the CI
+  workflow_run and this PR's own critic comment).
 
   STALE leg (agent/harness-…-gate_paths-stale): opened current. The
   instant the critic's bound APPROVE lands, the harness pushes a new
@@ -43,6 +50,11 @@ HONEST COVERAGE LIMITS:
     (conditions 0-3) are proven live by bot_pr_flow and the skew leg —
     condition D is the only extra hop, and its refusal side is proven
     live by the named leg.
+  * The CONFLICT arm of condition 0 (DRE-2416) is not exercised here: a
+    real textual conflict would hand the probe PR to the live fix agent,
+    which spends a model run and needs a card. It stays unit-pinned
+    (tests/test_merge_gate_freshness_race.py) and is observed in
+    production by the fix loop's own telemetry.
   * The stale-race construction loses if the gate merges within the
     seconds between the APPROVE landing and the harness's push. The
     scenario then FAILS with the race named (rerun) — an honest miss,
@@ -84,15 +96,12 @@ GATE_GRACE_SECONDS = 150.0
 # The race window between the APPROVE landing and the gate's merge is the
 # gate run's startup+checkout time (~30-60s) — poll far inside it.
 STALE_POLL_INTERVAL = 5.0
-# Chain-walk bound: consecutive gate updates only happen when base moves
-# again mid-flow; more than a few means something is looping.
-MAX_UPDATE_HOPS = 5
 
 _LEG_PURPOSE = {
     "skew": (
-        "opened deliberately BEHIND its base: the merge gate must update\n"
-        "this branch (as the qa-bot), the follow-up review must pass the\n"
-        "actor allowlists, and the gate then merges normally.\n"
+        "opened deliberately BEHIND its base: the merge gate must merge it\n"
+        "at the very head it reviewed, without merging the base in first —\n"
+        "freshness is not required and a re-merge would cost a CI run.\n"
     ),
     "named": (
         "a worker-authored PR on a dependabot-NAMED branch: the merge\n"
@@ -367,69 +376,10 @@ class GatePaths(framework.Scenario):
             )
         ctx.log(f"[{self.name}] stale: held on the stale verdict, merged fresh")
 
-    # -- skew leg: currency update as qa-bot, no lockout ------------------
+    # -- skew leg: a behind-base PR merges untouched (DRE-2416) -----------
     def _verify_skew(self, ctx):
         leg = ctx.state["legs"]["skew"]
         number, h1 = leg["pr"], leg["h1"]
-
-        def poll_moved():
-            pr = ctx.gh.get_pr(ctx.repo, number)
-            if pr.get("state") == "closed" and not pr.get("merged"):
-                raise ScenarioFailure(
-                    f"skew leg: PR #{number} closed without merging"
-                )
-            return pr if (pr["head"]["sha"] != h1 or pr.get("merged")) else None
-
-        # DRE-2274: the update is on-demand — the gate pushes it only once
-        # the PR is otherwise merge-ready, i.e. AFTER the critic's bound
-        # APPROVE lands on h1 — so this first wait must budget for the
-        # verdict too, not just the gate's own latency.
-        moved = wait_until(
-            f"the gate updating the behind-base PR #{number}",
-            poll_moved,
-            timeout=ctx.verdict_timeout + ctx.merge_timeout,
-            interval=ctx.poll_interval,
-            clock=ctx.clock,
-            sleep=ctx.sleep,
-        )
-        if moved["head"]["sha"] == h1:
-            raise ScenarioFailure(
-                f"skew leg: PR #{number} merged while still behind base — "
-                "the currency guard (condition 0) never updated it"
-            )
-        # Walk the update chain: every hop from the current head back to
-        # our commit must be a 2-parent update merge performed by the
-        # qa-bot (base may move more than once mid-flow — e.g. the stale
-        # leg merging its probe — so one hop is not guaranteed).
-        cur = moved["head"]["sha"]
-        for _ in range(MAX_UPDATE_HOPS):
-            commit = ctx.gh.get_commit(ctx.repo, cur)
-            parents = [p.get("sha") for p in commit.get("parents") or []]
-            if len(parents) != 2:
-                raise ScenarioFailure(
-                    f"skew leg: head {cur} is not an update-branch merge "
-                    f"commit (parents {parents}) — something other than the "
-                    "gate moved this branch"
-                )
-            author = ((commit.get("author") or {}).get("login")) or ""
-            committer = ((commit.get("committer") or {}).get("login")) or ""
-            if not (same_bot(author, ctx.qa_login) or same_bot(committer, ctx.qa_login)):
-                raise ScenarioFailure(
-                    f"skew leg: update commit {cur} was performed by "
-                    f"author={author!r}/committer={committer!r}, not the "
-                    "qa-bot — the skew-guard must update as the merging "
-                    "identity"
-                )
-            cur = parents[0]  # first parent = the previous head
-            if cur == h1:
-                break
-        else:
-            raise ScenarioFailure(
-                f"skew leg: could not walk the update chain from "
-                f"{moved['head']['sha']} back to {h1} within "
-                f"{MAX_UPDATE_HOPS} hops"
-            )
-        ctx.log(f"[{self.name}] skew: gate updated the branch as the qa-bot")
 
         def poll_merged():
             pr = ctx.gh.get_pr(ctx.repo, number)
@@ -439,20 +389,31 @@ class GatePaths(framework.Scenario):
                 raise ScenarioFailure(
                     f"skew leg: PR #{number} closed without merging"
                 )
+            if pr["head"]["sha"] != h1:
+                # THE regression this card removed: the gate merged the
+                # base in, which restarts the whole CI suite on unchanged
+                # source and, while the base keeps moving, never lets the
+                # branch hold a green state long enough to merge
+                # (DRE-2393 measured four such runs in thirteen minutes).
+                raise ScenarioFailure(
+                    f"skew leg: PR #{number} head moved {h1} → "
+                    f"{pr['head']['sha']} — something re-merged the base "
+                    "into a behind-but-mergeable branch; the gate must "
+                    "merge it as it stands (DRE-2416)"
+                )
             state, detail = verdict_state(
-                ctx.gh.list_comments(ctx.repo, number),
-                ctx.qa_login, pr["head"]["sha"],
+                ctx.gh.list_comments(ctx.repo, number), ctx.qa_login, h1,
             )
             if state == "REQUEST_CHANGES":
                 raise ScenarioFailure(
-                    f"skew leg: critic REQUEST_CHANGES after the update "
+                    f"skew leg: critic REQUEST_CHANGES on the probe "
                     f"(PR #{number}): {detail}"
                 )
             return None
 
         try:
             merged = wait_until(
-                f"the updated PR #{number} re-reviewing and merging",
+                f"the gate merging the behind-base PR #{number} untouched",
                 poll_merged,
                 timeout=ctx.verdict_timeout + ctx.merge_timeout,
                 interval=ctx.poll_interval,
@@ -461,11 +422,39 @@ class GatePaths(framework.Scenario):
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(
-                f"{e} — the qa-bot's synchronize event produced no fresh "
-                "bound verdict: the actor allowlists locked the review out "
-                "(the DRE-2037 class)"
+                f"{e} — a green, approved branch that is merely BEHIND its "
+                "base was never merged: that is the starvation DRE-2416 "
+                "exists to remove"
             ) from e
+
         final_head = merged["head"]["sha"]
+        if final_head != h1:
+            raise ScenarioFailure(
+                f"skew leg: PR #{number} merged at {final_head}, not at the "
+                f"head it was opened and reviewed at ({h1}) — the branch was "
+                "re-merged from its base after all"
+            )
+        # Prove the merged head really was BEHIND: it was cut from the
+        # original base tip and the harness advanced the base afterwards,
+        # so h1's own parent is the pre-advance tip and cannot contain the
+        # advance. Without this the leg would pass on a base that never
+        # moved — pretend coverage.
+        base_sha, base2 = ctx.state["base_sha"], ctx.state["base2"]
+        if base2 == base_sha:
+            raise ScenarioFailure(
+                "skew leg: the base never advanced, so the PR was not "
+                "behind and this leg proved nothing (rerun)"
+            )
+        parents = [
+            p.get("sha")
+            for p in (ctx.gh.get_commit(ctx.repo, h1).get("parents") or [])
+        ]
+        if parents != [base_sha]:
+            raise ScenarioFailure(
+                f"skew leg: merged head {h1} has parents {parents}, expected "
+                f"exactly the pre-advance base tip [{base_sha}] — the leg "
+                "cannot prove the merged head was behind its base"
+            )
         state, detail = verdict_state(
             ctx.gh.list_comments(ctx.repo, number), ctx.qa_login, final_head
         )
@@ -480,7 +469,10 @@ class GatePaths(framework.Scenario):
                 f"skew leg: PR #{number} merged by {merged_by!r}, not the "
                 f"qa-bot ({ctx.qa_login!r})"
             )
-        ctx.log(f"[{self.name}] skew: no lockout — fresh verdict, qa-bot merge")
+        ctx.log(
+            f"[{self.name}] skew: behind-base PR merged at its reviewed "
+            "head — no re-merge, no extra CI run"
+        )
 
     # -- named leg: human once, hands off ---------------------------------
     def _verify_named(self, ctx):
@@ -498,8 +490,8 @@ class GatePaths(framework.Scenario):
             if pr["head"]["sha"] != h1:
                 raise ScenarioFailure(
                     f"named leg: the gate TOUCHED PR #{number} (head moved "
-                    f"{h1} → {pr['head']['sha']}) — a human-decision PR gets "
-                    "no update-branch, even behind base"
+                    f"{h1} → {pr['head']['sha']}) — a human-decision PR is "
+                    "left completely alone, even behind base"
                 )
             return pr
 
@@ -649,9 +641,9 @@ class GatePaths(framework.Scenario):
         commit = ctx.gh.get_commit(ctx.repo, head)
         if len(commit.get("parents") or []) >= 2:
             raise ScenarioFailure(
-                f"real PR #{number}: head {head} is a merge commit — the "
-                "gate update-branched a major/unprovable Dependabot PR it "
-                "must never touch"
+                f"real PR #{number}: head {head} is a merge commit — "
+                "something merged the base into a major/unprovable "
+                "Dependabot PR the gate must never touch"
             )
         current = ctx.gh.get_pr(ctx.repo, number)
         if current.get("merged") or current.get("state") != "open":
