@@ -276,6 +276,30 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
+          # DRE-2601: reaching this step means go=true — a fix attempt is
+          # actually STARTING on an open PR, so the pipeline owns this card
+          # again and any `needs-human` stamp left by an earlier park is now a
+          # lie. It is read by the Needs-you queue, the board's hold badge and
+          # operator_complete's gate, so a card being actively fixed reads as
+          # parked in all three until it comes off (DRE-2509 carried it from
+          # 04:09 UTC straight through its merge — work resumed by direct
+          # dispatch and nothing ever cleared it).
+          #
+          # THE GUARD IS THE STEP'S OWN `if`. Every path that REFUSES to run —
+          # fix budget exhausted, conflict budget exhausted, convergence halt,
+          # closed PR, non-agent branch — sets go=false in the Resolve step and
+          # never gets here, so a card genuinely parked at a cap keeps its
+          # label. Pinned by tests/test_fix_dispatch_clears_stale_hold.py,
+          # which executes both step bodies for real.
+          #
+          # remove-label, NOT unpark: the label is all that is stale here.
+          # unpark would also reset the death budget and move the card to Todo,
+          # which re-dispatches a whole new build on top of the live PR. It is
+          # idempotent (a documented no-op when the label is absent) and, like
+          # the announce comment below, `|| true` — Linear bookkeeping must
+          # never cost the fix run.
+          [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py \
+            remove-label "${{ steps.pr.outputs.card }}" needs-human || true
           if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
             MSG="🔀 Conflict-resolution agent dispatched (round ${{ steps.pr.outputs.attempt }}/5) — merging main into PR #${{ steps.pr.outputs.number }}."
           else

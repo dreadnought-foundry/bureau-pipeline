@@ -184,9 +184,14 @@ class AnnounceClearsStaleHoldTest(unittest.TestCase):
         # label — clearing an absent label must not be an error. (unpark would
         # ALSO move the card to Todo and reset the death budget, which would
         # re-dispatch a whole new build on top of the live PR.)
-        run = step_named("Announce fix attempt")["run"]
-        self.assertIn("remove-label", run)
-        self.assertNotIn("unpark", run)
+        # Executable lines only — the step's comments explain the choice and
+        # name `unpark` while doing no such thing.
+        code = "\n".join(
+            ln for ln in step_named("Announce fix attempt")["run"].splitlines()
+            if not ln.lstrip().startswith("#")
+        )
+        self.assertIn("remove-label", code)
+        self.assertNotIn("unpark", code)
 
 
 class RemoveLabelIsIdempotentTest(unittest.TestCase):
