@@ -1,0 +1,196 @@
+# Live smoke test for the setup-node-cached composite action (DRE-2550).
+#
+# WHY THIS EXISTS. tests/test_shared_node_action*.py cover the key script (by
+# executing it) and the step conditions (by evaluating them). Neither runs the
+# ACTION. Its step wiring — whether setup-node accepts the conditional
+# empty-string `cache:`, whether cache/restore and cache/save round-trip, and
+# whether the `format()` dependency-path expression resolves on a real runner —
+# would otherwise first execute in a CONSUMER repo, after this repo had already
+# merged. A failure there costs a full critic round here to fix.
+#
+# So the action runs on a real runner, on this PR, before the merge. This repo
+# is public, so these minutes are free — which is the whole reason it is
+# affordable to be this thorough here rather than in agent-bureau.
+#
+# The project is GENERATED rather than committed: `npm install
+# --package-lock-only` produces a genuinely valid lockfile (integrity hashes
+# and all), which is not something to hand-author into a fixture. Its version
+# carries the run id, so the cache key is unique per run — otherwise the first
+# run of the day would populate the entry and every later run would report a
+# hit it never earned, which is a test that passes without exercising the
+# install path at all.
+name: Smoke · setup-node-cached
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/actions/setup-node-cached/**'
+      - '.github/workflows/smoke-setup-node-cached.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  miss-then-hit:
+    name: cold install, then a hit that skips it
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Generate a run-unique node project
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p smoke-tmp
+          # One real dependency with no sub-dependencies, so `npm ci` actually
+          # unpacks something and node_modules is a real directory rather than
+          # an empty one that would make the assertions below vacuous.
+          cat > smoke-tmp/package.json <<JSON
+          {
+            "name": "node-smoke",
+            "version": "0.0.${RUN_ID}${RUN_ATTEMPT}",
+            "private": true,
+            "dependencies": { "ms": "2.1.3" }
+          }
+          JSON
+          # --package-lock-only: writes the lockfile, installs nothing. The
+          # action under test is what performs the install.
+          npm install --package-lock-only --prefix smoke-tmp --silent
+          test -f smoke-tmp/package-lock.json
+
+      # --- the cold path -----------------------------------------------------
+
+      - name: FIRST call — expect a miss and a real install
+        id: cold
+        uses: ./.github/actions/setup-node-cached
+        with:
+          working-directory: smoke-tmp
+          node-version: "24"
+
+      - name: Assert the first call installed
+        env:
+          CACHE_HIT: ${{ steps.cold.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ "$CACHE_HIT" = "true" ]; then
+            echo "::error::first call reported a cache HIT on a run-unique key" \
+                 "— the key is not run-unique, so this test proves nothing"
+            exit 1
+          fi
+          test -d smoke-tmp/node_modules/ms \
+            || { echo "::error::npm ci did not install the dependency"; exit 1; }
+          echo "cold call: miss, dependency installed — as expected"
+
+      # Deleting it is what makes the second call's assertion meaningful: a
+      # node_modules that was merely left in place would look identical to one
+      # restored from cache.
+      - name: Delete node_modules so the restore has to do the work
+        run: rm -rf smoke-tmp/node_modules
+
+      # --- the warm path, which is the entire point of the action ------------
+
+      - name: SECOND call — expect a hit that skips the install
+        id: warm
+        uses: ./.github/actions/setup-node-cached
+        with:
+          working-directory: smoke-tmp
+          node-version: "24"
+
+      - name: Assert the second call restored without installing
+        env:
+          CACHE_HIT: ${{ steps.warm.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ "$CACHE_HIT" != "true" ]; then
+            echo "::error::second call did not hit the cache the first one" \
+                 "saved (cache-hit=$CACHE_HIT) — every run would be a miss," \
+                 "so the action would cost wall-clock and save nothing"
+            exit 1
+          fi
+          test -d smoke-tmp/node_modules/ms \
+            || { echo "::error::cache hit but node_modules was not restored"; exit 1; }
+          echo "warm call: hit, node_modules restored, npm ci skipped"
+
+      - name: Assert a different node major does NOT reuse that cache
+        id: other-major
+        uses: ./.github/actions/setup-node-cached
+        with:
+          working-directory: smoke-tmp
+          node-version: "22"
+
+      - name: The node version must be part of the key
+        env:
+          CACHE_HIT: ${{ steps.other-major.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ "$CACHE_HIT" = "true" ]; then
+            echo "::error::node 22 reused node 24's node_modules — native" \
+                 "module ABI differs across majors, so this hands a job the" \
+                 "binaries another major compiled"
+            exit 1
+          fi
+          echo "node 22: miss, as it must be"
+
+  node-only:
+    name: install:false needs no lockfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # `scripts/` is a real directory with no package-lock.json in it. Before
+      # the fix on this branch, the key step ran unconditionally and this job
+      # would fail here — which is exactly the defect the scenario table found.
+      - name: Set up node only, against a directory with no lockfile
+        uses: ./.github/actions/setup-node-cached
+        with:
+          working-directory: scripts
+          node-version: "24"
+          install: "false"
+
+      - name: Node is on PATH and nothing was cached
+        run: |
+          set -euo pipefail
+          node --version
+          test ! -d scripts/node_modules \
+            || { echo "::error::install:false created node_modules"; exit 1; }
+
+  hostile-input:
+    name: a hostile working-directory must fail, not execute
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The live counterpart to the adversarial unit tests. Every repo in the
+      # fleet is a caller, and Step 4 hands this action to four repos that are
+      # maintained separately — so a caller-supplied string reaching the shell
+      # is a real risk, not a theoretical one.
+      - name: Attempt command substitution through working-directory
+        id: attempt
+        continue-on-error: true
+        uses: ./.github/actions/setup-node-cached
+        with:
+          working-directory: $(touch /tmp/pwned)
+          node-version: "24"
+
+      - name: The action must have refused, and nothing may have executed
+        env:
+          OUTCOME: ${{ steps.attempt.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/pwned ]; then
+            echo "::error::COMMAND INJECTION EXECUTED — a caller-supplied" \
+                 "working-directory reached the shell"
+            exit 1
+          fi
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::expected the action to fail on a nonexistent" \
+                 "directory, got outcome=$OUTCOME"
+            exit 1
+          fi
+          echo "hostile input: refused, nothing executed"
