@@ -367,6 +367,23 @@ def _int_or_none(raw: str | None) -> int | None:
         return None
 
 
+def _timestamp_or_none(raw: str | None) -> str | None:
+    """The value if it reads as a timestamp, else None — a failed read is absent.
+
+    The repository-variables API answers 403 to `github.token` (channel-watch.yml
+    says so itself), and `gh api` hands the error BODY back on stdout, so what
+    arrives as `--hold-updated` in production is
+    `{"message":"Resource not accessible by integration","status":"403"}`.
+    Passing that through made the age unreadable, unreadable is unknown, and
+    unknown is overdue — so every hold alarmed on its first tick and the blob
+    was rendered to the operator where a date belongs (DRE-2603). An answer
+    that is not a timestamp is a failed read, never a value.
+    """
+    if not raw or not raw.strip():
+        return None
+    return raw.strip() if hours_since(raw.strip()) is not None else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Channel staleness alarm (DRE-2552)")
     parser.add_argument("--commits-ahead", default=None)
@@ -383,7 +400,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--body-file", default=None)
     args = parser.parse_args(argv)
 
-    hold_since = args.hold_updated or hold_started(args.hold)
+    # Two sources, in order of authority, and the same fallback `_hold_lines`
+    # already uses for display: GitHub's own answer when it gives one, then the
+    # `since=` the operator wrote. Neither leaves the age unknown, and unknown
+    # still alarms — failing loud is right, it just must not be the only path.
+    hold_since = _timestamp_or_none(args.hold_updated) or hold_started(args.hold)
     verdict = evaluate(
         commits_ahead=_int_or_none(args.commits_ahead),
         channel_age_hours=hours_since(args.channel_committed, now=args.now),

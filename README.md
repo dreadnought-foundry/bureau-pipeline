@@ -400,6 +400,13 @@ across 70 days, 7.4/day:
   this cadence and is a habit forming. A held channel is reported as **held —
   with who and when** — never as broken; unknown parts are printed as unknown
   rather than guessed.
+- **Where the hold's age comes from** (DRE-2603). The repository-variables API
+  needs admin scope and answers 403 to the workflow's token, so its answer is
+  used only when it *is* a timestamp — an error body is a failed read, never a
+  value, and is never rendered as a date. Failing that, the age is measured
+  from the `since=` the operator wrote into `CHANNEL_HOLD`. With neither, the
+  age is unknown and an unknown-age hold still alarms: failing loud is right,
+  it just must not be the only path, or the 24h above never applies.
 
 **So what if the watcher stops?** Two answers, and only one of them is
 mechanical:
