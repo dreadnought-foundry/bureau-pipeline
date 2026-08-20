@@ -19,13 +19,20 @@
 # So this caches node_modules itself, keyed exactly, and skips `npm ci`
 # outright on a hit.
 #
+# HOW CALLERS PIN THIS. The caller's `uses:` line takes a LITERAL ref, so it
+# is pinnable exactly like the reusable-workflow stubs: `@main` for the two
+# canary repos (agent-bureau, bureau-pipeline) and `@vN` for every other repo,
+# per standards/engineering.md — "the fleet consumes tagged releases ... only
+# agent-bureau and bureau-pipeline ride @main as the canary channel". Moving
+# that ref is part of the promotion step. See the README's "Which ref a repo
+# may use".
+#
 # WHAT THIS ACTION MUST NEVER DO: check out dreadnought-foundry/bureau-pipeline.
 # scripts/check_pipeline_ref.py enforces the DRE-2026 rule that every internal
-# checkout threads `pipeline_ref`, but it only scans .github/workflows — a
-# composite action is outside its sweep, and a `uses:` reference cannot be
-# templated with an expression, so an internal checkout here could not be
-# pinned by any mechanism we have. tests/test_shared_node_action.py fails if
-# one appears.
+# checkout threads `pipeline_ref`, but it only scans .github/workflows, and an
+# action cannot receive a `workflow_call` input in the first place — so a
+# checkout in HERE (unlike the outer `uses:` line above) could not be pinned by
+# any mechanism we have. tests/test_shared_node_action.py fails if one appears.
 
 name: Node with a cached install
 description: >-
