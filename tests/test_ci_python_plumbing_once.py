@@ -280,6 +280,59 @@ class EveryPythonSuiteUsesTheSharedAction(unittest.TestCase):
         )
 
 
+class TheInstallIsMeasurable(unittest.TestCase):
+    """Rule 4 — the cost has to land under a name a human chose.
+
+    Measured, not assumed. GitHub's jobs API reports a composite action as ONE
+    step: run 32421767876 called setup-python-cached three times and
+    `GET /actions/jobs/96595119245` returned the CALLER's step names
+    ("FIRST call — expect a miss and a real install"), never the action's own
+    "Install dependencies (pip install)". So the action's internal step name is
+    a log affordance, and the thing `scripts/ci_minutes_report.py` can actually
+    attribute cost to is the caller's step name.
+
+    That makes the acceptance criterion — "the pip install is a named step, and
+    its cost is reported" — a rule about CALLERS: an unnamed `uses:` is
+    reported as "Run ./.github/actions/setup-python-cached", which is the same
+    unmeasurable state as an install buried inside a test step, just with a
+    different label.
+    """
+
+    @staticmethod
+    def _callers():
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            doc = yaml.safe_load(path.read_text())
+            for job_name, job in (doc.get("jobs") or {}).items():
+                if not isinstance(job, dict):
+                    continue
+                for step in job.get("steps") or []:
+                    if isinstance(step, dict) and PYTHON_ACTION_REF in str(
+                        step.get("uses", "")
+                    ):
+                        yield path.name, job_name, step
+
+    def test_every_caller_names_its_step(self):
+        offenders = [
+            f"{fname}: job {job!r}"
+            for fname, job, step in self._callers()
+            if not str(step.get("name") or "").strip()
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            "these steps call the shared action without a name:, so the jobs "
+            "API reports their cost as 'Run ./.github/actions/"
+            "setup-python-cached' — the install stays unattributable, which is "
+            "the state this card exists to end: " + repr(offenders),
+        )
+
+    def test_the_sweep_found_callers(self):
+        self.assertTrue(
+            list(self._callers()),
+            "no workflow calls the shared action — the rule above is vacuous",
+        )
+
+
 class TheDetectorFires(unittest.TestCase):
     """A guard that cannot be shown to fire is a guard nobody can trust.
 
