@@ -65,7 +65,8 @@ def _run_key_script(script, working_directory, node_version="", node_version_fil
     return value.
     """
     with tempfile.TemporaryDirectory() as tmp:
-        project = Path(tmp) / working_directory
+        workspace = Path(tmp) / "workspace"
+        project = workspace / working_directory
         project.mkdir(parents=True, exist_ok=True)
         (project / "package-lock.json").write_text(_LOCKFILE_BYTES)
         if node_version_file:
@@ -75,11 +76,14 @@ def _run_key_script(script, working_directory, node_version="", node_version_fil
         out.touch()
         proc = subprocess.run(
             ["bash", "-c", script],
-            cwd=tmp,
+            cwd=str(workspace),
             capture_output=True,
             text=True,
             env={
                 **os.environ,
+                # Always set on a real runner; the script anchors on it so a
+                # caller's job-level working-directory default cannot shift it.
+                "GITHUB_WORKSPACE": str(workspace),
                 "WORKING_DIRECTORY": working_directory,
                 "NODE_VERSION": node_version,
                 "NODE_VERSION_FILE": node_version_file,
