@@ -109,9 +109,21 @@ jobs:
       # main); on pull_request the inputs context is EMPTY, so the middle
       # clause makes the PR's own head the driver checkout — without it
       # every PR run would silently test main (the DRE-2026 chimera).
+      #
+      # The tail is github.sha — an immutable commit, never the branch NAME
+      # 'main' (DRE-2551). On a push run neither earlier clause resolves, and
+      # a branch name checks out whatever main's tip is at the moment the job
+      # starts, not the commit that triggered this run. Merge bursts are
+      # routine here (merge-gate.yml records five PRs / twelve gate runs in 25
+      # minutes on 2026-08-17), so a second merge landing first would make the
+      # job test and stamp a DIFFERENT, newer sha than the one GitHub recorded
+      # as this run's head_sha. promote-channel.yml reads exactly that head_sha,
+      # would find no integration-harness stamp on it, and would silently
+      # decline to promote a commit the harness had in fact just proved — a
+      # quiet no-op precisely during the busy periods this must survive.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.pipeline_ref || github.event.pull_request.head.sha || 'main' }}
+          ref: ${{ inputs.pipeline_ref || github.event.pull_request.head.sha || github.sha }}
 
       # The sha the stamp binds — resolved from the ACTUAL checkout, the
       # only record a dispatch run has of what pipeline_ref pointed at.
