@@ -51,6 +51,12 @@ jobs:
       # to @vN silently runs scripts/briefs/standards from @main.
       - name: pipeline_ref threading check
         run: python3 scripts/check_pipeline_ref.py
+      # One WIP cap (DRE-2529): every path that promotes cards must take the
+      # caller's `max_wip`, never a literal. A hardcoded cap makes a repo's
+      # deliberate override inert on that path — silently, and only inside
+      # the WIP band the fast path exists for.
+      - name: WIP cap single-source check
+        run: python3 scripts/check_wip_cap.py
 
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching

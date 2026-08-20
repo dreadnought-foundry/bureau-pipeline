@@ -46,8 +46,10 @@ is happening while nothing runs (DRE-1978 sat in Planning 7 days unseen).
 Also runs the dependency gate: Backlog children whose parent epic is ACTIVATED
 (= plan approved) are auto-promoted to Todo once every blocker is Done — blockers
 read from Linear's native "blocks" relations AND from "Blocked by: DRE-N" /
-"serialize after DRE-N" lines in the description. A WIP cap (MAX_WIP, default 4
-active cards) throttles promotion so the pipeline never floods.
+"serialize after DRE-N" lines in the description. A WIP cap (MAX_WIP, default
+DEFAULT_MAX_WIP active cards) throttles promotion so the pipeline never floods.
+The calling workflow passes the repo's own cap through its `max_wip` input;
+every promotion path in the pipeline uses that one value (DRE-2529).
 
 An epic counts as ACTIVATED in EITHER Todo OR In Progress (DRE-1893). The CEO's
 activation action is moving an approved epic to **Todo** (lifecycle Backlog →
@@ -103,7 +105,31 @@ REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
 # In Progress dropped 180→60: silent agent deaths now requeue instantly from
 # the run itself; this timer is only the backstop for lost run outcomes.
 STALE_MINUTES = {"Todo": 15, "In Progress": 60, "In QA": 120, "In Review": 60}
-MAX_WIP = int(os.environ.get("MAX_WIP", "4"))
+# The ONE work-in-progress cap (DRE-2529). This constant is the single source
+# of truth: scripts/check_wip_cap.py reads it and fails the build unless every
+# reusable workflow declares its `max_wip` input with exactly this default, so
+# a stub that passes nothing inherits a value that is correct on its own.
+# It was 4 while the workflows all said 8 — a fifth cap hiding behind an unset
+# env var, which is the same defect this card removes from the workflows.
+DEFAULT_MAX_WIP = 8
+
+
+def resolve_max_wip(raw):
+    """The cap from the environment, falling back to the one default.
+
+    Empty is NOT zero. `MAX_WIP` now comes from a workflow_call input, and on
+    any event where the `inputs` context is empty the interpolation yields the
+    empty string — `int("")` would crash the promotion step outright, turning
+    a cap question into a red run. Unset, empty, and unparseable all mean
+    "the one default".
+    """
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_WIP
+
+
+MAX_WIP = resolve_max_wip(os.environ.get("MAX_WIP"))
 
 # Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893).
 # The CEO activates an approved epic by moving it to **Todo** (lifecycle Backlog

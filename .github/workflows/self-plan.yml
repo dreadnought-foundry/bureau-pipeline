@@ -1,6 +1,10 @@
 # Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
 # consumes its OWN reusable workflows exactly like a product repo.
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
+#
+# The activate route promotes cards, so this stub is one of the repo's three
+# WIP-cap paths. max_wip is left at the reusable's default ("8"), matching
+# self-reconcile and self-linear-sync — override all three or none (DRE-2529).
 name: Agent Plan
 
 on:

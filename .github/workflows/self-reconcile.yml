@@ -3,7 +3,11 @@
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
 # max_wip is left at the reusable's default ("8") — a conservative cap for the
-# control-plane repo, deliberately below agent-bureau's "12".
+# control-plane repo, deliberately below agent-bureau's "12". All THREE of this
+# repo's promotion stubs (this one, self-plan, self-linear-sync) inherit that
+# same default; to override, change all three together or the repo promotes at
+# two different caps depending on which path fires (DRE-2529, enforced by
+# scripts/check_wip_cap.py).
 name: Reconcile
 
 on:
