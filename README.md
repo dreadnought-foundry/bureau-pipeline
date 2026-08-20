@@ -126,6 +126,30 @@ place. Call it instead of writing your own `setup-node` + `npm ci` pair:
   working-directory: console/web
 ```
 
+`.github/actions/setup-python-cached` (DRE-2589) is the same thing for Python:
+it sets up Python and puts a virtualenv of the repo's **pinned** tooling in
+place. Call it instead of writing your own `setup-python` + `pip install` pair:
+
+```yaml
+# .github/workflows/ci.yml — CANARY REPOS ONLY (agent-bureau, bureau-pipeline)
+- uses: actions/checkout@v5
+- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-python-cached@main
+  with:
+    python-version: "3.12"
+    requirements: |
+      requirements-dev.txt
+- run: pytest tests        # the venv is on PATH for every later step
+```
+
+It takes requirements **files** and has no way to pass a package name. That is
+the point: a `pip install pytest==9.1.0` in a job is a pin with a second home,
+and installing bare names is what made a Dependabot bump exercise nothing
+(DRE-2039). One manifest per repo, installed from that manifest.
+
+`tests/test_ci_python_plumbing_once.py` is the guard: it fails if any workflow
+here runs its own `pip install`, if a pin acquires a second home, or if a job
+runs `pytest` without going through the action.
+
 ### Which ref a repo may use — this is not a style choice
 
 **`@main` is for the canary repos only.** `standards/engineering.md` is explicit:
@@ -141,6 +165,7 @@ stubs do:
 ```yaml
 # .github/workflows/ci.yml in a product repo — pinned, like its stubs
 - uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-node-cached@v6
+- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-python-cached@v6
 ```
 
 Unlike the internal checkouts inside a reusable workflow, this one takes **no
@@ -148,10 +173,10 @@ Unlike the internal checkouts inside a reusable workflow, this one takes **no
 literal, so **repointing it is part of the promotion step**, moved in lockstep
 with the workflow stubs and never left behind on `@main`.
 
-**No existing tag contains this action.** `v1`–`v5` were cut 2026-07-11 →
-2026-07-21 and predate it, so `@v5` would not resolve to it. A product repo
-therefore cannot adopt this until a release containing it is cut — which is why
-Wave 1 sequences external adoption (Step 4) **after** automatic promotion
+**No existing tag contains either action.** `v1`–`v5` were cut 2026-07-11 →
+2026-07-21 and predate them, so `@v5` would not resolve to one. A product repo
+therefore cannot adopt these until a release containing them is cut — which is
+why Wave 1 sequences external adoption (Step 4) **after** automatic promotion
 (Step 2). Adopting earlier would mean either an unpinned reference or a pin to
 a tag that has no action in it.
 
@@ -161,10 +186,19 @@ every run — measured at 89s per web shard in `agent-bureau` against a warm
 npm cache, 16% of that repo's billable CI minutes. This action caches
 `node_modules` itself and skips `npm ci` outright on a hit.
 
+Why it is not just `cache: pip`: same shape. `setup-python`'s own cache stores
+`~/.cache/pip` — the downloads — so a hit still pays the resolve, the wheel
+build and the install. `setup-python-cached` caches the virtualenv itself and
+skips `pip install` outright on a hit. None of agent-bureau's three Python jobs
+used even `cache: pip`, and because their install ran *inside* the test step,
+its cost could not be separated from the suite's at all.
+
 The **cache-break rule lives here and only here**: the key is the lockfile's
-content plus the node version, exact-match, no `restore-keys`. Don't
-reimplement it per repo — a partial `node_modules` hit looks installed while
-holding another lockfile's packages, so the suite fails far from the cause.
+content plus the node version (for Python: every manifest's content plus the
+**resolved** interpreter — a virtualenv is not relocatable across interpreters),
+exact-match, no `restore-keys`. Don't reimplement it per repo — a partial
+`node_modules` hit looks installed while holding another lockfile's packages, so
+the suite fails far from the cause.
 
 Two constraints worth knowing before you rely on it:
 

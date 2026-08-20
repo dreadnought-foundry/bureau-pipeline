@@ -1,0 +1,327 @@
+# Shared python plumbing for the fleet's CI (DRE-2589 — the Python half of
+# DRE-2550's Wave 1, Step 1).
+#
+# DRE-2550 moved the fleet's NODE plumbing here and deliberately left Python
+# out. The Python side has the same shape of duplication: agent-bureau's
+# ci.yml sets Python up and installs test tooling in THREE jobs — lint,
+# backend, relay — each with its own `setup-python`, its own `pip install`,
+# and its own copy of the pinned tool versions. `pytest==9.1.0` appears twice.
+# That is the same defect class as MAX_WIP in three files: a fact with more
+# than one home, kept honest only by nobody happening to edit one copy.
+#
+# What this action adds beyond `setup-python`'s own `cache: pip`:
+#
+#   `cache: pip` caches ~/.cache/pip — the DOWNLOADS. It does not cache the
+#   installed environment, so a cache HIT still pays the resolve, the wheel
+#   build and the install on every run. None of agent-bureau's three jobs uses
+#   even that; and because their install runs INSIDE the test step, its cost
+#   cannot currently be separated from the test's at all
+#   (`Console backend (pytest)` was 60 billable minutes of 452 over 30 job
+#   runs, and nobody can say what fraction of that was pip).
+#
+# So this caches the virtualenv itself, keyed exactly, skips `pip install`
+# outright on a hit, and makes the install a NAMED step so
+# `scripts/ci_minutes_report.py` has a number to report.
+#
+# It does NOT additionally set `cache: pip`. On a hit pip never runs, so
+# restoring its download cache is pure wall-clock; on a miss the download
+# cache would be keyed on the same manifest digest that just changed, so it
+# would miss too. A second cache that can only miss is cost with no upside.
+#
+# EVERY PINNED TOOL COMES FROM A MANIFEST. The action takes requirements FILES
+# and nothing else — no package-name input. Installing bare names is what made
+# a Dependabot bump exercise nothing (DRE-2039); an input that accepted
+# `pytest==9.1.0` would merely move the duplicated pin out of the workflow's
+# `run:` and into its `with:`, which is the same fact in the same number of
+# homes.
+#
+# HOW CALLERS PIN THIS. Same rule as setup-node-cached: the caller's `uses:`
+# line takes a LITERAL ref, so `@main` for the two canary repos (agent-bureau,
+# bureau-pipeline) and `@vN` for every other repo, per
+# standards/engineering.md. Moving that ref is part of the promotion step. See
+# the README's "Which ref a repo may use".
+#
+# WHAT THIS ACTION MUST NEVER DO: check out dreadnought-foundry/bureau-pipeline.
+# scripts/check_pipeline_ref.py enforces the DRE-2026 rule that every internal
+# checkout threads `pipeline_ref`, but it only scans .github/workflows, and an
+# action cannot receive a `workflow_call` input in the first place — so a
+# checkout in HERE could not be pinned by any mechanism we have.
+# tests/test_shared_node_action.py sweeps every action here and fails if one
+# appears.
+#
+# Linux and macOS runners only: the venv layout assumed below is `bin/`, not
+# Windows' `Scripts/`. Every runner in the fleet is ubuntu-latest.
+
+name: Python with a cached install
+description: >-
+  Set up Python and put a virtualenv of the repo's pinned tooling in place,
+  with the caching strategy and its cache-break rule declared ONCE for the
+  whole fleet instead of once per job.
+
+inputs:
+  requirements:
+    description: >-
+      Requirements files to install from, one per line, relative to the
+      workspace root (e.g. "console/backend/requirements.txt"). At least one
+      is required when installing. There is deliberately no way to pass a
+      package name.
+    required: false
+    default: ""
+  python-version:
+    description: >-
+      Python version literal (e.g. "3.12"). Prefer python-version-file
+      wherever the project has a .python-version — a file cannot drift from
+      the runtime the way a second copy of the number can. Exactly one of the
+      two is set.
+    required: false
+    default: ""
+  python-version-file:
+    description: >-
+      Path to a .python-version file. Preferred over python-version.
+    required: false
+    default: ""
+  venv-path:
+    description: >-
+      Where the virtualenv goes, relative to the workspace root. One job's
+      venv per path; two jobs installing different manifests may share the
+      default because they run on different runners.
+    required: false
+    default: ".venv"
+  install:
+    description: >-
+      Install dependencies (and cache them). Set "false" to set up Python only
+      — for a job that runs a stdlib-only script and needs no tooling.
+    required: false
+    default: "true"
+
+outputs:
+  cache-hit:
+    description: >-
+      "true" when the virtualenv was restored from cache and `pip install` was
+      therefore skipped. This is the value to read when reporting a saving:
+      the install step's own duration is 0 on a hit, which looks like a fast
+      install rather than an absent one.
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    # FIRST, unlike the node action. The cache key carries the RESOLVED
+    # interpreter (see the key step), which cannot be read until the requested
+    # version is actually on the runner.
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+        python-version-file: ${{ inputs.python-version-file }}
+
+    - name: Compute the virtualenv cache key
+      id: key
+      # Skipped entirely when nothing will be installed: this step REQUIRES a
+      # manifest, and a job that only wants python on the PATH need not have
+      # one.
+      if: inputs.install == 'true'
+      shell: bash
+      env:
+        # Through env, never interpolated into the shell line — the same rule
+        # the pipeline's own workflows follow for anything caller-supplied.
+        REQUIREMENTS: ${{ inputs.requirements }}
+        VENV_PATH: ${{ inputs.venv-path }}
+        PYTHON_VERSION: ${{ inputs.python-version }}
+        PYTHON_VERSION_FILE: ${{ inputs.python-version-file }}
+      run: |
+        set -euo pipefail
+
+        # Anchor at the workspace explicitly. A caller may set a job-level
+        # `defaults.run.working-directory` (agent-bureau's infra-ci.yml does),
+        # and rather than depend on being right about whether job defaults
+        # reach a composite action's steps, this is immune either way.
+        cd "$GITHUB_WORKSPACE"
+
+        if [ -z "$PYTHON_VERSION" ] && [ -z "$PYTHON_VERSION_FILE" ]; then
+          echo "::error::neither python-version nor python-version-file was" \
+               "given — the job would run on whatever interpreter the runner" \
+               "image happens to ship, which moves without a commit"
+          exit 1
+        fi
+
+        # venv-path is handed to actions/cache verbatim AND is deleted on a
+        # miss, so it must be a relative path inside the workspace. Refused
+        # here rather than discovered as a deleted checkout.
+        case "$VENV_PATH" in
+          "")
+            echo "::error::venv-path is empty — the cache path would be the" \
+                 "whole workspace"
+            exit 1
+            ;;
+          /*)
+            echo "::error::venv-path '$VENV_PATH' is absolute — it must be a" \
+                 "path inside the workspace"
+            exit 1
+            ;;
+        esac
+        case "/$VENV_PATH/" in
+          */../*)
+            echo "::error::venv-path '$VENV_PATH' escapes the workspace"
+            exit 1
+            ;;
+        esac
+
+        # The manifest list is parsed HERE and nowhere else: the install step
+        # consumes this file. Two parses of one input could disagree about
+        # which files the key covered versus which were installed, which is
+        # exactly the class of duplication this action exists to remove.
+        manifest_list="$RUNNER_TEMP/setup-python-cached-manifests.txt"
+        : > "$manifest_list"
+        count=0
+        while IFS= read -r line || [ -n "$line" ]; do
+          # Callers pass a YAML block scalar, so entries arrive indented (and
+          # on a Windows checkout, CR-terminated).
+          line="${line%$'\r'}"
+          line="${line#"${line%%[![:space:]]*}"}"
+          line="${line%"${line##*[![:space:]]}"}"
+          if [ -z "$line" ]; then
+            continue
+          fi
+          if [ ! -f "$line" ]; then
+            echo "::error::requirements file '$line' does not exist relative" \
+                 "to the workspace root — the job would install nothing and" \
+                 "its suite would fail far from the cause"
+            exit 1
+          fi
+          printf '%s\n' "$line" >> "$manifest_list"
+          count=$((count + 1))
+        done <<< "$REQUIREMENTS"
+
+        if [ "$count" -eq 0 ]; then
+          echo "::error::no requirements file was given — this action installs" \
+               "from a pinned manifest (DRE-2039), never from bare package" \
+               "names. Pass install: false for a job that needs no tooling."
+          exit 1
+        fi
+
+        # THE INTERPRETER GOES IN THE KEY, resolved rather than requested. A
+        # virtualenv is not relocatable across interpreters: bin/python is a
+        # symlink into the hostedtoolcache install and pyvenv.cfg names it by
+        # absolute path, so a venv built on 3.12.10 restored onto a runner
+        # image carrying 3.12.11 has an interpreter that is not there. Wheels
+        # are per-version too. Reading the RESOLVED value is why this step
+        # runs after setup-python rather than before it.
+        python_id="$(python3 -c 'import sys; print(sys.implementation.name, sys.version.split()[0])')"
+
+        # THE CACHE-BREAK RULE, in one place for the whole fleet: the key is
+        # every manifest's content plus the interpreter identity. Change
+        # either and the key changes, so the old entry is simply never
+        # matched. Nothing has to remember to bust anything — and a Dependabot
+        # bump of a pin therefore installs the new pin instead of restoring
+        # the environment built from the old one.
+        #
+        # `cache_version` is the manual escape hatch: bump it to orphan every
+        # entry at once, for the day a cached venv is itself the bug.
+        cache_version=v1
+        digest="$(
+          {
+            printf '%s\n' "$python_id"
+            while IFS= read -r f; do
+              printf '%s\n' "$f"
+              cat "$f"
+            done < "$manifest_list"
+          } | sha256sum | cut -d' ' -f1
+        )"
+
+        # A slug only so a human reading the repo's cache list can tell which
+        # environment an entry belongs to. It is not what makes the key correct.
+        slug="$(printf '%s' "$VENV_PATH" | tr -c '[:alnum:]' '-' | tr -s '-')"
+        slug="${slug#-}"
+        slug="${slug%-}"
+
+        echo "interpreter: $python_id"
+        echo "manifests:"
+        sed 's/^/  /' "$manifest_list"
+        echo "key=python-venv-$cache_version-$RUNNER_OS-$RUNNER_ARCH-$slug-$digest" >> "$GITHUB_OUTPUT"
+        echo "manifests=$manifest_list" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the virtualenv
+      id: restore
+      if: inputs.install == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ inputs.venv-path }}
+        key: ${{ steps.key.outputs.key }}
+        # NO restore-keys, deliberately. A near-miss virtualenv is worse than
+        # an empty one: it looks installed while holding another manifest's
+        # distributions, so the suite fails somewhere far from the cause and
+        # the run reads as a code defect. Exact match or a full install —
+        # there is no partial credit here.
+
+    # The named step the acceptance criterion is about: today agent-bureau's
+    # pip install happens inside the test step, so ci_minutes_report.py cannot
+    # separate its cost from the suite's. Here it is its own line in the run.
+    - name: Install dependencies (pip install)
+      id: install
+      if: inputs.install == 'true' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        # The list the key step already parsed and validated — not
+        # inputs.requirements a second time.
+        MANIFEST_LIST: ${{ steps.key.outputs.manifests }}
+        VENV_PATH: ${{ inputs.venv-path }}
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE"
+
+        # The key step already refused an absolute, empty, or escaping path.
+        # This is the step that DELETES, and a guard on an `rm -rf` of a
+        # caller-supplied path is worth stating twice.
+        case "$VENV_PATH" in
+          ""|/*) echo "::error::refusing to install into '$VENV_PATH'"; exit 1 ;;
+        esac
+        case "/$VENV_PATH/" in
+          */../*) echo "::error::refusing to install into '$VENV_PATH'"; exit 1 ;;
+        esac
+
+        args=()
+        while IFS= read -r manifest; do
+          args+=(-r "$manifest")
+        done < "$MANIFEST_LIST"
+
+        # A directory left by an earlier call in the same job would make
+        # `python -m venv` reuse it and quietly install into an environment
+        # built against another interpreter.
+        rm -rf "$VENV_PATH"
+        python3 -m venv "$VENV_PATH"
+
+        # --disable-pip-version-check: pip's "a new release is available"
+        # notice costs a network round trip and says nothing about this job.
+        "$VENV_PATH/bin/python" -m pip install \
+          --quiet --disable-pip-version-check "${args[@]}"
+
+    - name: Save the virtualenv
+      if: inputs.install == 'true' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ inputs.venv-path }}
+        key: ${{ steps.key.outputs.key }}
+
+    # Runs on a HIT as well as a miss. A restored virtualenv that nothing puts
+    # on PATH is worse than no cache at all: the job would run against the
+    # runner image's python, with none of the pinned tools, and the failure
+    # would read as a missing dependency in the code.
+    - name: Put the virtualenv on PATH
+      if: inputs.install == 'true'
+      shell: bash
+      env:
+        VENV_PATH: ${{ inputs.venv-path }}
+      run: |
+        set -euo pipefail
+        venv="$GITHUB_WORKSPACE/$VENV_PATH"
+        if [ ! -x "$venv/bin/python" ]; then
+          echo "::error::no interpreter at '$venv/bin/python' — the" \
+               "environment was neither restored nor installed. Every pinned" \
+               "tool would be missing and the job would silently run against" \
+               "the runner image's python."
+          exit 1
+        fi
+        echo "$venv/bin" >> "$GITHUB_PATH"
+        echo "VIRTUAL_ENV=$venv" >> "$GITHUB_ENV"
+        "$venv/bin/python" --version

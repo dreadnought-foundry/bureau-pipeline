@@ -131,9 +131,19 @@ jobs:
         id: tested
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-python@v7
+      # Only the named-scenario path needs test tooling: the DRE-2490
+      # unverified_claim scenario proves a shipped test is non-vacuous by
+      # RUNNING it against a mutant, and that needs pytest on the runner. The
+      # default sweep (empty input, every pull_request run) is stdlib-only and
+      # asks for install: false — a merge-gating workflow does not take a
+      # package-registry dependency it does not use. The install itself is the
+      # shared action's job now (DRE-2589), so the pins have one home.
+      - uses: ./.github/actions/setup-python-cached
         with:
           python-version: "3.12"
+          install: ${{ inputs.scenarios != '' && 'true' || 'false' }}
+          requirements: |
+            requirements-dev.txt
 
       - name: Mint worker-bot token (sandbox-scoped)
         id: worker
@@ -152,16 +162,6 @@ jobs:
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-harness
-
-      # Only the named-scenario path needs test tooling: the DRE-2490
-      # unverified_claim scenario proves a shipped test is non-vacuous by
-      # RUNNING it against a mutant, and that needs pytest on the runner. The
-      # default sweep (empty input, every pull_request run) is stdlib-only and
-      # skips this — a merge-gating workflow does not take a package-registry
-      # dependency it does not use.
-      - name: Install test tooling (named scenarios only)
-        if: inputs.scenarios != ''
-        run: python3 -m pip install --quiet -r requirements-dev.txt
 
       - name: Run harness scenarios
         env:

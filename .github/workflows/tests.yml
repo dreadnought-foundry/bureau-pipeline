@@ -17,9 +17,18 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      # The shared plumbing, dogfooded (DRE-2589). This job used to run THREE
+      # pip installs — one from the pinned manifest and two of bare `pyyaml`
+      # while requirements-dev.txt pins PyYAML — so two of the three took
+      # whatever PyPI served that morning and a Dependabot bump of that pin
+      # exercised nothing. One install, from the one manifest, cached and
+      # skipped on a hit, and measurable because it is its own named step.
+      # `./` on purpose: a PR's own run exercises the action from that PR.
+      - uses: ./.github/actions/setup-python-cached
         with:
           python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
       # pytest, not stdlib unittest discover: half the suite is written
       # pytest-style (function tests), which unittest discover silently
       # collects as ZERO tests — they had never run in CI before this.
@@ -28,23 +37,14 @@ jobs:
           LINEAR_API_KEY: test-key
           REPO: test/test
           GH_TOKEN: test
-        run: |
-          # From the pinned manifest, not bare names — requirements-dev.txt
-          # is Dependabot's pip manifest (DRE-2039); installing from it is
-          # what makes a version-bump PR actually exercise the new pins.
-          pip -q install -r requirements-dev.txt
-          python3 -m pytest tests -v
+        run: python3 -m pytest tests -v
       - name: Workflow YAML parses
-        run: |
-          pip -q install pyyaml
-          python3 -c "import yaml, glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('yaml ok')"
+        run: python3 -c "import yaml, glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('yaml ok')"
       # Release-channel integrity (DRE-2026): every internal checkout of
       # bureau-pipeline must thread the pipeline_ref input, or a stub pinned
       # to @vN silently runs scripts/briefs/standards from @main.
       - name: pipeline_ref threading check
-        run: |
-          pip -q install pyyaml
-          python3 scripts/check_pipeline_ref.py
+        run: python3 scripts/check_pipeline_ref.py
 
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching

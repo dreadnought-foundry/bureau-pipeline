@@ -17,7 +17,7 @@ name: Merge Gate
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, QA Review, Integration Harness, Smoke · setup-node-cached]
+    workflows: [Pipeline Tests, QA Review, Integration Harness, Smoke · setup-node-cached, Smoke · setup-python-cached]
     types: [completed]
   issue_comment:
     types: [created]

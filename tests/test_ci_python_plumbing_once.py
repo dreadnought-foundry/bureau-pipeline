@@ -54,6 +54,13 @@ INSTALLER = ACTIONS / "setup-python-cached" / "action.yml"
 # and `uv pip install`.
 PIP_INSTALL = re.compile(r"\bpip3?\b(?:\s+-[^\s]+)*\s+install\b")
 
+# A BALANCED quoted span. An `echo "pip install skipped"` is a message, not an
+# install, and a guard that fired on it would push the next editor to describe
+# the mechanism less precisely — the opposite of what this file is for. Only
+# balanced spans are removed, so an unterminated quote leaves the line intact
+# and a real install can never hide behind one.
+QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+
 # A pinned distribution, as written in a requirements file or on a pip command
 # line. Deliberately not matching `>=` or `~=`: this guard is about EXACT pins,
 # which are the ones that must have exactly one home.
@@ -111,14 +118,35 @@ def _run_scripts(doc):
                 yield job_name, str(step.get("name") or step.get("id") or "?"), str(step["run"])
 
 
+def _code_lines(text):
+    """Lines that could actually install something.
+
+    A whole-line `#` comment cannot: both YAML and requirements files use it,
+    and the shared action's own header explains this defect by quoting
+    `pytest==9.1.0` from agent-bureau's ci.yml. Counting that as a second home
+    for the pin would make the guard un-writable — the only fix would be to
+    stop documenting what it prevents. Inline trailing comments are NOT
+    stripped, deliberately: they sit on a line that does run.
+    """
+    return [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+
+
 def find_pip_installs(text):
     """Lines in `text` that install with pip. The detector rule 1 rests on."""
-    return [line.strip() for line in text.splitlines() if PIP_INSTALL.search(line)]
+    return [
+        line.strip()
+        for line in _code_lines(text)
+        if PIP_INSTALL.search(QUOTED.sub(" ", line))
+    ]
 
 
 def find_pins(text):
     """Normalised distribution names pinned with `==` in `text`."""
-    return {_normalise(name) for name, _ in PIN.findall(text)}
+    return {
+        _normalise(name)
+        for line in _code_lines(text)
+        for name, _ in PIN.findall(line)
+    }
 
 
 class SweepIsNotVacuous(unittest.TestCase):
@@ -297,6 +325,26 @@ class TheDetectorFires(unittest.TestCase):
         # two homes for one fact.
         self.assertEqual(find_pins("PyYAML==6.0.3"), find_pins("pyyaml==6.0.3"))
         self.assertEqual(find_pins("pytest_asyncio==1.4.0"), {"pytest-asyncio"})
+
+    def test_a_message_about_pip_is_not_an_install_but_a_real_one_is(self):
+        # The smoke workflow asserts "pip install skipped" in an echo. That is
+        # a message. An unterminated quote must NOT hide a real install.
+        self.assertEqual(
+            find_pip_installs('echo "warm call: hit, pip install skipped"'), []
+        )
+        self.assertEqual(
+            find_pip_installs('{ echo "::error::pip install did nothing"; exit 1; }'), []
+        )
+        self.assertTrue(find_pip_installs('pip install -r "$MANIFEST"'))
+        self.assertTrue(find_pip_installs('echo "starting\npip install evil'))
+
+    def test_a_commented_out_pin_is_not_a_home_but_a_live_one_is(self):
+        # The distinction the sweep depends on. If comment-stripping were
+        # applied too widely, rule 2 would stop seeing real pins entirely.
+        self.assertEqual(find_pins("  # bumped from pytest==9.1.0 last week"), set())
+        self.assertEqual(find_pins("pytest==9.1.0  # bumped last week"), {"pytest"})
+        self.assertEqual(find_pip_installs("  # pip install pytest"), [])
+        self.assertTrue(find_pip_installs("pip install pytest  # tooling"))
 
     def test_a_range_is_not_a_pin(self):
         self.assertEqual(find_pins("pytest>=9.1"), set())

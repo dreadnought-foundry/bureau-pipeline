@@ -1007,10 +1007,16 @@ class HarnessWorkflowWiringTest(unittest.TestCase):
                 self.assertIn("CLAUDE_AUTH_MODE", env[key])
 
     def test_test_tooling_is_installed_only_for_named_scenarios(self):
+        # DRE-2589 moved the install into the shared action, so the condition
+        # moved from the step's `if:` to the action's `install:` input. The
+        # invariant is unchanged: exactly one place installs tooling, and the
+        # default sweep — which is stdlib-only and gates every merge — must not
+        # take a package-registry dependency it never uses.
         installs = [
             step
             for step in self.steps
-            if "requirements-dev.txt" in (step.get("run") or "")
+            if "requirements-dev.txt"
+            in ((step.get("run") or "") + str((step.get("with") or {}).get("requirements", "")))
         ]
         self.assertEqual(
             len(installs),
@@ -1018,7 +1024,13 @@ class HarnessWorkflowWiringTest(unittest.TestCase):
             "the mutation evidence needs pytest on the runner — exactly one "
             "install step, and it must be conditional",
         )
-        self.assertEqual(installs[0].get("if"), "inputs.scenarios != ''")
+        install_input = str((installs[0].get("with") or {}).get("install", ""))
+        self.assertIn(
+            "inputs.scenarios != ''",
+            installs[0].get("if") or install_input,
+            "the install is unconditional — the default sweep would pay for "
+            "tooling it never uses on every pull_request run",
+        )
 
     def test_the_scenarios_input_names_the_opt_in_scenarios(self):
         # YAML 1.1 reads a bare `on:` key as the boolean True.
