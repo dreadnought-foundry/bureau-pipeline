@@ -197,8 +197,10 @@ def cron_interval_hours(cron: str) -> float | None:
 def _days(hours: float) -> str:
     """'29 days' / '30 hours' — the unit a human would have used."""
     if hours >= 48:
-        return f"{hours / 24:.0f} days"
-    return f"{hours:.0f} hours"
+        value, unit = hours / 24, "day"
+    else:
+        value, unit = hours, "hour"
+    return f"{value:.0f} {unit}" + ("" if f"{value:.0f}" == "1" else "s")
 
 
 def _drift_line(commits_ahead: int | None, channel_age_hours: float | None) -> str:
@@ -269,8 +271,7 @@ def evaluate(
     if hold and hold.strip():
         overdue = hold_age_hours is None or hold_age_hours >= HOLD_ALARM_AFTER_HOURS
         head = (
-            "The release channel is HELD — deliberately paused, by someone, "
-            "and still paused."
+            "The release channel is HELD — paused on purpose, and still paused."
             if overdue
             else "The release channel is held, and was held recently."
         )
