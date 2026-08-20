@@ -71,6 +71,12 @@ runs:
   steps:
     - name: Compute the node_modules cache key
       id: key
+      # Skipped entirely when nothing will be installed: this step REQUIRES a
+      # lockfile, and a job that only wants node on the PATH need not have
+      # one. Without this condition, `install: false` fails on a repo with no
+      # package-lock.json — found by the scenario table in
+      # tests/test_shared_node_action_scenarios.py, not in production.
+      if: inputs.install == 'true'
       shell: bash
       env:
         # Through env, never interpolated into the shell line — the same rule
@@ -80,6 +86,12 @@ runs:
         NODE_VERSION_FILE: ${{ inputs.node-version-file }}
       run: |
         set -euo pipefail
+
+        # Anchor at the workspace explicitly. A caller may set a job-level
+        # `defaults.run.working-directory` (agent-bureau's infra-ci.yml does),
+        # and rather than depend on being right about whether job defaults
+        # reach a composite action's steps, this is immune either way.
+        cd "$GITHUB_WORKSPACE"
 
         lock="$WORKING_DIRECTORY/package-lock.json"
         if [ ! -f "$lock" ]; then
@@ -161,7 +173,10 @@ runs:
     - name: Install dependencies (npm ci)
       if: inputs.install == 'true' && steps.restore.outputs.cache-hit != 'true'
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      # Workspace-anchored for the same reason the key step cd's there: a
+      # caller's job-level `defaults.run.working-directory` must not be able
+      # to turn `infra` into `infra/infra`.
+      working-directory: ${{ github.workspace }}/${{ inputs.working-directory }}
       # `npm ci`, never `npm install`: it installs the lockfile exactly and
       # fails if package.json and the lockfile disagree, which is the property
       # that makes the cache key trustworthy.
