@@ -6,9 +6,11 @@ thing that PUSHES: the tag move was a human act, it happened five times in ten
 days and then stopped, and nothing noticed for a month while `main` drifted 174
 commits past `v5`.
 
-Under automatic promotion the rot the ADR predicted cannot occur: the channel
-advances on every proven commit, so it is never more than one behind. It stops
-being a frozen pin and becomes a staged deploy.
+Under automatic promotion that rot cannot reach the `stable` ref: it advances
+on every proven commit, so it is never more than one behind. Scope, stated
+because it is easy to over-read: `stable` is the only ref moved here, nothing
+pins it, and the `vN` cut the fleet does pin stays a human act (README
+"Release channel"; docs/self-hosting.md).
 
 This module is the decision only — no network, no git. The workflow gathers
 GitHub's records and acts on the verdict, the `release_gate.py` shape.
@@ -26,8 +28,9 @@ import json
 import os
 import sys
 
-#: The channel consumers pin to. `v*` tags remain what they always were —
-#: immutable point releases; this ref is the moving, always-proven head.
+#: The moving, always-proven head this repo keeps for itself. NOT a consumer
+#: pin — no product repo references `@stable`; `v*` tags remain what they
+#: always were, the operator-cut refs the fleet pins (docs/self-hosting.md).
 CHANNEL = "stable"
 
 #: The context harness.yml stamps on the sha it actually checked out. The same

@@ -86,7 +86,10 @@ fleet consumes tagged releases (`vN`, paired `pipeline_ref`), never this
 repo's live `main`; only agent-bureau and bureau-pipeline ride `@main` as the
 canary channel. A bad merge here stages a bad NEXT release — it cannot
 silently reprogram the fleet; cutting/re-pointing the release tag is a human
-act and the permanent gate.
+act and the permanent gate. DRE-2551 added `stable`, a moving tag this repo
+advances by itself on every harness-proven commit on `main` — no product repo
+pins it, and the `vN` cut it stages is still the human act described here
+(`docs/self-hosting.md`).
 
 Reviewers: verify the verdict binds the head sha and the gate identities held.
 Do NOT block on agent authorship — that convention is retired.

@@ -1,10 +1,17 @@
 # Automatic channel promotion (DRE-2551, Wave 1 Step 2).
 #
-# "Agents author, human promotes, harness proves" is now "agents author,
-# HARNESS promotes". The tag move was the one human act left in the release
-# path: it happened five times in ten days (2026-07-11 → 07-21) and then
-# stopped, and nothing noticed for a month while main drifted 174 commits past
-# v5. The gate never failed — it was never invoked again.
+# The tag move is a human act: it happened five times in ten days
+# (2026-07-11 → 07-21) and then stopped, and nothing noticed for a month while
+# main drifted 174 commits past v5. The gate never failed — it was never
+# invoked again.
+#
+# What this workflow automates is ONE ref: `stable`, kept on the newest
+# harness-proven commit on main. Read the scope narrowly, because the file is
+# easy to over-read: nothing pins `stable`, no product-repo stub is
+# re-pointed, and cutting or re-pointing `vN` stays operator-only. "Agents
+# author, human promotes, harness proves" still describes the fleet-facing
+# step, unchanged — see README "Release channel: pinning, canary, promotion"
+# and docs/self-hosting.md, which this card updates rather than contradicts.
 #
 # So this workflow adds only the thing that pushes. release-gate.yml still
 # validates the result and is deliberately NOT rewritten; it is good machinery

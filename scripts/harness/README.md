@@ -4,7 +4,9 @@ End-to-end scenarios against the dedicated sandbox repo
 **`dreadnought-foundry/bureau-harness`**, driven by
 `.github/workflows/harness.yml` (job id `harness`; workflow_dispatch with
 input `pipeline_ref` default `main`, plus a `pull_request` trigger on the
-boundary paths — DRE-2103). The scenarios mock **nothing GitHub-side** —
+boundary paths — DRE-2103 — plus a `push` trigger on `main` with no paths
+filter, so every trunk commit is proved and stamped — DRE-2551). The
+scenarios mock **nothing GitHub-side** —
 real branches, real PRs, the sandbox's real critic and merge-gate stubs,
 real App identities. Unit tests (`tests/test_harness_*.py`) cover only
 the driver's pure logic.
@@ -15,7 +17,10 @@ gate (all-checks-green, no branch-protection change); dependabot-triggered
 PR events self-skip clean at the job level (empty Dependabot secrets
 store). A green run stamps a success `integration-harness` commit status
 on the tested sha — the record `release-gate.yml` requires before any
-`v*` tag stands ("agents author, human promotes, harness proves").
+`v*` tag stands ("agents author, human promotes, harness proves"), and,
+since DRE-2551, the record `promote-channel.yml` requires before it moves
+the `stable` tag on its own. Only that ref moves automatically: the `vN`
+cut the fleet pins is still a human act.
 
 ## Layout
 
