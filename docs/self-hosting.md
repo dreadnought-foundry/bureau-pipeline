@@ -58,6 +58,17 @@ agent-bureau repo; the third clause added by DRE-2103).
     anything the fleet runs — the "agents author; a human promotes" fact
     above holds in full.
 
+  - **A quiet channel now says so (DRE-2552).** `channel-watch.yml` runs
+    daily and raises one deduplicated Linear card when `stable` has stopped
+    advancing while `main` moves — 8+ commits behind for 72h, or anything
+    unpromoted for 14 days, thresholds derived from this repo's measured
+    commit cadence (README, "Channel staleness alarm"). A **held** channel
+    is reported as held rather than as broken, so set `CHANNEL_HOLD` to
+    `who=<name> since=<ISO date> <why>`: GitHub will not tell the watcher
+    who set a variable or when, and a hold nobody owns is reported as
+    exactly that. The watcher holds `contents: read` and cannot move the
+    ref it watches.
+
   So what `stable` buys today is the pre-tag question above, answered
   continuously instead of by a hand-run dispatch: it is always the newest
   proven sha on `main`, so once a candidate has soaked on the canary the

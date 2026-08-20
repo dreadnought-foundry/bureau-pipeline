@@ -247,7 +247,12 @@ so trunk commits have stamps of their own to read. The move is pushed with
 the bot App identity, never `github.token`, precisely so `release-gate.yml`
 (whose trigger now reads `["v*", "stable"]`) actually fires and validates
 it; a repository variable, `CHANNEL_HOLD`, pauses promotion when set to a
-reason, and unset means run. What it deliberately does **not** do:
+reason, and unset means run. **Write that reason as
+`who=<name> since=<ISO date> <why>`** — the staleness alarm below reports a
+held channel back to the CEO, and GitHub will not tell it who set a variable
+or when (that API needs an admin token the workflows do not carry), so a hold
+that skips the convention is reported as a hold nobody will own. What
+automatic promotion deliberately does **not** do:
 
 - **No product repo pins `@stable`.** Nothing consumes this ref. No stub
   was re-pointed, and the pairing rule above is untouched — the fleet is on
@@ -267,6 +272,63 @@ The harness is also a PR gate here: `harness.yml` runs on pull requests
 touching the boundary paths (workflow wiring + the dispatch/gate scripts),
 and the merge gate's all-checks-green rule holds any boundary PR whose
 harness run is red — no branch-protection change involved.
+
+## Channel staleness alarm (DRE-2552)
+
+Every other backstop in this repo watches for something **going wrong**.
+`channel-watch.yml` watches for something **ceasing to happen** — because
+that is the shape of the failure that hid July: the tag move did not break
+and the gate did not fail, the mechanism simply stopped being invoked, and no
+signal existed for "stopped". `main` ran 174 commits past `v5` over 29 days
+and nothing said so.
+
+The watcher runs daily, reads how far `main` is ahead of `stable` and how old
+the channel head is, and raises **one** deduplicated Linear card (the
+`red-main-repair.yml` / `model-drift.yml` pattern) — commenting on it daily
+while the condition lasts rather than minting a new one. It holds
+`contents: read` and cannot move the ref it watches. The decision, with the
+full derivation, is `scripts/channel_watch.py`.
+
+**The threshold, and where it came from.** Measured over `git log
+origin/main` from the first commit (2026-06-11) to 2026-08-20 — 522 commits
+across 70 days, 7.4/day:
+
+| Fact | Value |
+|---|---|
+| gap between commits | p50 0.06h · p90 3.3h · p95 15.2h · p99 62.4h |
+| longest quiet stretch ever | 257.9h = **10.7 days** |
+| commits in a 72h window | median 32, tenth percentile 8 |
+
+- **72 hours + 8 commits, both required.** 99.0% of observed gaps between
+  commits are shorter than 72h, so ordinary quiet never reaches it; a rounder
+  24h sits at the 96.9% mark and would fire most weekends. The **8 commits**
+  is the tenth-percentile count for a 72h window: below it the trunk was
+  unusually quiet and one slow harness run explains the lag, at or above it
+  promotion has *stopped* rather than lagged.
+- **14 days with a single unpromoted commit** — the backstop for a near-idle
+  trunk, which the pair above would miss. Longer than any quiet stretch main
+  has ever had (10.7 days above), so it cannot be ordinary.
+- **A channel with nothing to promote is silent by construction** (`ahead ==
+  0` never alarms). A noisy alarm gets muted, and a muted alarm on the thing
+  protecting the fleet is how we get back to July.
+- **24 hours for a hold.** A hold is true by construction, so this is a noise
+  threshold, not a false-positive one: a switch flipped and cleared inside a
+  working day stays private; one that outlives a day has blocked ~7 commits at
+  this cadence and is a habit forming. A held channel is reported as **held —
+  with who and when** — never as broken; unknown parts are printed as unknown
+  rather than guessed.
+
+**So what if the watcher stops?** Two answers, and only one of them is
+mechanical:
+
+- **A red run is diagnosed.** `Channel Watch` is in the medic's watch list
+  (`self-medic.yml`), like every other runnable workflow here.
+- **A skipped run is reported by the next one.** Each run reads its own last
+  completed run and alarms if it missed more than two ticks.
+- **A watcher that stops for good is not detected by anything in this repo.**
+  Nothing polls for its absence. That is stated rather than papered over —
+  adding a sixth mechanism nobody checks would be Wave 0's mistake at one
+  more level of indirection.
 
 ## Layout
 

@@ -1,0 +1,190 @@
+# The channel-staleness alarm (DRE-2552, Wave 1 Step 3).
+#
+# Nothing in the estate raised this sentence: "the release channel has not
+# moved in 29 days while the engine moved 174 commits." That is the only
+# reason July went unnoticed for a month — the gate did not fail and the tag
+# did not break, the mechanism simply stopped being invoked, and no signal
+# existed for "stopped". Every other backstop here watches for something going
+# wrong; this one watches for something ceasing to happen.
+#
+# It also completes DRE-2551's hold switch. A hold was approved as a switch,
+# not a habit, and an un-alarmed hold is indistinguishable from an abandoned
+# channel — so a held channel is reported as held, with who and when, and it
+# keeps being reported for as long as it lasts.
+#
+# This file only gathers GitHub's records and acts on the verdict; the decision
+# (and the threshold, and where the threshold came from) lives in
+# scripts/channel_watch.py, unit-tested in tests/test_channel_watch.py. The
+# alarm reaches a human the way every other unattended alarm in this repo does
+# — ONE deduplicated Linear card (red-main-repair.yml and model-drift.yml both
+# do exactly this), commented on rather than duplicated while the condition
+# lasts.
+#
+# WHAT IT DELIBERATELY CANNOT DO: move the channel. `contents: read`, no ref
+# write anywhere in the file, and a test that fails if one appears — the
+# model-drift guarantee, because an alarm that can write the ref it watches is
+# a promoter nobody reviewed.
+#
+# WHAT IF THE WATCHER ITSELF STOPS: two answers, one mechanical and one
+# partial, both stated in the README section "Channel staleness alarm".
+#   * A red run is diagnosed: "Channel Watch" is in the medic's watch list
+#     (self-medic.yml), like every other runnable workflow here.
+#   * A run that never happens is caught only when the NEXT one runs: each run
+#     reads its own last completed run and alarms if it skipped more than two
+#     ticks. A watcher that stops for good is not detected by anything in this
+#     repo, and that gap is written down rather than papered over.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — the schedule initiates as `github-actions`, the same actor the
+#      Reconcile and Model drift schedules already run as; the medic admits
+#      those today. Nothing is pushed, so no downstream trigger depends on the
+#      identity.
+#   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal
+#      secrets store (never the separate Dependabot store), so LINEAR_API_KEY
+#      resolves.
+#   Q3 re-run — idempotent by construction: the card lookup is by exact title
+#      and the titles are constants, so a re-run comments on the open card
+#      instead of minting a second. A card CANCELED while the condition still
+#      holds invites a fresh one next tick — park it in Backlog instead, the
+#      model-drift rule.
+#   Q4 command limits — `vars.CHANNEL_HOLD` is readable as an expression, but
+#      the repository-variables REST API needs an admin-scoped token this
+#      workflow does not have (it answers 403 to `github.token`). So "when was
+#      the hold set" is read from the API when allowed and from the hold text
+#      otherwise, and reported as unknown when neither says.
+#   Q5 our crash — no receipts, no markers, nothing to unstick: a run that dies
+#      anywhere repeats tomorrow, and its failure routes through the medic.
+name: Channel Watch
+
+on:
+  schedule:
+    # Daily at 07:41 UTC. Off the hour on purpose — GitHub delays scheduled
+    # jobs hardest at :00, and nothing here is time-critical. The interval is
+    # paired with channel_watch.INTERVAL_HOURS by a wiring test; changing one
+    # without the other would report gaps that are not gaps.
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+
+# READ ONLY. The alarm must never be able to promote what it is watching.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: channel-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Two facts about the channel: where it is, and how far main has run on
+      # without it. Each is retried once — a single API blip must not be
+      # reported as "the channel is unreadable", and an empty answer must not
+      # be reported as a healthy channel either (channel_watch.py renders an
+      # empty as unknown, never as moving).
+      - name: Read the channel head and the drift behind it
+        id: records
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          fetch() {  # fetch <jq> <path...> — two swings, then give up empty
+            for _ in 1 2; do
+              if OUT="$(gh api "$2" --jq "$1" 2>/dev/null)"; then
+                printf '%s' "$OUT"; return 0
+              fi
+              sleep 5
+            done
+            printf ''
+          }
+          SHA="$(fetch '.object.sha' "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable")"
+          if [ -n "$SHA" ]; then
+            COMMITTED="$(fetch '.commit.committer.date' "repos/${GITHUB_REPOSITORY}/commits/${SHA}")"
+            AHEAD="$(fetch '.ahead_by' "repos/${GITHUB_REPOSITORY}/compare/stable...main")"
+          else
+            # No channel ref at all: not a blip and not a healthy channel.
+            COMMITTED=""
+            AHEAD=""
+          fi
+          echo "committed=${COMMITTED}" >> "$GITHUB_OUTPUT"
+          echo "ahead=${AHEAD}" >> "$GITHUB_OUTPUT"
+
+      # The watcher's own pulse: the last run it completed before this one. An
+      # empty answer is "we have never run" — which is not a gap, and must not
+      # be alarmed on as one (reconcile.py's never-alarm-on-a-fabricated-empty
+      # rule).
+      - name: Read the watcher's own last run
+        id: pulse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LAST="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/channel-watch.yml/runs?status=completed&per_page=1" \
+            --jq '.workflow_runs[0].created_at' 2>/dev/null || true)"
+          if [ "$LAST" = "null" ]; then LAST=""; fi
+          echo "last=${LAST}" >> "$GITHUB_OUTPUT"
+
+      # Best effort, and expected to come back empty: reading a repository
+      # variable's own updated_at needs admin scope. When it does not answer,
+      # the decision falls back to `since=` in the hold text and, failing that,
+      # says plainly that it cannot tell how long the fleet has been frozen.
+      - name: Read when the hold was set, if GitHub will say
+        id: holdset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          UPDATED="$(gh api "repos/${GITHUB_REPOSITORY}/actions/variables/CHANNEL_HOLD" \
+            --jq '.updated_at' 2>/dev/null || true)"
+          if [ "$UPDATED" = "null" ]; then UPDATED=""; fi
+          echo "updated=${UPDATED}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide
+        id: decide
+        env:
+          # The SAME variable promote-channel.yml reads. Two names for one fact
+          # is how a hold gets alarmed on while the promoter reads something
+          # else; a wiring test pins both files to this one name.
+          HOLD: ${{ vars.CHANNEL_HOLD }}
+          COMMITTED: ${{ steps.records.outputs.committed }}
+          AHEAD: ${{ steps.records.outputs.ahead }}
+          LAST_RUN: ${{ steps.pulse.outputs.last }}
+          HOLD_UPDATED: ${{ steps.holdset.outputs.updated }}
+        run: |
+          python3 scripts/channel_watch.py \
+            --commits-ahead "$AHEAD" \
+            --channel-committed "$COMMITTED" \
+            --hold "$HOLD" \
+            --hold-updated "$HOLD_UPDATED" \
+            --last-run "$LAST_RUN" \
+            --title-file "$RUNNER_TEMP/alarm-title.txt" \
+            --body-file "$RUNNER_TEMP/alarm-body.md" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # ONE card per condition, and it keeps saying it. The title is a constant
+      # per condition, so tomorrow's identical finding comments on today's card
+      # instead of minting a second — an alarm that mints a card a day is the
+      # inbox this programme exists to escape.
+      - name: Raise the alarm where a human will see it
+        if: steps.decide.outputs.alarm == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEADLINE: ${{ steps.decide.outputs.headline }}
+        run: |
+          TITLE="$(cat "$RUNNER_TEMP/alarm-title.txt")"
+          EXISTING="$(python3 scripts/linear_ops.py find-open "$TITLE" || true)"
+          if [ -n "$EXISTING" ]; then
+            python3 scripts/linear_ops.py comment "$EXISTING" \
+              "🔔 Still true today: $HEADLINE  Watch run: $RUN_URL"
+          else
+            {
+              cat "$RUNNER_TEMP/alarm-body.md"
+              echo ""
+              echo "Watch run: $RUN_URL"
+            } > "$RUNNER_TEMP/alarm-card.md"
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/alarm-card.md"
+          fi
