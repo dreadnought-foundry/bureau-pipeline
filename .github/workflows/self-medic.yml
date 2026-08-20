@@ -18,12 +18,18 @@
 # the first attempt would not have. Any other deploy/release workflow added
 # later does NOT inherit that exemption. Red-Main Repair is watched, never
 # watching: a repair run's own failure routes through the medic (DRE-1927
-# guardrail 2 — no new retry loop anywhere).
+# guardrail 2 — no new retry loop anywhere). Channel Watch (DRE-2552) is the
+# alarm for a channel that stopped moving, so a red one is a watchdog nobody
+# is watching — the medic diagnosing it is half the answer to "what if the
+# watcher itself stops"; the other half (a run that never fires at all) is in
+# that workflow's own header. Retrying it is safe: it holds no write on the
+# channel and its Linear card is looked up by exact title, so a second run
+# comments where the first one would have.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch]
     types: [completed]
 
 permissions:
