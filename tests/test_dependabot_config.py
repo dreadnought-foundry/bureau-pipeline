@@ -104,11 +104,33 @@ class PipManifestWiringTest(unittest.TestCase):
                           "Dependabot has a version to bump")
 
     def test_ci_installs_from_the_manifest(self):
-        text = TESTS_WORKFLOW.read_text()
-        self.assertIn(
-            "-r requirements-dev.txt", text,
-            "tests.yml must install the suite's deps from requirements-dev.txt "
-            "— a pin CI ignores makes every Dependabot pip PR vacuous",
+        # Since DRE-2589 the install is the shared action's job, so the wiring
+        # to assert is the manifest handed to it rather than a `-r` on a run
+        # line. The invariant is unchanged: whatever installs must install
+        # THIS file — a pin CI ignores makes every Dependabot pip PR vacuous.
+        import yaml
+
+        doc = yaml.safe_load(TESTS_WORKFLOW.read_text())
+        callers = [
+            step
+            for job in doc["jobs"].values()
+            for step in job.get("steps") or []
+            if "setup-python-cached" in str(step.get("uses", ""))
+        ]
+        self.assertTrue(
+            callers,
+            "tests.yml no longer sets python up through the shared action, so "
+            "nothing here guarantees the suite runs against the pinned manifest",
+        )
+        named = [
+            c for c in callers
+            if "requirements-dev.txt" in str((c.get("with") or {}).get("requirements", ""))
+        ]
+        self.assertTrue(
+            named,
+            f"no step installs from {REQUIREMENTS.name} — the suite would run "
+            f"against whatever PyPI served this morning, so a Dependabot bump "
+            f"of these pins would exercise nothing",
         )
 
 

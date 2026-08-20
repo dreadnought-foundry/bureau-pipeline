@@ -1,0 +1,230 @@
+# Live smoke test for the setup-python-cached composite action (DRE-2589).
+#
+# WHY THIS EXISTS. tests/test_shared_python_action*.py cover the key script and
+# the install script (by executing them) and the step conditions (by evaluating
+# them). Neither runs the ACTION. Its step wiring — whether setup-python
+# accepts the empty-string `python-version-file`, whether cache/restore and
+# cache/save round-trip a virtualenv with its symlinks intact, whether
+# `$GITHUB_PATH` from inside a composite action actually reaches the caller's
+# later steps — would otherwise first execute in a CONSUMER repo, after this
+# repo had already merged. A failure there costs a full critic round here.
+#
+# This is the DRE-2587 standard applied before adoption rather than after it:
+# run it on a real runner, on this PR, before the merge. This repo is public,
+# so these minutes are free.
+#
+# The project is GENERATED rather than committed, and its requirements file
+# carries the run id, so the cache key is unique per run — otherwise the first
+# run of the day would populate the entry and every later run would report a
+# hit it never earned, which is a test that passes without exercising the
+# install path at all.
+name: Smoke · setup-python-cached
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/actions/setup-python-cached/**'
+      - '.github/workflows/smoke-setup-python-cached.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  miss-then-hit:
+    name: cold install, then a hit that skips it
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Generate a run-unique manifest
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p smoke-tmp
+          # One real dependency with no sub-dependencies, so pip actually
+          # installs something and the venv is a real environment rather than
+          # an empty one that would make the assertions below vacuous. The
+          # comment line is what makes the key run-unique: the cache key is the
+          # manifest's CONTENT, comments included.
+          cat > smoke-tmp/requirements.txt <<REQ
+          # smoke run ${RUN_ID}-${RUN_ATTEMPT}
+          six==1.17.0
+          REQ
+
+      # --- the cold path -----------------------------------------------------
+
+      - name: FIRST call — expect a miss and a real install
+        id: cold
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          venv-path: smoke-tmp/.venv
+          requirements: |
+            smoke-tmp/requirements.txt
+
+      - name: Assert the first call installed
+        env:
+          CACHE_HIT: ${{ steps.cold.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ "$CACHE_HIT" = "true" ]; then
+            echo "::error::first call reported a cache HIT on a run-unique key" \
+                 "— the key is not run-unique, so this test proves nothing"
+            exit 1
+          fi
+          # Through PATH, not through an explicit venv path: that is what a
+          # consumer's later steps rely on, and it is the wiring no unit test
+          # can reach.
+          python -c "import six; print('six', six.__version__)" \
+            || { echo "::error::pip install did not put six in the venv"; exit 1; }
+          echo "cold call: miss, dependency installed — as expected"
+
+      # Deleting it is what makes the second call's assertion meaningful: a
+      # venv that was merely left in place would look identical to a restored
+      # one.
+      - name: Delete the venv so the restore has to do the work
+        run: rm -rf smoke-tmp/.venv
+
+      # --- the warm path, which is the entire point of the action ------------
+
+      - name: SECOND call — expect a hit that skips the install
+        id: warm
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          venv-path: smoke-tmp/.venv
+          requirements: |
+            smoke-tmp/requirements.txt
+
+      - name: Assert the second call restored without installing
+        env:
+          CACHE_HIT: ${{ steps.warm.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ "$CACHE_HIT" != "true" ]; then
+            echo "::error::second call did not hit the cache the first one" \
+                 "saved (cache-hit=$CACHE_HIT) — every run would be a miss," \
+                 "so the action would cost wall-clock and save nothing"
+            exit 1
+          fi
+          test -x smoke-tmp/.venv/bin/python \
+            || { echo "::error::cache hit but the venv was not restored"; exit 1; }
+          # A restored venv whose interpreter symlink is broken is the failure
+          # mode the resolved-interpreter cache key exists to prevent, and it
+          # would look exactly like a hit until something tried to run.
+          python -c "import six" \
+            || { echo "::error::restored venv cannot import its own packages"; exit 1; }
+          echo "warm call: hit, venv restored, pip install skipped"
+
+      - name: Assert a different python version does NOT reuse that cache
+        id: other-version
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.11"
+          venv-path: smoke-tmp/.venv
+          requirements: |
+            smoke-tmp/requirements.txt
+
+      - name: The interpreter must be part of the key
+        env:
+          CACHE_HIT: ${{ steps.other-version.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ "$CACHE_HIT" = "true" ]; then
+            echo "::error::python 3.11 reused python 3.12's virtualenv — its" \
+                 "bin/python symlinks into a hostedtoolcache install that is" \
+                 "not the one this job set up"
+            exit 1
+          fi
+          python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version"
+          python -c "import six"
+          echo "python 3.11: miss and a fresh install, as it must be"
+
+  python-only:
+    name: install:false needs no manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up python only, with no requirements at all
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          install: "false"
+
+      - name: Python is on PATH and nothing was cached
+        run: |
+          set -euo pipefail
+          python --version
+          test ! -d .venv \
+            || { echo "::error::install:false created a virtualenv"; exit 1; }
+
+  hostile-input:
+    name: hostile inputs must fail, not execute
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The live counterpart to the adversarial unit tests. Every repo in the
+      # fleet is a caller, and the fleet's repos are maintained separately — so
+      # a caller-supplied string reaching the shell is a real risk, not a
+      # theoretical one.
+      - name: Attempt command substitution through requirements
+        id: injection
+        continue-on-error: true
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: $(touch /tmp/pwned)
+
+      - name: The action must have refused, and nothing may have executed
+        env:
+          OUTCOME: ${{ steps.injection.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/pwned ]; then
+            echo "::error::COMMAND INJECTION EXECUTED — a caller-supplied" \
+                 "requirements value reached the shell"
+            exit 1
+          fi
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::expected the action to fail on a nonexistent" \
+                 "requirements file, got outcome=$OUTCOME"
+            exit 1
+          fi
+          echo "hostile requirements: refused, nothing executed"
+
+      # An absolute venv-path is the destructive one: the action deletes that
+      # directory on a miss, and actions/cache would happily save and restore
+      # it outside the workspace.
+      - name: Attempt an absolute venv-path
+        id: absolute
+        continue-on-error: true
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          venv-path: /tmp/smoke-outside-the-workspace
+          requirements: |
+            requirements-dev.txt
+
+      - name: The action must have refused to install outside the workspace
+        env:
+          OUTCOME: ${{ steps.absolute.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -d /tmp/smoke-outside-the-workspace ]; then
+            echo "::error::the action created a virtualenv outside the workspace"
+            exit 1
+          fi
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::expected the action to refuse an absolute" \
+                 "venv-path, got outcome=$OUTCOME"
+            exit 1
+          fi
+          echo "absolute venv-path: refused"
