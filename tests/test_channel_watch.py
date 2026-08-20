@@ -27,12 +27,20 @@ a watcher can be worse than useless:
   5. **One condition, one card.** The titles are stable while the condition
      is, so `find-open` matches yesterday's card instead of minting a daily
      duplicate — the alarm must not become the inbox we are escaping.
+  6. **The decision is only as good as what reaches it** (DRE-2603). The
+     thresholds above are exercised through `main()` with the inputs
+     production actually hands it, because a threshold the CLI boundary never
+     reaches is a threshold that does not exist.
 """
 
+import contextlib
+import io
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -365,6 +373,118 @@ class TheDerivationIsWrittenDownTest(unittest.TestCase):
 
     def test_the_readme_says_how_the_watcher_is_known_to_be_alive(self):
         self.assertIn("what if the watcher stops", README.read_text().lower())
+
+
+class HoldAgeAtTheCliBoundaryTest(unittest.TestCase):
+    """6. The 24h patience, measured through the boundary production uses.
+
+    Found by firing the alarm for real on 2026-08-20 (DRE-2603): the
+    repository-variables API answers 403 to `github.token` — channel-watch.yml
+    says so in its own Q4 note — and `gh api` hands the error BODY back on
+    stdout, so `--hold-updated` arrived as `{"message":"Resource not
+    accessible by integration","status":"403"}`. That cannot be parsed, an
+    unreadable age is None, and None counts as overdue. Every hold alarmed on
+    its first tick regardless of age, and the JSON blob was printed to the
+    operator where a date belongs.
+
+    `evaluate` was never wrong — HeldChannelTest above proves the threshold on
+    real ages. Nothing reached it.
+    """
+
+    #: Verbatim what production got, per the DRE-2603 demonstration.
+    FORBIDDEN = '{"message":"Resource not accessible by integration","status":"403"}'
+
+    NOW = "2026-08-20T12:00:00Z"
+    A_MINUTE_AGO = "2026-08-20T11:59:00Z"
+    TWENTY_EIGHT_HOURS_AGO = "2026-08-19T08:00:00Z"
+
+    def _cli(self, hold=None, hold_updated=None):
+        """Run `main()` the way channel-watch.yml does; return (alarm, body)."""
+        with tempfile.TemporaryDirectory() as td:
+            body_file = os.path.join(td, "alarm-body.md")
+            out_file = os.path.join(td, "github-output.txt")
+            argv = [
+                "--commits-ahead", "3",
+                "--channel-committed", "2026-08-20T10:00:00Z",
+                "--now", self.NOW,
+                "--body-file", body_file,
+            ]
+            # The workflow always passes both flags; an unread one is empty.
+            argv += ["--hold", hold or "", "--hold-updated", hold_updated or ""]
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": out_file}):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(channel_watch.main(argv), 0)
+            outputs = dict(
+                line.split("=", 1)
+                for line in open(out_file).read().splitlines()
+                if "=" in line
+            )
+            return outputs["alarm"] == "true", open(body_file).read()
+
+    def test_a_fresh_hold_does_not_alarm_when_the_api_403s(self):
+        """The defect, in one line: production's inputs, a one-minute-old
+        hold, and the 24h patience actually applying."""
+        alarm, _ = self._cli(
+            hold=f"who=Ada since={self.A_MINUTE_AGO} rehearsing",
+            hold_updated=self.FORBIDDEN,
+        )
+        self.assertFalse(alarm, "a one-minute hold alarmed — the 403 body was "
+                                "read as an unknown age, and unknown is overdue")
+
+    def test_an_old_hold_still_alarms_when_the_api_403s(self):
+        """Failing loud stays the default: past a day it is a habit, and the
+        hold text's own `since=` is enough to know that."""
+        alarm, body = self._cli(
+            hold=f"who=Ada since={self.TWENTY_EIGHT_HOURS_AGO} rehearsing",
+            hold_updated=self.FORBIDDEN,
+        )
+        self.assertTrue(alarm)
+        self.assertIn(f"Since: {self.TWENTY_EIGHT_HOURS_AGO}.", body,
+                      "the operator's own `since=` is what the age came from")
+
+    def test_a_403_body_is_never_rendered_as_a_date(self):
+        """An unparseable API answer is a failed read, not a value. Rendering
+        it puts a JSON blob in an operator-facing Linear card."""
+        for hold in (f"who=Ada since={self.A_MINUTE_AGO} rehearsing", "who=Ada rehearsing"):
+            _, body = self._cli(hold=hold, hold_updated=self.FORBIDDEN)
+            self.assertNotIn(self.FORBIDDEN, body)
+            self.assertNotIn("Resource not accessible", body)
+            self.assertNotIn('{"message"', body)
+
+    def test_a_hold_with_no_since_and_no_readable_api_says_the_age_is_unknown(self):
+        """Neither source answers. It still alarms — an ageless hold is worse,
+        not better — and it says unknown rather than printing an error body."""
+        alarm, body = self._cli(hold="who=Ada rehearsing", hold_updated=self.FORBIDDEN)
+        self.assertTrue(alarm)
+        self.assertIn("does not say when", body.lower())
+
+    def test_any_unparseable_hold_updated_is_treated_as_absent(self):
+        """Not just the 403 shape — anything that is not a timestamp is a
+        failed read, because there is no other way it could have got here."""
+        for junk in ("not-a-date", "null", "gh: command not found", "   "):
+            alarm, body = self._cli(
+                hold=f"who=Ada since={self.A_MINUTE_AGO} rehearsing",
+                hold_updated=junk,
+            )
+            self.assertFalse(alarm, f"{junk!r} was read as an age")
+            if junk.strip():
+                self.assertNotIn(junk.strip(), body)
+
+    def test_a_readable_api_timestamp_is_still_preferred(self):
+        """The fallback is a fallback. When GitHub does answer, its answer is
+        the one the age is measured from."""
+        alarm, body = self._cli(
+            hold=f"who=Ada since={self.A_MINUTE_AGO} rehearsing",
+            hold_updated=self.TWENTY_EIGHT_HOURS_AGO,
+        )
+        self.assertTrue(alarm, "the API's 28h answer lost to the hold text")
+        self.assertIn(f"Since: {self.TWENTY_EIGHT_HOURS_AGO}.", body)
+
+    def test_no_hold_is_still_no_hold(self):
+        """The empty strings the workflow passes when nothing is set must not
+        become a hold, and a moving channel raises nothing."""
+        alarm, _ = self._cli()
+        self.assertFalse(alarm)
 
 
 if __name__ == "__main__":
