@@ -107,8 +107,10 @@ Consumed by pr-review.yml here and fleet stubs on `pull_request` +
 **Q1 — actor.** Job-if admits `workflow_dispatch` and PR events on
 agent/repair/dependabot/DRE-carrying branches. `allowed_bots`
 (qa-review.yml:380/517) admits the pool (DRE-2020), `agent-bureau-qa-bot`
-(the merge gate's update-branch push fires `synchronize` as qa-bot, DRE-2037),
-`dependabot` (its own opens/rebases, DRE-2039), and `github-actions`
+(the merge gate's update-branch push fired `synchronize` as qa-bot, DRE-2037 —
+**SUPERSEDED 2026-08-20 (DRE-2416):** that push is gone, so the entry is now
+defence in depth, not a live justification, matching the workflow's own inline
+comment), `dependabot` (its own opens/rebases, DRE-2039), and `github-actions`
 (reconcile's `gh workflow run` dispatches, DRE-2053).
 
 **Q2 — secrets.** The dependabot self-skip lives on the REUSABLE's job-if
@@ -145,7 +147,10 @@ qa-review.yml@main fully qualified (a PR editing qa-review.yml cannot choose
 the logic that reviews itself).
 
 **Q1 — actor.** PR events fire as the pushing identity (pool bots, qa-bot's
-update-branch push, dependabot) — all admitted downstream. `workflow_dispatch`
+update-branch push, dependabot) — all admitted downstream.
+**SUPERSEDED 2026-08-20 (DRE-2416):** the gate no longer pushes to any branch,
+so qa-bot is no longer among the pushing identities here; its downstream
+admission stays as defence in depth. `workflow_dispatch`
 from reconcile initiates as `github-actions` — admitted.
 
 **Q2 — secrets.** Dependabot-actor'd `pull_request` runs are skipped at the
@@ -174,7 +179,10 @@ surface here), and merge_gate.py treats an absent verifier as a non-gate.
 
 **Q1 — actor.** Job-if: dependabot-actor self-skip AND (`workflow_dispatch` OR
 `agent/` head). `allowed_bots` (verify.yml:225/336) carries the full roster
-including qa-bot (DRE-1924 skew guard), dependabot, and `github-actions`.
+including qa-bot (DRE-1924 skew guard — **SUPERSEDED 2026-08-20 (DRE-2416):**
+the skew guard's update-branch push is retired, so the entry is now defence in
+depth, matching verify.yml's own inline comment), dependabot, and
+`github-actions`.
 
 **Q2 — secrets.** Same leading-conjunct dependabot self-skip as qa-review
 (DRE-2067). The qa-bot App pair is REQUIRED here (DRE-1987) so the verdict
