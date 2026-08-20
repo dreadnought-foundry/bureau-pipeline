@@ -88,6 +88,7 @@ Division of labor:
 What the product repo still carries:
 
 - `.github/workflows/ci.yml` (+ any other product CI) — product-specific.
+  Its *plumbing* is not: see **Shared CI plumbing** below.
 - `.github/bureau/overrides.md` — stack, local check commands, migration
   tooling. The engineer/fix/planner agents are instructed to read it.
 - `.github/bureau/setup.sh` — OPTIONAL. Run by agent-task/agent-fix before
@@ -103,6 +104,48 @@ tokens may EVER live here, in code or in workflow files**): set
 `LINEAR_API_KEY`, `BUREAU_APP_ID`, `BUREAU_APP_PRIVATE_KEY`,
 `BUREAU_QA_APP_ID`, `BUREAU_QA_APP_PRIVATE_KEY` in each product repo, and
 install both bureau GitHub Apps on its org.
+
+## Shared CI plumbing (DRE-2550)
+
+Product CI is product-specific — different stacks, different suites — but its
+**plumbing** is not, and six independent copies of it is how a fix reaches one
+repo and not the other five. What lives here is the machinery; what stays in
+the product repo is which suites to run.
+
+`.github/actions/setup-node-cached` sets up Node and puts `node_modules` in
+place. Call it instead of writing your own `setup-node` + `npm ci` pair:
+
+```yaml
+# .github/workflows/ci.yml in the product repo
+- uses: actions/checkout@v5
+- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-node-cached@main
+  with:
+    working-directory: console/web
+    node-version-file: console/web/.nvmrc   # or node-version: "24"
+- run: npx vitest run
+  working-directory: console/web
+```
+
+Why it is not just `cache: npm`: `setup-node`'s own cache stores the
+**downloads** (`~/.npm`), so a cache hit still pays the unpack and link on
+every run — measured at 89s per web shard in `agent-bureau` against a warm
+npm cache, 16% of that repo's billable CI minutes. This action caches
+`node_modules` itself and skips `npm ci` outright on a hit.
+
+The **cache-break rule lives here and only here**: the key is the lockfile's
+content plus the node version, exact-match, no `restore-keys`. Don't
+reimplement it per repo — a partial `node_modules` hit looks installed while
+holding another lockfile's packages, so the suite fails far from the cause.
+
+Two constraints worth knowing before you rely on it:
+
+- **Caches are branch-scoped.** A cache saved on a PR branch is invisible to
+  other branches; only `main` populates one for everybody. So a new adopter's
+  own PR run is a MISS by design — the saving appears on the *next* PR.
+- **A composite action must never check out this repo.** `uses:` cannot carry
+  an expression, so such a checkout could not thread `pipeline_ref` and would
+  escape the release channel below entirely. `tests/test_shared_node_action.py`
+  fails if one appears.
 
 ## Release channel: pinning, canary, promotion (DRE-2026)
 
@@ -174,6 +217,10 @@ harness run is red — no branch-protection change involved.
 
 - `.github/workflows/` — the reusable workflows (must live here for
   `workflow_call` to resolve them)
+- `.github/actions/` — composite actions the product repos' own CI calls, for
+  plumbing that should exist once rather than six times (DRE-2550). Unlike the
+  reusable workflows, these cannot be pinned by `pipeline_ref` — a `uses:`
+  reference takes no expression — so they must never check this repo out.
 - `scripts/linear_ops.py` — Linear CLI (stdlib only); `scripts/reconcile.py`
   imports it as a sibling. Jobs check this repo out into `.bureau-pipeline/`
   inside the product checkout and call
