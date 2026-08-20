@@ -1128,11 +1128,12 @@ def verdict_bound(pr: dict) -> bool:
     """has_verdict, resolving the content binding from GitHub's own compare
     and commit records when the SHA binding is stale (DRE-2340).
 
-    Without this the sweep would fight the gate: after a gate-initiated
-    `update-branch` the standing verdict still binds the PR's content, the
-    gate is about to merge on it, and reconcile would spend a re-review (In
-    QA nudge) or report a false "a fresh review is needed" on the card
-    (crashed-review recovery) roughly every 15 minutes.
+    Without this the sweep would fight the gate: after a base merge into
+    the branch (the fix agent reconciling a conflict; before DRE-2416, the
+    gate's own `update-branch`) the standing verdict still binds the PR's
+    content, the gate is about to merge on it, and reconcile would spend a
+    re-review (In QA nudge) or report a false "a fresh review is needed" on
+    the card (crashed-review recovery) roughly every 15 minutes.
 
     Both records are resolved because the gate applies both; a sweep that
     honoured a carry the gate refuses reports a stalled PR as healthy (see

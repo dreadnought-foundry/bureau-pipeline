@@ -223,6 +223,11 @@ head (`merge_gate.py` condition 2): a dependabot rebase or any push demotes an
 APPROVE to no-verdict and the gate waits. Stale branches are updated, never
 merged blind (condition 0, DRE-1924); the update-branch push fires
 `synchronize` as qa-bot — admitted by qa-review/verify allowlists (DRE-2037).
+**SUPERSEDED 2026-08-20 (DRE-2416):** condition 0 is now CONFLICT, not
+currency — the fleet does not require up-to-date branches and the gate no
+longer pushes to any branch, so the qa-bot `synchronize` path described here
+no longer occurs (the allowlist entries stay as defence in depth). The Q1/Q2
+answers for that path are unchanged where it still exists via the fix agent.
 DIRTY dependabot PRs are never sent to the fix agent (Dependabot
 rebases/recreates its own conflicts, DRE-2039). Closed PRs exit early;
 reopened PRs re-evaluate statelessly. **The residual hole:** the final
@@ -240,7 +245,9 @@ the dispatchable fix workflow is self-agent-fix.yml, not the reusable
 (dispatching a workflow_call-only file 422s — DRE-2056).
 
 **Q5 — crash mid-flow.** merge_gate.py is pure and stateless; every GitHub
-read blip substitutes a fail-closed default (`{}` → wait). No receipts, so a
+read blip substitutes a fail-closed default (`{}` → wait). *(DRE-2416: the
+compare `{}` substitute now costs the content id rather than the merge — the
+check-runs, comments, workflow-runs and commits blips are unchanged.)* No receipts, so a
 crashed evaluation leaves nothing that blocks the next event or reconcile's
 nudge from re-evaluating from scratch.
 

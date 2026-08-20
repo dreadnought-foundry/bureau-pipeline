@@ -205,12 +205,13 @@ class DependabotFlow(framework.Scenario):
         head_commit = ctx.gh.get_commit(ctx.repo, tracker["head"])
         gate_updated = len(head_commit.get("parents") or []) >= 2
         if gate_updated:
-            # A merge-commit head was update-branched by the gate: its
-            # synchronize actor is the qa-bot with NORMAL secrets, so a
+            # A merge-commit head had its base merged in by a bot (the fix
+            # agent since DRE-2416, the gate's own update-branch before
+            # it): the synchronize actor is a bot with NORMAL secrets, so a
             # success review here is the DRE-2037 path, not a miswire.
             ctx.log(
-                f"[{self.name}] head {tracker['head'][:8]} is a gate-update "
-                "merge commit — self-skip not observable on it (qa-actor "
+                f"[{self.name}] head {tracker['head'][:8]} is a base-merge "
+                "commit — self-skip not observable on it (bot-actor "
                 "synchronize reviews run with normal secrets)"
             )
         elif not any(r.get("conclusion") == "skipped" for r in review_runs):
