@@ -26,4 +26,6 @@ jobs:
     # event runs with normal secrets.
     if: github.actor != 'dependabot[bot]'
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/linear-sync.yml@main
+    with:
+      pipeline_ref: main
     secrets: inherit

@@ -23,4 +23,6 @@ permissions:
 jobs:
   call:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/agent-fix.yml@main
+    with:
+      pipeline_ref: main
     secrets: inherit

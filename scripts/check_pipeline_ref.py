@@ -8,21 +8,31 @@ stub pinned to `...@v1` pinned only the top-level workflow YAML while every
 script/brief/standard it executed still came from `main`. Canary-testing a
 tag therefore tested a chimera.
 
-The fix threads a `pipeline_ref` workflow_call input (type string, default
-`main`) through every reusable workflow into every internal checkout as
+The fix threads a `pipeline_ref` workflow_call input (type string) through
+every reusable workflow into every internal checkout as
 
     ref: ${{ inputs.pipeline_ref || 'main' }}
 
 The `|| 'main'` fallback keeps behavior byte-identical to the old ref-less
 checkout on any event where the `inputs` context is empty (workflow_dispatch,
-repository_dispatch, schedule), and the `main` default keeps a stub that
-omits the input on today's rolling channel.
+repository_dispatch, schedule).
+
+DRE-2689 made the input REQUIRED and removed its `main` default. The default
+was the remaining way to be half pinned: a caller could pin `uses: …@stable`,
+omit the input, and run channel workflow YAML over `main` scripts with nothing
+reporting it. Note that GitHub's docs do not state whether a caller omitting a
+required workflow_call input fails the run — they do state an unset string
+input is `""`. So the `|| 'main'` fallback is still load-bearing: if GitHub's
+validation does not fire, an omitting caller degrades to `main` rather than
+checking out an empty ref. THIS checker, plus agent-bureau's
+`make check-channel-fleet` half-pin detection, are the enforcement we control.
 
 This checker FAILS (exit 1) when:
   * any `actions/checkout` of dreadnought-foundry/bureau-pipeline lacks a
     `ref:`, or carries any ref other than the canonical threading expression;
   * any reusable workflow (one with a `workflow_call` trigger) fails to
-    declare the `pipeline_ref` input as `type: string` / `default: main`.
+    declare the `pipeline_ref` input as `type: string` / `required: true`,
+    or declares a default for it.
 
 Deterministic, PyYAML-only. Run from anywhere:
 
@@ -98,11 +108,17 @@ def check_workflow(doc, name):
                     f"{name}: '{INPUT_NAME}' input must be type: string "
                     f"(got {spec.get('type')!r})"
                 )
-            if spec.get("default") != "main":
+            if spec.get("required") is not True:
                 violations.append(
-                    f"{name}: '{INPUT_NAME}' input must default to 'main' "
-                    f"(got {spec.get('default')!r}) — a stub that omits it "
-                    f"must stay on today's rolling channel"
+                    f"{name}: '{INPUT_NAME}' input must be required: true "
+                    f"(got {spec.get('required')!r}) — an optional input is "
+                    f"how a stub gets half pinned without anyone noticing"
+                )
+            if "default" in spec:
+                violations.append(
+                    f"{name}: '{INPUT_NAME}' input must carry no default "
+                    f"(got {spec.get('default')!r}) — a default is what let "
+                    f"a caller omit the ref and silently float"
                 )
 
     for job_id, i, step in internal_checkouts(doc):
