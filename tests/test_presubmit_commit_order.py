@@ -326,6 +326,46 @@ class SelfCheckCommandRunsTest(unittest.TestCase):
         )
 
 
+class HarnessSubstitutesTheBaseBranchTest(unittest.TestCase):
+    """The harness runs the SHIPPED prompt through a real agent, substituting
+    every Actions expression and raising on any it does not know — deliberately,
+    so a prompt change is seen rather than reaching the agent as literal
+    `${{ … }}` noise. The self-check's base branch is such an expression, so it
+    gets a value here or the whole adversarial suite dies at the substitution."""
+
+    def setUp(self):
+        import sys
+
+        sys.path.insert(0, os.path.join(REPO, "scripts"))
+        from harness import agent_run  # noqa: PLC0415 — path-dependent
+
+        self.agent_run = agent_run
+        self.card = agent_run.SeededCard(
+            identifier="harness-DRE-2694-1",
+            title="Seeded title",
+            description="Seeded body",
+            url="https://example.invalid/card",
+        )
+
+    def build(self, **kwargs):
+        return self.agent_run.build_prompt(
+            self.card, workflow_path=os.path.join(WF_DIR, TASK_WF), **kwargs
+        )
+
+    def test_the_sandbox_base_branch_reaches_the_command(self):
+        prompt = self.build(default_branch="trunk")
+        self.assertIn(
+            "origin/trunk HEAD",
+            prompt,
+            "the harness must resolve the self-check's base to the SANDBOX's "
+            "default branch — a hardcoded 'main' would hand the agent a ref "
+            "the sandbox may not have",
+        )
+
+    def test_no_unsubstituted_expression_survives(self):
+        self.assertNotIn("${{", self.build())
+
+
 class StandardHandsWritersTheCommandTest(unittest.TestCase):
     """The cause half of DRE-2694: a dispatched agent gets the command from
     the prompt above, and every other writer — a coordinating agent, an
