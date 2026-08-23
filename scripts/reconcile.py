@@ -268,11 +268,30 @@ def hand_built(card: dict) -> bool:
         for lbl in (card.get("labels") or {}).get("nodes", [])
     )
 
-# "Blocked by: DRE-1204 + DRE-1205", "serialize after DRE-1226", "depends on
-# DRE-N" — blockers are every DRE-N on a line that contains one of these
-# phrases. Line-scoped on purpose: parent-epic links appear all over card
-# bodies and must not count as blockers.
-_BLOCKER_LINE = re.compile(r"(?:blocked by|serialize after|depends on)", re.IGNORECASE)
+# "**Blocked by:** DRE-1204 + DRE-1205", "Serialize after: DRE-1226", "Depends
+# on DRE-N" — blockers are every DRE-N on a line that DECLARES a dependency.
+# Line-scoped on purpose: parent-epic links appear all over card bodies and
+# must not count as blockers.
+#
+# ANCHORED on purpose (DRE-2670). A bare substring match read a blocker out of
+# any sentence that merely MENTIONED one, so epic DRE-2492 — zero formal
+# `blockedBy` relations, a well-written plan — was jammed by its own prose:
+# "B3 is formally blocked by it" and "neither depends on the other" each named
+# one of the epic's own CHILDREN, the epic-level gate then held those children,
+# and the children were what would have unblocked it. Five cards, five days,
+# ~480 consecutive GREEN sweeps. A sentence whose literal meaning is "there are
+# no dependencies here" was parsed as declaring one.
+#
+# So the phrase must OPEN the line (after list/quote/heading/emphasis markup)
+# and be followed by a colon or the ids themselves. Same shape as
+# `linear_ops._BLOCKED_BY_RE`, which turns these lines into real relations.
+_BLOCKER_LINE = re.compile(
+    r"^[\s>*_`~+#-]*"                             # -, *, >, #, **bold**, `code`
+    r"(?:blocked by|serialize after|depends on)"
+    r"[\s*_`]*"                                   # closing emphasis markers
+    r"(?::|(?=\s*DRE-\d+))",                      # a colon, or the ids directly
+    re.IGNORECASE,
+)
 _CARD_REF = re.compile(r"DRE-\d+")
 
 
@@ -1244,6 +1263,9 @@ def card_state(identifier: str) -> str:
 
 
 def blockers_of(card: dict) -> set[str]:
+    """Every live blocker of `card`: its non-terminal formal `blocks` relations,
+    plus every DRE-N on a description line that DECLARES a dependency
+    (`_BLOCKER_LINE` — a mention is not a declaration; DRE-2670)."""
     found: set[str] = set()
     for rel in card["inverseRelations"]["nodes"]:
         if rel["type"] == "blocks" and rel["issue"]["state"]["name"] not in (
@@ -1299,6 +1321,11 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
     lines), just applied to the epic. A blocker counts as MET only when its
     state is Done/Canceled/Duplicate. Fails SAFE: if the epic's relation data
     can't be read, returns True (treat as blocked, do not promote).
+
+    Logs WHICH KIND of blocker holds the epic (DRE-2670): a formal relation and
+    a description line that no relation corroborates are different facts with
+    different fixes, and "this epic is frozen by its own documentation" is the
+    one nobody ever noticed — the sweep stayed green while it printed.
     """
     epic = _fetch_epic_relations(epic_identifier)
     if epic is None:
@@ -1314,8 +1341,12 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
         for rel in epic["inverseRelations"]["nodes"]
         if rel["type"] == "blocks"
     }
-    for blocker in blockers_of(epic):
+    for blocker in sorted(blockers_of(epic)):  # sorted: a deterministic log line
         if blocker in relation_blockers:
+            print(
+                f"epic-gate: {epic_identifier} is held by a formal blockedBy "
+                f"relation on {blocker}, which is not Done"
+            )
             return True  # relation blocker, already known non-terminal
         # A description-line blocker ("Blocked by: DRE-N"): state unknown, fetch.
         try:
@@ -1330,6 +1361,16 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
             )
             return True
         if state not in ("Done", "Canceled", "Duplicate"):
+            # PROSE ONLY: a description line declares this blocker and no formal
+            # relation corroborates it. The gate still honors it (prose has been
+            # load-bearing since DRE-1233), but it says so — an epic frozen by
+            # its own documentation should be readable as exactly that, not as
+            # an ordinary dependency (DRE-2670).
+            print(
+                f"epic-gate: {epic_identifier} is held by PROSE ONLY — a description "
+                f"line declares {blocker} ({state}) a blocker and no formal blockedBy "
+                "relation corroborates it; set the relation or reword the line"
+            )
             return True
     return False
 
