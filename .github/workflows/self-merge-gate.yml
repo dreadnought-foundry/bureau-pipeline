@@ -34,4 +34,6 @@ permissions:
 jobs:
   call:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/merge-gate.yml@main
+    with:
+      pipeline_ref: main
     secrets: inherit

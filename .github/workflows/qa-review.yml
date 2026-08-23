@@ -12,12 +12,12 @@ on:
       pipeline_ref:
         description: >-
           bureau-pipeline ref for the INTERNAL checkouts (scripts, briefs,
-          standards). A stub pinned to this workflow @vN MUST pass the same
-          vN here, or its scripts still float @main. Omitted = main (the
-          rolling channel), byte-identical to the pre-DRE-2026 behavior.
+          standards). REQUIRED since DRE-2689: a caller must pass the same
+          ref it pins in `uses:`, or it runs channel workflow YAML over
+          another ref's scripts — pinned to everything that counts refs,
+          and not actually pinned (DRE-2026).
         type: string
-        required: false
-        default: main
+        required: true
     secrets:
       ANTHROPIC_API_KEY:
         required: false

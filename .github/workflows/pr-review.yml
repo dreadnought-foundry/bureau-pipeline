@@ -51,4 +51,6 @@ jobs:
     # never pull_request_target against untrusted code).
     if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/qa-review.yml@main
+    with:
+      pipeline_ref: main
     secrets: inherit

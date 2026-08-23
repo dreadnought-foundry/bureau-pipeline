@@ -26,4 +26,6 @@ permissions:
 jobs:
   call:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/red-main-repair.yml@main
+    with:
+      pipeline_ref: main
     secrets: inherit
