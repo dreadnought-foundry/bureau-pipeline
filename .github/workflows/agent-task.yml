@@ -384,6 +384,21 @@ jobs:
                heading entirely when every criterion is met. Roughly 40% of
                review rejections are unmet or unverified criteria the author
                could have caught here; each one costs a full fix round.
+            4b. COMMIT-ORDER SELF-CHECK — run this BEFORE the push in step 5,
+               while fixing it is still free:
+
+                   python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/${{ github.event.repository.default_branch }} HEAD
+
+               Exit 0 and the order holds. Exit 1 means no commit touching
+               tests/ comes before your first code commit, and NO commit you
+               add later can clear it — the finding is the ORDER of the commits
+               that already exist. Reorder them NOW, before you push: an
+               interactive rebase, or re-commit the same content onto a fresh
+               branch test-first. Once the PR exists this same check has no
+               automated path to green at all and costs a human a rebase
+               (DRE-2694: three hours and two review rounds on work whose
+               content was never wrong). Exit 2 means it could not evaluate —
+               say so in the PR body rather than ignoring it.
             5. Push the branch and open a PR with `gh pr create` titled
                "feat(${{ github.event.client_payload.identifier }}): <summary>",
                body must include the card URL. GH_TOKEN is already in your env.

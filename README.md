@@ -493,3 +493,10 @@ mechanical:
    environment beyond a bare runner).
 3. Set the six secrets, install both bureau Apps, and register the repo slug
    with the relay Lambda.
+4. Add the `tdd-commit-check` job to the repo's own `ci.yml`, named exactly
+   `TDD commit discipline` (the snippet is under **Shared CI plumbing**). Skip
+   it and the repo absorbs the test-first violation silently: the 2026-08-23
+   sweep found portico #343 green and mergeable with its test committed after
+   its code, because the check ran in one repo and the discipline was broken in
+   four. The job name is load-bearing — `scripts/unfixable_checks.py` matches
+   the published check-run name to escalate the fix loop on its first attempt.

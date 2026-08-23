@@ -243,6 +243,10 @@ class AgentScenario(framework.Scenario):
             repo=ctx.repo,
             token=self.live_token(ctx),
             pipeline_root=ctx.state.get("pipeline_root", "."),
+            # The sandbox's real default branch, read off GitHub in setup().
+            # The prompt's commit-order self-check compares against
+            # `origin/<it>`, so a guess would hand the agent a missing ref.
+            default_branch=ctx.state.get("base") or agent_run.DEFAULT_BRANCH,
             log=ctx.log,
         )
 

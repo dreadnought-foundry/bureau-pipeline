@@ -10,6 +10,13 @@ is the floor. Every rule here exists because its violation shipped a bug.
   fixing it means rewriting the branch's history, which the fix loop cannot do
   (DRE-2694: three hours and two review rounds on work that was never wrong).
   Get it right on the second commit, where it is free.
+- **Check the order yourself, before you push.** One command answers it while
+  the branch is still local and a rebase is still yours to do:
+  `python3 scripts/check_tdd_commits.py origin/<default> HEAD` (in a product
+  repo the pipeline checkout puts it at
+  `.bureau-pipeline/scripts/check_tdd_commits.py`). Exit 1 means reorder now.
+  The same check runs in CI as `TDD commit discipline`, where the only remedy
+  left is a human rewriting your branch — this is the last moment it is free.
 - **Scope = exactly the card.** No drive-by refactors, no scope creep. If the
   card is wrong or ambiguous, STOP and write the blocker — a wrong guess costs a
   full review cycle.

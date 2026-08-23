@@ -49,6 +49,12 @@ from pathlib import Path
 # The workflow whose prompt is under test, relative to the pipeline checkout.
 AGENT_TASK_WORKFLOW = os.path.join(".github", "workflows", "agent-task.yml")
 
+# The sandbox branch the prompt's expressions resolve against when a caller
+# does not say. Every scenario knows its repo's real default branch (setup()
+# reads it off GitHub) and passes it; this is the value for the unit suites,
+# which parse the prompt without a sandbox to ask.
+DEFAULT_BRANCH = "main"
+
 # The agent CLI the action wraps. Overridable so a runner with the CLI already
 # installed skips the npx fetch (and so a pin can be forced in an incident).
 DEFAULT_AGENT_CLI = "npx --yes @anthropic-ai/claude-code@latest"
@@ -126,7 +132,12 @@ def agent_task_prompt(workflow_path) -> str:
     return prompts[0]
 
 
-def build_prompt(card: SeededCard, workflow_path=None, role: str = "engineer") -> str:
+def build_prompt(
+    card: SeededCard,
+    workflow_path=None,
+    role: str = "engineer",
+    default_branch: str = DEFAULT_BRANCH,
+) -> str:
     """The shipped prompt with the seeded card substituted for its Actions
     expressions.
 
@@ -135,10 +146,16 @@ def build_prompt(card: SeededCard, workflow_path=None, role: str = "engineer") -
     agent-task.yml grows an interpolation, this fails loudly and someone
     decides what the harness should feed it, instead of the scenarios quietly
     testing a corrupted prompt.
+
+    `default_branch` is the SANDBOX's own default branch — the value the live
+    expression resolves to in the caller repo. The commit-order self-check
+    (DRE-2694, agent-task.yml step 4b) compares against `origin/<it>`, so a
+    hardcoded name here would hand the agent a ref the sandbox may not have.
     """
     workflow_path = workflow_path or AGENT_TASK_WORKFLOW
     prompt = agent_task_prompt(workflow_path)
     values = {
+        "github.event.repository.default_branch": default_branch,
         "github.event.client_payload.identifier": card.identifier,
         "github.event.client_payload.title": card.title,
         "github.event.client_payload.url": card.url,
@@ -229,6 +246,7 @@ def run_agent(
     workdir: str | None = None,
     pipeline_root: str = ".",
     role: str = "engineer",
+    default_branch: str = DEFAULT_BRANCH,
     runner=subprocess.run,
     env: dict | None = None,
     timeout: float = AGENT_TIMEOUT_SECONDS,
@@ -270,6 +288,7 @@ def run_agent(
         card,
         workflow_path=os.path.join(pipeline_root, AGENT_TASK_WORKFLOW),
         role=role,
+        default_branch=default_branch,
     )
 
     _clear(ESCALATION_PATH)
