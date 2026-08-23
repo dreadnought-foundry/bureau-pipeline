@@ -326,6 +326,48 @@ class SelfCheckCommandRunsTest(unittest.TestCase):
         )
 
 
+class StandardHandsWritersTheCommandTest(unittest.TestCase):
+    """The cause half of DRE-2694: a dispatched agent gets the command from
+    the prompt above, and every other writer — a coordinating agent, an
+    operator session, a sub-agent handed a task brief — gets nothing but the
+    repo. The standard is the one document all of them do read, so the
+    command lives there too. Knowing the rule and being able to CHECK it
+    before pushing are different things, and only the second is free."""
+
+    def setUp(self):
+        with open(os.path.join(REPO, "standards", "engineering.md")) as f:
+            self.standard = f.read()
+
+    def bullet(self):
+        """The one bullet that names the checker — asserting against the whole
+        file would pass on any stray "before pushing" elsewhere in it (the
+        Acceptance section has one), which is a pin that proves nothing."""
+        for para in re.split(r"(?m)^(?=- )", self.standard):
+            if CHECKER in para:
+                return norm(para)
+        return None
+
+    def test_the_build_discipline_rule_names_the_command(self):
+        # assertTrue, not assertIn: a failing assertIn prints the entire
+        # standard as the container and buries the message.
+        self.assertTrue(
+            self.bullet(),
+            "standards/engineering.md tells writers the commit order is not "
+            f"repairable afterwards but never names scripts/{CHECKER} — the "
+            "one command that answers it while the branch is still local",
+        )
+
+    def test_the_command_is_offered_before_the_push(self):
+        bullet = self.bullet()
+        self.assertTrue(bullet, f"no bullet in the standard names {CHECKER}")
+        self.assertRegex(
+            bullet,
+            BEFORE_PUSH_RE,
+            "the same bullet must place the check BEFORE the push; afterwards "
+            "only a human with force-push rights can act on its answer",
+        )
+
+
 class OnboardingCarriesTheCheckTest(unittest.TestCase):
     """The detection half of DRE-2694: the fleet sweep found the violation in
     every repo and the check in exactly one. The carrier action shipped, but
