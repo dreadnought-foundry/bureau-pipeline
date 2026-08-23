@@ -562,5 +562,175 @@ class DelegationRuleTest(unittest.TestCase):
             )
 
 
+# ---------------------------------------------------------------------------
+# 6b. The gate step, EXECUTED — not grepped
+# ---------------------------------------------------------------------------
+# The YAML saying the right thing proves the wiring, not the behaviour: this
+# step spans three systems (the checks API, the registry, Linear), and
+# unit-green is not live-working. So run its real `run:` block against stubbed
+# `gh` and `linear_ops.py`, the way tests/test_fix_dispatch_clears_stale_hold.py
+# executes the Announce step.
+GH_STUB = r"""#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+json.dump(argv, open(os.environ["GH_LOG"], "a")); open(os.environ["GH_LOG"], "a").write("\n")
+if argv[:1] == ["api"]:
+    # The URL is not argv[1] — `--paginate --slurp` come first.
+    if any("/check-runs" in a for a in argv):
+        sys.stdout.write(open(os.environ["GH_CHECKS"]).read())
+    else:
+        sys.stdout.write(open(os.environ["GH_COMMENTS"]).read())
+    sys.exit(0)
+if argv[:2] == ["pr", "comment"]:
+    body = argv[argv.index("--body-file") + 1]
+    open(os.environ["GH_POSTED"], "a").write(open(body).read())
+    sys.exit(0)
+sys.exit(0)
+"""
+
+
+class GateScenarioTest(unittest.TestCase):
+    HEAD = "3e00473c" + "0" * 32
+
+    def _run(self, check_runs, thread=()):
+        """Execute the gate's real run block. Returns (proc, outputs, posted,
+        linear_calls)."""
+        step = None
+        for s in yaml.safe_load(AGENT_FIX.read_text())["jobs"]["fix"]["steps"]:
+            if "unfixable_checks.py" in (s.get("run") or ""):
+                step = s
+        self.assertIsNotNone(step, "no gate step in agent-fix.yml")
+        run = step["run"].replace("${{ github.repository }}", "acme/widget")
+        self.assertNotIn("${{", run, "harness left an unsubstituted expression")
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        td = Path(tmp.name)
+        (td / "bin").mkdir()
+        (td / ".bureau-pipeline" / "scripts").mkdir(parents=True)
+        (td / ".bureau-pipeline" / "scripts" / "unfixable_checks.py").write_text(
+            (SCRIPTS / "unfixable_checks.py").read_text()
+        )
+        linear_log = td / "linear.jsonl"
+        (td / ".bureau-pipeline" / "scripts" / "linear_ops.py").write_text(
+            "#!/usr/bin/env python3\nimport json, sys\n"
+            f"open({str(linear_log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        )
+        gh = td / "bin" / "gh"
+        gh.write_text(GH_STUB)
+        gh.chmod(0o755)
+        (td / "checks.json").write_text(json.dumps(check_runs))
+        # `--paginate --slurp` on the comments API yields one array per page,
+        # which the step's jq folds with `add`.
+        (td / "comments.json").write_text(json.dumps([list(thread)]))
+        out = td / "step-output"
+        out.write_text("")
+        script = td / "gate.sh"
+        script.write_text("set -eo pipefail\n" + run)
+
+        proc = subprocess.run(
+            ["bash", str(script)], cwd=str(td), capture_output=True, text=True,
+            env={**os.environ,
+                 "PATH": f"{td / 'bin'}:{os.environ['PATH']}",
+                 "GITHUB_OUTPUT": str(out),
+                 "GH_LOG": str(td / "gh.jsonl"),
+                 "GH_CHECKS": str(td / "checks.json"),
+                 "GH_COMMENTS": str(td / "comments.json"),
+                 "GH_POSTED": str(td / "posted.md"),
+                 "GH_TOKEN": "test", "LINEAR_API_KEY": "test-key",
+                 "HEAD_SHA": self.HEAD, "CARD": "DRE-2672",
+                 "PR": "176", "ATTEMPT": "1"},
+        )
+        outputs = dict(
+            line.split("=", 1) for line in out.read_text().splitlines() if "=" in line
+        )
+        posted = (td / "posted.md").read_text() if (td / "posted.md").exists() else ""
+        calls = [json.loads(x) for x in linear_log.read_text().splitlines()] \
+            if linear_log.exists() else []
+        return proc, outputs, posted, calls
+
+    def _red_tdd(self):
+        # The real `gh api --paginate --slurp` shape: one object per page.
+        return [{"total_count": 2, "check_runs": [
+            _check_run("scripts unit tests", "success"),
+            _check_run(unfixable_checks.TDD_CHECK_NAME, "failure"),
+        ]}]
+
+    # -- the PR #176 shape ------------------------------------------------
+    def test_a_red_order_check_escalates_holds_and_parks(self):
+        proc, outputs, posted, calls = self._run(self._red_tdd())
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outputs.get("escalate"), "true")
+        self.assertIn(unfixable_checks.NO_ADD_A_COMMIT_LINE, posted)
+        self.assertIn(unfixable_checks.HOLD_MARKER, posted)
+        self.assertIn(self.HEAD[:8], posted)
+        verbs = [c[0] for c in calls]
+        self.assertIn("comment", verbs)
+        self.assertIn("add-label", verbs)
+        self.assertIn(["add-label", "DRE-2672", "needs-human"], calls)
+        self.assertTrue(any(c[0] in ("advance", "state") for c in calls))
+
+    def test_the_card_note_is_the_plain_english_one(self):
+        _, _, _, calls = self._run(self._red_tdd())
+        note = next(c for c in calls if c[0] == "comment")[2]
+        self.assertIn("176", note)
+        self.assertNotIn("force-push", note)
+
+    # -- the normal path is untouched -------------------------------------
+    def test_an_ordinary_red_check_does_not_escalate(self):
+        proc, outputs, posted, calls = self._run(
+            [{"check_runs": [_check_run("scripts unit tests", "failure")]}]
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("escalate", outputs)
+        self.assertEqual(posted, "")
+        self.assertEqual(calls, [])
+
+    def test_an_all_green_board_does_not_escalate(self):
+        _, outputs, posted, calls = self._run([{"check_runs": []}])
+        self.assertNotIn("escalate", outputs)
+        self.assertEqual(posted, "")
+        self.assertEqual(calls, [])
+
+    # -- adversarial ------------------------------------------------------
+    def test_a_second_run_on_the_same_head_does_not_repeat_the_hold(self):
+        """The critic can re-fire on the same commit. The hold still stands —
+        escalate must stay true — but the PR must not collect a second copy."""
+        prior = {"user": {"login": "agent-bureau-bot[bot]"},
+                 "body": f"🛑 {unfixable_checks.HOLD_MARKER} ... {self.HEAD[:8]}"}
+        proc, outputs, posted, calls = self._run(self._red_tdd(), thread=[prior])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outputs.get("escalate"), "true")
+        self.assertEqual(posted, "", "the hold was posted twice on one head")
+        self.assertEqual(calls, [], "the card was parked twice on one head")
+
+    def test_a_hold_from_an_earlier_head_does_not_suppress_this_one(self):
+        """Sha-bound, like the convergence halt: a new commit is a new fact."""
+        prior = {"user": {"login": "agent-bureau-bot[bot]"},
+                 "body": f"🛑 {unfixable_checks.HOLD_MARKER} ... deadbeef"}
+        _, outputs, posted, _ = self._run(self._red_tdd(), thread=[prior])
+        self.assertEqual(outputs.get("escalate"), "true")
+        self.assertIn(unfixable_checks.HOLD_MARKER, posted)
+
+    def test_a_planted_hold_from_another_author_does_not_suppress_it(self):
+        """DRE-1995: anyone can comment on a PR. Only the worker bot's own
+        marker counts, or a stranger could silence the escalation."""
+        prior = {"user": {"login": "someone"},
+                 "body": f"🛑 {unfixable_checks.HOLD_MARKER} ... {self.HEAD[:8]}"}
+        _, outputs, posted, _ = self._run(self._red_tdd(), thread=[prior])
+        self.assertEqual(outputs.get("escalate"), "true")
+        self.assertIn(unfixable_checks.HOLD_MARKER, posted)
+
+    def test_an_unreadable_check_payload_falls_through_to_the_normal_path(self):
+        """Fail toward today's behaviour. Guessing "escalate" on a payload we
+        could not read would park healthy cards; the normal fix path already
+        survives a check it cannot fix, it just costs a round."""
+        proc, outputs, posted, calls = self._run("not a payload")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("escalate", outputs)
+        self.assertEqual(posted, "")
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

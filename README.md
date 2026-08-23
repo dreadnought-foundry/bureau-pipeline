@@ -199,6 +199,53 @@ and installing bare names is what made a Dependabot bump exercise nothing
 here runs its own `pip install`, if a pin acquires a second home, or if a job
 runs `pytest` without going through the action.
 
+### `tdd-commit-check` — the test-first commit order, fleet-wide (DRE-2694)
+
+`.github/actions/tdd-commit-check` runs `scripts/check_tdd_commits.py` — the
+DRE-2022 rule that a commit touching `tests/` must appear **strictly before**
+the first commit changing non-test code — from a product repo's own CI:
+
+```yaml
+# .github/workflows/ci.yml in a product repo
+tdd:
+  name: TDD commit discipline     # the check-run name the fix loop matches
+  if: github.event_name == 'pull_request'
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0            # the check walks the PR's whole commit list
+    - name: RED test precedes implementation
+      uses: dreadnought-foundry/bureau-pipeline/.github/actions/tdd-commit-check@v7
+      with:
+        base-ref: ${{ github.event.pull_request.base.ref }}
+        head-sha: ${{ github.event.pull_request.head.sha }}
+        pr-author: ${{ github.event.pull_request.user.login }}
+```
+
+**Why it exists.** The checker was wired into this repo's `tests.yml` and
+nowhere else. The fleet sweep of 2026-08-23 found the violation everywhere and
+the detection in one place: portico #343 was **green and mergeable** with its
+test committed after its code, and deltasolv runs no such check either. "Green"
+across the fleet did not mean the order was right.
+
+**Name the job `TDD commit discipline`.** GitHub publishes the check run under
+the job name, and `scripts/unfixable_checks.py` matches on it (nested
+`<caller> / <job>` names match too). A differently named job still gates the
+merge; it just loses the fix loop's first-attempt escalation below.
+
+**A red result has no automated path to green.** The finding is the ORDER of
+commits that already exist, and the fix loop can add commits but not reorder
+them. So `agent-fix.yml` consults the registry BEFORE it spends an attempt: it
+posts a hold naming the check and the remedy, parks the card in the CEO's
+"needs you" lane, and stops — on the first attempt, not the second. Clearing it
+is a human reordering the existing commits and force-pushing; the content does
+not change.
+
+Adoption elsewhere needs a release tag containing this action (see "Which ref a
+repo may use") plus a one-job addition to each repo's own `ci.yml` — per-repo
+work, not something this repo can do to another.
+
 ### Which ref a repo may use — this is not a style choice
 
 **`@main` is for the canary repos only.** `standards/engineering.md` is explicit:

@@ -52,6 +52,14 @@ Called from tests.yml's `tdd` job (pull_request events only):
 Exit 0 → discipline holds (or the PR is exempt). Exit 1 → violation, with the
 plain-language message on stdout. Exit 2 → cannot evaluate (git error) — fail
 loud, never pass.
+
+DRE-2694: a violation also prints WHY no commit can clear it and what does.
+The finding is the ORDER of commits that already exist, so the fix loop —
+which can add commits but not reorder them — has no path to green here, and
+saying nothing about that cost PR #176 three hours and two review rounds. The
+wording comes from `unfixable_checks.py`, the one registry of checks with no
+add-a-commit path, which the fix loop reads to escalate on the FIRST attempt
+instead of attempting and blocking.
 """
 
 from __future__ import annotations
@@ -60,6 +68,8 @@ import ast
 import os
 import subprocess
 import sys
+
+import unfixable_checks
 
 FAILURE_MESSAGE = (
     "no test commit precedes the implementation — commit the RED test first"
@@ -271,6 +281,11 @@ def main(argv: list[str]) -> int:
         print(f"{c['sha'][:7]} [{','.join(cats)}] {c['subject']}")
     ok, reason = check_commits(commits)
     print(reason)
+    if not ok:
+        # DRE-2694: tell the writer, here at CI time, that adding a commit
+        # cannot clear this — the cheapest place the discipline is knowable.
+        entry = unfixable_checks.match(unfixable_checks.TDD_CHECK_NAME)
+        print(unfixable_checks.remedy_block(entry))
     return 0 if ok else 1
 
 

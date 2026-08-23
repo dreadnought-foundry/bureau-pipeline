@@ -258,9 +258,85 @@ jobs:
         if: steps.pr.outputs.go == 'true'
         run: echo ".bureau-pipeline/" >> .git/info/exclude
 
+      # DRE-2694: some required checks cannot be satisfied by ADDING a commit,
+      # and this loop can only add commits. bureau-pipeline PR #176 was blocked
+      # for three hours on exactly one finding — the required TDD commit-order
+      # check was red — and the only thing that clears that is reordering the
+      # branch's existing commits, which needs a force-push the fix agent does
+      # not have and should not have. The agent worked that out correctly and
+      # refused, on attempt TWO, after a full CI round and a full critic round.
+      # Nothing anywhere said "this class of failure has no automated path to
+      # green", so a required check with no fix path looked identical to one
+      # the loop could attempt.
+      #
+      # unfixable_checks.py is the registry of that class. Consulted HERE, on
+      # the first attempt, before any inference is bought and before the
+      # Announce step strips `needs-human` off a card this gate is about to
+      # park. Scoped to fix mode on purpose: conflict rounds are about
+      # mergeability, not check greenness, and merging main in does push a new
+      # commit — a different job with its own budget.
+      #
+      # A check-runs read that cannot be parsed exits 2 and is treated as
+      # "carry on": guessing "escalate" would park healthy cards, and the
+      # normal fix path already survives a red check it cannot fix (it just
+      # costs a round). The gate fails toward today's behavior, never toward a
+      # silent park.
+      - name: Escalate checks the loop structurally cannot fix
+        id: unfixable
+        if: steps.pr.outputs.go == 'true' && steps.pr.outputs.mode == 'fix'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          CARD: ${{ steps.pr.outputs.card }}
+          PR: ${{ steps.pr.outputs.number }}
+          ATTEMPT: ${{ steps.pr.outputs.attempt }}
+        run: |
+          # `escalate` is written ONLY on the escalation path. Every downstream
+          # guard reads `!= 'true'`, so an unwritten output — this step exiting
+          # early, or being skipped entirely in conflict mode — means "carry
+          # on", and no second write can race the first.
+          set -u
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" \
+            > /tmp/check-runs.json 2>/dev/null || echo '[]' > /tmp/check-runs.json
+          DECISION=$(python3 .bureau-pipeline/scripts/unfixable_checks.py decide \
+            --checks-file /tmp/check-runs.json \
+            --attempt "$ATTEMPT" --pr "$PR" \
+            --comment-out /tmp/unfixable-comment.md \
+            --card-note-out /tmp/unfixable-card.md) || {
+              echo "::warning::could not read check runs — proceeding with the normal fix path"
+              exit 0
+            }
+          [ "$DECISION" = "escalate" ] || { echo "no unfixable red checks — normal fix path"; exit 0; }
+
+          # Idempotent per head sha (the fix-convergence-halt pattern,
+          # DRE-2024): the critic can re-fire on the same commit, and a second
+          # identical hold comment is noise on a PR a human is already reading.
+          SHA8=${HEAD_SHA:0:8}
+          HELD=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+            | jq --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("unfixable-check-hold")) | select(.body | contains($sha8))] | length')
+          if [ "${HELD:-0}" -eq 0 ]; then
+            printf '%s\n\nHead: `%s`\n' "$(cat /tmp/unfixable-comment.md)" "$SHA8" \
+              > /tmp/unfixable-comment-final.md
+            gh pr comment "$PR" --repo ${{ github.repository }} \
+              --body-file /tmp/unfixable-comment-final.md
+            if [ -n "$CARD" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                "$(cat /tmp/unfixable-card.md)" || true
+              python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
+              python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Plan Review" "In QA,In Progress,Todo" || \
+                python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review" --park || true
+            fi
+          else
+            echo "hold already posted for $SHA8 — not repeating it"
+          fi
+          echo "escalate=true" >> "$GITHUB_OUTPUT"
+
       # Product-specific environment setup (submodules, toolchains, test DB).
       - name: Product environment setup (optional)
-        if: steps.pr.outputs.go == 'true'
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
           BOT_TOKEN: ${{ steps.app.outputs.token }}
         run: |
@@ -271,7 +347,7 @@ jobs:
           fi
 
       - name: Announce fix attempt
-        if: steps.pr.outputs.go == 'true'
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -318,7 +394,7 @@ jobs:
       # `@main` standards edit reaches the fixer on its next run, no workflow change.
       - name: Assemble fix context
         id: ctx
-        if: steps.pr.outputs.go == 'true'
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble fix \
             > .bureau-pipeline/agent-context.md
@@ -337,7 +413,7 @@ jobs:
       # making.
       - name: Select model
         id: model
-        if: steps.pr.outputs.go == 'true'
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
           # The probe authenticates with the same CLAUDE token the fixer uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -370,7 +446,7 @@ jobs:
       # tests/test_untrusted_content_wiring.py pins this.
       - name: Sanitize agent-influenced prompt fields
         id: safe
-        if: steps.pr.outputs.go == 'true'
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
           RAW_BRANCH: ${{ steps.pr.outputs.branch }}
           RAW_ESCALATION: ${{ steps.pr.outputs.escalation }}
@@ -386,7 +462,7 @@ jobs:
       # (Bodies pass through base64 so `tail -1` picks the last COMMENT, not
       # the last line of a multiline body.)
       - name: Fetch critic verdict (qa-bot authored only)
-        if: steps.pr.outputs.go == 'true'
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
@@ -421,7 +497,7 @@ jobs:
       # malformed payload fails LOUD — a silently missing thread file is
       # exactly the deadlock this step exists to prevent.
       - name: Fetch fix-loop thread (blockers + operator decisions)
-        if: steps.pr.outputs.go == 'true'
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           WORKER_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
@@ -437,7 +513,7 @@ jobs:
 
       - name: Fix
         id: claude
-        if: steps.pr.outputs.go == 'true'
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         uses: anthropics/claude-code-action@v1
         env:
           # DRE-2696. The fixing agent must be able to READ THE CARD it is
@@ -590,7 +666,7 @@ jobs:
                write your reasoning to /tmp/fix-blocker.txt instead.
 
       - name: Report
-        if: steps.pr.outputs.go == 'true' && always()
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true' && always()
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
