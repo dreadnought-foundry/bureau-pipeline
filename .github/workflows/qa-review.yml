@@ -582,6 +582,32 @@ jobs:
       # Skipped entirely past the second size threshold (strategy
       # `oversized`): that PR gets an honest refusal naming its size, not a
       # fourth invoice for a review that cannot happen.
+      # NO LINEAR_API_KEY HERE, AND THAT IS DELIBERATE (DRE-2696). Every
+      # other agent step in the fleet gets the key; this one is the stated
+      # exception, so nobody has to guess whether it was an oversight — it
+      # was, for agent-fix.yml and red-main-repair.yml, and this is the file
+      # where the answer is the other way.
+      #
+      # The critic's card material arrives through exactly ONE stage: "Build
+      # card review context" above (review_card_context.py, DRE-2052). That
+      # stage tells the critic to judge check 1 against "the card description
+      # quoted in the PR body" — a frozen artifact — and for a cardless PR it
+      # sanitizes, size-caps and fences the body as untrusted data. Handing
+      # the critic a live Linear key would let it fetch card prose AROUND
+      # that sanitizer, which is the whole discipline the stage exists to
+      # enforce (standards/untrusted-content.md, DRE-1996). Judging the diff
+      # rather than re-reading the author's prose is the point of the role.
+      #
+      # The Linear WORK of this workflow is done by ordinary steps that DO
+      # hold the key — "Plan visual QA" (reads the card's **Design:** ref)
+      # and "Post verdict or neutral status" (the card bookkeeping). Linear
+      # state stays ground truth written by the pipeline, never an agent
+      # claim. And unlike the fix and repair agents, nothing tells this agent
+      # the key is in its env: assemble_context.py gives role `critic`
+      # standards only, with no brief.
+      #
+      # Pinned by tests/test_agent_linear_key.py, which fails if this step
+      # is renamed or the exception loses its reason.
       - name: Critic review
         id: critic
         if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
@@ -803,6 +829,12 @@ jobs:
       # of the resource it just exhausted is only a second invoice.
       # Enforced by tests/test_critic_turn_budget.py, which also checks that
       # nothing ELSE in these two blocks has drifted apart.
+      #
+      # NO LINEAR_API_KEY HERE EITHER, for the reasons written out in full
+      # above attempt 1 (DRE-2696): the critic reads card material only
+      # through the "Build card review context" stage, sanitized and fenced.
+      # A retry that quietly gained a credential attempt 1 never had would be
+      # exactly the drift this comment block warns about.
       - name: Critic review (retry)
         id: critic_retry
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
