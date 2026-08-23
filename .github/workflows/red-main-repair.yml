@@ -310,6 +310,18 @@ jobs:
       - name: Repair agent
         if: steps.decide.outputs.go == 'true'
         uses: anthropics/claude-code-action@v1
+        env:
+          # DRE-2696. Same gap as agent-fix.yml's "Fix" step: the prompt
+          # below sends this agent to briefs/engineer.md, which states
+          # "(LINEAR_API_KEY is in your env)" and then hands it the
+          # linear_ops.py command for its progress heartbeats — a promise the
+          # step did not keep. A repair PR is cardless by design, but the
+          # agent still needs Linear to read any card behind the failing
+          # commit and to check for an existing escalation before it writes a
+          # duplicate one. The secret is declared at workflow_call and
+          # already used by the Report step in this same job; only the
+          # agent's own step lacked it.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}

@@ -439,6 +439,20 @@ jobs:
         id: claude
         if: steps.pr.outputs.go == 'true'
         uses: anthropics/claude-code-action@v1
+        env:
+          # DRE-2696. The fixing agent must be able to READ THE CARD it is
+          # being judged against — the pre-push gate below (step 4b) makes it
+          # walk the card's acceptance criteria one by one, and some criteria
+          # only exist in Linear (portico PR #341: "compute the critical-path
+          # depth from the card's dependency links"; the agent had no key,
+          # correctly refused to guess, and the PR stopped dead). It is also
+          # what briefs/engineer.md — which the prompt below sends it to —
+          # already promises: "(LINEAR_API_KEY is in your env)", followed by
+          # the linear_ops.py command for the ⏳ n/5 progress heartbeats that
+          # drive the dashboard. The secret was declared at workflow_call and
+          # used by the Report step in this same job all along; only the
+          # agent's own step lacked it.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
