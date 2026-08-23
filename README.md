@@ -1,8 +1,8 @@
 # bureau-pipeline
 
 The Agent Bureau's pipeline, defined once. Every product repo
-(EveryBite/atlas, dreadnought-foundry/deltasolv, dreadnought-foundry/vericorr,
-…) runs the SAME eight workflows from here via GitHub reusable workflows.
+(EveryBite/atlas, dreadnought-foundry/deltasolv, …) runs the SAME eight
+workflows from here via GitHub reusable workflows.
 A change merged to `main` in this repo is live in every product repo on its
 next trigger — `@main` is the rolling channel. For fleet repos that want
 change isolation there is a **tagged release channel** (`v1`, `v2`, …, cut by
