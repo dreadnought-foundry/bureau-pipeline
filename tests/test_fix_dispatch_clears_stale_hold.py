@@ -54,10 +54,19 @@ SHA = "d9f2c1ab" + "0" * 32
 WORKER_BOT = "agent-bureau-bot[bot]"
 FIX_PUSHED = "🔧 Fix attempt {n} pushed — CI and critic review re-running."
 
-# The one guard the clear hides behind. Pinned as a literal: if the Announce
+# The guards the clear hides behind. Pinned as a literal: if the Announce
 # step's condition is ever widened, the retry-cap proof below stops holding and
 # this harness must be revisited rather than silently keep passing.
-GO_GUARD = "steps.pr.outputs.go == 'true'"
+#
+# DRE-2694 added the second conjunct. The unfixable-check gate runs between
+# Resolve and Announce and escalates a PR whose red check no pushed commit
+# could clear (commit ORDER — only a history rewrite satisfies it). That is
+# another real hold the clear must not run behind: escalating to a human and
+# then stripping `needs-human` off the card would un-park it in the same job.
+GO_GUARD = (
+    "steps.pr.outputs.go == 'true' "
+    "&& steps.unfixable.outputs.escalate != 'true'"
+)
 
 
 def steps() -> list:
@@ -315,7 +324,10 @@ def announce_would_run(outputs: dict) -> bool:
     these Resolve outputs? Pins the guard rather than assuming it."""
     guard = (step_named("Announce fix attempt").get("if") or "").strip()
     assert guard == GO_GUARD, f"Announce guard changed to {guard!r} — revisit"
-    return outputs.get("go") == "true"
+    # The unfixable gate never writes `escalate` unless it escalates, and it
+    # is not one of the Resolve step's outputs — so an absent value means
+    # "carry on", exactly as Actions reads it.
+    return outputs.get("go") == "true" and outputs.get("escalate") != "true"
 
 
 class ParkedAtTheCapKeepsItsLabelTest(unittest.TestCase):

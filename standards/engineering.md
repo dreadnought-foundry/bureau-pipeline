@@ -5,7 +5,11 @@ is the floor. Every rule here exists because its violation shipped a bug.
 
 ## Build discipline
 - **TDD, split commits.** Commit the failing test FIRST, the implementation
-  second. Git history must show the test existed before the fix.
+  second. Git history must show the test existed before the fix. Same-commit
+  does not count, and the order is **not repairable by adding a commit** —
+  fixing it means rewriting the branch's history, which the fix loop cannot do
+  (DRE-2694: three hours and two review rounds on work that was never wrong).
+  Get it right on the second commit, where it is free.
 - **Scope = exactly the card.** No drive-by refactors, no scope creep. If the
   card is wrong or ambiguous, STOP and write the blocker — a wrong guess costs a
   full review cycle.
@@ -31,6 +35,27 @@ is the floor. Every rule here exists because its violation shipped a bug.
   went stale within a DAY of the code change that outdated it, and an operator
   following it would have provisioned four secrets, watched them work for eight
   hours, and had the chain die silently.
+
+## Delegating work that will commit
+**Every gate the work must pass goes in the brief, at the moment of handoff.**
+A dispatched agent receives this standard through workflow context injection.
+Every other writer — a coordinating agent, an operator session, a sub-agent
+handed a task brief — receives nothing but the repo, the tools and the
+credentials. **Habit does not travel.** If you are applying a rule because you
+know it, the writer you hand the work to does not.
+
+The evidence (DRE-2694, 2026-08-23): the `tdd` job has been unchanged since
+2026-07-11 and hand-built work honoured it flawlessly for six weeks, in-session,
+where the discipline was already in context. The day hand-built CODE work was
+first handed to a sub-agent working from a brief that never mentioned the rule,
+two PRs broke it within hours — one blocked three hours on a change whose
+content was never wrong. Nothing regressed; the delegation did.
+
+So when you hand off work that will commit, write down: the test-first commit
+order, the local checks that must be green, and any required check the CI
+publishes. **Authorship will not tell you afterwards** — a sub-agent's commits
+carry the delegating human's git identity, so the record cannot distinguish
+"the operator worked in-session" from "the operator dispatched a sub-agent".
 
 ## Test rigor — no vacuous tests
 Every test must FAIL if the behavior it claims to verify is removed. Before the

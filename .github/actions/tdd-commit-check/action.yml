@@ -1,0 +1,106 @@
+# The TDD commit-order check, callable by any product repo's own CI (DRE-2694).
+#
+# THE DETECTION GAP. `scripts/check_tdd_commits.py` (DRE-2022) has been wired
+# into exactly ONE workflow in the fleet — this repo's `tests.yml`. The sweep
+# of 2026-08-23 checked all four open PRs for commit order:
+#
+#   #176  bureau-pipeline  code first, test 7h later  runs it  blocked 3h
+#   #178  bureau-pipeline  test + code in ONE commit   runs it  blocked
+#   #214  deltasolv        one commit                  no       red, unrelated
+#   #343  portico          code first, then test       no       GREEN
+#
+# So the discipline is not being broken in one repo and honoured elsewhere —
+# it is being broken fleet-wide and detected in one place, and "green" across
+# the fleet does not mean the order was right.
+#
+# This action is the carrier. Product CI is product-specific and stays in the
+# product repo (see the README), but the CHECK is not: one file, called from
+# every repo's own `ci.yml`, with no per-copy to drift.
+#
+#   # .github/workflows/ci.yml in a product repo
+#   tdd:
+#     name: TDD commit discipline     # <- the check-run name the fix loop matches
+#     if: github.event_name == 'pull_request'
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           fetch-depth: 0            # the check walks the PR's whole commit list
+#       - name: RED test precedes implementation
+#         uses: dreadnought-foundry/bureau-pipeline/.github/actions/tdd-commit-check@v7
+#         with:
+#           base-ref: ${{ github.event.pull_request.base.ref }}
+#           head-sha: ${{ github.event.pull_request.head.sha }}
+#           pr-author: ${{ github.event.pull_request.user.login }}
+#
+# NAME THE JOB `TDD commit discipline`. GitHub publishes the check run under
+# the job name, and scripts/unfixable_checks.py matches on it to escalate a PR
+# this class of failure has stranded. A differently named job still gates the
+# merge; it just loses the fix loop's first-attempt escalation.
+#
+# WHICH REF. Like the other actions here, the caller's `uses:` line takes a
+# LITERAL ref — `@main` for the canary repos (agent-bureau, bureau-pipeline)
+# and `@vN` everywhere else — because a `uses:` reference cannot carry an
+# expression. Repointing it is part of the promotion step. See the README's
+# "Which ref a repo may use".
+#
+# WHAT THIS ACTION MUST NEVER DO: check out dreadnought-foundry/bureau-pipeline.
+# An action cannot receive `pipeline_ref`, so a checkout in here could not be
+# pinned by any mechanism we have. It does not need one: a remote action is
+# fetched with its whole repository at the caller's ref, so the ONE checker
+# already sits beside it at `$GITHUB_ACTION_PATH/../../../scripts/`.
+# tests/test_shared_node_action.py sweeps every action here and fails if a
+# checkout appears.
+name: TDD commit discipline
+description: >-
+  Fail a pull request whose first code commit is not preceded by a commit
+  touching tests/ — the bureau's test-first discipline, enforced mechanically
+  from one source (DRE-2022, distributed by DRE-2694).
+
+inputs:
+  base-ref:
+    description: The PR's base branch name (github.event.pull_request.base.ref).
+    required: true
+  head-sha:
+    description: The PR's head sha (github.event.pull_request.head.sha).
+    required: true
+  pr-author:
+    description: >-
+      The PR author's login (github.event.pull_request.user.login) — decides
+      the dependabot exemption (DRE-2049) from GitHub-attested identity, never
+      from the spoofable branch name.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # A depth-1 checkout cannot answer "which commits are this PR's own", and
+    # a base ref that was never fetched makes `base..head` unresolvable — the
+    # checker would exit 2 (cannot evaluate) and read as an infra failure
+    # rather than as a caller that forgot `fetch-depth: 0`. Deepen what we can
+    # and say plainly what is wrong when we cannot.
+    - name: Ensure the PR's history is present
+      shell: bash
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+      run: |
+        if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
+          echo "shallow clone — deepening (call actions/checkout with fetch-depth: 0)"
+          git fetch --quiet --unshallow || git fetch --quiet --deepen=2147483647 || true
+        fi
+        git rev-parse --verify --quiet "origin/$BASE_REF" >/dev/null || \
+          git fetch --quiet --no-tags origin \
+            "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+    # Refs ride env, never shell interpolation — a crafted branch name must
+    # not become shell input (the same rule tests.yml follows).
+    - name: RED test precedes implementation
+      shell: bash
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        PR_AUTHOR: ${{ inputs.pr-author }}
+      run: |
+        python3 "$GITHUB_ACTION_PATH/../../../scripts/check_tdd_commits.py" \
+          "origin/$BASE_REF" "$HEAD_SHA"
