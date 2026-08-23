@@ -283,10 +283,22 @@ def hand_built(card: dict) -> bool:
 # no dependencies here" was parsed as declaring one.
 #
 # So the phrase must OPEN the line (after list/quote/heading/emphasis markup)
-# and be followed by a colon or the ids themselves. Same shape as
-# `linear_ops._BLOCKED_BY_RE`, which turns these lines into real relations.
+# and be followed by a colon or the ids themselves. Same anchored idea as
+# `linear_ops._BLOCKED_BY_RE`, which turns these lines into real relations —
+# that one is deliberately narrower (bold-or-bare "Blocked by:" only), and
+# narrower is safe here: this gate reading MORE declarations than the creation
+# path writes relations for can only hold a card, never release one early.
+#
+# The prefix accepts ORDERED list markers too (`1.` / `2)`). card-quality.md
+# promises the declaration may sit "inside a list item" without naming a style,
+# and numbered acceptance-criteria lists are common on these cards — dropping
+# them failed UNSAFE (the opposite of DRE-2492): a card with a real, undone
+# dependency would have read as free to promote. The marker only widens what
+# may PRECEDE the phrase, so a numbered line that merely mentions a dependency
+# mid-sentence still declares nothing.
 _BLOCKER_LINE = re.compile(
     r"^[\s>*_`~+#-]*"                             # -, *, >, #, **bold**, `code`
+    r"(?:\d+[.)][\s>*_`~+#-]*)?"                  # 1. / 2) ordered list item
     r"(?:blocked by|serialize after|depends on)"
     r"[\s*_`]*"                                   # closing emphasis markers
     r"(?::|(?=\s*DRE-\d+))",                      # a colon, or the ids directly

@@ -104,6 +104,14 @@ def test_mid_sentence_serialize_after_yields_zero_blockers():
     assert reconcile.blockers_of(card) == set()
 
 
+def test_numbered_prose_that_only_mentions_yields_zero_blockers():
+    """Accepting ordered-list markers must not re-open the mention hole: a
+    numbered step whose text merely TALKS about a dependency still declares
+    nothing."""
+    card = _card("1. Ship the rail. B3 is formally blocked by DRE-2496, per the plan.")
+    assert reconcile.blockers_of(card) == set()
+
+
 @pytest.mark.parametrize(
     "line",
     [
@@ -113,6 +121,14 @@ def test_mid_sentence_serialize_after_yields_zero_blockers():
         "- **Blocked by:** DRE-9",
         "* Blocked by: DRE-9",
         "> **Blocked by:** DRE-9",
+        # Ordered list items too: `standards/card-quality.md` promises "inside a
+        # list item" without naming a style, and numbered acceptance-criteria
+        # lists are common on these cards. Dropping these fails UNSAFE — a card
+        # with a real, undone dependency would read as free to promote.
+        "1. Blocked by: DRE-9",
+        "2) Depends on: DRE-9",
+        "3. **Blocked by:** DRE-9",
+        "10) Serialize after: DRE-9",
         "Blocked by DRE-9",
         "**Depends on:** DRE-9",
         "Depends on DRE-9",

@@ -29,9 +29,10 @@ right and the gate is a no-op.
   cross-component contract; read it before coding.
 - **`**Blocked by:** DRE-N, DRE-M`** — a body line the console parses into the
   dependency gate. It must **open its own line** (`Blocked by:` /
-  `Serialize after:` / `Depends on:`, optionally inside a list item or bold
-  markup) — the gate reads a declaration, never a mention, so an ordinary
-  sentence that happens to say "blocked by" or "depends on" is just prose
+  `Serialize after:` / `Depends on:`, optionally inside a list item — bulleted
+  or numbered — or bold markup) — the gate reads a declaration, never a
+  mention, so an ordinary sentence that happens to say "blocked by" or
+  "depends on" is just prose
   (DRE-2670: epic DRE-2492 froze five of its own children for five days on the
   sentence *"neither depends on the other"*). **Never name the parent epic
   here** (epics stay In Progress → deadlock). Also set the Linear formal
