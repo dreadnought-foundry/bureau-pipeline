@@ -592,7 +592,9 @@ sys.exit(0)
 class GateScenarioTest(unittest.TestCase):
     HEAD = "3e00473c" + "0" * 32
 
-    def _run(self, check_runs, thread=()):
+    def _run(self, check_runs, thread=(), card_held=0, linear_exit=0):
+        """`linear_exit` makes every linear_ops call fail — count-comments then
+        answers nothing at all, the shape a real API blip has."""
         """Execute the gate's real run block. Returns (proc, outputs, posted,
         linear_calls)."""
         step = None
@@ -613,8 +615,12 @@ class GateScenarioTest(unittest.TestCase):
         )
         linear_log = td / "linear.jsonl"
         (td / ".bureau-pipeline" / "scripts" / "linear_ops.py").write_text(
-            "#!/usr/bin/env python3\nimport json, sys\n"
+            "#!/usr/bin/env python3\nimport json, os, sys\n"
             f"open({str(linear_log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "code = int(os.environ.get('STUB_LINEAR_EXIT', '0'))\n"
+            "if sys.argv[1:2] == ['count-comments'] and not code:\n"
+            "    print(os.environ.get('STUB_CARD_HELD', '0'))\n"
+            "sys.exit(code)\n"
         )
         gh = td / "bin" / "gh"
         gh.write_text(GH_STUB)
@@ -639,7 +645,9 @@ class GateScenarioTest(unittest.TestCase):
                  "GH_POSTED": str(td / "posted.md"),
                  "GH_TOKEN": "test", "LINEAR_API_KEY": "test-key",
                  "HEAD_SHA": self.HEAD, "CARD": "DRE-2672",
-                 "PR": "176", "ATTEMPT": "1"},
+                 "PR": "176", "ATTEMPT": "1",
+                 "STUB_CARD_HELD": str(card_held),
+                 "STUB_LINEAR_EXIT": str(linear_exit)},
         )
         outputs = dict(
             line.split("=", 1) for line in out.read_text().splitlines() if "=" in line
@@ -693,31 +701,80 @@ class GateScenarioTest(unittest.TestCase):
         self.assertEqual(calls, [])
 
     # -- adversarial ------------------------------------------------------
-    def test_a_second_run_on_the_same_head_does_not_repeat_the_hold(self):
+    def _hold_key(self, sha8=None):
+        return f"{unfixable_checks.HOLD_MARKER} @{sha8 or self.HEAD[:8]}"
+
+    def _prior_pr_hold(self, login="agent-bureau-bot[bot]", sha8=None):
+        return {"user": {"login": login},
+                "body": f"🛑 held\n\n{self._hold_key(sha8)}"}
+
+    def test_a_second_run_on_the_same_head_does_not_repeat_the_notices(self):
         """The critic can re-fire on the same commit. The hold still stands —
-        escalate must stay true — but the PR must not collect a second copy."""
-        prior = {"user": {"login": "agent-bureau-bot[bot]"},
-                 "body": f"🛑 {unfixable_checks.HOLD_MARKER} ... {self.HEAD[:8]}"}
-        proc, outputs, posted, calls = self._run(self._red_tdd(), thread=[prior])
+        escalate must stay true — but neither side collects a second copy."""
+        proc, outputs, posted, calls = self._run(
+            self._red_tdd(), thread=[self._prior_pr_hold()], card_held=1
+        )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(outputs.get("escalate"), "true")
         self.assertEqual(posted, "", "the hold was posted twice on one head")
-        self.assertEqual(calls, [], "the card was parked twice on one head")
+        self.assertEqual([c for c in calls if c[0] == "comment"], [],
+                         "the card was noted twice on one head")
+
+    def test_the_park_is_re_applied_even_when_both_notices_already_landed(self):
+        """add-label and the park are no-ops when already applied, so they sit
+        behind no receipt at all — that is what makes a retry free, and it is
+        how the Report step's park_for_human() has always worked."""
+        _, _, _, calls = self._run(
+            self._red_tdd(), thread=[self._prior_pr_hold()], card_held=1
+        )
+        self.assertIn(["add-label", "DRE-2672", "needs-human"], calls)
+        self.assertTrue(any(c[0] in ("advance", "state") for c in calls))
+
+    # THE DEFECT the critic caught: one shared receipt let a Linear blip
+    # disappear the human-facing notification for good. The PR comment landed,
+    # a `|| true` Linear call failed silently, and every later run saw the PR
+    # marker and skipped the card entirely — a hold visible on the PR and
+    # nothing at all in the CEO's queue.
+    def test_a_landed_pr_hold_does_not_suppress_a_card_note_that_never_landed(self):
+        proc, outputs, posted, calls = self._run(
+            self._red_tdd(), thread=[self._prior_pr_hold()], card_held=0
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(outputs.get("escalate"), "true")
+        self.assertEqual(posted, "", "the PR side must still not repeat itself")
+        note = [c for c in calls if c[0] == "comment"]
+        self.assertEqual(len(note), 1, "the card note was never retried")
+        self.assertIn(["add-label", "DRE-2672", "needs-human"], calls)
+
+    def test_a_landed_card_note_does_not_suppress_a_pr_hold_that_never_landed(self):
+        """The mirror image — each side reads the side it guards."""
+        _, outputs, posted, calls = self._run(
+            self._red_tdd(), thread=[], card_held=1
+        )
+        self.assertEqual(outputs.get("escalate"), "true")
+        self.assertIn(unfixable_checks.HOLD_MARKER, posted)
+        self.assertEqual([c for c in calls if c[0] == "comment"], [])
+
+    def test_an_unreadable_card_receipt_retries_rather_than_going_quiet(self):
+        """A duplicate note is noise; a missing one is the stall this card is
+        about. So a count-comments that errors counts as ABSENT."""
+        _, _, _, calls = self._run(self._red_tdd(), card_held=1, linear_exit=1)
+        self.assertEqual(len([c for c in calls if c[0] == "comment"]), 1)
 
     def test_a_hold_from_an_earlier_head_does_not_suppress_this_one(self):
         """Sha-bound, like the convergence halt: a new commit is a new fact."""
-        prior = {"user": {"login": "agent-bureau-bot[bot]"},
-                 "body": f"🛑 {unfixable_checks.HOLD_MARKER} ... deadbeef"}
-        _, outputs, posted, _ = self._run(self._red_tdd(), thread=[prior])
+        _, outputs, posted, _ = self._run(
+            self._red_tdd(), thread=[self._prior_pr_hold(sha8="deadbeef")]
+        )
         self.assertEqual(outputs.get("escalate"), "true")
         self.assertIn(unfixable_checks.HOLD_MARKER, posted)
 
     def test_a_planted_hold_from_another_author_does_not_suppress_it(self):
         """DRE-1995: anyone can comment on a PR. Only the worker bot's own
         marker counts, or a stranger could silence the escalation."""
-        prior = {"user": {"login": "someone"},
-                 "body": f"🛑 {unfixable_checks.HOLD_MARKER} ... {self.HEAD[:8]}"}
-        _, outputs, posted, _ = self._run(self._red_tdd(), thread=[prior])
+        _, outputs, posted, _ = self._run(
+            self._red_tdd(), thread=[self._prior_pr_hold(login="someone")]
+        )
         self.assertEqual(outputs.get("escalate"), "true")
         self.assertIn(unfixable_checks.HOLD_MARKER, posted)
 

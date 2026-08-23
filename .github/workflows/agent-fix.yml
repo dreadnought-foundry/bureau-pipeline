@@ -312,25 +312,51 @@ jobs:
 
           # Idempotent per head sha (the fix-convergence-halt pattern,
           # DRE-2024): the critic can re-fire on the same commit, and a second
-          # identical hold comment is noise on a PR a human is already reading.
+          # identical hold is noise on a PR a human is already reading.
+          #
+          # TWO INDEPENDENT RECEIPTS, one per side, each read from the side it
+          # guards. One shared receipt would let a Linear blip disappear the
+          # notification permanently: the PR comment lands, a `|| true` Linear
+          # call fails silently, and every later run sees the PR marker and
+          # skips the whole block — the PR shows a hold, the card never gets
+          # `needs-human`, and the CEO's "needs you" queue stays quiet. That is
+          # this card's own defect rebuilt one layer over. So the PR side asks
+          # the PR, the card side asks the CARD (console-honesty rule 1: derive
+          # from truth, never from an adjacent signal), and neither can
+          # suppress the other. An unreadable receipt counts as ABSENT — a
+          # duplicate note is noise, a missing one is the stall.
           SHA8=${HEAD_SHA:0:8}
+          HOLD_KEY="unfixable-check-hold @$SHA8"
           HELD=$(gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
-            | jq --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("unfixable-check-hold")) | select(.body | contains($sha8))] | length')
+            | jq --arg key "$HOLD_KEY" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains($key))] | length')
           if [ "${HELD:-0}" -eq 0 ]; then
-            printf '%s\n\nHead: `%s`\n' "$(cat /tmp/unfixable-comment.md)" "$SHA8" \
+            printf '%s\n\n%s\n' "$(cat /tmp/unfixable-comment.md)" "$HOLD_KEY" \
               > /tmp/unfixable-comment-final.md
             gh pr comment "$PR" --repo ${{ github.repository }} \
               --body-file /tmp/unfixable-comment-final.md
-            if [ -n "$CARD" ]; then
-              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "$(cat /tmp/unfixable-card.md)" || true
-              python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
-              python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Plan Review" "In QA,In Progress,Todo" || \
-                python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review" --park || true
-            fi
           else
-            echo "hold already posted for $SHA8 — not repeating it"
+            echo "PR hold already posted for $SHA8 — not repeating it"
+          fi
+
+          if [ -n "$CARD" ]; then
+            CARD_HELD=$(python3 .bureau-pipeline/scripts/linear_ops.py \
+              count-comments "$CARD" "$HOLD_KEY" 2>/dev/null || true)
+            case "$CARD_HELD" in ''|*[!0-9]*) CARD_HELD=0 ;; esac
+            if [ "$CARD_HELD" -eq 0 ]; then
+              printf '%s\n\n%s\n' "$(cat /tmp/unfixable-card.md)" "$HOLD_KEY" \
+                > /tmp/unfixable-card-final.md
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                "$(cat /tmp/unfixable-card-final.md)" || true
+            else
+              echo "card note already posted for $SHA8 — not repeating it"
+            fi
+            # Re-run every time, behind no receipt at all: both are no-ops when
+            # already applied, and that is exactly what makes a retry free. The
+            # Report step's park_for_human() has always worked this way.
+            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Plan Review" "In QA,In Progress,Todo" || \
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review" --park || true
           fi
           echo "escalate=true" >> "$GITHUB_OUTPUT"
 
