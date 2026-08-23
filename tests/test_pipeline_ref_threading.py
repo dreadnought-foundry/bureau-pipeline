@@ -16,8 +16,10 @@ runs as a Pipeline Tests step and whose functions these tests exercise):
     context (workflow_dispatch / repository_dispatch / schedule) still
     lands on main exactly like the old ref-less checkout.
   * EVERY reusable workflow (workflow_call trigger) declares the
-    `pipeline_ref` input as type: string, default: main — so a stub that
-    omits it stays byte-identical to today's rolling @main channel.
+    `pipeline_ref` input as type: string, required: true, with NO default
+    (DRE-2689) — the default was the last way to be half pinned, letting a
+    caller pin `uses: …@stable`, omit the input, and run channel YAML over
+    main scripts with nothing reporting it.
 
 Live-extraction pattern (like tests/test_merge_gate_authorship.py): the
 Live* tests parse the ACTUAL workflow files, so a future diff that adds a
@@ -109,7 +111,10 @@ class LiveWorkflowsTest(unittest.TestCase):
                     spec, f"{name}: no pipeline_ref workflow_call input"
                 )
                 self.assertEqual(spec.get("type"), "string", name)
-                self.assertEqual(spec.get("default"), "main", name)
+                self.assertIs(spec.get("required"), True, name)
+                self.assertNotIn(
+                    "default", spec, f"{name}: a default re-opens the half pin"
+                )
 
     def test_every_internal_checkout_threads_the_input(self):
         """Explicit per-site enumeration (readable failure per site)."""
@@ -154,7 +159,7 @@ class SyntheticViolationsTest(unittest.TestCase):
         pipeline_ref value would never reach this checkout."""
         v = self.check(
             """
-            on: {workflow_call: {inputs: {pipeline_ref: {type: string, default: main}}}}
+            on: {workflow_call: {inputs: {pipeline_ref: {type: string, required: true}}}}
             jobs:
               j:
                 steps:
@@ -172,16 +177,34 @@ class SyntheticViolationsTest(unittest.TestCase):
         self.assertEqual(len(v), 1)
         self.assertIn("lacks the 'pipeline_ref' input", v[0])
 
-    def test_wrong_default_flagged(self):
+    def test_optional_input_flagged(self):
+        """DRE-2689: an optional input is how a stub gets half pinned."""
         v = self.check(
-            "on: {workflow_call: {inputs: {pipeline_ref: {type: string, default: v1}}}}\njobs: {}"
+            "on: {workflow_call: {inputs: {pipeline_ref: {type: string, required: false}}}}\njobs: {}"
         )
         self.assertEqual(len(v), 1)
-        self.assertIn("must default to 'main'", v[0])
+        self.assertIn("must be required: true", v[0])
+
+    def test_absent_required_flagged(self):
+        """Omitting `required` is optional-by-default, so it must fail too."""
+        v = self.check(
+            "on: {workflow_call: {inputs: {pipeline_ref: {type: string}}}}\njobs: {}"
+        )
+        self.assertEqual(len(v), 1)
+        self.assertIn("must be required: true", v[0])
+
+    def test_default_flagged(self):
+        """The `main` default was the last half-pin route (DRE-2689): with it
+        present a caller can pin @stable, pass nothing, and float."""
+        v = self.check(
+            "on: {workflow_call: {inputs: {pipeline_ref: {type: string, required: true, default: main}}}}\njobs: {}"
+        )
+        self.assertEqual(len(v), 1)
+        self.assertIn("must carry no default", v[0])
 
     def test_wrong_type_flagged(self):
         v = self.check(
-            "on: {workflow_call: {inputs: {pipeline_ref: {type: boolean, default: main}}}}\njobs: {}"
+            "on: {workflow_call: {inputs: {pipeline_ref: {type: boolean, required: true}}}}\njobs: {}"
         )
         self.assertEqual(len(v), 1)
         self.assertIn("must be type: string", v[0])
@@ -192,7 +215,7 @@ class SyntheticViolationsTest(unittest.TestCase):
             on:
               workflow_call:
                 inputs:
-                  pipeline_ref: {type: string, default: main}
+                  pipeline_ref: {type: string, required: true}
             jobs:
               j:
                 steps:
