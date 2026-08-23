@@ -49,6 +49,16 @@ Called from tests.yml's `tdd` job (pull_request events only):
 
     python3 scripts/check_tdd_commits.py "origin/$BASE_REF" "$HEAD_SHA"
 
+…and, one rung earlier, by the writer against a branch that has not been
+pushed yet — the build agent's own step 4b in agent-task.yml, and the same
+line in standards/engineering.md for everyone who never sees that prompt:
+
+    python3 scripts/check_tdd_commits.py origin/<default-branch> HEAD
+
+Same rule, same exit codes; the difference is only what a red answer costs.
+Before the push it costs a local rebase. After it, only a human rewriting the
+branch can clear it (see below).
+
 Exit 0 → discipline holds (or the PR is exempt). Exit 1 → violation, with the
 plain-language message on stdout. Exit 2 → cannot evaluate (git error) — fail
 loud, never pass.
