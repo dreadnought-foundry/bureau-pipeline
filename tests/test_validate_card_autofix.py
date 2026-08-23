@@ -109,9 +109,10 @@ class InferRepoTest(unittest.TestCase):
         self.assertIn("agent-bureau", validate_card.VALID_SLUGS)
         self.assertEqual(
             validate_card.VALID_SLUGS,
-            {"atlas", "deltasolv", "vericorr", "agent-bureau",
+            {"atlas", "deltasolv", "agent-bureau",
              "agent-bureau-demo", "bureau-pipeline",  # DRE-1929 self-host
              "portico"},  # DRE-2086 docs-platform → portico rename
+            # DRE-2672: vericorr retired — the fleet no longer routes to it.
         )
 
 
@@ -236,6 +237,18 @@ class GateFixFirstTest(unittest.TestCase):
         self.assertEqual(fake.states, [("DRE-999", "Backlog")])
         self.assertEqual(fake.descriptions, [])
 
+    def test_retired_vericorr_project_bounces(self):
+        # DRE-2672: vericorr left the fleet. A card still filed under a
+        # "VeriCorr: …" project must NOT be routed — the prefix no longer
+        # resolves, so the gate bounces it to Backlog and writes no repo
+        # label. Fails if vericorr ever returns to VALID_SLUGS.
+        fake = FakeLinear(
+            "Todo", "Do the thing.", ["agent:engineer"], project="VeriCorr: Forms"
+        )
+        self.assertTrue(self._run(fake))
+        self.assertEqual(fake.states, [("DRE-999", "Backlog")])
+        self.assertFalse(any(l[1].startswith("repo:") for l in fake.added_labels))
+
     # --- no-op paths ---
 
     def test_clean_card_untouched_no_autofix_comment(self):
@@ -276,11 +289,11 @@ class GateFixFirstTest(unittest.TestCase):
     def test_missing_repo_but_no_agent_label_both_handled(self):
         # repo inferable from project, agent label inferred from normal title.
         fake = FakeLinear(
-            "Todo", "Do it.", [], title="Plain card", project="VeriCorr: Forms"
+            "Todo", "Do it.", [], title="Plain card", project="DeltaSolv: Forms"
         )
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
-        self.assertIn(("DRE-999", "repo:vericorr"), fake.added_labels)
+        self.assertIn(("DRE-999", "repo:deltasolv"), fake.added_labels)
         self.assertEqual(fake.states, [])
 
 
