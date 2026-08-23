@@ -164,7 +164,12 @@ def _epic_2492():
 
 
 def test_epic_held_by_its_own_prose_is_no_longer_blocked():
-    with patch.object(reconcile, "_fetch_epic_relations", return_value=_epic_2492()):
+    # card_state is patched to a NON-terminal state on purpose: if the prose
+    # were still read as a declaration, the phantom blocker would resolve to a
+    # live card and the gate would hold — a clean assertion failure, offline.
+    with patch.object(
+        reconcile, "_fetch_epic_relations", return_value=_epic_2492()
+    ), patch.object(reconcile, "card_state", return_value="In Progress"):
         assert reconcile.epic_blockers_unmet("DRE-2492") is False
 
 
@@ -185,9 +190,9 @@ def test_children_of_the_prose_jammed_epic_promote():
     ]
     with patch.object(reconcile, "backlog_children", return_value=kids), patch.object(
         reconcile, "_fetch_epic_relations", return_value=_epic_2492()
-    ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
-        reconcile.linear_ops, "cmd_comment"
-    ):
+    ), patch.object(reconcile, "card_state", return_value="In Progress"), patch.object(
+        reconcile.linear_ops, "cmd_advance"
+    ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 5
     assert advance.call_count == 5
