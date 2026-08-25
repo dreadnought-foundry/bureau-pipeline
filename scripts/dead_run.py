@@ -200,8 +200,7 @@ def decide(
             [
                 f"🪦 {TURN_TAG}: the agent ran out of steps — it hit {facts} "
                 f"and stopped before opening a PR. That was a full run doing "
-                f"real work, not a failure to reach the model, so no attempt "
-                f"budget is charged for a service problem that did not happen. "
+                f"real work, not a credentials or connection problem. "
                 f"Requeued to Todo for one more attempt (turn exhaustion "
                 f"{prior_dead + 1}/{turn_cap + 1}); how far an agent gets "
                 f"varies run to run. If the next run hits the cap too, the card "

@@ -523,6 +523,28 @@ class BuildRunTurnExhaustionTest(unittest.TestCase):
             f"{dead_run.ERROR_MARKER_PREFIX} claude-opus-5", d.comments[0]
         )
 
+    def test_model_fallback_cannot_fire_on_an_exhaustion_receipt(self):
+        # End of the chain, not just the substring: the selector reads the
+        # marker back out of the card's comments. Feed it the real receipts
+        # and it must find nothing to swing on — DRE-2695's card carried
+        # `model-error: claude-opus-5` for a run that hit a budget ceiling.
+        import model_fallback
+
+        bodies = [
+            self.decide(0, error_model="claude-opus-5").comments[0],
+            self.decide(dead_run.TURN_REQUEUE_CAP,
+                        error_model="claude-opus-5").comments[0],
+        ]
+        self.assertIsNone(model_fallback.last_error_model(bodies))
+        # Same reader, an API death: the DRE-1354 swing still works.
+        self.assertEqual(
+            model_fallback.last_error_model(
+                [dead_run.decide(0, is_error=True,
+                                 error_model="claude-opus-5").comments[0]]
+            ),
+            "claude-opus-5",
+        )
+
     def test_cli_turn_exhaustion_reads_the_execution_file(self):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "out.json")
