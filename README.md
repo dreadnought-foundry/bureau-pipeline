@@ -381,22 +381,33 @@ reason, and unset means run. **Write that reason as
 `who=<name> since=<ISO date> <why>`** — the staleness alarm below reports a
 held channel back to the CEO, and GitHub will not tell it who set a variable
 or when (that API needs an admin token the workflows do not carry), so a hold
-that skips the convention is reported as a hold nobody will own. What
-automatic promotion deliberately does **not** do:
+that skips the convention is reported as a hold nobody will own.
 
-- **No product repo pins `@stable`.** Nothing consumes this ref. No stub
-  was re-pointed, and the pairing rule above is untouched — the fleet is on
-  `vN` with a matching `pipeline_ref: vN`, exactly as before.
-- **`vN` promotion is unchanged and remains operator-only**: the `git tag
-  -f` and the stub re-point above are still a human's job, and still the
-  gate between a merge here and anything the fleet runs.
+**The fleet pins `@stable`, and has since 2026-08-23 (DRE-2553).** This
+section used to say the opposite — *"no product repo pins `@stable`;
+nothing consumes this ref"* — and that is recorded here rather than quietly
+deleted. It stayed wrong for four days while five PRs contradicted it: the
+wave that shipped this channel staled its own engine's front page
+(`agent-bureau`, `architecture/post-mortems/wave-1-the-safety-rail.md` §8).
 
-Its value today is that the pre-tag question — *which sha has the harness
-proved?* — is answered continuously instead of by a hand-run dispatch; the
-operator still picks the soaked sha and still cuts it. Whether the
-fleet ever pins `stable` directly and the manual cut retires is a **later
-decision, not part of DRE-2551**; until it is made and written here, `vN`
-is the only channel the fleet consumes.
+Every consumer stub now rides `…@stable` **and** passes
+`pipeline_ref: stable`. That input is **required** since DRE-2689 — a caller
+must pass the same ref it pins in `uses:`, or it runs channel workflow YAML
+over another ref's scripts, which is pinned to everything that counts refs
+and not actually pinned. No repo consumes a `vN` tag.
+
+**This repo is the exception, deliberately.** Its own `uses:` are
+fully-qualified `@main` self-callers, so a PR editing `merge-gate.yml`
+cannot choose the logic that merges it — `@main` pins the gate to the
+already-merged version. A standing decision, not an outstanding repointing.
+
+**Which repo is on which ref is computed, never remembered here.** The
+roster is `agent-bureau`'s `config/repo-map.json`; each repo's expected ref
+and the reason for it live in `config/pipeline-channel.json`; and
+`make check-channel-fleet` reads every repo live and compares the two. Ask
+that command rather than trusting a number written into prose — the
+sentence this replaced is what an enumeration looks like once the set has
+moved (`adr-one-writer-per-fact`, DRE-2605).
 
 The harness is also a PR gate here: `harness.yml` runs on pull requests
 touching the boundary paths (workflow wiring + the dispatch/gate scripts),
