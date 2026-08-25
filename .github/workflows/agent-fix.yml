@@ -782,6 +782,29 @@ jobs:
                   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
                     "🤖 The AI service was unavailable during the last fix run — an outage, not a problem with the work. The pipeline retries automatically; no action needed." || true
                 fi
+              elif [ "$ACTION" = "retry-turns" ]; then
+                # DRE-2312: the run ran out of steps. Say that, and only that
+                # — this used to post the outage line above, which sent the
+                # operator to the credential chain for a run that never had a
+                # service problem. One retry (agent runs vary in how far they
+                # get); no park, no needs-human.
+                gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY"
+                if [ -n "$CARD" ]; then
+                  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                    "🤖 The last fix run ran out of steps before it could finish — it used a full run of real work and stopped at its step limit. Nothing is wrong with the setup. The pipeline retries once automatically; no action needed." || true
+                fi
+              elif [ "$ACTION" = "hold-turns" ]; then
+                # Second exhaustion: stop buying identical attempts and tell
+                # the operator the actual remedy (split it, or raise the
+                # budget) instead of a third $5 run into the same wall.
+                gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY
+
+          $FORMAT"
+                if [ -n "$CARD" ]; then
+                  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                    "🙋 Two fix runs in a row ran out of steps on this PR before finishing — both did real work and hit their step limit. That means the remaining fix is too big for one sitting, so it needs breaking into smaller pieces rather than another retry. This needs your look. Details on PR #$PR. Move it to **Todo** to try again anyway, or to **Backlog** to drop it." || true
+                fi
+                park_for_human
               elif [ "$ACTION" = "hold" ]; then
                 gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY
 

@@ -25,11 +25,37 @@ execution file's own result record (DRE-2435, see execution_result.py) — a
 whitelist of scalar fields, never the transcript. It prints on the
 --ignore-is-error path too: that is the death the Report step REQUEUES
 silently, so this log line is the only trace it leaves behind.
+
+DRE-2312 — WHICH KIND OF DEATH. `is_error: true` is not one fact, it is two,
+and this module is where every caller learns which:
+
+  * `turn_exhaustion` — the agent hit claude-code-action's turn ceiling
+    (`subtype: error_max_turns`, `terminal_reason: max_turns`, "Reached
+    maximum number of turns (60)"). It RAN, it spent minutes and dollars, and
+    it stopped mid-task. Nothing about the service, the model or the
+    credentials failed.
+  * `api_death` — everything else that ends is_error: the transport/auth
+    failures and mid-run usage-limit deaths DRE-1354 was written for.
+
+The split matters because the outage story is expensive: "the AI service was
+unavailable" sends the reader to the credential chain (`make cred-doctor`
+exists because that hunt is a known time sink), and the retry policies differ.
+Callers ask classify_death() / is_turn_exhaustion() / is_api_death(); nobody
+re-derives it from `is_error` locally (agent-task.yml did, and DRE-2695's
+turn-exhausted BUILD run was reported as an API/model death with a
+`model-error:` marker while the shared predicate sat one import away).
+
+    python3 check_agent_result.py classify <execution-json-path>
+
+prints exactly one of `turn_exhaustion` / `api_death` / `none` — the form the
+workflows call, so a shell branch never needs its own is_error test.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -39,13 +65,147 @@ from execution_result import (  # noqa: E402
     print_failure_detail,
 )
 
+# The death classes classify_death() returns. Strings, not an enum: they cross
+# a shell boundary (the `classify` CLI) into workflow `if` tests.
+DEATH_NONE = "none"
+DEATH_TURN_EXHAUSTION = "turn_exhaustion"
+DEATH_API = "api_death"
+
+# claude-code-action's own names for hitting the turn ceiling. `subtype` is the
+# canonical one; `terminal_reason`/`stop_reason` and the human sentence in
+# `result` are carried too, because the observed payloads (portico PR #170,
+# agent-bureau run 32791846359) did not all set the same field.
+_TURN_CAP_SUBTYPES = ("error_max_turns",)
+_TURN_CAP_REASONS = ("max_turns",)
+_TURN_CAP_TEXT = "maximum number of turns"
+# "Reached maximum number of turns (60)" — the cap the message can be built on.
+_TURN_CAP_NUMBER = re.compile(r"maximum number of turns\s*\((\d+)\)", re.I)
+
+# The POSITIVE signature of a genuine transport/auth failure (DRE-2365): it
+# returns in well under a second, on one turn, having spent nothing. A run that
+# spent money and took minutes did not fail to reach the service.
+_OUTAGE_MAX_DURATION_MS = 1000
+
+
+def _number(execution: dict, field: str) -> int | float | None:
+    """A numeric whitelist field, or None. bools are not numbers here — none of
+    these fields is ever legitimately one."""
+    value = execution.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def has_service_outage_signature(execution: dict | None) -> bool:
+    """True when the record carries the positive signature of a REAL outage.
+
+    This is what makes the split safe rather than guesswork: rather than
+    inferring an outage from the ABSENCE of `error_max_turns`, we can point at
+    what a failure to reach the service actually looks like — sub-second
+    `duration_ms`, `num_turns: 1`, `total_cost_usd: 0`. Used as a guard: a run
+    that never got a turn and spent nothing cannot have exhausted a 60-turn
+    budget, whatever else its record says.
+    """
+    if not isinstance(execution, dict):
+        return False
+    turns = _number(execution, "num_turns")
+    cost = _number(execution, "total_cost_usd")
+    duration = _number(execution, "duration_ms")
+    if turns is None or cost is None or duration is None:
+        return False
+    return turns <= 1 and cost == 0 and duration < _OUTAGE_MAX_DURATION_MS
+
+
+def _turn_cap_evidence(execution: dict) -> bool:
+    """True when the record positively says the run hit the turn ceiling."""
+    if str(execution.get("subtype") or "").strip() in _TURN_CAP_SUBTYPES:
+        return True
+    for field in ("terminal_reason", "stop_reason"):
+        if str(execution.get(field) or "").strip() in _TURN_CAP_REASONS:
+            return True
+    for field in ("result", "errors", "error"):
+        value = execution.get(field)
+        if not value:
+            continue
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        if _TURN_CAP_TEXT in text.lower():
+            return True
+    return False
+
+
+def classify_death(execution: dict | None) -> str:
+    """Which kind of death this execution result records (DRE-2312).
+
+    DEATH_TURN_EXHAUSTION — it ran out of turns: a failed ATTEMPT, retried at
+    most once and then escalated with the real reason.
+    DEATH_API — an API/model death: the outage path, unchanged (bounded
+    retries, model fallback, outage wording).
+    DEATH_NONE — it did not die (or there is no result record to say so).
+    """
+    if not is_error_death(execution):
+        return DEATH_NONE
+    if has_service_outage_signature(execution):
+        # Nothing that returned in 400ms on one turn exhausted 60 turns.
+        return DEATH_API
+    if _turn_cap_evidence(execution):
+        return DEATH_TURN_EXHAUSTION
+    return DEATH_API
+
 
 def is_error_death(execution: dict | None) -> bool:
-    """True when the execution result is a mid-run API/model death
-    ({"is_error": true}). The single source of truth for is_error detection,
-    reused by agent-task's Report step to route the death through the
-    model-fallback requeue path (DRE-1354)."""
+    """True when the execution result records a mid-run DEATH ({"is_error":
+    true}) — either class. The single source of truth for is_error detection.
+
+    It says the run died, NOT why: the docstring here used to assert that
+    is_error MEANS an API/model death, and every reader downstream inherited
+    that (DRE-2312). Ask classify_death() before telling anyone a story about
+    the AI service.
+    """
     return execution is not None and execution.get("is_error") is True
+
+
+def is_turn_exhaustion(execution: dict | None) -> bool:
+    """True when the run died by hitting the turn cap."""
+    return classify_death(execution) == DEATH_TURN_EXHAUSTION
+
+
+def is_api_death(execution: dict | None) -> bool:
+    """True when the run died of an API/model failure — the outage path."""
+    return classify_death(execution) == DEATH_API
+
+
+def turn_exhaustion_facts(execution: dict | None) -> str:
+    """A human clause naming the cap and what the run actually spent, e.g.
+    "the 60-turn cap after 60 turns and $4.72".
+
+    Every turn-exhaustion message is built on this: the operator needs the
+    number the run hit and the budget it burned to judge whether the card needs
+    splitting. Degrades to "the turn cap" when the record carries no numbers —
+    it never prints a None.
+    """
+    execution = execution if isinstance(execution, dict) else {}
+    cap = None
+    for field in ("result", "errors", "error"):
+        value = execution.get(field)
+        if not value:
+            continue
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        m = _TURN_CAP_NUMBER.search(text)
+        if m:
+            cap = m.group(1)
+            break
+    if cap is None:
+        turns = _number(execution, "num_turns")
+        cap = str(int(turns)) if turns else None
+    head = f"the {cap}-turn cap" if cap else "the turn cap"
+    spent = []
+    turns = _number(execution, "num_turns")
+    if turns:
+        spent.append(f"{int(turns)} turns")
+    cost = _number(execution, "total_cost_usd")
+    if cost:
+        spent.append(f"${cost:.2f}")
+    return f"{head} after {' and '.join(spent)}" if spent else head
 
 
 def failure_reason(
@@ -90,6 +250,13 @@ def failure_reason(
 
 
 def main(argv: list[str]) -> int:
+    # `classify <execution-json-path>` (DRE-2312): print the death class and
+    # exit 0. This is the form the workflows call — one shared predicate, no
+    # inline `is_error` test in a shell step. Handled before the positional
+    # parsing below; "classify" is not a plausible execution-file path.
+    if argv and argv[0] == "classify":
+        print(classify_death(_load_execution(argv[1] if len(argv) > 1 else "")))
+        return 0
     # Optional trailing --ignore-is-error flag (DRE-1354): the Report step owns
     # the is_error→model-fallback requeue, so the gate should not hard-fail on it
     # (a hard fail re-runs the job on the same model via the medic).

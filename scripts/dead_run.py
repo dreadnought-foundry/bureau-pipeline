@@ -6,7 +6,7 @@ HELD for a human (Backlog + needs-human label) so the pipeline stops looping
 (DRE-1403). Three death classes share ONE cap, counted by the `dead-run-requeue`
 comment tag:
 
-  - silent  : ran out of turns with no PR/blocker (agent-task Report step)
+  - silent  : ended with no PR and no blocker note (agent-task Report step)
   - hung     : timed out, never reached Report (reconcile sweep)
   - is_error : an API/model death mid-run (DRE-1354) — PREVIOUSLY this failed the
                job and the medic re-ran it on the SAME model, bypassing the cap,
@@ -14,6 +14,20 @@ comment tag:
                same cap AND records which model died (`model-error:`), so the
                requeue's next attempt selects the ALTERNATE model
                (see model_fallback.py).
+
+TURN EXHAUSTION IS ITS OWN CLASS (DRE-2312), on its own tag and its own cap:
+
+  - turn_exhaustion : the agent hit claude-code-action's turn ceiling. It RAN —
+               agent-bureau run 32791846359 (DRE-2695) spent 36 minutes and
+               reached "3/5 implementation green" — and the card was still told
+               "agent died with API/model error (is_error) … dead run 1/3",
+               with a `model-error: claude-opus-5` marker that armed the
+               DRE-1354 fallback to switch models for a reason that did not
+               exist. A budget ceiling is not a model fault and not an outage:
+               it spends NO dead-run strike, writes NO model-error marker, is
+               requeued ONCE (the two DRE-2695 attempts diverged by ~10 minutes
+               at the same milestone — the cap is a race the retry can win),
+               and the SECOND one holds saying the card needs splitting.
 
 A CANCELLED run is NOT a death class (DRE-2074): when the agent step's outcome
 is `cancelled` (the job timeout, or an external/concurrency cancel), the agent
@@ -44,11 +58,23 @@ unit-tested here so the "is_error counts toward the cap" regression is pinned.
 
 from __future__ import annotations
 
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
 REQUEUE_CAP = 2  # requeue at most twice (attempts 1,2,3), then hold
+
+# Turn exhaustion's own budget tag and cap (DRE-2312). The string discipline
+# RESET_TAG documents below applies here too: counting is substring-based, so
+# TURN_TAG must not contain DEAD_TAG (every exhaustion would spend a death) and
+# DEAD_TAG must not contain TURN_TAG. "turn-exhaustion-requeue" and
+# "dead-run-requeue" share only the "-requeue" suffix; neither contains the
+# other, and tests/test_turn_exhaustion_not_outage.py pins both directions.
+TURN_TAG = "turn-exhaustion-requeue"
+TURN_REQUEUE_CAP = 1  # requeue once (attempts 1,2), then hold
 
 # The un-park marker. A held card that a human releases (`linear_ops.py unpark`)
 # gets this comment, and the death count is only the DEAD_TAG comments AFTER the
@@ -106,16 +132,28 @@ def decide(
     *,
     is_error: bool = False,
     error_model: str | None = None,
+    turn_exhaustion: bool = False,
+    turn_facts: str = "",
     cancelled: bool = False,
     run_url: str = "",
     cap: int = REQUEUE_CAP,
+    turn_cap: int = TURN_REQUEUE_CAP,
 ) -> Decision:
-    """Decide requeue-vs-hold for a death given the prior `dead-run-requeue`
-    count on the card.
+    """Decide requeue-vs-hold for a death given the prior requeue count on the
+    card — `dead-run-requeue` comments normally, `turn-exhaustion-requeue`
+    comments when `turn_exhaustion` (each class reads and spends its OWN
+    budget, so a card that survived two API deaths still gets its retry when it
+    later runs out of turns).
 
     `is_error`/`error_model`: this death was an API/model error on `error_model`
     — record a `model-error:` marker so the requeue switches models, and (the
     DRE-1354 contract) count it toward the SAME cap as silent/hung deaths.
+
+    `turn_exhaustion`/`turn_facts` (DRE-2312): the agent ran out of turns.
+    Wins over `is_error` (a turn-exhausted run also ends `is_error: true`, and
+    reading only that bit is the bug this closes). `turn_facts` is the clause
+    check_agent_result.turn_exhaustion_facts() builds — the cap it hit and what
+    it spent — so the message names real numbers instead of a shrug.
 
     `cancelled` (DRE-2074): the agent step was cancelled — killed by the job
     timeout or an external cancel while still working, NOT a death. Wins over
@@ -137,6 +175,37 @@ def decide(
                 "does NOT count as a dead run (DRE-2074). If the run concluded "
                 "without a PR, the reconcile sweep requeues it from GitHub's "
                 f"own conclusion — never over a live run.{run_suffix}"
+            ],
+        )
+    if turn_exhaustion:
+        # A failed ATTEMPT, reported as one: no dead-run strike, no
+        # model-error marker, one retry, then an escalation that names the
+        # actual remedy (DRE-2312).
+        facts = turn_facts or "the turn cap"
+        if prior_dead >= turn_cap:
+            return Decision(
+                "hold",
+                [
+                    f"🚨 held-for-human ({TURN_TAG} cap reached): the agent ran "
+                    f"out of steps {prior_dead + 1} times in a row — the last "
+                    f"run hit {facts} and stopped mid-task. Both were full runs "
+                    f"doing real work, so the evidence says this card does not "
+                    f"fit inside one run: parked in Backlog with the "
+                    f"'{HOLD_LABEL}' label until a human splits it into smaller "
+                    f"pieces (or raises the turn budget).{run_suffix}"
+                ],
+            )
+        return Decision(
+            "requeue",
+            [
+                f"🪦 {TURN_TAG}: the agent ran out of steps — it hit {facts} "
+                f"and stopped before opening a PR. That was a full run doing "
+                f"real work, not a credentials or connection problem. "
+                f"Requeued to Todo for one more attempt (turn exhaustion "
+                f"{prior_dead + 1}/{turn_cap + 1}); how far an agent gets "
+                f"varies run to run. If the next run hits the cap too, the card "
+                f"needs splitting into smaller pieces or a larger turn "
+                f"budget.{run_suffix}"
             ],
         )
     cause = (
@@ -193,14 +262,21 @@ def reset_comment(note: str = "") -> str:
 def main(argv: list[str]) -> int:
     """CLI for the workflow:
 
-      decide <prior_dead> [--is-error] [--error-model M] [--cancelled] [--run-url U]
+      decide <prior_dead> [--is-error] [--error-model M] [--cancelled]
+             [--turn-exhaustion [--execution-file PATH]] [--run-url U]
+
+    With --turn-exhaustion, <prior_dead> is the card's `turn-exhaustion-requeue`
+    count (its own budget) and --execution-file names the run's result JSON —
+    read here, so decide() stays the no-I/O core, for the cap and spend the
+    message quotes.
 
     Prints (to stdout) the action on the first line, then a blank line, then the
     comment body. The workflow reads line 1 for the branch and posts the body.
     """
     if not argv:
         print("usage: dead_run.py decide <prior_dead> [--is-error] "
-              "[--error-model M] [--cancelled] [--run-url U]")
+              "[--error-model M] [--cancelled] [--turn-exhaustion] "
+              "[--execution-file PATH] [--run-url U]")
         return 2
     cmd, *rest = argv
     if cmd != "decide":
@@ -209,20 +285,34 @@ def main(argv: list[str]) -> int:
     prior_dead = int(rest[0]) if rest and rest[0].lstrip("-").isdigit() else 0
     is_error = "--is-error" in rest
     cancelled = "--cancelled" in rest
+    turn_exhaustion = "--turn-exhaustion" in rest
     error_model = None
     run_url = ""
-    for flag, target in (("--error-model", "model"), ("--run-url", "url")):
+    exec_path = ""
+    for flag, target in (("--error-model", "model"), ("--run-url", "url"),
+                         ("--execution-file", "exec")):
         if flag in rest:
             i = rest.index(flag)
             if i + 1 < len(rest):
                 if target == "model":
                     error_model = rest[i + 1]
-                else:
+                elif target == "url":
                     run_url = rest[i + 1]
+                else:
+                    exec_path = rest[i + 1]
+    turn_facts = ""
+    if turn_exhaustion and exec_path:
+        import check_agent_result  # local: only this branch needs the loader
+
+        turn_facts = check_agent_result.turn_exhaustion_facts(
+            check_agent_result._load_execution(exec_path)
+        )
     d = decide(
         prior_dead,
         is_error=is_error,
         error_model=error_model,
+        turn_exhaustion=turn_exhaustion,
+        turn_facts=turn_facts,
         cancelled=cancelled,
         run_url=run_url,
     )
