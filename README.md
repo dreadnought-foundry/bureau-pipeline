@@ -3,12 +3,12 @@
 The Agent Bureau's pipeline, defined once. Every product repo
 (EveryBite/atlas, dreadnought-foundry/deltasolv, …) runs the SAME eight
 workflows from here via GitHub reusable workflows.
-A change merged to `main` in this repo is live in every product repo on its
-next trigger — `@main` is the rolling channel. For fleet repos that want
-change isolation there is a **tagged release channel** (`v1`, `v2`, …, cut by
-the operator): a stub pins `uses: ...@vN` **and** passes
-`pipeline_ref: vN`, and moves only when the operator re-points it. See
-"Release channel" below.
+A change merged to `main` in this repo is live on the next trigger in every
+repo pinned there — `@main` is the rolling channel, and only the canary
+repos ride it. **The fleet pins `@stable`**, a moving tag this repo advances
+by itself onto the newest `main` commit the integration harness has proved,
+paired with `pipeline_ref: stable`. Hand-cut `vN` tags still exist and stay
+the operator's to cut and move. See "Release channel" below.
 
 ```
 Linear card → relay Lambda → repository_dispatch on the product repo
@@ -131,10 +131,11 @@ again, which is the same defect one level down:
 # .github/workflows/reconcile.yml, plan.yml AND linear-sync.yml in the product repo
 jobs:
   call:
-    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@v5
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@stable
     with:
-      max_wip: "12"      # quoted — an unquoted 12 is a YAML int and GitHub
-                         # rejects it against a `type: string` input
+      pipeline_ref: stable   # required, and must match the uses: ref
+      max_wip: "12"          # quoted — an unquoted 12 is a YAML int and GitHub
+                             # rejects it against a `type: string` input
     secrets: inherit
 ```
 
@@ -216,7 +217,7 @@ tdd:
       with:
         fetch-depth: 0            # the check walks the PR's whole commit list
     - name: RED test precedes implementation
-      uses: dreadnought-foundry/bureau-pipeline/.github/actions/tdd-commit-check@v7
+      uses: dreadnought-foundry/bureau-pipeline/.github/actions/tdd-commit-check@stable
       with:
         base-ref: ${{ github.event.pull_request.base.ref }}
         head-sha: ${{ github.event.pull_request.head.sha }}
@@ -251,25 +252,30 @@ work, not something this repo can do to another.
 **`@main` is for the canary repos only.** `standards/engineering.md` is explicit:
 *"the fleet consumes tagged releases (`vN`, paired `pipeline_ref`), never this
 repo's live `main`; only agent-bureau and bureau-pipeline ride `@main` as the
-canary channel."* A composite action is no exception — it is consumed by the
+canary channel."* That quote names `vN` because it predates DRE-2553; the
+channel the fleet actually pins is now `@stable` (see "Release channel"
+below). The half that matters here is unchanged either way — **`@main` is
+still canary-only.** A composite action is no exception — it is consumed by the
 product repo's CI on its very next run, so an unpinned reference means a bad
 merge here reprograms that repo's CI with no canary soak and no promotion step.
 
-**Every other repo pins to the release tag**, exactly as its reusable-workflow
-stubs do:
+**Every other repo pins to the channel ref its stubs are on** — `@stable`
+today — exactly as those stubs do:
 
 ```yaml
 # .github/workflows/ci.yml in a product repo — pinned, like its stubs
-- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-node-cached@v6
-- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-python-cached@v6
+- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-node-cached@stable
+- uses: dreadnought-foundry/bureau-pipeline/.github/actions/setup-python-cached@stable
 ```
 
 Unlike the internal checkouts inside a reusable workflow, this one takes **no
 `pipeline_ref`** — a `uses:` reference cannot carry an expression. The ref is a
-literal, so **repointing it is part of the promotion step**, moved in lockstep
-with the workflow stubs and never left behind on `@main`.
+literal, so it must move in lockstep with the repo's workflow stubs and never
+be left behind on `@main`. On a moving channel ref that costs nothing — the
+tag advances and the reference follows; on a hand-cut `vN` it is part of the
+operator's promotion step.
 
-**No existing tag contains either action.** `v1`–`v5` were cut 2026-07-11 →
+**No cut `vN` tag contains either action.** `v1`–`v5` were cut 2026-07-11 →
 2026-07-21 and predate them, so `@v5` would not resolve to one. A product repo
 therefore cannot adopt these until a release containing them is cut — which is
 why Wave 1 sequences external adoption (Step 4) **after** automatic promotion
@@ -318,25 +324,28 @@ stub sets BOTH halves:
 ```yaml
 jobs:
   call:
-    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml@v1
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml@stable
     with:
-      pipeline_ref: v1   # MUST match the tag on the uses: line
+      pipeline_ref: stable   # MUST match the ref on the uses: line
     secrets: inherit
 ```
 
-**The pairing rule: `uses: ...@vN` must pair with `pipeline_ref: vN`.**
-The `uses:` ref pins only the top-level workflow YAML; `pipeline_ref` pins
-everything that YAML checks out and executes (scripts/briefs/standards). A
-stub that pins `uses:` but omits `pipeline_ref` runs vN YAML with @main
+**The pairing rule: whatever ref `uses: ...@<ref>` pins, `pipeline_ref` must
+repeat.** The `uses:` ref pins only the top-level workflow YAML;
+`pipeline_ref` pins everything that YAML checks out and executes
+(scripts/briefs/standards). A stub that pins `uses:` but omits
+`pipeline_ref` runs the pinned ref's YAML with `@main`
 scripts — the exact chimera this channel exists to prevent. Omitting both
 (plain `@main`, no input) is the rolling channel, unchanged.
 `scripts/check_pipeline_ref.py` (a Pipeline Tests step, unit-tested in
 `tests/test_pipeline_ref_threading.py`) fails CI here if any internal
 checkout stops threading the input.
 
-**Canary**: the fleet consumes the current `vN` tag. **agent-bureau is the
-designated canary and stays on `@main`** (no `pipeline_ref`), so every
-merge here soaks on the canary's real traffic before the fleet sees it.
+**Canary**: **agent-bureau is the designated canary and stays on `@main`**
+(no `pipeline_ref`), so every merge here soaks on the canary's real traffic
+before the fleet sees it. The fleet is one step behind the canary, on
+`@stable` — see the `stable` section below for what the fleet actually
+consumes.
 
 **Promotion** (operator-only, never an agent): agents author, human
 promotes, **harness proves** (DRE-2103). After a change has soaked on the
@@ -358,19 +367,25 @@ then does the operator cut or re-point the next tag at that sha —
 git tag -f v2 <candidate-sha> && git push origin v2 --force
 ```
 
-— then re-points fleet stubs (`@v1` → `@v2` together with
-`pipeline_ref: v2`) repo by repo. `release-gate.yml` fires on every `v*`
-tag push and goes loudly red when the tagged commit lacks a green harness
-stamp (`scripts/release_gate.py`, fail-closed) — it cannot un-push a tag,
-so a red run is the alarm to run the harness and re-point or drop the tag.
-Rollback is the same move in reverse: re-point the stub back to the
-previous tag pair (already-proved shas keep their stamps). Tags are not
+— then re-points any stub pinned to the old tag (`@v1` → `@v2` together
+with `pipeline_ref: v2`) repo by repo. `release-gate.yml` fires on every
+`v*` tag push and goes loudly red when the tagged commit lacks a green
+harness stamp (`scripts/release_gate.py`, fail-closed) — it cannot un-push
+a tag, so a red run is the alarm to run the harness and re-point or drop
+the tag. Rollback is the same move in reverse: re-point the stub back to
+the previous tag pair (already-proved shas keep their stamps). Tags are not
 PR-reviewable, so cutting/moving `vN` is deliberately a human step outside
-the pipeline — and DRE-2551 left that exactly as it is. Read the next
-paragraph before assuming otherwise.
+the pipeline — and DRE-2551 left that exactly as it is.
 
-**`stable`: proven automatically, pinned by nobody (DRE-2551).** There is
-now a second ref in this repo. `promote-channel.yml` keeps a moving tag,
+**Scope of everything above: this is the operator's release path, not the
+fleet's day-to-day channel.** No product repo has pinned a `vN` tag since
+DRE-2553, so cutting one re-points nothing. `vN` is not dead — it is
+the human-cut, human-moved release ref, and the harness command above is
+still how any candidate sha earns its proof. What the fleet rides is the
+next section. Read it before assuming otherwise.
+
+**`stable`: proven automatically, and what the fleet pins (DRE-2551, then
+DRE-2553).** There is now a second ref in this repo. `promote-channel.yml` keeps a moving tag,
 `stable`, on the newest commit on `main` that carries a green
 `integration-harness` stamp — `harness.yml` runs on every push to `main`,
 so trunk commits have stamps of their own to read. The move is pushed with
@@ -381,22 +396,36 @@ reason, and unset means run. **Write that reason as
 `who=<name> since=<ISO date> <why>`** — the staleness alarm below reports a
 held channel back to the CEO, and GitHub will not tell it who set a variable
 or when (that API needs an admin token the workflows do not carry), so a hold
-that skips the convention is reported as a hold nobody will own. What
-automatic promotion deliberately does **not** do:
+that skips the convention is reported as a hold nobody will own.
 
-- **No product repo pins `@stable`.** Nothing consumes this ref. No stub
-  was re-pointed, and the pairing rule above is untouched — the fleet is on
-  `vN` with a matching `pipeline_ref: vN`, exactly as before.
-- **`vN` promotion is unchanged and remains operator-only**: the `git tag
-  -f` and the stub re-point above are still a human's job, and still the
-  gate between a merge here and anything the fleet runs.
+**The fleet pins `@stable`, and has since 2026-08-23 (DRE-2553).** This
+section used to say the opposite — *"no product repo pins `@stable`;
+nothing consumes this ref"* — and that is recorded here rather than quietly
+deleted. It stayed wrong for four days while five PRs contradicted it: the
+wave that shipped this channel staled its own engine's front page
+(`agent-bureau`, `architecture/post-mortems/wave-1-the-safety-rail.md` §8).
 
-Its value today is that the pre-tag question — *which sha has the harness
-proved?* — is answered continuously instead of by a hand-run dispatch; the
-operator still picks the soaked sha and still cuts it. Whether the
-fleet ever pins `stable` directly and the manual cut retires is a **later
-decision, not part of DRE-2551**; until it is made and written here, `vN`
-is the only channel the fleet consumes.
+What this channel automated is the *proof*, never the release: cutting or
+moving a `vN` tag is still **operator-only**, exactly as the promotion block
+above describes. No repo consumes a `vN` tag.
+
+Every consumer stub now rides `…@stable` **and** passes
+`pipeline_ref: stable`. That input is **required** since DRE-2689 — a caller
+must pass the same ref it pins in `uses:`, or it runs one ref's workflow YAML
+over another ref's scripts, which defeats the pin entirely.
+
+**This repo is the exception, deliberately.** Its own `uses:` are
+fully-qualified `@main` self-callers, so a PR editing `merge-gate.yml`
+cannot choose the logic that merges it — `@main` pins the gate to the
+already-merged version. A standing decision, not an outstanding repointing.
+
+**Which repo is on which ref is computed, never remembered here.** The
+roster is `agent-bureau`'s `config/repo-map.json`; each repo's expected ref
+and the reason for it live in `config/pipeline-channel.json`; and
+`make check-channel-fleet` reads every repo live and compares the two. Ask
+that command rather than trusting a number written into prose — the
+sentence this replaced is what an enumeration looks like once the set has
+moved (`adr-one-writer-per-fact`, DRE-2605).
 
 The harness is also a PR gate here: `harness.yml` runs on pull requests
 touching the boundary paths (workflow wiring + the dispatch/gate scripts),
