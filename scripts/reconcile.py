@@ -2031,20 +2031,22 @@ def is_worker_bot_comment(comment: dict) -> bool:
 
 def retry_dead_fix_runs() -> None:
     """DRE-2018: re-dispatch the fix agent for a PR whose last fix run died
-    of a model/API error (is_error — an outage, not an agent failure).
+    of a model/API error (is_error — an outage, not an agent failure), or
+    (DRE-2312) ran out of turns before it could push.
 
     A dying fix run pushes nothing, and the qa-bot's REQUEST_CHANGES comment
     that triggered it is consumed — nothing event-driven ever re-fires
     agent-fix for that PR (the medic does not watch Agent Fix; merge-gate
     dispatches it only for merge conflicts), so the PR would stall in In QA
-    forever. agent-fix's Report step posts the fix-run-model-death marker
-    instead of parking; this sweep is the promised retry.
+    forever. agent-fix's Report step posts a retry marker instead of parking;
+    this sweep is the promised retry.
 
-    Dispatch iff the NEWEST worker-bot comment on the PR carries the marker:
-    any later fix outcome (pushed / blocked / held) posts a newer worker-bot
-    comment and switches the sweep off. The retry cap lives in agent-fix's
-    Report step (the death after fix_dead_run.RETRY_CAP posts a hold WITHOUT
-    the marker), so the sweep stays dumb. Non-worker authors are invisible —
+    Dispatch iff the NEWEST worker-bot comment on the PR carries one of
+    fix_dead_run.RETRY_MARKERS: any later fix outcome (pushed / blocked /
+    held) posts a newer worker-bot comment and switches the sweep off. The
+    caps live in agent-fix's Report step — the death after
+    fix_dead_run.RETRY_CAP, and the second turn exhaustion (DRE-2312), each
+    post a hold WITHOUT any marker — so the sweep stays dumb. Non-worker authors are invisible —
     a planted marker must not spawn fix runs (DRE-1995/1998 discipline).
     Skips DIRTY PRs (unstick_conflicts owns those) and backs off while a fix
     run is queued/in_progress; one dispatch per sweep, like
@@ -2066,13 +2068,18 @@ def retry_dead_fix_runs() -> None:
             for c in pr.get("comments", [])
             if is_worker_bot_comment(c)
         ]
-        if not worker or fix_dead_run.OUTAGE_TAG not in worker[-1]:
+        if not worker or not any(t in worker[-1] for t in fix_dead_run.RETRY_MARKERS):
             continue
         if fix_dispatch_blocked(pr):
             continue  # human-parked card (DRE-2024) — the loop is over
+        why = (
+            "ran out of turns"
+            if fix_dead_run.TURN_CAP_TAG in worker[-1]
+            else "died of a model/API error"
+        )
         print(
-            f"dead fix run: PR #{pr['number']} last fix run died of a "
-            f"model/API error — re-dispatching fix agent"
+            f"dead fix run: PR #{pr['number']} last fix run {why} — "
+            f"re-dispatching fix agent"
         )
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")

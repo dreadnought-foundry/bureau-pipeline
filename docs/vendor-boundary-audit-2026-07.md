@@ -68,6 +68,10 @@ blocker → Backlog (parked, never Todo — DRE-1286); silent death →
 `dead_run.py decide` under the shared `dead-run-requeue` cap (2), with
 `--cancelled` deferring to reconcile instead of burning the cap (DRE-2074) and
 model-death markers swinging the model on retry.
+*Amended 2026-08-25 (DRE-2312): an `error_max_turns` death is no longer one of
+those model deaths. It routes on its own `turn-exhaustion-requeue` tag with its
+own cap (1 retry), writes no `model-error:` marker, and says the agent ran out
+of steps.*
 
 **Verdict:** covered.
 
@@ -295,6 +299,10 @@ pushes nothing routes through `fix_dead_run.py decide`: model-death → bounded
 retry marker (reconcile re-dispatches, no attempt burned — DRE-2018);
 cap → hold/park; genuine no-progress → escalate. Death cap counts CONSECUTIVE
 worker-bot deaths since the last successful push.
+*Amended 2026-08-25 (DRE-2312): turn exhaustion is a fourth route —
+`fix-run-turn-exhaustion` marker, one retry, then a hold that names the turn
+cap and the split it implies. It never claims an outage, and it never claims
+the fix budget was free (a full run was spent).*
 
 **Verdict:** GAP — filed DRE-2120 (hardcoded qa-bot login literal at the
 trigger job-if; shared with merge-gate.yml).

@@ -597,6 +597,18 @@ class ReconcileRetriesExhaustedFixRunsTest(unittest.TestCase):
 class WorkflowWiringTest(unittest.TestCase):
     """The workflows must actually route on the classification."""
 
+    @staticmethod
+    def emitted(shell: str) -> str:
+        """The step's shell minus its `#` comment lines.
+
+        These assertions are about what the pipeline SAYS — the comment lines
+        explaining why the outage wording moved are not messages anyone is
+        told, and matching them would make the pin vacuous in both directions.
+        """
+        return "\n".join(
+            line for line in shell.splitlines() if not line.strip().startswith("#")
+        )
+
     def report_step(self, name: str) -> str:
         src = workflow(name)
         m = re.search(
@@ -662,7 +674,7 @@ class WorkflowWiringTest(unittest.TestCase):
                 step, re.S,
             )
             self.assertIsNotNone(m, f"{action} branch not found")
-            branch = m.group(1)
+            branch = self.emitted(m.group(1))
             self.assertIn("ran out of steps", branch)
             assert_no_outage_claim(self, branch)
 
@@ -673,8 +685,9 @@ class WorkflowWiringTest(unittest.TestCase):
             step, re.S,
         )
         self.assertIsNotNone(m)
-        self.assertNotIn("park_for_human", m.group(1))
-        self.assertNotIn("needs-human", m.group(1))
+        branch = self.emitted(m.group(1))
+        self.assertNotIn("park_for_human", branch)
+        self.assertNotIn("needs-human", branch)
 
     def test_agent_fix_exhaustion_hold_parks_for_a_human(self):
         step = self.report_step("agent-fix.yml")

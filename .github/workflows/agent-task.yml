@@ -491,15 +491,21 @@ jobs:
             PR_STATE="UNREADABLE"
           fi
 
-          # Did the run die with an API/model error (is_error)? (DRE-1354)
-          # check_agent_result.py owns is_error detection; reuse it as the single
-          # source of truth so the gate and this step never disagree.
+          # HOW did the run die? (DRE-1354, split by DRE-2312.) One shared
+          # classifier answers it — `api_death`, `turn_exhaustion`, or `none`
+          # — so this step and the gate can never tell different stories.
+          #
+          # This line used to be its own inline is_error test, reading the raw
+          # result dict. That is why DRE-2695's turn-exhausted BUILD run was reported
+          # as "agent died with API/model error (is_error) … dead run 1/3"
+          # with a `model-error: claude-opus-5` marker after 36 minutes of real
+          # work: the shared predicate was one import away and this path did
+          # not call it. There is exactly one is_error test in the codebase now
+          # (check_agent_result.classify_death) and every caller goes through
+          # it.
           EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
-          IS_ERROR=false
-          if python3 -c "import sys; sys.path.insert(0, '.bureau-pipeline/scripts'); import check_agent_result as c; e=c._load_execution('$EXEC_FILE'); sys.exit(0 if (e or {}).get('is_error') is True else 1)"; then
-            IS_ERROR=true
-          fi
+          DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" || echo none)
 
           if [ "$PR_STATE" = "MERGED" ]; then
             # The work SHIPPED while this run was finishing (DRE-2316: PR #137
@@ -561,7 +567,8 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "⚠️ Could not read this card's PR state from GitHub (API error), so this run is NOT being recorded as a dead agent — the reconcile sweep will re-check. Run: $RUN_URL"
           else
-            # No PR and no blocker. Three death classes share ONE hold cap,
+            # No PR and no blocker. Three death classes share ONE hold cap
+            # (turn exhaustion has its OWN — see the DRE-2312 note below),
             # counted by the 'dead-run-requeue' tag (DRE-1403): silent (here),
             # hung (reconcile sweep), and — new in DRE-1354 — is_error (an
             # API/model death mid-run). dead_run.decide() unifies requeue-vs-hold
@@ -586,18 +593,32 @@ jobs:
             # with its whole exhausted history and re-held on its very first
             # subsequent death. `linear_ops.py unpark <CARD>` posts the reset
             # marker; only deaths AFTER it count here.
-            DEAD=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
-              "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
-            ERR_FLAGS=""
-            if [ "$IS_ERROR" = "true" ]; then
-              ERR_FLAGS="--is-error --error-model $MODEL_USED"
+            #
+            # TURN EXHAUSTION IS ITS OWN BUDGET (DRE-2312): the agent ran out
+            # of steps, which is a failed attempt, not a death of the service
+            # and not a fault of the model. It reads and spends the
+            # 'turn-exhaustion-requeue' count instead — one retry, then a hold
+            # that says the card needs splitting — and passes NO --error-model,
+            # so no 'model-error:' marker is written and the DRE-1354 fallback
+            # cannot switch models on a budget ceiling.
+            if [ "$DEATH_CLASS" = "turn_exhaustion" ]; then
+              PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
+                "$CARD" "turn-exhaustion-requeue" --since "dead-run-budget-reset" || echo 0)
+              ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE"
+            else
+              PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
+                "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
+              ERR_FLAGS=""
+              if [ "$DEATH_CLASS" = "api_death" ]; then
+                ERR_FLAGS="--is-error --error-model $MODEL_USED"
+              fi
             fi
             if [ "$CLAUDE_OUTCOME" = "cancelled" ]; then
               ERR_FLAGS="$ERR_FLAGS --cancelled"
             fi
             # shellcheck disable=SC2086  # ERR_FLAGS is deliberately word-split
             DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide \
-              "${DEAD:-0}" $ERR_FLAGS --run-url "$RUN_URL")
+              "${PRIOR:-0}" $ERR_FLAGS --run-url "$RUN_URL")
             ACTION=$(printf '%s\n' "$DECISION" | head -1)
             BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$BODY"

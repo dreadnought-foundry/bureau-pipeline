@@ -278,8 +278,13 @@ jobs:
       # medic re-runs the SAME workflow_run on attempt 2. That rerun re-evaluates
       # the Select-model step, which reads this `model-error:` marker and swings
       # to the NEXT model down the ladder instead of re-dying on the dead one.
-      # check_agent_result.py owns is_error detection (single source of truth);
-      # dead_run.error_marker writes the marker the selector parses.
+      # check_agent_result.py owns the death CLASSIFICATION (single source of
+      # truth); dead_run.error_marker writes the marker the selector parses.
+      #
+      # DRE-2312: only an `api_death` may arm the model swing. A planner that
+      # ran out of TURNS died of a budget ceiling, not of the model — stamping
+      # `model-error:` on it would make the medic's rerun change models for a
+      # reason that does not exist.
       - name: Record is_error death
         if: always() && steps.route.outputs.mode == 'plan'
         env:
@@ -289,13 +294,19 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
-          if python3 -c "import sys; sys.path.insert(0, '.bureau-pipeline/scripts'); import check_agent_result as c; e=c._load_execution('$EXEC_FILE'); sys.exit(0 if c.is_error_death(e) else 1)"; then
+          DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" || echo none)
+          if [ "$DEATH_CLASS" = "api_death" ]; then
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "🪦 planner died with API/model error (is_error) on $MODEL_USED — the medic rerun will switch to the alternate model.$([ -n "$RUN_URL" ] && echo " Run: $RUN_URL")
             $(python3 -c "import sys; sys.path.insert(0, '.bureau-pipeline/scripts'); import model_fallback as m; print(m.error_marker('$MODEL_USED'))")"
+          elif [ "$DEATH_CLASS" = "turn_exhaustion" ]; then
+            # Deliberately NO model-error: marker — see the DRE-2312 note above.
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "🪦 the planner ran out of steps before it finished this plan — a full run of real work that hit its step limit, not a problem with the model or the setup. If the retry runs out of steps too, this epic likely needs splitting into smaller pieces.$([ -n "$RUN_URL" ] && echo " Run: $RUN_URL")" || true
           else
-            echo "no is_error planner death — nothing to record"
+            echo "no planner death to record"
           fi
 
       # Post-plan child validation (DRE-1715). Run the SAME validate_card core
