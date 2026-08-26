@@ -268,6 +268,17 @@ jobs:
                Never write an epic's id on a "Blocked by"/"serialize after"
                line in a child — epics stay In Progress for their whole life
                and would deadlock the gate.
+            3b. A ONE-OFF — a card the plan concludes stands on its own and
+               needs no epic — has no parent to inherit labels from, so create
+               it PARENTLESS and take every label from the plan (DRE-2754):
+                 python3 .bureau-pipeline/scripts/linear_ops.py oneoff \
+                   "<title>" <desc-file> \
+                   --label repo:${{ steps.repo.outputs.slug }} \
+                   --label agent:<role> --label initiative:<x>
+               It lands in Backlog with no epic above it, and reaches the CEO
+               only if it needs a decision. Use `subissue`, NOT `oneoff`, for
+               anything that belongs to THIS epic's decomposition — a parentless
+               card never promotes with the epic.
             4. Write the PLAN ARTIFACT — the thing the CEO green-lights —
                with `Write`, to EXACTLY this path:
                  ${{ runner.temp }}/plan-artifact.md

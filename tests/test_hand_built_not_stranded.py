@@ -295,20 +295,24 @@ def _call_owners(name: str) -> set[str]:
     }
 
 
+_WATCHDOG_OWNERS = {"flag_stranded", "flag_stalled_planning", "main"}
+
+
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     """Structural guard, not a sentinel: if a later change wires hand-built
     into a PR-keyed repair path, this says so.
 
-    Two readers, both in the "would the pipeline start or restart an agent on
-    this card" family: flag_stranded (the alarm) and main (the no-PR dispatch
+    Three readers, all in the "would the pipeline start or restart an agent on
+    this card" family: flag_stranded (the alarm), flag_stalled_planning (the
+    same alarm for the Planning lane, DRE-2736) and main (the no-PR dispatch
     the alarm was reporting on). Every PR-level backstop stays label-blind.
     """
-    assert _call_owners("hand_built") == {"flag_stranded", "main"}
+    assert _call_owners("hand_built") == _WATCHDOG_OWNERS
 
 
 def test_the_owner_sweep_can_actually_see_a_call():
     """Guard the guard: a detector that matches nothing would pass forever."""
-    assert _call_owners("held") == {"flag_stranded", "main"}
+    assert _call_owners("held") == _WATCHDOG_OWNERS
 
 
 # --------------------------------------------------------------------------

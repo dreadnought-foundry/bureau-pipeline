@@ -11,11 +11,14 @@ rail now (DRE-1929), but budget blocks, quota exhaustion, relay outages, and
 any FUTURE off-map repo all still strand cards silently.
 
 FIX UNDER TEST — reconcile.flag_stranded(), run on every full sweep over the
-ACTIVE lanes (Planning / Todo / In Progress — Planning was previously
-invisible to the sweep entirely):
+WATCHDOG lanes (Todo / In Progress — Planning has its own rule since
+DRE-2736; see tests/test_planning_lane_strand.py):
   (a) a card/epic whose repo has NO route in the routing snapshot
       (validate_card.VALID_SLUGS) can never be dispatched — comment
-      "hand-build" + add the needs-human hold label, within one sweep;
+      "hand-build" + add the needs-human hold label, once the card is past
+      WATCHDOG_MINUTES (DRE-2736: a card is genuinely unroutable for a real
+      interval between creation and the Todo gate's repair pass, and
+      flagging on the first sweep races that repair);
   (b) a dispatchable card of THIS sweep's repo showing NO run receipt (the
       DRE-2032 🧠/⏳ proof-of-life comments — agent-task AND plan both post
       them) after WATCHDOG_MINUTES, or after a prior Todo-redispatch receipt
@@ -109,9 +112,18 @@ def _card(
 
 def _run_watchdog(cards, bodies=()):
     """Run flag_stranded over `cards` with the card's comments mocked to
-    `bodies`; returns (result, cmd_comment mock, add_label mock)."""
+    `bodies`; returns (result, cmd_comment mock, add_label mock).
+
+    The active_cards stub honours the lane filter it is handed, the way
+    Linear does — since DRE-2736 the watchdog reads two lane sets (its own
+    WATCHDOG_LANES, and Planning under its own rule) and a card must be
+    judged by the pass whose lane it actually sits in.
+    """
+    def by_lane(states=reconcile.SWEEP_STATES):
+        return [c for c in cards if c["state"]["name"] in states]
+
     with patch.object(
-        reconcile, "active_cards", return_value=list(cards)
+        reconcile, "active_cards", side_effect=by_lane
     ) as active, patch.object(
         reconcile.linear_ops, "comment_bodies", return_value=list(bodies)
     ), patch.object(
@@ -120,17 +132,18 @@ def _run_watchdog(cards, bodies=()):
         reconcile.linear_ops, "add_label"
     ) as add_label:
         result = reconcile.flag_stranded()
-    assert active.call_args.args[0] == reconcile.WATCHDOG_LANES, (
-        "the watchdog must sweep its own lane list (Planning included)"
+    lanes = [c.args[0] for c in active.call_args_list]
+    assert reconcile.WATCHDOG_LANES in lanes, (
+        "the watchdog must sweep its own lane list"
     )
     return result, comment, add_label
 
 
 # --------------------------------------------------------------------------
-# case (a): no repo-map route — flagged within one sweep, however fresh
+# case (a): no repo-map route — flagged once the grace period is up
 # --------------------------------------------------------------------------
-def test_no_route_card_flagged_within_one_sweep():
-    card = _card(labels=("repo:ghost-product",), minutes_stale=2)
+def test_no_route_card_flagged_past_the_grace_period():
+    card = _card(labels=("repo:ghost-product",), minutes_stale=45)
     flagged, comment, add_label = _run_watchdog([card])
     assert flagged == {"DRE-1978"}
     body = comment.call_args.args[1]
@@ -139,24 +152,30 @@ def test_no_route_card_flagged_within_one_sweep():
     add_label.assert_called_once_with("DRE-1978", reconcile.HOLD_LABEL)
 
 
-def test_no_route_epic_in_planning_flagged():
-    """The DRE-1978 shape as filed: an EPIC parked in Planning whose repo
-    routes nowhere — epics count, and Planning is a watchdog lane."""
-    card = _card(
-        state="Planning",
-        labels=("repo:ghost-product", "agent:planner"),
-        minutes_stale=7 * 24 * 60,
-    )
-    flagged, comment, add_label = _run_watchdog([card])
-    assert flagged == {"DRE-1978"}
-    assert "hand-built" in comment.call_args.args[1]
-
-
 def test_missing_repo_label_counts_as_no_route():
-    card = _card(labels=(), minutes_stale=2)
+    card = _card(labels=(), minutes_stale=45)
     flagged, comment, _ = _run_watchdog([card])
     assert flagged == {"DRE-1978"}
     assert "hand-built" in comment.call_args.args[1]
+
+
+# DRE-2736: the NO-ROUTE class had NO age gate at all — it fired on the first
+# sweep that saw a card, however fresh. But a card IS unroutable for a real
+# interval between creation and the Todo gate's repair pass (validate_card
+# infers a missing repo label and repairs it), so flagging on sight races that
+# repair and parks a card the pipeline was seconds from fixing — permanently,
+# because the hold label makes promote_ready skip the card forever.
+@pytest.mark.parametrize(
+    "labels", [("repo:ghost-product",), ()], ids=["off-map-slug", "no-repo-label"]
+)
+def test_fresh_unroutable_card_survives_one_sweep(labels):
+    """A card created two minutes ago gets the same grace the no-run class
+    always had: one sweep is not evidence of a strand."""
+    card = _card(labels=labels, minutes_stale=2)
+    flagged, comment, add_label = _run_watchdog([card])
+    assert flagged == set()
+    comment.assert_not_called()
+    add_label.assert_not_called()
 
 
 # --------------------------------------------------------------------------
@@ -215,17 +234,24 @@ def test_run_receipt_suppresses_flag(receipt):
     add_label.assert_not_called()
 
 
-def test_planning_epic_with_no_planner_run_flagged():
-    """DRE-1978's watchdog class with the repo NOW routable: an epic in
-    Planning where agent-plan never ran must still alarm."""
+def test_planning_cards_are_not_this_sweeps_business(monkeypatch):
+    """DRE-2736: the no-run class must never judge a Planning card — a card in
+    Planning owes a classification, not a run receipt. The DRE-1978 shape (an
+    epic parked in Planning for seven days) is still surfaced, by Planning's
+    own rule: tests/test_planning_lane_strand.py."""
+    assert "Planning" not in reconcile.WATCHDOG_LANES
+    seen = []
+    monkeypatch.setattr(reconcile, "flag_stalled_planning", lambda: seen.append(1) or set())
     card = _card(
         state="Planning",
         labels=("repo:agent-bureau", "agent:planner"),
         minutes_stale=7 * 24 * 60,
     )
-    flagged, comment, _ = _run_watchdog([card], bodies=[])
-    assert flagged == {"DRE-1978"}
-    assert "no agent run" in comment.call_args.args[1]
+    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    assert flagged == set()
+    comment.assert_not_called()
+    add_label.assert_not_called()
+    assert seen == [1], "the Planning lane must still be swept, by its own rule"
 
 
 def test_routable_epic_in_todo_not_flagged():
@@ -412,12 +438,14 @@ def test_watchdog_comment_is_machine_marked_not_proof_of_life():
 
 
 # --------------------------------------------------------------------------
-# lane visibility: the watchdog sweeps Planning; the nudge loop is unchanged
+# lane visibility: the watchdog sweeps its own lanes and Planning separately;
+# the nudge loop is unchanged
 # --------------------------------------------------------------------------
 def test_active_cards_takes_a_states_filter():
-    """active_cards(WATCHDOG_LANES) must query Planning; the default stays
-    byte-identical to the pre-DRE-1993 sweep (no Planning in the nudge loop,
-    no Planning cards counted against the WIP cap)."""
+    """Each lane set is its own query: the watchdog lanes (DRE-2736: Planning
+    is NOT one of them), Planning under its own rule, and the nudge loop's
+    default — byte-identical to the pre-DRE-1993 sweep (no Planning in the
+    nudge loop, no Planning cards counted against the WIP cap)."""
     seen = []
 
     def spy_gql(query, variables=None):
@@ -426,9 +454,11 @@ def test_active_cards_takes_a_states_filter():
 
     with patch.object(reconcile.linear_ops, "gql", side_effect=spy_gql):
         reconcile.active_cards(reconcile.WATCHDOG_LANES)
+        reconcile.active_cards(reconcile.PLANNING_LANE)
         reconcile.active_cards()
-    assert seen[0] == {"states": ["Planning", "Todo", "In Progress"]}
-    assert seen[1] == {"states": ["Todo", "In Progress", "In QA", "In Review"]}
+    assert seen[0] == {"states": ["Todo", "In Progress"]}
+    assert seen[1] == {"states": ["Planning"]}
+    assert seen[2] == {"states": ["Todo", "In Progress", "In QA", "In Review"]}
 
 
 # --------------------------------------------------------------------------
