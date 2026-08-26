@@ -5,7 +5,7 @@ Wave 1.5's guard (DRE-2725) undoes an unjustified lane occupancy: a card with no
 verdict, in any working lane, goes back to Intake. That rule collides head-on
 with the planner (DRE-2719), which creates an epic's children into `Backlog`
 while the epic is still pre-approval — `plan.yml:255` creates the sub-issues and
-`plan.yml:345` only afterwards moves the epic to Plan Review. At that moment no
+`plan.yml:360` only afterwards moves the epic to Green Light. At that moment no
 verdict exists for either card, so an un-scoped guard bounces the planner's own
 output to Intake, and to Triage on the second strike.
 
@@ -54,12 +54,20 @@ LANE_FLOW = (
 PLANNING_EXIT_FROM = "Green Light"
 PLANNING_EXIT_TO = "Backlog"
 
-# Wave 1.5 §5 renames `Plan Review` → `Green Light`, and that rename ships in its
-# own card (it has to move `reconcile.py` and the relay's escalation string with
-# it). Until it lands the live board still says `Plan Review`, so both names
-# resolve to the same position — a rename must never move the boundary.
+# Wave 1.5 §5's rename has now landed IN CODE (DRE-2722): every reader here says
+# `Green Light`. What has not landed is the board — renaming a Linear lane is a
+# manual click, and the relay's copy of the retired string lives in another repo,
+# so the click waits for that. Until then the live board still answers with the
+# old name, and both names must resolve to the same position: a rename must never
+# move the boundary.
+#
+# This is the ONE place the retired name survives, and both directions of the
+# transition read it from here: `classify()` below normalizes a board name INTO
+# the contract, and `linear_ops._LANE_RENAME_FALLBACKS` inverts it to write the
+# contract's name OUT to a board that does not have it yet. Delete this dict when
+# the board is renamed and both shims go with it.
 LANE_ALIASES = {
-    "Plan Review": "Green Light",
+    "Plan Review": "Green Light",  # lane-rename-shim DRE-2722
 }
 
 # Lanes that are not on the flow at all, each with the reason Layer 1 leaves it

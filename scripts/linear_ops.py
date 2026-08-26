@@ -84,6 +84,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
+import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
 
 API = "https://api.linear.app/graphql"
 
@@ -132,25 +133,31 @@ def state_id(team_id: str, name: str) -> str:
     return state_id_and_type(team_id, name)[0]
 
 
-# Transitional lane aliases (DRE-2722). Renaming a lane is a MANUAL act in the
-# Linear workspace, and the code that names the new lane necessarily lands
-# first — so between this merge and that click the live team still answers with
-# the retired name only. An exact-match-only lookup turns that gap into a hard
+# Transitional lane fallbacks (DRE-2722). Renaming a lane is a MANUAL act in the
+# Linear workspace, and the code that names the new lane necessarily lands first
+# — so between this merge and that click the live team still answers with the
+# retired name only. An exact-match-only lookup turns that gap into a hard
 # failure: `plan.yml`'s approve-the-plan step raises on the FIRST epic that
 # finishes planning, the epic never reaches the CEO, and the one gate the plan
 # flow depends on for sign-off is silently dead until someone reads a workflow
 # log.
 #
-# So a renamed lane resolves to what the board actually has, in this order:
-# exact name first, alias only if the new name is genuinely absent. The day the
-# workspace is renamed the exact match wins and the alias goes quiet on its own
-# — at which point delete the entry (it is a bridge, not a mapping).
+# So a renamed lane resolves to what the board actually HAS, in this order:
+# exact name first, pre-rename name only if the new one is genuinely absent. The
+# day the workspace is renamed the exact match wins and this goes quiet on its
+# own — which is when the alias gets deleted, in one place, for both readers.
 #
-# Aliases are deliberately narrow: only a lane THIS repo renamed. A lane that
-# was never renamed (Triage) must keep failing loud, because there a missing
-# state is a real misconfiguration and a fallback would hide it.
+# That one place is `lane_scope.LANE_ALIASES`, which already records the same
+# pending rename for the guard's lane contract (DRE-2754). It maps board name →
+# contract name because it normalizes what it READS; this is the same fact in
+# the direction we WRITE, so it is inverted rather than restated — one literal,
+# one deletion when the board catches up.
+#
+# Narrow on purpose: only a lane the repo has actually renamed gets a fallback.
+# A lane that was never renamed (Triage) must keep failing loud, because there a
+# missing state is a real misconfiguration and a fallback would hide it.
 _LANE_RENAME_FALLBACKS = {
-    "green light": ("Plan Review",),  # lane-rename-shim DRE-2722
+    new.lower(): (old,) for old, new in lane_scope.LANE_ALIASES.items()
 }
 
 

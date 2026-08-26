@@ -1,7 +1,7 @@
 """Layer 1's scope is a boundary at Planning exit, not a list of lanes (DRE-2754).
 
 The seam this closes: `plan.yml` creates an epic's children into `Backlog`
-(`:255`) and only afterwards moves the epic to Plan Review (`:345`). So children
+(`:255`) and only afterwards moves the epic to Green Light (`:360`). So children
 exist in a guarded lane while their epic is still pre-approval — and DRE-2725's
 Layer 1 rule ("a verdict, and if the card has a parent epic, that epic is In
 Progress") is satisfied by neither clause at that moment. The guard would bounce
@@ -55,12 +55,13 @@ class TestFlowOrder:
         pos = lane_scope.LANE_FLOW.index
         assert pos(lane_scope.PLANNING_EXIT_TO) == pos(lane_scope.PLANNING_EXIT_FROM) + 1
 
-    def test_plan_review_is_todays_name_for_green_light(self):
-        # Wave 1.5 §5 renames `Plan Review` → `Green Light`, and the rename
-        # ships in its own card. Until then the live board says Plan Review, so
-        # both names must land on the same side of the boundary.
-        assert lane_scope.canonical_lane("Plan Review") == "Green Light"
-        assert lane_scope.is_policed("Plan Review") is False
+    def test_the_retired_name_is_todays_board_name_for_green_light(self):
+        # Wave 1.5 §5's rename has landed in code (DRE-2722) but not on the
+        # board, which is a manual click waiting on the relay. Until it lands
+        # the live board answers with the retired name, so both names must land
+        # on the same side of the boundary.
+        assert lane_scope.canonical_lane("Plan Review") == "Green Light"  # lane-rename-shim
+        assert lane_scope.is_policed("Plan Review") is False  # lane-rename-shim
 
 
 # --- the matrix, extended (DRE-2725's amendment) -----------------------------
@@ -104,13 +105,17 @@ class TestPolicedLanes:
 
 
 class TestPlannerChildrenAreNotBounced:
-    @pytest.mark.parametrize("epic_lane", ["Planning", "Green Light", "Plan Review"])
+    # The third name is the board's CURRENT one for the second — a card sitting
+    # there today must classify the same way.
+    @pytest.mark.parametrize(
+        "epic_lane", ["Planning", "Green Light", "Plan Review"]  # lane-rename-shim
+    )
     def test_children_in_backlog_are_unpoliced_while_the_epic_is_pre_approval(
         self, epic_lane
     ):
         # Exactly the shape plan.yml produces: sub-issues created into Backlog
-        # at :255 while the epic is still in Planning, then moved to Plan
-        # Review at :345. No verdict can exist for either card yet.
+        # at :255 while the epic is still in Planning, then moved to Green
+        # Light at :360. No verdict can exist for either card yet.
         assert (
             lane_scope.is_policed("Backlog", parent_epic_lane=epic_lane) is False
         )

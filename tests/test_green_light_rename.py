@@ -31,6 +31,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+import lane_scope  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -42,11 +43,17 @@ OLD_LANE = "Plan " + "Review"
 NEW_LANE = "Green Light"
 PARKED_LANE = "Triage"
 
-#: The ONE thing allowed to still name the retired lane: the transitional
-#: alias that keeps the approve-the-plan gate resolving until the workspace
-#: rename is actually clicked. A line may carry the old name only if it carries
-#: this marker, so the exemption is a declared intent and not a path allow-list.
+#: The one thing allowed to still name the retired lane: the transitional alias
+#: that keeps both directions of the board transition working until the rename
+#: is actually clicked in Linear. A line may carry the old name only if it
+#: carries this marker, so the exemption is a declared intent and not a
+#: path allow-list.
 SHIM_MARKER = "lane-rename-shim"
+
+#: Where that marker is allowed to appear — the alias itself, and the tests that
+#: exercise it. `linear_ops` derives its write-direction fallback from the same
+#: dict rather than restating the literal, so it is deliberately NOT here.
+SHIM_FILES = ["scripts/lane_scope.py", "tests/test_lane_scope.py"]
 
 
 def src(name: str) -> str:
@@ -121,15 +128,24 @@ class NoStaleLaneNameTest(unittest.TestCase):
             f"now {NEW_LANE!r}.",
         )
 
-    def test_the_only_survivor_is_the_declared_transitional_shim(self):
-        # The exemption above is a hole in the sweep, so pin its size: one
-        # marked line, in the lookup, and nowhere else. Anything that widens it
-        # has to widen this test too, in the open.
+    def test_the_only_survivors_are_the_declared_transitional_shim(self):
+        # The exemption above is a hole in the sweep, so pin its size: the alias
+        # and its own tests, nowhere else. Anything that widens it has to widen
+        # this list too, in the open.
         self.assertEqual(
-            ["scripts/linear_ops.py"],
-            sorted({rel for rel, _, _ in retired_lane_mentions()}),
+            SHIM_FILES, sorted({rel for rel, _, _ in retired_lane_mentions()})
         )
-        self.assertEqual(1, len(retired_lane_mentions()))
+
+    def test_the_alias_is_declared_exactly_once(self):
+        # One literal, so the board rename is one deletion and cannot leave half
+        # the transition behind. The write direction inverts this dict instead of
+        # repeating it.
+        self.assertEqual({OLD_LANE: NEW_LANE}, lane_scope.LANE_ALIASES)
+        self.assertEqual(
+            1,
+            len([1 for rel, _, _ in retired_lane_mentions()
+                 if rel == "scripts/lane_scope.py"]),
+        )
 
 
 class EscalationsParkInTriageTest(unittest.TestCase):
