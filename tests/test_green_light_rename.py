@@ -42,6 +42,12 @@ OLD_LANE = "Plan " + "Review"
 NEW_LANE = "Green Light"
 PARKED_LANE = "Triage"
 
+#: The ONE thing allowed to still name the retired lane: the transitional
+#: alias that keeps the approve-the-plan gate resolving until the workspace
+#: rename is actually clicked. A line may carry the old name only if it carries
+#: this marker, so the exemption is a declared intent and not a path allow-list.
+SHIM_MARKER = "lane-rename-shim"
+
 
 def src(name: str) -> str:
     return open(os.path.join(WORKFLOWS, name)).read()
@@ -57,6 +63,21 @@ def tracked_files() -> list[str]:
     files = [p for p in out.stdout.split("\0") if p]
     assert files, "git ls-files returned nothing — cannot run the sweep"
     return files
+
+
+def retired_lane_mentions() -> list[tuple[str, int, str]]:
+    """`(path, lineno, line)` for every tracked line still naming the old lane."""
+    hits = []
+    for rel in tracked_files():
+        path = os.path.join(ROOT, rel)
+        try:
+            text = open(path, encoding="utf-8").read()
+        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+            continue  # binaries / submodule entries have no lane name
+        for i, line in enumerate(text.splitlines(), 1):
+            if OLD_LANE in line:
+                hits.append((rel, i, line))
+    return hits
 
 
 def step_body(workflow: str, step_name_re: str) -> str:
@@ -89,22 +110,26 @@ class NoStaleLaneNameTest(unittest.TestCase):
     name the retired lane."""
 
     def test_the_old_lane_name_is_gone_from_every_tracked_file(self):
-        offenders = []
-        for rel in tracked_files():
-            path = os.path.join(ROOT, rel)
-            try:
-                text = open(path, encoding="utf-8").read()
-            except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
-                continue  # binaries / submodule entries have no lane name
-            for i, line in enumerate(text.splitlines(), 1):
-                if OLD_LANE in line:
-                    offenders.append(f"{rel}:{i}")
+        offenders = [
+            f"{rel}:{i}" for rel, i, line in retired_lane_mentions()
+            if SHIM_MARKER not in line
+        ]
         self.assertEqual(
             [], offenders,
             f"the retired lane name survives at: {offenders}. The escalation "
             f"meaning is now {PARKED_LANE!r}; the plan-approval meaning is "
             f"now {NEW_LANE!r}.",
         )
+
+    def test_the_only_survivor_is_the_declared_transitional_shim(self):
+        # The exemption above is a hole in the sweep, so pin its size: one
+        # marked line, in the lookup, and nowhere else. Anything that widens it
+        # has to widen this test too, in the open.
+        self.assertEqual(
+            ["scripts/linear_ops.py"],
+            sorted({rel for rel, _, _ in retired_lane_mentions()}),
+        )
+        self.assertEqual(1, len(retired_lane_mentions()))
 
 
 class EscalationsParkInTriageTest(unittest.TestCase):
@@ -166,6 +191,56 @@ class PlanApprovalKeepsItsJobTest(unittest.TestCase):
 
     def test_green_light_epic_does_not_promote_its_children(self):
         self.assertNotIn(NEW_LANE, reconcile.EPIC_ACTIVE_STATES)
+
+
+class GreenLightResolvesBeforeTheBoardIsRenamedTest(unittest.TestCase):
+    """The gap the code cannot close by itself: renaming the LANE is a manual
+    click in the Linear workspace, and this code lands first. Until that click,
+    the live team answers with the retired name only — so an exact-match lookup
+    would make plan.yml's approval step raise on the first epic that finishes
+    planning, and the CEO would simply stop being handed plans.
+
+    These run the real lookup against a live-SHAPED `workflowStates` reply, so
+    they pin the thing the YAML-text tests could not: that the literal the
+    workflow passes actually resolves."""
+
+    #: The team as the board reads TODAY — retired lane present, new one absent.
+    BOARD_TODAY = {"workflowStates": {"nodes": [
+        {"id": "s-backlog", "name": "Backlog", "type": "backlog"},
+        {"id": "s-triage", "name": PARKED_LANE, "type": "unstarted"},
+        {"id": "s-todo", "name": "Todo", "type": "unstarted"},
+        {"id": "s-old", "name": OLD_LANE, "type": "unstarted"},
+        {"id": "s-done", "name": "Done", "type": "completed"},
+    ]}}
+
+    #: The team AFTER someone does the rename — both cannot coexist, but pin
+    #: the ordering anyway so the shim can never shadow the real lane.
+    BOARD_RENAMED = {"workflowStates": {"nodes": [
+        {"id": "s-green", "name": NEW_LANE, "type": "unstarted"},
+        {"id": "s-old", "name": OLD_LANE, "type": "unstarted"},
+    ]}}
+
+    def resolve(self, board, name):
+        with mock.patch.object(linear_ops, "gql", return_value=board):
+            return linear_ops.state_id_and_type("team-1", name)
+
+    def test_the_approval_lane_resolves_against_the_board_as_it_is_today(self):
+        self.assertEqual(("s-old", "unstarted"), self.resolve(self.BOARD_TODAY, NEW_LANE))
+
+    def test_the_renamed_lane_wins_over_the_fallback(self):
+        self.assertEqual(("s-green", "unstarted"), self.resolve(self.BOARD_RENAMED, NEW_LANE))
+
+    def test_an_unknown_lane_still_fails_loud(self):
+        # The shim is a bridge for ONE rename, not a blanket "close enough".
+        with self.assertRaises(linear_ops.LinearError):
+            self.resolve(self.BOARD_TODAY, "Some Lane Nobody Made")
+
+    def test_the_escalation_lane_needs_no_fallback(self):
+        # Triage predates this change on the live board, so it resolves on its
+        # own name — and must never acquire a fallback that hides its absence.
+        self.assertEqual(("s-triage", "unstarted"), self.resolve(self.BOARD_TODAY, PARKED_LANE))
+        with self.assertRaises(linear_ops.LinearError):
+            self.resolve(self.BOARD_RENAMED, PARKED_LANE)
 
 
 if __name__ == "__main__":

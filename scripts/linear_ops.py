@@ -123,18 +123,52 @@ def state_id(team_id: str, name: str) -> str:
     return state_id_and_type(team_id, name)[0]
 
 
+# Transitional lane aliases (DRE-2722). Renaming a lane is a MANUAL act in the
+# Linear workspace, and the code that names the new lane necessarily lands
+# first — so between this merge and that click the live team still answers with
+# the retired name only. An exact-match-only lookup turns that gap into a hard
+# failure: `plan.yml`'s approve-the-plan step raises on the FIRST epic that
+# finishes planning, the epic never reaches the CEO, and the one gate the plan
+# flow depends on for sign-off is silently dead until someone reads a workflow
+# log.
+#
+# So a renamed lane resolves to what the board actually has, in this order:
+# exact name first, alias only if the new name is genuinely absent. The day the
+# workspace is renamed the exact match wins and the alias goes quiet on its own
+# — at which point delete the entry (it is a bridge, not a mapping).
+#
+# Aliases are deliberately narrow: only a lane THIS repo renamed. A lane that
+# was never renamed (Triage) must keep failing loud, because there a missing
+# state is a real misconfiguration and a fallback would hide it.
+_LANE_RENAME_FALLBACKS = {
+    "green light": ("Plan Review",),  # lane-rename-shim DRE-2722
+}
+
+
 def state_id_and_type(team_id: str, name: str) -> tuple[str, str]:
     """`(id, type)` for the named workflow state. `type` is Linear's lifecycle
     bucket — one of: backlog, unstarted, started, completed, canceled — which is
-    what tells terminal (completed/canceled) states apart from in-flight ones."""
+    what tells terminal (completed/canceled) states apart from in-flight ones.
+
+    A lane this repo renamed falls back to its pre-rename name while the live
+    board still carries it (see `_LANE_RENAME_FALLBACKS`)."""
     data = gql(
         """query($teamId: ID) { workflowStates(filter: {team: {id: {eq: $teamId}}}) {
              nodes { id name type } } }""",
         {"teamId": team_id},
     )
-    for node in data["workflowStates"]["nodes"]:
+    nodes = data["workflowStates"]["nodes"]
+    for node in nodes:
         if node["name"].lower() == name.lower():
             return node["id"], node["type"]
+    for legacy in _LANE_RENAME_FALLBACKS.get(name.lower(), ()):
+        for node in nodes:
+            if node["name"].lower() == legacy.lower():
+                print(
+                    f"state: {name!r} is not on the board yet — using its "
+                    f"pre-rename lane {legacy!r} (DRE-2722, transitional)"
+                )
+                return node["id"], node["type"]
     raise LinearError(f"no state named {name!r} on team")
 
 
