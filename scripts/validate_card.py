@@ -23,6 +23,11 @@ label, unknown/absent project) or the inference yields a slug that isn't a real
 repo — the one case where a fix would be a wrong-repo guess. See infer_repo /
 VALID_SLUGS for the mapping (mirrors the relay's REPO_MAP, single source).
 
+One card gets past that bounce: a card carrying the operator's `break-glass`
+marker (DRE-2737). The bypass is recorded on the card and counted rather than
+undone, and the card owes the classification it skipped once its work merges —
+see scripts/break_glass.py, which owns the whole mechanism.
+
 The relay (cloud/relay/lambda_function.py in agent-bureau) has only a GitHub App
 token and cannot write to Linear, so the repair lives here, in the workflows
 that carry LINEAR_API_KEY. `missing()` / `infer_agent_label()` / `infer_repo()`
@@ -53,6 +58,8 @@ import os
 import re
 import sys
 from pathlib import Path
+
+import break_glass
 
 # IMPORTANT: this regex MUST stay in lockstep with the relay's _card_repo_slug
 # (cloud/relay/lambda_function.py in agent-bureau) so routing and validation
@@ -364,6 +371,21 @@ def cmd_gate(identifier: str) -> None:
                 if slug is not None
                 else "could not infer a repo (no initiative label or known project)"
             )
+            # Break glass (DRE-2737): the ONE sanctioned way past this gate at
+            # 2am. An operator-applied `break-glass` marker suppresses the
+            # bounce — the bypass is recorded on the card and counted, not
+            # undone, and the card owes the classification it skipped once its
+            # work merges. `bounce_suppressed` posts the notice, stamps the
+            # receipt, and refuses a marker no operator applied.
+            if break_glass.bounce_suppressed(linear_ops, identifier, labels, gaps):
+                # Apply whatever repair we COULD infer (the role label) so the
+                # card is no less complete for having come through here, then
+                # build.
+                for label in new_labels:
+                    linear_ops.add_label(identifier, label)
+                _emit(False)
+                _emit_role(_role_from_labels(labels + new_labels))
+                return
             _bounce(linear_ops, identifier, gaps, why)
             return
         new_labels.append(f"repo:{slug}")

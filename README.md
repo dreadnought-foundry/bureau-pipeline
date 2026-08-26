@@ -45,6 +45,43 @@ not a convention: standalone cards do not need it, and nobody should re-add
 it. Only the `Plan Review` lane and the console "needs you" surfacing are
 reused from the propose design.
 
+## Break glass (DRE-2737)
+
+`fast-track` is also the argument for designing one sanctioned exception. An
+unenforceable rule with no sanctioned exception grows an unsanctioned one: the
+choice is not between having an escape hatch and not having one, it is between
+one we designed and one we discover later.
+
+**The marker is `break-glass`**, applied by hand, in Linear, by the operator.
+It satisfies the entrance condition for `Todo` — the Todo-entry gate lets the
+card through instead of returning it. Three properties make it a designed
+exception rather than a hole (`scripts/break_glass.py` owns all three):
+
+1. **Recorded, not undone.** A rule that fights an emergency loses the
+   emergency and keeps the rule. The bounce is suppressed and the event is
+   written to the card: a notice naming what was skipped, by whom, when, and
+   what the card still owes, plus the `break-glass:used` receipt label.
+2. **Repaid.** When the work merges, the card returns to `Planning` for the
+   classification it skipped instead of going Done — both the `linear-sync`
+   fast path and reconcile's merged-PR backstop. The decision reads the
+   RECEIPT, never the live marker, so removing the marker mid-flight neither
+   strands the card nor erases the debt.
+3. **Counted.** `python3 scripts/break_glass.py count` and every full
+   reconcile sweep print the number. Read it as a measure of the front door:
+   frequent use is not people cheating, it means the front door is too slow,
+   and that is the finding.
+
+No expiry, no auto-revoke, no approval step — each is a way for the emergency
+path to fail during an emergency. The control is that it is loud and counted,
+not that it is hard to use.
+
+**No agent may apply it.** The relay, reconcile, the planner and every agent
+share one `LINEAR_API_KEY` and resolve to the operator's own Linear user, so
+actor identity cannot tell agent from operator. Enforcement lives at the write
+seam instead: `linear_ops.add_label` and the planner's child-label path refuse
+the marker outright, and a marker applied by a bot actor (an integration we do
+not own) is not honored — the card bounces as if it were absent.
+
 ## How a product repo consumes this
 
 Each pipeline workflow in the product repo is a thin stub: it owns the

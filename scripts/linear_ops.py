@@ -471,10 +471,25 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
     Ordinary code cards: → Done + "✅ Merged" comment, byte-identical to the
     old inline `state`/`comment` pair. `no-code` / `DEMO:` cards: comment the
     merge, leave the state alone, and say so LOUDLY in the job log.
+
+    Break-glass cards (DRE-2737) are the third class: the fix has shipped, so
+    the debt comes due — the card returns to Planning for the classification
+    it skipped instead of going Done. The decision reads the `break-glass:used`
+    RECEIPT, never the live marker, so an operator who tidies the marker off
+    mid-flight neither strands the card nor erases what it owes.
     """
+    import break_glass
+
     issue = get_issue(identifier)
-    reason = auto_done_skip_reason(issue.get("title") or "", _label_names(issue))
+    labels = _label_names(issue)
+    reason = auto_done_skip_reason(issue.get("title") or "", labels)
     if reason is not None:
+        # The operator/demo guard wins on the STATE (it is never moved here),
+        # but a break-glass debt on the same card is still recorded, not
+        # silently dropped — the card stays open, so the note is where the
+        # operator will see it.
+        if break_glass.owes_review(labels):
+            cmd_comment(identifier, break_glass.review_notice(pr_url, moved=False))
         banner = "=" * 72
         print(banner)
         print(f"AUTO-DONE SKIPPED for {identifier}: {reason}.")
@@ -485,6 +500,18 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
         )
         print(banner)
         cmd_comment(identifier, merged_not_closed_comment(pr_url, reason))
+        return
+    if break_glass.owes_review(labels):
+        # The comment lands BEFORE the move: the Planning transition is what
+        # queues the skipped classification, and the run it starts should find
+        # the receipt already on the card (same ordering rule as cmd_unpark).
+        print(
+            f"BREAK-GLASS DEBT for {identifier}: the gate was bypassed on this "
+            f"card, so the merge returns it to {break_glass.REVIEW_STATE} for the "
+            "classification it skipped rather than closing it (DRE-2737)."
+        )
+        cmd_comment(identifier, break_glass.review_notice(pr_url))
+        cmd_state(identifier, break_glass.REVIEW_STATE)
         return
     cmd_state(identifier, "Done")
     cmd_comment(identifier, f"✅ Merged: {pr_url}")
@@ -649,7 +676,7 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # 2 — LABELS: inherit repo:<slug> + role from the parent epic, plus any
     # explicit --label. No child is ever created label-less.
     parent_labels = _issue_label_names(parent["id"])
-    child_labels = parent_inherited_labels(parent_labels) + list(extra_labels)
+    child_labels = child_labels_from(parent_labels, list(extra_labels))
 
     # 3 — ORDERING → relations: union of the body's **Blocked by:** line and any
     # --blocked-by flag. Never block on the parent epic (it deadlocks the gate).
@@ -859,6 +886,46 @@ def _team_label_id(team_id: str, name: str) -> str | None:
     return None
 
 
+def agent_label_refusal(label_name: str) -> str | None:
+    """Why the pipeline must never write this label itself, or None.
+
+    Exactly one label qualifies: `break-glass` (DRE-2737). It is an OPERATOR
+    action — an agent that could bypass the intake gate would eventually
+    bypass it for a reason that seemed good at the time, which is the entire
+    failure class the intake wave addresses. Actor identity cannot enforce
+    that (the whole fleet shares one LINEAR_API_KEY and resolves to the
+    operator's own user), so the enforcement lives at the WRITE SEAM instead:
+    the label-writing paths below refuse it. The pipeline's own
+    `break-glass:used` receipt is a different label and stays writable — the
+    gate has to be able to record a bypass.
+    """
+    import break_glass  # local: keeps the label constants in one module
+
+    if (label_name or "").strip().lower() == break_glass.MARKER:
+        return (
+            f"'{break_glass.MARKER}' is an operator action and no agent may "
+            "apply it — the marker must be applied by hand, in Linear, by a "
+            "person (DRE-2737)"
+        )
+    return None
+
+
+def child_labels_from(parent_labels: list[str], extra_labels: list[str]) -> list[str]:
+    """The full label set for a planner-created child: what it inherits from
+    its parent epic plus any explicit --label, minus anything no agent may
+    apply. One operator action must not open the gate for a whole epic's worth
+    of cards nobody looked at, so the marker is dropped here (loudly) rather
+    than inherited or passed through."""
+    out: list[str] = []
+    for label in parent_inherited_labels(parent_labels) + list(extra_labels or []):
+        refusal = agent_label_refusal(label)
+        if refusal is not None:
+            print(f"  ! dropping label {label!r} from the child: {refusal}", file=sys.stderr)
+            continue
+        out.append(label)
+    return out
+
+
 def add_label(identifier: str, label_name: str) -> None:
     """Attach `label_name` to a card, creating the team label if it doesn't
     exist yet. Idempotent: a no-op if the card already carries it.
@@ -866,7 +933,14 @@ def add_label(identifier: str, label_name: str) -> None:
     Used by the dead/hung-run hold (DRE-1403): stamping 'needs-human' lets the
     reconcile sweep and the promotion gate recognise a card a human must look
     at and leave it untouched until the label is removed.
+
+    Refuses the one label no agent may apply (agent_label_refusal) BEFORE any
+    API call — this function is the fleet's single label-writing path, which
+    is what makes the refusal an enforcement rather than a convention.
     """
+    refusal = agent_label_refusal(label_name)
+    if refusal is not None:
+        raise LinearError(f"refusing to label {identifier}: {refusal}")
     data = gql(
         """query($id: String!) { issue(id: $id) {
              id team { id } labels { nodes { id name } } } }""",
