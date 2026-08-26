@@ -175,6 +175,25 @@ is a deprecated legacy fallback, not part of new cards.
 **Blocked by:** DRE-N   <- only if it must wait for a sibling; omit otherwise
 ```
 
+## The plan artifact (what the CEO green-lights)
+Every epic produces ONE artifact — business case, KPIs as structured data,
+risk assessment, outcome, visual model, the cards, proof and demo — written
+to the path the workflow prompt names. The full contract, the ```kpis field
+list and the mockup rule are in `standards/plan-artifact.md` (in your
+assembled context); the run checks the artifact against
+`scripts/plan_artifact.py check` before the epic can reach the CEO, so read
+the standard before you write it.
+
+Two things planners get wrong:
+- **KPIs as prose.** "Review time should come down a lot" predicts nothing a
+  close-out can diff. Name the number, its numeric baseline, and the
+  direction, inside the ```kpis block.
+- **A screenshot as the visual model.** For a NEW screen there is no PNG, so
+  build the mockup from `console/design/tokens.css` — then the CEO can see
+  what he is approving, and the fleet has a spec. Layout and styling only:
+  the published page carries no scripts, no frames and no event handlers, and
+  the check tells you what it removed.
+
 ## The plan comment (for the CEO — non-technical)
 Plain English: what gets built, in what order, what could go wrong, rough
 size (hours-of-agent-work scale). No jargon, no file paths. End with the

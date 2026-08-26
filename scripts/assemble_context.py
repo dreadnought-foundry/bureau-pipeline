@@ -75,14 +75,17 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     "database-architect": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
     # The planner authors cards (card-quality), sizes them against the
     # engineering floor, writes plan comments the CEO reads (comms), bakes
-    # the vendor-boundary answers into boundary-touching cards, and must
-    # account for every designed surface (design-parity — DRE-2116).
-    "planner": ["card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md"],
+    # the vendor-boundary answers into boundary-touching cards, must account
+    # for every designed surface (design-parity — DRE-2116), and produces the
+    # epic's CEO-facing artifact (plan-artifact — DRE-2720).
+    "planner": ["card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md", "plan-artifact.md"],
     # The critic reviews diffs AGAINST the engineering + architecture
     # standards — walks the vendor-boundaries checklist on boundary-touching
     # PRs, the console-honesty rules on console cards, and the design-parity
-    # lens for **Design:**-bearing PRs; its verdict voice is comms.
-    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md"],
+    # lens for **Design:**-bearing PRs; its verdict voice is comms. It also
+    # judges plan artifacts, so it reads the same definition of a complete
+    # one the planner writes to (DRE-2720).
+    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md"],
     # The verifier proves the feature works (comms for its verdict) and checks
     # UI against the design standard + the design-parity no-fake-states lens.
     "verifier": ["design.md", "design-parity.md"],
