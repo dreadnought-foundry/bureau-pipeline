@@ -119,8 +119,10 @@ def _run_watchdog(cards, bodies=()):
 def test_planning_card_without_a_repo_label_is_not_flagged():
     """THE CARD THIS FIX EXISTS FOR: the new front door hands Planning a card
     with no `repo:` label — assigning one is Planning's own job. The NO-ROUTE
-    class must never see it, at any age."""
-    card = _card(labels=(), minutes_stale=16)
+    class must never see it, and the age deliberately sits PAST
+    WATCHDOG_MINUTES: the no-route grace period alone would not save this
+    card, only taking Planning out of that class does."""
+    card = _card(labels=(), minutes_stale=reconcile.WATCHDOG_MINUTES + 15)
     flagged, comment, add_label = _run_watchdog([card], bodies=[])
     assert flagged == set()
     comment.assert_not_called()
@@ -130,7 +132,10 @@ def test_planning_card_without_a_repo_label_is_not_flagged():
 def test_planning_card_with_an_off_map_repo_label_is_not_flagged():
     """Same rule, one step along: a repo label that routes nowhere is a
     routing question, and a card in Planning does not owe routing yet."""
-    card = _card(labels=("repo:ghost-product",), minutes_stale=16)
+    card = _card(
+        labels=("repo:ghost-product",),
+        minutes_stale=reconcile.WATCHDOG_MINUTES + 15,
+    )
     flagged, comment, add_label = _run_watchdog([card], bodies=[])
     assert flagged == set()
     comment.assert_not_called()
