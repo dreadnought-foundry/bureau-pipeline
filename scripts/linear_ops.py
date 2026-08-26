@@ -969,6 +969,29 @@ def cmd_description(identifier: str) -> None:
     sys.stdout.write(issue.get("description") or "")
 
 
+def cmd_child_descriptions(identifier: str) -> None:
+    """Print every child card's description, one after another.
+
+    The plan run reads these to decide whether an epic is UI work (DRE-2720):
+    a child carrying a `**Design:**` ref is EVIDENCE the epic builds screens,
+    where the plan's own prose is only a claim. Same degrade-quietly contract
+    as `description` — a childless epic or a body-less child prints nothing,
+    so the caller reads "no design refs" rather than the step erroring out.
+    """
+    data = gql(
+        """query($id: String!) {
+             issue(id: $id) { children { nodes { description } } }
+           }""",
+        {"id": identifier},
+    )
+    issue = data.get("issue") or {}
+    nodes = ((issue.get("children") or {}).get("nodes")) or []
+    for node in nodes:
+        body = (node or {}).get("description") or ""
+        if body:
+            sys.stdout.write(body.rstrip("\n") + "\n")
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     try:
@@ -988,6 +1011,7 @@ if __name__ == "__main__":
             "add-label": add_label,
             "remove-label": remove_label,
             "description": cmd_description,
+            "child-descriptions": cmd_child_descriptions,
         }[cmd](*args)
     except LinearError as e:
         # The ONLY process abort: explicit, at top level, CLI-only. Library

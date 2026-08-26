@@ -147,6 +147,42 @@ the build if any workflow re-hardcodes a cap, if a promotion path stops taking
 the input, if the declared default drifts from the script's, or if this repo's
 own stubs disagree with each other.
 
+## The plan artifact (DRE-2720)
+
+An epic's CEO-facing output is a published document, not a Linear comment.
+`plan.yml` asks the planner for one markdown file — business case, KPIs,
+risk assessment, outcome, visual model, the cards, proof and demo — then
+**checks it, renders `plan.html`, and publishes it from a separate job**.
+
+The split is deliberate. The planner writes markdown with the `Write` tool it
+already had and gains no capability; the artifact is an output of the run. And
+because the publish job holds no agent, the document portal never enters the
+planner's workspace (`agents.yaml` records the planner's `repoScope`, and
+`tests/test_agents_registry.py` checks it against the job the agent runs in).
+
+The contract is `standards/plan-artifact.md`; the checker is
+`scripts/plan_artifact.py`, which the run uses as a GATE — an artifact missing
+a section, carrying prose where the ```kpis block belongs, or offering a
+screenshot where a UI epic needs a live mockup fails the run, and the epic
+stays in Planning rather than reaching the CEO incomplete.
+
+Two repo variables configure publishing; both are optional:
+
+| variable | effect |
+|---|---|
+| `PLAN_PORTAL_REPO` | the document portal repo (e.g. `dreadnought-foundry/portico`). Unset ⇒ no publish; the artifact is uploaded as a build output and the epic comment says so rather than inventing a URL. |
+| `PLAN_PORTAL_BASE_URL` | the portal's public base. Unset ⇒ the run publishes but posts the run link, because a URL the CEO follows to a 404 is worse than none. |
+
+The published path is `plans/<epic>/`, derived from the epic id alone, so
+revision two lands on top of revision one and **the link the CEO holds never
+moves**. The source markdown is published beside the page — that is what makes
+the next revision's `## Version record` generated rather than remembered.
+
+Publishing is a **commit** to the portal repo, made by the bureau App
+identity, which must therefore be installed there. Not the portal's "Add
+document" button: that strips scripts, and an interactive mockup uploaded that
+way renders looking complete while being dead.
+
 ## Shared CI plumbing (DRE-2550)
 
 Product CI is product-specific — different stacks, different suites — but its
@@ -509,6 +545,8 @@ mechanical:
   imports it as a sibling. Jobs check this repo out into `.bureau-pipeline/`
   inside the product checkout and call
   `python3 .bureau-pipeline/scripts/<x>.py`.
+- `standards/` — the canonical shared rules, injected per role by
+  `scripts/assemble_context.py`. See `standards/README.md` for the mapping.
 - `briefs/` — agent role briefs (engineer, planner). Generic by design:
   repo-specific facts belong in the product repo's
   `.github/bureau/overrides.md`.

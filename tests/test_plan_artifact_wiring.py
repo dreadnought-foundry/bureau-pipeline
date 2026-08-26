@@ -41,19 +41,36 @@ def wf_src() -> str:
     return open(WF).read()
 
 
+def wf_jobs() -> dict:
+    return yaml.safe_load(wf_src())["jobs"]
+
+
 def wf_steps() -> list[dict]:
-    doc = yaml.safe_load(wf_src())
-    return doc["jobs"]["plan"]["steps"]
+    """Every step in the workflow, whichever job it lives in. The artifact is
+    checked in the planner's job and published from a separate one, so the
+    pins below must not care which."""
+    return [s for job in wf_jobs().values() for s in job.get("steps") or []]
 
 
-def step_named(fragment: str) -> dict:
-    for s in wf_steps():
-        if fragment.lower() in (s.get("name") or "").lower():
-            return s
+def _located(fragment: str) -> tuple[dict, dict]:
+    for job in wf_jobs().values():
+        for s in job.get("steps") or []:
+            if fragment.lower() in (s.get("name") or "").lower():
+                return s, job
     raise AssertionError(
         f"no step whose name contains {fragment!r}; have: "
         + ", ".join(repr(s.get('name')) for s in wf_steps())
     )
+
+
+def step_named(fragment: str) -> dict:
+    return _located(fragment)[0]
+
+
+def gate_of(fragment: str) -> str:
+    """The full condition a step runs under: its own `if` plus its job's."""
+    step, job = _located(fragment)
+    return f"{step.get('if', '')} {job.get('if', '')}"
 
 
 class StandardOnTheRailTest(unittest.TestCase):
@@ -132,8 +149,16 @@ class PlanRunProducesTheArtifactTest(unittest.TestCase):
         # The activate route runs no agent, so there is no artifact to check.
         for name in ("Plan artifact — check", "Plan artifact — render",
                      "Plan artifact — version record"):
-            self.assertIn("steps.route.outputs.mode == 'plan'",
-                          step_named(name)["if"], f"{name} must be plan-only")
+            self.assertIn("mode == 'plan'", gate_of(name),
+                          f"{name} must be plan-only")
+
+    def test_the_artifact_steps_are_skipped_when_the_planner_asked_questions(self):
+        # No children means no artifact was written, and a planner that asked
+        # for clarification must not be failed for the absence of one.
+        for name in ("Plan artifact — check", "Plan artifact — render",
+                     "Plan artifact — version record", "Plan artifact — publish"):
+            self.assertIn("kids", gate_of(name),
+                          f"{name} must be skipped on a childless plan")
 
 
 class KpiAndMockupGatesTest(unittest.TestCase):
@@ -172,8 +197,21 @@ class PublishTest(unittest.TestCase):
     def test_plan_html_is_a_build_output(self):
         # The card's cheap route: the planner writes markdown, the RUN turns
         # it into plan.html and publishes it — no new planner capability.
-        step = step_named("Plan artifact — upload")
+        step = step_named("Plan artifact — upload build output")
         self.assertIn("actions/upload-artifact", step["uses"])
+        self.assertIn("plan.html", str(step["with"]["path"]))
+
+    def test_the_portal_never_enters_the_planner_job(self):
+        # The planner's repoScope in agents.yaml says caller + pipeline, and
+        # DRE-2729 checks that against the job the agent runs in. Publishing
+        # from a separate job is what keeps that true.
+        plan_job = wf_jobs()["plan"]
+        repos = [
+            (s.get("with") or {}).get("repository", "")
+            for s in plan_job["steps"]
+            if str(s.get("uses") or "").startswith("actions/checkout")
+        ]
+        self.assertNotIn("${{ vars.PLAN_PORTAL_REPO }}", repos)
 
     def test_the_publish_step_uses_the_stable_path_helper(self):
         step = step_named("Plan artifact — publish")

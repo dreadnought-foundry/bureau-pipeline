@@ -54,14 +54,16 @@ class MappingTest(unittest.TestCase):
         # trigger/event/command — planner/engineer/frontend/devops/critic.
         # console-honesty.md (DRE-2107) goes to the roles that build or
         # review console surfaces rendering pipeline state —
-        # engineer/frontend/critic.
+        # engineer/frontend/critic. plan-artifact.md (DRE-2720) goes to the
+        # two roles that handle the epic's CEO-facing artifact — the planner
+        # writes it, the critic judges one — and to nobody else.
         expected = {
             "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
             "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "vendor-boundaries.md", "console-honesty.md"],
             "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
             "database-architect": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
-            "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md"],
-            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md"],
+            "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md", "plan-artifact.md"],
+            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md"],
             "verifier": ["comms.md", "untrusted-content.md", "design.md", "design-parity.md"],
             "fix": ["comms.md", "untrusted-content.md", "engineering.md"],
             "medic": ["comms.md", "untrusted-content.md", "engineering.md"],

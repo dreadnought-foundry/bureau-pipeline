@@ -257,10 +257,17 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear epic (label agent:planner) → Todo → relay repository_dispatch (agent-plan)"
-    maxTurns: 50
+    # 50 → 80 with DRE-2720: the planner now writes the CEO-facing plan
+    # artifact (seven sections, the ```kpis block, a token-built mockup for UI
+    # work) on top of decomposing the epic. Shipping that on the old ceiling
+    # would be knowingly buying turn-exhaustion deaths (DRE-2312).
+    maxTurns: 80
     maxBudget: 8
     tools: [Bash, Edit, Write, Read, Glob, Grep]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    # Unchanged by DRE-2720 on purpose: the plan artifact is published to the
+    # document portal from a SEPARATE job in plan.yml, so the portal checkout
+    # never enters the planner's workspace and stays out of its reach.
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/planner.md
     workflow: .github/workflows/plan.yml

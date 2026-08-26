@@ -52,6 +52,12 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Read by the `publish` job below (DRE-2720): the plan artifact is
+    # rendered and published from a SEPARATE job so the document portal never
+    # enters the planner agent's workspace.
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
+      kids: ${{ steps.kids.outputs.count }}
     steps:
       - name: Mint bot token
         id: app
@@ -218,7 +224,7 @@ jobs:
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 50
+            --max-turns 80
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
@@ -262,16 +268,33 @@ jobs:
                Never write an epic's id on a "Blocked by"/"serialize after"
                line in a child — epics stay In Progress for their whole life
                and would deadlock the gate.
-            4. Post the plan to the epic for CEO review:
+            4. Write the PLAN ARTIFACT — the thing the CEO green-lights —
+               with `Write`, to EXACTLY this path:
+                 ${{ runner.temp }}/plan-artifact.md
+               `standards/plan-artifact.md` in your assembled context is the
+               contract: seven `##` sections (Business case, KPIs, Risk
+               assessment, Outcome, Visual model, The cards, Proof and demo),
+               the KPIs as a fenced ```kpis JSON block where every record
+               carries `name`, a NUMERIC `baseline` and a `direction`, and —
+               for UI work — a fenced ```mockup block of HTML built from
+               console/design/tokens.css rather than a screenshot. A non-UI
+               epic writes "Not applicable — <reason>" under Visual model.
+               The run checks this file and FAILS if it is incomplete, so
+               check your own work first:
+                 python3 .bureau-pipeline/scripts/plan_artifact.py check \
+                   "${{ runner.temp }}/plan-artifact.md"
+               You do not render or publish it — the run turns it into
+               plan.html and publishes it.
+            5. Post the plan to the epic for CEO review:
                  python3 .bureau-pipeline/scripts/linear_ops.py comment \
                    "${{ github.event.client_payload.identifier }}" "<plan>"
                Write the plan in PLAIN ENGLISH for a non-technical reader:
                what will be built, in what order, what could go wrong, rough
                size. End with: "To start the build: move this epic to Todo
                again — the children will flow automatically in order."
-            5. If the intent is too ambiguous to plan, create NO sub-issues and
-               instead post a comment asking the specific questions you need
-               answered.
+            6. If the intent is too ambiguous to plan, create NO sub-issues,
+               write NO artifact, and instead post a comment asking the
+               specific questions you need answered.
 
       # Record an is_error PLANNER death so the fallback engages on retry
       # (DRE-1354). Unlike agent-task, a plan death has no PR/requeue path — the
@@ -318,12 +341,17 @@ jobs:
       # belt-and-braces sweep that closes any path that skipped the seam.
       # Skipped when the planner created zero children (it asked questions).
       - name: Validate created children
+        id: kids
         if: steps.route.outputs.mode == 'plan'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
+          # The artifact steps below key off this: a planner that asked
+          # questions created no children and wrote no artifact, and must not
+          # be failed for the absence of one.
+          echo "count=$KIDS" >> "$GITHUB_OUTPUT"
           if [ "$KIDS" -gt 0 ]; then
             if ! python3 .bureau-pipeline/scripts/validate_card.py check-children "$EPIC"; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -333,6 +361,55 @@ jobs:
           else
             echo "no children created (planner asked questions) — nothing to validate"
           fi
+      # --- The plan artifact (DRE-2720) ------------------------------------
+      #
+      # What the CEO green-lights. The planner wrote ONE markdown file with
+      # the `Write` tool it already had; the run checks it here and the
+      # `publish` job below renders and publishes it. Deliberately split that
+      # way: the planner stays headless and hardened, and the artifact is an
+      # OUTPUT of the run rather than a capability the agent needs.
+      # The contract is standards/plan-artifact.md; the checker is
+      # scripts/plan_artifact.py.
+      #
+      # Plan-route only (the activate route runs no agent) AND
+      # children-bearing only: a planner that asked clarifying questions
+      # created no cards and wrote no artifact, and must not be failed for the
+      # absence of one.
+
+      # Is this UI work? Read it off the CARDS the planner just created — a
+      # child carrying a **Design:** ref is evidence — never off the plan's
+      # own say-so, which is the thing being checked.
+      - name: Plan artifact — UI epic?
+        id: uiepic
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          UI=$(python3 .bureau-pipeline/scripts/linear_ops.py child-descriptions "$EPIC" \
+                 | python3 .bureau-pipeline/scripts/plan_artifact.py ui-epic)
+          echo "ui=$UI" >> "$GITHUB_OUTPUT"
+          echo "UI epic: $UI"
+
+      # The gate. An incomplete artifact fails the run, so the epic stays in
+      # Planning rather than reaching the CEO with a section missing, a KPI
+      # written as prose, or a screenshot where a mockup belongs.
+      - name: Plan artifact — check
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        run: |
+          python3 .bureau-pipeline/scripts/plan_artifact.py check \
+            "${{ runner.temp }}/plan-artifact.md" \
+            ${{ steps.uiepic.outputs.ui == 'true' && '--ui' || '' }}
+
+      # Hand the checked source to the publish job — jobs do not share a
+      # workspace, and the portal deliberately never enters this one.
+      - name: Plan artifact — upload source
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-source-${{ github.event.client_payload.identifier }}
+          path: ${{ runner.temp }}/plan-artifact.md
+          if-no-files-found: error
 
       - name: Epic → Plan Review
         if: steps.route.outputs.mode == 'plan'
@@ -348,3 +425,149 @@ jobs:
             # answering + re-Todo restarts planning cleanly.
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Backlog"
           fi
+
+  # The plan artifact's build output and its publication (DRE-2720).
+  #
+  # A SEPARATE job on purpose. The card's cheap route is that the planner
+  # writes markdown and a separate step publishes it — that keeps the planner
+  # headless and hardened, and it keeps the document portal out of the agent's
+  # workspace entirely (agents.yaml records the planner's repoScope, and this
+  # job has no agent in it).
+  #
+  # Vendor boundary (standards/vendor-boundaries.md), answered:
+  #   Q1 actor — the push is made by the bureau App identity minted below, so
+  #      the App must be installed on the portal repo. No `github-actions`
+  #      dispatch is involved.
+  #   Q2 secrets — this is the repository_dispatch run's own store (never a
+  #      fork or dependabot context), and the reusable's declared secrets
+  #      reach this job the same way they reach `plan`.
+  #   Q3 retry/re-run — publishing is an overwrite at a path derived from the
+  #      epic id, and an identical republish commits nothing, so a rerun is
+  #      idempotent rather than a second document.
+  #   Q4 limitations — the portal's "Add document" button STRIPS SCRIPTS: an
+  #      interactive mockup uploaded that way renders looking complete while
+  #      being dead. This is the committed pipeline route for that reason.
+  #   Q5 our own crash — the artifact is regenerated from the planner's
+  #      markdown on every run and the publish is the last step, so a crash
+  #      leaves the previously published version standing and the next plan
+  #      run republishes over it.
+  publish:
+    needs: plan
+    if: needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      - name: Plan artifact — fetch source
+        uses: actions/download-artifact@v4
+        with:
+          name: plan-source-${{ github.event.client_payload.identifier }}
+          path: ${{ runner.temp }}
+
+      # The portal checkout has to precede the version record: "what changed
+      # since you last read it" is generated by diffing the PUBLISHED source
+      # against the new one, and the published source lives here.
+      - name: Plan artifact — portal checkout
+        if: vars.PLAN_PORTAL_REPO != ''
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ vars.PLAN_PORTAL_REPO }}
+          token: ${{ steps.app.outputs.token }}
+          path: .plan-portal
+
+      # Generated, never remembered. Revision one has no previous version and
+      # gets no record — the script prints nothing rather than inventing one.
+      - name: Plan artifact — version record
+        run: |
+          ART="${{ runner.temp }}/plan-artifact.md"
+          REC="${{ runner.temp }}/plan-version-record.md"
+          python3 .bureau-pipeline/scripts/plan_artifact.py version-record \
+            "$ART" --epic "${{ github.event.client_payload.identifier }}" \
+            --portal .plan-portal > "$REC"
+          if [ -s "$REC" ]; then
+            python3 .bureau-pipeline/scripts/plan_artifact.py with-version-record \
+              "$ART" "$REC" -o "$ART"
+            echo "version record folded in"
+          else
+            echo "first version of this artifact — no version record"
+          fi
+
+      - name: Plan artifact — render plan.html
+        run: |
+          python3 .bureau-pipeline/scripts/plan_artifact.py render \
+            "${{ runner.temp }}/plan-artifact.md" \
+            --epic "${{ github.event.client_payload.identifier }}" \
+            -o "${{ runner.temp }}/plan.html"
+
+      # The build output, always — so the artifact exists and is readable even
+      # when no portal is configured (console-honesty rule 2: the run says
+      # where it is rather than pointing at a URL that does not resolve).
+      - name: Plan artifact — upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-artifact-${{ github.event.client_payload.identifier }}
+          path: |
+            ${{ runner.temp }}/plan.html
+            ${{ runner.temp }}/plan-artifact.md
+          if-no-files-found: error
+
+      # The stable URL: plans/<epic>/ derived from the epic id alone, so
+      # revision two lands on top of revision one and the CEO's link never
+      # moves. The source markdown is published beside the page — that is what
+      # the NEXT run's version record diffs against.
+      - name: Plan artifact — publish
+        id: publish
+        if: vars.PLAN_PORTAL_REPO != ''
+        env:
+          PLAN_PORTAL_BASE_URL: ${{ vars.PLAN_PORTAL_BASE_URL }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          URL=$(python3 .bureau-pipeline/scripts/plan_artifact.py publish \
+            "${{ runner.temp }}/plan-artifact.md" --epic "$EPIC" \
+            --portal .plan-portal)
+          PAGE=$(python3 .bureau-pipeline/scripts/plan_artifact.py path "$EPIC")
+          cd .plan-portal
+          git config user.name "agent-bureau-bot"
+          git config user.email "agent-bureau-bot@users.noreply.github.com"
+          git add "$(dirname "$PAGE")"
+          # Idempotent republish: identical bytes commit nothing.
+          if git diff --cached --quiet; then
+            echo "artifact unchanged — nothing to publish"
+          else
+            git commit -q -m "plan artifact: $EPIC"
+            git push
+          fi
+          # Empty when no base URL is configured — the announce step below
+          # then says where the artifact is instead of inventing a link.
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      # The CEO's entry point, and the address anchored feedback binds to.
+      - name: Plan artifact — announce
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          URL="${{ steps.publish.outputs.url }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          case "$URL" in
+            http*)
+              MSG="📄 The plan artifact is published: $URL — it stays at that address, so every revision lands on the same link. Comment on the paragraph or the mockup you want changed." ;;
+            *)
+              # Not published, or published with no public base URL set. Say
+              # where the artifact actually is; never invent a URL
+              # (standards/console-honesty.md rule 2).
+              MSG="📄 The plan artifact is built. No document portal URL is configured for this repo, so read it from the run: $RUN_URL" ;;
+          esac
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$MSG"
