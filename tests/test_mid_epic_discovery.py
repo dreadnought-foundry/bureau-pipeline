@@ -379,7 +379,11 @@ class TestGrowthIsLegible:
         happened — the one conclusion the number must never fabricate."""
         line = mid_epic.growth_line("DRE-2700", None, 14)
         assert "unknown" in line.lower()
-        assert "0" not in line.split("running")[0]
+        assert "0 cards" not in line
+        assert "green-lit at 14" not in line, (
+            "and never the CURRENT count either — that reads as an approval of "
+            "everything on the epic right now"
+        )
 
     def test_the_growth_line_says_both_numbers(self):
         line = mid_epic.growth_line("DRE-2700", 9, 14)
@@ -490,6 +494,42 @@ class TestACardHasNoChildren:
             "the mid-epic route needs the identifier it just created so it can "
             "record the growth on the epic in the same motion"
         )
+
+
+# ===========================================================================
+# The record: the route only exists for a writer who can find it
+# ===========================================================================
+class TestTheRouteIsWrittenDown:
+    ADR = ROOT / "architecture" / "decisions" / "adr-mid-epic-discovery.md"
+    STANDARD = ROOT / "standards" / "card-quality.md"
+
+    def test_the_adr_records_the_decision(self):
+        text = " ".join(self.ADR.read_text().split())  # unwrap prose line breaks
+        assert "DRE-2739" in text
+        for fact in (
+            mid_epic.THE_QUESTION,
+            "No new green light",
+            "A card has no children",
+        ):
+            assert fact.lower() in text.lower(), f"the ADR does not record: {fact}"
+
+    def test_the_card_standard_hands_a_writer_the_route(self):
+        """A rule nobody meets until it refuses them is a wall with extra steps.
+        The standard every card author reads must name both the refusal and the
+        command that satisfies it."""
+        text = self.STANDARD.read_text()
+        assert "mid_epic.py discovery" in text
+        assert "sibling" in text
+        assert mid_epic.ADDITION in text and mid_epic.AMENDMENT in text
+
+    def test_the_sweep_documents_the_promotion_condition_it_gained(self):
+        """reconcile's header is the sweep's contract. A promotion condition
+        that is not in it is a rule the next reader will not know about."""
+        assert "mid-epic" in reconcile.__doc__.lower()
+
+    def test_the_create_seam_documents_the_refusal_it_gained(self):
+        """`subissue`'s CLI help is where a planner meets this rule."""
+        assert "already an epic" in (linear_ops.__doc__ or "")
 
 
 # ===========================================================================

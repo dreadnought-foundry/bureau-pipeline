@@ -32,7 +32,12 @@ Subcommands:
                                        validate_card gate before creating it — a
                                        placeholder/empty body or a child missing
                                        repo/role is REJECTED (exit 3), never
-                                       created broken. Optional flags:
+                                       created broken. A parent that is NOT
+                                       already an epic is also REJECTED — giving
+                                       a card children reclassifies it as an
+                                       epic and it stops ever being promoted
+                                       (DRE-2739; file a sibling instead, see
+                                       scripts/mid_epic.py). Optional flags:
                                          --label <name>   (repeatable) extra label
                                          --blocked-by DRE-N,DRE-M  (also parsed
                                                           from the body line)
@@ -85,6 +90,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
 import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
+import mid_epic  # noqa: E402 — ONE source for "a card has no children" (DRE-2739)
 
 API = "https://api.linear.app/graphql"
 
@@ -771,9 +777,10 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     extra = f" labels={','.join(labels)}"
     extra += f" blockedBy={','.join(rel)}" if rel else ""
     print(f"created {issue['identifier']} {issue['url']}{extra}")
+    return issue
 
 
-def cmd_subissue(parent_identifier: str, title: str, description_file: str, *flags) -> None:
+def cmd_subissue(parent_identifier: str, title: str, description_file: str, *flags) -> dict:
     parent = get_issue(parent_identifier)
 
     # 1 — INLINE REAL CONTENTS (never the path).
@@ -786,6 +793,21 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # explicit --label. No child is ever created label-less.
     parent_labels = _issue_label_names(parent["id"])
     child_labels = child_labels_from(parent_labels, list(extra_labels))
+
+    # 2b — A CARD HAS NO CHILDREN (DRE-2739). Refuse BEFORE any write: giving a
+    # plain card sub-issues silently reclassifies it as an epic (validate_card
+    # reads children as epic-ness) and reconcile then never promotes it. The
+    # refusal names that consequence and the sibling route that works.
+    # The two free epic tests come first: a parent already classified as an epic
+    # cannot be reclassified by one more child, so the children read is only
+    # bought when the title and the labels both say no — the planner's own path
+    # (every parent is agent:planner) buys nothing at all.
+    if not mid_epic.is_epic(parent.get("title"), parent_labels, has_children=False):
+        refusal = mid_epic.subissue_refusal(
+            parent.get("title"), parent_labels, _issue_has_children(parent["id"])
+        )
+        if refusal is not None:
+            raise LinearError(f"subissue REJECTED ({title!r}): {refusal}")
 
     # 3 — ORDERING → relations: union of the body's **Blocked by:** line and any
     # --blocked-by flag. Never block on the parent epic (it deadlocks the gate).
@@ -809,8 +831,12 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # 5 — CREATE, under the epic, in Backlog. The children sit there while the
     # epic is still pre-approval, and the guard leaves them alone until the epic
     # passes Planning exit (DRE-2754 — see scripts/lane_scope.py).
-    _create_card(parent["team"]["id"], title, description, child_labels,
-                 blockers, parent_id=parent["id"])
+    # RETURNED, not just printed: the mid-epic route needs the identifier it
+    # just created so it can record the growth on the epic in the same motion
+    # (DRE-2739, consumed at mid_epic.py:483). The CLI path ignores the value,
+    # so behaviour there is unchanged.
+    return _create_card(parent["team"]["id"], title, description, child_labels,
+                        blockers, parent_id=parent["id"])
 
 
 def cmd_oneoff(title: str, description_file: str, *flags) -> None:
@@ -859,6 +885,18 @@ def _parse_flags(flags) -> tuple[list[str], list[str]]:
         elif tok == "--blocked-by":
             blockers.extend(d.upper() for d in _DRE_RE.findall(next(it)))
     return labels, blockers
+
+
+def _issue_has_children(issue_id: str) -> bool:
+    """Does this issue already have sub-issues? The third leg of the epic test
+    (DRE-2739): a parent that already has children is already an epic, so one
+    more child changes nothing about what it is."""
+    data = gql(
+        """query($id: String!) { issue(id: $id) { children { nodes { id } } } }""",
+        {"id": issue_id},
+    )
+    issue = data.get("issue") or {}
+    return bool((issue.get("children") or {}).get("nodes"))
 
 
 def _issue_label_names(issue_id: str) -> list[str]:

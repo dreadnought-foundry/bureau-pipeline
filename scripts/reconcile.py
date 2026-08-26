@@ -54,6 +54,16 @@ DEFAULT_MAX_WIP active cards) throttles promotion so the pipeline never floods.
 The calling workflow passes the repo's own cap through its `max_wip` input;
 every promotion path in the pipeline uses that one value (DRE-2529).
 
+Mid-epic discovery (DRE-2739): a Backlog child created AFTER its epic's most
+recent green light is a card the approved plan never described, and promoting it
+dispatches an agent within fifteen minutes whether or not anyone has read it. So
+it promotes only once it carries a verdict (`mid-epic-verdict`), which the
+mid-epic route records for it — the green light is waived, Layer 1 is not. An
+epic whose green light Linear cannot report abstains rather than refusing. Every
+full sweep also refreshes each active epic's growth record on the epic itself:
+green-lit at N cards, running M, plus any card that joined without the plan
+moving with it (scripts/mid_epic.py owns the whole mechanism).
+
 An epic counts as ACTIVATED in EITHER Todo OR In Progress (DRE-1893). The CEO's
 activation action is moving an approved epic to **Todo** (lifecycle Backlog →
 Planning → Todo); In Progress is a downstream/system progression. Todo is purely
@@ -97,6 +107,9 @@ import linear_ops  # noqa: E402
 # a verdict exactly the way the gate does (DRE-1998 had to fix an
 # independent copy once already).
 import merge_gate  # noqa: E402
+# DRE-2739: ONE source for the mid-epic discovery route — what counts as a card
+# added after the green light, and the verdict it must carry before it promotes.
+import mid_epic  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
@@ -1364,7 +1377,7 @@ def backlog_children() -> list[dict]:
              team: {key: {eq: "DRE"}},
              state: {name: {eq: "Backlog"}}
            }) { nodes {
-             id identifier title description
+             id identifier title description createdAt
              parent { identifier state { name } }
              labels { nodes { name } }
              comments(last: 50) { nodes { body } }
@@ -1602,6 +1615,9 @@ def promote_ready(active_count: int) -> int:
     # Cache the epic-level gate per parent epic: it is the same answer for every
     # child of that epic, so consult Linear once per epic per sweep (DRE-1772).
     epic_gate: dict[str, bool] = {}
+    # Same shape, same reason, for the epic's green light (DRE-2739) — one
+    # history read per epic per sweep, shared by all its children.
+    green_light: dict[str, str | None] = {}
     candidates = sorted(backlog_children(), key=lambda c: int(c["identifier"].split("-")[1]))
     for card in candidates:
         if promoted >= budget:
@@ -1626,6 +1642,7 @@ def promote_ready(active_count: int) -> int:
         # DELIBERATELY outside it — a write failure there is a write failure,
         # not a bad reference, and must not stamp the card with a false
         # "reference doesn't resolve" diagnostic (critic PR #89).
+        refusal: str | None = None
         try:
             # Epic-level gate (DRE-1772): even an active (plan-approved) epic
             # must not start its children while the epic itself is blocked-by a
@@ -1655,8 +1672,42 @@ def promote_ready(active_count: int) -> int:
             if has_unresolved_blocker(card):
                 print(f"promotion: {card['identifier']} has an unresolved agent-blocker — skipping")
                 continue
+            # Mid-epic discovery (DRE-2739): a card added to an epic AFTER it was
+            # green-lit dispatches an agent on this very sweep — within fifteen
+            # minutes — whether or not anyone has read it. Right for a card the
+            # plan anticipated, wrong for one nobody has seen. So it carries a
+            # verdict before it joins: Layer 1 is not waived, only the green
+            # light is. An epic whose green light Linear cannot report abstains
+            # (mid_epic.promotion_refusal) — never refuses the whole roster.
+            if epic_id not in green_light:
+                green_light[epic_id] = mid_epic.last_green_light(linear_ops, epic_id)
+            refusal = mid_epic.promotion_refusal(
+                card["identifier"],
+                card.get("createdAt"),
+                green_light[epic_id],
+                [n.get("body") or "" for n in (card.get("comments") or {}).get("nodes", [])],
+            )
         except linear_ops.LinearError as e:
             skip_bad_reference(card["identifier"], e)
+            continue
+        if refusal is not None:
+            print(
+                f"promotion: {card['identifier']} was added to its epic after the "
+                "green light and carries no verdict — skipping"
+            )
+            # Surfaced ONCE, the DEAD_TAG shape: the card is invisible otherwise,
+            # and an invisible refusal is the silent-accretion problem wearing a
+            # different hat. A WRITE, so deliberately outside the read-guard —
+            # and guarded itself, because reporting never blocks the sweep.
+            try:
+                if linear_ops.count_comments(card["identifier"], mid_epic.NO_VERDICT_TAG) == 0:
+                    linear_ops.cmd_comment(card["identifier"], refusal)
+            except linear_ops.LinearError as e:
+                print(
+                    f"ERROR: could not surface the mid-epic refusal on "
+                    f"{card['identifier']}: {e}",
+                    file=sys.stderr,
+                )
             continue
         # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
         # bad reference: record it on the existing _write_failures path (fails
@@ -3165,6 +3216,30 @@ def report_break_glass() -> None:
     except Exception as exc:  # noqa: BLE001 — a KPI read never fails the sweep
         print(break_glass.count_line(None, None, error=str(exc)))
 
+def report_epic_growth(epics: set[str]) -> None:
+    """Refresh each active epic's growth artifact on every full sweep (DRE-2739).
+
+    The epic shows what it was green-lit at and what it is now — approved at
+    nine cards, running at fourteen. Nobody polices the number; it just has to
+    be visible, because silent accretion turns an approved scope into an
+    unapproved one with no single decision being wrong. Riding the sweep that
+    already runs is what makes it visible without anyone remembering to look.
+
+    A read that fails prints and moves on: a KPI is never worth failing a sweep
+    for, and one epic's unreadable history must not cost the others theirs.
+    """
+    for epic in sorted(epics):
+        try:
+            report = mid_epic.refresh_epic_growth(linear_ops, epic)
+        except Exception as exc:  # noqa: BLE001 — a KPI read never fails the sweep
+            print(f"epic-growth: {epic} unknown — Linear did not answer ({exc})")
+            continue
+        if report["unrecorded"]:
+            print(
+                f"epic-growth: {epic} grew without its plan changing — "
+                + ", ".join(report["unrecorded"])
+            )
+
 
 def repo_epics(active: list[dict]) -> set[str]:
     """Identifiers of THIS repo's active epics (agent:planner cards).
@@ -3461,6 +3536,9 @@ def main(
     # The break-glass KPI, beside the sweep's own numbers (DRE-2737): a rising
     # count is a finding about the front door, not about the people using it.
     report_break_glass()
+    # The epic-growth KPI (DRE-2739), beside the sweep's own numbers: green-lit
+    # at N, running M, and any card that joined without the plan moving with it.
+    report_epic_growth(epics)
     print(f"sweep complete: {nudges} nudge(s)")
     if _write_failures or _read_failures:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
