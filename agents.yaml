@@ -13,6 +13,26 @@
 # ordered fallback LADDERS live in that config only: they used to be
 # copy-pasted five times into this file, where nothing on the CI path read them.
 #
+# WHAT IS ENFORCED, AND BY WHAT (DRE-2729). Before this card only `model:`
+# had a check, so `tools:` was a comment asking people to remember and it had
+# drifted on two of ten entries — including the critic, the agent that gates
+# every unattended merge. Every behavioural field now has an owner:
+#
+#   model       — CI drift check against config/models.yaml (DRE-2316), plus
+#                 tests/test_model_config.py
+#   maxTurns    — tests/test_agents_registry.py::test_turns_match_workflow_text
+#   tools       — tests/test_agents_registry.py::test_tools_match_workflow_text
+#   credentials — tests/test_agents_registry.py::test_credentials_match_the_agent_step
+#   repoScope   — tests/test_agents_registry.py::test_repo_scope_matches_the_agent_workspace
+#   maxBudget   — NOT enforced. Advisory display only; there is nothing in the
+#                 workflow to compare it against.
+#
+# The credential and repo checks read the AGENT STEP, never the workflow file.
+# That distinction is the whole point: LINEAR_API_KEY appears seven times in
+# agent-fix.yml and was missing from exactly one place — the env block of the
+# step that runs the agent (DRE-2696). A file-level answer would have been a
+# confident green over the precise gap it exists to find.
+#
 # Schema (one entry per agent):
 #   name      — stable identifier (lowercase)
 #   role      — human label shown in the console roster
@@ -40,6 +60,19 @@
 #   maxTurns  — hard turn budget passed via claude_args
 #   maxBudget — advisory dollars per run (console display; not enforced)
 #   tools     — allowedTools passed to the agent
+#   credentials — the credential NAMES the agent step is handed, from its own
+#               env chain and from the action's inputs. NAMES ONLY — never a
+#               value, and never the expression that resolves to one. This
+#               file is world-readable through the console's contents-API
+#               fetch. An empty list is a real answer (the critic is denied
+#               Linear on purpose); where it is empty, the reason is written
+#               out in tests/test_agent_linear_key.py's DOCUMENTED_EXCEPTIONS
+#               and the roster check requires the entry to be there.
+#   repoScope — the repositories checked out into the agent's workspace, which
+#               is the reach its job actually has. `caller` is the product
+#               repo that dispatched the run — it differs per repo, so it
+#               cannot be named. Every agent also gets this repo read-only at
+#               .bureau-pipeline for scripts, briefs and standards.
 #   briefPath — role brief in this repo (briefs/<role>.md), if any
 #   workflow  — the reusable workflow implementing the agent
 
@@ -58,6 +91,9 @@ agents:
     maxTurns: 150
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/engineer.md
     workflow: .github/workflows/agent-task.yml
 
@@ -77,6 +113,9 @@ agents:
     maxTurns: 150
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/frontend.md
     workflow: .github/workflows/agent-task.yml
 
@@ -100,6 +139,9 @@ agents:
     maxTurns: 150
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/database-architect.md
     workflow: .github/workflows/agent-task.yml
 
@@ -114,6 +156,9 @@ agents:
     maxTurns: 150
     maxBudget: 12
     tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/devops.md
     workflow: .github/workflows/agent-task.yml
 
@@ -136,6 +181,8 @@ agents:
     maxTurns: 150
     maxBudget: 9
     tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/agent-fix.yml
 
@@ -162,7 +209,14 @@ agents:
     # Advisory display only. Raised with the ceiling so the console does not
     # show a $3 run for an agent observed at $2.05 in 41 turns.
     maxBudget: 6
-    tools: [Bash, Read, Glob, Grep]
+    tools: [Bash, Read, Glob, Grep, Write]
+    # No LINEAR_API_KEY, on purpose (DRE-2052 + DRE-2696): card material
+    # reaches the critic through ONE sanitising stage — review_card_context.py —
+    # and a live key would let it fetch card prose around that stage. The
+    # reason is written out in tests/test_agent_linear_key.py, and the roster
+    # check requires this omission to appear there rather than be a blank.
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/qa-review.yml
 
@@ -187,6 +241,9 @@ agents:
     maxTurns: 120
     maxBudget: 5
     tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/verifier.md
     workflow: .github/workflows/verify.yml
 
@@ -202,7 +259,9 @@ agents:
     trigger: "Linear epic (label agent:planner) → Todo → relay repository_dispatch (agent-plan)"
     maxTurns: 50
     maxBudget: 8
-    tools: [Bash, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: briefs/planner.md
     workflow: .github/workflows/plan.yml
 
@@ -217,6 +276,8 @@ agents:
     maxTurns: 40
     maxBudget: 3
     tools: [Bash, Read, Glob, Grep, Write]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/medic.yml
 
@@ -232,5 +293,8 @@ agents:
     maxTurns: 100
     maxBudget: 10
     tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
     workflow: .github/workflows/red-main-repair.yml
