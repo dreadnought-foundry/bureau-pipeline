@@ -37,11 +37,14 @@ the fix agent, receipted on the PR, and its card released from the human queue
 on top of the answer. A human comment that mentions an operator decision but
 does not parse as one is reported on the PR instead of held in silence.
 
-Stranded-card watchdog (DRE-1993): every card/epic in Planning / Todo /
-In Progress whose repo has no route in the routing snapshot, or (this repo's
-cards) with no run receipt after 30 minutes, gets ONE plain-English comment
-naming the reason plus the needs-human label — the board must never say work
-is happening while nothing runs (DRE-1978 sat in Planning 7 days unseen).
+Stranded-card watchdog (DRE-1993): every card/epic in Todo / In Progress whose
+repo has no route in the routing snapshot, or (this repo's cards) with no run
+receipt, gets — after 30 minutes either way — ONE plain-English comment naming
+the reason plus the needs-human label, so the board never says work is
+happening while nothing runs. Planning has its OWN rule (DRE-2736): a card
+there owes a classification, not a repo label or a run receipt, and is flagged
+only after PLANNING_MINUTES with nothing happening to it (DRE-1978 sat in
+Planning 7 days unseen).
 
 Also runs the dependency gate: Backlog children whose parent epic is ACTIVATED
 (= plan approved) are auto-promoted to Todo once every blocker is Done — blockers
@@ -84,6 +87,7 @@ import time
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
@@ -201,11 +205,33 @@ _LIFE_PREFIXES = ("⏳", "🧠")
 # all strand cards the same silent way. flag_stranded() below alarms on both
 # classes, ONCE per card (the WATCHDOG_TAG comment is the idempotency
 # marker), and adds HOLD_LABEL so the sweep stops re-dispatching into the
-# same wall. Planning is a watchdog-only lane: the nudge loop / WIP cap
-# below never see it (no STALE_MINUTES entry, no defined nudge).
-WATCHDOG_LANES = ("Planning", "Todo", "In Progress")
+# same wall.
+#
+# A LANE'S STRAND RULE MATCHES WHAT THAT LANE'S OCCUPANTS OWE (DRE-2736).
+# Planning used to be swept here, and the no-route class fired on the first
+# sweep that saw a card — fine while almost nothing sat in Planning, fatal
+# under DRE-2719, where every card enters through Planning and a card in
+# Planning has NO repo: label yet, because assigning one is what Planning
+# does. Every card on the front path would have collected the hold label
+# within fifteen minutes, and promote_ready() skips a held card permanently:
+# a front door that manufactures unpromotable cards. (With DRE-2725's
+# move-to-Triage upgrade it is worse — Triage's exit re-classifies into
+# Planning, so the flag becomes a loop.) So the lanes below own the two
+# classes a Todo / In Progress card really does owe, and Planning gets its
+# own rule in flag_stalled_planning(). The nudge loop / WIP cap still never
+# see Planning (no STALE_MINUTES entry, no defined nudge).
+WATCHDOG_LANES = ("Todo", "In Progress")
 WATCHDOG_MINUTES = int(os.environ.get("WATCHDOG_MINUTES", "30"))
 WATCHDOG_TAG = "stranded-watchdog"
+
+# Planning's own lane and threshold (DRE-2736). Longer than WATCHDOG_MINUTES
+# on purpose: what a Planning card owes is a CLASSIFICATION, and producing one
+# is a planner run — plan.yml's job alone is capped at 30 minutes, so sharing
+# the 30-minute threshold would alarm on runs that are simply still going.
+# Every receipt the planner posts bumps updatedAt, so this clock only runs on
+# a card nothing is happening to.
+PLANNING_LANE = ("Planning",)
+PLANNING_MINUTES = int(os.environ.get("PLANNING_MINUTES", "120"))
 
 # Hand-built work is not stranded work (DRE-2524). On 2026-08-17 five portico
 # cards (DRE-2499/2500/2501/2505/2507) each collected a 🚨 notice plus the hold
@@ -706,16 +732,24 @@ def live_rail_slugs() -> frozenset[str] | None:
 def flag_stranded() -> set[str]:
     """DRE-1993 watchdog: flag active-lane cards with no evidence of work.
 
-    Two strand classes, checked over WATCHDOG_LANES on every full sweep:
+    Two strand classes, checked over WATCHDOG_LANES on every full sweep,
+    plus Planning's own rule (flag_stalled_planning, called at the end —
+    Planning is not one of these lanes since DRE-2736):
       (a) NO ROUTE — the card's repo slug is not in the routing snapshot
           (validate_card.VALID_SLUGS, mirroring the relay's map), so no
-          dispatch can EVER start a run. Flagged within one sweep, however
-          fresh the card. Every repo's sweep checks this (an off-map card
-          belongs to no sweep's `mine`); the once-ever gate makes whichever
-          sweep gets there first the only one that speaks. Because fleet
-          sweeps run PINNED checkouts whose snapshot can predate an
-          onboarding (DRE-2260), a labeled slug is claimed unroutable only
-          after the canonical @main snapshot confirms it: slug present
+          dispatch can EVER start a run. Flagged after WATCHDOG_MINUTES,
+          the same grace class (b) always had: a card is genuinely
+          unroutable for a real interval between creation and the Todo
+          gate's repair pass (validate_card infers a missing repo label and
+          repairs it), and flagging on the first sweep RACES that repair —
+          for a permanent consequence, since promote_ready() skips a held
+          card forever (DRE-2736). Every repo's sweep checks this (an
+          off-map card belongs to no sweep's `mine`); the once-ever gate
+          makes whichever sweep gets there first the only one that speaks.
+          Because fleet sweeps run PINNED checkouts whose snapshot can
+          predate an onboarding (DRE-2260), a labeled slug is claimed
+          unroutable only after the canonical @main snapshot confirms it:
+          slug present
           there → stale pin, leave the card to a current sweep; snapshot
           unreadable → defer the claim to a later sweep. Only a label-less
           card — unroutable under ANY snapshot — needs no confirmation.
@@ -724,7 +758,7 @@ def flag_stranded() -> set[str]:
           and plan both post them at run start) after WATCHDOG_MINUTES —
           or after a prior Todo-redispatch receipt, which resets updatedAt
           every cycle and would otherwise hide the strand forever.
-          Epics past Planning are containers — no run ever targets them,
+          Epics in these lanes are containers — no run ever targets them,
           so their receipt-less state is normal, not a strand.
 
     Neither class applies to HAND-BUILT work (DRE-2524): a card labelled
@@ -754,6 +788,8 @@ def flag_stranded() -> set[str]:
     live_fetched = False  # one canonical-snapshot read per sweep, and only if needed
     for card in active_cards(WATCHDOG_LANES):
         ident, state = card["identifier"], card["state"]["name"]
+        if state == "Planning":
+            continue  # Planning has its own rule (DRE-2736) — never these two
         if held(card):
             continue  # already in a human's queue — never spam
         if hand_built(card):
@@ -770,17 +806,23 @@ def flag_stranded() -> set[str]:
         if routable and slug != REPO_SLUG:
             continue  # that repo's own sweep runs the no-run check for its cards
         labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
-        if routable and state != "Planning" and "agent:planner" in labels:
-            continue  # an epic past Planning carries no run — normal, not stranded
+        if routable and "agent:planner" in labels:
+            continue  # an epic in these lanes carries no run — normal, not stranded
         bodies = linear_ops.comment_bodies(ident)
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
         if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
             continue  # a run DID start (either class) — the dead-run machinery owns it now
+        # ONE age gate, both classes (DRE-2736). It used to sit inside the
+        # routable branch, so NO ROUTE fired on the first sweep that saw a
+        # card and raced the Todo gate's repair pass. A prior redispatch
+        # receipt substitutes for the elapsed time on either class: it resets
+        # updatedAt every cycle, so "dispatch fired, nothing ran" is already
+        # the evidence the clock was there to gather.
+        redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
+        if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
+            continue  # young — give the dispatch (and the gate's repair) time
         if routable:
-            redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
-            if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
-                continue  # young — give the dispatch time to start a run
             # Says what was OBSERVED and nothing more (DRE-2524). The old text
             # offered three suspects — the Actions budget, the LLM quota, the
             # relay — with no evidence for any of them, so the reader had to
@@ -825,6 +867,64 @@ def flag_stranded() -> set[str]:
         linear_ops.add_label(ident, HOLD_LABEL)
         flagged.add(ident)
         print(f"watchdog: {ident} in {state} flagged ({'no-run' if routable else 'no-route'})")
+    return flagged | flag_stalled_planning()
+
+
+def flag_stalled_planning() -> set[str]:
+    """DRE-2736 watchdog: flag cards stalled in Planning, on Planning's terms.
+
+    Planning's occupants owe a CLASSIFICATION — the decision about what the
+    card is and where it goes — and nothing else. Not a `repo:` label
+    (assigning one is what Planning does, so the whole front path arrives
+    without one), and not a run receipt (a planner-created child inherits
+    `repo:` and a role label but never `agent:planner`, so the no-run class's
+    epic exemption never covered it). Judging Planning by those two rules is
+    what made the watchdog flag every card on the new front path.
+
+    So the only question asked here is the lane's own: has anything happened
+    to this card in PLANNING_MINUTES? Every planner receipt, comment and state
+    move bumps updatedAt, so the clock runs only on a card that is genuinely
+    sitting still — the DRE-1978 shape, which sat in Planning for SEVEN DAYS
+    with no planner run and which this rule must still catch. Removing
+    Planning from the sweep instead of re-keying it would have given those
+    seven days back.
+
+    Same manners as flag_stranded: held and hand-built cards are skipped, the
+    WATCHDOG_TAG comment is the once-ever idempotency marker, and flagging is
+    one plain-English comment plus HOLD_LABEL — no state move, no cancel.
+    Returns the identifiers flagged this sweep.
+    """
+    flagged: set[str] = set()
+    for card in active_cards(PLANNING_LANE):
+        ident, state = card["identifier"], card["state"]["name"]
+        if state != "Planning":
+            continue  # this rule speaks for one lane only
+        if held(card):
+            continue  # already in a human's queue — never spam
+        if hand_built(card):
+            print(
+                f"watchdog: {ident} is labeled '{HAND_BUILT_LABEL}' — the "
+                "pipeline is not planning this card, so time spent in "
+                "Planning is not a strand"
+            )
+            continue
+        if any(WATCHDOG_TAG in b for b in linear_ops.comment_bodies(ident)):
+            continue  # flagged once already — idempotent forever
+        if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
+            continue  # planning is young — let it produce its classification
+        reason = (
+            "planning has produced nothing. Observed: this card has sat in "
+            f"Planning for {PLANNING_MINUTES}+ minutes with nothing posted or "
+            "changed on it — a card in Planning owes a decision about what it "
+            "is and where it goes, and no decision has been recorded. Why is "
+            "not known from here. If planning is genuinely still going, remove "
+            f"the '{HOLD_LABEL}' label and it will carry on; otherwise this "
+            "card needs a human to look."
+        )
+        linear_ops.cmd_comment(ident, f"🚨 {WATCHDOG_TAG}: {reason}")
+        linear_ops.add_label(ident, HOLD_LABEL)
+        flagged.add(ident)
+        print(f"watchdog: {ident} in Planning flagged (no-classification)")
     return flagged
 
 
@@ -3048,6 +3148,24 @@ def check_dependabot_capacity() -> None:
             )
 
 
+def report_break_glass() -> None:
+    """Print the break-glass count on every full sweep (DRE-2737).
+
+    The number has to be readable without anyone applying a filter or
+    remembering to look, so it rides the sweep that already runs. A read that
+    fails prints UNKNOWN and returns — a KPI is never worth failing a sweep
+    for, and a break-glass count that renders 0 because Linear was down would
+    say "the front door is fine", the one conclusion it must never invent.
+    """
+    try:
+        c = break_glass.counts(linear_ops)
+        print(break_glass.count_line(c["recorded"], c["owing"]))
+        if c["owing_cards"]:
+            print("break-glass still owing: " + ", ".join(c["owing_cards"]))
+    except Exception as exc:  # noqa: BLE001 — a KPI read never fails the sweep
+        print(break_glass.count_line(None, None, error=str(exc)))
+
+
 def repo_epics(active: list[dict]) -> set[str]:
     """Identifiers of THIS repo's active epics (agent:planner cards).
 
@@ -3213,6 +3331,24 @@ def main(
                         ),
                     )
                 continue
+            # Break-glass debt (DRE-2737): the same call linear-sync's
+            # card-done makes, for the same reason the no-code guard is
+            # mirrored here — linear-sync can be down, and this backstop must
+            # not close a card that owes the classification it skipped. Read
+            # off the `break-glass:used` receipt, so a marker removed
+            # mid-flight neither strands the card nor cancels the debt.
+            if break_glass.owes_review(
+                [l["name"] for l in (card.get("labels") or {}).get("nodes", [])]
+            ):
+                if not linear_ops.count_comments(ident, break_glass.REVIEW_TAG):
+                    linear_ops.cmd_comment(
+                        ident,
+                        break_glass.review_notice(
+                            f"https://github.com/{REPO}/pull/{pr['number']}"
+                        ),
+                    )
+                linear_ops.cmd_state(ident, break_glass.REVIEW_STATE)
+                continue
             linear_ops.cmd_state(ident, "Done")
             linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
         elif state == "Todo" and not is_open:
@@ -3322,6 +3458,9 @@ def main(
                     ident, "🧹 Reconcile: stuck In Review — merge gate re-triggered."
                 )
         nudges += 1
+    # The break-glass KPI, beside the sweep's own numbers (DRE-2737): a rising
+    # count is a finding about the front door, not about the people using it.
+    report_break_glass()
     print(f"sweep complete: {nudges} nudge(s)")
     if _write_failures or _read_failures:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0

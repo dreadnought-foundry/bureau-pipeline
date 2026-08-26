@@ -41,6 +41,13 @@ right and the gate is a no-op.
   alone now says so in the sweep log.
 - **Labels:** `initiative:<x>` (the cross-project filter); `no-code` for
   operator/non-build cards.
+- **`break-glass`** — the ONE sanctioned way past the Todo-entry gate at 2am
+  (DRE-2737). **Operator-only**: applied by hand, in Linear, by a person; the
+  pipeline's own label writes refuse it, so **no agent may apply it**. The
+  bypass is recorded on the card and counted rather than undone, and the card
+  owes the classification it skipped — once its work merges it returns to
+  `Planning` for that review instead of going Done. Removing the marker
+  afterwards changes neither the record nor the debt.
 
 ## Lifecycle — build by default; escalate by exception (DRE-1655)
 A card flows `Todo → In Progress → In QA → In Review → Done`, **unattended**.
