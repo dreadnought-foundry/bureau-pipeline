@@ -61,6 +61,16 @@ REQUIRED_SECTIONS: list[str] = [
 # The generated section (not required — revision one has no previous version).
 VERSION_RECORD = "version record"
 
+# How a section is SPELLED for the reader. Sentence case for everything except
+# the acronym, which naive title-casing renders "Kpis" — in the one document
+# the CEO reads.
+SECTION_TITLES: dict[str, str] = {"kpis": "KPIs"}
+
+
+def section_title(key: str) -> str:
+    return SECTION_TITLES.get(key, key[0].upper() + key[1:])
+
+
 # Heading spellings a planner will reasonably write, mapped to the canonical
 # key. Deliberately narrow: a heading nobody recognises must surface as a
 # MISSING section, not be silently absorbed.
@@ -386,7 +396,7 @@ def version_record(previous: str, current: str) -> str:
     changed: list[str] = []
     unchanged: list[str] = []
     for key in REQUIRED_SECTIONS:
-        title = key[0].upper() + key[1:]
+        title = section_title(key)
         old_body, new_body = was.get(key), now.get(key)
         if old_body is None and new_body is not None:
             changed.append(f"- **{title}** — added")
@@ -563,7 +573,7 @@ def _render_section(key: str, body: str) -> str:
     case does not renumber the anchors a comment on the outcome is bound to.
     """
     anchor = key.replace(" ", "-")
-    title = key[0].upper() + key[1:]
+    title = section_title(key)
     out = [f'<section id="{anchor}" data-anchor>',
            f'<a class="anchor" href="#{anchor}">#</a>',
            f"<h2>{_esc(title)}</h2>"]

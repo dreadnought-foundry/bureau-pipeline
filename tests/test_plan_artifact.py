@@ -165,6 +165,15 @@ class SevenSectionsTest(unittest.TestCase):
         text = ARTIFACT_V1.replace("## KPIs", "## KPIs — as structured data")
         self.assertEqual(_pa().missing_sections(text), [])
 
+    def test_the_acronym_section_is_spelled_for_the_reader(self):
+        # Naive title-casing renders "Kpis" — in the one document the CEO
+        # reads, and in the generated version record he reads with it.
+        pa = _pa()
+        self.assertEqual(pa.section_title("kpis"), "KPIs")
+        self.assertEqual(pa.section_title("risk assessment"), "Risk assessment")
+        self.assertIn("<h2>KPIs</h2>", pa.render(ARTIFACT_V1, "DRE-2668"))
+        self.assertIn("**KPIs**", pa.version_record(ARTIFACT_V1, ARTIFACT_V2))
+
     def test_section_body_is_returned_for_the_renderer(self):
         body = _pa().sections(ARTIFACT_V1)["outcome"]
         self.assertIn("green-lights in minutes", body)
