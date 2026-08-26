@@ -264,7 +264,10 @@ def test_an_unreadable_history_does_not_fail_the_emergency_path():
     assert _run_gate(fake) is False
     body = "\n".join(b for _, b in fake.comments)
     assert break_glass.BYPASS_TAG in body
-    assert "unreadable" in body.lower()          # honest about what it could not read
+    # Honest about what it could not read, rather than naming a likely human:
+    # Linear's history is eventually consistent and a freshly-marked card
+    # routinely returns nothing (measured live on DRE-2757).
+    assert "unknown" in body.lower() and "history" in body.lower()
 
 
 def test_add_label_refuses_the_marker():

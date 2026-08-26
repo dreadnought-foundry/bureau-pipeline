@@ -48,6 +48,17 @@ path refuse to apply the marker at all. `refusal_reason()` below is the second
 layer, for writers we do not own — a Linear integration or automation app
 writes as a `botActor`, and its bypass is not honored.
 
+AND THE PROVENANCE READ IS BEST EFFORT, measured, not assumed. Linear's
+`issue.history` is eventually consistent: on the DRE-2737 live observation
+(scratch card DRE-2757) the card had NO history nodes at all — no label add,
+not even a state transition — for more than ten minutes after the writes, while
+an hours-old card's label add read back fine. So the notice's "by whom" is
+frequently unknown at gate time, and that is reported as unknown rather than
+guessed (console-honesty rule 2). A caller that already HAS the actor — the
+relay-side guard (DRE-2725) sees it on the webhook, which the
+repository_dispatch payload does not carry — should pass its own provenance
+dict to `refusal_reason()` instead of calling `marker_provenance()`.
+
 CLI:
   count   print the fleet-wide bypass count (recorded all-time, and how many
           still owe the classification they skipped). Read the number as a
@@ -123,8 +134,12 @@ def refusal_reason(provenance: dict) -> str | None:
 def bypass_notice(gaps: list[str], provenance: dict) -> str:
     """The notice posted on the card when a bounce is suppressed: what was
     bypassed, by whom, when, and what the card still owes."""
-    who = provenance.get("who") or "unknown (Linear history unreadable)"
-    when = provenance.get("at") or "unknown (Linear history unreadable)"
+    unknown = (
+        "unknown — Linear's history had no readable record of the marker being "
+        "applied (it lags the write; see scripts/break_glass.py)"
+    )
+    who = provenance.get("who") or unknown
+    when = provenance.get("at") or unknown
     return (
         f"🔓 {BYPASS_TAG}: this card carried the `{MARKER}` marker, so the "
         "intake gate let it through instead of returning it.\n\n"
@@ -222,8 +237,11 @@ def marker_provenance(linear_ops, identifier: str) -> dict:
             "at": node.get("createdAt"),
             "readable": True,
         }
-    # The marker is on the card but no add event is in the window we read —
-    # the same class as an unreadable history, and treated the same way.
+    # The marker is on the card but no add event is in the window we read.
+    # This is the COMMON case, not a rare one: Linear writes history nodes
+    # asynchronously and a freshly-labelled card can return an empty history
+    # for many minutes (measured on DRE-2757). Same class as an unreadable
+    # history, and treated the same way — reported, never a refusal.
     return {"who": None, "bot": False, "at": None, "readable": False}
 
 
