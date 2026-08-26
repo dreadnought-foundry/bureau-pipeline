@@ -4,7 +4,7 @@
 Origin (2026-07-10, DeltaSolv token outage): when the model died mid-fix-run
 (execution result {"is_error": true} — API outage, exhausted subscription),
 agent-fix's post-run guard saw "no new commit", posted "🛑 Fix attempt N
-pushed no new commit" and parked the card needs-human/Plan Review — an
+pushed no new commit" and parked the card needs-human/the human-park lane — an
 escalation that blames the fix agent and misleads the CEO's queue. The
 agent-task path already distinguishes model-death (check_agent_result +
 dead_run's requeue cap); this module is the fix-loop counterpart.

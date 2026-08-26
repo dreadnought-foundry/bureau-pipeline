@@ -1,10 +1,11 @@
 """DRE-2722: one name stopped covering two jobs — the rename and the
 escalation move ship together.
 
-`Plan Review` meant two unrelated things. The LANE was where the pipeline
-parked a card that needed a person: an unroutable repo, an agent that gave
-up, a question only the CEO can answer. The PAGE of the same name is the
-approve-the-plan queue, and it deliberately never read that lane.
+The retired lane name meant two unrelated things. The LANE was where the
+pipeline parked a card that needed a person: an unroutable repo, an agent
+that gave up, a question only the CEO can answer. The console PAGE of the
+same name is the approve-the-plan queue, and it deliberately never read that
+lane.
 
 The plan-approval meaning is the real one, so it keeps its job under a name
 that says what the CEO does with it: **Green Light**. What did not belong —
@@ -125,20 +126,24 @@ class EscalationsParkInTriageTest(unittest.TestCase):
             self.assertFalse(reconcile.card_parked_for_human("DRE-2009"))
 
     def test_agent_task_escalation_parks_in_triage(self):
+        # The quoted literal is what the shell hands Linear; the prose around it
+        # names Green Light on purpose, to say which lane this is NOT.
         branch = escalation_branch()
         self.assertIn(f'"{PARKED_LANE}"', branch)
-        self.assertNotIn(NEW_LANE, branch)
+        self.assertNotIn(f'"{NEW_LANE}"', branch)
 
     def test_agent_fix_report_parks_in_triage(self):
         step = step_body("agent-fix.yml", "Report")
         self.assertIn(f'"{PARKED_LANE}"', step)
-        self.assertNotIn(NEW_LANE, step)
+        self.assertNotIn(f'"{NEW_LANE}"', step)
 
     def test_unfixable_check_gate_parks_in_triage(self):
-        body = src("agent-fix.yml")
-        m = re.search(r"unfixable_checks\.py.*?(?:\n      - name:|\Z)", body, re.S)
-        self.assertIsNotNone(m, "unfixable_checks gate not found in agent-fix.yml")
-        self.assertIn(f'"{PARKED_LANE}"', m.group(0))
+        step = step_body(
+            "agent-fix.yml", "Escalate checks the loop structurally cannot fix"
+        )
+        self.assertIn("unfixable_checks.py", step)
+        self.assertIn(f'"{PARKED_LANE}"', step)
+        self.assertNotIn(f'"{NEW_LANE}"', step)
 
     def test_red_main_repair_escalation_parks_in_triage(self):
         body = src("red-main-repair.yml")

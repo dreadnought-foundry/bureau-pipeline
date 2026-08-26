@@ -406,7 +406,7 @@ jobs:
                risky/destructive change, or a business A-vs-B decision): do NOT
                guess and do NOT open a PR. Write a PLAIN-ENGLISH question (business
                terms, NO code/diffs/file paths) to /tmp/agent-escalation.txt — the
-               workflow posts it to the card and parks the card in Plan Review for
+               workflow posts it to the card and parks the card in Triage for
                the CEO. The CEO answers and moves the card back to Todo to proceed.
             7. If the card is instead IMPOSSIBLE as specified (cannot be built as
                written, no human decision would unblock it), open no PR and write
@@ -525,8 +525,11 @@ jobs:
             # risky/destructive change, or a business A-vs-B decision the CEO
             # should own — so it stopped BEFORE opening a PR and wrote a
             # plain-English question. Post the question and park the card in
-            # Plan Review (the "needs you" lane plan.yml already uses for epics).
-            # The CEO answers in-thread and moves Plan Review → Todo to proceed
+            # Triage — the lane for a card that went wrong (DRE-2722/2723),
+            # NOT the Green Light approve-the-plan queue epics wait in: an
+            # agent that stopped to ask is a card that did not work, and the
+            # two carry different urgency and different cost to the CEO.
+            # The CEO answers in-thread and moves Triage → Todo to proceed
             # (a fresh run reads the guidance) or → Backlog to drop it. Checked
             # BEFORE the blocker branch: an escalation is a human DECISION that
             # unblocks the build, distinct from an impossible-as-specified card.
@@ -539,8 +542,8 @@ jobs:
             } > /tmp/escalation-comment.md
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "$(cat /tmp/escalation-comment.md)"
-            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Plan Review" "In Progress,Todo" || \
-              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review" || true
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Progress,Todo" || \
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" || true
           elif [ -f /tmp/agent-blocker.txt ]; then
             # Backlog, NEVER Todo: the relay dispatches a fresh agent on every
             # Todo transition, and a blocker is deterministic — the next agent
