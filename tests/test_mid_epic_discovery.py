@@ -322,6 +322,7 @@ class TestArtifactMovesWithTheCard:
         because = "the fix must be split — and its order reversed"
         ops = _FakeOps(epic_description="The epic.", epic_state="In Progress")
         mid_epic.discovery(ops, "DRE-2700", kind=mid_epic.AMENDMENT, because=because)
+        ops.epic_state = "In Progress"  # re-green-lit, so the settled tail is written
         mid_epic.discovery(ops, "DRE-2700", kind=mid_epic.ADDITION, because=because,
                            title="one", body="- work")
         artifact = mid_epic.parse_artifact(ops.epic_description)

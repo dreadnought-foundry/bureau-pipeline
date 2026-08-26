@@ -127,7 +127,14 @@ AWAITING_REAPPROVAL = "awaiting re-approval"
 UNKNOWN_GREEN_LIGHT = "unknown — Linear has no readable green light for this epic"
 
 _ADDITION_LINE = re.compile(r"^-\s+(DRE-\d+)\s+—\s+(.*)$")
-_AMENDMENT_LINE = re.compile(r"^-\s+(\S+)\s+—\s+(.*?)\s+—\s+(.*)$")
+# GREEDY on the justification, anchored on the settled field: the artifact is
+# parsed back on every sweep, and a justification that happens to contain the
+# field separator must not shear the record it was written into.
+_AMENDMENT_LINE = re.compile(
+    r"^-\s+(\S+)\s+—\s+(.*)\s+—\s+("
+    + re.escape(AWAITING_REAPPROVAL)
+    + r"|re-green-lit\s+.*)$"
+)
 _REGION = re.compile(
     re.escape(ARTIFACT_BEGIN) + r".*?" + re.escape(ARTIFACT_END), re.DOTALL
 )
@@ -454,7 +461,9 @@ def discovery(linear_ops, epic: str, *, kind, because, title=None, body=None,
     if problem is not None:
         raise DiscoveryRefused(problem)
     kind = kind.strip().lower()
-    because = because.strip()
+    # It is a ONE-LINE justification, and it is written into a line-oriented
+    # record on the epic: a pasted paragraph must not break the record open.
+    because = _one_line(because)
     if kind == AMENDMENT:
         return _amend(linear_ops, epic, because)
     if not (title or "").strip() or not (body or "").strip():
@@ -610,6 +619,12 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
 
 def _ts(iso: str) -> datetime:
     return datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+
+
+def _one_line(text) -> str:
+    """Collapse any run of whitespace to a single space. Nothing is dropped —
+    the whole justification survives, on one line."""
+    return " ".join((text or "").split())
 
 
 def _now() -> str:
