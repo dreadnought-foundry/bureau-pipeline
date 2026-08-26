@@ -82,9 +82,13 @@ CLI:
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from datetime import UTC, datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lane_scope  # noqa: E402 — the ONE place the retired lane name survives
 
 # The two kinds, and the question that tells them apart.
 ADDITION = "addition"
@@ -111,10 +115,18 @@ AMENDMENT_STATE = "Planning"
 EPIC_ACTIVE_LANES = ("Todo", "In Progress")
 
 # The human-decision lane an ADDITION deliberately does not pass through. Both
-# names, because Wave 1.5 renames `Plan Review` → `Green Light` in its own card
-# and until it lands the live board still says the old one — a rename must not
-# quietly re-route an addition through a gate it was designed to skip.
-GREEN_LIGHT_LANES = ("Green Light", "Plan Review")
+# names, because the live board may still answer with the retired one — a rename
+# must not quietly re-route an addition through a gate it was designed to skip.
+#
+# DERIVED, not restated. `lane_scope.LANE_ALIASES` is the ONE place the retired
+# name survives (DRE-2722), and `linear_ops` inverts that same dict for its
+# write direction rather than repeating the literal. Spelling the old name here
+# would make this the second source of a fact that has exactly one, and the
+# rename would then have to find both. Delete nothing here when the board is
+# renamed: emptying LANE_ALIASES collapses this to the new name on its own.
+GREEN_LIGHT_LANES = ("Green Light",) + tuple(
+    old for old, new in lane_scope.LANE_ALIASES.items() if new == "Green Light"
+)
 
 # The managed region in the epic's description. Fenced by HTML comments so it is
 # invisible in rendered Linear and unambiguous to parse.
