@@ -52,8 +52,10 @@ class TestAdrRedMainAutoRepair(unittest.TestCase):
         self.assertIn("agent-bureau-bot", self.text)
         self.assertIn("agent-bureau-qa-bot", self.text)
 
-    def test_fix_flow_escalates_to_plan_review(self):
-        self.assertIn("Plan Review", self.text)
+    def test_fix_flow_escalates_to_the_park_lane(self):
+        # DRE-2722: the escalation lane is Triage, the lane for a card that
+        # went wrong — not the CEO's approve-the-plan queue.
+        self.assertIn("Triage", self.text)
 
     def test_guardrail_no_test_gutting_has_a_critic_mechanism(self):
         # Not just "the critic reviews it": the ADR must state the

@@ -113,7 +113,7 @@ def test_backlog_epic_still_does_not_promote():
     """Scope guard: a not-yet-activated epic (still Backlog/Planning) never
     promotes its children — only Todo and In Progress count as active."""
     reconcile._write_failures.clear()
-    for inactive in ("Backlog", "Planning", "Plan Review", "Done"):
+    for inactive in ("Backlog", "Planning", "Green Light", "Done"):
         card = _child(inactive)
         with patch.object(reconcile, "backlog_children", return_value=[card]), patch.object(
             reconcile, "epic_blockers_unmet", return_value=False

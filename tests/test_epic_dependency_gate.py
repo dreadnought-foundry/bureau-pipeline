@@ -18,8 +18,8 @@ This module TDDs two additive behaviors:
 
   2. AUTO-ADVANCE — when a blocker epic reaches Done, for each epic blocked-by
      it: if ALL its blocker epics are now Done AND it is still in Backlog, move
-     it to Triage (which triggers the planner). NEVER to In Progress — the Plan
-     Review approval gate is preserved. Idempotent: never re-advance an epic
+     it to Triage (which triggers the planner). NEVER to In Progress — the
+     Green Light approval gate is preserved. Idempotent: never re-advance an epic
      already past Backlog; never thrash an operator-parked epic. Fails SAFE.
 
 Reconcile governs promotion for EVERY product repo, so a bug here breaks
@@ -205,7 +205,7 @@ def test_done_blocker_epic_advances_dependent_backlog_to_triage():
 
 
 def test_advance_never_moves_epic_to_in_progress():
-    """The Plan Review approval gate is preserved: target is Triage, NOT
+    """The Green Light approval gate is preserved: target is Triage, NOT
     In Progress — assert the literal transition target."""
     with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
         patch.object(reconcile, "card_state", return_value="Backlog"), \

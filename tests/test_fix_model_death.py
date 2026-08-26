@@ -3,7 +3,7 @@
 Origin (2026-07-10, DeltaSolv token outage): when the model died mid-fix-run
 (execution result {"is_error": true} — API outage, exhausted subscription),
 agent-fix's no-progress guard posted "🛑 Fix attempt N pushed no new commit"
-and parked the card needs-human/Plan Review — an escalation that blames the
+and parked the card needs-human/the human-park lane — an escalation that blames the
 fix agent and misleads the CEO's queue. The medic path (agent-task) already
 distinguishes model-death ("agent died with API/model error") and requeues;
 the fix path did not.
