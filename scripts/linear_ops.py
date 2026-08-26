@@ -36,6 +36,15 @@ Subcommands:
                                          --label <name>   (repeatable) extra label
                                          --blocked-by DRE-N,DRE-M  (also parsed
                                                           from the body line)
+  oneoff <title> <description-file>    create a PARENTLESS card (Backlog) — the
+                                       one-off route's producer (DRE-2754). Same
+                                       body guard, validate_card gate and
+                                       blockedBy handling as `subissue`, but the
+                                       PLAN supplies the labels (there is no
+                                       parent to inherit repo:<slug> from):
+                                         --label repo:<slug> --label agent:<role>
+                                         --label initiative:<x>
+                                         --blocked-by DRE-N,DRE-M
   create <title> <description-file>    create a standalone card in Triage
   find-open <title>                    print the identifier of an existing
                                        non-terminal (not Done/Canceled) card
@@ -630,18 +639,77 @@ def _add_blocked_by(issue_id: str, blocker_identifiers: list[str]) -> list[str]:
     return resolved
 
 
+def _card_body(description_file: str) -> str:
+    """INLINE REAL CONTENTS. The arg is a FILE the planner drafted the card to;
+    we read its CONTENTS. If the file is missing, the planner likely passed the
+    body text (or a bare path) directly — fall back to treating the arg as the
+    body so the path-guard catches a bare "/tmp/cardN.md"."""
+    if os.path.isfile(description_file):
+        with open(description_file) as f:
+            return f.read()
+    return description_file
+
+
+def _reject_unless_creatable(kind: str, title: str, description: str,
+                             labels: list[str], hint: str) -> None:
+    """GUARD before creating: reject a broken card, do NOT create it.
+
+    Shared by every planner create seam (`subissue`, `oneoff`) so a one-off is
+    held to exactly the checks a planned child is — the path-guard on the body,
+    then the EXISTING validate_card gate's pure core (single source of truth —
+    no parallel checker). `hint` says how to fix it for that seam."""
+    problem = body_problem(description)
+    if problem is not None:
+        raise LinearError(
+            f"{kind} REJECTED ({title!r}): {problem}. "
+            "Re-draft the card with real contents (not a path) and retry."
+        )
+
+    import validate_card
+
+    gaps = validate_card.missing(description, labels, require_initiative=True)
+    if gaps:
+        raise LinearError(
+            f"{kind} REJECTED ({title!r}): card fails validate_card — missing "
+            + ", ".join(gaps)
+            + ". "
+            + hint
+        )
+
+
+def _create_card(team_id: str, title: str, description: str, labels: list[str],
+                 blockers: list[str], *, parent_id: str | None = None) -> None:
+    """Create a validated card in `Backlog` with its labels and blockedBy
+    relations, and print the receipt. `parent_id=None` creates a PARENTLESS card
+    — the one-off route has no epic to hang under (DRE-2754)."""
+    sid = state_id(team_id, "Backlog")
+    label_ids = _team_label_ids(team_id, labels)
+    card_input = {
+        "teamId": team_id,
+        "title": title,
+        "description": description,
+        "stateId": sid,
+        "labelIds": label_ids,
+    }
+    if parent_id is not None:
+        card_input["parentId"] = parent_id
+    data = gql(
+        """mutation($input: IssueCreateInput!) {
+             issueCreate(input: $input) { success issue { id identifier url } } }""",
+        {"input": card_input},
+    )
+    issue = data["issueCreate"]["issue"]
+    rel = _add_blocked_by(issue["id"], blockers) if blockers else []
+    extra = f" labels={','.join(labels)}"
+    extra += f" blockedBy={','.join(rel)}" if rel else ""
+    print(f"created {issue['identifier']} {issue['url']}{extra}")
+
+
 def cmd_subissue(parent_identifier: str, title: str, description_file: str, *flags) -> None:
     parent = get_issue(parent_identifier)
 
-    # 1 — INLINE REAL CONTENTS. The arg is a FILE the planner drafted the card
-    # to; we read its CONTENTS. If the file is missing, the planner likely passed
-    # the body text (or a bare path) directly — fall back to treating the arg as
-    # the body so the path-guard below catches a bare "/tmp/cardN.md".
-    if os.path.isfile(description_file):
-        with open(description_file) as f:
-            description = f.read()
-    else:
-        description = description_file
+    # 1 — INLINE REAL CONTENTS (never the path).
+    description = _card_body(description_file)
 
     # Extra flags: --label <name> (repeatable), --blocked-by DRE-N,DRE-M.
     extra_labels, cli_blockers = _parse_flags(flags)
@@ -660,50 +728,55 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # de-dup, order-preserving
     blockers = list(dict.fromkeys(b.upper() for b in blockers))
 
-    # --- GUARD before creating: reject a broken child, do NOT create it. ---
-    problem = body_problem(description)
-    if problem is not None:
-        raise LinearError(
-            f"subissue REJECTED ({title!r}): {problem}. "
-            "Re-draft the card with real contents (not a path) and retry."
-        )
-
-    # 4 — VALIDATE through the EXISTING validate_card gate's pure core (single
-    # source of truth — no parallel checker). The child must carry a resolvable
-    # repo and an agent:* role once the inherited labels are applied.
-    import validate_card
-
-    gaps = validate_card.missing(description, child_labels, require_initiative=True)
-    if gaps:
-        raise LinearError(
-            f"subissue REJECTED ({title!r}): child fails validate_card — missing "
-            + ", ".join(gaps)
-            + ". The parent epic must carry a repo:<slug> label AND an "
-            "initiative:<x> label so children inherit them (DRE-1699: the repo "
-            "LABEL is the source of truth — no **Repo:** stamp needed)."
-        )
-
-    sid = state_id(parent["team"]["id"], "Backlog")
-    label_ids = _team_label_ids(parent["team"]["id"], child_labels)
-    data = gql(
-        """mutation($input: IssueCreateInput!) {
-             issueCreate(input: $input) { success issue { id identifier url } } }""",
-        {
-            "input": {
-                "teamId": parent["team"]["id"],
-                "parentId": parent["id"],
-                "title": title,
-                "description": description,
-                "stateId": sid,
-                "labelIds": label_ids,
-            }
-        },
+    # 4 — GUARD before creating: reject a broken child, do NOT create it. The
+    # child must carry a resolvable repo and an agent:* role once the inherited
+    # labels are applied.
+    _reject_unless_creatable(
+        "subissue", title, description, child_labels,
+        "The parent epic must carry a repo:<slug> label AND an "
+        "initiative:<x> label so children inherit them (DRE-1699: the repo "
+        "LABEL is the source of truth — no **Repo:** stamp needed).",
     )
-    issue = data["issueCreate"]["issue"]
-    rel = _add_blocked_by(issue["id"], blockers) if blockers else []
-    extra = f" labels={','.join(child_labels)}"
-    extra += f" blockedBy={','.join(rel)}" if rel else ""
-    print(f"created {issue['identifier']} {issue['url']}{extra}")
+
+    # 5 — CREATE, under the epic, in Backlog. The children sit there while the
+    # epic is still pre-approval, and the guard leaves them alone until the epic
+    # passes Planning exit (DRE-2754 — see scripts/lane_scope.py).
+    _create_card(parent["team"]["id"], title, description, child_labels,
+                 blockers, parent_id=parent["id"])
+
+
+def cmd_oneoff(title: str, description_file: str, *flags) -> None:
+    """Create a PARENTLESS card in Backlog — the one-off route's producer.
+
+    `cmd_subissue` requires a parent and takes the child's `repo:` label from
+    `parent_inherited_labels()`. A one-off has no parent by definition, so it
+    had no API and no source for the `repo:` label that DRE-2744 makes the only
+    routing key. Here the plan supplies the labels directly:
+
+        linear_ops.py oneoff "<title>" <desc-file> \\
+          --label repo:<slug> --label initiative:<x> --label agent:engineer
+
+    Same body path-guard, same validate_card gate, same **Blocked by:** →
+    relation handling, same Backlog landing as a planned child (DRE-2754).
+    """
+    description = _card_body(description_file)
+    labels, cli_blockers = _parse_flags(flags)
+
+    # ORDERING → relations: union of the body's **Blocked by:** line and the
+    # flag. No parent epic to strip out — a one-off has none.
+    blockers = list(dict.fromkeys(
+        b.upper() for b in parse_blocked_by(description) + list(cli_blockers)
+    ))
+
+    _reject_unless_creatable(
+        "oneoff", title, description, labels,
+        "A one-off inherits nothing, so the PLAN must supply every label: "
+        "--label repo:<slug> --label initiative:<x> --label agent:<role>.",
+    )
+
+    teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
+    _create_card(teams["teams"]["nodes"][0]["id"], title, description, labels,
+                 blockers)
 
 
 def _parse_flags(flags) -> tuple[list[str], list[str]]:
@@ -979,6 +1052,7 @@ if __name__ == "__main__":
             "card-done": cmd_card_done,
             "set-description": set_description,
             "subissue": cmd_subissue,
+            "oneoff": cmd_oneoff,
             "create": cmd_create,
             "find-open": cmd_find_open,
             "children": cmd_children,
