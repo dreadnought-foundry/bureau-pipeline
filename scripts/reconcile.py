@@ -87,6 +87,7 @@ import time
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
@@ -3138,6 +3139,24 @@ def check_dependabot_capacity() -> None:
             )
 
 
+def report_break_glass() -> None:
+    """Print the break-glass count on every full sweep (DRE-2737).
+
+    The number has to be readable without anyone applying a filter or
+    remembering to look, so it rides the sweep that already runs. A read that
+    fails prints UNKNOWN and returns — a KPI is never worth failing a sweep
+    for, and a break-glass count that renders 0 because Linear was down would
+    say "the front door is fine", the one conclusion it must never invent.
+    """
+    try:
+        c = break_glass.counts(linear_ops)
+        print(break_glass.count_line(c["recorded"], c["owing"]))
+        if c["owing_cards"]:
+            print("break-glass still owing: " + ", ".join(c["owing_cards"]))
+    except Exception as exc:  # noqa: BLE001 — a KPI read never fails the sweep
+        print(break_glass.count_line(None, None, error=str(exc)))
+
+
 def repo_epics(active: list[dict]) -> set[str]:
     """Identifiers of THIS repo's active epics (agent:planner cards).
 
@@ -3303,6 +3322,24 @@ def main(
                         ),
                     )
                 continue
+            # Break-glass debt (DRE-2737): the same call linear-sync's
+            # card-done makes, for the same reason the no-code guard is
+            # mirrored here — linear-sync can be down, and this backstop must
+            # not close a card that owes the classification it skipped. Read
+            # off the `break-glass:used` receipt, so a marker removed
+            # mid-flight neither strands the card nor cancels the debt.
+            if break_glass.owes_review(
+                [l["name"] for l in (card.get("labels") or {}).get("nodes", [])]
+            ):
+                if not linear_ops.count_comments(ident, break_glass.REVIEW_TAG):
+                    linear_ops.cmd_comment(
+                        ident,
+                        break_glass.review_notice(
+                            f"https://github.com/{REPO}/pull/{pr['number']}"
+                        ),
+                    )
+                linear_ops.cmd_state(ident, break_glass.REVIEW_STATE)
+                continue
             linear_ops.cmd_state(ident, "Done")
             linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
         elif state == "Todo" and not is_open:
@@ -3412,6 +3449,9 @@ def main(
                     ident, "🧹 Reconcile: stuck In Review — merge gate re-triggered."
                 )
         nudges += 1
+    # The break-glass KPI, beside the sweep's own numbers (DRE-2737): a rising
+    # count is a finding about the front door, not about the people using it.
+    report_break_glass()
     print(f"sweep complete: {nudges} nudge(s)")
     if _write_failures or _read_failures:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
