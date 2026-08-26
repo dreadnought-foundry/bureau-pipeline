@@ -42,7 +42,7 @@ def report_step() -> str:
 
 def escalation_branch() -> str:
     """The escalation branch of the Report step (DRE-1655): the agent stopped to
-    ask the CEO a decision and the workflow parks the card in Plan Review."""
+    ask the CEO a decision and the workflow parks the card in Triage."""
     src = report_step()
     m = re.search(
         r"elif \[ -f /tmp/agent-escalation\.txt \](.*?)\n\s*elif \[ -f /tmp/agent-blocker\.txt \]",
@@ -76,11 +76,12 @@ class ProposeMachineryRetiredTest(unittest.TestCase):
 
 class EscalateByExceptionTest(unittest.TestCase):
     """DRE-1655/1706: on genuine uncertainty the agent stops BEFORE a PR, posts a
-    plain-English question, and the workflow parks the card in Plan Review (the
-    existing "needs you" lane). This is distinct from the blocker→Backlog path."""
+    plain-English question, and the workflow parks the card in Triage (the
+    lane for a card that went wrong). This is distinct from the blocker→Backlog
+    path."""
 
-    def test_escalation_branch_parks_in_plan_review(self):
-        self.assertIn('"Plan Review"', escalation_branch())
+    def test_escalation_branch_parks_in_triage(self):
+        self.assertIn('"Triage"', escalation_branch())
 
     def test_escalation_branch_does_not_go_to_backlog(self):
         # Escalation is a human DECISION that unblocks the build; it must NOT be
@@ -93,7 +94,7 @@ class EscalateByExceptionTest(unittest.TestCase):
         self.assertIn("agent-escalation.txt", branch)
 
     def test_escalation_checked_before_blocker(self):
-        # Order matters: an escalation note (→ Plan Review) takes precedence over
+        # Order matters: an escalation note (→ Triage) takes precedence over
         # the blocker note (→ Backlog) so a decision card isn't buried in Backlog.
         src = report_step()
         esc = src.index("agent-escalation.txt")

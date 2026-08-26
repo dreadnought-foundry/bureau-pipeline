@@ -67,7 +67,7 @@ EPICS. Before promoting an epic's children, it checks that EPIC's own
 not Done, none of that epic's children promote this sweep — regardless of the
 epic's own state. And when a blocker epic reaches Done, every epic blocked-by
 it whose blockers are now ALL Done is auto-advanced from Backlog to Triage
-(which re-triggers the planner) — never to In Progress, so the Plan Review
+(which re-triggers the planner) — never to In Progress, so the Green Light
 human-approval gate is preserved. Both behaviors fail SAFE on unreadable
 relation data (don't promote / don't advance on uncertainty).
 
@@ -140,7 +140,7 @@ MAX_WIP = resolve_max_wip(os.environ.get("MAX_WIP"))
 # → Planning → Todo); In Progress is a later/system progression that historically
 # was the ONLY activation trigger. Todo is ADDITIVE: an epic in either state
 # promotes its unblocked Backlog children. Anything else (Backlog, Planning,
-# Plan Review, Done, …) is not active and its children stay parked.
+# Green Light, Done, …) is not active and its children stay parked.
 EPIC_ACTIVE_STATES = ("Todo", "In Progress")
 
 # Human-hold (DRE-1403). A card whose agent keeps dying with no PR — whether it
@@ -931,13 +931,22 @@ def flag_stalled_planning() -> set[str]:
 # Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
 # agent-fix from PR state alone (DIRTY / approved-but-red / dead-fix-run),
 # blind to the card — so a card the fix loop had already escalated to
-# needs-human / Plan Review kept getting the identical doomed run every
+# needs-human / Triage kept getting the identical doomed run every
 # sweep (DeltaSolv PR #120 / DRE-2009: five max-turns deaths in one evening,
 # runs 29115842272×2, 29122046329, 29125603420, 29128546908). Human-parked
 # means the loop is over until a human acts: look the card up by the DRE-N
 # in the head ref and skip the dispatch. Same family as the medic↔critic
 # loop-break (bureau-pipeline #50).
-PARKED_STATE = "Plan Review"
+#
+# The lane is **Triage**, not the CEO's approve-the-plan queue (DRE-2722).
+# One name used to cover both jobs — "an agent is stuck, please answer" and
+# "a plan is ready, please approve" — and only one of them is a card that
+# went WRONG. Broken cards land in Triage (DRE-2723); the approval queue kept
+# its own job under the name that says what the CEO does with it, Green Light.
+# Getting this constant wrong is silent: it would read a lane no card ever
+# enters, and every doomed fix run this gate exists to stop would dispatch
+# again.
+PARKED_STATE = "Triage"
 _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
 
 
@@ -1001,7 +1010,7 @@ def branch_card(head_ref: str) -> str | None:
 
 
 def card_parked_for_human(identifier: str) -> bool:
-    """True if the card sits in the Plan Review lane OR carries HOLD_LABEL —
+    """True if the card sits in the Triage lane OR carries HOLD_LABEL —
     a human's queue either way, so no fix agent may be dispatched for its PR.
     Fails SAFE on an unreadable card: treat as parked (skip this sweep; the
     next one retries) rather than dispatch into a possibly-parked card."""
@@ -1030,7 +1039,7 @@ def fix_dispatch_blocked(pr: dict) -> bool:
     if card and card_parked_for_human(card):
         print(
             f"park-gate: PR #{pr['number']} card {card} is human-parked "
-            "(Plan Review / needs-human) — not dispatching agent-fix"
+            "(Triage / needs-human) — not dispatching agent-fix"
         )
         return True
     return False
@@ -1494,7 +1503,7 @@ def advance_unblocked_epics(done_epic: str) -> None:
     For each epic that `done_epic` `blocks` (its forward `relations`): if ALL of
     that epic's own blocker epics are now Done AND it is still in Backlog, move
     it to **Triage** (which triggers the planner). NEVER to In Progress — the
-    Plan Review approval gate stays human-owned. Idempotent and safe:
+    Green Light approval gate stays human-owned. Idempotent and safe:
       * only acts on epics still in Backlog (never re-advances one already past
         it, never thrashes an operator-parked or already-running epic);
       * never revives a Canceled/Duplicate/Done dependent;
@@ -2049,7 +2058,7 @@ def _flag_one_silent_pr(pr: dict) -> None:
     if any(marker in b for b in linear_ops.comment_bodies(card)):
         return  # reported once already — idempotent forever
     park_note = (
-        "The card is human-parked (Plan Review / needs-human), so every "
+        "The card is human-parked (Triage / needs-human), so every "
         "automatic repair is standing down on purpose (DRE-2024) — the PR "
         "stays frozen until a human acts on the card."
         if card_parked_for_human(card) else
@@ -2256,7 +2265,7 @@ def _pr_thread(pr_number: int) -> list:
 
 def _release_card(pr: dict, note: str) -> None:
     """Take the PR's card out of the human queue: the operator HAS acted, so
-    leaving needs-human + Plan Review on it would keep every other repair
+    leaving needs-human + Triage on it would keep every other repair
     sweep standing down (DRE-2024) and keep the card in the CEO's queue
     claiming it still needs them."""
     card = branch_card(pr.get("headRefName") or "")

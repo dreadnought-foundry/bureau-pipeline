@@ -17,7 +17,7 @@ four guardrail mechanisms exactly as pinned there:
   * fix flow: the agent authors a normal PR as the worker identity (the
     qa-bot merges it — author != merger), forward-fix only, with the
     stale-test-vs-broken-code claim required in the PR body; the
-    can't-confidently-fix path escalates to Plan Review.
+    can't-confidently-fix path escalates to Triage.
 
 The self-host stub (self-red-main-repair.yml) puts THIS repo's own main on
 the repair rail, and the medic watches the stage (a repair run's failure is
@@ -101,10 +101,10 @@ class DecideBeforeDispatchTest(unittest.TestCase):
         self.assertIn("linear_ops.py", body)
         self.assertIn("find-open", body)
 
-    def test_uncertain_agent_parks_in_plan_review(self):
+    def test_uncertain_agent_parks_in_triage(self):
         body = src(REUSABLE)
         self.assertIn("/tmp/repair-escalation.txt", body)
-        self.assertIn("Plan Review", body)
+        self.assertIn("Triage", body)
 
 
 class QuotaIsolationTest(unittest.TestCase):

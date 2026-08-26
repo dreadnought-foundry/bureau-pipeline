@@ -15,10 +15,10 @@ of the wave: a lane's occupancy must be justified by evidence outside Linear.
 
 **DRE-2719** — everything goes to Planning — says Planning produces the
 children. It already does. `plan.yml` creates the sub-issues at `plan.yml:255`
-and only afterwards moves the epic to Plan Review at `plan.yml:356` (the step is
-declared at `plan.yml:348`). **Children therefore exist in `Backlog` while their
-epic is still in Planning or awaiting a green light**, and `linear_ops.py:686`
-hardcodes that landing.
+and only afterwards moves the epic to Green Light at `plan.yml:360` (the step is
+declared at `plan.yml:352`). **Children therefore exist in `Backlog` while their
+epic is still in Planning or awaiting a green light**, and `linear_ops.py`'s
+`_create_card` hardcodes that landing.
 
 Apply the guard to that state and a freshly planned epic satisfies neither
 clause — no verdict has been written yet, and the epic is not In Progress. Every

@@ -61,14 +61,15 @@ The agent **stops and asks only by exception** — on genuine uncertainty it
 cannot safely resolve: **ambiguous intent**, a **risky/destructive change**, or
 a real **business A-vs-B decision** the CEO should own. When it stops, it posts a
 **plain-English question** (business terms, no code or diffs) as a comment and
-parks the card in the **`Plan Review`** lane (the "needs you" queue; the same
-lane epics use for plan approval). The CEO answers and moves the card back to
+parks the card in the **`Triage`** lane — the lane for a card that went wrong
+(DRE-2722/2723), NOT `Green Light`, which is the CEO's approve-the-plan queue
+for epics. The CEO answers and moves the card back to
 `Todo` to proceed (a fresh run picks up the guidance) or to `Backlog` to drop
 it. This is a **high bar** — over-escalating recreates the overnight-stall the
 model exists to avoid; routine, reversible choices are just built and noted in
 the PR.
 
-`Plan Review` (decision needed, build can proceed once answered) is distinct
+`Triage` (decision needed, build can proceed once answered) is distinct
 from `Backlog` (the impossible-as-specified / blocked path, inert until the card
 is fixed). There is **no propose-first hard stop**: cards are not gated awaiting
 approval before any work — autonomy is the default, the human is the exception.

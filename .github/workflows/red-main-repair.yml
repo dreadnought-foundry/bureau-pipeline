@@ -425,8 +425,9 @@ jobs:
             echo "repair PR opened: $PR_URL — the critic and the merge gate own it from here (author ≠ merger)."
           elif [ -f /tmp/repair-escalation.txt ] && [ -s /tmp/repair-escalation.txt ]; then
             # Escalate-by-exception: the agent paused rather than guess on
-            # main. File the question as a card parked in Plan Review (the
-            # "needs you" lane), deduplicated by exact title.
+            # main. File the question as a card parked in Triage (the
+            # lane for a card that went wrong — DRE-2722/2723; not the
+            # Green Light approve-the-plan queue), deduped by exact title.
             TITLE="Red main needs a decision — $WF_NAME failing on the default branch"
             EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
             {
@@ -440,7 +441,7 @@ jobs:
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EXISTING" "$(cat /tmp/repair-question.md)"
             else
               CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-question.md | grep -oE 'DRE-[0-9]+' | head -1 || true)
-              [ -n "$CREATED" ] && python3 .bureau-pipeline/scripts/linear_ops.py state "$CREATED" "Plan Review" || true
+              [ -n "$CREATED" ] && python3 .bureau-pipeline/scripts/linear_ops.py state "$CREATED" "Triage" || true
             fi
           else
             echo "::error::repair agent produced neither a PR nor an escalation — failing for medic visibility"

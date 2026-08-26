@@ -80,16 +80,16 @@ class PlanWiringTest(unittest.TestCase):
         self.assertIsNotNone(m, "Route step not found")
         self.assertIn("steps.gate.outputs.bounced", m.group(1))
 
-    def test_children_validated_before_plan_review(self):
+    def test_children_validated_before_green_light(self):
         # DRE-1715: the planner's created children are validated through the same
-        # validate_card core BEFORE the epic moves to Plan Review / completes.
+        # validate_card core BEFORE the epic moves to Green Light / completes.
         order = [s.lower() for s in steps_order(self.WF)]
         validate = next(
             (i for i, s in enumerate(order) if "validate created children" in s), None
         )
         self.assertIsNotNone(validate, "plan.yml must validate created children (DRE-1715)")
-        review = next(i for i, s in enumerate(order) if "plan review" in s)
-        self.assertLess(validate, review, "children must be validated before Plan Review")
+        review = next(i for i, s in enumerate(order) if "green light" in s)
+        self.assertLess(validate, review, "children must be validated before Green Light")
 
     def test_child_validation_uses_check_children(self):
         # Reuse the existing gate (check-children), not a parallel checker.

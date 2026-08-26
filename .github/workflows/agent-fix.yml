@@ -355,8 +355,8 @@ jobs:
             # already applied, and that is exactly what makes a retry free. The
             # Report step's park_for_human() has always worked this way.
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
-            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Plan Review" "In QA,In Progress,Todo" || \
-              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review" --park || true
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In QA,In Progress,Todo" || \
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
           fi
           echo "escalate=true" >> "$GITHUB_OUTPUT"
 
@@ -717,14 +717,16 @@ jobs:
           # 2026-06-28: ~20h stall, hand-merged). That is exactly an
           # escalate-by-exception case (the engineer and the critic disagree, or
           # the fix made no headway), so route it to the human the same way
-          # agent-task.yml does: Plan Review (the "needs you" lane) + a
-          # needs-human stamp, with a plain-English note. The CEO answers and
-          # moves the card → Todo (proceed) or → Backlog (drop).
+          # agent-task.yml does: Triage (the lane for a card that went wrong,
+          # DRE-2722/2723) + a needs-human stamp, with a plain-English note.
+          # The CEO answers and moves the card → Todo (proceed) or → Backlog
+          # (drop). NOT Green Light: that lane is the approve-the-plan queue,
+          # a different job at a different urgency and cost to the CEO.
           park_for_human() {
             [ -n "$CARD" ] || return 0
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
-            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Plan Review" "In QA,In Progress,Todo" || \
-              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Plan Review" --park || true
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In QA,In Progress,Todo" || \
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
           }
 
           if [ -f /tmp/fix-blocker.txt ]; then
@@ -735,7 +737,7 @@ jobs:
             # Escalate, don't just narrate. The fixer disputed the critic's
             # findings and (per its instructions) pushed NOTHING — so the branch
             # holds a stale REQUEST_CHANGES the critic will never lift on its own.
-            # Park the card in Plan Review so it surfaces in the CEO's queue
+            # Park the card in Triage so it surfaces in the CEO's queue
             # instead of stalling invisibly in In QA.
             if [ -n "$CARD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \

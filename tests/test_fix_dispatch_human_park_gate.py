@@ -2,7 +2,7 @@
 
 Observed live 2026-07-10 on DeltaSolv PR #120 (DRE-2009): the fix loop
 failed to converge (five identical max-turns deaths), the card was correctly
-parked needs-human / Plan Review — and the reconcile sweep's DIRTY-PR
+parked needs-human / the human-park lane — and the reconcile sweep's DIRTY-PR
 backstop kept dispatching the identical doomed Agent Fix run every cycle
 (runs 29115842272, 29122046329, 29125603420, 29128546908), burning an agent
 run + Claude tokens per sweep, indefinitely.
@@ -10,7 +10,7 @@ run + Claude tokens per sweep, indefinitely.
 The rule: human-parked means the loop is over until a human acts. NO
 reconcile backstop (unstick_conflicts, fix_approved_but_red,
 retry_dead_fix_runs) may dispatch agent-fix for a PR whose card sits in the
-Plan Review lane or carries the needs-human label. Same family as the
+Triage lane or carries the needs-human label. Same family as the
 medic↔critic loop-break (bureau-pipeline #50).
 """
 
@@ -58,14 +58,14 @@ class BranchCardTest(unittest.TestCase):
 
 
 class CardParkedForHumanTest(unittest.TestCase):
-    """The Linear-side check: Plan Review lane OR needs-human label = parked."""
+    """The Linear-side check: Triage lane OR needs-human label = parked."""
 
     def _parked(self, payload):
         with mock.patch.object(linear_ops, "gql", return_value=payload):
             return reconcile.card_parked_for_human("DRE-2009")
 
-    def test_plan_review_lane_is_parked(self):
-        self.assertTrue(self._parked(_issue(state="Plan Review")))
+    def test_triage_lane_is_parked(self):
+        self.assertTrue(self._parked(_issue(state="Triage")))
 
     def test_needs_human_label_is_parked(self):
         self.assertTrue(self._parked(_issue(state="In QA", labels=["needs-human"])))

@@ -59,7 +59,9 @@ crashes).
 4. **Escalate when unsure.** If the agent cannot confidently produce a fix
    (ambiguous cause, a product-behavior choice, a destructive-looking
    remedy), it opens no PR and posts a plain-English question to Linear —
-   the card parks in **Plan Review**, the existing "needs you" lane. A
+   the card parks in **Triage**, the lane for a card that went wrong
+   (renamed/split by DRE-2722 — the queue it used to share with epic plan
+   approval is now `Green Light` and holds only that). A
    confused repair agent asking beats a confident one guessing on `main`.
 
 ## Guardrail 1 — no test-gutting

@@ -12,7 +12,7 @@ FIX UNDER TEST — reconcile.flag_no_checks_prs(), run on every full sweep:
 any open, non-draft agent/* PR whose head commit has ZERO check runs after
 NO_CHECKS_MINUTES gets ONE plain-English comment on its linked card naming
 the PR, branch, mergeStateStatus, silence duration, and the card's park
-state — REGARDLESS of needs-human / Plan Review, because parked IS the
+state — REGARDLESS of needs-human / Triage, because parked IS the
 invisible case. Noticing is not dispatching: the watchdog never starts an
 agent (the DRE-2024 gate stays), and it adds no hold label (for an unparked
 card that label would stand down unstick_conflicts and CREATE the very
@@ -80,7 +80,7 @@ def _fake_gh(prs, statuses='[]', head_age_min=999.0, calls=None):
 def sweep(prs, statuses='[]', head_age_min=999.0, bodies=(), parked=False):
     """Run flag_no_checks_prs once; returns (comments, dispatches, gh_calls,
     add_label mock). `bodies` are the linked card's existing comments;
-    `parked` is the card's human-park state (Plan Review / needs-human)."""
+    `parked` is the card's human-park state (Triage / needs-human)."""
     comments, dispatches, gh_calls = [], [], []
     with mock.patch.object(
         reconcile, "gh",

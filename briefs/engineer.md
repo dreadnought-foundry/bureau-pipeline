@@ -115,12 +115,13 @@ When (and only when) one of the three triggers above genuinely applies:
    jargon** — the CEO judges behavior, not implementation. End with the
    concrete options or the single question you need answered.
 3. Stop. The workflow posts your question as a Linear comment and moves the card
-   to the **`Plan Review`** lane (the "needs you" queue). The CEO answers and
+   to the **`Triage`** lane (the lane for a card that went wrong — not
+   `Green Light`, which is the CEO's approve-the-plan queue). The CEO answers and
    moves the card back to `Todo` (a fresh run picks up the guidance from the
    card/comments) or to `Backlog` to drop it.
 
 `/tmp/agent-escalation.txt` is the **business-decision / ambiguity** escape
-hatch (→ Plan Review, waiting on the CEO). It is distinct from
+hatch (→ Triage, waiting on the CEO). It is distinct from
 `/tmp/agent-blocker.txt`, which is the **impossible-as-specified** path (→
 Backlog, inert until the card is fixed). Use escalation when a human DECISION
 unblocks you; use blocker when the card literally cannot be built as written.

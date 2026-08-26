@@ -431,7 +431,7 @@ class AgentFixWiringTest(unittest.TestCase):
         difference between this and a permanent stall."""
         run = self.steps[self._index_of_step_running("unfixable_checks.py")]["run"]
         self.assertIn("needs-human", run)
-        self.assertIn("Plan Review", run)
+        self.assertIn("Triage", run)
 
     def test_the_gate_comments_on_the_pull_request(self):
         run = self.steps[self._index_of_step_running("unfixable_checks.py")]["run"]

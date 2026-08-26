@@ -49,7 +49,7 @@ class FailureReasonTest(unittest.TestCase):
 
     def test_honest_escalation_is_exempt(self):
         # DRE-1655: the agent intentionally stopped to ask the CEO a decision —
-        # an honest, designed outcome (→ Plan Review), not a silent death.
+        # an honest, designed outcome (→ Triage), not a silent death.
         self.assertIsNone(verdict({"is_error": False}, escalation=True))
 
     def test_clean_success_with_pr_passes(self):

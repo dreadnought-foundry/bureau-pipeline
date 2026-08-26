@@ -422,7 +422,11 @@ jobs:
           path: ${{ runner.temp }}/plan-artifact.md
           if-no-files-found: error
 
-      - name: Epic → Plan Review
+      # Green Light is the CEO approve-the-plan queue (DRE-2722, renamed
+      # from a name that also covered stuck-agent escalations — those now
+      # park in Triage). The name says what the CEO does with it: green-
+      # light it, send it back, or park it.
+      - name: Epic → Green Light
         if: steps.route.outputs.mode == 'plan'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -430,7 +434,7 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
           if [ "$KIDS" -gt 0 ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Plan Review"
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
           else
             # Planner asked clarifying questions instead — back to Backlog so
             # answering + re-Todo restarts planning cleanly.

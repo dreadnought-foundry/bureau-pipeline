@@ -16,7 +16,7 @@ left the card in In QA with a stale REQUEST_CHANGES the critic would never lift
 on its own. Nothing surfaced it to the CEO, so it stalled invisibly.
 
 The fix: both the dispute path and the no-new-commit path must park the card in
-Plan Review (the "needs you" lane) + stamp needs-human, exactly as
+Triage (the went-wrong lane) + stamp needs-human, exactly as
 agent-task.yml escalates. These tests pin the Report step's shell to that shape.
 """
 
@@ -38,9 +38,9 @@ def report_step() -> str:
 
 
 class FixDisputeEscalatesTest(unittest.TestCase):
-    def test_report_step_parks_in_plan_review(self):
+    def test_report_step_parks_in_triage(self):
         # A disputed or no-progress fix must route the card to the human queue.
-        self.assertIn('"Plan Review"', report_step())
+        self.assertIn('"Triage"', report_step())
 
     def test_report_step_stamps_needs_human(self):
         self.assertIn("needs-human", report_step())
@@ -53,7 +53,7 @@ class FixDisputeEscalatesTest(unittest.TestCase):
             r"if \[ -f /tmp/fix-blocker\.txt \]; then(.*?)\n\s*else\b", step, re.S
         )
         self.assertIsNotNone(m, "fix-blocker branch not found in Report step")
-        self.assertIn("Plan Review", m.group(1) + step)
+        self.assertIn("Triage", m.group(1) + step)
 
     def test_detects_phantom_push_by_comparing_head_sha(self):
         # The success branch must verify the head SHA actually advanced before

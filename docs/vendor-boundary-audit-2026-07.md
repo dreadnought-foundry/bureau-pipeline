@@ -63,7 +63,8 @@ is quota-exempt. Both are encoded in `dispatch_pool.py` comments and its tests.
 
 **Q5 — crash mid-flow.** The `🧠 model-attempt:` heartbeat carries the run URL,
 so reconcile checks GitHub's real run status before declaring death (DRE-2032).
-The always()-guarded Report step routes: PR → In QA; escalation → Plan Review;
+The always()-guarded Report step routes: PR → In QA; escalation → Triage
+(the lane was renamed and the escalations moved off it by DRE-2722);
 blocker → Backlog (parked, never Todo — DRE-1286); silent death →
 `dead_run.py decide` under the shared `dead-run-requeue` cap (2), with
 `--cancelled` deferring to reconcile instead of burning the cap (DRE-2074) and
@@ -98,7 +99,8 @@ path-shaped/empty bodies — no raw GraphQL from the agent.
 
 **Q5 — crash mid-flow.** Plan death has no PR/requeue path: the medic re-runs
 the SAME workflow_run (attempt 2), and the recorded `model-error:` marker
-swings the model on the rerun. Epic parks in Plan Review only when children
+swings the model on the rerun. Epic parks in Green Light (DRE-2722; the lane
+was called something else when this audit was written) only when children
 exist; a question-only run parks in Backlog.
 
 **Verdict:** covered.
