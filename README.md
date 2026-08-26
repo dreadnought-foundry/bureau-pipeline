@@ -178,6 +178,12 @@ revision two lands on top of revision one and **the link the CEO holds never
 moves**. The source markdown is published beside the page — that is what makes
 the next revision's `## Version record` generated rather than remembered.
 
+The mockup renders as live markup, so it goes through an allowlist first: the
+artifact is authored by an agent reading untrusted epic text, and the page is
+opened in the CEO's browser. Styling and structure survive; scripts, frames,
+event handlers and `javascript:` URLs do not, the check reports what it
+removed, and the page carries a policy forbidding script execution outright.
+
 Publishing is a **commit** to the portal repo, made by the bureau App
 identity, which must therefore be installed there. Not the portal's "Add
 document" button: that strips scripts, and an interactive mockup uploaded that

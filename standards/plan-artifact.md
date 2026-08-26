@@ -68,6 +68,18 @@ The old convention pointed at an exported PNG under
 would be approving a text plan for a screen he cannot see. A visual model that
 is only an image is a defect on its own evidence.
 
+**"Live" means styled, never executing.** The mockup is the one place the
+artifact publishes markup rather than escaped text, and the artifact is written
+by an agent reading untrusted epic text — so the block passes through an
+allowlist on the way to the page. Layout, text, tables, controls and inline SVG
+survive; `<script>`, `<iframe>`, `<object>`, `<form>`, every `on…` handler,
+`javascript:` URLs and `expression()`/`url()` in a `style` attribute do not.
+Nothing a mockup needs is on that list — a mockup gets its look from
+`tokens.css`, not from behaviour. The check reports what it removed rather than
+stripping in silence, so a planner is never left believing the CEO is looking
+at what it wrote, and the published page also carries a Content-Security-Policy
+that forbids script execution outright.
+
 A non-UI epic writes `Not applicable — <reason>` (the same stated-reason
 grammar as `deferred: <surface> — <reason>` in `standards/design-parity.md`).
 Silence is not a decision. An epic whose CARDS carry `**Design:**` refs is UI

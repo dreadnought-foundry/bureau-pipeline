@@ -43,6 +43,7 @@ import json
 import os
 import re
 import sys
+from html.parser import HTMLParser
 
 # --- The seven sections ------------------------------------------------------
 #
@@ -123,6 +124,80 @@ _NOT_APPLICABLE = re.compile(
 # Where a published artifact lives, relative to the portal checkout root.
 PAGE_NAME = "index.html"
 SOURCE_NAME = "plan.md"
+
+# --- The mockup allowlist ----------------------------------------------------
+#
+# The mockup fence is the ONE place this module emits markup instead of escaped
+# text, so it is the one place an injection could land — and the chain is real:
+# the epic body is untrusted (standards/untrusted-content.md), the planner turns
+# it into the mockup, and the run publishes that to a page the CEO opens in a
+# browser. The portal's own "Add document" button strips scripts for exactly
+# this reason; this path must not become the way around it.
+#
+# A mockup only ever needs to be STYLED by real tokens — it never needs to
+# execute. So markup passes through and scripting does not, by allowlist:
+# anything not named here is removed, and `mockup_defects` reports what was
+# removed so the planner is told rather than quietly served a different page.
+
+# Removed WITH their contents: their text is payload, not copy.
+_MOCKUP_DROP_SUBTREE = frozenset({
+    "script", "style", "iframe", "object", "embed", "applet", "noscript",
+    "template", "link", "meta", "base", "form", "frame", "frameset",
+})
+
+# Kept. Structure, text, tables, form-LOOKING controls (a mockup shows a
+# button; it does not submit one), and the SVG subset an icon needs.
+_MOCKUP_ALLOWED_TAGS = frozenset({
+    "div", "span", "p", "section", "article", "aside", "header", "footer",
+    "main", "nav", "figure", "figcaption", "blockquote", "hr", "br",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "ul", "ol", "li", "dl", "dt", "dd",
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "col",
+    "colgroup",
+    "a", "img", "picture", "source",
+    "strong", "b", "em", "i", "u", "s", "small", "code", "pre", "kbd", "samp",
+    "abbr", "mark", "time", "sup", "sub", "label", "legend", "fieldset",
+    "button", "input", "select", "option", "optgroup", "textarea", "progress",
+    "meter", "details", "summary",
+    "svg", "g", "path", "circle", "ellipse", "rect", "line", "polyline",
+    "polygon", "text", "tspan", "defs", "use", "symbol", "title",
+})
+
+_MOCKUP_VOID_TAGS = frozenset({
+    "br", "hr", "img", "input", "source", "col", "path", "circle", "ellipse",
+    "rect", "line", "polyline", "polygon", "use",
+})
+
+# Attributes any allowed tag may carry. `aria-*` and `data-*` are admitted by
+# prefix below; every `on*` handler is refused by the same test.
+_MOCKUP_ALLOWED_ATTRS = frozenset({
+    "class", "id", "style", "title", "alt", "role", "lang", "dir",
+    "width", "height", "type", "placeholder", "value", "checked", "selected",
+    "disabled", "readonly", "multiple", "min", "max", "step", "rows", "cols",
+    "colspan", "rowspan", "scope", "span", "for", "datetime", "open",
+    "href", "src", "srcset", "sizes", "loading", "decoding",
+    # The SVG geometry/paint subset.
+    "viewbox", "xmlns", "fill", "stroke", "stroke-width", "stroke-linecap",
+    "stroke-linejoin", "fill-rule", "clip-rule", "d", "x", "y", "cx", "cy",
+    "r", "rx", "ry", "x1", "y1", "x2", "y2", "points", "transform",
+    "preserveaspectratio", "opacity", "text-anchor", "font-size",
+})
+
+# URL-bearing attributes, and the schemes they may carry. Relative, fragment,
+# http(s) and inline images only — `javascript:` and `data:text/html` are the
+# two that turn a link into code.
+_MOCKUP_URL_ATTRS = frozenset({"href", "src", "srcset"})
+_UNSAFE_URL = re.compile(r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:",
+                         re.IGNORECASE)
+_UNSAFE_DATA_URL = re.compile(r"^\s*data\s*:(?!image/(?:png|jpe?g|gif|webp|svg\+xml);)",
+                              re.IGNORECASE)
+
+# Inline-style constructs that execute or fetch. `url(...)` is refused
+# outright: a mockup gets its look from tokens.css, not from a remote asset,
+# and permitting it would reopen the exfiltration channel by another door.
+_UNSAFE_STYLE = re.compile(
+    r"expression\s*\(|javascript\s*:|vbscript\s*:|@import|behavior\s*:|"
+    r"-moz-binding|url\s*\(", re.IGNORECASE)
 
 
 class ArtifactError(Exception):
@@ -208,6 +283,124 @@ def mockup(md: str) -> str | None:
     return blocks[0] if blocks else None
 
 
+class _MockupSanitizer(HTMLParser):
+    """Re-emit a mockup through the allowlist above, recording every removal.
+
+    Allowlist, not blocklist: an unknown tag loses its markup (its text is
+    kept, escaped) and a listed-as-dangerous tag loses its contents too. Both
+    are recorded, because a sanitizer that works in silence would leave the
+    planner sure the CEO is looking at what it wrote.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out: list[str] = []
+        self.removed: list[str] = []
+        self._drop_depth = 0          # inside a drop-with-contents subtree
+        self._emitted: list[str] = []  # tags whose end tag we must close
+
+    # -- helpers ---------------------------------------------------------
+    def _note(self, what: str) -> None:
+        if what not in self.removed:
+            self.removed.append(what)
+
+    def _safe_attrs(self, tag: str, attrs) -> str:
+        kept = []
+        for name, value in attrs:
+            name = (name or "").lower()
+            value = value if value is not None else ""
+            if name.startswith("on"):
+                self._note(f"event handler `{name}`")
+                continue
+            if not (name in _MOCKUP_ALLOWED_ATTRS
+                    or name.startswith(("aria-", "data-"))):
+                self._note(f"attribute `{name}` on <{tag}>")
+                continue
+            if name in _MOCKUP_URL_ATTRS and (
+                    _UNSAFE_URL.match(value) or _UNSAFE_DATA_URL.match(value)):
+                self._note(f"unsafe URL in `{name}`")
+                continue
+            if name == "style" and _UNSAFE_STYLE.search(value):
+                self._note("executable construct in a `style` attribute")
+                continue
+            kept.append(f' {name}="{html.escape(value, quote=True)}"')
+        return "".join(kept)
+
+    # -- HTMLParser hooks ------------------------------------------------
+    def handle_starttag(self, tag, attrs):
+        if self._drop_depth:
+            if tag in _MOCKUP_DROP_SUBTREE:
+                self._drop_depth += 1
+            return
+        if tag in _MOCKUP_DROP_SUBTREE:
+            self._note(f"<{tag}> and its contents")
+            self._drop_depth = 1
+            return
+        if tag not in _MOCKUP_ALLOWED_TAGS:
+            self._note(f"<{tag}>")
+            return
+        self.out.append(f"<{tag}{self._safe_attrs(tag, attrs)}>")
+        if tag not in _MOCKUP_VOID_TAGS:
+            self._emitted.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        if self._drop_depth:
+            return
+        if tag in _MOCKUP_DROP_SUBTREE:
+            self._note(f"<{tag}> and its contents")
+            return
+        if tag not in _MOCKUP_ALLOWED_TAGS:
+            self._note(f"<{tag}>")
+            return
+        self.out.append(f"<{tag}{self._safe_attrs(tag, attrs)}>")
+
+    def handle_endtag(self, tag):
+        if self._drop_depth:
+            if tag in _MOCKUP_DROP_SUBTREE:
+                self._drop_depth -= 1
+            return
+        if tag in self._emitted:
+            # Close back to it, so a mis-nested input cannot leave the page
+            # with an element the sanitizer never opened.
+            while self._emitted:
+                open_tag = self._emitted.pop()
+                self.out.append(f"</{open_tag}>")
+                if open_tag == tag:
+                    break
+
+    def handle_data(self, data):
+        if self._drop_depth:
+            return
+        self.out.append(html.escape(data, quote=False))
+
+    def handle_comment(self, data):
+        return  # a comment is never load-bearing in a mockup
+
+    def handle_decl(self, decl):
+        self._note(f"<!{decl.split()[0] if decl else 'doctype'}>")
+
+    def handle_pi(self, data):
+        self._note("processing instruction")
+
+    def result(self) -> str:
+        self.close()
+        tail = "".join(f"</{t}>" for t in reversed(self._emitted))
+        self._emitted.clear()
+        return "".join(self.out) + tail
+
+
+def sanitize_mockup(markup: str) -> tuple[str, list[str]]:
+    """`(safe markup, what was removed)` for a mockup block.
+
+    The mockup renders live so the CEO sees the real screen under the real
+    tokens — but "live" means styled, never executing. Everything outside the
+    allowlist comes out, and the second element is what the check reports.
+    """
+    parser = _MockupSanitizer()
+    parser.feed(markup or "")
+    return parser.result(), parser.removed
+
+
 # --- The check ---------------------------------------------------------------
 
 
@@ -255,11 +448,20 @@ def visual_model_defects(md: str, ui: bool = False) -> list[str]:
         return []  # missing_sections already reports the absent heading
     block = mockup(md)
     if block is not None:
+        out = []
         if not _TOKEN_USE.search(block):
-            return ["the mockup uses no design token (`var(--…)` from "
-                    "console/design/tokens.css) — that is a picture of a UI, "
-                    "not the UI"]
-        return []
+            out.append("the mockup uses no design token (`var(--…)` from "
+                       "console/design/tokens.css) — that is a picture of a "
+                       "UI, not the UI")
+        # Never a silent strip: a sanitizer that works in silence would leave
+        # the planner sure the CEO is looking at what it wrote.
+        _safe, removed = sanitize_mockup(block)
+        if removed:
+            out.append(
+                "the mockup contains markup the published page will not carry "
+                "— a mockup is styled by tokens, it never executes. Removed: "
+                + "; ".join(removed))
+        return out
     if ui:
         return ["this epic's cards carry design refs, so its visual model "
                 "must be a live ```mockup block built from "
@@ -512,6 +714,11 @@ _PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Defence in depth behind the mockup allowlist: even a hole in it cannot
+     execute, load a frame, or reach a third-party host. The kpi-data block
+     below is a JSON DATA island, not a script — browsers never execute it,
+     and script-src does not remove it from the DOM. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; object-src 'none'; frame-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <title>{title}</title>
 <link rel="stylesheet" href="{tokens}">
 <style>
@@ -592,12 +799,15 @@ def _render_section(key: str, body: str) -> str:
             i += 1
             raw = "\n".join(block)
             if lang == "mockup":
-                # Live markup, deliberately not escaped: this IS the UI, and a
-                # picture of it would be the thing this card exists to replace.
+                # Markup, not escaped text: this IS the UI, and a picture of
+                # it would be the thing this card exists to replace. Through
+                # the allowlist first — "live" means styled by real tokens,
+                # never executing (see _MOCKUP_ALLOWED_TAGS).
+                safe, _removed = sanitize_mockup(raw)
                 out.append(f'<div class="mockup" id="{anchor}-mockup" '
                            f'data-anchor>'
                            f'<a class="anchor" href="#{anchor}-mockup">#</a>'
-                           f"\n{raw}\n</div>")
+                           f"\n{safe}\n</div>")
             elif lang == "kpis":
                 out.append(_kpi_table(raw, anchor))
             else:

@@ -190,7 +190,9 @@ Two things planners get wrong:
   direction, inside the ```kpis block.
 - **A screenshot as the visual model.** For a NEW screen there is no PNG, so
   build the mockup from `console/design/tokens.css` — then the CEO can see
-  what he is approving, and the fleet has a spec.
+  what he is approving, and the fleet has a spec. Layout and styling only:
+  the published page carries no scripts, no frames and no event handlers, and
+  the check tells you what it removed.
 
 ## The plan comment (for the CEO — non-technical)
 Plain English: what gets built, in what order, what could go wrong, rough
