@@ -315,6 +315,30 @@ class TestArtifactMovesWithTheCard:
         ids = [a["id"] for a in mid_epic.parse_artifact(ops.epic_description)["additions"]]
         assert ids == ["DRE-2740", "DRE-2741"]
 
+    def test_a_justification_containing_the_separator_round_trips(self):
+        """The record is parsed back on every sweep, so a justification that
+        happens to contain the field separator must not shear the record it
+        was written into."""
+        because = "the fix must be split — and its order reversed"
+        ops = _FakeOps(epic_description="The epic.", epic_state="In Progress")
+        mid_epic.discovery(ops, "DRE-2700", kind=mid_epic.AMENDMENT, because=because)
+        mid_epic.discovery(ops, "DRE-2700", kind=mid_epic.ADDITION, because=because,
+                           title="one", body="- work")
+        artifact = mid_epic.parse_artifact(ops.epic_description)
+        assert artifact["amendments"][0]["because"] == because
+        assert artifact["amendments"][0]["re_green_lit"] is not None
+        assert artifact["additions"][0]["because"] == because
+
+    def test_a_multi_line_justification_is_recorded_as_one_line(self):
+        """It is a ONE-LINE justification: a pasted paragraph must not break the
+        record open, and it must not be silently truncated either."""
+        ops = _FakeOps(epic_description="The epic.")
+        mid_epic.discovery(ops, "DRE-2700", kind=mid_epic.ADDITION,
+                           because="a second call site\nneeds\tthe same fix",
+                           title="one", body="- work")
+        recorded = mid_epic.parse_artifact(ops.epic_description)["additions"][0]
+        assert recorded["because"] == "a second call site needs the same fix"
+
     def test_a_card_added_without_the_artifact_changing_is_surfaced(self):
         """The hand-add: somebody creates the sibling in Linear directly. The
         epic grew and its plan did not move — say so."""
