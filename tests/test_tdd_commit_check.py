@@ -68,6 +68,77 @@ class ClassifyPathTest(unittest.TestCase):
     def test_agents_registry_is_ops(self):
         self.assertEqual(check_tdd_commits.classify_path("agents.yaml"), "ops")
 
+    # --- nested test trees (DRE-2741) -----------------------------------
+    #
+    # DRE-2022 built this check for bureau-pipeline's OWN PRs, and this repo
+    # keeps its tests in a top-level `tests/`. The check then went fleet-wide
+    # and the classifier did not. Every consumer that nests its tests — which
+    # is all of them — had no path that could ever classify as `test`, so a
+    # genuinely test-first branch still read as code-then-code and failed a
+    # check DRE-2694 makes unfixable-by-another-commit. Measured on
+    # agent-bureau: 0 of its 4 test trees matched.
+
+    def test_a_nested_tests_directory_is_test(self):
+        # console/backend/tests/, cloud/relay/tests/ — the common shape.
+        self.assertEqual(
+            check_tdd_commits.classify_path("console/backend/tests/test_auth.py"),
+            "test",
+        )
+
+    def test_a_singular_test_directory_is_test(self):
+        # infra/test/ — jest's convention, and agent-bureau's for CDK.
+        self.assertEqual(
+            check_tdd_commits.classify_path("infra/test/rollback/test_rollback.py"),
+            "test",
+        )
+
+    def test_a_dotted_test_suffix_is_test(self):
+        # A TS/JS test need not live in a test directory at all.
+        self.assertEqual(
+            check_tdd_commits.classify_path("infra/lib/backend-stack.test.ts"), "test"
+        )
+        self.assertEqual(
+            check_tdd_commits.classify_path("web/src/App.spec.tsx"), "test"
+        )
+
+    def test_a_test_prefixed_filename_is_test(self):
+        # pytest's own discovery rule, wherever the file sits.
+        self.assertEqual(
+            check_tdd_commits.classify_path("scripts/test_reconcile.py"), "test"
+        )
+
+    def test_a_go_style_test_suffix_is_test(self):
+        self.assertEqual(
+            check_tdd_commits.classify_path("internal/relay/handler_test.go"), "test"
+        )
+
+    def test_source_living_beside_tests_is_still_code(self):
+        # The limit of the widening, pinned deliberately. Only a directory
+        # whose NAME says it holds tests, or a filename in a test convention,
+        # counts — a helper that merely sits near them does not, or the
+        # discipline could be dodged by moving implementation next to a suite.
+        self.assertEqual(
+            check_tdd_commits.classify_path("console/backend/services/tenant.py"),
+            "code",
+        )
+        self.assertEqual(
+            check_tdd_commits.classify_path("infra/rollback-console.sh"), "code"
+        )
+        self.assertEqual(
+            check_tdd_commits.classify_path("scripts/latest_test_results.py"), "code"
+        )
+
+    def test_a_nested_test_commit_satisfies_the_ordering_rule(self):
+        # The end-to-end point of the widening: the classification change must
+        # actually clear the gate, not merely relabel a path.
+        ok, _ = check_tdd_commits.check_commits(
+            [
+                commit(["infra/test/rollback/test_annotation_digest.py"], "red"),
+                commit(["infra/rollback-console.sh"], "fix"),
+            ]
+        )
+        self.assertTrue(ok)
+
     def test_unknown_paths_default_to_code(self):
         # Fail-closed: anything unrecognized counts as implementation, so a
         # new source tree can't silently dodge the discipline.

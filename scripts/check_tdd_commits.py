@@ -87,7 +87,22 @@ FAILURE_MESSAGE = (
 
 # Path prefixes/names per category. Checked in order; first match wins, and
 # anything unmatched is code (fail-closed).
-_TEST_PREFIXES = ("tests/",)
+#
+# TEST paths are matched by DIRECTORY SEGMENT and by filename convention, not by
+# one top-level prefix (DRE-2741). This check was written for bureau-pipeline's
+# own PRs, where the tests live in a top-level `tests/`, and then applied to the
+# whole fleet — where they do not. Measured on agent-bureau: `infra/test/`,
+# `console/backend/tests/`, `cloud/relay/tests/` and `infra/*.test.ts` ALL
+# classified as `code`, so no branch in that repo could satisfy the gate however
+# correctly it was built. Combined with DRE-2694 (this check is unfixable by
+# adding a commit) that left PRs permanently stuck on something no amount of
+# right behaviour could clear.
+_TEST_SEGMENTS = frozenset({"tests", "test", "spec", "__tests__"})
+_TEST_SUFFIXES = (
+    ".test.ts", ".test.tsx", ".test.js", ".test.jsx",
+    ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
+    "_test.py", "_test.go", "_test.rb",
+)
 _DOCS_PREFIXES = ("docs/",)
 _OPS_PREFIXES = (".github/", "config/")
 _OPS_FILES = frozenset({"agents.yaml"})
@@ -172,6 +187,25 @@ def is_docs_only_python_change(before: str | None, after: str | None) -> bool:
     return shape_before == shape_after
 
 
+def is_test_path(path: str) -> bool:
+    """True iff `path` is a test by its DIRECTORY or by its FILENAME.
+
+    Deliberately narrow at the edges. A directory counts only when its own name
+    says it holds tests, and a filename only when it follows a runner's
+    discovery convention (pytest's `test_*.py`, Go's `*_test.go`, jest's
+    `*.test.ts`). Merely LIVING beside a suite is not enough — otherwise the
+    discipline could be dodged by parking implementation next to one.
+
+    This only ever moves a path OUT of `code`, so it cannot make the gate
+    stricter and cannot let implementation masquerade as a test. The
+    fail-closed default for everything unrecognized is unchanged.
+    """
+    *dirs, name = path.split("/")
+    if any(d in _TEST_SEGMENTS for d in dirs):
+        return True
+    return name.startswith("test_") or name.endswith(_TEST_SUFFIXES)
+
+
 def classify_path(
     path: str, before: str | None = None, after: str | None = None
 ) -> str:
@@ -180,7 +214,7 @@ def classify_path(
     `before`/`after` are the file's two versions across the commit, supplied
     only for `.py` paths the path rules would otherwise call `code`. Omitting
     them keeps the pre-DRE-2409 path-only answer, which is the strict one."""
-    if path.startswith(_TEST_PREFIXES):
+    if is_test_path(path):
         return "test"
     if path.startswith(_DOCS_PREFIXES) or path.endswith(".md"):
         return "docs"
