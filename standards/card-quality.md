@@ -83,6 +83,39 @@ epic, **move ONLY the epic to In
 Progress and stop** — reconcile auto-promotes the unblocked children; never
 hand-move children (it double-dispatches and reverts in-progress work).
 
+**A card has no children.** Giving a card sub-issues silently converts it INTO
+an epic — the gate infers `agent:planner` from having children, and reconcile
+never promotes an `agent:planner` card — so the parent stops being promoted,
+permanently, with nothing saying so. `linear_ops.py subissue` refuses a parent
+that is not already an epic. Neither a `DRE-1234a` suffix nor a sub-issue: the
+new work is a **sibling card under the same epic**, with its own number.
+
+## Mid-epic discovery (DRE-2739)
+A finding made **while building**, about an epic that is already approved and
+already running, does not go back to Intake. It is filed against the epic with
+one line of justification, classified by one question — **does the approved plan
+still describe what we are doing?**
+
+    python3 scripts/mid_epic.py discovery <EPIC> --kind addition \
+      --because "<one line>" --title "…" --body <file>
+    python3 scripts/mid_epic.py discovery <EPIC> --kind amendment --because "<one line>"
+
+- **Addition** — the plan holds, there is just more of it (a second call site
+  needs the same fix). A sibling card lands in Backlog carrying a **verdict**
+  and promotes normally. **No new green light**: that decision was already made
+  for this epic.
+- **Amendment** — the plan no longer describes the work (the fix must be split
+  and its order reversed). No card is created; the epic goes back to `Planning`
+  and is re-green-lit.
+
+Guessing wrong is cheap — the artifact update catches an amendment mislabelled
+as an addition. What is NOT cheap is adding the card by hand: a Backlog child of
+an active epic dispatches an agent within fifteen minutes, so a card added after
+the epic's green light **without a verdict is refused promotion** and said so on
+the card. The epic's own description carries the growth record — green-lit at N
+cards, running M — and names any card that joined without the plan moving with
+it. See `architecture/decisions/adr-mid-epic-discovery.md`.
+
 ## Body
 A clear, **one-PR-scoped** description with its own `## Acceptance criteria`
 (checkable `- [ ]` items). Any string shared across sibling cards (schema field,
