@@ -319,19 +319,27 @@ class AgentsRegistryTest(unittest.TestCase):
         consumed by the token-mint step's `with:` and never enters the agent
         step's environment."""
         pool = {"BUREAU_APP_ID_2", "BUREAU_APP_ID_3", "BUREAU_APP_ID_4"}
-        with_linear, with_pool = set(), set()
+        with_linear, with_pool, declares_linear = set(), set(), set()
         workflows = {a["workflow"] for a in load()}
         self.assertEqual(7, len(workflows), "the fleet is no longer seven "
                                             "agent workflows — re-read the "
                                             "surface before editing this")
         for wf in sorted(workflows):
             doc = yaml.safe_load(open(os.path.join(ROOT, wf)).read())
+            call = (doc.get("on", doc.get(True)) or {}).get("workflow_call") or {}
+            if "LINEAR_API_KEY" in (call.get("secrets") or {}):
+                declares_linear.add(wf.split("/")[-1])
             for _job_id, job, step, _name in agent_steps(doc):
                 creds = step_credentials(doc, job, step)
                 if "LINEAR_API_KEY" in creds:
                     with_linear.add(wf.split("/")[-1])
                 if pool <= creds:
                     with_pool.add(wf.split("/")[-1])
+        # All seven DECLARE the key. Six hand it to the agent step. Both
+        # halves are pinned, because the gap between them is exactly the
+        # thing a file-level check cannot see.
+        self.assertEqual({wf.split("/")[-1] for wf in workflows},
+                         declares_linear)
         self.assertEqual(
             {"agent-task.yml", "agent-fix.yml", "plan.yml", "medic.yml",
              "verify.yml", "red-main-repair.yml"}, with_linear)
