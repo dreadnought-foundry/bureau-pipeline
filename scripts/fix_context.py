@@ -103,6 +103,34 @@ _DECISION_MENTION_RE = re.compile(r"operator\s+decision", re.IGNORECASE)
 # carries no backtick, no dollar sign, no double quote and no backslash
 # (pinned by tests/test_operator_decision_intent.py).
 DECISION_EXAMPLE = "**Operator decision** — <your answer here>"
+
+# What actually restarts the loop, said in the message that asks for the
+# answer (DRE-2548). This paragraph used to end "the fix loop picks it up and
+# restarts itself — no dispatch needed", one sentence after requiring the
+# comment be written by a person: agent-fix's job-if admits an issue_comment
+# start ONLY from the qa-bot, so the comment an operator was told to write
+# fired a run that completed/SKIPPED — green at the run level, nothing on the
+# PR (agent-bureau PR #2065, four skipped runs; PR #2087, skipped one second
+# after the decision, both hand-dispatched afterwards). Following the
+# instruction correctly guaranteed the failure, and the failure was silent.
+#
+# The real trigger is the 15-minute reconcile sweep
+# (reconcile.restart_answered_blockers, DRE-2409): it reads the human
+# decision and workflow_dispatches agent-fix, which the same job-if accepts.
+# Both sentences are pinned against that gate by
+# tests/test_restart_instruction_matches_gate.py, and against the workflow's
+# own inline copies of them — those bodies are written before the pipeline
+# checkout exists, so they cannot call this module and are pinned instead.
+RESTART_PROMISE = (
+    "What happens next: the pipeline sweep sees your answer on its next pass "
+    "and starts the fix loop for you, normally within about 15 minutes. You "
+    "do not need to run anything by hand."
+)
+SKIP_NOTICE = (
+    "Your comment does not start the run by itself — it also fires an Agent "
+    "Fix run that skips within seconds. That skip is expected and does not "
+    "mean your answer was rejected."
+)
 ANSWER_FORMAT = (
     "**How to answer this** — comment on this PR from your own account with a "
     "first line that STARTS with the words Operator decision, then your "
@@ -113,7 +141,7 @@ ANSWER_FORMAT = (
     "Bold, plain, or a '## Operator decision' heading all work, in any case, "
     "and the rest of your answer can continue on that same line or below it. "
     "The comment has to be newer than this one and written by a person, not a "
-    "bot. The fix loop picks it up and restarts itself — no dispatch needed."
+    f"bot. {RESTART_PROMISE} {SKIP_NOTICE}"
 )
 
 NEAR_MISS_TAG = "operator-decision-near-miss"

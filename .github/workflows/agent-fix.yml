@@ -181,10 +181,15 @@ jobs:
               # here rather than read from fix_context.py --answer-format;
               # tests/test_operator_decision_restart.py pins the example
               # against fix_context.DECISION_EXAMPLE so the two cannot drift.
+              # DRE-2548 pins the two sentences after it the same way, to
+              # fix_context.RESTART_PROMISE / SKIP_NOTICE: the operator is
+              # told what actually starts the loop (the 15-minute reconcile
+              # sweep), because THIS job's own gate skips the comment they
+              # were asked to write.
               gh pr comment "$PR" --repo ${{ github.repository }} \
                 --body "🛑 Conflict-resolution budget exhausted ($RESOLVED rounds) — main keeps moving under this branch; holding for a human decision.
 
-          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. The fix loop picks it up and restarts itself within about 15 minutes."
+          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected."
               echo "held=true" >> "$GITHUB_OUTPUT"
             fi
             exit 0
@@ -215,7 +220,7 @@ jobs:
             gh pr comment "$PR" --repo ${{ github.repository }} \
               --body "🛑 Fix budget exhausted ($ATTEMPTS attempts, including a fresh-eyes re-derivation) — holding for a human decision.
 
-          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. The fix loop picks it up and restarts itself within about 15 minutes."
+          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected."
             echo "held=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -747,7 +752,7 @@ jobs:
             # instead of stalling invisibly in In QA.
             if [ -n "$CARD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "🙋 The fix agent disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong. This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here> — and the fix loop restarts itself. Or move this card to **Todo** to have the reviewer take another look, or to **Backlog** to drop it." || true
+                "🙋 The fix agent disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong. This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **Todo** to have the reviewer take another look, or to **Backlog** to drop it." || true
             fi
             park_for_human
           else
