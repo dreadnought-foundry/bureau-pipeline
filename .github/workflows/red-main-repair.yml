@@ -425,9 +425,11 @@ jobs:
             echo "repair PR opened: $PR_URL — the critic and the merge gate own it from here (author ≠ merger)."
           elif [ -f /tmp/repair-escalation.txt ] && [ -s /tmp/repair-escalation.txt ]; then
             # Escalate-by-exception: the agent paused rather than guess on
-            # main. File the question as a card parked in Triage (the
-            # lane for a card that went wrong — DRE-2722/2723; not the
-            # Green Light approve-the-plan queue), deduped by exact title.
+            # main. File the question as a card parked in Triage (the lane for
+            # a card that went wrong — DRE-2722/2723), deduped by exact title.
+            # Triage and not Green Light, which DRE-2776 made the queue for a
+            # card waiting on a JUDGEMENT: the subject here is a broken default
+            # branch, and the card exists because something is already wrong.
             TITLE="Red main needs a decision — $WF_NAME failing on the default branch"
             EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
             {
