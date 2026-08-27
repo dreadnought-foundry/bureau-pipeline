@@ -41,6 +41,7 @@ DECISION_LANE = "Green Light"
 BROKEN_CARD_LANE = "Triage"
 
 AGENT_TASK = os.path.join(".github", "workflows", "agent-task.yml")
+PLAN = os.path.join(".github", "workflows", "plan.yml")
 
 
 def read(rel: str) -> str:
@@ -83,6 +84,15 @@ def brief_escalation_section() -> str:
     standard below."""
     m = re.search(r"### How to escalate(.*?)\n## ", read("briefs/engineer.md"), re.S)
     assert m, "'How to escalate' section not found in briefs/engineer.md"
+    return m.group(1)
+
+
+def plan_epic_gate_comment() -> str:
+    """The comment block sitting directly above `plan.yml`'s `Epic → Green
+    Light` step — the justification the next editor of that routing reads
+    first."""
+    m = re.search(r"((?:^ *#.*\n)+) *- name: Epic → Green Light", read(PLAN), re.M)
+    assert m, "the 'Epic → Green Light' step's comment was not found in plan.yml"
     return m.group(1)
 
 
@@ -141,6 +151,46 @@ class TheInstructionsTheAgentReadsTest(unittest.TestCase):
         assert m, "the README's escalate-by-exception paragraph was not found"
         self.assertIn(DECISION_LANE, m.group(1))
         self.assertNotIn(BROKEN_CARD_LANE, m.group(1))
+
+
+class ThePlannerStepsOwnExplanationTest(unittest.TestCase):
+    """The plan workflow's own routing was never wrong — epics have always gone
+    to `Green Light`. The comment justifying it was: it told the next reader
+    that stuck-agent escalations park in Triage, the exact rule this card
+    reverses, sitting on top of the step most likely to be edited when this area
+    changes next. A confident wrong explanation beside correct code is how the
+    original mismatch shipped, so pin the explanation too.
+    """
+
+    #: Naming `Triage` in this comment is FINE — drawing the contrast is the
+    #: point, so a flat `assertNotIn` would ban the correct wording along with
+    #: the wrong one. What is banned is ATTRIBUTING an agent's escalation to it:
+    #: the two ideas inside one sentence.
+    ESCALATION_WORDS = re.compile(r"escalat|stuck", re.I)
+
+    def _sentences(self) -> list[str]:
+        prose = " ".join(
+            line.lstrip().lstrip("#").strip()
+            for line in plan_epic_gate_comment().splitlines()
+        )
+        return re.split(r"(?<=\.)\s+", prose)
+
+    def test_no_sentence_routes_an_escalation_to_the_broken_card_lane(self):
+        offenders = [
+            s for s in self._sentences()
+            if BROKEN_CARD_LANE in s and self.ESCALATION_WORDS.search(s)
+        ]
+        self.assertEqual(
+            [], offenders,
+            f"the plan workflow still explains escalations as parking in "
+            f"{BROKEN_CARD_LANE!r}: {offenders}. They park in "
+            f"{DECISION_LANE!r}; {BROKEN_CARD_LANE} is the went-wrong lane.",
+        )
+
+    def test_the_comment_still_explains_the_lane_the_step_moves_to(self):
+        # The cheap way to pass the guard above is to delete the comment. The
+        # step's justification has to survive the correction.
+        self.assertIn(DECISION_LANE, plan_epic_gate_comment())
 
 
 class HumanParkGateTest(unittest.TestCase):
