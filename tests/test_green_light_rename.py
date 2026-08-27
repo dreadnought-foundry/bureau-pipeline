@@ -21,6 +21,13 @@ the CEO an agent is stuck.
 These tests pin BOTH halves, plus the sweep that made the card a single
 change: the literal must not survive anywhere in the repo. The needle is
 assembled from two fragments on purpose so this file does not match itself.
+
+*Amended 2026-08-27 (DRE-2776): "what did not belong" was drawn too wide here.
+The criteria DRE-2722 was accepted against moved the UNROUTABLE and the HELD
+card to Triage — not the agent's escalate-by-exception question, which is a
+card waiting on a judgement rather than a card that went wrong, and which goes
+to Green Light. This file keeps the broken-card half; the escalation half is
+pinned in `test_escalations_park_in_green_light.py`.*
 """
 import os
 import re
@@ -97,19 +104,6 @@ def step_body(workflow: str, step_name_re: str) -> str:
     return m.group(1)
 
 
-def escalation_branch() -> str:
-    """agent-task.yml's escalate-by-exception branch — the agent stopped to ask
-    the CEO a decision (DRE-1655)."""
-    step = step_body("agent-task.yml", "Report result to Linear")
-    m = re.search(
-        r"elif \[ -f /tmp/agent-escalation\.txt \](.*?)\n\s*elif \[ -f /tmp/agent-blocker\.txt \]",
-        step,
-        re.S,
-    )
-    assert m, "escalation branch not found in agent-task.yml"
-    return m.group(1)
-
-
 class NoStaleLaneNameTest(unittest.TestCase):
     """The sweep the card made a hard requirement: the two references it named
     were found by READING, and a third would break the same way. Nothing that
@@ -148,8 +142,12 @@ class NoStaleLaneNameTest(unittest.TestCase):
         )
 
 
-class EscalationsParkInTriageTest(unittest.TestCase):
-    """Half one: every "a person is needed" path points at Triage."""
+class BrokenCardsParkInTriageTest(unittest.TestCase):
+    """Half one, as DRE-2776 narrowed it: every path that parks a card because
+    the card WENT WRONG points at Triage. The fix loop that could not converge,
+    a check no agent can satisfy, a red default branch. The agent's question to
+    the CEO is not one of these and left this class — see
+    `test_escalations_park_in_green_light.py`."""
 
     def test_reconcile_parked_state_is_triage(self):
         self.assertEqual(PARKED_LANE, reconcile.PARKED_STATE)
@@ -158,20 +156,6 @@ class EscalationsParkInTriageTest(unittest.TestCase):
         payload = {"issue": {"state": {"name": PARKED_LANE}, "labels": {"nodes": []}}}
         with mock.patch.object(linear_ops, "gql", return_value=payload):
             self.assertTrue(reconcile.card_parked_for_human("DRE-2009"))
-
-    def test_a_card_in_the_green_light_lane_is_not_human_parked(self):
-        # Green Light is the CEO's approve-the-plan queue, not a stuck-agent
-        # signal: a PR whose card sits there must still get its fix agent.
-        payload = {"issue": {"state": {"name": NEW_LANE}, "labels": {"nodes": []}}}
-        with mock.patch.object(linear_ops, "gql", return_value=payload):
-            self.assertFalse(reconcile.card_parked_for_human("DRE-2009"))
-
-    def test_agent_task_escalation_parks_in_triage(self):
-        # The quoted literal is what the shell hands Linear; the prose around it
-        # names Green Light on purpose, to say which lane this is NOT.
-        branch = escalation_branch()
-        self.assertIn(f'"{PARKED_LANE}"', branch)
-        self.assertNotIn(f'"{NEW_LANE}"', branch)
 
     def test_agent_fix_report_parks_in_triage(self):
         step = step_body("agent-fix.yml", "Report")
