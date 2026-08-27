@@ -73,6 +73,10 @@ model-death markers swinging the model on retry.
 those model deaths. It routes on its own `turn-exhaustion-requeue` tag with its
 own cap (1 retry), writes no `model-error:` marker, and says the agent ran out
 of steps.*
+*Amended 2026-08-27 (DRE-2776): escalation now routes to `Green Light`, the
+CEO's "needs you" queue, not to the broken-card lane. An agent's question is a
+card waiting on a judgement, not a card that went wrong. The other routes above
+are unchanged.*
 
 **Verdict:** covered.
 

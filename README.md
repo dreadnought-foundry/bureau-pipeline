@@ -27,8 +27,9 @@ the normal PR → critic → merge gates with no human in the loop. It **stops a
 asks only by exception** — on genuine uncertainty (ambiguous intent, a
 risky/destructive change, or a business A-vs-B decision). When it stops it posts
 a **plain-English question** as a Linear comment and parks the card in the
-`Triage` lane (the lane for a card that went wrong — DRE-2722/2723; the epic
-approve-the-plan queue is `Green Light`, a different job); the CEO answers and
+`Green Light` lane — the CEO's "needs you" queue, the same lane epics wait in
+for plan approval (DRE-2776; an escalated card is waiting on a judgement, not
+broken, so it does not belong in the broken-card lane); the CEO answers and
 moves it back to `Todo` to proceed or to `Backlog` to drop it.
 The critic + tests remain the correctness backstop on every merge.
 
@@ -43,8 +44,8 @@ consumed, so those cards were logged as handled and silently never built
 (DRE-1980; removed by agent-bureau PR #2008). The `fast-track` label was the
 hand-workaround for that bug — the way to route a card past the dead gate —
 not a convention: standalone cards do not need it, and nobody should re-add
-it. Only the human "needs you" queue (now `Triage`) and the console surfacing
-of it are reused from the propose design.
+it. Only the human "needs you" queue (now `Green Light`) and the console
+surfacing of it are reused from the propose design.
 
 ## Break glass (DRE-2737)
 
