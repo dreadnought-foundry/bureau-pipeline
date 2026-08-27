@@ -422,10 +422,13 @@ jobs:
           path: ${{ runner.temp }}/plan-artifact.md
           if-no-files-found: error
 
-      # Green Light is the CEO approve-the-plan queue (DRE-2722, renamed
-      # from a name that also covered stuck-agent escalations — those now
-      # park in Triage). The name says what the CEO does with it: green-
-      # light it, send it back, or park it.
+      # Green Light holds a card waiting on a human JUDGEMENT: an epic's plan
+      # awaiting approval — this step — and, since DRE-2776, an agent's
+      # escalate-by-exception question. The name says what the CEO does with
+      # one: green-light it, send it back, or park it. Triage is the other
+      # human lane and holds the other case, a card that went WRONG
+      # (DRE-2723). Same tuple in `scripts/reconcile.py` (PARKED_STATES) —
+      # both lanes stop the dispatch loop, for different reasons.
       - name: Epic → Green Light
         if: steps.route.outputs.mode == 'plan'
         env:

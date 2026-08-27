@@ -117,9 +117,9 @@ class NoStaleLaneNameTest(unittest.TestCase):
         ]
         self.assertEqual(
             [], offenders,
-            f"the retired lane name survives at: {offenders}. The escalation "
-            f"meaning is now {PARKED_LANE!r}; the plan-approval meaning is "
-            f"now {NEW_LANE!r}.",
+            f"the retired lane name survives at: {offenders}. A went-wrong "
+            f"park is now {PARKED_LANE!r}; plan approval and an agent's "
+            f"escalate-by-exception question are both {NEW_LANE!r} (DRE-2776).",
         )
 
     def test_the_only_survivors_are_the_declared_transitional_shim(self):
