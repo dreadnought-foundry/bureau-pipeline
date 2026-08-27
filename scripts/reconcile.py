@@ -985,9 +985,19 @@ _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
 # its own conflicted PRs), so the narrow questions stay narrow. What changed
 # is that each one is now NAMED and defined here, instead of spelled out at
 # the call site where the next sweep copies it.
+#
+# `bot/standards-sync` is the nightly dreadnought-standards regeneration
+# (DRE-2777). The merge gate merges it, so the broad question must say so —
+# otherwise the sweep tells a PR "nothing is coming" on a branch the gate is
+# actively merging. It stays OUT of the two narrow tuples for the same reason
+# `dependabot/` does: no card to work, and no fix agent to hand it to. It is
+# the LITERAL branch, not a `bot/` prefix — auto-merge is not a permission any
+# future `bot/…` branch should inherit by name alone.
 CARD_BRANCH_PREFIXES = ("agent/",)
 FIX_BRANCH_PREFIXES = ("agent/", "repair/")
-PIPELINE_BRANCH_PREFIXES = ("agent/", "repair/", "dependabot/")
+PIPELINE_BRANCH_PREFIXES = (
+    "agent/", "repair/", "dependabot/", "bot/standards-sync",
+)
 
 
 def _has_prefix(head_ref: str | None, prefixes: tuple[str, ...]) -> bool:
