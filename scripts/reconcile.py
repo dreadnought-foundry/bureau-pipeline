@@ -951,15 +951,21 @@ def flag_stalled_planning() -> set[str]:
 # in the head ref and skip the dispatch. Same family as the medic↔critic
 # loop-break (bureau-pipeline #50).
 #
-# The lane is **Triage**, not the CEO's approve-the-plan queue (DRE-2722).
-# One name used to cover both jobs — "an agent is stuck, please answer" and
-# "a plan is ready, please approve" — and only one of them is a card that
-# went WRONG. Broken cards land in Triage (DRE-2723); the approval queue kept
-# its own job under the name that says what the CEO does with it, Green Light.
-# Getting this constant wrong is silent: it would read a lane no card ever
-# enters, and every doomed fix run this gate exists to stop would dispatch
-# again.
+# There are TWO human queues, and this gate asks the one question they both
+# answer yes to: does a person owe this card an action before automation may
+# act again? **Triage** holds a card that went WRONG — unroutable, held,
+# bounced by the readiness guard (DRE-2723). **Green Light** holds a card that
+# is waiting on a JUDGEMENT: an epic's plan awaiting approval, and — since
+# DRE-2776 — an agent's escalate-by-exception question. Different reasons, same
+# consequence for the loop: it is over until the human acts.
+#
+# Recognising only one of them is silent, and the failure is a bill: every
+# doomed fix run this gate exists to stop dispatches again, every sweep,
+# forever (DeltaSolv PR #120 / DRE-2009). So both lanes are declared here, once,
+# and `card_parked_for_human` tests membership rather than equality.
 PARKED_STATE = "Triage"
+ESCALATED_STATE = "Green Light"
+PARKED_STATES = (PARKED_STATE, ESCALATED_STATE)
 _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
 
 
@@ -1023,10 +1029,11 @@ def branch_card(head_ref: str) -> str | None:
 
 
 def card_parked_for_human(identifier: str) -> bool:
-    """True if the card sits in the Triage lane OR carries HOLD_LABEL —
-    a human's queue either way, so no fix agent may be dispatched for its PR.
-    Fails SAFE on an unreadable card: treat as parked (skip this sweep; the
-    next one retries) rather than dispatch into a possibly-parked card."""
+    """True if the card sits in either human queue (:data:`PARKED_STATES`) OR
+    carries HOLD_LABEL — a person owes it an action either way, so no fix agent
+    may be dispatched for its PR. Fails SAFE on an unreadable card: treat as
+    parked (skip this sweep; the next one retries) rather than dispatch into a
+    possibly-parked card."""
     try:
         issue = linear_ops.gql(
             """query($id: String!) { issue(id: $id) {
@@ -1036,7 +1043,7 @@ def card_parked_for_human(identifier: str) -> bool:
     except Exception as e:  # noqa: BLE001 — any Linear/transport error -> fail safe
         print(f"park-gate: could not read {identifier}: {e} — skipping dispatch")
         return True
-    if ((issue.get("state") or {}).get("name")) == PARKED_STATE:
+    if ((issue.get("state") or {}).get("name")) in PARKED_STATES:
         return True
     return any(
         (lbl.get("name") or "").lower() == HOLD_LABEL
@@ -1052,7 +1059,7 @@ def fix_dispatch_blocked(pr: dict) -> bool:
     if card and card_parked_for_human(card):
         print(
             f"park-gate: PR #{pr['number']} card {card} is human-parked "
-            "(Triage / needs-human) — not dispatching agent-fix"
+            f"({' / '.join(PARKED_STATES)} / {HOLD_LABEL}) — not dispatching agent-fix"
         )
         return True
     return False
@@ -2109,7 +2116,8 @@ def _flag_one_silent_pr(pr: dict) -> None:
     if any(marker in b for b in linear_ops.comment_bodies(card)):
         return  # reported once already — idempotent forever
     park_note = (
-        "The card is human-parked (Triage / needs-human), so every "
+        "The card is human-parked (waiting on a person in "
+        f"{' or '.join(PARKED_STATES)}, or stamped {HOLD_LABEL}), so every "
         "automatic repair is standing down on purpose (DRE-2024) — the PR "
         "stays frozen until a human acts on the card."
         if card_parked_for_human(card) else

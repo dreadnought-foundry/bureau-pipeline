@@ -62,10 +62,9 @@ cannot safely resolve: **ambiguous intent**, a **risky/destructive change**, or
 a real **business A-vs-B decision** the CEO should own. When it stops, it posts a
 **plain-English question** (business terms, no code or diffs) as a comment and
 parks the card in the **`Green Light`** lane — the CEO's "needs you" queue,
-the same lane epics use for plan approval (DRE-2722 renamed it from `Plan
-Review`). The CEO answers and moves the card back to
-`Todo` to proceed (a fresh run picks up the guidance) or to `Backlog` to drop
-it.
+the same lane epics wait in for plan approval. The CEO answers and moves the
+card back to `Todo` to proceed (a fresh run picks up the guidance) or to
+`Backlog` to drop it.
 
 **NOT `Triage`, and the distinction is the point.** Triage is the *broken-card*
 lane: an unroutable `repo:` label, an archived repo, a card the readiness guard
@@ -74,16 +73,21 @@ An escalated card is **not broken**. It is correct, and waiting on a judgement
 only the CEO can make. Triage became a dead end once by mixing the two — 17
 cards, all machine-created, none ever moved — and a real decision sitting in a
 lane people scan as a defect list is that same failure wearing a new label
-(DRE-2776). DRE-2722's title reads "move the escalations to Triage"; its own
-acceptance criteria say `Green Light` "holds what `Plan Review` held", and
-`Plan Review` held escalations. The criteria are what it was accepted against. This is a **high bar** — over-escalating recreates the overnight-stall the
-model exists to avoid; routine, reversible choices are just built and noted in
-the PR.
+(DRE-2776). DRE-2722's title reads "move the escalations to Triage"; the
+criteria it was accepted against say `Green Light` holds what the lane it
+renamed held, and that lane held escalations. A title is not what a card was
+accepted against.
+
+Escalating is a **high bar** — over-escalating recreates the overnight-stall
+the model exists to avoid; routine, reversible choices are just built and noted
+in the PR.
 
 `Green Light` (decision needed, build can proceed once answered) is distinct
 from `Backlog` (the impossible-as-specified / blocked path, inert until the card
 is fixed), and from `Triage` (the card itself is malformed and cannot proceed as
-written, whoever answers). There is **no propose-first hard stop**: cards are not gated awaiting
+written, whoever answers).
+
+There is **no propose-first hard stop**: cards are not gated awaiting
 approval before any work — autonomy is the default, the human is the exception.
 
 ## Epics
