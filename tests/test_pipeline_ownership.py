@@ -75,6 +75,21 @@ class OwnershipRuleTest(unittest.TestCase):
         self.assertTrue(reconcile.pipeline_owns("repair/" + "a" * 40))
         self.assertTrue(reconcile.pipeline_owns("dependabot/npm/left-pad-1.0.0"))
 
+    def test_the_nightly_standards_sync_branch_is_owned(self):
+        # DRE-2777. The merge gate merges `bot/standards-sync`, so the broad
+        # question has to agree — otherwise the sweep posts "no owning
+        # automation, nothing is coming" on a branch the gate is actively
+        # merging, which is the false status this module exists to prevent.
+        self.assertTrue(reconcile.pipeline_owns("bot/standards-sync"))
+        # Narrow stays narrow, exactly as for dependabot/*: the nightly job
+        # carries no card, so neither the card sweeps nor the fix agent claim
+        # it. Widening either tuple here is the bug this split prevents.
+        self.assertFalse(reconcile.card_branch("bot/standards-sync"))
+        self.assertFalse(reconcile.fix_eligible("bot/standards-sync"))
+        # The LITERAL branch, not a `bot/` prefix — auto-merge is not a
+        # permission a future bot branch should inherit by being named one.
+        self.assertFalse(reconcile.pipeline_owns("bot/something-else"))
+
     def test_hand_named_branches_are_NOT_owned(self):
         # The four live strandings, by name.
         for ref in (
