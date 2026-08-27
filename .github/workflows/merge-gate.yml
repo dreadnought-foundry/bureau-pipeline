@@ -97,7 +97,8 @@ jobs:
        github.event.workflow_run.event == 'pull_request' &&
        (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
         startsWith(github.event.workflow_run.head_branch, 'repair/') ||
-        startsWith(github.event.workflow_run.head_branch, 'dependabot/'))) ||
+        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
+        github.event.workflow_run.head_branch == 'bot/standards-sync')) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        contains(github.event.comment.body, 'QA Critic') &&
@@ -192,7 +193,19 @@ jobs:
           # patch only — the script's condition D routes majors to a
           # human). All merge ONLY here, as qa-bot, on CI green + critic
           # APPROVE (author != merger by App identity).
-          case "$BRANCH" in agent/*|repair/*|dependabot/*) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+          #
+          # bot/standards-sync = the nightly dreadnought-standards regeneration
+          # (DRE-2777). CARD-LESS on purpose, exactly like dependabot/*: a
+          # nightly job has no per-run card, and pinning it to a fixed id would
+          # have linear-sync re-close a long-done card every night. The CARD
+          # lookup below already tolerates an empty result.
+          #
+          # Matched as the LITERAL branch, not `bot/*`. A broad prefix would
+          # hand auto-merge to any future branch that happened to be named that
+          # way — a permission nobody asked for. A second bot workflow will hit
+          # this wall and unowned-branch-watchdog will say so loudly, which is
+          # the right amount of friction.
+          case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync) ;; *) echo "not an agent branch — skip"; exit 0;; esac
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 
           # The conflict record (DRE-2416): GitHub's own mergeability
