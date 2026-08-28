@@ -148,10 +148,18 @@ class IdentityWiringTest(unittest.TestCase):
         ]
 
     def test_worker_and_qa_tokens_minted_scoped_to_the_sandbox(self):
-        mints = {(s.get("with") or {}).get("app-id"): s for s in self._mints()}
-        self.assertIn("${{ secrets.BUREAU_APP_ID }}", mints)
-        self.assertIn("${{ secrets.BUREAU_QA_APP_ID }}", mints)
-        for step in mints.values():
+        # Keyed by STEP ID, not by app-id: the console mint (DRE-2726) reuses
+        # the worker App and would otherwise collide with it in this dict and
+        # hide whichever one it replaced.
+        mints = {s.get("id"): s for s in self._mints()}
+        self.assertEqual(
+            "${{ secrets.BUREAU_APP_ID }}", (mints["worker"].get("with") or {})["app-id"]
+        )
+        self.assertEqual(
+            "${{ secrets.BUREAU_QA_APP_ID }}", (mints["qa"].get("with") or {})["app-id"]
+        )
+        for name in ("worker", "qa"):
+            step = mints[name]
             self.assertEqual(
                 (step.get("with") or {}).get("repositories"), "bureau-harness",
                 "mint must be scoped to the sandbox repo only",
@@ -159,6 +167,30 @@ class IdentityWiringTest(unittest.TestCase):
             self.assertEqual(
                 (step.get("with") or {}).get("owner"), "dreadnought-foundry"
             )
+
+    def test_the_console_mint_reads_one_other_repo_and_cannot_redden_the_run(self):
+        """DRE-2726: the lane contract's console-parity clause reads the
+        console's own state lists, which live in another repository. That mint
+        is scoped to exactly that repo and is `continue-on-error`, because a
+        clause the wave has not reached must not turn every boundary PR red —
+        the contract escalates the resulting UNEVALUATED to a hard failure at
+        the phase it names instead."""
+        import json as _json
+        import os as _os
+        import sys as _sys
+
+        _sys.path.insert(
+            0, _os.path.join(_os.path.dirname(__file__), "..", "scripts")
+        )
+        import lane_contract  # noqa: E402
+
+        step = {s.get("id"): s for s in self._mints()}["console"]
+        self.assertTrue(step.get("continue-on-error"))
+        declared = lane_contract.console()["repo"]
+        owner, name = declared.split("/")
+        self.assertEqual((step.get("with") or {}).get("owner"), owner)
+        self.assertEqual((step.get("with") or {}).get("repositories"), name)
+        del _json
 
     def test_qa_login_is_derived_from_the_app_slug_not_hardcoded(self):
         raw = WORKFLOW.read_text()

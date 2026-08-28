@@ -458,7 +458,7 @@ def test_active_cards_takes_a_states_filter():
         reconcile.active_cards()
     assert seen[0] == {"states": ["Todo", "In Progress"]}
     assert seen[1] == {"states": ["Planning"]}
-    assert seen[2] == {"states": ["Todo", "In Progress", "In QA", "In Review"]}
+    assert seen[2] == {"states": ["Todo", "In Progress", "In Review"]}
 
 
 # --------------------------------------------------------------------------

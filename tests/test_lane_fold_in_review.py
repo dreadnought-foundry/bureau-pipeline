@@ -193,6 +193,75 @@ class TestNoWriterStillAimsAtTheRetiredLane:
         assert '"In Review" "In Progress"' in text
 
 
+class TestTheRetiringLaneDrainsItself:
+    """The ordering that makes the fold safe.
+
+    The code stops writing the lane first; the sweep drains what the previous
+    pipeline left there second; the board archives the state last. Skip the
+    middle step and every card sitting in the folded lane at merge time is
+    stranded with nothing coming for it — the sweep no longer looks at that
+    lane, and the merge gate no longer advances out of it.
+    """
+
+    def test_every_retiring_lane_names_where_its_cards_go(self):
+        import lane_contract
+
+        for lane in lane_contract.lanes(status="retiring"):
+            assert lane.get("replaced_by"), (
+                f"{lane['name']} is retiring with no replacement — its cards "
+                "would have nowhere to go"
+            )
+            assert lane["replaced_by"] in lane_contract.lane_names(status="live")
+
+    def test_the_drain_moves_a_stranded_card_to_the_replacement(self):
+        stranded = {
+            "identifier": "DRE-9999",
+            "description": "**Repo:** agent-bureau\nwork",
+            "state": {"name": "In QA"},
+            "labels": {"nodes": []},
+            "updatedAt": "2026-08-28T00:00:00Z",
+        }
+        with patch.object(
+            reconcile, "active_cards", MagicMock(return_value=[stranded])
+        ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
+            reconcile.linear_ops, "cmd_comment"
+        ) as comment:
+            reconcile.drain_retiring_lanes()
+        advance.assert_called_once_with("DRE-9999", "In Review", "In QA")
+        assert "retired" in comment.call_args.args[1]
+
+    def test_the_drain_is_a_no_op_when_the_lane_is_already_empty(self):
+        with patch.object(
+            reconcile, "active_cards", MagicMock(return_value=[])
+        ), patch.object(reconcile.linear_ops, "cmd_advance") as advance:
+            reconcile.drain_retiring_lanes()
+        advance.assert_not_called()
+
+    def test_the_drain_runs_on_every_sweep(self):
+        # A drain nobody calls is a drain that never happens. Pin it to the
+        # backstop list the full sweep actually walks.
+        import inspect
+
+        source = inspect.getsource(reconcile.main)
+        assert "drain_retiring_lanes," in source
+
+    def test_a_failed_drain_fails_the_run(self):
+        stranded = {
+            "identifier": "DRE-9999",
+            "description": "**Repo:** agent-bureau\nwork",
+            "state": {"name": "In QA"},
+            "labels": {"nodes": []},
+            "updatedAt": "2026-08-28T00:00:00Z",
+        }
+        with patch.object(
+            reconcile, "active_cards", MagicMock(return_value=[stranded])
+        ), patch.object(
+            reconcile.linear_ops, "cmd_advance", side_effect=RuntimeError("nope")
+        ):
+            with pytest.raises(reconcile.ReconcileWriteError):
+                reconcile.drain_retiring_lanes()
+
+
 class TestTheDocumentedFlowMatches:
     def test_the_card_quality_standard_describes_the_eleven_lane_flow(self):
         text = (ROOT / "standards" / "card-quality.md").read_text(encoding="utf-8")

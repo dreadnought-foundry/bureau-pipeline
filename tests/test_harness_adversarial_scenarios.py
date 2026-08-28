@@ -209,8 +209,11 @@ class DiscoveryTest(unittest.TestCase):
         for name in AGENT_SCENARIOS:
             with self.subTest(scenario=name):
                 self.assertNotIn(name, default)
+        # lane_contract joined the cheap sweep with DRE-2726: two API reads,
+        # no build-agent run, and every trunk commit is the point.
         self.assertEqual(
-            default, ["bot_pr_flow", "dependabot_flow", "gate_paths"]
+            default,
+            ["bot_pr_flow", "dependabot_flow", "gate_paths", "lane_contract"],
         )
 
     def test_the_opt_in_flag_is_the_scenario_s_own_declaration(self):

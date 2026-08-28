@@ -65,8 +65,10 @@ class StalenessBackstopTest(unittest.TestCase):
     def test_other_thresholds_unchanged(self):
         import reconcile
         self.assertEqual(reconcile.STALE_MINUTES["Todo"], 15)
-        self.assertEqual(reconcile.STALE_MINUTES["In QA"], 120)
-        self.assertEqual(reconcile.STALE_MINUTES["In Review"], 60)
+        # One review lane since DRE-2726, keeping the longer of the two
+        # windows the fold merged (120, not 60).
+        self.assertEqual(reconcile.STALE_MINUTES["In Review"], 120)
+        self.assertNotIn("In QA", reconcile.STALE_MINUTES)
 
 
 class BlockerImmunityRegression(unittest.TestCase):

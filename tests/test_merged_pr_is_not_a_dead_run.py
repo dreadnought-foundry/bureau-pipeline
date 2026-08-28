@@ -108,7 +108,7 @@ def test_no_pr_is_not_work():
 
 def test_a_closed_unmerged_pr_is_not_work():
     """Unchanged behaviour: an abandoned PR leaves the card requeueable — the
-    reconcile In QA cap (DRE-2034) is built on exactly that."""
+    reconcile review-lane cap (DRE-2034) is built on exactly that."""
     assert card_pr.has_work_pr(CLOSED_PR) is False
 
 
@@ -342,7 +342,7 @@ def _clean_failure_state(monkeypatch):
     getattr(reconcile, "_read_failures", []).clear()
 
 
-@pytest.mark.parametrize("state", ["In Progress", "In QA"])
+@pytest.mark.parametrize("state", ["In Progress", "In Review"])
 def test_sweep_never_requeues_a_card_whose_pr_merged(state):
     mocks = {
         "unstick_conflicts": MagicMock(),

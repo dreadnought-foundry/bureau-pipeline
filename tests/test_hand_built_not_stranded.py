@@ -29,7 +29,7 @@ suppresses, for that card:
 …and NOTHING else. Everything that keys on a PULL REQUEST stays label-blind:
 the PR-level backstops in the same file (flag_no_checks_prs, flag_unowned_prs,
 unstick_conflicts, retrigger_dead_heads, …) and main()'s own PR-carrying
-branches (merged → Done, open PR → In QA). A hand-built card whose PR wedges
+branches (merged → Done, open PR → In Review). A hand-built card whose PR wedges
 must still be caught, and once a human opens a PR the sweep shepherds it
 exactly as before — so the label must not become a second, wider hold.
 
@@ -441,7 +441,7 @@ def test_hand_built_card_with_an_open_pr_is_still_advanced_to_in_qa():
             "review_workflow": mock.MagicMock(return_value="qa-review.yml"),
         },
     )
-    s.cmd_advance.assert_called_once_with("DRE-2499", "In QA", "In Progress")
+    s.cmd_advance.assert_called_once_with("DRE-2499", "In Review", "In Progress")
 
 
 def test_hand_built_card_with_a_merged_pr_is_still_moved_to_done():
