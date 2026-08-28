@@ -195,10 +195,10 @@ def _census(total: int, repairable_rows: tuple[int, ...] = ()) -> list[dict]:
 
 def test_the_report_names_a_repaired_card_beyond_row_100():
     """The production proof this phase is accepted against: a 150-row census
-    whose repairable card is the 150th."""
+    whose repairable card is the 150th, and a run that WROTE it."""
     cards = _census(150, repairable_rows=(150,))
     repairs, gaps = structural_repair.plan_repairs(cards)
-    report = structural_repair.format_report(cards, repairs, gaps)
+    report = structural_repair.format_report(cards, repairs, gaps, applied=repairs)
     assert repairs[0]["identifier"] == "DRE-150"
     assert repairs[0]["row"] == 150
     assert "PROVEN" in report and "NOT PROVEN" not in report
@@ -206,12 +206,33 @@ def test_the_report_names_a_repaired_card_beyond_row_100():
     assert "row 150" in report
 
 
+def test_a_planned_repair_that_did_not_land_proves_nothing():
+    """The report counts what LANDED. A write that failed is not a repair, and
+    a report that counts it would be the confident-wrong-answer failure the
+    console-honesty standard exists for."""
+    cards = _census(150, repairable_rows=(150,))
+    repairs, gaps = structural_repair.plan_repairs(cards)
+    report = structural_repair.format_report(cards, repairs, gaps, applied=[])
+    assert "NOT PROVEN" in report
+
+
+def test_a_dry_run_never_claims_it_proved_anything():
+    """`report` writes nothing, so it cannot be the proof — it says so and
+    names what a `repair` run would write instead."""
+    cards = _census(150, repairable_rows=(150,))
+    repairs, gaps = structural_repair.plan_repairs(cards)
+    report = structural_repair.format_report(cards, repairs, gaps)
+    assert "NOT PROVEN" in report
+    assert "dry run" in report
+    assert "DRE-150" in report
+
+
 def test_a_run_that_stayed_inside_the_first_100_rows_records_that_it_did_not_prove_it():
     """A run that touched only the first 100 rows has not proven this phase and
     must be recorded as not proving it — the report says so itself."""
     cards = _census(60, repairable_rows=(7,))
     repairs, gaps = structural_repair.plan_repairs(cards)
-    report = structural_repair.format_report(cards, repairs, gaps)
+    report = structural_repair.format_report(cards, repairs, gaps, applied=repairs)
     assert repairs[0]["identifier"] == "DRE-7"
     assert "NOT PROVEN" in report
 
@@ -219,7 +240,7 @@ def test_a_run_that_stayed_inside_the_first_100_rows_records_that_it_did_not_pro
 def test_the_report_counts_the_whole_census_not_the_first_page():
     cards = _census(226, repairable_rows=(126,))
     repairs, gaps = structural_repair.plan_repairs(cards)
-    report = structural_repair.format_report(cards, repairs, gaps)
+    report = structural_repair.format_report(cards, repairs, gaps, applied=repairs)
     assert "226" in report
 
 
@@ -258,7 +279,7 @@ def test_apply_writes_exactly_the_planned_labels():
                 "source": "DRE-0", "row": 137}]
     with patch.object(structural_repair, "linear_ops", fake):
         applied = structural_repair.apply_repairs(repairs)
-    assert applied == 1
+    assert applied == repairs
     assert fake.added == [("DRE-1", "initiative:bureau")]
     assert fake.comments and "DRE-0" in fake.comments[0][1]
 
@@ -273,6 +294,7 @@ def test_a_dry_run_writes_nothing():
     assert fake.added == []
     assert fake.comments == []
     assert "DRE-150" in report
+    assert "NOT PROVEN" in report  # nothing written proves nothing
 
 
 def test_the_run_repairs_the_card_beyond_row_100_it_reported():

@@ -221,8 +221,9 @@ label set directly). Nothing needing judgment is repaired: an unknown
 `repo:<slug>` is reported, never rewritten.
 
 Every run ends with its own proof line — whether it repaired a card **beyond
-row 100**. A run that stayed inside the first page records that it proved
-nothing, in those words.
+row 100**. It counts what LANDED, not what it planned, so a `report` run and a
+run that stayed inside the first page both record that they proved nothing, in
+those words.
 
 The `initiative:<x>` label does **not** gate promotion. `reconcile.py` never
 reads it; what breaks without it is `validate_card.infer_repo` step 2a and the

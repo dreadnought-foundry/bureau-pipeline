@@ -196,20 +196,38 @@ def plan_repairs(
     return repairs, gaps
 
 
-def proof_line(cards: list[dict], repairs: list[dict]) -> str:
+def _named(repairs: list[dict]) -> str:
+    return ", ".join(f"{r['identifier']} (row {r['row']})" for r in repairs[:5])
+
+
+def proof_line(
+    cards: list[dict], repairs: list[dict], applied: list[dict] | None = None
+) -> str:
     """The one line the acceptance criterion is read against.
 
-    A run that repaired a card beyond row 100 proves the promoter now sees past
-    the first page. A run that did not says so — it is not evidence, and
-    recording it as evidence is how a phase gets signed off on a page it never
-    left.
+    A run that REPAIRED a card beyond row 100 proves the promoter now sees past
+    the first page. Anything else says it did not — a run that stayed inside the
+    first 100 rows, and a dry run that only planned the work, are both "not
+    proven", because recording either as evidence is how a phase gets signed off
+    on a page nobody ever left. `applied` is the repairs that actually landed;
+    None means nothing was written.
     """
-    beyond = [r for r in repairs if r["row"] > FIRST_PAGE]
+    if applied is None:
+        planned = [r for r in repairs if r["row"] > FIRST_PAGE]
+        detail = (
+            f"{len(planned)} card(s) past row {FIRST_PAGE} are repairable "
+            f"({_named(planned)})" if planned
+            else f"no card past row {FIRST_PAGE} is repairable"
+        )
+        return (
+            f"beyond row {FIRST_PAGE}: NOT PROVEN — dry run, nothing written. "
+            f"{detail}; `repair` writes them."
+        )
+    beyond = [r for r in applied if r["row"] > FIRST_PAGE]
     if beyond:
-        named = ", ".join(f"{r['identifier']} (row {r['row']})" for r in beyond[:5])
         return (
             f"beyond row {FIRST_PAGE}: PROVEN — {len(beyond)} card(s) repaired "
-            f"past the first page: {named}"
+            f"past the first page: {_named(beyond)}"
         )
     return (
         f"beyond row {FIRST_PAGE}: NOT PROVEN — this run repaired nothing past "
@@ -218,13 +236,15 @@ def proof_line(cards: list[dict], repairs: list[dict]) -> str:
     )
 
 
-def format_report(cards: list[dict], repairs: list[dict], gaps: list[dict]) -> str:
+def format_report(cards: list[dict], repairs: list[dict], gaps: list[dict],
+                  applied: list[dict] | None = None) -> str:
     """The run's own report: what it read, what it repaired, what it could not,
     and whether it proved anything about the pages past the first."""
+    verb = "repaired" if applied is not None else "repairable (nothing written)"
     lines = [
         f"structural repair: {len(cards)} Backlog card(s) read "
         "(pagination followed to exhaustion)",
-        f"repaired {len(repairs)}:",
+        f"{verb} {len(repairs) if applied is None else len(applied)}:",
     ]
     lines += [
         f"  {r['identifier']} (row {r['row']}): {r['label']} inherited from {r['source']}"
@@ -235,7 +255,7 @@ def format_report(cards: list[dict], repairs: list[dict], gaps: list[dict]) -> s
         f"  {g['identifier']} (row {g['row']}): {g['detail']}"
         for g in sorted(gaps, key=lambda g: (g["kind"], g["row"]))
     ] or ["  (none)"]
-    lines.append(proof_line(cards, repairs))
+    lines.append(proof_line(cards, repairs, applied))
     return "\n".join(lines)
 
 
@@ -260,14 +280,15 @@ def fetch_backlog() -> list[dict]:
     )
 
 
-def apply_repairs(repairs: list[dict]) -> int:
-    """Write the planned labels. Returns how many actually landed.
+def apply_repairs(repairs: list[dict]) -> list[dict]:
+    """Write the planned labels. Returns the repairs that actually LANDED —
+    the report counts those, never the ones it merely intended.
 
     One 🔧 comment per card, in the Todo gate's own words — the repair has to be
     visible on the card, not only in a run log nobody keeps. A write failure is
     reported and the pass continues: one bad card must not strand the rest.
     """
-    applied = 0
+    applied: list[dict] = []
     for r in repairs:
         try:
             linear_ops.add_label(r["identifier"], r["label"])
@@ -279,22 +300,21 @@ def apply_repairs(repairs: list[dict]) -> int:
         except Exception as e:  # noqa: BLE001 — one card's write, never the pass
             print(f"ERROR: {r['identifier']} repair failed: {e}", file=sys.stderr)
             continue
-        applied += 1
+        applied.append(r)
     return applied
 
 
 def run(apply: bool = False) -> str:
     cards = fetch_backlog()
     repairs, gaps = plan_repairs(cards)
-    if apply:
-        applied = apply_repairs(repairs)
-        if applied != len(repairs):
-            print(
-                f"WARNING: {len(repairs) - applied} planned repair(s) did not "
-                "land — see ERROR lines above",
-                file=sys.stderr,
-            )
-    report = format_report(cards, repairs, gaps)
+    applied = apply_repairs(repairs) if apply else None
+    if applied is not None and len(applied) != len(repairs):
+        print(
+            f"WARNING: {len(repairs) - len(applied)} planned repair(s) did not "
+            "land — see ERROR lines above",
+            file=sys.stderr,
+        )
+    report = format_report(cards, repairs, gaps, applied)
     print(report)
     return report
 
