@@ -7,9 +7,9 @@ card labelled `repo:nonsense` passed validation, including at the planner's
 create seam, which is where it costs a round trip.
 
 The relay does catch it, late and loudly: `_escalate_unknown_slug()` posts a
-comment naming the bad value and the full valid set, then parks the card in Plan
-Review. Catching it at intake is an improvement that saves a round trip, not a
-new safety property.
+comment naming the bad value and the full valid set, then parks the card.
+Catching it at intake is an improvement that saves a round trip, not a new
+safety property.
 
 The one thing this must not do is bounce a card whose slug is real but younger
 than this checkout's bundled snapshot — fleet repos run PINNED checkouts, and

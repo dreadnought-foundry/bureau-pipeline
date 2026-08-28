@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess  # nosec B404 — fixed-arg `gh api` read, shell=False
 import sys
 from pathlib import Path
 
@@ -78,14 +79,46 @@ _INITIATIVE_LABEL = "initiative:"
 WANT_REPO = "repo: label (or legacy **Repo:** line)"
 WANT_AGENT = "agent: role label"
 WANT_INITIATIVE = "initiative: label"
+WANT_KNOWN_REPO = "repo: label naming a known repo"
 
 
-def _has_repo(description: str, labels: list[str]) -> bool:
-    # Canonical form (DRE-1699): the repo:<slug> LABEL with a non-empty slug.
-    if any(
-        l.lower().startswith(_REPO_LABEL) and l.split(":", 1)[1].strip()
-        for l in labels
-    ):
+def _repo_label_slugs(labels: list[str]) -> list[str]:
+    """Every `repo:<slug>` label's slug, lowercased and owner-stripped — the
+    same normalization `reconcile.card_repo` routes on, so validation and
+    routing can never disagree about what a card's slug is."""
+    out: list[str] = []
+    for l in labels or []:
+        low = l.lower()
+        if low.startswith(_REPO_LABEL):
+            slug = low[len(_REPO_LABEL):].strip().rsplit("/", 1)[-1]
+            if slug:
+                out.append(slug)
+    return out
+
+
+def unknown_repo_slugs(labels: list[str], known: set[str] | None = None) -> list[str]:
+    """Every `repo:<slug>` label whose slug is not a real repo (DRE-2681).
+
+    VALID_SLUGS used to be applied ONLY to slugs the gate INFERRED, so a card
+    labelled `repo:nonsense` passed validation — including at the planner's
+    create seam, which is where it costs a round trip. The relay does catch it,
+    late and loudly (`_escalate_unknown_slug` comments with the bad value and
+    the full valid set, then parks the card), so catching it at intake saves a
+    round trip; it is not a new safety property.
+
+    `known` overrides the routing map for one call — the seam the stale-pin
+    deferral in cmd_gate uses (see canonical_rail_slugs).
+    """
+    valid = VALID_SLUGS if known is None else known
+    return [s for s in _repo_label_slugs(labels) if s not in valid]
+
+
+def _has_repo(description: str, labels: list[str], known: set[str] | None = None) -> bool:
+    # Canonical form (DRE-1699): a repo:<slug> LABEL naming a REAL repo. A
+    # non-empty slug used to be the whole test, which is how `repo:nonsense`
+    # got through (DRE-2681).
+    valid = VALID_SLUGS if known is None else known
+    if any(s in valid for s in _repo_label_slugs(labels)):
         return True
     # DEPRECATED fallback: a legacy `**Repo:** <slug>` frontmatter line, kept
     # only so pre-label cards still validate/route. Ignores fenced code blocks
@@ -106,24 +139,41 @@ def _has_initiative_label(labels: list[str]) -> bool:
     )
 
 
-def missing(description: str, labels: list[str], *, require_initiative: bool = False) -> list[str]:
+def missing(
+    description: str,
+    labels: list[str],
+    *,
+    require_initiative: bool = False,
+    known_slugs: set[str] | None = None,
+) -> list[str]:
     """Return the list of missing requirements (empty list == clean card).
+
+    A `repo:` label that names something that is not a real repo reports
+    WANT_KNOWN_REPO, not WANT_REPO — a wrong label and an absent one are
+    different facts with different fixes, and only the first can be repaired by
+    a human editing the value they already chose (DRE-2681). `known_slugs`
+    overrides the routing map for one call (the stale-pin deferral seam).
 
     `require_initiative` additionally requires a non-empty `initiative:<x>` label.
     It is OPT-IN and OFF by default so the Todo-entry gate is unchanged: that gate
     runs BEFORE repo inference and routinely sees clean cards that carry a
     `repo:<slug>` label (or a legacy `**Repo:** <slug>` line) and a role label
     but no initiative — it INFERS the repo from an initiative label only when one
-    is present, so it must not demand one. The
-    post-plan child sweep / create seam turn it ON — a planner-created child must
-    inherit `initiative:*` (DRE-1722) or the reconcile dependency-gate, which
-    scopes promotion to the initiative, never promotes it and it stalls in
-    Backlog. Inheritance (parent_inherited_labels) makes this hold deterministically;
-    the check is the backstop that fails the plan if it ever doesn't.
+    is present, so it must not demand one. The post-plan child sweep / create
+    seam turn it ON, because THIS check is itself the consequence: a
+    planner-created child without `initiative:*` is refused at creation
+    (linear_ops._reject_unless_creatable) and fails the post-plan sweep. The
+    label's other job is `infer_repo` step 2a, the first route to a repo for a
+    card carrying no `repo:` label. Promotion is NOT affected — reconcile.py
+    never reads the label (DRE-1722 predates that being true; DRE-2681 checked).
+    Inheritance (parent_inherited_labels) makes this hold deterministically; the
+    check is the backstop that fails the plan if it ever doesn't.
     """
     labels = labels or []
     out: list[str] = []
-    if not _has_repo(description, labels):
+    if unknown_repo_slugs(labels, known_slugs):
+        out.append(WANT_KNOWN_REPO)
+    elif not _has_repo(description, labels, known_slugs):
         out.append(WANT_REPO)
     if not _has_agent_label(labels):
         out.append(WANT_AGENT)
@@ -241,6 +291,45 @@ _PROJECT_PREFIX_TO_SLUG.update(_PROJECT_PREFIX_ALIAS)
 
 _INITIATIVE_PREFIX = "initiative:"
 
+# The canonical routing snapshot: config/repo-map.json at bureau-pipeline@main,
+# the published mirror of the relay's SSM map (public repo, raw read needs no
+# scopes). ONE literal for one fact — reconcile.py reads the same endpoint for
+# the same reason (DRE-2260) and imports it from here rather than restating it.
+CANONICAL_SNAPSHOT_ENDPOINT = (
+    "repos/dreadnought-foundry/bureau-pipeline/contents/config/repo-map.json?ref=main"
+)
+
+
+def canonical_rail_slugs() -> set[str] | None:
+    """The slug set of the canonical snapshot at bureau-pipeline@main, or None
+    when it can't be read/parsed.
+
+    Fleet repos run PINNED checkouts, so THIS checkout's bundled snapshot can
+    predate a repo's onboarding — a pinned gate cannot tell "not a real repo"
+    from "onboarded after my pin". Calling the second one unknown is what parked
+    nine live cards under DRE-2260, so the gate confirms here before it claims a
+    slug is unknown. Never collapses to an empty set, which would read as
+    "nothing is on the rail" and bounce everything.
+    """
+    try:
+        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+            ["gh", "api", "-H", "Accept: application/vnd.github.raw+json",
+             CANONICAL_SNAPSHOT_ENDPOINT],
+            capture_output=True, text=True, check=False,
+        )
+        if p.returncode != 0:
+            print(
+                f"validate_card: canonical snapshot unreadable (rc={p.returncode}): "
+                f"{(p.stderr or '').strip()[:200]}",
+                file=sys.stderr,
+            )
+            return None
+        parsed = json.loads(p.stdout)
+    except Exception as exc:  # gh missing, timeout, malformed JSON
+        print(f"validate_card: canonical snapshot unreadable ({exc})", file=sys.stderr)
+        return None
+    return set(parsed) if isinstance(parsed, dict) and parsed else None
+
 
 def infer_agent_label(title: str, has_children: bool, labels: list[str]) -> str:
     """The agent role label a card should carry if it has none.
@@ -343,6 +432,10 @@ def cmd_gate(identifier: str) -> None:
     description, labels = card["description"], card["labels"]
 
     gaps = missing(description, labels)
+    if WANT_KNOWN_REPO in gaps:
+        gaps = _resolve_unknown_slug(linear_ops, identifier, card, gaps)
+        if gaps is None:
+            return  # bounced (or break-glassed) on the bad label — done here
     if not gaps:
         print(f"{identifier} is clean — proceeding to build")
         _emit(False)
@@ -414,11 +507,63 @@ def cmd_gate(identifier: str) -> None:
     _emit_role(_role_from_labels(labels + new_labels))
 
 
-def _bounce(linear_ops, identifier: str, gaps: list[str], why: str) -> None:
+def _resolve_unknown_slug(linear_ops, identifier: str, card: dict,
+                          gaps: list[str]) -> list[str] | None:
+    """What an unknown `repo:<slug>` label means here, and what to do about it.
+
+    Returns the gaps cmd_gate should CONTINUE with, or None when the card has
+    been bounced and cmd_gate must stop. Never infers a replacement repo: the
+    card already names one, and adding a second `repo:` label would leave which
+    one routes decided by label order.
+
+    A pinned checkout cannot tell a bogus slug from an onboarding younger than
+    its bundled snapshot, so the claim is confirmed against the canonical
+    snapshot first, and an unreadable snapshot defers rather than guesses
+    (DRE-2260 parked nine live cards making exactly this call wrong).
+    """
+    description, labels = card["description"], card["labels"]
+    unknown = unknown_repo_slugs(labels)
+    live = canonical_rail_slugs()
+    if live is None:
+        print(
+            f"{identifier}: repo label(s) {', '.join(unknown)} unknown to this "
+            "checkout's routing snapshot and the canonical snapshot is "
+            "unreadable — deferring the claim rather than bouncing a card the "
+            "relay already routed"
+        )
+        return missing(description, labels, known_slugs=VALID_SLUGS | set(unknown))
+    still = unknown_repo_slugs(labels, VALID_SLUGS | live)
+    if not still:
+        print(
+            f"{identifier}: repo label(s) {', '.join(unknown)} onboarded after "
+            "this checkout's snapshot — proceeding"
+        )
+        return missing(description, labels, known_slugs=VALID_SLUGS | live)
+    # Break glass (DRE-2737): the ONE sanctioned way past this gate applies to
+    # this bounce too — recorded and counted, never undone.
+    if break_glass.bounce_suppressed(linear_ops, identifier, labels, gaps):
+        return missing(description, labels, known_slugs=VALID_SLUGS | set(still))
+    bad = ", ".join(f"repo:{s}" for s in still)
+    _bounce(
+        linear_ops, identifier, gaps, f"repo label {bad} is not a known repo",
+        detail=(
+            f"The card is labelled {bad}, which is not a repo this pipeline "
+            "routes to (confirmed against the canonical routing map at "
+            "bureau-pipeline@main). Valid values: "
+            + ", ".join(sorted(VALID_SLUGS))
+            + "."
+        ),
+    )
+    return None
+
+
+def _bounce(linear_ops, identifier: str, gaps: list[str], why: str,
+            detail: str | None = None) -> None:
     body = (
         "🚧 Not ready for build — missing: "
         + ", ".join(gaps)
         + ". Returned to Backlog; fix and move to Todo again."
+        + (f"\n\n{detail}" if detail else "")
     )
     linear_ops.cmd_comment(identifier, body)
     linear_ops.cmd_state(identifier, "Backlog")
@@ -464,7 +609,10 @@ def child_problems(title: str, description: str, labels: list[str]) -> list[str]
     and linear_ops.body_problem for the path-like/empty/placeholder body — the
     SAME checks the create seam enforces, so the sweep and the create path can
     never disagree. A child MUST carry `initiative:*` (inherited from the parent
-    epic) or the reconcile dependency-gate never promotes it (DRE-1722)."""
+    epic): without it the child is refused at creation by this very check, and
+    `infer_repo` loses step 2a, its first route to a repo. It does NOT stop
+    promotion — reconcile.py never reads the label (DRE-1722 said otherwise;
+    DRE-2681 checked)."""
     import linear_ops  # body_problem lives with the create seam
 
     out = list(missing(description, labels, require_initiative=True))

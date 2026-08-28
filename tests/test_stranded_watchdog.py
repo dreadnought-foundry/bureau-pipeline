@@ -450,15 +450,20 @@ def test_active_cards_takes_a_states_filter():
 
     def spy_gql(query, variables=None):
         seen.append(variables)
-        return {"issues": {"nodes": []}}
+        # The paginated query (DRE-2681) reads pageInfo; one page, no cursor.
+        return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
 
     with patch.object(reconcile.linear_ops, "gql", side_effect=spy_gql):
         reconcile.active_cards(reconcile.WATCHDOG_LANES)
         reconcile.active_cards(reconcile.PLANNING_LANE)
         reconcile.active_cards()
-    assert seen[0] == {"states": ["Todo", "In Progress"]}
-    assert seen[1] == {"states": ["Planning"]}
-    assert seen[2] == {"states": ["Todo", "In Progress", "In QA", "In Review"]}
+    # `after: None` is the first page's cursor — the lane filter is what this
+    # test pins, and it survives pagination unchanged.
+    assert seen[0] == {"states": ["Todo", "In Progress"], "after": None}
+    assert seen[1] == {"states": ["Planning"], "after": None}
+    assert seen[2] == {
+        "states": ["Todo", "In Progress", "In QA", "In Review"], "after": None
+    }
 
 
 # --------------------------------------------------------------------------
