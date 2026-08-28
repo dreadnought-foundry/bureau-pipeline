@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Which lanes Layer 1 of the guard polices (DRE-2754).
+"""Which lanes Layer 1 of the guard polices (DRE-2754), read from the contract.
 
 Wave 1.5's guard (DRE-2725) undoes an unjustified lane occupancy: a card with no
 verdict, in any working lane, goes back to Intake. That rule collides head-on
@@ -16,8 +16,8 @@ output to Intake, and to Triage on the second strike.
 
 Planning exit is the transition out of the planning segment — the point at which
 the second critic has written its verdict and the card enters `Backlog`. Every
-lane before it (`Intake`, `Planning`, `Green Light`) sits before any verdict can
-exist, so there is nothing there to check.
+lane before it sits before any verdict can exist, so there is nothing there to
+check.
 
 This is deliberately NOT an exception list. It is derived from one fact — where
 verdicts are produced — and it survives the board changing: a lane added before
@@ -26,61 +26,43 @@ edited either way. The boundary is named after the transition ("Planning exit"),
 never after a description of the lanes on one side of it, because a description
 drifts and takes the guard's scope with it.
 
-Consumers: the guard itself (DRE-2725, built in agent-bureau) and the lane
-contract-as-data (Wave 1.5 item 12) both read the boundary from here rather than
-restating it — one definition, one place to move it if it ever moves.
+**Where the lanes come from (DRE-2726).** This module used to carry its own copy
+of the flow, the off-flow lanes and their reasons, and the rename aliases. It
+does not any more: every one of them is read from `config/lane-contract.json`,
+the single file the harness asserts the live board against, the sweep takes its
+stall windows from, and `docs/lane-contract.md` is rendered from. A guard with
+its own copy of the rules is a second document, and a second document drifts —
+which is the finding this whole wave keeps arriving at.
+
+Consumers: the guard itself (DRE-2725, built in agent-bureau) and every pipeline
+script that needs the boundary read it from here rather than restating it.
 """
 
+import lane_contract
+
 # The board's lanes in flow order: the planning segment, then the work segment.
-# Order is load-bearing — classification is derived from POSITION, so inserting
-# a lane here is the whole act of onboarding it.
-LANE_FLOW = (
-    # --- planning segment: no verdict can exist yet, so nothing to check -----
-    "Intake",
-    "Planning",
-    "Green Light",
-    # --- work segment: a verdict exists, so the lane's claim is checkable ----
-    "Backlog",
-    "Todo",
-    "In Progress",
-    "In Review",
-    "Done",
-)
+# Order is load-bearing — classification is derived from POSITION, so onboarding
+# a lane is one entry in the contract file and no edit here.
+LANE_FLOW = lane_contract.flow_lanes()
 
 # PLANNING EXIT — the transition a card makes leaving the planning segment. The
 # second critic writes its verdict here, which is exactly why the boundary sits
-# here and not somewhere describable. Named as a pair of lanes so the transition
-# itself is the thing pinned, not a lane index.
-PLANNING_EXIT_FROM = "Green Light"
-PLANNING_EXIT_TO = "Backlog"
+# here and not somewhere describable. Declared as a pair of lanes in the
+# contract, so the transition itself is the thing pinned, not a lane index.
+PLANNING_EXIT_FROM, PLANNING_EXIT_TO = lane_contract.planning_exit()
 
-# Wave 1.5 §5's rename has now landed IN CODE (DRE-2722): every reader here says
-# `Green Light`. What has not landed is the board — renaming a Linear lane is a
-# manual click, and the relay's copy of the retired string lives in another repo,
-# so the click waits for that. Until then the live board still answers with the
-# old name, and both names must resolve to the same position: a rename must never
-# move the boundary.
-#
-# This is the ONE place the retired name survives, and both directions of the
-# transition read it from here: `classify()` below normalizes a board name INTO
-# the contract, and `linear_ops._LANE_RENAME_FALLBACKS` inverts it to write the
-# contract's name OUT to a board that does not have it yet. Delete this dict when
-# the board is renamed and both shims go with it.
-LANE_ALIASES = {
-    "Plan Review": "Green Light",  # lane-rename-shim DRE-2722
-}
+# Retired board names accepted on INPUT, so a board mid-rename still resolves to
+# the right lane. `classify()` normalizes a board name INTO the contract;
+# `linear_ops._LANE_RENAME_FALLBACKS` inverts it to write a contract name OUT to
+# a board that does not carry it yet. Both read the same entry, and an entry is
+# deleted from the contract once no board carries the old name.
+LANE_ALIASES = lane_contract.aliases()
 
 # Lanes that are not on the flow at all, each with the reason Layer 1 leaves it
 # alone. A lane belongs here only when it is genuinely off the path a card
-# takes — not when policing it is merely awkward.
-OFF_FLOW = {
-    "Triage": (
-        "the guard's own destination for a card returned three times — policing "
-        "it would bounce the sink straight back to Intake and loop"
-    ),
-    "Canceled": "terminal and off the path; the card makes no claim to justify",
-    "Duplicate": "terminal and off the path; the card makes no claim to justify",
-}
+# takes — not when policing it is merely awkward. The contract refuses an
+# off-flow lane that gives no reason.
+OFF_FLOW = lane_contract.off_flow()
 
 
 class UnknownLane(Exception):
@@ -111,9 +93,9 @@ def classify(lane: str) -> str:
     if name in OFF_FLOW:
         return "off-flow"
     raise UnknownLane(
-        f"lane {lane!r} is not in the lane contract — place it in LANE_FLOW "
-        f"(before or after {PLANNING_EXIT_FROM!r} → {PLANNING_EXIT_TO!r}) or in "
-        "OFF_FLOW with its reason, in scripts/lane_scope.py"
+        f"lane {lane!r} is not in the lane contract — declare it in "
+        f"config/lane-contract.json, on the flow (before or after "
+        f"{PLANNING_EXIT_FROM!r} -> {PLANNING_EXIT_TO!r}) or off it with its reason"
     )
 
 
@@ -131,10 +113,10 @@ def is_policed(lane: str, *, parent_epic_lane: str | None = None) -> bool:
 
       1. **The card's own lane.** Before Planning exit → not policed.
       2. **Its epic's lane**, when it has a parent epic. The planner creates
-         children into `Backlog` before the epic is green-lit, and the second
-         critic writes their verdicts only after approval — so a child whose
-         epic has not passed Planning exit has no verdict to be judged against
-         either. It becomes policed the moment its epic does.
+         children into the first work lane before the epic is green-lit, and the
+         second critic writes their verdicts only after approval — so a child
+         whose epic has not passed Planning exit has no verdict to be judged
+         against either. It becomes policed the moment its epic does.
 
     `parent_epic_lane=None` means a parentless card (a one-off), for which
     clause 2 has nothing to say.
@@ -146,13 +128,13 @@ def is_policed(lane: str, *, parent_epic_lane: str | None = None) -> bool:
     return True
 
 
-def policed_lanes() -> tuple[str, ...]:
+def policed_lanes() -> tuple:
     """The lanes Layer 1 polices, in flow order — sliced from the flow at
     Planning exit, never enumerated."""
     return LANE_FLOW[LANE_FLOW.index(PLANNING_EXIT_TO):]
 
 
-def unpoliced_lanes() -> tuple[str, ...]:
+def unpoliced_lanes() -> tuple:
     """Every other lane the contract carries: the planning segment, then the
     off-flow lanes."""
     return LANE_FLOW[: LANE_FLOW.index(PLANNING_EXIT_TO)] + tuple(OFF_FLOW)

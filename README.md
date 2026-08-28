@@ -19,6 +19,24 @@ Linear card → relay Lambda → repository_dispatch on the product repo
 
 CI is deliberately NOT here — `ci.yml` stays product-specific in each repo.
 
+## The lane contract (DRE-2726)
+
+`config/lane-contract.json` declares every lane's entrance condition, exit
+condition, permitted writers and the evidence that justifies occupancy — one
+file, read by everything. The guard (`scripts/lane_scope.py`) takes its flow
+from it, the sweep takes its stall windows from it, `docs/lane-contract.md` is
+rendered from it, and the integration harness asserts the live Linear board
+against it on every trunk commit: a state the contract does not name, or a lane
+it names that does not exist, fails the harness.
+
+Every clause carries `enforced_from: <phase>`. The harness asserts only clauses
+whose phase has shipped, reports the rest as promises, and **fails when a
+clause's phase has passed with nothing enforcing it** — so the file is a
+schedule that checks itself, not a description that drifts.
+
+    python3 scripts/lane_contract.py check --live   # the live board
+    python3 scripts/lane_contract.py render         # rewrite the document
+
 ## Build by default; escalate by exception (DRE-1655)
 
 The engineer agent (`agent-task.yml` + `briefs/engineer.md`) is **autonomous by

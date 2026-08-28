@@ -33,6 +33,10 @@ cut the fleet pins is still a human act.
 | `scenarios/` | one module per scenario, discovered by convention (`SCENARIO` export); siblings add files, never edit a registry |
 | `__main__.py` | CLI: `PYTHONPATH=scripts python3 -m harness --scenarios bot_pr_flow` |
 
+The `lane_contract` scenario additionally reads `LINEAR_API_KEY` (one read-only
+query) and, when `HARNESS_CONSOLE_TOKEN` is set, the console repository's own
+state lists. Neither is a write path.
+
 ## Namespacing and self-cleaning
 
 Every branch a run creates is `agent/harness-<run-id>-<scenario>` (or
@@ -63,6 +67,10 @@ then no-ops deterministically:
 
 No permanent harness card, no sandbox Linear stubs, zero Linear writes —
 the harness cannot spam real cards because it never addresses one.
+
+DRE-2726 added the first Linear READ (the `lane_contract` scenario's one
+`query` for the board's workflow states and their occupancy). The promise above
+is about writes and is unchanged: no mutation, and still no card addressed.
 
 ## What the sandbox must provide (operator card DRE-2097)
 
@@ -118,6 +126,35 @@ untouched head = the receipted route was bypassed — DRE-2049/2071).
 Coverage limits (no conjurable Dependabot PR, no on-demand critic crash,
 App-bot `@dependabot` commands not vendor-guaranteed) are documented in
 the scenario module itself.
+
+## Scenario `lane_contract` (DRE-2726)
+
+The only scenario that looks at the LINEAR board rather than the sandbox, and
+the only one that writes nothing anywhere. It reads the live workflow states and
+their occupancy (one read-only GraphQL `query`), the console's own state lists
+(located by module name in the console's repo — a remembered path is the
+enumeration of a derivable set), and this checkout's own lane vocabulary (Python
+string constants via the AST, workflow bodies minus comment lines). Then it runs
+`config/lane-contract.json`'s conformance rules over all three.
+
+Three properties, pinned by `tests/test_harness_lane_contract.py`:
+
+* **No writes.** The zero-Linear-writes promise above is unchanged — one query,
+  no mutation, no card addressed, no sandbox branch, PR, file or comment.
+* **Unknown is never a pass.** A console it cannot reach reports UNEVALUATED,
+  never agreement and never an empty list; the contract names the phase from
+  which that unevaluated state becomes a hard failure. The console token is
+  minted `continue-on-error` for exactly that reason.
+* **A report that asserted nothing fails.** A green run that checked nothing is
+  the failure mode the card exists to prevent.
+
+It is in the DEFAULT sweep — two API reads, not a build-agent run.
+
+`enforced_from` is why it can run at all today: most of the lane contract is
+enforced by mechanisms Wave 1.5 builds in Phase 5, and a harness that asserted
+those against the live board now would fail red on every card for three phases.
+Clauses whose phase has not shipped are reported SKIPPED; a clause whose phase
+HAS shipped with nothing implementing it FAILS.
 
 ## Scenario `gate_paths` (DRE-2100)
 

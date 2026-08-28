@@ -470,7 +470,7 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # Resolve the card's branch FIRST: an empty --head filter makes
           # `gh pr list` return the repo's most recent open PR, which once
-          # attributed another card's PR to a dead run and sent it to In QA
+          # attributed another card's PR to a dead run and sent it to the review lane
           # with a false "PR opened" receipt (DRE-1343, 2026-06-12).
           BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
           # Then ask card_pr.py — the ONE PR-existence predicate the reconcile
@@ -519,7 +519,7 @@ jobs:
           elif [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
-            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In QA" "In Progress,Todo"
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress,Todo"
           elif [ -f /tmp/agent-escalation.txt ] && [ -s /tmp/agent-escalation.txt ]; then
             # Escalate-by-exception (DRE-1655/1706): the agent hit GENUINE
             # uncertainty — ambiguous intent it can't safely resolve, a

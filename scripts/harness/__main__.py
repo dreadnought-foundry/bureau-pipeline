@@ -14,6 +14,11 @@ Env (harness.yml sets all of these):
                         and a permission refusal surfaces loudly.
   HARNESS_WORKER_LOGIN  informational — the authoring identity
   HARNESS_WORKER_APP_ID / HARNESS_WORKER_APP_PRIVATE_KEY
+  HARNESS_CONSOLE_TOKEN optional — a token scoped to the CONSOLE's repository,
+                        for the lane contract's console-parity clause. Absent:
+                        that clause reports UNEVALUATED rather than passing.
+  LINEAR_API_KEY        required by the lane_contract scenario — one read-only
+                        GraphQL query for the board's workflow states.
   HARNESS_QA_APP_ID / HARNESS_QA_APP_PRIVATE_KEY
                         optional — App credentials so the driver can
                         RE-MINT its installation tokens mid-run: the
@@ -158,6 +163,19 @@ def main(argv=None) -> int:
     )
     if not qa_token:
         print("note: HARNESS_QA_TOKEN unset — check-runs reads use the worker token")
+    # Third client, for the lane contract's console-parity clause (DRE-2726).
+    # The console lives in another repository and needs its own installation
+    # token; harness.yml mints it best-effort, because a console the harness
+    # cannot reach must not turn every boundary PR red. Absent, the clause
+    # reports UNEVALUATED — which the contract escalates to a hard failure from
+    # the phase it names, so this is a schedule, not a shrug.
+    console_token = os.environ.get("HARNESS_CONSOLE_TOKEN")
+    gh_console = GitHub(console_token) if console_token else None
+    if not gh_console:
+        print(
+            "note: HARNESS_CONSOLE_TOKEN unset — the console's state lists "
+            "cannot be read; the lane-contract clause reports UNEVALUATED"
+        )
     print(f"harness run {run_id} on {args.repo}: scenarios {names}")
 
     results = []
@@ -165,6 +183,7 @@ def main(argv=None) -> int:
         ctx = framework.HarnessContext(
             gh=gh,
             gh_qa=gh_qa,
+            gh_console=gh_console,
             repo=args.repo,
             run_id=run_id,
             worker_login=os.environ.get("HARNESS_WORKER_LOGIN", ""),

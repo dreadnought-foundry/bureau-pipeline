@@ -23,7 +23,8 @@ Properties every caller inherits:
 
   * `--state all`, always. A merged PR is a PR (that is the DRE-2316 bug).
   * A CLOSED-unmerged PR does NOT count. An abandoned attempt leaves the card
-    requeueable, which is what the reconcile In QA cap is built on (DRE-2034).
+    requeueable, which is what the reconcile review-lane cap is built on
+    (DRE-2034).
   * Attribution is confirmed with a \\b-anchored match on the card identifier
     in the head ref, so neither DRE-1343 (an empty --head filter returns the
     repo's newest open PR, which the step then claimed) nor DRE-2025 (DRE-142

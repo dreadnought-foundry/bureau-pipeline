@@ -50,7 +50,10 @@ right and the gate is a no-op.
   afterwards changes neither the record nor the debt.
 
 ## Lifecycle — build by default; escalate by exception (DRE-1655)
-A card flows `Todo → In Progress → In QA → In Review → Done`, **unattended**.
+A card flows `Todo → In Progress → In Review → Done`, **unattended** — one
+review lane since DRE-2726, because the two that preceded it both meant "a pull
+request is open and being checked". The lane contract is data
+(`config/lane-contract.json`) and `docs/lane-contract.md` is rendered from it.
 The engineer agent is **autonomous by default**: it researches the card and, if
 confident, builds and ships it through the normal PR → critic → merge gates — no
 human in the loop (overnight automation is the point). The adversarial critic

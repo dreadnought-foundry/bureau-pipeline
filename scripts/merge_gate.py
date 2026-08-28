@@ -486,7 +486,7 @@ def commit_shas(pr_commits) -> frozenset:
     condition 4 record.
 
     One implementation (DRE-2340, trap 4): the gate, the review-skip
-    (should_review_pr) and the In QA sweep (reconcile) all read the same
+    (should_review_pr) and the review-lane sweep (reconcile) all read the same
     payload shape, and a hand-rolled second copy is exactly how the three
     drifted into disagreeing about the same state. A blip substitute (`[]`),
     a payload that is not a list at all, or a shapeless entry contributes

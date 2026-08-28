@@ -7,13 +7,18 @@ which bumps updatedAt past the staleness threshold for the next sweep.
 
 Checks (card must carry **Repo:** atlas, any owner-prefix form):
   Todo        stale >15m, no open PR, no fresh dispatch -> re-fire dispatch
-  In Progress stale >3h: PR open -> advance In QA + trigger qa-review;
-              no PR -> back to Todo (relay re-dispatches on the transition)
-  In QA       stale >2h: PR merged -> Done; verdict bound to the current
+  In Progress stale >1h: PR open -> advance to the review lane + trigger
+              qa-review; no PR -> back to Todo (relay re-dispatches on the
+              transition)
+  In Review   stale >2h: PR merged -> Done; verdict bound to the current
               head (DRE-1990) -> merge-gate; verdict missing OR stale/
               unbound -> re-trigger qa-review; no PR -> back to Todo,
               capped by the shared dead-run cap (DRE-2034)
-  In Review   stale >1h: PR merged -> Done; else re-trigger merge-gate
+
+The review lane is ONE lane since DRE-2726 — the two that preceded it both
+meant "a pull request is open and being checked", and the split made the
+sweep's job depend on which of them a card happened to sit in rather than on
+the evidence. It keeps the longer of the two stall windows.
 
 No-checks watchdog (DRE-2261): every open, non-draft agent/* PR whose head
 commit has ZERO check runs after NO_CHECKS_MINUTES gets ONE plain-English
@@ -102,6 +107,10 @@ import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
+# DRE-2726: ONE source for the lanes, their order and their stall windows —
+# config/lane-contract.json, the file the harness asserts the live board against
+# and docs/lane-contract.md is rendered from.
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 # DRE-2340: ONE implementation of the verdict binding — the sweep must read
 # a verdict exactly the way the gate does (DRE-1998 had to fix an
@@ -119,9 +128,19 @@ import verdict_content  # noqa: E402 — the content-binding algorithm
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
 
-# In Progress dropped 180→60: silent agent deaths now requeue instantly from
-# the run itself; this timer is only the backstop for lost run outcomes.
-STALE_MINUTES = {"Todo": 15, "In Progress": 60, "In QA": 120, "In Review": 60}
+# The stall windows come from the lane contract (DRE-2726), not from a second
+# copy here: a lane's stall budget is part of what the lane IS, and the file the
+# harness asserts the board against is where it belongs. In Progress dropped
+# 180→60 because silent agent deaths now requeue instantly from the run itself;
+# this timer is only the backstop for lost run outcomes. The review lane keeps
+# 120 — the longer of the two windows the fold merged.
+STALE_MINUTES = lane_contract.stale_minutes()
+
+# The ONE review lane (DRE-2726). Read THROUGH the contract rather than written
+# down here: lane_contract.lane() raises UnknownLane if the board ever stops
+# carrying it, so a rename fails at import instead of leaving a dead literal
+# that writes into a state Linear no longer has.
+REVIEW_LANE = lane_contract.lane("In Review")["name"]
 # The ONE work-in-progress cap (DRE-2529). This constant is the single source
 # of truth: scripts/check_wip_cap.py reads it and fails the build unless every
 # reusable workflow declares its `max_wip` input with exactly this default, so
@@ -232,7 +251,8 @@ _LIFE_PREFIXES = ("⏳", "🧠")
 # Planning, so the flag becomes a loop.) So the lanes below own the two
 # classes a Todo / In Progress card really does owe, and Planning gets its
 # own rule in flag_stalled_planning(). The nudge loop / WIP cap still never
-# see Planning (no STALE_MINUTES entry, no defined nudge).
+# see Planning (it is not in SWEEP_STATES, and there is no defined nudge) — the
+# contract's stall window for it feeds flag_stalled_planning() alone.
 WATCHDOG_LANES = ("Todo", "In Progress")
 WATCHDOG_MINUTES = int(os.environ.get("WATCHDOG_MINUTES", "30"))
 WATCHDOG_TAG = "stranded-watchdog"
@@ -243,8 +263,12 @@ WATCHDOG_TAG = "stranded-watchdog"
 # the 30-minute threshold would alarm on runs that are simply still going.
 # Every receipt the planner posts bumps updatedAt, so this clock only runs on
 # a card nothing is happening to.
+# The default is the contract's own stall window for the lane (DRE-2726), so
+# the number a reader finds in docs/lane-contract.md is the number that runs.
 PLANNING_LANE = ("Planning",)
-PLANNING_MINUTES = int(os.environ.get("PLANNING_MINUTES", "120"))
+PLANNING_MINUTES = int(
+    os.environ.get("PLANNING_MINUTES", STALE_MINUTES["Planning"])
+)
 
 # Hand-built work is not stranded work (DRE-2524). On 2026-08-17 five portico
 # cards (DRE-2499/2500/2501/2505/2507) each collected a 🚨 notice plus the hold
@@ -269,7 +293,7 @@ PLANNING_MINUTES = int(os.environ.get("PLANNING_MINUTES", "120"))
 # coming". Everything that keys on a PULL REQUEST stays label-blind — the
 # PR-level backstops below (flag_no_checks_prs, flag_unowned_prs,
 # unstick_conflicts, retrigger_dead_heads, …) and the nudge loop's own
-# PR-carrying branches (merged → Done, open PR → In QA + critic). So a
+# PR-carrying branches (merged → Done, open PR → In Review + critic). So a
 # hand-built card whose PR wedges is still caught, and once the human opens a
 # PR the sweep shepherds it exactly as before — see
 # test_hand_built_not_stranded.py, which asserts both halves structurally.
@@ -647,7 +671,7 @@ def gate_workflow() -> str:
     """The DISPATCHABLE merge-gate stub's filename for this sweep's repo.
 
     Third member of the review_workflow()/fix_workflow() family (DRE-2056):
-    the In QA / In Review nudges dispatch merge-gate.yml, which in
+    the In Review nudges dispatch merge-gate.yml, which in
     bureau-pipeline is the workflow_call-only reusable — the stub is
     self-merge-gate.yml.
     """
@@ -687,9 +711,65 @@ def age_minutes(iso: str, now: str | None = None) -> float:
     return (at - then).total_seconds() / 60
 
 
-# The nudge loop's lanes — the pre-DRE-1993 sweep, byte-identical. The
+# The nudge loop's lanes: the work-segment lanes that carry a stall window,
+# derived from the contract rather than listed here (DRE-2726). A lane with a
+# declared window is a lane the sweep owes a nudge; Done carries no window
+# because there is nothing to nudge a finished card toward, and Planning is a
+# planning-segment lane with its own rule in flag_stalled_planning(). The
 # watchdog passes WATCHDOG_LANES instead to also see Planning.
-SWEEP_STATES = ("Todo", "In Progress", "In QA", "In Review")
+SWEEP_STATES = tuple(
+    name
+    for name in lane_contract.flow_lanes()
+    if name in STALE_MINUTES and lane_contract.lane(name)["segment"] == "work"
+)
+
+
+def drain_retiring_lanes() -> None:
+    """Move every card out of a lane the contract is retiring (DRE-2726).
+
+    A retiring lane is one the pipeline no longer writes to. The board still
+    has it — archiving a Linear state is a workspace change in another repo —
+    so cards the PREVIOUS pipeline put there would sit forever with nothing
+    coming for them. The contract names each retiring lane's replacement and
+    this drains into it, every sweep, until the board catches up.
+
+    Order matters and is the reason this exists at all: the code stops writing
+    the lane first, the sweep drains it second, and only then is archiving the
+    state safe. Archiving first would fail every in-flight write instead.
+
+    Idempotent by construction — `cmd_advance` moves a card only while it is
+    still in the lane named, so a second sweep finds nothing and a race between
+    two repos' sweeps costs one no-op.
+    """
+    draining = {
+        lane["name"]: lane["replaced_by"]
+        for lane in lane_contract.lanes(status="retiring")
+        if lane.get("replaced_by")
+    }
+    if not draining:
+        return
+    try:
+        stranded = active_cards(tuple(draining))
+    except Exception as e:  # a read failure here must not kill the sweep
+        raise ReconcileWriteError(f"drain: could not list retiring lanes: {e}") from e
+    for card in stranded:
+        ident = card["identifier"]
+        was = card["state"]["name"]
+        to = draining.get(was)
+        if to is None:
+            continue  # not a retiring lane: the state filter is the query's job
+        try:
+            linear_ops.cmd_advance(ident, to, was)
+            linear_ops.cmd_comment(
+                ident,
+                f"🧹 Reconcile: the '{was}' lane is being retired (DRE-2726) and "
+                f"nothing writes to it any more — moved to '{to}', which is where "
+                "the work now continues.",
+            )
+        except Exception as e:
+            raise ReconcileWriteError(f"{ident} drain {was}->{to}: {e}") from e
+    if stranded:
+        print(f"drain: moved {len(stranded)} card(s) out of retiring lane(s)")
 
 
 def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
@@ -1096,7 +1176,7 @@ def pr_for(identifier: str) -> dict | None:
     """
     # baseRefName: the content binding (DRE-2340) compares base...head —
     # without it verdict_bound has nothing to compare and the carry never
-    # fires, so the In QA sweep would re-review every carried head.
+    # fires, so the In Review sweep would re-review every carried head.
     fields = "number,url,headRefName,state,comments,headRefOid,baseRefName"
 
     def newest_match(out: str) -> dict | None:
@@ -1184,7 +1264,7 @@ def is_qa_bot_comment(comment: dict) -> bool:
 
     The verdict reads below previously trusted any comment whose BODY
     mentioned "QA Critic" — a forged comment (worker bot, human) could
-    suppress the In QA re-review nudge (card stalls in In QA) or read as
+    suppress the In Review re-review nudge (card stalls in In Review) or read as
     APPROVE to the approved-but-red sweep (spurious agent-fix dispatches).
     Merge was never at risk — merge-gate enforces authorship itself
     (DRE-1987) — this closes the stall/waste vector.
@@ -1195,7 +1275,7 @@ def is_qa_bot_comment(comment: dict) -> bool:
     "agent-bureau-qa-bot[bot]" merge-gate reads. The suffix is stripped
     before comparing so either payload shape matches; a literal
     "agent-bureau-qa-bot[bot]" compare would match NOTHING here and wedge
-    every In QA card in review churn.
+    every In Review card in review churn.
 
     Why a literal login instead of merge-gate's app-slug derivation:
     merge-gate learns the slug from the qa-bot token it mints in order to
@@ -1235,7 +1315,7 @@ def has_verdict(
     An unbound verdict (legacy/neutral comment with no SHA) or one bound to
     an older commit whose content no longer matches is NOT a verdict:
     merge-gate ignores those fail-closed, so nudging merge-gate would spin
-    forever. Returning False routes the In QA re-nudge to qa-review
+    forever. Returning False routes the In Review re-nudge to qa-review
     instead, producing a fresh, bound verdict — this is also the automatic
     one-time re-review path for APPROVEs posted before DRE-1990 shipped.
 
@@ -1328,7 +1408,7 @@ def verdict_bound(pr: dict) -> bool:
     the branch (the fix agent reconciling a conflict; before DRE-2416, the
     gate's own `update-branch`) the standing verdict still binds the PR's
     content, the gate is about to merge on it, and reconcile would spend a
-    re-review (In QA nudge) or report a false "a fresh review is needed" on
+    re-review (In Review nudge) or report a false "a fresh review is needed" on
     the card (crashed-review recovery) roughly every 15 minutes.
 
     Both records are resolved because the gate applies both; a sweep that
@@ -2215,7 +2295,7 @@ def retry_dead_fix_runs() -> None:
     A dying fix run pushes nothing, and the qa-bot's REQUEST_CHANGES comment
     that triggered it is consumed — nothing event-driven ever re-fires
     agent-fix for that PR (the medic does not watch Agent Fix; merge-gate
-    dispatches it only for merge conflicts), so the PR would stall in In QA
+    dispatches it only for merge conflicts), so the PR would stall in In Review
     forever. agent-fix's Report step posts a retry marker instead of parking;
     this sweep is the promised retry.
 
@@ -2345,7 +2425,7 @@ def _release_card(pr: dict, note: str) -> None:
     # remaining backstops in this sweep.
     try:
         linear_ops.remove_label(card, HOLD_LABEL)
-        linear_ops.cmd_advance(card, "In QA", PARKED_STATE)
+        linear_ops.cmd_advance(card, REVIEW_LANE, PARKED_STATE)
         linear_ops.cmd_comment(card, note)
     except Exception as e:  # noqa: BLE001 — any Linear/transport error
         err = f"releasing {card} after an operator decision failed: {e}"
@@ -2551,7 +2631,7 @@ def _review_dispatch_in_flight() -> bool:
     on an unreadable listing (DRE-2034 read discipline): re-dispatching
     while the prior run is live would CANCEL it via the stub's per-PR
     concurrency group (cancel-in-progress) — the DRE-2032
-    watchdog-kills-its-patient class. Repo-wide on purpose: the In QA
+    watchdog-kills-its-patient class. Repo-wide on purpose: the In Review
     re-review nudges share the same stub, and deferring a retry one sweep
     is always cheaper than cancelling a live review.
 
@@ -2620,7 +2700,7 @@ def review_dependabot_prs() -> None:
     """DRE-2047: dispatch the critic for dependabot PRs — their own
     pull_request events can never produce a review (empty Dependabot secrets
     store; the stub skips those doomed runs), and with no Linear card the
-    In QA nudges never see them either. workflow_dispatch runs with full
+    In Review nudges never see them either. workflow_dispatch runs with full
     secrets against the PR ref — deliberately NOT pull_request_target, which
     would attach secrets to a checkout of untrusted head code.
 
@@ -3321,6 +3401,7 @@ def main(
         # Backstops run independently: one failing must not silence the
         # others, but every write failure is recorded and fails the run.
         for backstop in (
+            drain_retiring_lanes,
             unstick_conflicts,
             retrigger_dead_heads,
             flag_no_checks_prs,
@@ -3389,7 +3470,7 @@ def main(
             # a competing run on a card the label says no run is coming for.
             # Scoped to `not has_pr` on purpose: once there IS a pull request
             # the branches below are ordinary PR shepherding (merged → Done,
-            # open → In QA) and stay label-blind like every PR-level backstop.
+            # open → In Review) and stay label-blind like every PR-level backstop.
             print(
                 f"hand-built: {ident} in {state} with no PR — no dispatched "
                 "run is coming by design, leaving alone"
@@ -3460,11 +3541,12 @@ def main(
                 )
         elif state == "In Progress":
             if is_open:
-                linear_ops.cmd_advance(ident, "In QA", "In Progress")
+                linear_ops.cmd_advance(ident, REVIEW_LANE, "In Progress")
                 if _nudge(review_workflow(), pr["number"]):
                     linear_ops.cmd_comment(
                         ident,
-                        "🧹 Reconcile: PR exists but card was stuck In Progress — advanced to In QA, critic re-triggered.",
+                        "🧹 Reconcile: PR exists but card was stuck In Progress — "
+                        f"advanced to {REVIEW_LANE}, critic re-triggered.",
                     )
             else:
                 # No PR past the staleness window: dead (silent crash), HUNG
@@ -3504,7 +3586,12 @@ def main(
                         f"appears dead (hung or lost). Requeued to Todo "
                         f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
                     )
-        elif state == "In QA" and is_open:
+        elif state == REVIEW_LANE and is_open:
+            # ONE review lane since DRE-2726, and the branch it takes is decided
+            # by the EVIDENCE rather than by which of two lanes the card sat in.
+            # The two lanes both meant "a pull request is open and being
+            # checked"; what actually differs is whether a verdict is bound to
+            # the head yet.
             if verdict_bound(pr):
                 if _nudge(gate_workflow(), pr["number"]):
                     linear_ops.cmd_comment(
@@ -3517,13 +3604,15 @@ def main(
                 # dispatch would 422 silently into _write_failures (DRE-2047).
                 if _nudge(review_workflow(), pr["number"]):
                     linear_ops.cmd_comment(
-                        ident, "🧹 Reconcile: no critic verdict after 2h — review re-triggered."
+                        ident,
+                        "🧹 Reconcile: no critic verdict after "
+                        f"{STALE_MINUTES[REVIEW_LANE] // 60}h — review re-triggered.",
                     )
-        elif state == "In QA" and not is_open:
+        elif state == REVIEW_LANE and not is_open:
             # Capped like the In Progress dead-run path (DRE-1403 mechanics,
             # same shared DEAD_TAG counter): uncapped, a card whose PR keeps
-            # reading as gone laps In QA → Todo → In Progress → In QA forever,
-            # burning an agent run per lap (DRE-2034).
+            # reading as gone laps the review lane → Todo → In Progress → the
+            # review lane forever, burning an agent run per lap (DRE-2034).
             # since=RESET_TAG: only deaths after the last un-park count.
             dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
             if dead >= REQUEUE_CAP:
@@ -3533,22 +3622,17 @@ def main(
                 linear_ops.cmd_state(ident, "Backlog", "--park")
                 linear_ops.cmd_comment(
                     ident,
-                    f"🚨 held-for-human: In QA with no PR after {dead} requeues — "
-                    f"parked in Backlog with the '{HOLD_LABEL}' label so the sweep "
-                    "stops looping. A human must split/fix the card and clear the "
-                    "label to retry.",
+                    f"🚨 held-for-human: {REVIEW_LANE} with no PR after {dead} "
+                    f"requeues — parked in Backlog with the '{HOLD_LABEL}' label "
+                    "so the sweep stops looping. A human must split/fix the card "
+                    "and clear the label to retry.",
                 )
             else:
                 linear_ops.cmd_state(ident, "Todo")
                 linear_ops.cmd_comment(
                     ident,
-                    f"🪦 {DEAD_TAG}: In QA with no PR — requeued to Todo "
+                    f"🪦 {DEAD_TAG}: {REVIEW_LANE} with no PR — requeued to Todo "
                     f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
-                )
-        elif state == "In Review" and is_open:
-            if _nudge(gate_workflow(), pr["number"]):
-                linear_ops.cmd_comment(
-                    ident, "🧹 Reconcile: stuck In Review — merge gate re-triggered."
                 )
         nudges += 1
     # The break-glass KPI, beside the sweep's own numbers (DRE-2737): a rising

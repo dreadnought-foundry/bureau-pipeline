@@ -1098,7 +1098,7 @@ jobs:
             # demotes it to no-verdict and the merge waits for a fresh review.
             # CUTOVER: verdicts posted before DRE-1990 carry no @sha and are
             # likewise treated as stale — an open PR with an old-format
-            # APPROVE needs one re-review nudge (reconcile's In QA sweep now
+            # APPROVE needs one re-review nudge (reconcile's review-lane sweep now
             # re-triggers qa-review for verdicts not bound to the head).
             # DRE-2340: ` content:<64-hex>` is appended when the reviewed
             # commit's three-dot diff could be hashed, so a gate-initiated
