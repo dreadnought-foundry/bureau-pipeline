@@ -28,6 +28,9 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+os.environ.setdefault("LINEAR_API_KEY", "test-key")
+os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
+os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
 import lane_scope  # noqa: E402

@@ -31,8 +31,10 @@ import lane_contract  # noqa: E402
 def fixture_contract(**overrides):
     """A tiny two-lane contract with a known phase order.
 
-    Phases 1 and 2 have shipped; 3 has not. `Todo`'s entrance clause is
-    asserted today; its evidence clause is a Phase-3 promise.
+    Phases 1 and 2 have shipped; 3 has not, so every lane clause here is a
+    promise the harness must SKIP rather than fail. The tests that need the
+    other half — a clause whose phase has passed with nothing enforcing it —
+    move one clause's `enforced_from` back to 2 and watch it fail.
     """
     doc = {
         "version": 1,
@@ -85,7 +87,7 @@ def fixture_contract(**overrides):
                 "status": "live",
                 "segment": "planning",
                 "clauses": {
-                    "entrance": {"text": "a plan exists", "enforced_from": "2",
+                    "entrance": {"text": "a plan exists", "enforced_from": "3",
                                  "assertion": None},
                     "exit": {"text": "the CEO approves", "enforced_from": "3"},
                     "writers": {"text": "plan.yml", "enforced_from": "3"},
@@ -231,10 +233,12 @@ class TestEnforcedFrom:
         assert "Todo.evidence" not in failed_rules(report)
 
     def test_a_clause_whose_phase_has_passed_with_nothing_enforcing_it_fails(self):
-        # The half that would otherwise be quietly dropped. Green Light's
-        # entrance clause is enforced_from phase 2, phase 2 has shipped, and
-        # its `assertion` is null — nothing implements it.
-        report = run(fixture_contract())
+        # The half that would otherwise be quietly dropped. Move Green Light's
+        # entrance clause to phase 2, which HAS shipped, and leave its
+        # `assertion` null — nothing implements it, so it must fail.
+        doc = fixture_contract()
+        doc["lanes"][0]["clauses"]["entrance"]["enforced_from"] = "2"
+        report = run(doc)
         assert not report.ok
         assert "Green Light.entrance" in failed_rules(report)
         detail = next(
@@ -242,15 +246,20 @@ class TestEnforcedFrom:
         )
         assert "2" in detail and "not enforced" in detail.lower()
 
-    def test_the_same_clause_one_phase_later_is_merely_skipped(self):
+    def test_the_same_clause_one_phase_earlier_is_merely_skipped(self):
+        # Identical clause, identical missing implementation — the only thing
+        # that changed is how far the wave has shipped.
         doc = fixture_contract()
+        doc["lanes"][0]["clauses"]["entrance"]["enforced_from"] = "2"
         doc["phases"]["current"] = "1"
         report = run(doc)
         statuses = {f.clause_id: f.status for f in report.findings}
         assert statuses["Green Light.entrance"] == "skipped"
+        assert "Green Light.entrance" not in failed_rules(report)
 
     def test_a_clause_naming_an_assertion_that_does_not_exist_fails(self):
         doc = fixture_contract()
+        doc["lanes"][0]["clauses"]["entrance"]["enforced_from"] = "2"
         doc["lanes"][0]["clauses"]["entrance"]["assertion"] = "nope.not_a_thing"
         report = run(doc)
         assert "Green Light.entrance" in failed_rules(report)
