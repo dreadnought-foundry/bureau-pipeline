@@ -461,8 +461,8 @@ def cmd_advance(identifier: str, to_state: str, from_states_csv: str) -> None:
     sid, stype = state_id_and_type(issue["team"]["id"], to_state)
     # The from-states csv is checked against the read ABOVE, so this seam has
     # the same check-then-act race cmd_state had: agent-task's PR path runs
-    # `advance <card> "In QA" "In Progress,Todo"`, and a card that goes Done in
-    # between would be dragged back into In QA. Same guarded write (DRE-2316).
+    # `advance <card> "In Review" "In Progress,Todo"`, and a card that goes Done
+    # in between would be dragged back into review. Same guarded write (DRE-2316).
     if guarded_state_write(identifier, issue, sid, stype, to_state):
         print(f"{identifier} → {to_state}")
 

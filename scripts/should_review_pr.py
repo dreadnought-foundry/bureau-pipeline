@@ -106,7 +106,7 @@ def carried_approve(
     (`git commit --amend`, a rebase onto an unmoved base, `@dependabot
     rebase`, or simply a commit record longer than the fetched window).
     On that state the skip said "no review needed" while the gate said
-    "stale, waiting for a fresh review", and reconcile's In QA sweep — also
+    "stale, waiting for a fresh review", and reconcile's review-lane sweep — also
     missing condition 4 — nudged the GATE rather than the review. Nothing
     ordered the review the gate was waiting for, so the PR stalled until a
     human dispatched one by hand: the DRE-2071 failure mode. Sharing the

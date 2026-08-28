@@ -360,7 +360,7 @@ jobs:
             # already applied, and that is exactly what makes a retry free. The
             # Report step's park_for_human() has always worked this way.
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
-            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In QA,In Progress,Todo" || \
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress,Todo" || \
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
           fi
           echo "escalate=true" >> "$GITHUB_OUTPUT"
@@ -718,7 +718,7 @@ jobs:
           # branch's LATEST critic verdict at REQUEST_CHANGES with no new commit
           # to re-review — so the critic never re-fires and merge-gate correctly
           # but permanently HOLDS ("latest verdict is not APPROVE — holding").
-          # The card then sits silently in In QA forever (DeltaSolv PR #64/#74,
+          # The card then sits silently in the review lane forever (DeltaSolv PR #64/#74,
           # 2026-06-28: ~20h stall, hand-merged). So route it to the human:
           # Triage (the lane for a card that went wrong, DRE-2722/2723) + a
           # needs-human stamp, with a plain-English note. The CEO answers and
@@ -736,7 +736,7 @@ jobs:
           park_for_human() {
             [ -n "$CARD" ] || return 0
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
-            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In QA,In Progress,Todo" || \
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress,Todo" || \
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
           }
 
@@ -749,7 +749,7 @@ jobs:
             # findings and (per its instructions) pushed NOTHING — so the branch
             # holds a stale REQUEST_CHANGES the critic will never lift on its own.
             # Park the card in Triage so it surfaces in the CEO's queue
-            # instead of stalling invisibly in In QA.
+            # instead of stalling invisibly in the review lane.
             if [ -n "$CARD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
                 "🙋 The fix agent disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong. This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **Todo** to have the reviewer take another look, or to **Backlog** to drop it." || true
@@ -760,7 +760,7 @@ jobs:
             # the critic. If the head SHA did not advance (the agent committed
             # nothing, or its push was a no-op), announcing "review re-running"
             # is a lie: no run fires, the stale REQUEST_CHANGES stands, and the
-            # card stalls in In QA (DeltaSolv PR #74, 2026-06-28). Verify real
+            # card stalls in the review lane (DeltaSolv PR #74, 2026-06-28). Verify real
             # forward progress; escalate to the human when there is none.
             POST_SHA=$(gh pr view "$PR" --repo ${{ github.repository }} --json headRefOid --jq .headRefOid)
             if [ -n "$PRE_SHA" ] && [ "$POST_SHA" = "$PRE_SHA" ]; then

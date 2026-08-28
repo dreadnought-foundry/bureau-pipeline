@@ -336,7 +336,7 @@ def _card(state):
     ("state", "extra"),
     [
         ("In Progress", {"agent_run_alive": MagicMock(return_value=False)}),
-        ("In QA", None),
+        ("In Review", None),
     ],
 )
 def test_reconcile_counts_deaths_since_the_reset(state, extra):

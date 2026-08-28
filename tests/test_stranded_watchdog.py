@@ -458,11 +458,12 @@ def test_active_cards_takes_a_states_filter():
         reconcile.active_cards(reconcile.PLANNING_LANE)
         reconcile.active_cards()
     # `after: None` is the first page's cursor — the lane filter is what this
-    # test pins, and it survives pagination unchanged.
+    # test pins, and it survives pagination unchanged. `In QA` is retired
+    # (DRE-2726) and folded into `In Review`, so it no longer appears here.
     assert seen[0] == {"states": ["Todo", "In Progress"], "after": None}
     assert seen[1] == {"states": ["Planning"], "after": None}
     assert seen[2] == {
-        "states": ["Todo", "In Progress", "In QA", "In Review"], "after": None
+        "states": ["Todo", "In Progress", "In Review"], "after": None
     }
 
 

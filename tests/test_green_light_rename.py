@@ -60,7 +60,9 @@ SHIM_MARKER = "lane-rename-shim"
 #: Where that marker is allowed to appear — the alias itself, and the tests that
 #: exercise it. `linear_ops` derives its write-direction fallback from the same
 #: dict rather than restating the literal, so it is deliberately NOT here.
-SHIM_FILES = ["scripts/lane_scope.py", "tests/test_lane_scope.py"]
+#: The alias moved out of `lane_scope.py` and into the lane contract (DRE-2726);
+#: the guard reads the file rather than carrying its own copy of the rules.
+SHIM_FILES = ["config/lane-contract.json", "tests/test_lane_scope.py"]
 
 
 def src(name: str) -> str:
@@ -138,7 +140,7 @@ class NoStaleLaneNameTest(unittest.TestCase):
         self.assertEqual(
             1,
             len([1 for rel, _, _ in retired_lane_mentions()
-                 if rel == "scripts/lane_scope.py"]),
+                 if rel == "config/lane-contract.json"]),
         )
 
 

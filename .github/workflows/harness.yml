@@ -164,9 +164,31 @@ jobs:
           owner: dreadnought-foundry
           repositories: bureau-harness
 
+      # The console's own state lists (DRE-2726). Best-effort BY DESIGN: this
+      # is a different repository and a different installation, and a mint that
+      # cannot happen must not turn every boundary PR red on a clause the wave
+      # has not reached yet. When the token is absent the lane-contract clause
+      # reports UNEVALUATED — never a pass — and config/lane-contract.json names
+      # the phase from which that unevaluated state becomes a hard failure.
+      - name: Mint console token (lane-contract parity — best effort)
+        id: console
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: agent-bureau
+
       - name: Run harness scenarios
         env:
           HARNESS_REPO: dreadnought-foundry/bureau-harness
+          # The lane_contract scenario's ONE Linear call: a read-only GraphQL
+          # query for the board's workflow states and their occupancy. The
+          # harness writes nothing to Linear and addresses no card (see
+          # scripts/harness/README.md) — this does not change that.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          HARNESS_CONSOLE_TOKEN: ${{ steps.console.outputs.token }}
           # The agent scenarios run the SHIPPED agent-task.yml prompt through
           # the Claude Code CLI against a sandbox clone (scripts/harness/
           # agent_run.py). Same auth switch agent-task.yml uses; unset on the

@@ -123,7 +123,7 @@ class AnsweredBlockerRestartsTest(unittest.TestCase):
         _, _, linear = sweep([_pr()], self.ANSWERED)
         linear.remove_label.assert_called_once_with("DRE-2409", reconcile.HOLD_LABEL)
         linear.cmd_advance.assert_called_once_with(
-            "DRE-2409", "In QA", reconcile.PARKED_STATE
+            "DRE-2409", "In Review", reconcile.PARKED_STATE
         )
         self.assertTrue(linear.cmd_comment.called)
 

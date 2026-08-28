@@ -207,6 +207,32 @@ class GitHub:
             raise
         return out if isinstance(out, list) else []
 
+    def list_tree(self, repo, ref) -> list[str]:
+        """Every blob path in `repo` at `ref`, in one recursive call.
+
+        The lane-contract scenario locates the console's state-list module BY
+        NAME rather than by a remembered path (DRE-2726) — a path written down
+        here is exactly the enumeration of a derivable set this repo keeps
+        being bitten by. A truncated tree is returned as far as it goes; the
+        caller reports "not found" as unknown, never as agreement.
+        """
+        try:
+            out = self.request(
+                "GET",
+                f"/repos/{repo}/git/trees/{urllib.parse.quote(ref)}?recursive=1",
+            )
+        except GitHubError as e:
+            if e.status == 404:
+                return []
+            raise
+        if not isinstance(out, dict):
+            return []
+        return [
+            entry.get("path", "")
+            for entry in out.get("tree") or []
+            if entry.get("type") == "blob"
+        ]
+
     def get_file(self, repo, path, ref) -> str | None:
         """A file's decoded text at `ref` (a branch name or a sha), or None
         when it is absent there. What the driver reads to see what a PR's head

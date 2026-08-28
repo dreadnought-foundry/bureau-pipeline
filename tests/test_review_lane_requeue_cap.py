@@ -1,12 +1,14 @@
-"""RED-first tests: the In QA→Todo requeue honours the shared hold cap (DRE-2034).
+"""RED-first tests: the review lane's →Todo requeue honours the shared hold cap
+(DRE-2034). The lane was called In QA until DRE-2726 folded it into In Review;
+the cap is the same cap and moved with it.
 
 THE BUG: main()'s In-QA-no-PR branch requeues to Todo UNCAPPED — no DEAD_TAG
 receipt, no REQUEUE_CAP check. A card whose PR read persistently misses (the
-class the loud-read fix closes; or a genuinely vanished PR) loops In QA →
-Todo → In Progress → In QA forever, burning an agent run per lap, while the
+class the loud-read fix closes; or a genuinely vanished PR) loops In Review →
+Todo → In Progress → In Review forever, burning an agent run per lap, while the
 sibling In Progress path has been capped since DRE-1403.
 
-FIX UNDER TEST: the In QA requeue counts the same shared DEAD_TAG as the In
+FIX UNDER TEST: the In Review requeue counts the same shared DEAD_TAG as the In
 Progress path — below the cap it requeues with a 🪦 DEAD_TAG receipt (so the
 next lap sees a higher count), at the cap it parks the card in Backlog with
 the needs-human label, exactly like the In Progress hold.
@@ -43,11 +45,11 @@ def _clean_failure_state(monkeypatch):
     getattr(reconcile, "_read_failures", []).clear()
 
 
-def _inqa_card():
+def _review_lane_card():
     return {
         "identifier": "DRE-2034",
         "description": "**Repo:** agent-bureau\nwork",
-        "state": {"name": "In QA"},
+        "state": {"name": "In Review"},
         "labels": {"nodes": []},
         "updatedAt": "2026-06-28T00:00:00Z",
     }
@@ -62,9 +64,9 @@ def _sweep_mocks(extra=None):
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale
-        "pr_for": MagicMock(return_value=None),  # In QA, no PR
+        "pr_for": MagicMock(return_value=None),  # In Review, no PR
         "redispatch": MagicMock(return_value=True),
-        "active_cards": MagicMock(return_value=[_inqa_card()]),
+        "active_cards": MagicMock(return_value=[_review_lane_card()]),
         # DRE-1993: the stranded-card watchdog runs on every full sweep and
         # would make real Linear calls on this mocked card; stub it out —
         # this test exercises the In-QA requeue cap, not the watchdog.
@@ -75,7 +77,7 @@ def _sweep_mocks(extra=None):
     return m
 
 
-def test_inqa_requeue_below_cap_counts_the_shared_dead_tag():
+def test_review_lane_requeue_below_cap_counts_the_shared_dead_tag():
     """Below the cap the requeue still happens, but its receipt must carry
     DEAD_TAG so the next lap counts it. On the unfixed code this FAILS —
     the receipt is a plain 🧹 comment the counter never sees."""
@@ -90,11 +92,11 @@ def test_inqa_requeue_below_cap_counts_the_shared_dead_tag():
     add_label.assert_not_called()
     bodies = [c.args[1] for c in cmd_comment.call_args_list]
     assert any(reconcile.DEAD_TAG in b for b in bodies), (
-        "the In QA requeue must count toward the shared dead-run cap"
+        "the In Review requeue must count toward the shared dead-run cap"
     )
 
 
-def test_inqa_requeue_at_cap_holds_instead_of_looping():
+def test_review_lane_requeue_at_cap_holds_instead_of_looping():
     """ACCEPTANCE: at the cap the card parks needs-human in Backlog — no
     third lap. On the unfixed code this FAILS: it requeues to Todo again."""
     mocks = _sweep_mocks()
@@ -110,8 +112,8 @@ def test_inqa_requeue_at_cap_holds_instead_of_looping():
     assert ("DRE-2034", "Todo") not in [c.args for c in cmd_state.call_args_list]
 
 
-def test_inqa_with_open_pr_is_untouched_by_the_cap():
-    """Control: the cap only guards the no-PR branch — an In QA card with an
+def test_review_lane_with_open_pr_is_untouched_by_the_cap():
+    """Control: the cap only guards the no-PR branch — an In Review card with an
     open PR and no verdict still just gets the qa-review re-nudge."""
     pr = {
         "number": 9,

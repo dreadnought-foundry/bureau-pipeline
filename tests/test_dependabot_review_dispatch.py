@@ -29,7 +29,7 @@ FIX UNDER TEST (three legs):
   3. reconcile.review_workflow() resolves the DISPATCHABLE critic stub per
      repo: product repos name it qa-review.yml; in bureau-pipeline that
      filename is the reusable itself (workflow_call-only — dispatching it
-     422s), so the stub is pr-review.yml. The In QA re-review nudges use
+     422s), so the stub is pr-review.yml. The review-lane re-review nudges use
      the same resolution.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/ -v
@@ -171,7 +171,7 @@ def test_review_workflow_resolves_per_repo(monkeypatch):
 
 
 def test_in_qa_nudge_dispatches_the_selfhost_stub():
-    """main()'s In QA no-verdict nudge hardcoded qa-review.yml — a 422 in
+    """main()'s review-lane no-verdict nudge hardcoded qa-review.yml — a 422 in
     this repo, where that file cannot be dispatched. It must resolve through
     review_workflow()."""
     card = {
@@ -179,7 +179,7 @@ def test_in_qa_nudge_dispatches_the_selfhost_stub():
         "identifier": "DRE-2047",
         "title": "dependabot review dispatch",
         "description": "**Repo:** bureau-pipeline\nwork",
-        "state": {"name": "In QA"},
+        "state": {"name": "In Review"},
         "labels": {"nodes": [{"name": "agent:engineer"}]},
         "updatedAt": "2026-07-11T00:00:00Z",
     }
@@ -209,7 +209,7 @@ def test_in_qa_nudge_dispatches_the_selfhost_stub():
         reconcile.main()
     targets = [c.args[0] for c in mocks["_nudge"].call_args_list]
     assert targets == ["pr-review.yml"], (
-        f"the In QA re-review nudge must dispatch this repo's critic stub "
+        f"the review-lane re-review nudge must dispatch this repo's critic stub "
         f"(pr-review.yml), got {targets}"
     )
 

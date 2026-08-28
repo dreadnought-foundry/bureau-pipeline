@@ -122,6 +122,12 @@ class HarnessContext:
     # — merge-gate.yml's own read path); None = fall back to the worker
     # client and let a permission refusal surface loudly.
     gh_qa: object = None
+    # Third client, scoped to the CONSOLE's repository (DRE-2726). The lane
+    # contract's console-parity clause reads that repo's own state lists; the
+    # token is minted separately because it is a different installation. None
+    # = the clause reports UNEVALUATED, which the contract turns into a hard
+    # failure from the phase it names — never a silent pass.
+    gh_console: object = None
     # The worker-bot installation token, for the one thing the REST client
     # cannot do for a scenario: hand a real build agent a sandbox clone it can
     # push (DRE-2490). Never logged — agent_run builds every log line from the

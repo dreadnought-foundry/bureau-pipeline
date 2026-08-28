@@ -1,5 +1,9 @@
 # Vendor-boundary backfill audit — 2026-07
 
+> **Dated record.** This audit describes the pipeline as it stood in July 2026.
+> The two review lanes it names were folded into one (`In Review`) by DRE-2726;
+> `docs/lane-contract.md` is the current, rendered lane contract.
+
 One-time backfill sweep (DRE-2110, filed under epic DRE-2073): the five-question
 premortem checklist from `standards/vendor-boundaries.md` (DRE-2105), applied to
 every EXISTING external-boundary surface in this repo. The rollout incidents
