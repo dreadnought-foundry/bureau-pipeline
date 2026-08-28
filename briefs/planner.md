@@ -143,9 +143,10 @@ uses them as the card description. NEVER write the literal path (e.g.
 expected — `subissue` rejects a body that is a bare path, empty, or has no real
 markdown, and refuses to create that broken card. It also:
   - inherits the `repo:<slug>` + `initiative:<x>` + role label from this epic, so
-    the child is never label-less and the reconcile dependency-gate (which scopes
-    promotion to the initiative) can promote it (you do not need to add labels by
-    hand);
+    the child is never label-less (you do not need to add labels by hand). The
+    `initiative:<x>` label does not gate promotion — reconcile never reads it —
+    but the create seam REFUSES a child without one, and repo inference uses it
+    as its first route to a repo (DRE-2681);
   - turns any `**Blocked by:** DRE-N, DRE-M` body line into real Linear
     `blockedBy` relations;
   - validates the child through the same `validate_card` gate the build uses,
