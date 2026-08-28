@@ -122,6 +122,55 @@ def gql(query: str, variables: dict | None = None) -> dict:
     return out["data"]
 
 
+def gql_paged(
+    query: str, variables: dict | None = None, *, connection: str = "issues"
+) -> list[dict]:
+    """Every node of a paginated Linear connection, followed to exhaustion.
+
+    Linear serves at most 100 nodes per page and says so ONLY in `pageInfo` — a
+    query that never selects it gets the first page and no way to know another
+    exists. That is silent by construction, and it is what made the reconcile
+    sweep's world the first 100 rows of a 226-card Backlog: 126 cards were not
+    promotion candidates, not by policy, not reported anywhere, and WHICH 126
+    was decided by Linear's default ordering (DRE-2681).
+
+    `query` MUST declare `$after: String`, pass it as the connection's `after:`
+    argument, and select `pageInfo { hasNextPage endCursor }`. A query that
+    can't paginate is rejected here rather than silently returning page one —
+    the failure this exists to end must never be reintroduced quietly.
+
+    `connection` names the top-level field to walk (`issues` for every caller
+    today). Terminates on a missing or repeated cursor: a server that keeps
+    claiming another page without advancing must not hang a ten-minute sweep.
+    """
+    if "$after" not in query:
+        raise ValueError(
+            "gql_paged: the query must declare $after and select "
+            "pageInfo { hasNextPage endCursor } — without a cursor it can only "
+            "ever return the first 100 nodes"
+        )
+    nodes: list[dict] = []
+    after: str | None = None
+    seen: set[str] = set()
+    while True:
+        conn = gql(query, {**(variables or {}), "after": after})[connection]
+        nodes.extend(conn.get("nodes") or [])
+        info = conn.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            return nodes
+        after = info.get("endCursor")
+        if not after or after in seen:
+            # hasNextPage with no usable cursor: return what we have rather
+            # than re-requesting the same page forever.
+            print(
+                f"gql_paged: {connection} claims another page with cursor "
+                f"{after!r} — stopping at {len(nodes)} node(s)",
+                file=sys.stderr,
+            )
+            return nodes
+        seen.add(after)
+
+
 def get_issue(identifier: str) -> dict:
     data = gql(
         """query($id: String!) { issue(id: $id) {
@@ -640,11 +689,14 @@ def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
     `repo:<slug>` label (so the child routes to the same repo), the parent's
     `initiative:<x>` label(s), and a role label.
 
-    The `initiative:*` label is load-bearing: the reconcile dependency-gate scopes
-    promotion to an initiative, so a child WITHOUT it never auto-promotes and
-    stalls in Backlog (DRE-1722 — epic DRE-1717's children sat unpromoted until
-    the operator hand-added `initiative:bureau`). Inheriting it deterministically
-    closes that gap.
+    The `initiative:*` label is load-bearing, but NOT for the reason this said
+    for a year: promotion does not read it. `reconcile.py` never mentions
+    `initiative` at all (DRE-2681 checked; test_initiative_claim_matches_the_code
+    keeps it honest). Two real things break without it — the create seam refuses
+    the child outright (`validate_card.missing(..., require_initiative=True)`,
+    enforced below in `_reject_unless_creatable`), and `validate_card.infer_repo`
+    loses step 2a, its first route to a repo for a card carrying no `repo:`
+    label. Inheriting it deterministically is what keeps both from biting.
 
     The role is `agent:engineer` by default, or `agent:devops` when the parent is
     an infra/pipeline epic (its slug is the shared pipeline repo, or it carries
@@ -657,7 +709,7 @@ def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
     if repo:
         out.append(repo)
     # Inherit every `initiative:<x>` label the parent carries (non-empty slug),
-    # order-preserving — the reconcile dependency-gate keys promotion off it.
+    # order-preserving — the create seam refuses a child without one.
     for l in low:
         if l.startswith("initiative:") and l.split(":", 1)[1].strip() and l not in out:
             out.append(l)

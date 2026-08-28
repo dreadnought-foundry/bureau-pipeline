@@ -204,6 +204,49 @@ the build if any workflow re-hardcodes a cap, if a promotion path stops taking
 the input, if the declared default drifts from the script's, or if this repo's
 own stubs disagree with each other.
 
+## The sweep reads every row (DRE-2681)
+
+Linear serves at most 100 nodes per page and says another page exists only in
+`pageInfo`. `backlog_children()` and `active_cards()` asked for
+`issues(first: 100)` and selected no `pageInfo`, so the promoter's whole world
+was the first 100 rows Linear happened to return. On the 2026-08-26 census the
+Backlog held **226** cards: 126 were not promotion candidates — not by policy,
+not reported anywhere, and *which* 126 was decided by Linear's default
+ordering. The sweep log printed what it considered and never what it never saw.
+
+Both queries now follow `pageInfo.hasNextPage` / `endCursor` to exhaustion
+through `linear_ops.gql_paged`, which **refuses** a query that declares no
+`$after` — the failure this fixed was silent, and it must not come back
+quietly. The pagination test uses a 150-card fixture whose 150th card is the
+one that must be found; a 100-card fixture passes against the broken code and
+proves nothing.
+
+`scripts/structural_repair.py` is the operator-run repair pass over that full
+census. It is deliberately narrow — it inherits a missing `initiative:<x>`
+label from a card's parent and nothing else:
+
+```bash
+python3 scripts/structural_repair.py report   # read-only (default)
+python3 scripts/structural_repair.py repair   # applies the planned labels
+```
+
+It resolves **parents before children**, so a parent repaired in the same run
+supplies the value to its own children; a top-to-bottom pass reports those
+children as unrepairable instead. What it cannot repair it reports, keeping the
+two cases apart — "the parent carries no label" (label the parent) and "the
+parent is Done or Canceled" (it cannot be fixed first, so this card needs the
+label set directly). Nothing needing judgment is repaired: an unknown
+`repo:<slug>` is reported, never rewritten.
+
+Every run ends with its own proof line — whether it repaired a card **beyond
+row 100**. It counts what LANDED, not what it planned, so a `report` run and a
+run that stayed inside the first page both record that they proved nothing, in
+those words.
+
+The `initiative:<x>` label does **not** gate promotion. `reconcile.py` never
+reads it; what breaks without it is `validate_card.infer_repo` step 2a and the
+create seam, which refuses a child that lacks it.
+
 ## The plan artifact (DRE-2720)
 
 An epic's CEO-facing output is a published document, not a Linear comment.

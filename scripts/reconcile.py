@@ -773,17 +773,23 @@ def drain_retiring_lanes() -> None:
 
 
 def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
-    data = linear_ops.gql(
-        """query($states: [String!]!) { issues(first: 100, filter: {
+    """EVERY card in `states`, not the first page of them (DRE-2681).
+
+    This list is the sweep's whole world: the nudge loop, the WIP count that
+    budgets promotion, and the stranded-card watchdog all read it. A single
+    unpaginated page silently truncated every one of them at 100 rows.
+    """
+    return linear_ops.gql_paged(
+        """query($states: [String!]!, $after: String) {
+           issues(first: 100, after: $after, filter: {
              team: {key: {eq: "DRE"}},
              state: {name: {in: $states}}
            }) { nodes {
              id identifier title description updatedAt
              state { name } labels { nodes { name } }
-           } } }""",
+           } pageInfo { hasNextPage endCursor } } }""",
         {"states": list(states)},
     )
-    return data["issues"]["nodes"]
 
 
 # Live-snapshot re-check for NO-ROUTE claims (DRE-2260). Fleet repos pin the
@@ -798,9 +804,10 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
 # labeled card, flag_stranded re-checks the slug against the CANONICAL
 # snapshot: config/repo-map.json at bureau-pipeline@main, the published
 # mirror of the relay's SSM map (public repo, raw read needs no scopes).
-_CANONICAL_SNAPSHOT_ENDPOINT = (
-    "repos/dreadnought-foundry/bureau-pipeline/contents/config/repo-map.json?ref=main"
-)
+# ONE literal for one fact (DRE-2681): the Todo gate confirms an unknown
+# `repo:` label against the same snapshot for the same reason, so the endpoint
+# is defined once, in validate_card, and read here.
+_CANONICAL_SNAPSHOT_ENDPOINT = validate_card.CANONICAL_SNAPSHOT_ENDPOINT
 
 
 def live_rail_slugs() -> frozenset[str] | None:
@@ -1469,8 +1476,16 @@ def redispatch(card: dict) -> bool:
 
 
 def backlog_children() -> list[dict]:
-    data = linear_ops.gql(
-        """query { issues(first: 100, filter: {
+    """EVERY Backlog card, not the first page of them (DRE-2681).
+
+    promote_ready() picks its candidates from this list, so an unpaginated page
+    made "every Backlog card" mean "the first 100 Linear happened to return" —
+    126 of the 226 cards on the 2026-08-26 census were not promotion
+    candidates, and nothing said so.
+    """
+    return linear_ops.gql_paged(
+        """query($after: String) {
+           issues(first: 100, after: $after, filter: {
              team: {key: {eq: "DRE"}},
              state: {name: {eq: "Backlog"}}
            }) { nodes {
@@ -1481,9 +1496,8 @@ def backlog_children() -> list[dict]:
              inverseRelations(first: 20) { nodes {
                type issue { identifier state { name } }
              } }
-           } } }"""
+           } pageInfo { hasNextPage endCursor } } }"""
     )
-    return data["issues"]["nodes"]
 
 
 def card_state(identifier: str) -> str:
