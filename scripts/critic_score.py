@@ -105,7 +105,16 @@ ESCALATE_TAG = "critic-unclassified"
 #: This module, as the lane contract names writers.
 WRITER = "critic_score.py"
 
-OUTCOMES = ("agree", "disagree", "unclassified", "excluded", "unread")
+#: Values `judgement_of` emits that answer a DIFFERENT question than the axis
+#: asks, so no dimension declares them. PARKED says "deliberately not to be
+#: built" — a decision about whether to spend the effort, not a reading of
+#: whether the card can be worked from what it says. The review was never asked
+#: it, so comparing the two can only ever come out unequal and would book a
+#: disagreement neither side made. `score()` reports these rows as `off-axis`
+#: and leaves them out of the number.
+OFF_AXIS_VALUES = ("deliberately-not-built",)
+
+OUTCOMES = ("agree", "disagree", "unclassified", "off-axis", "excluded", "unread")
 
 _CARD_ID = re.compile(r"^[A-Z]+-\d+$")
 
@@ -203,6 +212,19 @@ def reference_problems(doc: dict | None = None) -> list:
                 "exclusion would be scoring the contaminated dimension under "
                 "another name"
             )
+
+    axis = dimensions(doc).get(DEFAULT_DIMENSION) or {}
+    declared = tuple(axis.get("values") or ())
+    for name in routing_verdict.verdicts() if axis.get("scored") else ():
+        value = judgement_of(name)
+        if value in declared or value in OFF_AXIS_VALUES:
+            continue
+        problems.append(
+            f"the verdict {name!r} reads as {value!r} on the "
+            f"{DEFAULT_DIMENSION!r} axis, which that dimension does not carry "
+            "and nothing marks off-axis — a value the review can never hold "
+            "comes out as a disagreement the critic never expressed"
+        )
 
     for name, block in dimensions(doc).items():
         if not (block.get("question") or "").strip():
@@ -325,6 +347,13 @@ def judgement_of(verdict: str | None, dimension: str = DEFAULT_DIMENSION,
     what separates them is WHO builds the card, which is the contaminated
     dimension. That collapse IS the exclusion, and `reference_problems` checks
     it covers exactly the verdicts the vocabulary marks `hand-built`.
+
+    PARKED is the one verdict that answers something else entirely, so it
+    returns a value no dimension declares (`OFF_AXIS_VALUES`) and `score()`
+    reports the row rather than comparing it. `reference_problems` checks that
+    every OTHER verdict lands inside the axis it will be compared against — an
+    undeclared value can only ever come out as a disagreement the critic never
+    expressed, in the one number this module exists to get right.
     """
     if source == "epic":
         return "plan-test"
@@ -390,9 +419,9 @@ def score(cards, *, doc: dict | None = None, comments: dict | None = None) -> di
     """Compare the critic, card by card, against the held-back review.
 
     Every reference row comes out carrying exactly one outcome — agree,
-    disagree, unclassified, excluded or unread — because a row that quietly
-    fell out of the population is the same failure as a truncated read: a
-    smaller set reported in the same shape.
+    disagree, unclassified, off-axis, excluded or unread — because a row that
+    quietly fell out of the population is the same failure as a truncated read:
+    a smaller set reported in the same shape.
     """
     doc = doc if doc is not None else load()
     by_id: dict = {}
@@ -441,6 +470,13 @@ def score(cards, *, doc: dict | None = None, comments: dict | None = None) -> di
             rows.append({**row, "outcome": "unclassified", "why": (
                 f"the critic did not answer — {seen['reason']}")})
             continue
+        if observed in OFF_AXIS_VALUES:
+            rows.append({**row, "outcome": "off-axis", "why": (
+                f"the critic answered {observed!r} — a decision not to build "
+                f"the card, not a reading of the {dimension!r} question the "
+                "review answered, so there is nothing here to agree or "
+                f"disagree with. {seen['reason']}")})
+            continue
         rows.append({**row,
                      "outcome": "agree" if observed == entry["judgement"]
                      else "disagree",
@@ -472,6 +508,11 @@ def escalation_lane(doc: dict | None = None) -> str:
     Read from the routing vocabulary, never written here: a card nobody could
     route owes exactly what a NEEDS WORK card owes — a planner's attention —
     and one literal for one lane means one place to change when the board does.
+
+    `doc` is accepted and deliberately ignored. Callers hold the audit
+    reference and pass it by habit, but it is a different schema from the
+    routing vocabulary this reads: threading it through would let the reference
+    file redefine a lane the vocabulary owns.
     """
     return routing_verdict.destination("NEEDS WORK")
 
@@ -563,7 +604,7 @@ def render_report(result: dict, doc: dict | None = None) -> str:
     w(f"{result['scored']} row(s) scored: **{counts['agree']} agree**, "
       f"**{counts['disagree']} disagree**, {counts['unclassified']} the critic "
       f"could not classify. {counts['excluded']} excluded as contaminated, "
-      f"{counts['unread']} unread.")
+      f"{counts['off-axis']} answered off-axis, {counts['unread']} unread.")
     w("")
 
     sections = [
@@ -575,6 +616,11 @@ def render_report(result: dict, doc: dict | None = None) -> str:
         ("## Could not classify", "unclassified",
          "No verdict, so nothing to compare. Each of these raises an alert and "
          "moves — never a silent hold (D3)."),
+        ("## Answered a different question", "off-axis",
+         "The critic answered on an axis the review was never asked about — a "
+         "decision not to build a card is not a reading of whether it can be. "
+         "Named and not counted, rather than booked as a disagreement neither "
+         "side made."),
         ("## Excluded as contaminated", "excluded",
          "Judgements the critic was handed face-up during planning. Scoring "
          "them would flatter the audit, so they are named and not counted."),
