@@ -14,11 +14,12 @@ These tests pin the three consumers named on the card:
   * the SWEEP (`reconcile.py`) — its staleness windows come from the same file,
     so a lane's stall budget cannot drift from the lane's own declaration.
 
-The lane cleanup is pinned here too: `In Design Review` and `In QA` are no
-longer lanes. They are `retiring` entries, which is a different thing — the
-board still carries them until the workspace apply archives them, and the
-conformance rules in test_lane_contract_conformance.py are what make that
-transition finish rather than linger.
+The lane cleanup is pinned here too, and it is now FINISHED (DRE-2818). `In
+Design Review` and `In QA` were `retiring` entries — a different thing from a
+lane, kept only while the board still carried the states. Linear has archived
+both, so the entries are gone: a retiring entry whose state Linear already
+dropped is the last copy of a lane that no longer exists, and the conformance
+rule `board.retired_entry_is_deleted` failed on `main` until it was deleted.
 """
 
 import json
@@ -57,6 +58,12 @@ LIVE_LANES = (
     "Canceled",
     "Duplicate",
 )
+
+# The two states DRE-2726 retired and DRE-2818 finished retiring. Spelled out
+# HERE, in the test, because the contract no longer spells them anywhere — a
+# scan keyed off the contract's own lane list could not find a name the contract
+# has forgotten, and a vacuous green is how the next cleanup gets missed.
+RETIRED_LANES = ("In Design Review", "In QA")
 
 CLAUSE_KINDS = ("entrance", "exit", "writers", "evidence")
 
@@ -102,22 +109,26 @@ class TestTheFileExists:
 
 
 class TestLaneCleanup:
-    def test_in_design_review_is_not_a_lane(self):
-        assert "In Design Review" not in lane_contract.lane_names(status="live")
+    def test_neither_retired_lane_is_a_live_lane(self):
+        for name in RETIRED_LANES:
+            assert name not in lane_contract.lane_names(status="live")
 
-    def test_in_qa_is_not_a_lane(self):
-        assert "In QA" not in lane_contract.lane_names(status="live")
+    def test_neither_retired_lane_is_carried_as_a_retiring_entry(self):
+        # DRE-2818. The board half (agent-bureau's config/linear-workspace.json)
+        # is done — Linear no longer has either state — so the entries were the
+        # last copy of two lanes that do not exist. Keeping them is drift, and
+        # the harness said so by rule id on every trunk commit.
+        assert lane_contract.lanes(status="retiring") == ()
 
-    def test_both_are_recorded_as_retiring_with_the_reason_and_the_board_step(self):
-        retiring = {l["name"]: l for l in lane_contract.lanes(status="retiring")}
-        assert set(retiring) == {"In Design Review", "In QA"}
-        for lane in retiring.values():
-            assert lane["retired_by"] == "DRE-2726"
-            assert lane["reason"].strip()
-            # The board half is somebody else's repo (agent-bureau's
-            # config/linear-workspace.json). The contract names the step so the
-            # transition is a scheduled act, not a hope.
-            assert lane["board_action"].strip()
+    def test_the_contract_file_spells_neither_name_anywhere(self):
+        # Not just the entries. The rationale prose named them too, and a grep
+        # of this file is how the next reader decides whether a lane exists.
+        text = open(CONTRACT, encoding="utf-8").read()
+        for name in RETIRED_LANES:
+            assert name not in text, (
+                f"config/lane-contract.json still names {name!r}, which Linear "
+                "no longer has"
+            )
 
     def test_the_eleven_live_lanes_are_exactly_the_board_after_cleanup(self):
         assert set(lane_contract.lane_names(status="live")) == set(LIVE_LANES)
