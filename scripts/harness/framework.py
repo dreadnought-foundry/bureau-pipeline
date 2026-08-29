@@ -65,6 +65,30 @@ LEGACY_PROBE_DIRS = ("harness_runs",)
 _RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,60}$")
 
 
+# How long the shipped critic is ALLOWED to take: qa-review.yml's `review`
+# job wall clock (65 minutes since DRE-2466 — attempt 1, the mandatory
+# backoff and the retry are 42.8 of them on their own). A verdict can
+# legitimately land at any moment inside that clock, so a shorter wait here
+# does not test the pipeline, it races it: the driver gives up, the verdict
+# posts minutes later, and the harness reports FAIL on a healthy run. That
+# is what run 33274348041 was — gate_paths' named leg timed out with the PR
+# untouched and the gate's own waiting-for-human state already posted.
+#
+# Pinned to the workflow by tests/test_harness_wiring.py, because the drift
+# it cost us was silent: the wait was written when that cap was 25 minutes
+# and simply stayed there when the cap moved.
+CRITIC_JOB_BUDGET_SECONDS = 65 * 60
+# The critic's clock starts when its RUN starts. Before that come the
+# minting steps, two checkouts, and whatever queue the sandbox's own runners
+# are in — a burst of harness PRs opens three reviews at once.
+CRITIC_STARTUP_ALLOWANCE_SECONDS = 5 * 60
+VERDICT_TIMEOUT_SECONDS = float(
+    CRITIC_JOB_BUDGET_SECONDS + CRITIC_STARTUP_ALLOWANCE_SECONDS
+)
+MERGE_TIMEOUT_SECONDS = 1200.0
+POLL_INTERVAL_SECONDS = 30.0
+
+
 class HarnessTimeout(Exception):
     """A polled condition never became true within its budget."""
 
@@ -133,9 +157,9 @@ class HarnessContext:
     # push (DRE-2490). Never logged — agent_run builds every log line from the
     # repo slug, never from the clone URL.
     worker_token: str = ""
-    verdict_timeout: float = 1500.0  # ≥ the critic job's 25-minute budget
-    merge_timeout: float = 1200.0
-    poll_interval: float = 30.0
+    verdict_timeout: float = VERDICT_TIMEOUT_SECONDS  # ≥ the critic's own cap
+    merge_timeout: float = MERGE_TIMEOUT_SECONDS
+    poll_interval: float = POLL_INTERVAL_SECONDS
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
     log: Callable = print

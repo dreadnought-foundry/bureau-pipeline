@@ -191,9 +191,24 @@ def main(argv=None) -> int:
             # The agent scenarios clone the sandbox as the worker bot; every
             # other scenario ignores this.
             worker_token=token,
-            verdict_timeout=float(os.environ.get("HARNESS_VERDICT_TIMEOUT", 1500)),
-            merge_timeout=float(os.environ.get("HARNESS_MERGE_TIMEOUT", 1200)),
-            poll_interval=float(os.environ.get("HARNESS_POLL_INTERVAL", 30)),
+            # Defaults live in framework.py, never a second literal here —
+            # the env vars are the operator's override, not a second copy of
+            # the budget (the one the critic's cap is pinned against).
+            verdict_timeout=float(
+                os.environ.get(
+                    "HARNESS_VERDICT_TIMEOUT", framework.VERDICT_TIMEOUT_SECONDS
+                )
+            ),
+            merge_timeout=float(
+                os.environ.get(
+                    "HARNESS_MERGE_TIMEOUT", framework.MERGE_TIMEOUT_SECONDS
+                )
+            ),
+            poll_interval=float(
+                os.environ.get(
+                    "HARNESS_POLL_INTERVAL", framework.POLL_INTERVAL_SECONDS
+                )
+            ),
         )
         results.append(framework.run_scenario(available[name], ctx))
 

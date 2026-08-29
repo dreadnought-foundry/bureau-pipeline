@@ -99,11 +99,21 @@ jobs:
     if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # Scenario budget for all three scenarios: each verdict wait is bounded
-    # by the critic job's own 25m timeout, dependabot_flow adds one
-    # reconcile cron interval (~15m, DRE-2100), and gate_paths runs three
-    # PR legs (concurrent reviews, sequential asserts). Typical runs finish
-    # far sooner; this is the slow-but-honest ceiling.
-    timeout-minutes: 120
+    # by the critic job's own timeout — 65m since DRE-2466, not the 25m this
+    # comment and the driver's default were both written against —
+    # dependabot_flow adds one reconcile cron interval (~15m, DRE-2100), and
+    # gate_paths runs three PR legs (concurrent reviews, sequential asserts).
+    # Typical runs finish far sooner; this is the slow-but-honest ceiling.
+    #
+    # It was never a sum of worst cases (five verdict waits overran it at 25m
+    # each) and it is not one now. What it must hold is the shape of a bad
+    # day: one earlier scenario burning a full verdict wait, and gate_paths
+    # still owed its longest single chain — a verdict wait plus the merge
+    # wait after it. Below that the run is CANCELLED at the cap, and a
+    # cancelled run skips the `success() || failure()` stamp step, so the
+    # release gate loses the evidence a clean FAIL would have left it.
+    # Pinned to the driver's own budgets by tests/test_harness_wiring.py.
+    timeout-minutes: 180
     steps:
       # The ref under test: pipeline_ref on a dispatch (defaulted to
       # main); on pull_request the inputs context is EMPTY, so the middle
