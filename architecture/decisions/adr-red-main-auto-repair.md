@@ -38,6 +38,25 @@ A failure on any non-default branch is out of scope: branch CI failures
 already route through agent-fix (critic rejections) and the medic (run
 crashes).
 
+**Amendment 2026-08-29 (DRE-2820) — the watched set is derived, never
+remembered.** "The product repo's CI workflow" was written when there was one
+of them, and the stub encoded that as a literal: `workflows: [Pipeline Tests]`.
+DRE-2726 then shipped the lane-contract harness as its own workflow
+("Integration Harness"), nobody added it, and on 2026-08-29 the harness sat red
+on `main` for fourteen hours while every Red-Main Repair run concluded
+`skipped` — including the one three minutes after the failure. Two approved PRs
+inherited the breakage and one fix agent spent attempts on a check that was
+never its fault.
+
+So the rule is now plural and mechanical: **every** workflow that validates a
+commit on the default branch is on the repair rail, and every workflow that can
+merely RUN on the default branch is watched by something — the repair rail for
+a red commit, the medic for a crashed run. `scripts/check_workflow_watchers.py`
+derives both populations from the workflow files and fails Pipeline Tests when
+one is unwatched, so adding a workflow with no watcher cannot pass quietly. The
+single exemption is declared with its reason: nothing watches the medic,
+because a medic that watched itself is the crash-loop guardrail 2 forbids.
+
 ## Decision — fix flow
 
 1. **Classify first, dispatch second.** Before any agent spins up, the

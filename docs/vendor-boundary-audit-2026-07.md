@@ -437,6 +437,14 @@ caps (`REQUEUE_CAP=2`) park to Backlog + `needs-human` at the bound.
 
 Stub self-red-main-repair.yml binds `workflow_run: [Pipeline Tests] completed`.
 
+> **2026-08-29 (DRE-2820):** that single-workflow binding was itself the gap.
+> The harness shipped as a second main-triggering workflow and nothing watched
+> it, so a red `main` was invisible for fourteen hours. The binding is now
+> `[Pipeline Tests, Integration Harness]`, derived and asserted by
+> `scripts/check_workflow_watchers.py` rather than remembered. The Q1–Q5
+> answers below are unchanged by the widening — see the premortem written into
+> the stub's own header.
+
 **Q1 — actor.** Job-if: conclusion failure AND head_branch == default branch.
 The failing push may be qa-bot's merge, a pool bot, `github-actions`, or a
 human — the repair agent's `allowed_bots` roster admits all bot cases, no

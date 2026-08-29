@@ -55,11 +55,35 @@ def test_every_clause_shows_its_phase_and_whether_it_is_live_or_promised():
     assert "live" in text and "promised" in text
 
 
+def test_no_retiring_section_is_rendered_while_nothing_is_retiring():
+    # DRE-2818 deleted the last two entries once Linear archived their states.
+    # The section's absence is the visible half of that delete.
+    assert lane_contract.lanes(status="retiring") == ()
+    assert "## Retiring" not in committed()
+
+
 def test_a_retiring_lane_is_shown_with_the_board_step_it_is_waiting_on():
-    text = committed()
-    for lane in lane_contract.lanes(status="retiring"):
-        assert lane["name"] in text
-        assert lane["board_action"][:40] in text
+    # The section is data-driven, not deleted: the NEXT retirement gets its
+    # board step printed the same way. Rendered from a contract built here,
+    # because the shipped one no longer has a retiring lane to prove it with.
+    import copy
+
+    doc = copy.deepcopy(lane_contract.load())
+    doc["lanes"].append(
+        {
+            "name": "In Escrow",
+            "status": "retiring",
+            "retired_by": "DRE-9999",
+            "replaced_by": "In Review",
+            "reason": "folded into In Review",
+            "board_action": "archive the state through the workspace apply, "
+            "then delete this entry",
+        }
+    )
+    text = lane_contract.render_markdown(doc)
+    assert "## Retiring" in text
+    assert "In Escrow" in text
+    assert "archive the state through the workspace apply" in text
 
 
 def test_the_render_changes_when_the_contract_changes():

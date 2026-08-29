@@ -478,6 +478,89 @@ jobs:
           fi
           echo "escalate=true" >> "$GITHUB_OUTPUT"
 
+      # DRE-2820: a PR must be able to say "this check is red on main too."
+      #
+      # Origin (live, 2026-08-29): the Integration Harness was red on main all
+      # day. PRs #199 and #201 inherited it — both green on their own work, one
+      # critic-APPROVED — and nothing on either PR told an inherited failure
+      # from a caused one. #199's fix agent spent attempts trying to clear a
+      # check that was never its fault, and fourteen hours passed before anyone
+      # learned the cause. One comment would have collapsed that.
+      #
+      # The comparison is the MERGE BASE, the commit this branch was cut from:
+      # a check red on both sides was red before this branch existed. Read-only
+      # and fail-soft — an unresolvable base, an unreadable payload, or an
+      # empty comparison all leave today's fix path exactly as it was. It never
+      # HOLDS the PR: the notice is information for the next reader, not a gate
+      # (which is why it is not blocker-shaped and carries no verdict marker).
+      - name: Label failures inherited from the merge base
+        id: inherited
+        if: >-
+          steps.pr.outputs.go == 'true' &&
+          steps.pr.outputs.mode == 'fix' &&
+          steps.unfixable.outputs.escalate != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          BASE_REF=$(gh api "repos/$REPO/pulls/$PR" --jq .base.ref 2>/dev/null || true)
+          if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then
+            echo "could not read the PR's base branch — no inherited-failure check"
+            exit 0
+          fi
+          # The merge base, from GitHub rather than from git: this checkout has
+          # the branch's history, not necessarily the base branch's.
+          MERGE_BASE=$(gh api "repos/$REPO/compare/$BASE_REF...$HEAD_SHA" \
+            --jq .merge_base_commit.sha 2>/dev/null || true)
+          if [ -z "$MERGE_BASE" ] || [ "$MERGE_BASE" = "null" ]; then
+            echo "could not resolve the merge base — no inherited-failure check"
+            exit 0
+          fi
+          gh api --paginate --slurp \
+            "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" \
+            > /tmp/inherited-head-checks.json 2>/dev/null \
+            || echo '[]' > /tmp/inherited-head-checks.json
+          # Deliberately NOT defaulted to '[]': an empty base read is "we could
+          # not look", which the script reports as unevaluated — never as a
+          # green base, which would blame this PR for a failure it inherited.
+          gh api --paginate --slurp \
+            "repos/$REPO/commits/$MERGE_BASE/check-runs?per_page=100" \
+            > /tmp/inherited-base-checks.json 2>/dev/null || : > /tmp/inherited-base-checks.json
+          DECISION=$(python3 .bureau-pipeline/scripts/inherited_failures.py decide \
+            --checks-file /tmp/inherited-head-checks.json \
+            --base-checks-file /tmp/inherited-base-checks.json \
+            --base-sha "$MERGE_BASE" --pr "$PR" \
+            --comment-out /tmp/inherited-comment.md \
+            --agent-note-out .bureau-pipeline/inherited-checks.md) || {
+              echo "::warning::could not read this PR's check runs — no inherited-failure notice"
+              exit 0
+            }
+          if [ "$DECISION" != "inherited" ]; then
+            echo "inherited-failure check: $DECISION — nothing to say on this PR"
+            exit 0
+          fi
+          # Idempotent per head sha (the fix-convergence-halt receipt pattern,
+          # DRE-2024): the critic can re-fire on the same commit, and a second
+          # identical notice is noise on a PR someone is already reading. Any
+          # author's copy counts — the fact is about the commit, not about who
+          # noticed it first.
+          SHA8=${HEAD_SHA:0:8}
+          NOTICE_KEY="inherited-failure @$SHA8"
+          POSTED=$(gh api --paginate --slurp \
+            "repos/$REPO/issues/$PR/comments?per_page=100" \
+            | jq --arg key "$NOTICE_KEY" '[add[] | select(.body | contains($key))] | length')
+          if [ "${POSTED:-0}" -eq 0 ]; then
+            printf '%s\n\n%s\n' "$(cat /tmp/inherited-comment.md)" "$NOTICE_KEY" \
+              > /tmp/inherited-comment-final.md
+            gh pr comment "$PR" --repo "$REPO" --body-file /tmp/inherited-comment-final.md
+          else
+            echo "inherited-failure notice already posted for $SHA8 — not repeating it"
+          fi
+          echo "inherited=true" >> "$GITHUB_OUTPUT"
+
       # Product-specific environment setup (submodules, toolchains, test DB).
       - name: Product environment setup (optional)
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
@@ -767,6 +850,15 @@ jobs:
             2. Check for failing CI:
                gh pr checks ${{ steps.pr.outputs.number }} — for any failed check,
                read its log (gh run view <id> --log-failed) and understand why.
+            2a. Read .bureau-pipeline/inherited-checks.md IF IT EXISTS (DRE-2820).
+               It lists checks that fail on this branch AND on its merge base —
+               they were red before this branch existed, so they are NOT this
+               PR's defect. Do not spend attempts on them, and never weaken,
+               skip or delete a test to clear one. Fix only what this PR broke;
+               if every failing check is listed there and the critic raised
+               nothing else, write that to /tmp/fix-blocker.txt and stop (step
+               6) rather than editing code to chase a failure you did not cause.
+               No such file means every red check here is this PR's own.
             2b. Check for a merge conflict with the default branch
                (gh pr view ${{ steps.pr.outputs.number }} --json mergeStateStatus).
                If DIRTY: git fetch origin && git merge origin/<default-branch>,

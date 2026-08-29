@@ -232,6 +232,39 @@ tokens may EVER live here, in code or in workflow files**): set
 `BUREAU_QA_APP_ID`, `BUREAU_QA_APP_PRIVATE_KEY` in each product repo, and
 install both bureau GitHub Apps on its org.
 
+## Every workflow that can go red on main has a watcher (DRE-2820)
+
+`self-red-main-repair.yml` watched exactly one workflow by name — `Pipeline
+Tests`. DRE-2726 shipped the lane-contract harness as its OWN workflow
+(`harness.yml` / "Integration Harness"), nobody added it to that list, and on
+2026-08-29 the harness sat red on `main` for fourteen hours while every
+Red-Main Repair run concluded `skipped` — including the one three minutes
+after the failure. Two approved PRs inherited the breakage, one fix agent
+spent attempts on a check that was never its fault, and the cause (two stale
+entries in `config/lane-contract.json`, named in plain words by the harness log
+the whole time) was found by accident.
+
+The list is now **derived, never remembered**. `scripts/check_workflow_watchers.py`
+(a Pipeline Tests step) enumerates the workflow files and enforces two rules:
+
+| population | rule | why |
+|---|---|---|
+| a `push` trigger that reaches the default branch | must be watched by the **Red-Main Repair** caller | its failure means the branch itself is red |
+| can RUN on the default branch at all (`schedule`, `repository_dispatch`, `workflow_dispatch`, `workflow_run`, `issue_comment`) | must be watched by **some** `workflow_run` watcher | usually a crashed run — the medic's job — but "nobody" is never the answer |
+
+One declared exemption, with its reason in the code: nothing watches the medic,
+because a medic that watched itself rebuilds the 2026-06-28 crash-loop. Adding
+a workflow with no watcher fails CI instead of adding a silent failure surface.
+
+**And a PR now says when a red check is not its fault.** The other half of that
+day was that two fix agents and a human could not tell an inherited failure
+from a caused one. Before it spends an attempt, `agent-fix` compares the PR's
+failing checks against the same checks on the **merge base**
+(`scripts/inherited_failures.py`); anything red on both sides was red before
+the branch existed, and the loop says so in a comment on the PR and in the
+fixing agent's own context. It never holds the PR — it is information, not a
+gate — and a base it cannot read reports *unevaluated*, never a pass.
+
 ## One WIP cap per repo (DRE-2529)
 
 A repo has ONE work-in-progress cap, and **three** workflows promote Backlog
@@ -730,8 +763,12 @@ mechanical:
 ## Onboarding a new product repo
 
 1. Copy another product repo's eight stub workflows; adjust the
-   `workflow_run` lists in `medic.yml`/`merge-gate.yml` to include the repo's
-   own CI workflow names. Then run
+   `workflow_run` lists in `medic.yml`/`merge-gate.yml`/`red-main-repair.yml`
+   to include the repo's own CI workflow names — **every** workflow that runs
+   on a push to the default branch belongs on the repair stub's list, not just
+   the one you think of first (DRE-2820; `python3
+   scripts/check_workflow_watchers.py <the repo's .github/workflows>` answers
+   it from the files). Then run
    `python3 scripts/fix_concurrency.py audit .github/workflows` against the new
    stubs — the `agent-fix` group is the one a copy gets silently wrong
    (DRE-2810).

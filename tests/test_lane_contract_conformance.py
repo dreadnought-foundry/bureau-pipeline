@@ -112,6 +112,13 @@ def fixture_contract(**overrides):
     return doc
 
 
+# The two states DRE-2726 retired and DRE-2818 finished retiring. Named here
+# because the shipped contract no longer names them: a repo scan keyed off the
+# contract's lane list stopped being able to find them the moment the entries
+# were deleted, and that silent weakening is the shape of the hole this card
+# closes.
+RETIRED_LANES = ("In Design Review", "In QA")
+
 BOARD_OK = {"Green Light": 1, "Todo": 4}
 CONSOLE_OK = ["Green Light", "Todo"]
 VOCAB_OK = {"Green Light", "Todo"}
@@ -307,6 +314,29 @@ class TestAgainstTheShippedContract:
                 "which has shipped, and nothing implements it"
             )
 
+    def test_the_shipped_contract_carries_no_retiring_entry(self):
+        # DRE-2818. `board.retired_entry_is_deleted` failed on `main` all day
+        # naming both entries; this is that failure, pinned as a unit test so
+        # the next one is caught before it reaches the trunk.
+        contract = lane_contract.load()
+        assert lane_contract.lanes(status="retiring", contract=contract) == ()
+
+    def test_the_shipped_contract_fails_when_linear_has_dropped_a_declared_lane(self):
+        # The direction nobody was checking (the card's "related" section): a
+        # lane the contract declares that the board no longer has. Proved
+        # against the REAL contract, not a fixture, so the shipped file is
+        # covered by the rule and not merely near it.
+        contract = lane_contract.load()
+        live = list(lane_contract.lane_names(status="live", contract=contract))
+        for dropped in live:
+            board = {name: 0 for name in live if name != dropped}
+            report = lane_contract.check(
+                contract=contract, board=board, console=live, vocabulary=set(live)
+            )
+            assert not report.ok, f"dropping {dropped!r} from the board passed"
+            assert "board.every_lane_exists" in failed_rules(report)
+            assert any(dropped in f.detail for f in report.failures())
+
     def test_the_shipped_contract_passes_against_its_own_intended_board(self):
         contract = lane_contract.load()
         live = lane_contract.lane_names(status="live", contract=contract)
@@ -340,8 +370,8 @@ class TestVocabularyScan:
         assert found == set()
 
     def test_the_live_pipeline_names_only_contract_lanes(self):
-        # The repo-wide assertion. `In QA` and `In Design Review` must be gone
-        # from every script and workflow that writes or reads a lane.
+        # The repo-wide assertion: nothing the pipeline names is a state the
+        # contract does not carry.
         contract = lane_contract.load()
         known = set(lane_contract.lane_names(status="live", contract=contract)) | set(
             lane_contract.lane_names(status="retiring", contract=contract)
@@ -355,6 +385,19 @@ class TestVocabularyScan:
             lane_contract.lane_names(status="live", contract=contract)
         )
         assert not stray, f"the pipeline still names retired lane(s) {sorted(stray)}"
+
+    def test_the_live_pipeline_names_neither_retired_lane(self):
+        # The test above scans for names the CONTRACT knows, and since DRE-2818
+        # the contract knows neither of these — so it can no longer catch them
+        # and would report a green it did not earn. Scan for them by name: this
+        # is the check that the retirement finished in the code too, not only in
+        # the config file.
+        root = os.path.join(os.path.dirname(__file__), "..")
+        found = lane_contract.scan_vocabulary(
+            [os.path.join(root, "scripts"), os.path.join(root, ".github", "workflows")],
+            known=list(RETIRED_LANES),
+        )
+        assert not found, f"the pipeline still names retired lane(s) {sorted(found)}"
 
 
 def test_the_check_never_mutates_the_contract_it_is_given():
