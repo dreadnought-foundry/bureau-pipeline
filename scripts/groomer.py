@@ -343,6 +343,14 @@ def collision_report(cards: list[dict], *,
 
     pairs = []
     for a, b in itertools.combinations(sorted(refs, key=_card_sort_key), 2):
+        # SAME REPO ONLY. A shared basename across two repositories is not a
+        # collision — `package.json` in portico and `package.json` in deltasolv
+        # are different files that can never conflict. Measured live on
+        # 2026-08-29: cross-repo matches on `CLAUDE.md`, `repo-map.json` and
+        # `deploy.sh` pulled an agent-bureau card ahead of most of Portico,
+        # breaking the one ordering rule the batch has.
+        if repo_of(by_id[a]) != repo_of(by_id[b]):
+            continue
         shared = (refs[a] & refs[b]) - set(boilerplate)
         if not shared:
             continue
@@ -420,6 +428,57 @@ def _repo_rank(cards: list[dict], priority) -> dict:
     return {name: i for i, name in enumerate(list(priority) + rest)}
 
 
+def _break_cycles(keys: list[str], edges: set[tuple[str, str]], rank,
+                  broken: list | None = None) -> set[tuple[str, str]]:
+    """Drop the back-edges that make the constraint graph cyclic, FIRST.
+
+    Three Portico epics constrain each other in a loop on the live board
+    (DRE-2492 ↔ DRE-2628 ↔ DRE-2629, 2026-08-29). Leaving the loop in and
+    breaking it only when the sort runs out of ready nodes is what happened
+    first: nothing in the tangle was ever "ready", so the sort emptied every
+    other repo first and the highest-priority work in the population came out
+    at position 118 of 147. A cycle is a planning question — two things that
+    each have to go first — and answering it late silently re-prioritises
+    everything else.
+
+    Deterministic: nodes and successors are walked in rank order, so the edge
+    dropped is always the one that closes the loop against the ranked order.
+    """
+    adjacency = {k: [] for k in keys}
+    for before, after in edges:
+        if before in adjacency and after in adjacency:
+            adjacency[before].append(after)
+    for key in adjacency:
+        adjacency[key].sort(key=lambda k: (rank(k), k))
+
+    kept = set(edges)
+    state = {k: 0 for k in keys}                     # 0 unseen, 1 on stack, 2 done
+    for root in sorted(keys, key=lambda k: (rank(k), k)):
+        if state[root]:
+            continue
+        stack = [(root, iter(adjacency[root]))]
+        state[root] = 1
+        while stack:
+            node, children = stack[-1]
+            nxt = next(children, None)
+            if nxt is None:
+                state[node] = 2
+                stack.pop()
+                continue
+            if state[nxt] == 1:                      # a back edge: the loop
+                kept.discard((node, nxt))
+                if broken is not None:
+                    broken.append({
+                        "dropped": [node, nxt],
+                        "why": "each constrains the other; the ranked order wins",
+                    })
+                continue
+            if state[nxt] == 0:
+                state[nxt] = 1
+                stack.append((nxt, iter(adjacency[nxt])))
+    return kept
+
+
 def _topo(keys: list[str], edges: set[tuple[str, str]], rank,
           broken: list | None = None) -> list[str]:
     """Kahn's algorithm with a priority heap: the constraints decide what is
@@ -430,6 +489,7 @@ def _topo(keys: list[str], edges: set[tuple[str, str]], rank,
     RECORDED. An order that silently drops a constraint is worse than one that
     says which constraint it could not honour.
     """
+    edges = _break_cycles(keys, edges, rank, broken)
     incoming = {k: set() for k in keys}
     outgoing = {k: set() for k in keys}
     for before, after in edges:

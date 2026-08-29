@@ -113,16 +113,24 @@ larger than the capacity gets a cycle to itself rather than being cut in half.
 
 ## What it cannot see
 
-Collision detection reads the files a card *names*, in backticks. Two limits
-come out of that, and both are printed in every proposal rather than left
+Collision detection reads the files a card *names*, in backticks, and compares
+them by basename within ONE repo — `package.json` in portico and `package.json`
+in agent-bureau are different files that can never conflict. Three limits come
+out of that, and all three are printed in every proposal rather than left
 implicit:
 
 - **a card that names no files** is listed as unreadable — five of the eight
   collisions the Forms review (DRE-2649) found are invisible for exactly this
   reason;
-- **a path cited by more than five cards** is read as reference, not ownership.
-  Thirteen live Forms cards carry a branch-rule banner naming
-  `linear-sync.yml`; none of them edits it.
+- **a path cited by more than twelve cards** is read as reference, not
+  ownership. Nineteen live cards carry a branch-rule banner naming
+  `linear-sync.yml`; none of them edits it. The threshold is tuned against the
+  live population — at 5 it discarded a file the Forms review named as a real
+  collision;
+- **constraints that point both ways** (a collision says A first, a relation
+  says B first) cannot both be honoured. The ranked order wins and every
+  dropped constraint is reported, because two cards that each have to go first
+  is a planning question, not an ordering one.
 
 The second critic's cross-epic sight (DRE-2721, D3) catches what the groomer
 missed. That is a backstop, not a duplicate: the groomer prevents the collision

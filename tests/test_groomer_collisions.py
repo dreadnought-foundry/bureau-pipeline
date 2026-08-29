@@ -140,3 +140,71 @@ def test_a_cross_epic_collision_orders_the_two_epics():
     pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}
     assert max(pos["DRE-11"], pos["DRE-12"]) < min(pos["DRE-21"], pos["DRE-22"])
     assert proposal["collisions"]["pairs"], "the cross-epic collision was lost"
+
+
+def test_two_repos_naming_the_same_file_do_not_collide():
+    """`package.json` in portico and `package.json` in deltasolv are different
+    files in different git repositories and can never conflict.
+
+    Measured live on 2026-08-29: cross-repo matches on `CLAUDE.md`,
+    `repo-map.json` and `deploy.sh` pulled an agent-bureau card to position 30
+    and pushed Portico work behind it — a false constraint breaking the one
+    ordering rule the batch has."""
+    cards = [
+        card("DRE-1", repo="portico", description="edits `client/package.json`"),
+        card("DRE-2", repo="agent-bureau", description="edits `console/package.json`"),
+    ]
+    assert groomer.collision_report(cards)["pairs"] == []
+
+
+def test_portico_stays_first_when_another_repo_names_the_same_basename():
+    cards = [
+        card("DRE-1", repo="agent-bureau", created="2026-01-01T00:00:00.000Z",
+             description="edits `CLAUDE.md`"),
+        card("DRE-2", repo="portico", created="2026-08-01T00:00:00.000Z",
+             description="edits `CLAUDE.md`"),
+    ]
+    proposal = groomer.propose(cards, cycles=CYCLES)
+    pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}
+    assert pos["DRE-2"] < pos["DRE-1"], (
+        "an older agent-bureau card must not be pulled ahead of Portico by a "
+        "shared basename it cannot actually conflict with"
+    )
+
+
+def test_a_constraint_loop_is_broken_where_it_is_found_not_at_the_end():
+    """Portico cards that constrain each other in a loop must not push every
+    other repo ahead of them.
+
+    The live failure (2026-08-29): DRE-2492, DRE-2628 and DRE-2629 constrain
+    each other in a loop, nothing in the tangle was ever "ready", and the sort
+    drained agent-bureau, bureau-pipeline, atlas and deltasolv first — the
+    highest-priority work in the population came out at position 118 of 147.
+
+    The loop here is the shape that produces one: two collisions ordered by
+    age, closed by a blocks relation pointing the other way.
+    """
+    cards = [
+        card("DRE-10", repo="portico", created="2026-08-01T00:00:00.000Z",
+             description="edits `alpha.ts`"),
+        card("DRE-11", repo="portico", created="2026-08-02T00:00:00.000Z",
+             description="edits `alpha.ts` and `beta.ts`"),
+        card("DRE-12", repo="portico", created="2026-08-03T00:00:00.000Z",
+             description="edits `beta.ts`"),
+        card("DRE-20", repo="agent-bureau", created="2026-01-01T00:00:00.000Z"),
+        card("DRE-21", repo="agent-bureau", created="2026-01-02T00:00:00.000Z"),
+    ]
+    # alpha.ts puts 10 before 11, beta.ts puts 11 before 12, and 12 blocks 10.
+    cards[0]["inverseRelations"] = {"nodes": [
+        {"type": "blocks", "issue": {"identifier": "DRE-12", "state": {"name": "Intake"}}}
+    ]}
+    proposal = groomer.propose(cards, cycles=CYCLES)
+    pos = {r["identifier"]: r["position"] for r in proposal["sequence"]}
+    assert max(pos["DRE-10"], pos["DRE-11"], pos["DRE-12"]) < \
+        min(pos["DRE-20"], pos["DRE-21"]), (
+        "the tangled Portico cards were pushed behind another repo"
+    )
+    assert proposal["unhonoured_constraints"], (
+        "the constraint that had to be dropped must be reported, not silently "
+        "discarded — two cards that each have to go first is a planning question"
+    )
