@@ -11,7 +11,7 @@ Wave phase reached: **2** — the lane contract asserted by the harness. A claus
 
 | # | Lane | Segment | Stall window |
 | --- | --- | --- | --- |
-| 1 | Intake | planning | — |
+| 1 | Intake | planning | 2880 min |
 | 2 | Planning | planning | 120 min |
 | 3 | Green Light | planning | — |
 | 4 | Backlog | work | — |
@@ -38,10 +38,10 @@ Planning exit is the transition **Green Light → Backlog** — where the second
 | --- | --- | --- |
 | **entrance** | Every writer that creates work writes here first — the relay, the planner, a mid-epic discovery, a human. There is no other valid first lane.  
 _Waiting on: DRE-2680 points every writer at Intake._ | Phase 5 — promised |
-| **exit** | A classification exists: one-off, epic, or wave.  
-_Waiting on: DRE-2719 makes Planning decide the classification._ | Phase 5 — promised |
-| **writers** | Anything that creates a card, and nothing that moves one onward.  
-Permitted writers: `relay`, `plan.yml`, `mid_epic.py`, `linear_ops.py`, `operator` | Phase 2 — live |
+| **exit** | A classification exists: one-off, epic, or wave — or the card has sat here past the lane's own stall window, in which case the sweep moves it to Green Light carrying whatever reason is already stated on it (DRE-2687). Intake is the one planning lane with a timer, because a lane nothing drains is what this wave exists to remove.  
+_Waiting on: DRE-2719 makes Planning decide the classification; the aged-card exit is live._ | Phase 5 — promised |
+| **writers** | Anything that creates a card, the retroactive pass that moves the legacy Backlog in, and nothing that moves one onward.  
+Permitted writers: `relay`, `plan.yml`, `mid_epic.py`, `linear_ops.py`, `backlog_cutover.py`, `operator` | Phase 2 — live |
 | **evidence** | The card exists and carries no classification yet.  
 _Waiting on: DRE-2719._ | Phase 5 — promised |
 
@@ -62,12 +62,12 @@ _Waiting on: DRE-2720._ | Phase 5 — promised |
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, or the post-approval critic sent an approved plan back with a stated reason (DRE-2721).  
+| **entrance** | A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, the post-approval critic sent an approved plan back with a stated reason (DRE-2721), or a card has aged out of Intake and the sweep moved it here (DRE-2687).  
 _Waiting on: needs the transition history the Phase-5 front door records — the three entrances exist, nothing yet reads a card's arrival against them._ | Phase 5 — promised |
 | **exit** | The CEO answers: an approved plan activates — and its children promote only once the post-approval critic has read it (DRE-2721) — an answered escalation returns to Todo, a rejected one goes to Backlog.  
 _Waiting on: needs the transition history the Phase-5 front door records._ | Phase 5 — promised |
-| **writers** | The planner, the two agent runs that escalate, and a human.  
-Permitted writers: `plan.yml`, `agent-task.yml`, `agent-fix.yml`, `operator` | Phase 2 — live |
+| **writers** | The planner, the two agent runs that escalate, the sweep that moves a card out of Intake once it has aged past the window, and a human.  
+Permitted writers: `plan.yml`, `agent-task.yml`, `agent-fix.yml`, `reconcile.py`, `operator` | Phase 2 — live |
 | **evidence** | A plan artifact, an escalation comment written in business terms — never code, never a diff — or a `plan-critic:` marker recording the round that sent the plan back (DRE-2721).  
 _Waiting on: needs routing verdicts (DRE-2724) writing on every card before arrival can be judged against the evidence._ | Phase 5 — promised |
 
@@ -219,5 +219,6 @@ _Waiting on: the routing verdict exists and is readable (DRE-2724); still needed
 | `dead_run.py` | the dead-run cap — parks a card that keeps dying | `scripts/dead_run.py` |
 | `groomer.py` | the groomer — moves ONE approved batch out of Intake, in order | `scripts/groomer.py` |
 | `critic_score.py` | the critic's audit — moves a card the critic could not classify, with the reason on it | `scripts/critic_score.py` |
+| `backlog_cutover.py` | the retroactive pass — moves the legacy Backlog into Intake, promoter-reach cards first and then newest-first, with no exemption list | `scripts/backlog_cutover.py` |
 | `guard` | the lane guard — returns a card whose occupancy is unjustified | DRE-2725, built in agent-bureau; reads its scope from lane_scope.py |
 

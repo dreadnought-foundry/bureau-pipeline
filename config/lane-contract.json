@@ -148,6 +148,10 @@
       "what": "the critic's audit — moves a card the critic could not classify, with the reason on it",
       "path": "scripts/critic_score.py"
     },
+    "backlog_cutover.py": {
+      "what": "the retroactive pass — moves the legacy Backlog into Intake, promoter-reach cards first and then newest-first, with no exemption list",
+      "path": "scripts/backlog_cutover.py"
+    },
     "guard": {
       "what": "the lane guard — returns a card whose occupancy is unjustified",
       "path": null,
@@ -223,6 +227,8 @@
       "name": "Intake",
       "status": "live",
       "segment": "planning",
+      "stale_minutes": 2880,
+      "stale_why": "what an Intake card owes is a classification, and the thing that produces one — a groomer batch the CEO approves, then a planner run — is on-demand (D5, 2026-08-23), so the window has to cover a day nobody remembers to run it. Two days is the point past which nothing is coming: the card is not waiting on the flow, it is out of it, and reconcile.escalate_aged_intake MOVES it to Green Light rather than reporting it (DRE-2687)",
       "clauses": {
         "entrance": {
           "text": "Every writer that creates work writes here first — the relay, the planner, a mid-epic discovery, a human. There is no other valid first lane.",
@@ -231,14 +237,14 @@
           "pending": "DRE-2680 points every writer at Intake"
         },
         "exit": {
-          "text": "A classification exists: one-off, epic, or wave.",
+          "text": "A classification exists: one-off, epic, or wave — or the card has sat here past the lane's own stall window, in which case the sweep moves it to Green Light carrying whatever reason is already stated on it (DRE-2687). Intake is the one planning lane with a timer, because a lane nothing drains is what this wave exists to remove.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2719 makes Planning decide the classification"
+          "pending": "DRE-2719 makes Planning decide the classification; the aged-card exit is live"
         },
         "writers": {
-          "text": "Anything that creates a card, and nothing that moves one onward.",
-          "who": ["relay", "plan.yml", "mid_epic.py", "linear_ops.py", "operator"],
+          "text": "Anything that creates a card, the retroactive pass that moves the legacy Backlog in, and nothing that moves one onward.",
+          "who": ["relay", "plan.yml", "mid_epic.py", "linear_ops.py", "backlog_cutover.py", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },
@@ -289,7 +295,7 @@
       "segment": "planning",
       "clauses": {
         "entrance": {
-          "text": "A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, or the post-approval critic sent an approved plan back with a stated reason (DRE-2721).",
+          "text": "A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, the post-approval critic sent an approved plan back with a stated reason (DRE-2721), or a card has aged out of Intake and the sweep moved it here (DRE-2687).",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs the transition history the Phase-5 front door records — the three entrances exist, nothing yet reads a card's arrival against them"
@@ -301,8 +307,8 @@
           "pending": "needs the transition history the Phase-5 front door records"
         },
         "writers": {
-          "text": "The planner, the two agent runs that escalate, and a human.",
-          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "operator"],
+          "text": "The planner, the two agent runs that escalate, the sweep that moves a card out of Intake once it has aged past the window, and a human.",
+          "who": ["plan.yml", "agent-task.yml", "agent-fix.yml", "reconcile.py", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },

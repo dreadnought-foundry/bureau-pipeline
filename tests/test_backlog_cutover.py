@@ -255,6 +255,12 @@ def test_an_old_run_receipt_is_not_evidence_of_anything_in_flight():
     assert [c["identifier"] for c in result["move"]] == ["DRE-2503"]
 
 
+def test_the_proof_of_life_prefixes_are_the_sweeps_own():
+    """One fact, one source: the receipts that mean 'a run is going' are the
+    sweep's, and this fails if the sweep's set ever changes underneath."""
+    assert cutover.LIFE_PREFIXES == reconcile._LIFE_PREFIXES
+
+
 def test_a_sweep_receipt_is_not_proof_of_life():
     """Only ⏳ and 🧠 count — the sweep's own 🪦/🧹/🚨 receipts would make every
     card it ever touched look alive."""
