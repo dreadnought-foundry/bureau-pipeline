@@ -284,6 +284,12 @@ approved-but-red / stuck-PR / dead-fix-run sweeps).
 
 **Q1 — actor.** Job-if admits `workflow_dispatch` OR a PR comment authored by
 `agent-bureau-qa-bot[bot]` containing `VERDICT: REQUEST_CHANGES` (DRE-1988).
+*Amended 2026-08-29 (DRE-2813): the job-if is unchanged, but a
+`workflow_dispatch` is now also CLASSIFIED by its triggering actor — a
+person's login means a hand dispatch, `github-actions`/any `[bot]` means the
+pipeline restarting itself (reconcile, merge-gate). An unrecognised actor
+reads as machine, because the costly failure is refusing the sweep's one
+restart, not spending one attempt.*
 `allowed_bots: "agent-bureau-qa-bot,github-actions"` is a deliberate security
 lock — pinned by `AgentFixGateUnchangedTest`, never widened for the pool. The
 qa-bot login here is the same hardcoded literal as merge-gate's (DRE-2120):
@@ -302,6 +308,13 @@ head re-arms cleanly.
 **Q4 — command limitations.** Two separate bounded budgets: 3 review-fix
 attempts (attempt 3 escalates the model), 5 conflict rounds; exhaustion posts
 🛑 and parks for a human.
+*Amended 2026-08-29 (DRE-2813): the 🛑 is no longer posted unconditionally. A
+spent budget with an operator decision the loop has not acted on posts a
+tagged `dispatch-no-work` notice instead — a repeat hold outranked the answer
+and stood the restart sweep down permanently (PR #199). A machine dispatch in
+that state re-arms exactly one attempt; a hand dispatch does nothing and says
+so. Decision in `scripts/fix_budget.py`, operator page in
+`docs/held-pr-recovery.md`.*
 
 **Q5 — crash mid-flow.** The "dispatched" announcement posts BEFORE the agent
 runs, which is why counters are author-filtered and push-bound. A fix run that

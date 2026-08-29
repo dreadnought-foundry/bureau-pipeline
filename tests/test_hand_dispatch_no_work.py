@@ -408,6 +408,13 @@ class WorkflowWiringTest(unittest.TestCase):
         self.assertIn("github.event_name", env)
         self.assertIn("github-actions", step["run"])
 
+    def test_a_re_armed_attempt_announces_itself_as_one(self):
+        # The re-armed attempt is number 4 against a cap of 3, so the normal
+        # "attempt N/3" line would misreport which budget it is spending.
+        run = step_named("Announce fix attempt")["run"]
+        self.assertIn("steps.pr.outputs.rearmed", run)
+        self.assertIn("re-armed", run)
+
     def test_the_no_work_report_is_guarded_on_the_no_work_output(self):
         no_work = [
             s for s in steps()
@@ -417,15 +424,229 @@ class WorkflowWiringTest(unittest.TestCase):
         self.assertIn("::notice::", no_work[0]["run"])
         self.assertIn("GITHUB_STEP_SUMMARY", no_work[0]["run"])
 
-    def test_both_refusal_paths_set_no_work(self):
-        run = step_named(self.RESOLVE)["run"]
-        self.assertGreaterEqual(run.count("no_work=true"), 2)
 
-    def test_the_noop_path_never_reaches_the_fixer(self):
-        # go=false is what every downstream step is guarded on.
-        run = step_named(self.RESOLVE)["run"]
-        self.assertRegex(run, r'ACTION.*noop|noop.*ACTION')
-        self.assertIn("go=false", run)
+# ── the Resolve step, executed for real ────────────────────────────────────
+#
+# The rule ships as bash in a workflow, so the bash is what these tests run
+# (the tests/test_fix_dispatch_clears_stale_hold.py pattern): the shipped
+# step body, the real fix_budget.py, a stubbed `gh`.
+
+GH_STUB = '''#!/usr/bin/env python3
+"""Stand-in for `gh`: serves the PR view and the comments API from fixtures,
+runs the workflow's REAL jq filters, and records every write."""
+import json, os, subprocess, sys
+
+args = sys.argv[1:]
+info = json.load(open(os.environ["GH_PR_INFO"]))
+comments = json.load(open(os.environ["GH_COMMENTS"]))
+log = os.environ["GH_LOG"]
+
+if args[:2] == ["pr", "view"]:
+    print(json.dumps(info))
+elif args[:2] == ["pr", "comment"]:
+    body = ""
+    if "--body" in args:
+        body = args[args.index("--body") + 1]
+    elif "--body-file" in args:
+        body = open(args[args.index("--body-file") + 1]).read()
+    open(log, "a").write(json.dumps(body) + "\\n")
+elif args[0] == "api":
+    payload = [comments] if "--slurp" in args else comments
+    if "--jq" in args:
+        expr = args[args.index("--jq") + 1]
+        out = subprocess.run(["jq", "-r", expr], input=json.dumps(payload),
+                             capture_output=True, text=True)
+        sys.stderr.write(out.stderr)
+        sys.exit(out.returncode) if out.returncode else sys.stdout.write(out.stdout)
+    else:
+        print(json.dumps(payload))
+else:
+    sys.stderr.write("unexpected gh call: %r\\n" % (args,))
+    sys.exit(2)
+'''
+
+
+def substitute(run: str, values: dict) -> str:
+    """Apply the `${{ ... }}` substitutions Actions would make, and prove none
+    survive — an unsubstituted expression is a hole in the harness."""
+    def repl(m):
+        key = m.group(1).strip()
+        if key not in values:
+            raise AssertionError(f"harness has no value for ${{{{ {key} }}}}")
+        return values[key]
+
+    out = re.sub(r"\$\{\{([^}]*)\}\}", repl, run)
+    assert "${{" not in out
+    return out
+
+
+def run_resolve(td, thread, actor="smeed652", event="workflow_dispatch",
+                merge_state="CLEAN"):
+    """Execute the shipped 'Resolve PR, mode, and attempt budget' body against
+    `thread`. Returns (step outputs, PR comment bodies it posted)."""
+    import subprocess
+
+    os.makedirs(os.path.join(td, "bin"), exist_ok=True)
+    stub = os.path.join(td, "bin", "gh")
+    with open(stub, "w") as f:
+        f.write(GH_STUB)
+    os.chmod(stub, 0o755)
+    # The pipeline checkout the job now takes before this step.
+    os.symlink(ROOT, os.path.join(td, ".bureau-pipeline"))
+
+    paths = {}
+    for name, payload in (
+        ("pr-info.json", {"state": "OPEN", "headRefName": "agent/DRE-2721-x",
+                          "headRefOid": "d9f2c1ab" + "0" * 32,
+                          "mergeStateStatus": merge_state}),
+        ("comments.json", thread),
+    ):
+        paths[name] = os.path.join(td, name)
+        with open(paths[name], "w") as f:
+            json.dump(payload, f)
+    out_file = os.path.join(td, "step-output")
+    open(out_file, "w").close()
+    log = os.path.join(td, "gh-writes.jsonl")
+
+    body = substitute(
+        step_named("Resolve PR, mode, and attempt budget")["run"],
+        {
+            "github.event.issue.number || github.event.inputs.pr_number": "199",
+            "github.repository": "dreadnought-foundry/bureau-pipeline",
+        },
+    )
+    script = os.path.join(td, "resolve.sh")
+    with open(script, "w") as f:
+        f.write("set -eo pipefail\n" + body)
+    proc = subprocess.run(
+        ["bash", script],
+        cwd=td,
+        env=dict(
+            os.environ,
+            PATH=f"{td}/bin:{os.environ['PATH']}",
+            GITHUB_OUTPUT=out_file,
+            RUNNER_TEMP=td,
+            GH_PR_INFO=paths["pr-info.json"],
+            GH_COMMENTS=paths["comments.json"],
+            GH_LOG=log,
+            GH_TOKEN="test",
+            WORKER_LOGIN=WORKER,
+            EVENT_NAME=event,
+            TRIGGERING_ACTOR=actor,
+        ),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    outputs = {}
+    for line in open(out_file).read().splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            outputs[key] = value
+    posted = [
+        json.loads(line)
+        for line in (open(log).read().splitlines() if os.path.exists(log) else [])
+    ]
+    return outputs, posted
+
+
+class ResolveStepExecutedTest(unittest.TestCase):
+    """(AC1, AC2, AC5) The shipped bash, run for real."""
+
+    def resolve(self, thread, **kw):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            return run_resolve(td, thread, **kw)
+
+    def test_a_hand_dispatch_on_an_answered_pr_posts_no_hold(self):
+        outputs, posted = self.resolve(spent_and_answered())
+        self.assertEqual(outputs["go"], "false")
+        self.assertEqual(outputs["no_work"], "true")
+        self.assertNotIn("held", outputs)
+        self.assertEqual(len(posted), 1)
+        self.assertIn(fix_context.NOOP_TAG, posted[0])
+        self.assertNotIn("🛑", posted[0])
+
+    def test_the_notice_it_posts_leaves_the_sweep_armed(self):
+        # End to end through the real bash: what the job puts on the thread
+        # must still let the sweep dispatch.
+        _, posted = self.resolve(spent_and_answered())
+        thread = spent_and_answered() + [rest(WORKER, posted[0])]
+        self.assertEqual(len(sweep(thread)[0]), 1)
+
+    def test_the_sweeps_own_dispatch_runs_the_fixer(self):
+        outputs, posted = self.resolve(
+            spent_and_answered(), actor="github-actions"
+        )
+        self.assertEqual(outputs["go"], "true")
+        self.assertEqual(outputs["rearmed"], "true")
+        self.assertEqual(posted, [])
+
+    def test_an_unanswered_hold_still_holds_and_still_asks(self):
+        thread = [rest(WORKER, ATTEMPT.format(n=n)) for n in (1, 2, 3)]
+        outputs, posted = self.resolve(thread)
+        self.assertEqual(outputs["go"], "false")
+        self.assertEqual(outputs["held"], "true")
+        self.assertEqual(outputs["no_work"], "true")
+        self.assertEqual(len(posted), 1)
+        self.assertIn("🛑 Fix budget exhausted", posted[0])
+        self.assertIn(fix_context.DECISION_EXAMPLE, posted[0])
+        self.assertIn(fix_context.HAND_DISPATCH_NOTICE, posted[0])
+
+    def test_an_ordinary_attempt_still_dispatches(self):
+        # Non-vacuous twin: the same harness, one attempt short of the cap.
+        outputs, posted = self.resolve([rest(WORKER, ATTEMPT.format(n=1))])
+        self.assertEqual(outputs["go"], "true")
+        self.assertEqual(outputs["attempt"], "2")
+        self.assertEqual(outputs["rearmed"], "false")
+        self.assertEqual(posted, [])
+
+    def test_the_conflict_hold_carries_the_same_notice(self):
+        thread = [rest(WORKER, ROUND.format(n=n)) for n in range(1, 6)]
+        outputs, posted = self.resolve(thread, merge_state="DIRTY")
+        self.assertEqual(outputs["mode"], "conflict")
+        self.assertEqual(outputs["held"], "true")
+        self.assertIn("🛑 Conflict-resolution budget exhausted", posted[0])
+        self.assertIn(fix_context.HAND_DISPATCH_NOTICE, posted[0])
+
+    def test_a_second_hand_dispatch_repeats_nothing(self):
+        _, posted = self.resolve(spent_and_answered())
+        thread = spent_and_answered() + [rest(WORKER, posted[0])]
+        outputs, again = self.resolve(thread)
+        self.assertEqual(outputs["no_work"], "true")
+        self.assertEqual(again, [], "the notice was posted twice")
+
+    def test_the_incidents_own_run_records_classify_correctly(self):
+        # The actors are not guessed: these are the Agent Fix runs GitHub
+        # recorded for PR #199 on 2026-08-29. Four machine dispatches
+        # (`github-actions[bot]`) and one hand dispatch (`smeed652`) — the
+        # 15:29 run that disarmed the sweep.
+        runs = json.load(open(
+            os.path.join(ROOT, "tests", "fixtures",
+                         "agent-fix-runs-2026-08-29.json"),
+            encoding="utf-8",
+        ))
+        seen = {(r["actor"], r["event"]) for r in runs}
+        self.assertIn(("github-actions[bot]", "workflow_dispatch"), seen)
+        self.assertIn(("smeed652", "workflow_dispatch"), seen)
+        for actor, event in sorted(seen):
+            if event != "workflow_dispatch":
+                continue
+            with self.subTest(actor=actor):
+                outputs, _ = self.resolve(
+                    spent_and_answered(), actor=actor, event=event
+                )
+                machine = actor.endswith("[bot]") or actor == "github-actions"
+                self.assertEqual(outputs["go"], "true" if machine else "false")
+
+    def test_a_qa_verdict_comment_is_never_a_hand_dispatch(self):
+        # The critic's REQUEST_CHANGES re-entry is not a person pushing the
+        # button — it must keep its normal path.
+        outputs, _ = self.resolve(
+            spent_and_answered(), event="issue_comment", actor="agent-bureau-qa-bot"
+        )
+        self.assertEqual(outputs["go"], "true")
 
 
 class DocumentedRecoveryTest(unittest.TestCase):
