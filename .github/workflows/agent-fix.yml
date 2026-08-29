@@ -105,7 +105,7 @@ jobs:
           # discipline — never a hardcoded name that an App rename outdates).
           WORKER_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
           # How this run was started. `gh workflow run` under a workflow's
-          # github.token initiates as `github-actions` (DRE-2053), so the
+          # github.token initiates as `github-actions[bot]` (DRE-2053), so the
           # reconcile sweep's restart and merge-gate's conflict repair are
           # machine dispatches; a person dispatching by hand carries their
           # own login. Read from the event, never from anything a commenter
@@ -220,10 +220,12 @@ jobs:
           # tests/fixtures/agent-fix-runs-2026-08-29.json). Those are the
           # pipeline restarting itself and are allowed to act.
           #
-          # Any bot-shaped actor counts as machine, and an unrecognised one
-          # therefore reads as machine rather than hand: the failure that
-          # costs a PR is refusing to act on a restart the sweep already
-          # spent its one dispatch on, not doing one attempt of real work.
+          # Any bot-shaped actor counts as machine — a token-triggered
+          # dispatch always initiates as one — so only a plain human login
+          # reads as a hand dispatch. That is the safe direction: misreading
+          # the sweep's OWN restart as a hand dispatch would strand the PR
+          # with its one answer already spent, while misreading a hand
+          # dispatch as machine only buys one attempt of real work.
           HAND=false
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             HAND=true
