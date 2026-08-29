@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -32,9 +33,46 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import lane_contract  # noqa: E402
 import reconcile  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# The two states DRE-2726 retired; DRE-2818 deleted their contract entries once
+# Linear archived them. Spelled out here because the contract no longer does.
+RETIRED_LANES = ("In QA", "In Design Review")
+
+# A retiring lane the shipped contract does NOT carry. The drain's behaviour is
+# proved against this instead of against the real file: with the real file the
+# retiring set is empty, so every assertion below would pass by doing nothing.
+FAKE_RETIRING = {
+    "name": "In Escrow",
+    "status": "retiring",
+    "retired_by": "DRE-9001",
+    "replaced_by": "In Review",
+    "reason": "a stand-in retirement, so the drain is proved and not assumed",
+    "board_action": "archive the state through the workspace apply, then "
+    "delete this entry",
+}
+
+
+@contextmanager
+def _retiring(*lane_docs):
+    """Run the body as if the contract declared `lane_docs` as retiring."""
+    with patch.object(
+        reconcile.lane_contract, "lanes", MagicMock(return_value=tuple(lane_docs))
+    ):
+        yield
+
+
+def _stranded(state="In Escrow"):
+    return {
+        "identifier": "DRE-9999",
+        "description": "**Repo:** agent-bureau\nwork",
+        "state": {"name": state},
+        "labels": {"nodes": []},
+        "updatedAt": "2026-08-28T00:00:00Z",
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -182,7 +220,7 @@ class TestNoWriterStillAimsAtTheRetiredLane:
             for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if line.lstrip().startswith("#"):
                     continue  # incident history may name the lane it happened in
-                if "In QA" in line or "In Design Review" in line:
+                if any(name in line for name in RETIRED_LANES):
                     offenders.append(f"{path.name}:{n}: {line.strip()}")
         assert not offenders, "\n".join(offenders)
 
@@ -194,44 +232,68 @@ class TestNoWriterStillAimsAtTheRetiredLane:
 
 
 class TestTheRetiringLaneDrainsItself:
-    """The ordering that makes the fold safe.
+    """The ordering that makes any lane retirement safe.
 
     The code stops writing the lane first; the sweep drains what the previous
-    pipeline left there second; the board archives the state last. Skip the
-    middle step and every card sitting in the folded lane at merge time is
-    stranded with nothing coming for it — the sweep no longer looks at that
-    lane, and the merge gate no longer advances out of it.
+    pipeline left there second; the board archives the state last; the contract
+    entry is deleted fourth. Skip the middle step and every card sitting in the
+    folded lane at merge time is stranded with nothing coming for it — the sweep
+    no longer looks at that lane, and the merge gate no longer advances out of
+    it.
+
+    DRE-2818 finished step four for `In QA` and `In Design Review`, so the
+    contract carries no retiring lane today. The DECISION recorded here is that
+    `drain_retiring_lanes` STAYS: it is step two of a protocol the contract
+    still defines (a `retiring` status with a mandatory board step, plus the
+    `board.retiring_lane_is_empty` rule that is promised from Phase 3 and names
+    this function as its prerequisite). What it does not get to be is code that
+    reads as live while nothing proves it — so every test below injects a
+    retiring lane of its own, and one pins the inert case explicitly.
     """
 
-    def test_every_retiring_lane_names_where_its_cards_go(self):
-        import lane_contract
+    def test_the_contract_carries_no_retiring_lane_today(self):
+        assert lane_contract.lanes(status="retiring") == ()
 
-        for lane in lane_contract.lanes(status="retiring"):
-            assert lane.get("replaced_by"), (
-                f"{lane['name']} is retiring with no replacement — its cards "
-                "would have nowhere to go"
-            )
-            assert lane["replaced_by"] in lane_contract.lane_names(status="live")
+    def test_the_drain_is_inert_when_nothing_is_retiring(self):
+        # The explicit decision, as a test: with an empty retiring set the drain
+        # reads nothing from Linear and writes nothing to it. Not "it happens to
+        # do nothing" — it must not even ask.
+        with patch.object(reconcile, "active_cards") as cards, patch.object(
+            reconcile.linear_ops, "cmd_advance"
+        ) as advance, patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+            reconcile.drain_retiring_lanes()
+        cards.assert_not_called()
+        advance.assert_not_called()
+        comment.assert_not_called()
 
     def test_the_drain_moves_a_stranded_card_to_the_replacement(self):
-        stranded = {
-            "identifier": "DRE-9999",
-            "description": "**Repo:** agent-bureau\nwork",
-            "state": {"name": "In QA"},
-            "labels": {"nodes": []},
-            "updatedAt": "2026-08-28T00:00:00Z",
-        }
-        with patch.object(
-            reconcile, "active_cards", MagicMock(return_value=[stranded])
+        with _retiring(FAKE_RETIRING), patch.object(
+            reconcile, "active_cards", MagicMock(return_value=[_stranded()])
         ), patch.object(reconcile.linear_ops, "cmd_advance") as advance, patch.object(
             reconcile.linear_ops, "cmd_comment"
         ) as comment:
             reconcile.drain_retiring_lanes()
-        advance.assert_called_once_with("DRE-9999", "In Review", "In QA")
-        assert "retired" in comment.call_args.args[1]
+        advance.assert_called_once_with("DRE-9999", "In Review", "In Escrow")
+        note = comment.call_args.args[1]
+        assert "retired" in note
+        # The card that retired the lane comes from the lane's own entry, never
+        # from a card id frozen into the sweep.
+        assert "DRE-9001" in note
+
+    def test_the_drain_ignores_a_retiring_lane_that_names_no_replacement(self):
+        # A retirement with nowhere to send its cards is not drainable, and
+        # guessing a destination is worse than leaving it for a human.
+        orphan = dict(FAKE_RETIRING)
+        orphan.pop("replaced_by")
+        with _retiring(orphan), patch.object(
+            reconcile, "active_cards"
+        ) as cards, patch.object(reconcile.linear_ops, "cmd_advance") as advance:
+            reconcile.drain_retiring_lanes()
+        cards.assert_not_called()
+        advance.assert_not_called()
 
     def test_the_drain_is_a_no_op_when_the_lane_is_already_empty(self):
-        with patch.object(
+        with _retiring(FAKE_RETIRING), patch.object(
             reconcile, "active_cards", MagicMock(return_value=[])
         ), patch.object(reconcile.linear_ops, "cmd_advance") as advance:
             reconcile.drain_retiring_lanes()
@@ -246,15 +308,8 @@ class TestTheRetiringLaneDrainsItself:
         assert "drain_retiring_lanes," in source
 
     def test_a_failed_drain_fails_the_run(self):
-        stranded = {
-            "identifier": "DRE-9999",
-            "description": "**Repo:** agent-bureau\nwork",
-            "state": {"name": "In QA"},
-            "labels": {"nodes": []},
-            "updatedAt": "2026-08-28T00:00:00Z",
-        }
-        with patch.object(
-            reconcile, "active_cards", MagicMock(return_value=[stranded])
+        with _retiring(FAKE_RETIRING), patch.object(
+            reconcile, "active_cards", MagicMock(return_value=[_stranded()])
         ), patch.object(
             reconcile.linear_ops, "cmd_advance", side_effect=RuntimeError("nope")
         ):
