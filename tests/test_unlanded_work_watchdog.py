@@ -93,14 +93,16 @@ def _card(identifier=CARD, state="In Progress", labels=("hand-built",),
 
 
 def _fake_gh(branches, pr_refs, pulls=None, compare=None, calls=None,
-             listing=None):
-    """Stub reconcile.gh for the four reads the watchdog makes.
+             listing=None, branches_unreadable=False):
+    """Stub reconcile.gh / gh_read for the four reads the watchdog makes.
 
     branches: {branch name: head sha} — the `repos/:r/branches` listing.
     pr_refs:  head refs of every PR in ANY state (open, closed, merged).
     pulls:    {sha: raw gh output} for `commits/:sha/pulls` (default "[]").
     compare:  {branch: (ahead_by, minutes since last commit)} or a raw string.
     listing:  raw override for the `pr list` output (e.g. "" = unreadable).
+    branches_unreadable: the branch listing raises the way gh_read does on a
+              non-zero exit (403 / rate limit), rather than answering.
     """
     pulls = pulls or {}
     compare = compare or {}
@@ -117,6 +119,10 @@ def _fake_gh(branches, pr_refs, pulls=None, compare=None, calls=None,
             if path == f"repos/{reconcile.REPO}":
                 return "main"
             if path.endswith("/branches"):
+                if branches_unreadable:
+                    raise reconcile.ReconcileReadError(
+                        "gh api branches failed rc=1: HTTP 403"
+                    )
                 return "\n".join(
                     json.dumps({"name": n, "sha": s})
                     for n, s in branches.items()
@@ -152,7 +158,7 @@ def _state_of(states):
 
 
 def sweep(branches=None, pr_refs=(), pulls=None, compare=None, bodies=(),
-          cards=(), states=None, listing=None):
+          cards=(), states=None, listing=None, branches_unreadable=False):
     """Run flag_unlanded_work() once against a stubbed GitHub + Linear.
 
     Returns (comments, gh_calls, add_label mock).
@@ -160,10 +166,14 @@ def sweep(branches=None, pr_refs=(), pulls=None, compare=None, bodies=(),
     branches = {BRANCH: SHA} if branches is None else branches
     states = states or {}
     comments, gh_calls = [], []
+    fake_gh = _fake_gh(branches, pr_refs, pulls, compare, gh_calls, listing,
+                       branches_unreadable)
     with mock.patch.object(
-        reconcile, "gh",
-        side_effect=_fake_gh(branches, pr_refs, pulls, compare, gh_calls,
-                             listing),
+        reconcile, "gh", side_effect=fake_gh,
+    ), mock.patch.object(
+        # The branch listing goes through the LOUD helper, so the stub must
+        # answer there too — and raise there, when the listing is unreadable.
+        reconcile, "gh_read", side_effect=fake_gh,
     ), mock.patch.object(
         reconcile, "active_cards", return_value=list(cards),
     ), mock.patch.object(
@@ -234,6 +244,38 @@ def test_an_unreadable_pr_check_reports_nothing():
 
 def test_an_unreadable_pr_listing_reports_nothing():
     assert sweep(listing="")[0] == []
+
+
+def test_an_unreadable_branch_listing_reports_nothing():
+    """The mirror of the PR listing, and the one that alarms on a CARD.
+
+    A failed `/branches` read must never read as "this repo has no branches":
+    _flag_hand_built_idle would then see an empty `with_branch` and tell a
+    person "no branch, no pull request" on a card whose branch the sweep
+    simply could not see — the exact false alarm this watchdog exists to
+    prevent, one level up (DRE-2034 discipline).
+    """
+    comments, _, _ = sweep(
+        branches={BRANCH: SHA}, cards=[_card()], branches_unreadable=True,
+    )
+    assert comments == []
+
+
+def test_an_unreadable_branch_listing_never_reaches_the_hand_built_half():
+    """Not merely quiet — the card sweep must not run at all, so no card can
+    be judged against a listing that was never read."""
+    with mock.patch.object(reconcile, "_flag_hand_built_idle") as idle:
+        sweep(cards=[_card()], branches_unreadable=True)
+    idle.assert_not_called()
+
+
+def test_a_confirmed_empty_branch_listing_still_reports_the_hand_built_card():
+    """The other side of the same coin: a repo that genuinely has no card
+    branches is a readable answer, and the hand-built alarm must still fire.
+    Without this, failing closed would silence the half entirely."""
+    comments, _, _ = sweep(branches={}, cards=[_card()])
+    assert len(comments) == 1
+    assert comments[0][0] == CARD
 
 
 def test_a_branch_with_no_commits_of_its_own_is_not_reported():
@@ -318,10 +360,12 @@ def test_one_failing_branch_does_not_silence_the_others():
             raise RuntimeError("linear exploded")
 
     posted = []
+    fake_gh = _fake_gh({BRANCH: SHA, other: "c" * 40}, (), None, None,
+                       None, None)
     with mock.patch.object(
-        reconcile, "gh",
-        side_effect=_fake_gh({BRANCH: SHA, other: "c" * 40}, (), None, None,
-                             None, None),
+        reconcile, "gh", side_effect=fake_gh,
+    ), mock.patch.object(
+        reconcile, "gh_read", side_effect=fake_gh,
     ), mock.patch.object(
         reconcile, "active_cards", return_value=[],
     ), mock.patch.object(
@@ -397,9 +441,11 @@ def test_the_hand_built_half_is_reported_once():
 def test_only_the_working_lanes_are_swept_for_hand_built_idleness():
     """A Backlog card owes nobody a branch."""
     _, calls, _ = sweep(branches={}, cards=[_card()])
+    fake_gh = _fake_gh({}, (), None, None, None, None)
     with mock.patch.object(
-        reconcile, "gh",
-        side_effect=_fake_gh({}, (), None, None, None, None),
+        reconcile, "gh", side_effect=fake_gh,
+    ), mock.patch.object(
+        reconcile, "gh_read", side_effect=fake_gh,
     ), mock.patch.object(
         reconcile, "active_cards", return_value=[],
     ) as active, mock.patch.object(

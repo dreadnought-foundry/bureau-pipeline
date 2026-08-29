@@ -133,6 +133,9 @@ import mid_epic  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
+# DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
+# card, who picks it up there, and which of the five may be dispatched at all.
+import routing_verdict  # noqa: E402
 # DRE-2682: ONE source for "this card is finished" — the terminal states the
 # structural sweep already names, read here rather than spelled a fifth time.
 import structural_repair  # noqa: E402
@@ -931,6 +934,17 @@ def flag_stranded() -> set[str]:
         if routable and "agent:planner" in labels:
             continue  # an epic in these lanes carries no run — normal, not stranded
         bodies = linear_ops.comment_bodies(ident)
+        if routing_verdict.is_parked(bodies):
+            # DRE-2724: a PARKED card is well-formed and sitting still ON
+            # PURPOSE. Reporting the intended state as a defect costs the card
+            # a hold label a human has to remove, and promote_ready() skips a
+            # held card forever — so the alarm would make the deliberate
+            # decision permanent by accident.
+            print(
+                f"watchdog: {ident} is routed PARKED — deliberately not built, "
+                "so time spent sitting still is not a strand"
+            )
+            continue
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
         if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
@@ -1030,7 +1044,17 @@ def flag_stalled_planning() -> set[str]:
                 "Planning is not a strand"
             )
             continue
-        if any(WATCHDOG_TAG in b for b in linear_ops.comment_bodies(ident)):
+        bodies = linear_ops.comment_bodies(ident)
+        if routing_verdict.is_parked(bodies):
+            # DRE-2724, same rule as flag_stranded: PARKED is a decision, not a
+            # stall. A parked card in Planning owes nobody a classification —
+            # it has one.
+            print(
+                f"watchdog: {ident} is routed PARKED — deliberately not built, "
+                "so time spent in Planning is not a strand"
+            )
+            continue
+        if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
         if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
             continue  # planning is young — let it produce its classification
@@ -1775,7 +1799,10 @@ def promote_ready(active_count: int) -> int:
         # DELIBERATELY outside it — a write failure there is a write failure,
         # not a bad reference, and must not stamp the card with a false
         # "reference doesn't resolve" diagnostic (critic PR #89).
+        # Two refusals can hold a card here, each with its own idempotency tag
+        # so one does not silence the other's notice (DRE-2739, DRE-2724).
         refusal: str | None = None
+        refusal_tag = mid_epic.NO_VERDICT_TAG
         try:
             # Epic-level gate (DRE-1772): even an active (plan-approved) epic
             # must not start its children while the epic itself is blocked-by a
@@ -1814,30 +1841,48 @@ def promote_ready(active_count: int) -> int:
             # (mid_epic.promotion_refusal) — never refuses the whole roster.
             if epic_id not in green_light:
                 green_light[epic_id] = mid_epic.last_green_light(linear_ops, epic_id)
+            bodies = [
+                n.get("body") or ""
+                for n in (card.get("comments") or {}).get("nodes", [])
+            ]
             refusal = mid_epic.promotion_refusal(
                 card["identifier"],
                 card.get("createdAt"),
                 green_light[epic_id],
-                [n.get("body") or "" for n in (card.get("comments") or {}).get("nodes", [])],
+                bodies,
             )
+            # Routing verdict (DRE-2724): the verdict answers WHO builds this
+            # card, and only FLEET means "an unattended agent, in one pull
+            # request". WORKBENCH needs an interactive flow, OPERATOR is not
+            # code at all, PARKED is deliberately not built, NEEDS WORK is not
+            # buildable as written — dispatching any of them sends the fleet at
+            # a card it cannot close. A card with NO verdict promotes exactly as
+            # before: Backlog's "it carries a verdict" clause is enforced from
+            # Phase 5, and refusing the whole verdictless board today would
+            # freeze it rather than route it.
+            if refusal is None:
+                refusal = routing_verdict.promotion_refusal(
+                    card["identifier"], bodies
+                )
+                refusal_tag = routing_verdict.NOT_FLEET_TAG
         except linear_ops.LinearError as e:
             skip_bad_reference(card["identifier"], e)
             continue
         if refusal is not None:
             print(
-                f"promotion: {card['identifier']} was added to its epic after the "
-                "green light and carries no verdict — skipping"
+                f"promotion: {card['identifier']} is not being promoted — "
+                f"{refusal.splitlines()[0]}"
             )
             # Surfaced ONCE, the DEAD_TAG shape: the card is invisible otherwise,
             # and an invisible refusal is the silent-accretion problem wearing a
             # different hat. A WRITE, so deliberately outside the read-guard —
             # and guarded itself, because reporting never blocks the sweep.
             try:
-                if linear_ops.count_comments(card["identifier"], mid_epic.NO_VERDICT_TAG) == 0:
+                if linear_ops.count_comments(card["identifier"], refusal_tag) == 0:
                     linear_ops.cmd_comment(card["identifier"], refusal)
             except linear_ops.LinearError as e:
                 print(
-                    f"ERROR: could not surface the mid-epic refusal on "
+                    f"ERROR: could not surface the promotion refusal on "
                     f"{card['identifier']}: {e}",
                     file=sys.stderr,
                 )
@@ -2322,18 +2367,35 @@ def default_branch() -> str:
     return _default_branch
 
 
-def card_branches() -> list[dict]:
-    """Every `agent/DRE-*` branch head in REPO — `{name, sha}` each.
+def card_branches() -> list[dict] | None:
+    """Every `agent/DRE-*` branch head in REPO — `{name, sha}` each, or None
+    when the listing is unreadable.
 
     Emitted as JSON LINES (a per-object `--jq`) rather than one array: gh
     `--paginate` concatenates one array PER PAGE, so a whole-array jq hands
     back a stream no json.loads can read — and the sweep would then see zero
     branches on exactly the busy repos this watchdog is for.
+
+    Read LOUDLY (gh_read), and None — never [] — on failure. Those JSON lines
+    are exactly why: an array listing betrays a failed read by parsing to
+    nothing, but a per-object stream makes a 403 and a genuinely branchless
+    repo byte-identical empty stdout. The silent gh() helper would hand both
+    back as [], and _flag_hand_built_idle would then tell a person "no branch,
+    no pull request" about a branch it simply could not see. Same discipline,
+    same reason, as pr_head_refs below (DRE-2034).
     """
-    out = gh(
-        "api", f"repos/{REPO}/branches", "--paginate",
-        "--jq", ".[] | {name: .name, sha: .commit.sha}",
-    )
+    try:
+        out = gh_read(
+            "api", f"repos/{REPO}/branches", "--paginate",
+            "--jq", ".[] | {name: .name, sha: .commit.sha}",
+        )
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"unlanded watchdog: branch listing failed: {e}")
+        print(
+            f"ERROR: unlanded watchdog: branch listing failed: {e}",
+            file=sys.stderr,
+        )
+        return None
     found: list[dict] = []
     for line in (out or "").splitlines():
         try:
@@ -2393,15 +2455,18 @@ def flag_unlanded_work() -> None:
 
     Both halves only ever ADD a notice, so every unreadable answer means "say
     nothing this sweep" rather than "nothing has a PR": the PR listing, the
-    per-branch confirm, the compare and the card read each fail closed. A
-    per-branch failure is recorded on the fail-loudly rail and the rest of the
-    sweep continues (the DRE-2035 isolation discipline).
+    BRANCH listing, the per-branch confirm, the compare and the card read each
+    fail closed. A per-branch failure is recorded on the fail-loudly rail and
+    the rest of the sweep continues (the DRE-2035 isolation discipline).
     """
     pr_refs = pr_head_refs()
     if pr_refs is None:
         print("unlanded: PR listing unreadable — reporting nothing this sweep")
         return  # fail closed: a blip is not "nothing has a pull request"
     branches = card_branches()
+    if branches is None:
+        print("unlanded: branch listing unreadable — reporting nothing this sweep")
+        return  # fail closed: a blip is not "this card has no branch"
     for branch in branches:
         try:
             _flag_one_unlanded_branch(branch, pr_refs)
