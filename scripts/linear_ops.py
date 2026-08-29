@@ -14,6 +14,12 @@ Subcommands:
                                        move ONLY if current state is in the csv
                                        (guards against dragging Done cards back)
   comment <DRE-N> <body>               add a comment to a card
+  actor <DRE-N> <role>                 record WHICH agent acted on this card, in
+                                       the one machine-readable form
+                                       (scripts/agent_marker.py). The briefs tell
+                                       every build agent to post this at the end
+                                       of its run; the run URL is added from the
+                                       ambient Actions env when there is one.
   card-done <DRE-N> <pr-url>           linear-sync's merge→Done seam: move the
                                        card whose OWN agent branch merged to
                                        Done and comment the PR link — UNLESS
@@ -88,6 +94,7 @@ import sys
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import agent_marker  # noqa: E402 — ONE definition of the "which agent acted" marker
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
 import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
 import mid_epic  # noqa: E402 — ONE source for "a card has no children" (DRE-2739)
@@ -492,6 +499,16 @@ def cmd_comment(identifier: str, body: str) -> None:
         {"input": {"issueId": issue["id"], "body": body}},
     )
     print(f"commented on {identifier}")
+
+
+def cmd_actor(identifier: str, role: str) -> None:
+    """Record which agent acted on this card (DRE-2727).
+
+    A thin wrapper over `comment` on purpose: the VALUE is that the string has
+    exactly one author. Six briefs each spelling out a marker is six markers
+    within a month, and nothing downstream can parse the set.
+    """
+    cmd_comment(identifier, agent_marker.actor_line(role))
 
 
 # --- Auto-Done guard: operator cards and demo cards ---------------------------
@@ -1387,6 +1404,7 @@ if __name__ == "__main__":
             "state": cmd_state,
             "advance": cmd_advance,
             "comment": cmd_comment,
+            "actor": cmd_actor,
             "card-done": cmd_card_done,
             "set-description": set_description,
             "subissue": cmd_subissue,

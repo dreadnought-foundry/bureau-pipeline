@@ -8,11 +8,18 @@ this is the standard it implements. Create cards with the Linear MCP
 duplicates.
 
 ## Required — a card is valid with BOTH
-1. A **`repo:<slug>` label** (slug ∈ the relay's `VALID_SLUGS`) — the canonical
-   source of truth for the card's repo. *(Legacy fallback: a `**Repo:** <slug>`
-   frontmatter line in the description is still ACCEPTED for pre-existing cards
-   so they keep routing, but it's deprecated — set the label, don't write the
-   stamp. Fenced code is ignored.)*
+1. A **`repo:<slug>` label** — the canonical source of truth for the card's
+   repo. **The valid slugs are exactly the keys of `config/repo-map.json` in
+   bureau-pipeline.** Read that file; do not trust a list copied into a
+   document, this one included. It is the same snapshot the relay routes on and
+   `validate_card.py` derives `VALID_SLUGS` from, so a slug that is in the file
+   routes and a slug that is not is bounced with the full valid set named on the
+   card. A restated list is how a document ends up naming five slugs while the
+   live map carries more, and everyone who reads it to write a card gets it
+   wrong. *(Legacy fallback: a `**Repo:** <slug>` frontmatter line in the
+   description is still ACCEPTED for pre-existing cards so they keep routing,
+   but it's deprecated — set the label, don't write the stamp. Fenced code is
+   ignored.)*
 2. An **`agent:*` label** (`agent:engineer`, `agent:frontend`, `agent:devops`,
    `agent:planner`, …).
 
@@ -107,7 +114,7 @@ bad, only a wrong destination, which shows up immediately.
 | **FLEET** | Buildable unattended in one PR | `Todo` — the sweep promotes it, an agent run builds it. The ONLY verdict that is dispatched. |
 | **WORKBENCH** | Needs an interactive flow or live system state | `Todo`, marked `hand-built` — the operator, at an interactive session. |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret | `Todo`, marked `hand-built` + `no-code` — the operator. |
-| **PARKED** | Well-formed and deliberately not to be built | `Backlog` — nobody, until a human revives it. Never promoted, and **never reported as stalled** by any sweep. |
+| **PARKED** | Well-formed and deliberately not to be built | `Backlog` — landed there by the planning-exit writer, and nobody picks it up. Never promoted, and **never reported as stalled** by any sweep. |
 | **NEEDS WORK** | Not buildable as written | `Planning` — the planner, with the specific missing thing named. |
 
 **The rule is mechanical:** route on whether an unattended agent can SATISFY
@@ -119,7 +126,17 @@ what survives all three is a judgement call worth asking a model about.
 **Split the visual case carefully.** Static visual fidelity is FLEET-checkable —
 `qa-review.yml` screenshots the changed screens and hands the critic both the
 design PNG and the render. Interactive or live-state behaviour is WORKBENCH.
-Screenshotting a screen is not driving a flow.
+Screenshotting a screen is not driving a flow. That is the RULE; do not read it
+as a promise that the mechanical signal decides the case, because on real cards
+it usually does not fire (DRE-2831) — `standards/design-parity.md` states the
+live caveat.
+
+**PARKED is landed by the process, not by a person (DRE-2824).** `Backlog` is
+process-controlled and no human may write it, so the actor on a PARKED card is
+the planning-exit writer that stamps the verdict and lands the card there. There
+is no one waiting to pick it up, because for PARKED nobody is. Reviving it is a
+separate, later human act — nothing in the pipeline takes a PARKED card back out
+of Backlog: no sweep, no run, no label.
 
 An **epic never gets a buildability verdict.** "Could an agent build this
 unattended" is meaningless for a card the planner owns; an epic gets a plan

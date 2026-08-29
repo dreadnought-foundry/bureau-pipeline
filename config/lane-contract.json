@@ -262,8 +262,8 @@
           "pending": "DRE-2720 writes the artifact; the gate that refuses exit without one is Phase 5"
         },
         "writers": {
-          "text": "The planner, the sweep that re-triggers it, and a human.",
-          "who": ["plan.yml", "reconcile.py", "operator"],
+          "text": "The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, and a human.",
+          "who": ["plan.yml", "reconcile.py", "agent-task.yml", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },

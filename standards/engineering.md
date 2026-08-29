@@ -75,10 +75,21 @@ passes against the unmodified codebase proves nothing and the critic rejects it.
   and gives a false green; stub the live tool to fail and run the WHOLE suite.
 
 ## Don't fight over shared files
-- **Each card/agent owns DISJOINT files.** A shared barrel, registry, route
-  table, or gallery index edited by two open PRs conflicts every sibling. If
-  registration would touch a shared file, make discovery convention-based
-  (glob) so later work only ADDS files — or serialize with a formal blocker.
+- **Each card/agent owns DISJOINT files, and that is checked at PLAN TIME.** It
+  is not a request made of the builder — by the time a builder could honour it
+  the cards are already cut, already parallel, and the collision is already
+  paid for. The planner runs a contention pre-flight before it creates the
+  cards: list the files each proposed card will create or edit, and where two
+  lists intersect on a file that cannot be made append-only, carve a foundation
+  card that OWNS that file first and block the others on it
+  (`briefs/planner.md`). The plan critic reads the same question before the
+  plan reaches the CEO. As a builder you inherit the answer: if you find
+  yourself editing a file a sibling card also owns, that is a planning defect —
+  say so rather than racing for it.
+- A shared barrel, registry, route table, or gallery index edited by two open
+  PRs conflicts every sibling. If registration would touch a shared file, make
+  discovery convention-based (glob) so later work only ADDS files — or
+  serialize with a formal blocker.
 - **AST-sweep all call sites when you add a kwarg** — not one sentinel call site.
 - **Producer-consumer drift:** extract a shared module OR update all callers in
   the same commit.

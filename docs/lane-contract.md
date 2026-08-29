@@ -53,8 +53,8 @@ _Waiting on: DRE-2719._ | Phase 5 — promised |
 _Waiting on: DRE-2719._ | Phase 5 — promised |
 | **exit** | A plan artifact exists. No artifact, no exit.  
 _Waiting on: DRE-2720 writes the artifact; the gate that refuses exit without one is Phase 5._ | Phase 5 — promised |
-| **writers** | The planner, the sweep that re-triggers it, and a human.  
-Permitted writers: `plan.yml`, `reconcile.py`, `operator` | Phase 2 — live |
+| **writers** | The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, and a human.  
+Permitted writers: `plan.yml`, `reconcile.py`, `agent-task.yml`, `operator` | Phase 2 — live |
 | **evidence** | The plan artifact on the card: business case, KPIs as data, risk, outcome.  
 _Waiting on: DRE-2720._ | Phase 5 — promised |
 

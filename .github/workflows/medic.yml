@@ -299,8 +299,16 @@ jobs:
                  python3 .bureau-pipeline/scripts/linear_ops.py comment DRE-N "<report>"
                - Otherwise: FIRST check for an existing open card for this same
                  failure — search Linear (GraphQL via curl with LINEAR_API_KEY,
-                 or linear_ops) for a Triage/Todo/In Progress issue titled
-                 "Pipeline failure: ${{ github.event.workflow_run.name }}".
+                 or linear_ops) for ANY issue titled
+                 "Pipeline failure: ${{ github.event.workflow_run.name }}"
+                 that is not Done, Canceled or Duplicate. Search by title and
+                 open-ness, NOT by a list of lanes: a failure card can sit in
+                 Intake, Triage, Backlog, Todo, In Progress or In Review, and a
+                 lane list that misses the one the card is actually in mints a
+                 fresh card on every failure instead of commenting on the one
+                 that exists. `linear_ops.py find-open "<title>"` answers this
+                 exactly — it prints the identifier of a non-terminal card with
+                 that title, or nothing.
                  If one exists, ADD A COMMENT to it ("failed again at <run url>;
                  diagnosis unchanged/changed: ...") instead of creating a card.
                  Only if none exists: write the report to /tmp/diag.md, then:

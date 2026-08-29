@@ -412,7 +412,16 @@ jobs:
             7. If the card is instead IMPOSSIBLE as specified (cannot be built as
                written, no human decision would unblock it), open no PR and write
                your blocker reason to /tmp/agent-blocker.txt instead (this parks
-               the card in Backlog). Write at most one of escalation/blocker.
+               the card in Backlog).
+            8. HAND BACK (the third exit): if this card was dispatched as one
+               piece of work and is really an epic's worth — several
+               independently shippable PRs, contracts between them — do NOT
+               sprawl it into one unreviewable PR and do NOT silently build a
+               fragment. Open no PR, and write to /tmp/agent-handback.txt the
+               pieces you found, one line each, in plain English. The workflow
+               hands the card back to Planning with your list so the planner
+               decomposes it instead of re-deriving it.
+               Write at most ONE of escalation / blocker / hand-back.
 
       # DRE-1346 Fix 1: the execution result can end {"subtype":"success",
       # "is_error":true} (usage-limit/API death mid-run) — previously the
@@ -520,6 +529,36 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
             python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress,Todo"
+          elif [ -f /tmp/agent-handback.txt ] && [ -s /tmp/agent-handback.txt ]; then
+            # The hand-back rule (DRE-2727). The agent opened what the card
+            # describes as one piece of work and found an epic's worth: several
+            # independent PRs, several owners, contracts between them. The two
+            # existing exits are both wrong for it — an escalation asks the CEO
+            # a question nobody needs to answer ("should this be planned?" has
+            # one answer), and a blocker parks it inert in Backlog where the
+            # planner never sees it. So it goes back to Planning, which is the
+            # lane that owes a decomposition, with the pieces the agent already
+            # found written down so the planner does not re-derive them.
+            #
+            # Checked FIRST of the three stop-before-a-PR branches: it is the
+            # most specific, and an agent that wrote a hand-back note has
+            # already decided the card cannot ship as one PR.
+            #
+            # `advance`, not `state`: cmd_state's DRE-1885 building-card guard
+            # re-routes an In Progress card aimed at a backlog-type state back
+            # to Todo, which would re-dispatch straight into the same sprawl.
+            # cmd_advance writes the target directly and still refuses to drag
+            # a card that went Done in the meantime (DRE-2316).
+            {
+              echo "🤖 Handed back to Planning: this card was dispatched as one piece of work and is an epic's worth. The agent stopped rather than sprawl it into one unreviewable pull request."
+              echo ""
+              cat /tmp/agent-handback.txt
+              echo ""
+              echo "Run: $RUN_URL"
+            } > /tmp/handback-comment.md
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+              "$(cat /tmp/handback-comment.md)"
+            python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "In Progress,Todo" || true
           elif [ -f /tmp/agent-escalation.txt ] && [ -s /tmp/agent-escalation.txt ]; then
             # Escalate-by-exception (DRE-1655/1706): the agent hit GENUINE
             # uncertainty — ambiguous intent it can't safely resolve, a

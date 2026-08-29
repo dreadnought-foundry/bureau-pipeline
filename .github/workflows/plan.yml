@@ -110,8 +110,10 @@ jobs:
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
 
-      # Sub-issue descriptions must carry this repo's slug on their
-      # `**Repo:**` line so the relay routes them back here.
+      # The slug this repo's cards route by. `subissue` inherits the
+      # `repo:<slug>` LABEL from the epic (DRE-1699 — the label is canonical
+      # and the `**Repo:**` body stamp is a deprecated legacy fallback); the
+      # planner prompt uses this value to name the slug it is planning for.
       - name: Resolve repo slug
         id: repo
         if: steps.gate.outputs.bounced != 'true'
@@ -291,7 +293,10 @@ jobs:
             3. Create each sub-issue with:
                  python3 .bureau-pipeline/scripts/linear_ops.py subissue \
                    "${{ github.event.client_payload.identifier }}" "<title>" <desc-file>
-               Every description MUST start with a line `**Repo:** ${{ steps.repo.outputs.slug }}`,
+               `subissue` inherits the `repo:${{ steps.repo.outputs.slug }}`
+               label from this epic, which is the canonical repo signal
+               (DRE-1699) — do NOT write the deprecated repo stamp line into
+               the body. Every description MUST
                include `## Acceptance criteria`, and — for every sub-issue
                that must wait for a sibling — end with a line in EXACTLY this
                form (the dependency gate parses it):
@@ -332,8 +337,9 @@ jobs:
                    "${{ github.event.client_payload.identifier }}" "<plan>"
                Write the plan in PLAIN ENGLISH for a non-technical reader:
                what will be built, in what order, what could go wrong, rough
-               size. End with: "To start the build: move this epic to Todo
-               again — the children will flow automatically in order."
+               size. End with: "To start the build: move ONLY this epic to
+               In Progress — the children promote automatically, in order.
+               Do not move the children by hand."
             6. If the intent is too ambiguous to plan, create NO sub-issues,
                write NO artifact, and instead post a comment asking the
                specific questions you need answered.

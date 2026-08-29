@@ -81,11 +81,11 @@ green-lit at N cards, running M, plus any card that joined without the plan
 moving with it (scripts/mid_epic.py owns the whole mechanism).
 
 An epic counts as ACTIVATED in EITHER Todo OR In Progress (DRE-1893). The CEO's
-activation action is moving an approved epic to **Todo** (lifecycle Backlog →
-Planning → Todo); In Progress is a downstream/system progression. Todo is purely
-ADDITIVE to the pre-existing In Progress trigger, so both activate identically
-and nothing that worked before changes. MAX_WIP and the blocker checks are
-unchanged — only the set of parent states that count as "active" widened.
+activation action is moving an approved epic to **In Progress** — that is what
+standards/card-quality.md and the planner brief tell them, and what the plan
+comment asks for (DRE-2727). Todo remains accepted and activates identically, so
+an epic started the old way still flows; the set of parent states that count as
+"active" is unchanged, and so are MAX_WIP and the blocker checks.
 
 EPIC-LEVEL dependencies (DRE-1772): the gate also honours dependencies between
 EPICS. Before promoting an epic's children, it checks that EPIC's own
@@ -186,11 +186,12 @@ def resolve_max_wip(raw):
 MAX_WIP = resolve_max_wip(os.environ.get("MAX_WIP"))
 
 # Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893).
-# The CEO activates an approved epic by moving it to **Todo** (lifecycle Backlog
-# → Planning → Todo); In Progress is a later/system progression that historically
-# was the ONLY activation trigger. Todo is ADDITIVE: an epic in either state
-# promotes its unblocked Backlog children. Anything else (Backlog, Planning,
-# Green Light, Done, …) is not active and its children stay parked.
+# The CEO activates an approved epic by moving it to **In Progress** (DRE-2727 —
+# the verb the standard, the planner brief and the plan comment all name). Todo
+# was added by DRE-1893 and is still accepted: an epic in either state promotes
+# its unblocked Backlog children, so an epic started the old way still flows.
+# Anything else (Backlog, Planning, Green Light, Done, …) is not active and its
+# children stay parked.
 EPIC_ACTIVE_STATES = ("Todo", "In Progress")
 
 # Human-hold (DRE-1403). A card whose agent keeps dying with no PR — whether it

@@ -12,11 +12,17 @@ via `claude-code-action` and **cannot load Claude Code Skills**. Shared
 learnings therefore live here as plain markdown that the workflows inject as
 context. Two consumers read these files:
 
-1. **CI agents** — consumed `@main`: a change merged here is live in every
-   product repo on its next pipeline trigger. There are no versioned tags; if a
-   change is risky, test it by pointing one repo's stub at a branch ref first.
+1. **CI agents** — read from the checkout at run time, **at the ref the calling
+   stub passes**. That is a RELEASE TAG (`@vN`, with a matching `pipeline_ref`)
+   for every product repo; only `agent-bureau` and `bureau-pipeline` ride
+   `@main`, as the canary. So a merge here is NOT live in the fleet: it is live
+   on the canary immediately, and everywhere else when a human cuts or
+   re-points `vN` (`docs/self-hosting.md`). Say so when you ship a standards
+   change — a lane change and a brief change do not land together, and assuming
+   they do is how the fleet spends a week operating the old model. If a change
+   is risky, point one repo's stub at a branch ref first.
 2. **The interactive plugin** — the operator-facing packaging of the same
-   standards (epic DRE-1644, card DRE-1647).
+   standards (epic DRE-1644, card DRE-1647), regenerated from `@main`.
 
 ### How CI agents actually receive them (DRE-1646)
 
@@ -27,9 +33,9 @@ standards an agent must act on (`ROLE_STANDARDS`). Every agent-bearing workflow
 these files **from the checkout at run time** and concatenates comms + the
 role's standards + the role brief into `.bureau-pipeline/agent-context.md`. The
 agent prompt then reads that one file FIRST. Because the files are read at run
-time and product repos consume the pipeline `@main`, editing a standard here
-propagates to every repo's agents on the next run — no workflow change, no
-per-repo copy. The per-role mapping:
+time, editing a standard here reaches an agent on its next run with no workflow
+change and no per-repo copy — but only once that repo's pinned ref carries the
+commit (the channel note above). The per-role mapping:
 
 | Role | Standards injected (comms + untrusted-content are added to all) |
 |---|---|
@@ -66,6 +72,8 @@ per-repo copy. The per-role mapping:
 - If two sources say the same rule, state it here once and have the briefs point
   here — do not duplicate the rule into a brief.
 - All changes land via PR (this repo is **public** — no secrets, keys, or tokens
-  may ever live here). A merge to `main` rolls out everywhere; ship small.
+  may ever live here). A merge to `main` rolls out on the canary immediately and
+  to the fleet when the release channel advances; ship small, and say in the PR
+  when the fleet will actually read the change.
 - When a standard supersedes a rule that was inline in a brief, replace the
   brief's copy with a one-line `see standards/<file>.md` pointer.
