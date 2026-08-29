@@ -36,20 +36,27 @@ Three rules baked in, each one bought:
     merge gate reads verdicts out of comments, so these markers deliberately
     share no prefix with one, and every reason an agent writes is collapsed to
     a single line before it can reach `$GITHUB_OUTPUT`.
-  * ...BUT THE MARKERS ARE THIS GATE'S OWN CREDENTIAL, so they are bound to
-    the identity that may write them: only the pipeline's own comments are
-    read (`trusted_bodies`, fed by `dump-comments --with-authors`). Without
-    that, two comments anyone on the epic could post overrode a real critic
-    rejection, and one refunded a spent budget — both silently.
+  * ...BUT THE MARKERS ARE THIS GATE'S OWN CREDENTIAL, so a record has to be
+    narrower than a line of text somebody wrote. Two conditions, and both are
+    required (`trusted_bodies` + `_sole_record`): the pipeline itself wrote the
+    comment, AND the comment says nothing but the record. Identity alone is not
+    enough — the shared Linear key also posts the planner's own plan write-up
+    to the same epic, freeform prose derived from untrusted card text, and one
+    line inside it matching a marker spent a round nobody ran.
 
 CLI:
   charter <stage> [--sight-file F]   the stage's prompt block
   mechanical [--plan-comment-file F] [--surfaces-dir D]   cards on stdin
-  decide --stage S --result-file F [--epic E] [--github-output F] [--note-file F]
+  decide --stage S --result-file F [--epic E] [--github-output F]
+         [--note-file F] [--record-file F]
                                      comment thread (JSON array) on stdin,
-                                     from `dump-comments --with-authors`
+                                     from `dump-comments --with-authors`.
+                                     The note and the record are TWO comments.
   sight --this <EPIC>                epics in flight (JSON array) on stdin
-  cycle-start --epic <EPIC>          the note that opens a planning attempt
+  cycle-start --epic <EPIC> [--record]
+                                     the note that opens a planning attempt,
+                                     and (--record) the boundary line itself —
+                                     again two comments, never one
   rate --stage S                     comment thread on stdin
   collisions                         comment thread on stdin
   late-collision --epic E --with E2 --detail "…"   print the marker line
@@ -371,17 +378,51 @@ def trusted_bodies(entries) -> list[str]:
     return out
 
 
+def _sole_record(pattern, body: str):
+    """`pattern` matched against a comment that says NOTHING BUT that line.
+
+    The second half of the credential, and the half `trusted_bodies` cannot
+    supply (DRE-2721 review round 3). "The pipeline wrote it" is far wider than
+    "this module wrote it": the same shared Linear key posts the PLANNER's plan
+    write-up to the same epic — freeform LLM prose derived from the epic's own
+    untrusted description, and instructed by `briefs/planner.md` to explain
+    this very gate. Matched line-by-line, one sentence of that write-up quoting
+    or paraphrasing `standards/plan-critic.md`'s worked example counted as a
+    round nobody ran: combined with the critic's own current SEND_BACK it
+    reached the bound, and a real rejection — a migration card with no operator
+    step — was silently waved through to build. The boundary line does the same
+    damage in the other direction, refunding a budget that was legitimately
+    spent.
+
+    So a record is one line, alone in its comment. Prose can quote a marker,
+    explain one, or be steered by injected card text into echoing one, and none
+    of it qualifies — there is no line to embed it in. That is why `decide` and
+    `cycle-start` each emit their human note and their record as two SEPARATE
+    comments (`--note-file` / `--record-file`, `--record`).
+
+    Returns the match, or None.
+    """
+    text = (body or "").strip()
+    # `\s+` inside the record patterns spans newlines, so a wrapped body could
+    # otherwise satisfy a "whole body" match across two lines.
+    if "\n" in text or "\r" in text:
+        return None
+    return pattern.fullmatch(text)
+
+
 def parse_markers(bodies: list) -> list[dict]:
     """Every critic-round marker in a comment thread, oldest→newest.
 
-    At most ONE marker per comment (the first): the reason field is written by
-    an agent reading untrusted epic prose, and a reason quoting a marker line
-    must not be able to add a round nobody ran. And only the pipeline's own
-    comments are read at all — see `trusted_bodies`.
+    A comment records a round only when the pipeline wrote it
+    (`trusted_bodies`) AND it is nothing but the marker (`_sole_record`). Both
+    halves are load-bearing: the first keeps a bystander's comment out, the
+    second keeps the pipeline's OWN prose out — including a critic's reason
+    field quoting a marker, which is why at most one round can ever come from
+    one comment.
     """
     rows = []
     for body in trusted_bodies(bodies):
-        m = _MARKER.search(body or "")
+        m = _sole_record(_MARKER, body)
         if not m:
             continue
         rows.append({
@@ -400,17 +441,17 @@ def cycle_marker(epic: str) -> str:
 
 
 def cycle_start_note(epic: str) -> str:
-    """What plan.yml posts to the epic when a planning attempt begins.
-
-    The human half says what the machine half means, because the CEO reads
-    this thread: the line is why a re-planned epic gets its rounds back.
+    """The HUMAN half of opening a planning attempt, for the CEO reading the
+    thread. It carries no boundary line: `cycle_marker` is posted as its own
+    comment right after this one, because a record that shares a comment with
+    prose is a record any prose can forge (`_sole_record`).
     """
-    return "\n\n".join([
-        "📋 A fresh planning attempt starts here. Both critics count their "
-        "rounds from this line, so a re-planned epic gets its own revision "
-        "round rather than inheriting a budget the last attempt already spent.",
-        cycle_marker(epic),
-    ])
+    return (
+        f"📋 A fresh planning attempt on {epic} starts here. Both critics count "
+        "their rounds from this point, so a re-planned epic gets its own "
+        "revision round rather than inheriting a budget the last attempt "
+        "already spent."
+    )
 
 
 def current_cycle(bodies: list, epic: str | None = None) -> list[str]:
@@ -423,10 +464,10 @@ def current_cycle(bodies: list, epic: str | None = None) -> list[str]:
     Three things a boundary has to be, because it hands a stage a fresh budget
     and an unbounded loop is how 17 cards sat in a lane for 27 days:
 
-      * Its own comment. A comment carrying a critic-round marker never opens a
-        cycle: the reason field is written by an agent that has just read
-        untrusted epic prose, and a reason quoting a boundary line must not
-        hand its own stage a fresh budget.
+      * ITS OWN COMMENT, and the whole of it (`_sole_record`). A boundary
+        quoted inside prose — a critic's reason field, the planner's plan
+        write-up, anything an agent wrote after reading untrusted epic text —
+        opens nothing.
       * The pipeline's. Only the run that decides an epic is being planned
         writes one, so only its own comments are read (`trusted_bodies`).
       * About THIS epic, when the caller says which one. The standard's worked
@@ -445,8 +486,10 @@ def current_cycle(bodies: list, epic: str | None = None) -> list[str]:
     bodies = trusted_bodies(bodies)
     start = 0
     for i, body in enumerate(bodies):
-        m = _CYCLE.search(body)
-        if not m or _MARKER.search(body):
+        # A body that is exactly a boundary cannot also be exactly a marker, so
+        # the old "a marker never opens a cycle" guard is now structural.
+        m = _sole_record(_CYCLE, body)
+        if not m:
             continue
         if epic and m.group("epic") != epic:
             continue
@@ -488,7 +531,8 @@ def collision_counts(bodies: list) -> dict:
     """The two counters, kept apart: caught by the post critic, and found later."""
     caught = sum(r["collisions"] for r in parse_markers(bodies)
                  if r["stage"] == STAGE_POST)
-    later = sum(1 for body in trusted_bodies(bodies) if _LATE_COLLISION.search(body))
+    later = sum(1 for body in trusted_bodies(bodies)
+                if _sole_record(_LATE_COLLISION, body))
     return {"caught_at_review": caught, "found_later": later}
 
 
@@ -740,16 +784,25 @@ def _cmd_decide(args) -> int:
         else "send-back rate at this critic so far on this planning attempt: "
              "first round"
     )
+    # TWO comments, never one. The note is for the CEO reading the epic; the
+    # record is this gate's credential and says nothing else, because a record
+    # sharing a comment with prose is a record that prose can forge
+    # (`_sole_record`).
     body = "\n\n".join([
         f"{icon} **{title}** — round {round_n} of {MAX_ROUNDS}: {note}",
         *( [f"Reason: {reason}"] if reason else [] ),
         rate_text,
-        marker(args.stage, round_n, result, reason, collisions),
     ])
+    record = marker(args.stage, round_n, result, reason, collisions)
     if args.note_file:
         with open(args.note_file, "w", encoding="utf-8") as f:
             f.write(body + "\n")
+    if args.record_file:
+        with open(args.record_file, "w", encoding="utf-8") as f:
+            f.write(record + "\n")
     print(body)
+    print()
+    print(record)
     return 0
 
 
@@ -770,7 +823,7 @@ def _cmd_collisions(_args) -> int:
 
 
 def _cmd_cycle_start(args) -> int:
-    print(cycle_start_note(args.epic))
+    print(cycle_marker(args.epic) if args.record else cycle_start_note(args.epic))
     return 0
 
 
@@ -802,6 +855,9 @@ def main(argv: list[str]) -> int:
     d.add_argument("--result-file", required=True)
     d.add_argument("--github-output", default=None)
     d.add_argument("--note-file", default=None)
+    # The round record, for its OWN comment. Keeping it out of the note is what
+    # makes "the pipeline wrote a bare marker" mean something (`_sole_record`).
+    d.add_argument("--record-file", default=None)
     d.set_defaults(fn=_cmd_decide)
 
     s = sub.add_parser("sight", help="cross-epic scope; epics on stdin")
@@ -814,6 +870,8 @@ def main(argv: list[str]) -> int:
 
     y = sub.add_parser("cycle-start", help="the note that opens a planning attempt")
     y.add_argument("--epic", required=True)
+    y.add_argument("--record", action="store_true",
+                   help="print the boundary line alone, for its own comment")
     y.set_defaults(fn=_cmd_cycle_start)
 
     x = sub.add_parser("collisions", help="both collision counters; thread on stdin")

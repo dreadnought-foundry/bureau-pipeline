@@ -62,16 +62,28 @@ a better first critic — not another round. Each round writes one
 `plan-critic:` marker to the epic and the rate is read back out of them
 (`plan_critic.py rate`), the same convention as the design-parity ledger.
 
-**A marker counts only if the pipeline wrote it.** Because the bound is
-enforced entirely out of those markers, they are this gate's credential — and a
-Linear comment thread is writable by anyone with access to the card. The thread
-is therefore read with authorship (`dump-comments --with-authors`) and only the
-pipeline's own comments are parsed, with the cycle boundary additionally scoped
-to the epic being decided. Without that, two ordinary comments overrode a real
+**A record is a comment the pipeline wrote that says nothing else.** Because the
+bound is enforced entirely out of those markers, they are this gate's
+credential, and two things have to be true of one.
+
+It has to be **the pipeline's**: a Linear comment thread is writable by anyone
+with access to the card, so the thread is read with authorship
+(`dump-comments --with-authors`), with the cycle boundary additionally scoped to
+the epic being decided. Without that, two ordinary comments overrode a real
 critic rejection and promoted the children to build, and one refunded a spent
-budget so the plan could circle indefinitely — both silently, and neither
-needing a hostile actor, since this standard's own worked example is a literal
-boundary line (`standards/untrusted-content.md`).
+budget so the plan could circle indefinitely.
+
+And it has to be **the whole comment**. Authorship alone resolves to "posted
+with the shared Linear key", which the planner also holds: its plan write-up
+lands in the same thread, freeform prose over the epic's untrusted description,
+and `briefs/planner.md` now asks it to explain this gate. Read line by line, one
+sentence quoting the worked example was a round nobody ran. So every round posts
+its CEO-facing note and its record as **two comments**, and a marker embedded in
+prose is prose.
+
+Neither failure needs a hostile actor — this standard's own worked example is a
+literal boundary line — and neither leaves anything a reader would see as wrong
+(`standards/untrusted-content.md`).
 
 ### Why the second critic gets cross-epic sight (D3, answered 2026-08-25)
 

@@ -233,6 +233,26 @@ class TheBoundIsWired(unittest.TestCase):
             # so the standard's own worked example stays inert elsewhere.
             self.assertIn("--epic", run, name)
 
+    def test_every_decider_posts_its_record_as_a_comment_of_its_own(self):
+        """Authorship is only half the credential. The same Linear key posts
+        the PLANNER's plan write-up to the same epic — freeform prose over
+        untrusted card text — so a record has to be a comment that says nothing
+        else (`plan_critic._sole_record`). That only holds while the run keeps
+        the record out of the note the CEO reads: one decision, two comments.
+        """
+        deciders = [s for s in steps()
+                    if "plan_critic.py decide" in str(s.get("run") or "")]
+        self.assertTrue(deciders)
+        for s in deciders:
+            run, name = str(s.get("run")), s.get("name")
+            self.assertIn("--record-file", run, name)
+            self.assertEqual(run.count("linear_ops.py comment"), 2, name)
+
+    def test_the_boundary_is_posted_alone_too(self):
+        route = str(step_named(ROUTE).get("run") or "")
+        self.assertIn("cycle-start --epic \"$EPIC\" --record", route)
+        self.assertEqual(route.count("linear_ops.py comment"), 2)
+
     def test_the_job_timeout_leaves_room_for_two_planner_runs_and_two_reviews(self):
         doc = yaml.safe_load(wf_src())
         timeout = doc["jobs"]["plan"]["timeout-minutes"]

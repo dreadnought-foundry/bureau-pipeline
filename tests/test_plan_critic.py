@@ -214,7 +214,7 @@ class TheBoundIsPerPlanningAttempt(unittest.TestCase):
 
     def test_a_fresh_cycle_gives_the_new_attempt_its_own_revision_round(self):
         self.assertEqual(pc.send_backs(self.SPENT, pc.STAGE_PRE), 2)
-        fresh = pc.current_cycle(self.SPENT + [pc.cycle_start_note("DRE-2721")])
+        fresh = pc.current_cycle(self.SPENT + [pc.cycle_marker("DRE-2721")])
         prior = pc.send_backs(fresh, pc.STAGE_PRE)
         self.assertEqual(prior, 0, "the new attempt inherited the old one's budget")
         action, _ = pc.decide(pc.SEND_BACK, prior, reason="a card names no repo")
@@ -224,7 +224,7 @@ class TheBoundIsPerPlanningAttempt(unittest.TestCase):
         """A fresh budget, not an unbounded one — the second send-back of the
         new cycle still reaches the CEO."""
         thread = self.SPENT + [
-            pc.cycle_start_note("DRE-2721"),
+            pc.cycle_marker("DRE-2721"),
             pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "a card names no repo"),
         ]
         prior = pc.send_backs(pc.current_cycle(thread), pc.STAGE_PRE)
@@ -239,15 +239,15 @@ class TheBoundIsPerPlanningAttempt(unittest.TestCase):
         thread = [
             pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "no card manufactures the operator step"),
             pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "still none"),
-            pc.cycle_start_note("DRE-2721"),
+            pc.cycle_marker("DRE-2721"),
         ]
         self.assertEqual(pc.send_backs(pc.current_cycle(thread), pc.STAGE_POST), 0)
 
     def test_only_the_most_recent_boundary_counts(self):
         thread = [
-            pc.cycle_start_note("DRE-2721"),
+            pc.cycle_marker("DRE-2721"),
             pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "attempt two, round one"),
-            pc.cycle_start_note("DRE-2721"),
+            pc.cycle_marker("DRE-2721"),
         ]
         self.assertEqual(pc.current_cycle(thread), [])
 
@@ -261,7 +261,7 @@ class TheBoundIsPerPlanningAttempt(unittest.TestCase):
         """`How often the second critic sends a plan back` is a measurement
         across attempts; the BOUND is per attempt. Two questions, and the
         caller picks the scope by what it hands in."""
-        thread = self.SPENT + [pc.cycle_start_note("DRE-2721"),
+        thread = self.SPENT + [pc.cycle_marker("DRE-2721"),
                                pc.marker(pc.STAGE_PRE, 1, pc.PASS)]
         self.assertEqual(pc.rate(thread, pc.STAGE_PRE)["rounds"], 3)
         self.assertEqual(pc.rate(pc.current_cycle(thread), pc.STAGE_PRE)["rounds"], 1)
@@ -279,10 +279,17 @@ class TheBoundIsPerPlanningAttempt(unittest.TestCase):
         self.assertEqual(pc.send_backs(pc.current_cycle(thread), pc.STAGE_PRE), 2)
 
     def test_the_boundary_is_not_a_verdict_credential(self):
+        for text in (pc.cycle_start_note("DRE-2721"), pc.cycle_marker("DRE-2721")):
+            for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
+                self.assertNotIn(forbidden, text)
+
+    def test_the_human_note_that_opens_an_attempt_carries_no_boundary(self):
+        """The note is prose the CEO reads and the boundary is a credential, so
+        they are two comments. Were they one, every pipeline-authored comment
+        that quotes the note would be a comment that refunds a budget."""
         note = pc.cycle_start_note("DRE-2721")
-        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
-            self.assertNotIn(forbidden, note)
-        self.assertIn(pc.cycle_marker("DRE-2721"), note)
+        self.assertNotIn(pc.CYCLE_PREFIX, note)
+        self.assertEqual(pc.current_cycle([note, "later"]), [note, "later"])
 
 
 def ours(body: str) -> dict:
@@ -334,7 +341,7 @@ class TheRoundRecordIsBoundToItsAuthor(unittest.TestCase):
         """Repro 1, end to end: the critic's current SEND_BACK must still hold
         the plan, however many rounds a stranger claims already happened."""
         thread = [
-            ours(pc.cycle_start_note(self.EPIC)),
+            ours(pc.cycle_marker(self.EPIC)),
             stray(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "x")),
             stray(pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "y")),
         ]
@@ -364,7 +371,7 @@ class TheRoundRecordIsBoundToItsAuthor(unittest.TestCase):
         thread = [
             ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "the cards do not sum to the epic")),
             ours(pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "they still do not")),
-            ours(pc.cycle_start_note(self.EPIC)),
+            ours(pc.cycle_marker(self.EPIC)),
         ]
         prior = pc.send_backs(pc.current_cycle(thread, self.EPIC), pc.STAGE_PRE)
         self.assertEqual(prior, 0)
@@ -372,13 +379,13 @@ class TheRoundRecordIsBoundToItsAuthor(unittest.TestCase):
         self.assertEqual(action, "hold")
 
     def test_a_boundary_naming_another_epic_is_not_this_epics_boundary(self):
-        """The standard's worked example names DRE-2721 verbatim. Pasted onto a
+        """The standard's worked example names DRE-2721 verbatim. Posted onto a
         different epic — by the operator, whose key the pipeline shares — it
         must not refund that epic's budget either."""
         thread = [
             ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "the cards do not sum to the epic")),
             ours(pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "they still do not")),
-            ours("quoting standards/plan-critic.md:\n\n" + pc.cycle_marker("DRE-2721")),
+            ours(pc.cycle_marker("DRE-2721")),
         ]
         self.assertEqual(pc.send_backs(pc.current_cycle(thread, "DRE-9100"), pc.STAGE_PRE), 2)
         # ...and on the epic it really does name, it still works.
@@ -405,6 +412,123 @@ class TheRoundRecordIsBoundToItsAuthor(unittest.TestCase):
                          ["vouched", "mine"])
         self.assertEqual(pc.trusted_bodies([]), [])
         self.assertEqual(pc.trusted_bodies(None), [])
+
+
+#: What the PLANNER posts to the same epic, through the same `linear_ops.py
+#: comment` call and the same shared Linear key: a plain-English write-up for
+#: the CEO, written by an LLM that has just read the epic's untrusted
+#: description and been told (briefs/planner.md) to explain the two-critic
+#: gate. Quoting the worked example out of standards/plan-critic.md is the
+#: obvious way to do that — and nothing about this comment is hostile.
+PLANNER_WRITE_UP = """\
+Plan for DRE-2721 — two plan critics.
+
+We will review every plan twice: once before you read it, once after you
+approve it. Both reviews give up after two rounds, so a plan can never circle
+forever. The pipeline records each round on this card as a line like
+
+{record}
+
+so the send-back rate stays readable over time.
+
+To start the build: move this epic to Todo again — the children will flow
+automatically in order.
+"""
+
+
+class ARecordIsAComment_ThatSaysNothingElse(unittest.TestCase):
+    """The other half of the credential, and the half authorship cannot supply.
+
+    Found in review round 3. `trusted_bodies` narrowed the round history to
+    "the pipeline wrote it" — but the pipeline's shared Linear key writes far
+    more to an epic than round decisions. `.github/workflows/plan.yml` has the
+    PLANNER post its own plan write-up to the same thread through the same
+    call: freeform prose, derived from the epic's untrusted description, and
+    now instructed to explain this very gate to the CEO.
+
+    Matched line by line, one sentence of that write-up quoting the standard's
+    worked example WAS a round nobody ran. Combined with the critic's own
+    current SEND_BACK it reached the bound, and a real rejection — a migration
+    card with no operator step — was silently promoted to build. The boundary
+    line does the same damage in reverse, refunding a spent budget.
+
+    So a record is one line, alone in its comment, from the pipeline. Prose can
+    quote a marker and none of it counts.
+    """
+
+    EPIC = "DRE-2721"
+
+    def _write_up(self, record: str) -> dict:
+        return ours(PLANNER_WRITE_UP.format(record=record))
+
+    def test_a_planner_write_up_quoting_a_marker_records_no_round(self):
+        thread = [self._write_up(
+            pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "the operator step is missing"))]
+        self.assertEqual(pc.parse_markers(thread), [])
+        self.assertEqual(pc.send_backs(thread, pc.STAGE_POST), 0)
+        self.assertEqual(pc.rate(thread, pc.STAGE_POST)["rounds"], 0)
+
+    def test_a_quoted_marker_cannot_override_a_real_rejection(self):
+        """The repro, end to end: one quoted line plus the critic's own current
+        send-back reached the bound, and the finding was discarded."""
+        thread = [self._write_up(
+            pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "x"))]
+        prior = pc.send_backs(pc.current_cycle(thread, self.EPIC), pc.STAGE_POST)
+        self.assertEqual(prior, 0, "a quoted marker was counted against the budget")
+        action, _ = pc.decide(
+            pc.SEND_BACK, prior,
+            "DRE-9003 migrates a table but no card runs the migration")
+        self.assertEqual(action, "hold",
+                         "a quoted marker promoted a plan the critic rejected")
+
+    def test_a_planner_write_up_quoting_the_boundary_refunds_nothing(self):
+        spent = [
+            ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "the cards do not sum to the epic")),
+            ours(pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "they still do not")),
+        ]
+        thread = spent + [self._write_up(pc.cycle_marker(self.EPIC))]
+        prior = pc.send_backs(pc.current_cycle(thread, self.EPIC), pc.STAGE_PRE)
+        self.assertEqual(prior, 2, "a quoted boundary erased the rounds already spent")
+        action, _ = pc.decide(pc.SEND_BACK, prior)
+        self.assertEqual(action, "proceed", "a quoted boundary reopened the loop")
+
+    def test_a_quoted_late_collision_line_moves_no_counter(self):
+        thread = [
+            ours(pc.marker(pc.STAGE_POST, 1, pc.PASS, collisions=1)),
+            self._write_up(pc.late_collision_marker(
+                self.EPIC, "DRE-2700", "both edit scripts/reconcile.py")),
+        ]
+        self.assertEqual(pc.collision_counts(thread),
+                         {"caught_at_review": 1, "found_later": 0})
+
+    def test_a_record_wrapped_over_two_lines_is_not_a_record(self):
+        """`\\s+` inside the record patterns spans newlines, so "the whole body
+        matches" is not on its own enough — the body has to be ONE line."""
+        wrapped = pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "x").replace(
+            " round=", "\nround=", 1)
+        self.assertEqual(pc.parse_markers([ours(wrapped)]), [])
+        self.assertEqual(
+            pc.current_cycle([ours(pc.cycle_marker(self.EPIC).replace(
+                " start ", "\nstart ", 1))], self.EPIC),
+            [pc.cycle_marker(self.EPIC).replace(" start ", "\nstart ", 1)])
+
+    def test_the_pipelines_own_bare_records_still_count(self):
+        """The narrowing must not cost the gate its own memory — every record
+        the run writes is posted as its own comment for exactly this reason."""
+        thread = [
+            ours(pc.cycle_marker(self.EPIC)),
+            ours(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "no operator step")),
+            ours(pc.late_collision_marker(self.EPIC, "DRE-2700", "both edit reconcile.py")),
+        ]
+        self.assertEqual(pc.send_backs(pc.current_cycle(thread, self.EPIC),
+                                       pc.STAGE_POST), 1)
+        self.assertEqual(pc.collision_counts(thread)["found_later"], 1)
+
+    def test_the_whitespace_a_comment_round_trip_adds_is_tolerated(self):
+        """Linear round-trips a comment body; a trailing newline must not lose
+        the round the run recorded."""
+        record = pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "a card names no repo")
+        self.assertEqual(pc.send_backs([ours("\n" + record + "  \n")], pc.STAGE_PRE), 1)
 
 
 class TheMarkerIsTheRecord(unittest.TestCase):
@@ -648,6 +772,39 @@ class TheCli(unittest.TestCase):
         written = open(gho).read()
         self.assertIn("action=proceed", written)
         self.assertIn("round=2", written)
+
+    def test_decide_writes_the_note_and_the_record_as_two_separate_files(self):
+        """They become two comments, because a record sharing a comment with
+        prose is a record that prose can forge."""
+        result = os.path.join(self.tmp, "r.md")
+        with open(result, "w") as f:
+            f.write(pc.result_line(pc.SEND_BACK, "DRE-9001 has no acceptance criteria"))
+        note_file = os.path.join(self.tmp, "note.md")
+        record_file = os.path.join(self.tmp, "record.txt")
+        out = self._run("decide", "--stage", "pre", "--result-file", result,
+                        "--note-file", note_file, "--record-file", record_file,
+                        stdin=json.dumps([]))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        note = open(note_file).read()
+        record = open(record_file).read()
+        self.assertNotIn(pc.MARKER_PREFIX, note,
+                         "the CEO-facing note carries a forgeable record line")
+        self.assertIn("DRE-9001 has no acceptance criteria", note)
+        # The record is the whole of its comment, and the module reads it back.
+        self.assertEqual(record.strip(), pc.marker(
+            pc.STAGE_PRE, 1, pc.SEND_BACK, "DRE-9001 has no acceptance criteria"))
+        self.assertEqual(pc.send_backs([record], pc.STAGE_PRE), 1)
+        self.assertEqual(pc.send_backs([note], pc.STAGE_PRE), 0)
+
+    def test_cycle_start_prints_the_note_and_the_boundary_separately(self):
+        note = self._run("cycle-start", "--epic", "DRE-2721")
+        record = self._run("cycle-start", "--epic", "DRE-2721", "--record")
+        self.assertEqual((note.returncode, record.returncode), (0, 0),
+                         note.stderr + record.stderr)
+        self.assertNotIn(pc.CYCLE_PREFIX, note.stdout)
+        self.assertEqual(record.stdout.strip(), pc.cycle_marker("DRE-2721"))
+        self.assertEqual(pc.current_cycle([note.stdout, record.stdout, "after"],
+                                          "DRE-2721"), ["after"])
 
     def test_decide_survives_a_missing_result_file(self):
         gho = os.path.join(self.tmp, "out")

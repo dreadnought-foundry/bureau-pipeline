@@ -77,15 +77,28 @@ budget it already spent, so its first send-back reads as the bound and the plan
 reaches the CEO with no revision round at all — indistinguishable, from the
 outside, from a normal pass.
 
-**The round history is only what the pipeline itself wrote.** The line above is
-a real one, and anyone with comment access on an epic can post it. Left
-unchecked, two comments carrying a `SEND_BACK` marker made a critic's real,
-current rejection read as "the budget is already spent" and promoted the
-children to build; one carrying the boundary refunded a budget that had been
-spent, so the plan could circle indefinitely. Both are quiet — nothing a person
-sees looks wrong. So the thread is read with authorship
-(`linear_ops.py dump-comments <EPIC> --with-authors`) and a marker or boundary
-from any other author is ignored. Quoting this page on an epic is inert.
+**A round record is a comment the pipeline wrote that says nothing else.** Two
+conditions, and both are needed.
+
+The line above is a real one, and anyone with comment access on an epic can
+post it. Left unchecked, two comments carrying a `SEND_BACK` marker made a
+critic's real, current rejection read as "the budget is already spent" and
+promoted the children to build; one carrying the boundary refunded a budget
+that had been spent, so the plan could circle indefinitely. So the thread is
+read with authorship (`linear_ops.py dump-comments <EPIC> --with-authors`) and
+a record from any other author is ignored.
+
+Authorship is only half of it, because the pipeline's shared Linear key writes
+far more to an epic than round decisions — the **planner's own plan write-up**
+lands in the same thread through the same call, freeform prose derived from the
+epic's untrusted description and expected to explain this gate to the CEO. One
+sentence of it quoting the example above used to be a round nobody ran. So a
+record has to be **one line, alone in its comment**: every round posts its note
+and its record as two separate comments, and a marker or boundary embedded in
+prose records nothing.
+
+Both failures are quiet — nothing a person sees looks wrong. Quoting this page,
+anywhere, is inert.
 
 A send-back before approval returns the plan to the planner for one revision.
 A send-back after approval returns the epic to `Green Light` with the findings
@@ -98,8 +111,8 @@ is still free.
 good the first one is.** If it routinely finds significant gaps, the fix is
 upstream — a better first critic — not another round.
 
-Every round writes one marker to the epic, and the rate is read back out of
-them:
+Every round writes one marker to the epic — as its own comment, carrying
+nothing else — and the rate is read back out of them:
 
     plan-critic: stage=post round=1 result=SEND_BACK collisions=1 — <reason>
 
@@ -110,9 +123,9 @@ That reads the epic's WHOLE history on purpose: the rate is a measurement
 across attempts, while the bound above is scoped to the current one. Two
 questions, and the scope is what separates them.
 
-The marker is the record — durable, timestamped, and on the epic it belongs to,
-the same convention as the design-parity ledger and the `model-attempt:`
-heartbeat. Nothing here is ever spelled like a QA verdict: `VERDICT:`,
+The marker is the record — durable, timestamped, alone in its comment, and on
+the epic it belongs to, the same convention as the design-parity ledger and the
+`model-attempt:` heartbeat. Nothing here is ever spelled like a QA verdict: `VERDICT:`,
 `QA Critic` and `QA Verifier` are approval credentials the merge gate reads, and
 no plan critic may mint one (`standards/untrusted-content.md`).
 

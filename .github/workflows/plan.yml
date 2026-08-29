@@ -183,8 +183,15 @@ jobs:
             # send-back, looking exactly like a normal pass. This is the one
             # step that knows an attempt is starting, so it is where the
             # boundary belongs.
+            #
+            # TWO comments: the note the CEO reads, then the boundary line
+            # ALONE. A record that shares a comment with prose is a record any
+            # pipeline-authored prose can forge — the planner's own plan
+            # write-up included.
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC")"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC" --record)"
           fi
 
       # Heartbeat: record which model this plan attempt uses so the board/
@@ -560,9 +567,15 @@ jobs:
             --result-file "${{ runner.temp }}/plan-critic-pre.md" \
             --github-output "$GITHUB_OUTPUT" \
             --note-file "${{ runner.temp }}/plan-critic-note.md" \
+            --record-file "${{ runner.temp }}/plan-critic-record.txt" \
             < "${{ runner.temp }}/plan-critic-thread.json"
+          # The note the CEO reads, then the round record ALONE in its own
+          # comment — the record is only a credential while nothing else can
+          # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
 
       - name: Re-plan after send-back
         id: replan
@@ -680,9 +693,15 @@ jobs:
             --result-file "${{ runner.temp }}/plan-critic-pre.md" \
             --github-output "$GITHUB_OUTPUT" \
             --note-file "${{ runner.temp }}/plan-critic-note.md" \
+            --record-file "${{ runner.temp }}/plan-critic-record.txt" \
             < "${{ runner.temp }}/plan-critic-thread.json"
+          # The note the CEO reads, then the round record ALONE in its own
+          # comment — the record is only a credential while nothing else can
+          # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
 
       # Hand the checked source to the publish job — jobs do not share a
       # workspace, and the portal deliberately never enters this one.
@@ -853,9 +872,15 @@ jobs:
             --result-file "${{ runner.temp }}/plan-critic-post.md" \
             --github-output "$GITHUB_OUTPUT" \
             --note-file "${{ runner.temp }}/plan-critic-note.md" \
+            --record-file "${{ runner.temp }}/plan-critic-record.txt" \
             < "${{ runner.temp }}/plan-critic-thread.json"
+          # The note the CEO reads, then the round record ALONE in its own
+          # comment — the record is only a credential while nothing else can
+          # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
 
       # Held: the epic goes back to the CEO's queue with the finding, and the
       # children do NOT promote. Green Light is where a plan waits on a human

@@ -26,6 +26,10 @@ The walk, one method per observable the card asks for:
   8. The round history the bound is counted from is the PIPELINE's own writes.
      A comment left by anyone else on the epic — the marker line, or the cycle
      boundary — neither spends a budget nor refunds one.
+  9. ...and authorship alone is not the credential either. The planner posts
+     its plan write-up to this same thread with this same key; a marker or a
+     boundary quoted INSIDE that prose records nothing, because the run writes
+     every record as a comment of its own and reads back nothing else.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_critic_scenario.py -v
 """
@@ -204,6 +208,24 @@ class CriticWalk(unittest.TestCase):
     def _thread(self):
         return [r["body"] for r in self._records()]
 
+    def _note(self):
+        """The CEO-facing half of the last round. Each round posts TWO comments
+        — this one, then the record alone — so a comment carrying prose can
+        never also carry the credential the bound is counted from."""
+        return self._thread()[-2]
+
+    def _record(self):
+        """The machine half: nothing but the marker line."""
+        return self._thread()[-1]
+
+    def _pipeline_comment(self, body: str):
+        """A comment the PIPELINE wrote that is not a round record — the
+        planner's plan write-up is the real one, posted to the same epic
+        through the same `linear_ops.py comment` call and the same key."""
+        records = self._records() + [{"body": body, "authored_by_pipeline": True}]
+        with open(self.thread_path, "w") as f:
+            json.dump(records, f)
+
     def _stray_comment(self, body: str):
         """A comment somebody who is NOT the pipeline left on the epic. Anyone
         with comment access on the card can post one, and it renders exactly
@@ -251,9 +273,10 @@ class CriticWalk(unittest.TestCase):
         out = self._outputs()
         self.assertEqual(out["action"], "proceed",
                          "a plan circled past the bound instead of reaching the CEO")
-        posted = self._thread()[-1]
-        self.assertIn("still do not sum", posted, "the stated reason was not attached")
-        self.assertIn("two failed rounds", posted.lower())
+        self.assertIn("still do not sum", self._note(),
+                      "the stated reason was not attached")
+        self.assertIn("two failed rounds", self._note().lower())
+        self.assertIn("still do not sum", self._record())
 
         self._shell(" Green Light")
         self.assertIn("state Green Light", self._log())
@@ -290,8 +313,8 @@ class CriticWalk(unittest.TestCase):
             self._shell("second critic — decision")
         out = self._outputs()
         self.assertEqual(out["action"], "proceed")
-        self.assertIn("still no card", self._thread()[-1])
-        self.assertIn("two failed rounds", self._thread()[-1].lower())
+        self.assertIn("still no card", self._note())
+        self.assertIn("two failed rounds", self._note().lower())
 
     # --- 7: a re-plan is a fresh attempt ----------------------------------
 
@@ -324,14 +347,14 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(out["action"], "hold",
                          "a re-planned epic inherited the previous attempt's spent budget")
         self.assertEqual(out["round"], "1")
-        self.assertIn("round 1 of 2", self._thread()[-1])
+        self.assertIn("round 1 of 2", self._note())
 
         # ...and it is still bounded: the second send-back of the NEW attempt
         # reaches the CEO with the reason attached.
         self._critic_writes("pre", pc.SEND_BACK, "DRE-9005 still carries none")
         self._shell("first critic — round 2 decision")
         self.assertEqual(self._outputs()["action"], "proceed")
-        self.assertIn("two failed rounds", self._thread()[-1].lower())
+        self.assertIn("two failed rounds", self._note().lower())
 
     # --- 8: the round history is the pipeline's own ------------------------
 
@@ -376,6 +399,80 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(self._outputs()["action"], "proceed",
                          "a stray boundary reopened a loop the bound had closed")
 
+    # --- 8b: a record is a comment that says nothing else -------------------
+
+    def _planner_write_up(self, record: str) -> str:
+        """What the planner posts to this same epic, in the same thread, with
+        the same key — plain English for the CEO, written by an LLM that has
+        just read the epic's untrusted description and been told to explain
+        this gate. Quoting the worked example is the obvious way to do that."""
+        return (
+            "Plan for DRE-2721 — two plan critics.\n\n"
+            "We will review every plan twice: once before you read it, once "
+            "after you approve it, and both reviews give up after two rounds "
+            "so a plan can never circle forever. Each round is recorded on "
+            "this card as a line like\n\n"
+            f"{record}\n\n"
+            "To start the build: move this epic to Todo again."
+        )
+
+    def test_a_planner_write_up_quoting_a_marker_forges_no_round(self):
+        """Authorship alone was not narrow enough: the planner posts to this
+        same thread through the same call and the same key. One quoted line in
+        its write-up made the second critic's real, current rejection — a
+        migration card with nobody to run the migration — read as "the budget
+        is already spent", and the children promoted to build anyway."""
+        self._pipeline_comment(self._planner_write_up(
+            pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "an earlier round")))
+
+        self._critic_writes(
+            "post", pc.SEND_BACK,
+            "DRE-9003 migrates a table but no card manufactures the operator step",
+        )
+        self._shell("second critic — decision")
+        out = self._outputs()
+        self.assertEqual(out["action"], "hold",
+                         "a quoted marker overrode the critic's real rejection")
+        self.assertEqual(out["round"], "1", "a quoted marker was counted as a round run")
+
+        self._shell("second critic sent the plan back")
+        log = self._log()
+        self.assertNotIn("promote", log, "children promoted on a quoted round count")
+        self.assertIn("operator step", log)
+
+    def test_a_planner_write_up_quoting_the_boundary_refunds_nothing(self):
+        for reason in ("no card manufactures the operator step",
+                       "still no card manufactures the operator step"):
+            self._critic_writes("post", pc.SEND_BACK, reason)
+            self._shell("second critic — decision")
+        self.assertEqual(self._outputs()["action"], "proceed")
+
+        self._pipeline_comment(self._planner_write_up(pc.cycle_marker(EPIC)))
+        self._critic_writes("post", pc.SEND_BACK, "and still none")
+        self._shell("second critic — decision")
+        self.assertEqual(self._outputs()["action"], "proceed",
+                         "a quoted boundary reopened a loop the bound had closed")
+
+    def test_the_run_posts_its_records_as_comments_of_their_own(self):
+        """The narrowing only holds because the run stopped writing records
+        into prose. Both halves land on the epic, and only the bare one is
+        read back as a round."""
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "triage"},
+        )
+        self.assertEqual(self._thread()[-1], pc.cycle_marker(EPIC))
+        self.assertNotIn(pc.CYCLE_PREFIX, self._thread()[-2])
+
+        self._critic_writes("pre", pc.SEND_BACK, "DRE-9001 carries no acceptance criteria")
+        self._shell("first critic — round 1 decision")
+        self.assertEqual(
+            self._record(),
+            pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK,
+                      "DRE-9001 carries no acceptance criteria"))
+        self.assertNotIn(pc.MARKER_PREFIX, self._note())
+        self.assertEqual(pc.send_backs(self._thread(), pc.STAGE_PRE), 1)
+
     # --- 5: the rate ------------------------------------------------------
 
     def test_the_send_back_rate_is_readable_from_what_the_run_wrote(self):
@@ -413,9 +510,8 @@ class CriticWalk(unittest.TestCase):
         self._shell("second critic — decision")
         self.assertEqual(self._outputs()["action"], "hold")
 
-        posted = self._thread()[-1]
-        self.assertIn(OTHER_EPIC, posted)
-        self.assertIn("reconcile.py", posted)
+        self.assertIn(OTHER_EPIC, self._note())
+        self.assertIn("reconcile.py", self._note())
 
         counts = pc.collision_counts(self._thread())
         self.assertEqual(counts["caught_at_review"], 1)
