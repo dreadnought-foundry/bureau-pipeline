@@ -24,8 +24,8 @@ critic could not classify at all.
 
 ## What the `hand-built` exclusion actually costs — and why it stays
 
-The review judged the set on two axes. One of them — *must a person look at
-it?* — was read during planning and quoted in the plan. The `hand-built`
+The review judged the set on more than one axis, and one of them — *must a
+person look at it?* — was read during planning and quoted in the plan. The `hand-built`
 labels and the `DEMO:` / `SIGN-OFF (OPERATOR)` title conventions the critic
 resolves that question from **were set by the answer**. Scoring it grades the
 critic on a card it was handed face-up.
