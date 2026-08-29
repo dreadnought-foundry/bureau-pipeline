@@ -39,6 +39,8 @@ per-repo copy. The per-role mapping:
 | planner | card-quality, engineering, vendor-boundaries, design-parity, plan-artifact |
 | critic | engineering, architecture, vendor-boundaries, console-honesty, design-parity, plan-artifact |
 | verifier | design, design-parity |
+| plan-critic-pre | card-quality, design-parity, plan-artifact, plan-critic |
+| plan-critic-post | card-quality, engineering, architecture, vendor-boundaries, plan-artifact, plan-critic |
 | fix / medic | engineering |
 
 ## The standards
@@ -54,6 +56,7 @@ per-repo copy. The per-role mapping:
 | `architecture.md` | The canonical system shape + the load-bearing decisions. |
 | `vendor-boundaries.md` | The vendor-behavior premortem checklist for anything touching an external trigger/event/command, seeded with the 2026-07-12 GitHub-boundary incidents; the critic treats an unanswered question as a finding. |
 | `plan-artifact.md` | What an epic produces for the CEO to green-light — the seven sections, KPIs as a machine-readable ```kpis block, the token-built mockup rule, the generated version record, and the stable `plans/<epic>/` publish path. |
+| `plan-critic.md` | The two plan critics — the first asks whether a plan is fit to take the CEO's time, the second asks what is missing now the approved text IS the specification; the two-failed-round bound, the send-back rate as the measurement, the stated cross-epic scope, and the collision tripwire. |
 | `console-honesty.md` | Badges derive from what actually happened — console state fetched from the source of truth, never inferred from adjacent signals; explicit stale/absent rendering; every state element ships a stale-data test; the critic checks all three on console cards. |
 
 ## How to add or update a standard

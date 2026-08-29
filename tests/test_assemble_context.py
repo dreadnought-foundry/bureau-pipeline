@@ -55,8 +55,9 @@ class MappingTest(unittest.TestCase):
         # console-honesty.md (DRE-2107) goes to the roles that build or
         # review console surfaces rendering pipeline state —
         # engineer/frontend/critic. plan-artifact.md (DRE-2720) goes to the
-        # two roles that handle the epic's CEO-facing artifact — the planner
-        # writes it, the critic judges one — and to nobody else.
+        # roles that handle the epic's CEO-facing artifact — the planner
+        # writes it, the code critic judges one, and both plan critics read
+        # the artifact the CEO green-lights (DRE-2721) — and to nobody else.
         expected = {
             "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
             "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "vendor-boundaries.md", "console-honesty.md"],
@@ -65,6 +66,14 @@ class MappingTest(unittest.TestCase):
             "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md", "plan-artifact.md"],
             "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md"],
             "verifier": ["comms.md", "untrusted-content.md", "design.md", "design-parity.md"],
+            # The two plan critics (DRE-2721). Different questions, so
+            # different context: the pre stage judges the SHAPE of a plan that
+            # is still moving and is deliberately NOT given the engineering
+            # floor or the system shape; the post stage reads the frozen text
+            # as an agent would and gets everything the build roles are held
+            # to, plus the vendor premortem that catches a false claim.
+            "plan-critic-pre": ["comms.md", "untrusted-content.md", "card-quality.md", "design-parity.md", "plan-artifact.md", "plan-critic.md"],
+            "plan-critic-post": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "plan-artifact.md", "plan-critic.md"],
             "fix": ["comms.md", "untrusted-content.md", "engineering.md"],
             "medic": ["comms.md", "untrusted-content.md", "engineering.md"],
         }

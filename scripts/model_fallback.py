@@ -159,6 +159,8 @@ _FALLBACK_MODEL_CONFIG = {
         "critic": "advisory",
         "verifier": "advisory",
         "medic": "advisory",
+        "plan-critic-pre": "advisory",
+        "plan-critic-post": "advisory",
     },
     "discovery": {"on_new_model": "advisory", "alert": True},
     "retired": ["claude-opus-4-8"],

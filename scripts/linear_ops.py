@@ -1071,9 +1071,60 @@ def comment_bodies(identifier: str) -> list[str]:
     return [c.get("body") or "" for c in data["issue"]["comments"]["nodes"]]
 
 
-def cmd_dump_comments(identifier: str) -> None:
-    """Print the card's comment bodies as a JSON array (oldest→newest) so the
-    workflow can feed them to model_fallback.py without a second API client."""
+def comment_records(identifier: str) -> list[dict]:
+    """Every comment on the card WITH who wrote it, oldest→newest.
+
+    `[{"body": str, "authored_by_pipeline": bool}]`. The one authorship fact
+    anything downstream needs: this pipeline's writes all go through a single
+    `LINEAR_API_KEY` that resolves to one Linear user (README — "the relay,
+    reconcile, the planner and every agent share one LINEAR_API_KEY and resolve
+    to the operator's own Linear user"), so "the pipeline wrote this" is
+    exactly "the key's own `viewer` wrote this". A comment from anyone else on
+    the card — a teammate, a guest with comment access — resolves to a
+    different user, and an integration's comment has no `user` at all, which is
+    the same rule README already states for break-glass labels: "a marker
+    applied by a bot actor (an integration we do not own) is not honored."
+
+    Why it exists (DRE-2721 review): `plan_critic.py` counts a plan's review
+    rounds out of markers in this thread, and `comment_bodies` selected bodies
+    and nothing else — so a marker nobody could attribute was a credential
+    anyone could mint. Two stray comments carrying the marker line overrode a
+    real critic rejection and promoted an epic's children to build; one
+    carrying the cycle boundary refunded a budget that had been spent. Neither
+    needs a hostile actor: `standards/plan-critic.md`'s worked example is a
+    literal boundary line.
+
+    An unknown viewer vouches for nobody. That is the safe direction: the round
+    history reads as absent rather than as whatever a stranger wrote.
+    """
+    data = gql(
+        """query($id: String!) { viewer { id } issue(id: $id) {
+             comments(last: 50) { nodes { body user { id } } } } }""",
+        {"id": identifier},
+    )
+    me = (data.get("viewer") or {}).get("id")
+    rows = []
+    for c in data["issue"]["comments"]["nodes"]:
+        author = (c.get("user") or {}).get("id")
+        rows.append({
+            "body": c.get("body") or "",
+            "authored_by_pipeline": bool(me) and author == me,
+        })
+    return rows
+
+
+def cmd_dump_comments(identifier: str, *flags: str) -> None:
+    """`dump-comments <DRE-N> [--with-authors]`.
+
+    Bare: the card's comment bodies as a JSON array (oldest→newest) so the
+    workflow can feed them to model_fallback.py without a second API client.
+
+    `--with-authors`: the same thread as `comment_records` rows instead, for
+    callers that read a machine record out of it and must know who wrote it.
+    """
+    if "--with-authors" in flags:
+        print(json.dumps(comment_records(identifier)))
+        return
     print(json.dumps(comment_bodies(identifier)))
 
 
@@ -1270,6 +1321,65 @@ def cmd_child_descriptions(identifier: str) -> None:
             sys.stdout.write(body.rstrip("\n") + "\n")
 
 
+def cmd_children_json(identifier: str) -> None:
+    """Every child card as `{"identifier", "body"}` records, as a JSON array.
+
+    `child-descriptions` concatenates the bodies, which is right for the
+    "is this UI work?" question and useless for anything that has to say WHICH
+    card is wrong. The plan critics (DRE-2721) report per card — "DRE-9001
+    carries no acceptance criteria" — so they need the identity beside the
+    body, and `plan_critic.py mechanical` reads exactly this shape on stdin.
+    """
+    data = gql(
+        """query($id: String!) {
+             issue(id: $id) { children { nodes { identifier description } } }
+           }""",
+        {"id": identifier},
+    )
+    issue = data.get("issue") or {}
+    nodes = ((issue.get("children") or {}).get("nodes")) or []
+    print(json.dumps([
+        {"identifier": (n or {}).get("identifier"), "body": (n or {}).get("description") or ""}
+        for n in nodes
+    ]))
+
+
+def cmd_epics_in_flight() -> None:
+    """Every epic in flight, as `{"identifier", "title", "state"}` records.
+
+    The post-approval critic's cross-epic sight (DRE-2721 D3). An epic is a
+    card WITH CHILDREN — Linear-native parent/child, never a label
+    (standards/card-quality.md) — so the child count is fetched and filtered
+    here rather than guessed from a title convention.
+
+    The states are `plan_critic.IN_FLIGHT_EPIC_STATES`, imported rather than
+    restated: the critic's charter tells the CEO exactly which lanes it looked
+    in, and a second copy of that tuple here would let the sentence and the
+    query drift apart.
+    """
+    import plan_critic
+
+    nodes = gql_paged(
+        """query($states: [String!]!, $after: String) {
+             issues(first: 100, after: $after, filter: {
+               team: {key: {eq: "DRE"}},
+               state: {name: {in: $states}}
+             }) { nodes {
+               identifier title state { name } children { nodes { id } }
+             } pageInfo { hasNextPage endCursor } } }""",
+        {"states": list(plan_critic.IN_FLIGHT_EPIC_STATES)},
+    )
+    print(json.dumps([
+        {
+            "identifier": n.get("identifier"),
+            "title": n.get("title"),
+            "state": (n.get("state") or {}).get("name"),
+        }
+        for n in nodes
+        if ((n.get("children") or {}).get("nodes"))
+    ]))
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     try:
@@ -1291,6 +1401,8 @@ if __name__ == "__main__":
             "remove-label": remove_label,
             "description": cmd_description,
             "child-descriptions": cmd_child_descriptions,
+            "children-json": cmd_children_json,
+            "epics-in-flight": cmd_epics_in_flight,
         }[cmd](*args)
     except LinearError as e:
         # The ONLY process abort: explicit, at top level, CLI-only. Library

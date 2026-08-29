@@ -272,6 +272,58 @@ agents:
     briefPath: briefs/planner.md
     workflow: .github/workflows/plan.yml
 
+  # The two plan critics (DRE-2721). ONE workflow, two agents, two questions:
+  # the first reads a plan that is still moving and asks whether it is fit to
+  # take the CEO's time; the second reads the approved text as the
+  # specification agents will build from and asks what is missing. Their
+  # prompts are generated from scripts/plan_critic.py, so the roster cannot
+  # drift into describing one agent twice.
+  #
+  # tools/credentials match the planner entry BY NECESSITY, not by accident:
+  # tests/test_agents_registry.py checks every claude-code-action invocation in
+  # a workflow against every roster entry naming it, so the three agents in
+  # plan.yml share one tool list and one credential set. Neither critic writes
+  # code; `Edit` reaches them because it reaches the planner in the same file.
+  #
+  # WEB SEARCH IS NOT HERE YET. The card names it a hard prerequisite for the
+  # second critic — a critic that cannot check an external claim will approve a
+  # plan asserting something false about a vendor — and DRE-2712 adds it to the
+  # planner and both critics in one change, deliberately never separately.
+  - name: plan-critic-pre
+    role: Plan Critic (before approval)
+    category: product
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: advisory
+    model: claude-sonnet-5  # top of the `advisory` ladder
+    # END generated model
+    trigger: "Linear epic planned (agent-plan dispatch, plan route) — runs before the epic reaches Green Light"
+    # Structural review of cards that already exist, with the mechanical half
+    # (plan_critic.py mechanical) done for it before the first turn. Two of
+    # these run at most, and the second only after a send-back.
+    maxTurns: 40
+    maxBudget: 3
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/plan.yml
+
+  - name: plan-critic-post
+    role: Plan Critic (after approval)
+    category: product
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: advisory
+    model: claude-sonnet-5  # top of the `advisory` ladder
+    # END generated model
+    trigger: "Approved epic activated (agent-plan dispatch, activate route) — runs before the children promote"
+    maxTurns: 40
+    maxBudget: 3
+    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/plan.yml
+
   - name: medic
     role: Pipeline Medic
     category: operations
