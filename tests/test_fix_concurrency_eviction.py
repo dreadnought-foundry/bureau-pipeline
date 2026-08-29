@@ -115,7 +115,11 @@ class StubGroupingTest(unittest.TestCase):
     def test_a_hand_dispatch_still_resolves_to_a_group(self):
         # workflow_dispatch carries no comment: the group must still be a
         # stable string, not "agent-fix-199-".
-        self.assertEqual(fc.group(STUB, DISPATCH), f"agent-fix-{PR}-dispatch")
+        self.assertEqual(fc.group(STUB, DISPATCH), f"agent-fix-{PR}-work")
+
+    def test_a_bot_notice_gets_a_lane_of_its_own(self):
+        self.assertEqual(
+            fc.group(STUB, NOTICE), f"agent-fix-{PR}-{fc.WORKER_BOT_LOGIN}")
 
     def test_the_audit_passes_the_shipped_stub(self):
         self.assertEqual(fc.audit(STUB, name="self-agent-fix.yml"), [])
@@ -152,10 +156,16 @@ class EvictionScenarioTest(unittest.TestCase):
         # skipped at the job gate. Only its concurrency slot was the problem.
         self.assertFalse(fc.reaches_fix_agent(REUSABLE, NOTICE))
 
-    def test_a_hand_dispatch_cannot_evict_a_pending_verdict_run(self):
-        # The documented recovery (`gh workflow run self-agent-fix.yml -f
-        # pr_number=199`) must not itself drop a queued verdict.
-        self.assertFalse(fc.evicts(STUB, pending=VERDICT, arriving=DISPATCH))
+    def test_a_dispatch_shares_the_verdict_lane_so_two_agents_never_race(self):
+        # Deliberately NOT separated. merge-gate routes a merge conflict to
+        # this workflow by workflow_dispatch and does it BEFORE it looks at
+        # the verdict (merge_gate.evaluate_conflict), so a conflicted PR that
+        # draws REQUEST_CHANGES fires both triggers at once. In one lane they
+        # serialize, as they always have. In two they would put two fix
+        # agents on one branch, and the loser's push would report "no new
+        # commit" and park the card for a human.
+        self.assertTrue(fc.evicts(STUB, pending=VERDICT, arriving=DISPATCH))
+        self.assertEqual(fc.group(STUB, VERDICT), fc.group(STUB, DISPATCH))
         self.assertTrue(fc.reaches_fix_agent(REUSABLE, DISPATCH))
 
     def test_two_verdicts_in_a_row_each_reach_the_fix_agent(self):
@@ -196,6 +206,21 @@ class FleetStubAuditTest(unittest.TestCase):
         self.assertTrue(
             any(fc.COMMENTER_KEY in p for p in problems),
             f"the problem must name the missing key, got {problems}",
+        )
+
+    def test_the_audit_finds_a_stub_that_splits_the_work_lane(self):
+        # The first expression this card considered — keyed on the commenter
+        # alone — fixes the eviction and breaks the serialization: a
+        # workflow_dispatch lands in its own lane and can start a second fix
+        # agent on a branch one is already working.
+        split = json.loads(json.dumps(STUB))
+        split["concurrency"]["group"] = (
+            PRE_FIX_GROUP + "-${{ github.event.comment.user.login || 'dispatch' }}"
+        )
+        problems = fc.audit(split, name="agent-fix.yml")
+        self.assertTrue(
+            any("workflow_dispatch" in p for p in problems),
+            f"a split work lane must be a finding, got {problems}",
         )
 
     def test_the_audit_rejects_cancel_in_progress(self):
@@ -316,16 +341,23 @@ class SweepEvictionReportTest(unittest.TestCase):
     def _sweep(self, reads):
         # `now` an hour after the sequence: the window is a parameter, so this
         # test does not rot as the fixture ages (the age_minutes pattern).
-        with mock.patch.object(reconcile, "gh_actions_read", side_effect=reads), \
-                mock.patch.object(
-                    reconcile, "workflow_on_default_branch", return_value=True):
-            return _capture(reconcile.report_evicted_fix_runs, "2026-08-29T04:00:00Z")
+        # _actions_read, not gh_actions_read: the sweep must adjudicate a
+        # missing stub BEFORE the failure is recorded (DRE-2525).
+        before = list(reconcile._read_failures)
+        try:
+            with mock.patch.object(reconcile, "_actions_read", side_effect=reads), \
+                    mock.patch.object(
+                        reconcile, "workflow_on_default_branch", return_value=True):
+                return _capture(
+                    reconcile.report_evicted_fix_runs, "2026-08-29T04:00:00Z")
+        finally:
+            del reconcile._read_failures[len(before):]
 
     def _reads(self, jobs="0"):
-        def read(*args):
+        def read(args):
             if "/jobs" in args[1]:
-                return jobs
-            return json.dumps(self.runs)
+                return jobs, None
+            return json.dumps(self.runs), None
         return read
 
     def test_the_lost_verdict_trigger_is_reported(self):
@@ -344,15 +376,17 @@ class SweepEvictionReportTest(unittest.TestCase):
         self.assertNotIn("33231413617", out)
 
     def test_an_unreadable_listing_never_reads_as_nothing_evicted(self):
-        out = self._sweep(lambda *a: None)
+        out = self._sweep(lambda args: (None, "rc=1: HTTP 403"))
         self.assertIn("unknown", out.lower())
+        self.assertNotIn("0 verdict trigger(s)", out)
 
     def test_both_reports_run_on_every_full_sweep(self):
         src = (ROOT / "scripts" / "reconcile.py").read_text()
         # Called, not merely defined — the DRE-2682 lesson about a watchdog
-        # nobody invokes.
-        self.assertIn("report_fix_concurrency()", src)
-        self.assertIn("report_evicted_fix_runs()", src)
+        # nobody invokes. (assertTrue, not assertIn: a failing assertIn on a
+        # 4,000-line source dumps the whole file into the report.)
+        for call in ("report_fix_concurrency()", "report_evicted_fix_runs()"):
+            self.assertTrue(call in src, f"{call} is never called by the sweep")
 
 
 if __name__ == "__main__":

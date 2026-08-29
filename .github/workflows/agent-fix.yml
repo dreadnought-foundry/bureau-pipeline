@@ -6,7 +6,14 @@
 # fix with fresh eyes), and 5 conflict-resolution rounds — conflict churn from main
 # moving must not consume the review budget. Either exhausted → human hold.
 #
-# Reusable workflow: concurrency + permissions live in the calling stub.
+# Reusable workflow: concurrency + permissions live in the calling stub — and
+# the stub's concurrency GROUP is load-bearing (DRE-2810). This job's own
+# success comment is an issue_comment on the PR, so it queues a run of the
+# calling stub; if that run shares a group with a pending REQUEST_CHANGES
+# trigger, GitHub cancels the trigger before it starts and the PR stalls with
+# every run reporting an honest conclusion. The required group is in the
+# README ("The agent-fix stub's concurrency group"), audited by
+# scripts/fix_concurrency.py and by the reconcile sweep in every repo.
 name: Agent Fix (reusable)
 
 on:
