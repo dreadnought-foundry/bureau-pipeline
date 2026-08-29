@@ -262,6 +262,67 @@ class ScoringTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# a verdict that answers a different question
+# --------------------------------------------------------------------------
+class OffAxisTest(unittest.TestCase):
+    """PARKED says *deliberately not to be built*. That is a decision about
+    whether to spend the effort, not a reading of whether the card can be
+    worked from what it says — and the review was never asked it. Compared
+    against a `buildable`/`not-buildable` reference it can only ever come out
+    unequal, which would book a disagreement neither side ever made into the
+    one number this module exists to get right."""
+
+    def parked(self, reference_judgement="buildable"):
+        doc = reference(judgement("DRE-1", reference_judgement))
+        comment = routing_verdict.verdict_comment(
+            "PARKED", "the epic it belongs to is on hold"
+        )
+        return doc, critic_score.score(
+            [card("DRE-1")], doc=doc, comments={"DRE-1": [comment]}
+        )
+
+    def test_a_parked_card_is_never_scored_as_a_disagreement(self):
+        for value in ("buildable", "not-buildable"):
+            with self.subTest(reference=value):
+                _, result = self.parked(value)
+                row = result["rows"][0]
+                self.assertEqual(row["outcome"], "off-axis")
+                self.assertEqual(row["observed"], "deliberately-not-built")
+                self.assertEqual(row["observed_source"], "stamped")
+
+    def test_an_off_axis_row_is_reported_and_left_out_of_the_number(self):
+        _, result = self.parked()
+        self.assertEqual(result["counts"]["off-axis"], 1)
+        self.assertEqual(result["counts"]["disagree"], 0)
+        self.assertEqual(result["counts"]["agree"], 0)
+        self.assertEqual(result["scored"], 0, "an unasked question was scored")
+
+    def test_an_off_axis_row_is_not_a_card_the_critic_could_not_classify(self):
+        """It must not escalate. The critic answered, clearly — just on another
+        axis — so alerting it would move a card somebody deliberately shelved
+        back to Planning as if nobody could read it."""
+        lops = FakeLinear()
+        _, result = self.parked()
+        self.assertEqual(result["counts"]["unclassified"], 0)
+        self.assertEqual(critic_score.unclassified(result), [])
+        self.assertEqual(critic_score.escalate(lops, result), [])
+        self.assertEqual(lops.comments, [])
+        self.assertEqual(lops.states, [])
+
+    def test_the_off_axis_rows_are_named_under_their_own_heading(self):
+        """Reported, never dropped — the same rule the excluded rows follow —
+        and reported somewhere other than the disagreements, which is the whole
+        point of separating them."""
+        doc, result = self.parked()
+        report = critic_score.render_report(result, doc=doc)
+        self.assertIn("deliberately-not-built", report)
+        before, _, after = report.partition("## Answered a different question")
+        self.assertTrue(after, report)
+        self.assertIn("DRE-1", after)
+        self.assertNotIn("DRE-1", before, "the row was printed as a disagreement")
+
+
+# --------------------------------------------------------------------------
 # D3 — a card the critic could not classify is never held silently
 # --------------------------------------------------------------------------
 class UnclassifiedTest(unittest.TestCase):
@@ -371,6 +432,16 @@ class ReferenceTest(unittest.TestCase):
         self.assertTrue(
             any("looks-fine" in p for p in critic_score.reference_problems(doc))
         )
+
+    def test_a_verdict_the_scored_axis_cannot_carry_is_a_problem(self):
+        """`reference_problems` checks the rows already in the file. It must
+        also check what `judgement_of` can EMIT: a verdict reading as a value
+        the axis does not declare is a row that could only ever come out as a
+        disagreement the critic never expressed."""
+        doc = reference(judgement("DRE-1", "buildable"))
+        doc["dimensions"]["buildability"]["values"] = ["buildable"]
+        problems = critic_score.reference_problems(doc)
+        self.assertTrue(any("not-buildable" in p for p in problems), problems)
 
     def test_the_escalation_lane_must_permit_this_writer(self):
         """Binding the destination to the lane contract, the way the routing
