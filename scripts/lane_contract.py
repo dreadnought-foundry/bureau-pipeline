@@ -257,6 +257,18 @@ def writers(contract: dict | None = None) -> dict:
     return _clean((contract or load()).get("writers"))
 
 
+def lane_writers(name: str, status: str = "live", contract: dict | None = None) -> tuple:
+    """The writer keys THIS lane permits — not the glossary of every writer.
+
+    The distinction is the whole of DRE-2824: `operator` is a defined writer,
+    and it is not a `Backlog` writer, so a routing verdict that sent a card to
+    Backlog "for the operator" named somebody who may not legally write the
+    lane. Anything binding an actor to a lane asks here; reaching into the
+    clause dict at each call site is how a second copy of the answer starts.
+    """
+    return tuple(lane(name, status, contract)["clauses"]["writers"]["who"])
+
+
 def console(contract: dict | None = None) -> dict:
     return _clean((contract or load()).get("console"))
 

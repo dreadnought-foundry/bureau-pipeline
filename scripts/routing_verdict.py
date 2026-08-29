@@ -180,9 +180,29 @@ def destination(name: str, doc: dict | None = None) -> str:
 
 
 def actor(name: str, doc: dict | None = None) -> str:
-    """Who picks the card up at that destination. Every verdict names one — a
-    route with no actor is the dead end the amendment to DRE-2724 removed."""
+    """Who is accountable for the card at that destination. Every verdict names
+    one — a route with no actor is the dead end the amendment to DRE-2724
+    removed — and it must be a permitted writer OF THAT LANE (DRE-2824), not
+    merely a writer somewhere.
+
+    Usually that is whoever picks the card up. For PARKED nobody does, which is
+    the entire point of the verdict, so the actor is the writer that performs
+    the move; who revives the card is `revival()`, a different question.
+    """
     return record(name, doc)["actor"]
+
+
+def revival(name: str, doc: dict | None = None) -> str | None:
+    """Who takes a card back OUT of this route, when the answer is not the
+    actor. None for every route somebody already picks up.
+
+    PARKED carries it. `operator` used to sit in PARKED's actor field to say
+    "only a human revives it", which collapsed two different questions into one
+    field and sent the card to a lane that actor may not write (DRE-2824). The
+    sentence is not lost — it is stated here, in the card comment, in the
+    sweep's refusal notice and in the rendered document.
+    """
+    return record(name, doc).get("revival")
 
 
 def is_promotable(name: str, doc: dict | None = None) -> bool:
@@ -251,6 +271,24 @@ def config_problems(doc: dict | None = None) -> list:
                 f"verdict {name!r} names the actor {entry.get('actor')!r}, which is "
                 "not in the lane contract's writer glossary — a route with no "
                 "actor is a card nobody is coming for"
+            )
+        elif entry.get("destination") in lanes:
+            # The STRONG half (DRE-2824). Being a writer somewhere is not being
+            # allowed to write THIS lane: PARKED routed to Backlog naming
+            # `operator`, and Backlog permits no human writer, so the card was
+            # sent to a lane the actor named to handle it could not touch.
+            permitted = lane_contract.lane_writers(entry["destination"])
+            if entry["actor"] not in permitted:
+                problems.append(
+                    f"verdict {name!r} names the actor {entry['actor']!r} on the "
+                    f"destination {entry['destination']!r}, which permits only "
+                    f"{', '.join(permitted)} — an actor the destination lane does "
+                    "not permit cannot legally act on the card it is sent"
+                )
+        if "revival" in entry and not (entry.get("revival") or "").strip():
+            problems.append(
+                f"verdict {name!r} declares a 'revival' field and says nothing in "
+                "it — the field exists to state who takes the card back out"
             )
         if not isinstance(entry.get("promotable"), bool):
             problems.append(f"verdict {name!r} does not say whether it is promotable")
@@ -327,8 +365,10 @@ def verdict_comment(name: str, why: str, doc: dict | None = None) -> str:
         f"**Why:** {why.strip()}",
         "",
         f"**Where it goes:** {entry['destination']}. "
-        f"**Who picks it up:** {entry['actor']}.",
+        f"**Who handles it there:** {entry['actor']}.",
     ]
+    if entry.get("revival"):
+        lines.append(f"**Who takes it back out:** {entry['revival']}")
     if entry["marks"]:
         lines.append(
             "**Marked:** " + ", ".join(f"`{m}`" for m in entry["marks"])
@@ -423,11 +463,13 @@ def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) 
     if name is None or is_promotable(name, doc):
         return None
     entry = record(name, doc)
+    revived = f"**Who takes it back out:** {entry['revival']}\n\n" if entry.get("revival") else ""
     return (
         f"🚨 {NOT_FLEET_TAG}: {identifier} is routed **{name}** — {entry['means']} "
         f"The fleet is not being sent at it.\n\n"
         f"**Where it goes:** {entry['destination']}. "
-        f"**Who picks it up:** {entry['actor']}.\n\n"
+        f"**Who handles it there:** {entry['actor']}.\n\n"
+        f"{revived}"
         f"{entry['why']}\n\n"
         "If that routing is wrong, the card needs a different verdict — not a "
         "nudge from the sweep."
@@ -648,14 +690,23 @@ def render_markdown(doc: dict | None = None) -> str:
         "This document is rendered from the same file the sweep and the write "
         "path read, so it cannot drift from the enforcement. Destinations and "
         "actors are bound to `config/lane-contract.json`: a route whose "
-        "destination is not a lane, or whose actor is not a permitted writer, "
-        "fails `python3 scripts/routing_verdict.py check`."
+        "destination is not a lane, or whose actor is not a permitted writer of "
+        "that lane, fails `python3 scripts/routing_verdict.py check`."
+    )
+    w("")
+    w(
+        "The actor is who is **accountable for the card at the destination** — "
+        "usually whoever picks it up, and where nobody does, the writer that "
+        "performs the move. Being a writer somewhere is not enough: `operator` "
+        "is a real writer and is not permitted on `Backlog`, which is why "
+        "PARKED naming it sent cards to a lane that actor may not write "
+        "(DRE-2824)."
     )
     w("")
 
     w("## The five routes")
     w("")
-    w("| Verdict | Means | Destination | Who picks it up | Dispatched? |")
+    w("| Verdict | Means | Destination | Who handles it there | Dispatched? |")
     w("| --- | --- | --- | --- | --- |")
     for entry in _records(doc):
         w(
@@ -670,6 +721,8 @@ def render_markdown(doc: dict | None = None) -> str:
             else ""
         )
         w(f"- **{entry['name']}** — {entry['why']}{marked}")
+        if entry.get("revival"):
+            w(f"  - **Who takes it back out:** {entry['revival']}")
     w("")
 
     w("## The rule, and it is mechanical")
@@ -778,7 +831,7 @@ def _cmd_stamp(identifier: str, name: str, why: str) -> int:
         linear_ops.add_label(identifier, label)
     print(
         f"stamped {identifier} {name} → {destination(name)} "
-        f"(picked up by {actor(name)})"
+        f"(handled there by {actor(name)})"
     )
     return 0
 

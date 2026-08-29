@@ -62,6 +62,26 @@ def test_every_title_convention_appears_with_its_adversarial_fixture():
             assert title in text
 
 
+def test_the_document_carries_the_revival_note_of_every_route_that_has_one():
+    """DRE-2824: PARKED's actor is now the process writer that lands the card,
+    so the rendered document is where a reader learns that only a human takes a
+    card back out of it. If that sentence lives only in the JSON, the reader
+    this vocabulary is written for never sees it."""
+    text = committed()
+    for name in routing_verdict.verdicts():
+        note = routing_verdict.revival(name)
+        if note:
+            assert note in text, f"{name}'s revival note is missing from the document"
+    assert routing_verdict.revival("PARKED"), "PARKED must state who revives it"
+
+
+def test_the_document_binds_actors_to_the_destination_lane_not_the_glossary():
+    """The weaker claim — "the actor is a writer somewhere" — is what let a
+    human be named on a lane no human may write."""
+    text = committed().lower()
+    assert "permitted writer of that lane" in text
+
+
 def test_the_document_says_epics_get_a_plan_test_not_a_verdict():
     text = committed().lower()
     assert "epic" in text and "plan test" in text

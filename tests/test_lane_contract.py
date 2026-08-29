@@ -101,6 +101,27 @@ class TestTheFileExists:
     def test_the_current_phase_is_one_of_the_declared_phases(self):
         assert lane_contract.current_phase() in lane_contract.phase_order()
 
+    def test_a_lanes_permitted_writers_are_readable_on_their_own(self):
+        """DRE-2824: binding an actor to a lane needs the lane's OWN writer
+        list, not the glossary of every writer anywhere. Reading it out of the
+        clause dict at each call site is how a second copy starts."""
+        assert lane_contract.lane_writers("Backlog") == (
+            "plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py", "linear_ops.py"
+        )
+        assert lane_contract.lane_writers("Canceled") == ("operator",)
+
+    def test_every_lanes_permitted_writers_are_defined_in_the_glossary(self):
+        known = set(lane_contract.writers())
+        for name in lane_contract.lane_names(status="live"):
+            for writer in lane_contract.lane_writers(name):
+                assert writer in known, f"{name} permits undefined writer {writer!r}"
+
+    def test_an_unknown_lane_raises_rather_than_returning_no_writers(self):
+        # An empty tuple would read as "this lane permits nobody", which is a
+        # different and much quieter wrong answer than "there is no such lane".
+        with pytest.raises(lane_contract.UnknownLane):
+            lane_contract.lane_writers("Nowhere In Particular")
+
     def test_a_phase_at_or_before_the_current_one_has_shipped(self):
         order = lane_contract.phase_order()
         current = order.index(lane_contract.current_phase())

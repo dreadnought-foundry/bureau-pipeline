@@ -106,6 +106,25 @@ class TestTheFiveRoutes:
                 "lane contract's writer glossary"
             )
 
+    @pytest.mark.parametrize("name", THE_FIVE)
+    def test_every_actor_is_a_permitted_writer_of_its_own_destination(self, name):
+        """The check that caught DRE-2824, and it is the STRONG half: being in
+        the glossary somewhere is not the same as being allowed to write the
+        lane this verdict routes to. PARKED named `operator` on `Backlog`, a
+        lane whose writers are all process — so the card was sent to a lane the
+        actor named to handle it could not legally write.
+
+        Parametrized over all five ON PURPOSE: the Phase 3 gate found PARKED
+        because it checked every verdict, and the repo confirming only the one
+        it already knows about is how the next contradiction ships.
+        """
+        permitted = set(lane_contract.lane_writers(routing_verdict.destination(name)))
+        assert routing_verdict.actor(name) in permitted, (
+            f"{name} routes to {routing_verdict.destination(name)!r}, whose "
+            f"permitted writers are {sorted(permitted)} — its actor "
+            f"{routing_verdict.actor(name)!r} is not among them"
+        )
+
     def test_fleet_is_the_only_promotable_verdict(self):
         promotable = [v for v in routing_verdict.verdicts()
                       if routing_verdict.is_promotable(v)]
@@ -125,6 +144,98 @@ class TestTheFiveRoutes:
     def test_an_unknown_verdict_is_raised_not_defaulted(self):
         with pytest.raises(routing_verdict.UnknownVerdict):
             routing_verdict.destination("PROBABLY FINE")
+
+
+# ===========================================================================
+# DRE-2824: Backlog is process-written, so PARKED cannot name a human
+# ===========================================================================
+class TestParkedNamesTheProcessWriter:
+    """Two shipped files contradicted each other and the Phase 3 gate caught it.
+
+    `PARKED` routed to `Backlog` with the actor `operator`; the lane contract
+    permits no human writer on `Backlog`, because every card now enters through
+    Intake and Backlog became a lane only the process writes. The contract is
+    right, so the fix is on the verdict side: `operator` was written into the
+    actor field to capture *only a human revives it*, but the field means who
+    handles the card at the destination — and for PARKED the honest answer is
+    that nobody does. Revival is a separate, later, human act.
+    """
+
+    def test_operator_is_not_a_backlog_writer(self):
+        """The decided change, pinned so a future fix cannot take the easy road
+        of widening the lane instead of correcting the verdict."""
+        assert "operator" not in lane_contract.lane_writers("Backlog"), (
+            "Backlog is process-controlled — re-opening by-hand writes would "
+            "make the lane contract describe the old model"
+        )
+
+    def test_parked_is_landed_by_a_process_writer(self):
+        actor = routing_verdict.actor("PARKED")
+        assert actor != "operator"
+        assert actor in lane_contract.lane_writers("Backlog")
+
+    def test_parked_names_the_planning_exit_writer_that_really_lands_it(self):
+        """Not any permitted writer — the one that actually performs the move.
+
+        `plan.yml` owns planning exit: it creates the children in Backlog and
+        runs the two plan critics, and the contract's own Backlog-entrance
+        clause names that writer as the one still owed. The sweep only READS a
+        verdict (`promotion_refusal`, `is_parked`); `dead_run.py` parks with a
+        `needs-human` hold, which is not a routing verdict at all.
+        """
+        assert routing_verdict.actor("PARKED") == "plan.yml"
+
+    def test_only_a_human_revives_a_parked_card_is_still_stated(self):
+        """The meaning the old actor field was carrying must not be lost when
+        the actor changes. A later reader still learns that a person, and only
+        a person, takes a card out of PARKED."""
+        revival = routing_verdict.revival("PARKED")
+        assert revival and revival.strip(), "PARKED states nothing about revival"
+        assert "human" in revival.lower()
+
+    def test_the_other_four_routes_carry_no_revival_note(self):
+        """The field is not decoration: it exists because PARKED is the one
+        route where nobody picks the card up."""
+        for name in THE_FIVE:
+            if name != "PARKED":
+                assert routing_verdict.revival(name) is None
+
+    def test_the_parked_comment_on_the_card_says_a_human_revives_it(self):
+        body = routing_verdict.verdict_comment("PARKED", "deliberately not built")
+        assert "human" in body.lower()
+
+    def test_the_sweeps_refusal_notice_says_a_human_revives_it(self):
+        """The refusal is where a reader meets a PARKED card in the wild."""
+        parked = [routing_verdict.verdict_comment("PARKED", "deliberately inert")]
+        notice = routing_verdict.promotion_refusal("DRE-1", parked)
+        assert notice is not None and "human" in notice.lower()
+
+    def test_an_actor_the_destination_forbids_is_a_config_problem(self):
+        """The mutation test, and the exact contradiction that shipped: revert
+        the fix and the repo must go red on its own, without waiting for the
+        Phase 3 gate's next live run."""
+        doc = json.loads(CONFIG.read_text(encoding="utf-8"))
+        for entry in doc["verdicts"]:
+            if entry["name"] == "PARKED":
+                entry["actor"] = "operator"
+        problems = routing_verdict.config_problems(doc)
+        assert any(
+            "PARKED" in p and "operator" in p and "Backlog" in p for p in problems
+        ), f"a forbidden actor passed the check: {problems}"
+
+    def test_a_glossary_writer_is_not_enough_on_any_lane(self):
+        """Generalised: `qa-review.yml` is a real writer, and it is not a
+        Planning writer — so NEEDS WORK naming it must fail too."""
+        doc = json.loads(CONFIG.read_text(encoding="utf-8"))
+        for entry in doc["verdicts"]:
+            if entry["name"] == "NEEDS WORK":
+                entry["actor"] = "qa-review.yml"
+        problems = routing_verdict.config_problems(doc)
+        assert any("NEEDS WORK" in p and "Planning" in p for p in problems)
+
+    def test_the_shipped_vocabulary_has_no_problems_at_all(self):
+        """AC3: the other four were CHECKED, not assumed."""
+        assert routing_verdict.config_problems() == []
 
 
 # ===========================================================================
