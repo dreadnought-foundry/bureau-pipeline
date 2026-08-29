@@ -575,13 +575,25 @@ class TestTheRouteIsWrittenDown:
             assert name in text, f"{name} is not in the card-quality standard"
 
     def test_the_lane_contract_no_longer_waits_on_this_card_for_the_vocabulary(self):
-        """The contract's Backlog and Todo clauses named DRE-2724 as the thing
-        they were waiting on. The vocabulary exists now; a `pending` that still
-        blames it is the drift this wave keeps arriving at."""
-        doc = lane_contract.load()
-        for clause in lane_contract.clauses(doc):
+        """Four of the contract's Backlog and Todo clauses named DRE-2724 as the
+        thing they were waiting on. The vocabulary exists now, so a `pending`
+        that still reads "waiting on DRE-2724" is the drift this wave keeps
+        arriving at. Naming the card as what SHIPPED is fine — what may not
+        survive is the clause saying it is still owed."""
+        stale = ("DRE-2724", "DRE-2724 writes routing verdicts")
+        for clause in lane_contract.clauses(lane_contract.load()):
             if clause.lane in ("Backlog", "Todo"):
-                assert "DRE-2724" not in (clause.pending or ""), clause.id
+                assert (clause.pending or "").strip() not in stale, clause.id
+
+    def test_the_lane_contract_carries_the_vocabulary_it_used_to_wait_for(self):
+        contract = lane_contract.load()
+        backlog = lane_contract.lane("Backlog", contract=contract)
+        todo = lane_contract.lane("Todo", contract=contract)
+        assert "routing verdict" in backlog["clauses"]["entrance"]["text"]
+        # Todo now holds work for BOTH actors: a dispatched run and a person.
+        for name in ("FLEET", "WORKBENCH", "OPERATOR"):
+            assert name in todo["clauses"]["entrance"]["text"]
+        assert reconcile.HAND_BUILT_LABEL in todo["clauses"]["entrance"]["text"]
 
     def test_no_claim_is_made_that_a_specific_card_proved_the_need(self):
         """DRE-2695 was cited as a card that "could not have closed". It closed:

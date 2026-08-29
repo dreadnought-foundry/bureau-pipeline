@@ -93,6 +93,44 @@ written, whoever answers).
 There is **no propose-first hard stop**: cards are not gated awaiting
 approval before any work — autonomy is the default, the human is the exception.
 
+## Routing verdicts (DRE-2724)
+
+Every card leaving the planning segment carries **exactly one** verdict, as a
+machine-readable comment (`🧭 routing-verdict: …`). It is a **routing decision,
+not a quality score** — it answers *who builds this, and how*, and each answer
+sends the card somewhere different. Framed as a score a critic drifts toward
+marking things good so it looks useful; framed as routing there is no good or
+bad, only a wrong destination, which shows up immediately.
+
+| Verdict | Means | Where it goes / who picks it up |
+| -- | -- | -- |
+| **FLEET** | Buildable unattended in one PR | `Todo` — the sweep promotes it, an agent run builds it. The ONLY verdict that is dispatched. |
+| **WORKBENCH** | Needs an interactive flow or live system state | `Todo`, marked `hand-built` — the operator, at an interactive session. |
+| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Todo`, marked `hand-built` + `no-code` — the operator. |
+| **PARKED** | Well-formed and deliberately not to be built | `Backlog` — nobody, until a human revives it. Never promoted, and **never reported as stalled** by any sweep. |
+| **NEEDS WORK** | Not buildable as written | `Planning` — the planner, with the specific missing thing named. |
+
+**The rule is mechanical:** route on whether an unattended agent can SATISFY
+the acceptance criteria — not on whether it could write the code. Read in strict
+precedence: an explicit role label (`agent:ops`, `no-code`), then the title
+convention **anchored at the start of the title**, then the criteria rule; only
+what survives all three is a judgement call worth asking a model about.
+
+**Split the visual case carefully.** Static visual fidelity is FLEET-checkable —
+`qa-review.yml` screenshots the changed screens and hands the critic both the
+design PNG and the render. Interactive or live-state behaviour is WORKBENCH.
+Screenshotting a screen is not driving a flow.
+
+An **epic never gets a buildability verdict.** "Could an agent build this
+unattended" is meaningless for a card the planner owns; an epic gets a plan
+test — does it have children, do they carry inheritable labels, is there an
+acceptance criterion for the set.
+
+The vocabulary is data (`config/routing-verdicts.json` in bureau-pipeline) and
+`docs/routing-verdicts.md` is rendered from it; every destination and actor is
+bound to the lane contract, so a route with no destination or no actor fails the
+check rather than becoming a dead end.
+
 ## Epics
 Expressed by Linear **native parent/child** (not a label, not frontmatter).
 `[EPIC]` in the title OR having children ⇒ the gate infers `agent:planner`. The

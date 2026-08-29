@@ -1,0 +1,192 @@
+{
+  "_readme": [
+    "THE ROUTING VOCABULARY (DRE-2724). One file, read by everything.",
+    "",
+    "A verdict is a ROUTING DECISION, not a quality score. It answers *who",
+    "builds this, and how* — and every answer sends the card somewhere",
+    "different. Framed as a score a critic drifts toward marking things good so",
+    "it looks useful; framed as routing there is no good or bad, only a wrong",
+    "destination, which shows up immediately.",
+    "",
+    "Per verdict: what it means, the LANE it sends the card to, the ACTOR who",
+    "picks it up there, whether the sweep may promote it, and the labels the",
+    "stamp applies. Destination and actor are both drawn from",
+    "config/lane-contract.json — a destination that is not a lane, or an actor",
+    "that is not a permitted writer, is a dead end, and the amendment to this",
+    "card was written because OPERATOR and WORKBENCH had exactly that: 'enters",
+    "Backlog and goes to the queue when its turn comes', with no turn ever",
+    "coming (DRE-2735 — the promoter skips a parentless card, and it skips a",
+    "non-FLEET verdict too).",
+    "",
+    "JSON, not YAML: scripts/reconcile.py imports the reader on every product",
+    "repo's sweep, where there is no pip install and PyYAML is not guaranteed.",
+    "",
+    "Regenerate the document after any edit:",
+    "  python3 scripts/routing_verdict.py render",
+    "Check this file against the lane contract and its own fixtures:",
+    "  python3 scripts/routing_verdict.py check"
+  ],
+  "version": 1,
+
+  "verdicts": [
+    {
+      "name": "FLEET",
+      "means": "Buildable unattended in one pull request.",
+      "destination": "Todo",
+      "actor": "agent-task.yml",
+      "promotable": true,
+      "marks": [],
+      "why": "The sweep promotes it out of Backlog and the relay dispatches a build run. This is the only verdict that may be dispatched."
+    },
+    {
+      "name": "WORKBENCH",
+      "means": "Needs an interactive flow or live system state — driving an auth flow, forcing a token past expiry, confirming something in production.",
+      "destination": "Todo",
+      "actor": "operator",
+      "promotable": false,
+      "marks": ["hand-built"],
+      "why": "It is real work and it goes on the board where work goes — but a person does it at an interactive session, so it carries `hand-built`, which is already the signal that stops the sweep dispatching a competing run or reporting the card as stranded (DRE-2524). Backlog was the old answer and Backlog is a dead end: nothing there ever moves a non-FLEET card on."
+    },
+    {
+      "name": "OPERATOR",
+      "means": "Not code — a deploy, a migration run, a secret.",
+      "destination": "Todo",
+      "actor": "operator",
+      "promotable": false,
+      "marks": ["hand-built", "no-code"],
+      "why": "Same destination as WORKBENCH and the same actor, because the same person does it; the difference is that no code is produced. `no-code` is the existing marker for that, and it already stops a merged runbook auto-closing the card (linear_ops.auto_done_skip_reason — six false portico closes)."
+    },
+    {
+      "name": "PARKED",
+      "means": "Well-formed and deliberately not to be built.",
+      "destination": "Backlog",
+      "actor": "operator",
+      "promotable": false,
+      "marks": [],
+      "why": "Backlog IS the right lane for a card that is deliberately inert — the dead end is the point. It is never promoted and never reported as stalled by any sweep; only a human revives it."
+    },
+    {
+      "name": "NEEDS WORK",
+      "means": "Not buildable as written.",
+      "destination": "Planning",
+      "actor": "plan.yml",
+      "promotable": false,
+      "marks": [],
+      "why": "It returns to Planning with the specific missing thing named — the verdict comment carries it, so the planner is told what to add rather than asked to guess."
+    }
+  ],
+
+  "precedence": [
+    "An explicit role label — read first, no judgement.",
+    "The title convention — anchored at the start of the title, never a substring search.",
+    "The acceptance-criteria rule: can an unattended agent SATISFY the stated exit condition?",
+    "Only what survives all three reaches a judgement call, and only then is a model asked."
+  ],
+
+  "labels": {
+    "_readme": [
+      "Precedence 1. An exact label match, lower-cased — never a prefix: `no-codegen`",
+      "is not `no-code`, and reading it as one is the same mistake class as a",
+      "substring blocker match, one field over."
+    ],
+    "map": {
+      "agent:ops": "OPERATOR",
+      "no-code": "OPERATOR"
+    }
+  },
+
+  "title_conventions": [
+    {
+      "verdict": "OPERATOR",
+      "pattern": "^\\s*sign-off \\(operator\\)",
+      "means": "The card's deliverable is a human's sign-off on live work.",
+      "example": "SIGN-OFF (OPERATOR): rotate the CloudFront key group",
+      "adversarial": [
+        "Add a SIGN-OFF (OPERATOR) section to the runbook template",
+        "Runbook: the SIGN-OFF (OPERATOR) checklist is out of date"
+      ]
+    },
+    {
+      "verdict": "WORKBENCH",
+      "pattern": "^\\s*demo:",
+      "means": "The card closes only when every end-state claim in its demo report is a PASS — somebody drives the live system and records what it did. That is an interactive flow over live state, which is WORKBENCH; it is not a deploy, so it is not OPERATOR.",
+      "example": "DEMO: Phase 3 — folder access end to end",
+      "adversarial": [
+        "Record the demo: phase 3",
+        "Update demo docs",
+        "Phase 3 demo runner"
+      ]
+    }
+  ],
+
+  "criteria_signals": {
+    "_readme": [
+      "Precedence 3, and the whole mechanical rule: route on whether an",
+      "unattended agent can SATISFY the acceptance criteria, not on whether it",
+      "could write the code. That reads the card's own stated exit condition",
+      "instead of guessing from the title.",
+      "",
+      "Scoped to checkbox criteria ONLY, never free prose, and matched on whole",
+      "words. A bare substring match over prose is how epic DRE-2492 was jammed",
+      "by its own sentence 'neither depends on the other' for five days.",
+      "",
+      "Order is load-bearing: interactive wins over visual. Screenshotting a",
+      "screen is not driving a flow, but driving a flow that ends at a screen is",
+      "still driving a flow."
+    ],
+    "order": ["interactive", "static_visual"],
+    "signals": {
+      "interactive": {
+        "verdict": "WORKBENCH",
+        "why": "The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.",
+        "phrases": [
+          "sign in",
+          "sign out",
+          "log in",
+          "log out",
+          "force the token",
+          "past expiry",
+          "past `exp`",
+          "confirm the session",
+          "in production",
+          "against the live",
+          "on the live",
+          "walk through",
+          "step through",
+          "in the browser",
+          "by hand",
+          "manually",
+          "interactively"
+        ]
+      },
+      "static_visual": {
+        "verdict": "FLEET",
+        "why": "Static visual fidelity is FLEET-checkable. qa-review.yml runs a visual-QA stage (DRE-1481): it installs chromium via Playwright, screenshots the changed screens, and hands the critic both the design PNG and the render, with the instruction to read both images and compare.",
+        "phrases": [
+          "matches the design",
+          "match the design",
+          "renders identically",
+          "render identically",
+          "pixel-identical",
+          "pixel-perfect",
+          "visual parity",
+          "screenshot",
+          "design png"
+        ]
+      }
+    }
+  },
+
+  "epics": {
+    "_readme": [
+      "'Could an agent build this unattended' is meaningless for a card the",
+      "planner owns. An epic gets a PLAN test — never a buildability test, and",
+      "never one of the five routes."
+    ],
+    "plan_test": [
+      "it has children",
+      "its children carry inheritable labels",
+      "it states an acceptance criterion for the set"
+    ]
+  }
+}
