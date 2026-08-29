@@ -99,7 +99,7 @@ class InheritedSelectionTest(unittest.TestCase):
 class NoticeWordingTest(unittest.TestCase):
     def setUp(self):
         self.names = ["harness"]
-        self.comment = inh.pr_comment(self.names, BASE_SHA, pr=201)
+        self.comment = inh.pr_comment(self.names, BASE_SHA)
         self.note = inh.agent_note(self.names, BASE_SHA)
 
     def test_the_pr_comment_names_the_check_and_the_merge_base(self):

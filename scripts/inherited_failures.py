@@ -88,14 +88,13 @@ def _bullets(names) -> list:
             for name in names]
 
 
-def pr_comment(names, base_sha: str, pr=None) -> str:
+def pr_comment(names, base_sha: str) -> str:
     """The comment posted on the pull request. States the fact, names the
     evidence, and tells whoever reads it next what NOT to spend time on."""
-    where = f" PR #{pr}." if pr is not None else ""
     parts = [
         f"🧬 {INHERITED_MARKER}: {len(names)} failing check(s) on this branch "
-        f"also fail on the merge base (`{base_sha[:8]}`), so they are not this "
-        f"pull request's defect.{where}",
+        f"also fail on the merge base (`{base_sha[:8]}`) — they are not this "
+        f"pull request's defect.",
         "",
         *_bullets(names),
         "",
@@ -148,7 +147,8 @@ def main(argv=None) -> int:
     d.add_argument("--base-checks-file", required=True,
                    help="the same, for the merge-base commit")
     d.add_argument("--base-sha", required=True)
-    d.add_argument("--pr", type=int)
+    d.add_argument("--pr", type=int, help="for the run log only — the "
+                   "comment is posted ON the PR, so it does not name it")
     d.add_argument("--comment-out")
     d.add_argument("--agent-note-out")
     args = parser.parse_args(argv)
@@ -183,7 +183,7 @@ def main(argv=None) -> int:
     if names:
         if args.comment_out:
             with open(args.comment_out, "w", encoding="utf-8") as fh:
-                fh.write(pr_comment(names, args.base_sha, args.pr))
+                fh.write(pr_comment(names, args.base_sha))
         if args.agent_note_out:
             with open(args.agent_note_out, "w", encoding="utf-8") as fh:
                 fh.write(agent_note(names, args.base_sha))
