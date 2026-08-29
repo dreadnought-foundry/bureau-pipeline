@@ -295,17 +295,26 @@ def _call_owners(name: str) -> set[str]:
     }
 
 
-_WATCHDOG_OWNERS = {"flag_stranded", "flag_stalled_planning", "main"}
+_WATCHDOG_OWNERS = {
+    "flag_stranded", "flag_stalled_planning", "main", "_flag_hand_built_idle",
+}
 
 
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     """Structural guard, not a sentinel: if a later change wires hand-built
     into a PR-keyed repair path, this says so.
 
-    Three readers, all in the "would the pipeline start or restart an agent on
-    this card" family: flag_stranded (the alarm), flag_stalled_planning (the
-    same alarm for the Planning lane, DRE-2736) and main (the no-PR dispatch
-    the alarm was reporting on). Every PR-level backstop stays label-blind.
+    Three readers in the "would the pipeline start or restart an agent on this
+    card" family: flag_stranded (the alarm), flag_stalled_planning (the same
+    alarm for the Planning lane, DRE-2736) and main (the no-PR dispatch the
+    alarm was reporting on). Every PR-level backstop stays label-blind.
+
+    The fourth reader is the other direction, and it is why the guard exists
+    rather than a bare count: _flag_hand_built_idle (DRE-2682) fires ONLY on
+    hand-built work — the alarm that replaces what this label suppresses. A
+    label that switches off the only thing which would say the work had
+    stopped, with nothing put in its place, is what left DRE-2655's finished
+    work invisible on a pushed branch for nineteen hours.
     """
     assert _call_owners("hand_built") == _WATCHDOG_OWNERS
 

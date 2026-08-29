@@ -27,6 +27,17 @@ human-parked card suppresses every repair without raising a hand (DRE-2180
 sat invisible five hours; portico PR #21 thirteen days). Alert-only: never
 dispatches, so the DRE-2024 fix-loop cannot come back.
 
+Unlanded-work watchdog (DRE-2682): every gate here keys off a PULL REQUEST, so
+a pushed branch that never became one is outside the system entirely — DRE-2655
+sat that way nineteen hours with the work finished, found by eye. Any
+`agent/DRE-*` branch carrying commits with no PR ever opened (open, closed or
+merged) is reported on its card after UNLANDED_MINUTES, naming the route out;
+and a hand-built card in a working lane with no branch and no PR is reported
+after HAND_IDLE_MINUTES, which is the alarm that replaces what `hand-built`
+suppresses (DRE-2524). Alert-only, and nothing here reads git authorship — it
+misleads in both directions. The full census of ways work escapes the one path
+is docs/escape-census.md.
+
 Crashed-review recovery (DRE-2282): an open agent PR whose review CRASHED
 (FAILURE review check, no verdict at the head — the critic fails its job on
 purpose and the medic correctly skips it, DRE-1921) gets ONE re-dispatch of
@@ -105,6 +116,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
+import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
@@ -122,6 +134,12 @@ import mid_epic  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
+# DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
+# card, who picks it up there, and which of the five may be dispatched at all.
+import routing_verdict  # noqa: E402
+# DRE-2682: ONE source for "this card is finished" — the terminal states the
+# structural sweep already names, read here rather than spelled a fifth time.
+import structural_repair  # noqa: E402
 import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 import verdict_content  # noqa: E402 — the content-binding algorithm
 
@@ -299,6 +317,14 @@ PLANNING_MINUTES = int(
 # hand-built card whose PR wedges is still caught, and once the human opens a
 # PR the sweep shepherds it exactly as before — see
 # test_hand_built_not_stranded.py, which asserts both halves structurally.
+#
+# WHAT SUPPRESSION OWES (DRE-2682). Silencing an alarm without replacing it is
+# how DRE-2655's finished work sat invisible for nineteen hours: the label that
+# says "no agent is coming" also switched off the only thing that would have
+# said the work had stopped. So this label now has a counterpart alarm that
+# measures what hand-built work actually owes — _flag_hand_built_idle, plus the
+# branch half beside it — and the suppression above is legitimate only for as
+# long as that counterpart exists.
 HAND_BUILT_LABEL = "hand-built"
 
 # The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
@@ -736,15 +762,29 @@ def drain_retiring_lanes() -> None:
     this drains into it, every sweep, until the board catches up.
 
     Order matters and is the reason this exists at all: the code stops writing
-    the lane first, the sweep drains it second, and only then is archiving the
-    state safe. Archiving first would fail every in-flight write instead.
+    the lane first, the sweep drains it second, the board archives the state
+    third, and the contract entry is deleted fourth. Archiving before the drain
+    would fail every in-flight write instead.
+
+    NOTHING IS RETIRING TODAY, and that is deliberate rather than neglect
+    (DRE-2818): the operator confirmed DRE-2726's drain was finished, Linear
+    archived both states, and the two entries were deleted — a retiring entry
+    whose state Linear already dropped is itself drift, and
+    `board.retired_entry_is_deleted` fails on it. This function stays because
+    it is step two of a protocol the contract still defines: `retiring` remains
+    a validated lane status with a mandatory board step, and the Phase-3 rule
+    `board.retiring_lane_is_empty` names this drain as its prerequisite. With
+    an empty retiring set it returns before it reads anything from Linear, and
+    tests/test_lane_fold_in_review.py pins both that inertness and — against an
+    injected retiring lane, since the real file no longer has one — the
+    behaviour it will have on the next retirement.
 
     Idempotent by construction — `cmd_advance` moves a card only while it is
     still in the lane named, so a second sweep finds nothing and a race between
     two repos' sweeps costs one no-op.
     """
     draining = {
-        lane["name"]: lane["replaced_by"]
+        lane["name"]: lane
         for lane in lane_contract.lanes(status="retiring")
         if lane.get("replaced_by")
     }
@@ -757,16 +797,17 @@ def drain_retiring_lanes() -> None:
     for card in stranded:
         ident = card["identifier"]
         was = card["state"]["name"]
-        to = draining.get(was)
-        if to is None:
+        lane = draining.get(was)
+        if lane is None:
             continue  # not a retiring lane: the state filter is the query's job
+        to = lane["replaced_by"]
         try:
             linear_ops.cmd_advance(ident, to, was)
             linear_ops.cmd_comment(
                 ident,
-                f"🧹 Reconcile: the '{was}' lane is being retired (DRE-2726) and "
-                f"nothing writes to it any more — moved to '{to}', which is where "
-                "the work now continues.",
+                f"🧹 Reconcile: the '{was}' lane is being retired "
+                f"({lane['retired_by']}) and nothing writes to it any more — "
+                f"moved to '{to}', which is where the work now continues.",
             )
         except Exception as e:
             raise ReconcileWriteError(f"{ident} drain {was}->{to}: {e}") from e
@@ -911,6 +952,17 @@ def flag_stranded() -> set[str]:
         if routable and "agent:planner" in labels:
             continue  # an epic in these lanes carries no run — normal, not stranded
         bodies = linear_ops.comment_bodies(ident)
+        if routing_verdict.is_parked(bodies):
+            # DRE-2724: a PARKED card is well-formed and sitting still ON
+            # PURPOSE. Reporting the intended state as a defect costs the card
+            # a hold label a human has to remove, and promote_ready() skips a
+            # held card forever — so the alarm would make the deliberate
+            # decision permanent by accident.
+            print(
+                f"watchdog: {ident} is routed PARKED — deliberately not built, "
+                "so time spent sitting still is not a strand"
+            )
+            continue
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
         if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
@@ -1010,7 +1062,17 @@ def flag_stalled_planning() -> set[str]:
                 "Planning is not a strand"
             )
             continue
-        if any(WATCHDOG_TAG in b for b in linear_ops.comment_bodies(ident)):
+        bodies = linear_ops.comment_bodies(ident)
+        if routing_verdict.is_parked(bodies):
+            # DRE-2724, same rule as flag_stranded: PARKED is a decision, not a
+            # stall. A parked card in Planning owes nobody a classification —
+            # it has one.
+            print(
+                f"watchdog: {ident} is routed PARKED — deliberately not built, "
+                "so time spent in Planning is not a strand"
+            )
+            continue
+        if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
         if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
             continue  # planning is young — let it produce its classification
@@ -1755,7 +1817,10 @@ def promote_ready(active_count: int) -> int:
         # DELIBERATELY outside it — a write failure there is a write failure,
         # not a bad reference, and must not stamp the card with a false
         # "reference doesn't resolve" diagnostic (critic PR #89).
+        # Two refusals can hold a card here, each with its own idempotency tag
+        # so one does not silence the other's notice (DRE-2739, DRE-2724).
         refusal: str | None = None
+        refusal_tag = mid_epic.NO_VERDICT_TAG
         try:
             # Epic-level gate (DRE-1772): even an active (plan-approved) epic
             # must not start its children while the epic itself is blocked-by a
@@ -1794,30 +1859,48 @@ def promote_ready(active_count: int) -> int:
             # (mid_epic.promotion_refusal) — never refuses the whole roster.
             if epic_id not in green_light:
                 green_light[epic_id] = mid_epic.last_green_light(linear_ops, epic_id)
+            bodies = [
+                n.get("body") or ""
+                for n in (card.get("comments") or {}).get("nodes", [])
+            ]
             refusal = mid_epic.promotion_refusal(
                 card["identifier"],
                 card.get("createdAt"),
                 green_light[epic_id],
-                [n.get("body") or "" for n in (card.get("comments") or {}).get("nodes", [])],
+                bodies,
             )
+            # Routing verdict (DRE-2724): the verdict answers WHO builds this
+            # card, and only FLEET means "an unattended agent, in one pull
+            # request". WORKBENCH needs an interactive flow, OPERATOR is not
+            # code at all, PARKED is deliberately not built, NEEDS WORK is not
+            # buildable as written — dispatching any of them sends the fleet at
+            # a card it cannot close. A card with NO verdict promotes exactly as
+            # before: Backlog's "it carries a verdict" clause is enforced from
+            # Phase 5, and refusing the whole verdictless board today would
+            # freeze it rather than route it.
+            if refusal is None:
+                refusal = routing_verdict.promotion_refusal(
+                    card["identifier"], bodies
+                )
+                refusal_tag = routing_verdict.NOT_FLEET_TAG
         except linear_ops.LinearError as e:
             skip_bad_reference(card["identifier"], e)
             continue
         if refusal is not None:
             print(
-                f"promotion: {card['identifier']} was added to its epic after the "
-                "green light and carries no verdict — skipping"
+                f"promotion: {card['identifier']} is not being promoted — "
+                f"{refusal.splitlines()[0]}"
             )
             # Surfaced ONCE, the DEAD_TAG shape: the card is invisible otherwise,
             # and an invisible refusal is the silent-accretion problem wearing a
             # different hat. A WRITE, so deliberately outside the read-guard —
             # and guarded itself, because reporting never blocks the sweep.
             try:
-                if linear_ops.count_comments(card["identifier"], mid_epic.NO_VERDICT_TAG) == 0:
+                if linear_ops.count_comments(card["identifier"], refusal_tag) == 0:
                     linear_ops.cmd_comment(card["identifier"], refusal)
             except linear_ops.LinearError as e:
                 print(
-                    f"ERROR: could not surface the mid-epic refusal on "
+                    f"ERROR: could not surface the promotion refusal on "
                     f"{card['identifier']}: {e}",
                     file=sys.stderr,
                 )
@@ -2026,6 +2109,50 @@ NO_CHECKS_TAG = "no-checks-watchdog"
 # which is the failure this whole card is about.
 UNOWNED_MINUTES = int(os.environ.get("UNOWNED_MINUTES", "120"))
 UNOWNED_MARKER = "unowned-branch-watchdog"
+
+# --- unlanded-work watchdog (DRE-2682) ---------------------------------------
+# Every gate in this pipeline keys off a PULL REQUEST — CI, the critic, the
+# merge gate and linear-sync all read one — so a pushed branch that never
+# became a PR is outside the system entirely. On 2026-08-22 that is exactly
+# where DRE-2655's finished work sat: three files, tests green, pushed to
+# `agent/DRE-2655-drift-count-out-of-the-pill`, for NINETEEN HOURS, while the
+# card read "In Progress" — true, and carrying no information. An operator
+# found it by eye. The branch was named perfectly and that bought nothing:
+# every gate matches the head ref OF A PULL REQUEST, so the naming convention
+# only starts paying once one exists.
+#
+# The unowned-branch watchdog above covers the MIRROR case (a PR on a branch
+# the pipeline does not own). This covers the branch that never became a PR —
+# and the hand-built card with nothing to point at at all, which is the alarm
+# that REPLACES what HAND_BUILT_LABEL suppresses. DRE-2524 correctly silenced
+# flag_stranded for hand-built work and left nothing measuring the HAND thing
+# (no branch, or a branch with no PR) in place of the FLEET thing (in a
+# working lane with no dispatched run, which for hand-built work is normal).
+#
+# Alert-only, like both backstops above: one comment per branch (or per card
+# for the no-branch half), no state move, no hold label — the hold label would
+# stand down repairs and block promotion forever, and noticing is not parking.
+#
+# AUTHORSHIP IS NEVER THE SIGNAL. DRE-2655's commits were authored
+# `agent-bureau-bot[bot]` and were written by hand; DRE-2694's hand-built work
+# wore the operator's identity. Git authorship misleads in BOTH directions, so
+# nothing here reads it: the facts are the branch, the pull request, and the
+# card's own label.
+#
+# One hour, not thirty minutes: pushing a branch and opening its PR are two
+# deliberate acts a person does minutes apart, and an agent run that pushes
+# opens the PR in the same run — so an hour of a branch with no PR is already
+# a stall, while anything shorter greets a normal push.
+UNLANDED_MINUTES = int(os.environ.get("UNLANDED_MINUTES", "60"))
+# Longer again for the no-branch half: what a hand-built card owes is a
+# person's own work, and a person who picked a card up an hour ago is not
+# late. The clock only runs on a card nothing is happening to — every comment
+# on it bumps updatedAt.
+HAND_IDLE_MINUTES = int(os.environ.get("HAND_IDLE_MINUTES", "180"))
+UNLANDED_TAG = "unlanded-work-watchdog"
+
+#: REPO's default branch, read at most once per sweep (see default_branch()).
+_default_branch: str | None = None
 
 
 def open_prs(limit: int = 50) -> list[dict]:
@@ -2243,6 +2370,256 @@ def _flag_one_silent_pr(pr: dict) -> None:
         f"no-checks: PR #{pr['number']} ({pr['headRefName']}) silent "
         f"{silent:.0f}m — reported on {card}"
     )
+
+
+def default_branch() -> str:
+    """REPO's default branch, read at most once per sweep.
+
+    Silent gh() with a `main` fallback: this helper HAS its own answer, and a
+    wrong base only makes the compare below unreadable, which the caller
+    already treats as "say nothing this sweep".
+    """
+    global _default_branch
+    if _default_branch is None:
+        _default_branch = gh("api", f"repos/{REPO}", "--jq", ".default_branch") or "main"
+    return _default_branch
+
+
+def card_branches() -> list[dict] | None:
+    """Every `agent/DRE-*` branch head in REPO — `{name, sha}` each, or None
+    when the listing is unreadable.
+
+    Emitted as JSON LINES (a per-object `--jq`) rather than one array: gh
+    `--paginate` concatenates one array PER PAGE, so a whole-array jq hands
+    back a stream no json.loads can read — and the sweep would then see zero
+    branches on exactly the busy repos this watchdog is for.
+
+    Read LOUDLY (gh_read), and None — never [] — on failure. Those JSON lines
+    are exactly why: an array listing betrays a failed read by parsing to
+    nothing, but a per-object stream makes a 403 and a genuinely branchless
+    repo byte-identical empty stdout. The silent gh() helper would hand both
+    back as [], and _flag_hand_built_idle would then tell a person "no branch,
+    no pull request" about a branch it simply could not see. Same discipline,
+    same reason, as pr_head_refs below (DRE-2034).
+    """
+    try:
+        out = gh_read(
+            "api", f"repos/{REPO}/branches", "--paginate",
+            "--jq", ".[] | {name: .name, sha: .commit.sha}",
+        )
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"unlanded watchdog: branch listing failed: {e}")
+        print(
+            f"ERROR: unlanded watchdog: branch listing failed: {e}",
+            file=sys.stderr,
+        )
+        return None
+    found: list[dict] = []
+    for line in (out or "").splitlines():
+        try:
+            branch = json.loads(line)
+        except ValueError:
+            continue  # a partial page or an error body — not a branch
+        if not isinstance(branch, dict):
+            continue
+        name = branch.get("name") or ""
+        if card_branch(name) and branch_card(name):
+            found.append(branch)
+    return found
+
+
+def pr_head_refs() -> set[str] | None:
+    """Head refs of every PR in ANY state, or None when the listing is unreadable.
+
+    `--state all`, not `open`, is the load-bearing part: a squash-merged
+    branch stays "ahead" of the default branch forever, so an open-only
+    listing would report every merged branch that was not deleted. None
+    (never an empty set) on an unreadable answer — a blip must not read as
+    "nothing here has a pull request" (DRE-2034).
+    """
+    try:
+        raw = gh(
+            "pr", "list", "--repo", REPO, "--state", "all",
+            "--limit", "100", "--json", "headRefName",
+        )
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"unlanded watchdog: PR listing failed: {e}")
+        print(f"ERROR: unlanded watchdog: PR listing failed: {e}", file=sys.stderr)
+        return None
+    try:
+        prs = json.loads(raw) if raw else None
+    except ValueError:
+        prs = None
+    if not isinstance(prs, list):
+        return None
+    return {pr.get("headRefName") or "" for pr in prs if isinstance(pr, dict)}
+
+
+def flag_unlanded_work() -> None:
+    """DRE-2682 watchdog: report work that never became a pull request.
+
+    Two halves over one branch listing and one PR listing:
+
+      (A) an `agent/DRE-*` branch carrying commits that are not on the default
+          branch, with NO pull request ever opened for it — open, closed or
+          merged — is reported on its card after UNLANDED_MINUTES. This is the
+          hole DRE-2655 fell through: nineteen hours of finished work on a
+          correctly-named branch that no gate could see.
+      (C) a HAND-BUILT card in a working lane with nothing to point at — no
+          card branch, no PR — is reported after HAND_IDLE_MINUTES
+          (_flag_hand_built_idle). That is the alarm which replaces what the
+          label suppresses; without it, routing work to a hand-built lane
+          makes DRE-2655's failure mode more common, not less.
+
+    Both halves only ever ADD a notice, so every unreadable answer means "say
+    nothing this sweep" rather than "nothing has a PR": the PR listing, the
+    BRANCH listing, the per-branch confirm, the compare and the card read each
+    fail closed. A per-branch failure is recorded on the fail-loudly rail and
+    the rest of the sweep continues (the DRE-2035 isolation discipline).
+    """
+    pr_refs = pr_head_refs()
+    if pr_refs is None:
+        print("unlanded: PR listing unreadable — reporting nothing this sweep")
+        return  # fail closed: a blip is not "nothing has a pull request"
+    branches = card_branches()
+    if branches is None:
+        print("unlanded: branch listing unreadable — reporting nothing this sweep")
+        return  # fail closed: a blip is not "this card has no branch"
+    for branch in branches:
+        try:
+            _flag_one_unlanded_branch(branch, pr_refs)
+        except Exception as e:  # noqa: BLE001 — isolate one branch, sweep the rest
+            _write_failures.append(
+                f"unlanded watchdog on branch {branch.get('name')}: {e}"
+            )
+            print(
+                f"ERROR: unlanded watchdog on branch {branch.get('name')}: {e}",
+                file=sys.stderr,
+            )
+    _flag_hand_built_idle(branches, pr_refs)
+
+
+def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str]) -> None:
+    """Evaluate ONE card branch and report it if no PR was ever opened."""
+    name, sha = branch["name"], branch.get("sha") or ""
+    if name in pr_refs or not sha:
+        return  # a PR exists (any state) — every other backstop applies
+    pulls = gh("api", f"repos/{REPO}/commits/{sha}/pulls", "--jq", "[.[].number]")
+    if not pulls:
+        return  # unreadable — a 403 is not "no PR was ever opened" (DRE-2034)
+    try:
+        if json.loads(pulls):
+            return  # a PR older than the listing window — confirmed, not guessed
+    except ValueError:
+        return
+    base = default_branch()
+    raw = gh(
+        "api", f"repos/{REPO}/compare/{base}...{name}",
+        "--jq", "{ahead: .ahead_by, last: ([.commits[].commit.committer.date] | last)}",
+    )
+    try:
+        compared = json.loads(raw) if raw else None
+    except ValueError:
+        compared = None
+    if not isinstance(compared, dict):
+        return  # unreadable — never alarm on a fabricated empty
+    ahead, last = compared.get("ahead") or 0, compared.get("last")
+    if ahead < 1 or not last:
+        return  # nothing of its own on this branch — an old or empty ref
+    idle = age_minutes(last)
+    if idle < UNLANDED_MINUTES:
+        return  # still moving; the PR may be seconds away
+    card = branch_card(name)
+    try:
+        state = card_state(card)
+    except Exception as e:  # noqa: BLE001 — any Linear/transport error -> defer
+        print(f"unlanded: could not read {card}: {e} — deferring to a later sweep")
+        return
+    if state in structural_repair.TERMINAL_STATES:
+        return  # a finished card's leftover branch is route F/I, not this alarm
+    # Keyed on the BRANCH, not the card: a card whose first attempt was
+    # reported must still speak when a second branch strands the same way.
+    marker = f"{UNLANDED_TAG} branch {name}:"
+    if any(marker in b for b in linear_ops.comment_bodies(card)):
+        return  # said once, and once is the point
+    linear_ops.cmd_comment(card, (
+        f"🚨 {marker} the branch `{name}` carries {ahead} commit(s) that are "
+        f"not on `{base}`, and no pull request has ever been opened for it — "
+        f"so nothing in the pipeline can see this work. CI, the critic, the "
+        f"merge gate and the Linear sync all key off a pull request; a branch "
+        f"on its own passes through no gate at all and closes no card. Last "
+        f"commit {idle:.0f} minutes ago.\n\n"
+        f"Where it goes from here: open a pull request from `{name}` into "
+        f"`{base}`. Hand-built work lands exactly the way dispatched work "
+        f"does — the branch, then the pull request, then the same checks and "
+        f"the same critic verdict. What changes is who writes the code, never "
+        f"how it lands.\n\n"
+        f"_Posted once per branch. Opening the pull request ends it._"
+    ))
+    print(
+        f"unlanded: branch {name} has {ahead} commit(s), no PR, idle "
+        f"{idle:.0f}m — reported on {card}"
+    )
+
+
+def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
+    """The alarm that replaces what HAND_BUILT_LABEL suppresses (DRE-2682).
+
+    A hand-built card in Todo / In Progress with NO card branch and NO pull
+    request has nothing to point at: the board says work is happening and
+    there is no artifact anywhere that agrees. flag_stranded cannot say so —
+    it is silenced on this label by design and correctly, because the thing it
+    measures (no dispatched run receipt) is normal here. So this measures what
+    hand-built work actually owes, and says what is missing rather than
+    calling the card "stalled".
+
+    A card with a branch is the other half's business (it names the specific
+    gap), a card with a PR belongs to the PR-level backstops, and a card
+    without the label belongs to flag_stranded — one alarm per card, always
+    the one that knows what is wrong.
+    """
+    with_branch = {branch_card(b["name"]) for b in branches}
+    with_pr = {branch_card(ref) for ref in pr_refs if branch_card(ref)}
+    for card in active_cards(WATCHDOG_LANES):
+        ident = card["identifier"]
+        try:
+            if not hand_built(card):
+                continue  # a dispatched card with no run is flag_stranded's case
+            if held(card):
+                continue  # already in a human's queue — never spam
+            if card_repo(card) != REPO_SLUG:
+                continue  # that repo's own sweep sees its own branches
+            if ident in with_branch or ident in with_pr:
+                continue  # there IS something to point at
+            if age_minutes(card["updatedAt"]) < HAND_IDLE_MINUTES:
+                continue  # a person picked this up recently — not a stall
+            marker = f"{UNLANDED_TAG} no branch:"
+            if any(marker in b for b in linear_ops.comment_bodies(ident)):
+                continue  # reported once already — idempotent forever
+            state, idle = card["state"]["name"], age_minutes(card["updatedAt"])
+            linear_ops.cmd_comment(ident, (
+                f"🚨 {marker} this card has sat in {state} for {idle:.0f} "
+                f"minutes with nothing to point at: no branch, no pull "
+                f"request. It is labelled '{HAND_BUILT_LABEL}', so no "
+                f"dispatched run is coming by design — which also means the "
+                f"stranded-card watchdog stays silent on it (DRE-2524). This "
+                f"notice is what stands in its place.\n\n"
+                f"What is missing, in order: a branch named "
+                f"`agent/{ident}-<slug>`, then a pull request from it. "
+                f"Hand-built work meets the same checks and the same critic "
+                f"verdict as dispatched work — the only difference is who "
+                f"writes the code. If the work is deliberately paused, say so "
+                f"on the card, so the pause is a decision rather than a "
+                f"silence.\n\n"
+                f"_Posted once per card._"
+            ))
+            print(
+                f"unlanded: {ident} is hand-built, in {state} {idle:.0f}m with "
+                f"no branch and no PR — reported"
+            )
+        except Exception as e:  # noqa: BLE001 — isolate one card, sweep the rest
+            _write_failures.append(f"unlanded watchdog on {ident}: {e}")
+            print(f"ERROR: unlanded watchdog on {ident}: {e}", file=sys.stderr)
 
 
 def fix_approved_but_red() -> None:
@@ -3330,6 +3707,142 @@ def report_break_glass() -> None:
     except Exception as exc:  # noqa: BLE001 — a KPI read never fails the sweep
         print(break_glass.count_line(None, None, error=str(exc)))
 
+#: How far back the eviction report looks. Wider than the sweep's own 15
+#: minutes on purpose (GitHub's cron delivers sweeps 78-100 minutes apart in
+#: practice), so a dropped verdict is named at least once rather than falling
+#: between two ticks. A run named twice costs a log line; one never named is
+#: the DRE-2810 stall.
+FIX_EVICTION_WINDOW_MIN = 180
+
+
+def report_fix_concurrency(workflows: str = _WORKFLOWS_DIR) -> None:
+    """Audit THIS repo's agent-fix stub on every full sweep (DRE-2810).
+
+    The concurrency group is written in each consumer repo's stub, not in the
+    reusable workflow, so "every stub in the fleet carries the grouping" cannot
+    be answered from one repository. It can be answered in every repository, on
+    the sweep that already runs there: the stub is in the checkout this sweep
+    is standing in.
+
+    A stub that still groups on the PR alone is a WARN, not a failure. The
+    condition is latent — it costs nothing until a critic returns a verdict
+    while a fix run is finishing — and taking a fleet of sweeps red over a
+    stub only that repo's own PR can change would be an alarm people learn to
+    ignore (standards: WARN at the threshold, CRITICAL when it breaks).
+    """
+    try:
+        problems = fix_concurrency.audit_workflows_dir(workflows)
+    except Exception as exc:  # noqa: BLE001 — a report never fails the sweep
+        print(f"fix-concurrency: UNKNOWN — could not audit {workflows} ({exc})")
+        return
+    if not problems:
+        print(
+            "fix-concurrency: this repo carries no agent-fix stub — nothing "
+            "to check."
+        )
+        return
+    for name, found in sorted(problems.items()):
+        if not found:
+            print(
+                f"fix-concurrency: {name} groups Agent Fix runs by PR and "
+                "commenter — a bot notice cannot evict a pending "
+                "REQUEST_CHANGES trigger."
+            )
+            continue
+        for line in found:
+            print(f"fix-concurrency: WARN — {line}")
+
+
+def _fix_run_job_count(run_id) -> int | None:
+    """How many jobs GitHub listed for a run. None when unreadable — never 0,
+    which is the very fact the caller is looking for."""
+    args = ("api", f"repos/{REPO}/actions/runs/{run_id}/jobs", "--jq", ".total_count")
+    out, detail = _actions_read(args)
+    if detail is not None:
+        _note_actions_read_failure(args, detail)
+        return None
+    try:
+        return int((out or "").strip())
+    except ValueError:
+        return None
+
+
+def report_evicted_fix_runs(now: str | None = None) -> None:
+    """Name every Agent Fix run cancelled before it started a job (DRE-2810).
+
+    A `cancelled` Agent Fix run has two meanings and GitHub records them
+    identically: a duplicate dispatch nobody was waiting on, and a
+    REQUEST_CHANGES verdict evicted from the concurrency queue by a run that
+    went on to skip. The second one stalls a PR indefinitely with every run
+    reporting success, and on PR #199 it read as the first.
+
+    The actor tells them apart — on an `issue_comment` run it is the commenter
+    — so a run triggered by the qa-bot and cancelled before any job started is
+    a verdict that never reached the fix agent, and it is reported as one.
+
+    This is a report, not a repair: the grouping fix is what stops the
+    eviction, and re-dispatching off a log line would race the sweeps that
+    already own PR recovery.
+    """
+    workflow = fix_workflow()
+    args = ("api", f"repos/{REPO}/actions/workflows/{workflow}/runs?per_page=30",
+            "--jq", fix_concurrency.RUNS_JQ)
+    out, detail = _actions_read(args)
+    if detail is not None:
+        # Absence is a third answer, never a failure (DRE-2525): adjudicate it
+        # BEFORE recording, or a repo with no fix stub takes the sweep red.
+        if workflow_on_default_branch(workflow) is False:
+            return
+        _note_actions_read_failure(args, detail)
+        print(
+            "evicted-fix-run: UNKNOWN — the Agent Fix run listing was "
+            "unreadable, so this sweep cannot say whether a verdict trigger "
+            "was evicted."
+        )
+        return
+    try:
+        runs = json.loads(out) if out else None
+    except ValueError:
+        runs = None
+    if not isinstance(runs, list):
+        print(
+            "evicted-fix-run: UNKNOWN — the Agent Fix run listing did not "
+            "parse, so this sweep cannot say whether a verdict trigger was "
+            "evicted."
+        )
+        return
+
+    lost = duplicates = 0
+    for run in runs:
+        if not fix_concurrency.is_cancelled(run):
+            continue
+        try:
+            if age_minutes(run.get("created_at") or "", now) > FIX_EVICTION_WINDOW_MIN:
+                continue
+        except ValueError:
+            continue
+        jobs = _fix_run_job_count(run.get("id"))
+        if jobs is None:
+            print(
+                f"evicted-fix-run: UNKNOWN — could not read the job list for "
+                f"run {run.get('id')}, so whether it ever started is unknown."
+            )
+            continue
+        if not fix_concurrency.never_started(jobs):
+            continue  # cancelled mid-work: a timeout or a human, not an eviction
+        if fix_concurrency.trigger_kind(run) != fix_concurrency.TRIGGER_VERDICT:
+            duplicates += 1
+            continue
+        lost += 1
+        print(fix_concurrency.eviction_report(
+            run, fix_concurrency.evictor_of(run, runs)))
+    print(
+        f"evicted-fix-run: {lost} verdict trigger(s) and {duplicates} no-op "
+        f"trigger(s) were cancelled before starting in the last "
+        f"{FIX_EVICTION_WINDOW_MIN} minutes."
+    )
+
+
 def report_epic_growth(epics: set[str]) -> None:
     """Refresh each active epic's growth artifact on every full sweep (DRE-2739).
 
@@ -3422,6 +3935,7 @@ def main(
             retrigger_dead_heads,
             flag_no_checks_prs,
             flag_unowned_prs,
+            flag_unlanded_work,
             fix_approved_but_red,
             retry_dead_fix_runs,
             restart_answered_blockers,
@@ -3657,6 +4171,12 @@ def main(
     # The epic-growth KPI (DRE-2739), beside the sweep's own numbers: green-lit
     # at N, running M, and any card that joined without the plan moving with it.
     report_epic_growth(epics)
+    # The fix loop's own grouping (DRE-2810), audited where the stub lives —
+    # the only way "every stub in the fleet carries it" is checked rather than
+    # remembered — and any REQUEST_CHANGES trigger GitHub cancelled before it
+    # could start, which otherwise reads as a harmless duplicate dispatch.
+    report_fix_concurrency()
+    report_evicted_fix_runs()
     print(f"sweep complete: {nudges} nudge(s)")
     if _write_failures or _read_failures:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0

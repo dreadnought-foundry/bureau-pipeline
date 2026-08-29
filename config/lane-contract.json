@@ -151,7 +151,7 @@
     {
       "id": "board.every_state_is_named",
       "text": "No state exists in Linear that the contract does not name.",
-      "why": "In Design Review sat on the board with one card ever and zero code references, and nobody noticed for four months.",
+      "why": "A leftover design-review state sat on the board with one card ever and zero code references, and nobody noticed for four months (DRE-2726 retired it; DRE-2818 deleted the last entry naming it).",
       "enforced_from": "2",
       "assertion": "board.every_state_is_named"
     },
@@ -168,7 +168,7 @@
       "why": "A lane the pipeline no longer writes to is a lane nothing will move a card out of. An occupied one is a stranded card.",
       "enforced_from": "3",
       "assertion": "board.retiring_lane_is_empty",
-      "pending": "the sweep's drain (reconcile.drain_retiring_lanes) must have run at least once — until it has, cards the pre-DRE-2726 pipeline put in the folded lane are still on their way out, and failing on them would block the very change that empties them"
+      "pending": "Phase 3 is when the wave asserts it. Nothing is retiring today (DRE-2818 deleted the last two entries once Linear archived their states), so the clause is vacuously satisfied and skipped; it earns its keep on the NEXT retirement, where the sweep's drain (reconcile.drain_retiring_lanes) empties the lane and this is what proves the drain finished"
     },
     {
       "id": "board.retired_entry_is_deleted",
@@ -206,7 +206,7 @@
       "why": "The evidence clause is the one that makes occupancy justifiable rather than assumed.",
       "enforced_from": "5",
       "assertion": null,
-      "pending": "needs routing verdicts (DRE-2724) and the plan artifact gate (DRE-2720) to be writing on every card"
+      "pending": "the routing verdict exists and is readable (DRE-2724); still needed is the plan artifact gate (DRE-2720) and a writer that stamps every card at planning exit (DRE-2721)"
     }
   ],
 
@@ -312,16 +312,16 @@
       "segment": "work",
       "clauses": {
         "entrance": {
-          "text": "It carries a verdict.",
+          "text": "It carries a routing verdict — one of the five in config/routing-verdicts.json, machine-readable on the card.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2724 writes routing verdicts"
+          "pending": "the vocabulary exists (DRE-2724); what is still missing is a writer that puts a verdict on EVERY card at planning exit — DRE-2721's second critic"
         },
         "exit": {
-          "text": "The dependency gate clears, the WIP cap has room, and the sweep promotes it to Todo.",
+          "text": "The verdict's destination is reached. The sweep promotes a FLEET card to Todo once the dependency gate clears and the WIP cap has room; a human moves a WORKBENCH or OPERATOR card to Todo and works it there; a PARKED card does not leave, and is never reported as stalled.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2724"
+          "pending": "the sweep already refuses to promote a non-FLEET card (DRE-2724); asserting the transitions needs the history Phase 5 records"
         },
         "writers": {
           "text": "The planner and mid-epic discovery create here; the sweep and the dead-run cap park here.",
@@ -330,10 +330,10 @@
           "assertion": "lane.writers_exist"
         },
         "evidence": {
-          "text": "A routing verdict; and, for a child of an epic, an epic that has passed Planning exit.",
+          "text": "A routing verdict comment; and, for a child of an epic, an epic that has passed Planning exit.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2724"
+          "pending": "the marker exists and the sweep reads it (DRE-2724); asserting that every Backlog card carries one needs the writer at planning exit (DRE-2721)"
         }
       }
     },
@@ -345,16 +345,16 @@
       "stale_why": "a Todo card with no dispatched run is a card nothing is coming for",
       "clauses": {
         "entrance": {
-          "text": "Its verdict is FLEET — the acceptance criteria are ones an agent can satisfy.",
+          "text": "Its verdict names who builds it here: FLEET for a dispatched agent run, WORKBENCH or OPERATOR for a person — marked `hand-built`, which is what already stops the sweep dispatching a competing run or reporting the card as stranded.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2724"
+          "pending": "the sweep promotes only a FLEET card (DRE-2724); asserting occupancy needs the transition history Phase 5 records"
         },
         "exit": {
-          "text": "A dispatched run posts its start receipt, and the card moves to In Progress.",
+          "text": "A dispatched run posts its start receipt and the card moves to In Progress — or, on a hand-built card, the person working it opens the pull request.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2724"
+          "pending": "needs the transition history Phase 5 records"
         },
         "writers": {
           "text": "The sweep promotes into it; the build run takes cards out of it.",
@@ -363,10 +363,10 @@
           "assertion": "lane.writers_exist"
         },
         "evidence": {
-          "text": "A FLEET verdict, no unmet blocking relation, and room under the WIP cap.",
+          "text": "A verdict whose destination is this lane, no unmet blocking relation, and — for a FLEET card — room under the WIP cap.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2724"
+          "pending": "needs the transition history Phase 5 records"
         }
       }
     },
@@ -408,8 +408,8 @@
       "status": "live",
       "segment": "work",
       "stale_minutes": 120,
-      "stale_why": "the folded lane keeps the longer of the two windows (In QA had 120, In Review 60) — a shorter one re-dispatches reviews that are simply still running",
-      "note": "Folded from In QA + In Review (DRE-2726). Both meant 'a pull request is open and being checked'; the sweep now keys off the evidence — a verdict bound to the head — rather than off which of two lanes the card sat in.",
+      "stale_why": "the folded lane keeps the longer of the two windows the pair had (120 and 60) — a shorter one re-dispatches reviews that are simply still running",
+      "note": "Folded from the two review lanes DRE-2726 retired (DRE-2818 deleted their entries once Linear archived the states). Both meant 'a pull request is open and being checked'; the sweep now keys off the evidence — a verdict bound to the head — rather than off which of two lanes the card sat in.",
       "clauses": {
         "entrance": {
           "text": "A pull request is open on the card's branch and is being checked: by the critic, by the verifier, or by the merge gate.",
@@ -563,22 +563,6 @@
           "pending": "needs the transition history Phase 5 records"
         }
       }
-    },
-    {
-      "name": "In Design Review",
-      "status": "retiring",
-      "retired_by": "DRE-2726",
-      "replaced_by": "Intake",
-      "reason": "One card ever, and zero references in the pipeline, the relay or the console. A leftover from the April design-review-gate epic.",
-      "board_action": "Archive the state through agent-bureau's config/linear-workspace.json and its apply script (DRE-2751), then delete this entry — the harness fails until both halves are done."
-    },
-    {
-      "name": "In QA",
-      "status": "retiring",
-      "retired_by": "DRE-2726",
-      "replaced_by": "In Review",
-      "reason": "In QA and In Review both meant 'a pull request is open and being checked'. The sweep now keys off the evidence — a verdict bound to the head — instead of off which of two lanes the card sat in. The merged In Review lane keeps the longer 120-minute window.",
-      "board_action": "Archive the state through agent-bureau's config/linear-workspace.json and its apply script (DRE-2751) AFTER this pipeline change is live, then delete this entry — archiving first would fail every in-flight write."
     }
   ]
 }

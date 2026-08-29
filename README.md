@@ -142,6 +142,50 @@ Division of labor:
 | `permissions:` (constrains `GITHUB_TOKEN`) | — (jobs inherit the caller's token scope) |
 | `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on all three promotion paths) | `secrets:`/`inputs:` declarations |
 
+### The agent-fix stub's concurrency group (DRE-2810)
+
+Because the group lives in the stub, this one is not fixable from here — every
+`agent-fix` stub in the fleet must carry it:
+
+```yaml
+concurrency:
+  group: agent-fix-${{ github.event.issue.number || inputs.pr_number }}-${{ (github.event_name != 'issue_comment' || github.event.comment.user.login == 'agent-bureau-qa-bot[bot]') && 'work' || github.event.comment.user.login }}
+  cancel-in-progress: false
+```
+
+Two lanes per PR: everything that can **do work** in one, every no-op trigger
+in its own.
+
+GitHub keeps at most **one pending run per group**, so a newly queued run
+cancels the previously pending one — and the fix agent's own `🔧 Fix attempt N
+pushed` comment is an `issue_comment` on the same PR, which queues an Agent Fix
+run. That run skips at the job gate (wrong author, no verdict), but it has
+already claimed the slot. On PR #199, 2026-08-29, it evicted the pending
+REQUEST_CHANGES trigger one second after it was queued: the PR held a standing
+verdict for 24 minutes with no agent working it, `success` / `cancelled` /
+`skipped` across the three runs, and nothing red for the medic to find.
+
+A qa-bot verdict and every `workflow_dispatch` share the `work` lane on
+purpose. merge-gate routes a merge conflict here by dispatch *before* it looks
+at the verdict, so a conflicted PR that draws REQUEST_CHANGES fires both
+triggers at once; in one lane they serialize as they always have, and in two
+they would put two fix agents on one branch. Two verdicts in a row also share
+it and serialize behind `cancel-in-progress: false`. The qa login is a
+hardcoded site like the two job-ifs — see the rename procedure in
+`tests/test_qa_login_literal_roster.py`.
+
+Audit a repo's stub — no credentials, no network:
+
+```bash
+python3 .bureau-pipeline/scripts/fix_concurrency.py audit   # .github/workflows
+```
+
+The reconcile sweep runs the same audit in every repo it sweeps and prints a
+`fix-concurrency:` line, so drift is checked rather than remembered. Beside it,
+`evicted-fix-run:` names any Agent Fix run GitHub cancelled before it started a
+job whose trigger was a qa-bot verdict — the case that otherwise reads as the
+harmless duplicate-dispatch cancel it shares a conclusion with.
+
 What the product repo still carries:
 
 - `.github/workflows/ci.yml` (+ any other product CI) — product-specific.
@@ -161,6 +205,39 @@ tokens may EVER live here, in code or in workflow files**): set
 `LINEAR_API_KEY`, `BUREAU_APP_ID`, `BUREAU_APP_PRIVATE_KEY`,
 `BUREAU_QA_APP_ID`, `BUREAU_QA_APP_PRIVATE_KEY` in each product repo, and
 install both bureau GitHub Apps on its org.
+
+## Every workflow that can go red on main has a watcher (DRE-2820)
+
+`self-red-main-repair.yml` watched exactly one workflow by name — `Pipeline
+Tests`. DRE-2726 shipped the lane-contract harness as its OWN workflow
+(`harness.yml` / "Integration Harness"), nobody added it to that list, and on
+2026-08-29 the harness sat red on `main` for fourteen hours while every
+Red-Main Repair run concluded `skipped` — including the one three minutes
+after the failure. Two approved PRs inherited the breakage, one fix agent
+spent attempts on a check that was never its fault, and the cause (two stale
+entries in `config/lane-contract.json`, named in plain words by the harness log
+the whole time) was found by accident.
+
+The list is now **derived, never remembered**. `scripts/check_workflow_watchers.py`
+(a Pipeline Tests step) enumerates the workflow files and enforces two rules:
+
+| population | rule | why |
+|---|---|---|
+| a `push` trigger that reaches the default branch | must be watched by the **Red-Main Repair** caller | its failure means the branch itself is red |
+| can RUN on the default branch at all (`schedule`, `repository_dispatch`, `workflow_dispatch`, `workflow_run`, `issue_comment`) | must be watched by **some** `workflow_run` watcher | usually a crashed run — the medic's job — but "nobody" is never the answer |
+
+One declared exemption, with its reason in the code: nothing watches the medic,
+because a medic that watched itself rebuilds the 2026-06-28 crash-loop. Adding
+a workflow with no watcher fails CI instead of adding a silent failure surface.
+
+**And a PR now says when a red check is not its fault.** The other half of that
+day was that two fix agents and a human could not tell an inherited failure
+from a caused one. Before it spends an attempt, `agent-fix` compares the PR's
+failing checks against the same checks on the **merge base**
+(`scripts/inherited_failures.py`); anything red on both sides was red before
+the branch existed, and the loop says so in a comment on the PR and in the
+fixing agent's own context. It never holds the PR — it is information, not a
+gate — and a base it cannot read reports *unevaluated*, never a pass.
 
 ## One WIP cap per repo (DRE-2529)
 
@@ -660,8 +737,15 @@ mechanical:
 ## Onboarding a new product repo
 
 1. Copy another product repo's eight stub workflows; adjust the
-   `workflow_run` lists in `medic.yml`/`merge-gate.yml` to include the repo's
-   own CI workflow names.
+   `workflow_run` lists in `medic.yml`/`merge-gate.yml`/`red-main-repair.yml`
+   to include the repo's own CI workflow names — **every** workflow that runs
+   on a push to the default branch belongs on the repair stub's list, not just
+   the one you think of first (DRE-2820; `python3
+   scripts/check_workflow_watchers.py <the repo's .github/workflows>` answers
+   it from the files). Then run
+   `python3 scripts/fix_concurrency.py audit .github/workflows` against the new
+   stubs — the `agent-fix` group is the one a copy gets silently wrong
+   (DRE-2810).
 2. Write `.github/bureau/overrides.md` (and `setup.sh` if agents need an
    environment beyond a bare runner).
 3. Set the six secrets, install both bureau Apps, and register the repo slug

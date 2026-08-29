@@ -75,27 +75,27 @@ _Waiting on: needs routing verdicts (DRE-2724) writing on every card before arri
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | It carries a verdict.  
-_Waiting on: DRE-2724 writes routing verdicts._ | Phase 5 — promised |
-| **exit** | The dependency gate clears, the WIP cap has room, and the sweep promotes it to Todo.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
+| **entrance** | It carries a routing verdict — one of the five in config/routing-verdicts.json, machine-readable on the card.  
+_Waiting on: the vocabulary exists (DRE-2724); what is still missing is a writer that puts a verdict on EVERY card at planning exit — DRE-2721's second critic._ | Phase 5 — promised |
+| **exit** | The verdict's destination is reached. The sweep promotes a FLEET card to Todo once the dependency gate clears and the WIP cap has room; a human moves a WORKBENCH or OPERATOR card to Todo and works it there; a PARKED card does not leave, and is never reported as stalled.  
+_Waiting on: the sweep already refuses to promote a non-FLEET card (DRE-2724); asserting the transitions needs the history Phase 5 records._ | Phase 5 — promised |
 | **writers** | The planner and mid-epic discovery create here; the sweep and the dead-run cap park here.  
 Permitted writers: `plan.yml`, `mid_epic.py`, `reconcile.py`, `dead_run.py`, `linear_ops.py` | Phase 2 — live |
-| **evidence** | A routing verdict; and, for a child of an epic, an epic that has passed Planning exit.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
+| **evidence** | A routing verdict comment; and, for a child of an epic, an epic that has passed Planning exit.  
+_Waiting on: the marker exists and the sweep reads it (DRE-2724); asserting that every Backlog card carries one needs the writer at planning exit (DRE-2721)._ | Phase 5 — promised |
 
 ### Todo
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | Its verdict is FLEET — the acceptance criteria are ones an agent can satisfy.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
-| **exit** | A dispatched run posts its start receipt, and the card moves to In Progress.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
+| **entrance** | Its verdict names who builds it here: FLEET for a dispatched agent run, WORKBENCH or OPERATOR for a person — marked `hand-built`, which is what already stops the sweep dispatching a competing run or reporting the card as stranded.  
+_Waiting on: the sweep promotes only a FLEET card (DRE-2724); asserting occupancy needs the transition history Phase 5 records._ | Phase 5 — promised |
+| **exit** | A dispatched run posts its start receipt and the card moves to In Progress — or, on a hand-built card, the person working it opens the pull request.  
+_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 | **writers** | The sweep promotes into it; the build run takes cards out of it.  
 Permitted writers: `reconcile.py`, `agent-task.yml`, `linear_ops.py`, `operator` | Phase 2 — live |
-| **evidence** | A FLEET verdict, no unmet blocking relation, and room under the WIP cap.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
+| **evidence** | A verdict whose destination is this lane, no unmet blocking relation, and — for a FLEET card — room under the WIP cap.  
+_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 
 ### In Progress
 
@@ -112,7 +112,7 @@ _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promis
 
 ### In Review
 
-> Folded from In QA + In Review (DRE-2726). Both meant 'a pull request is open and being checked'; the sweep now keys off the evidence — a verdict bound to the head — rather than off which of two lanes the card sat in.
+> Folded from the two review lanes DRE-2726 retired (DRE-2818 deleted their entries once Linear archived the states). Both meant 'a pull request is open and being checked'; the sweep now keys off the evidence — a verdict bound to the head — rather than off which of two lanes the card sat in.
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
@@ -177,33 +177,17 @@ Permitted writers: `operator` | Phase 2 — live |
 | **evidence** | The card it duplicates, named on it.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 
-## Retiring
-
-Lanes the pipeline no longer writes to, still on the board until the workspace apply archives them. The harness fails while one still holds a card, and fails again once the state is gone and the entry below has not been deleted.
-
-### In Design Review — retired by DRE-2726
-
-One card ever, and zero references in the pipeline, the relay or the console. A leftover from the April design-review-gate epic.
-
-**Board step:** Archive the state through agent-bureau's config/linear-workspace.json and its apply script (DRE-2751), then delete this entry — the harness fails until both halves are done.
-
-### In QA — retired by DRE-2726
-
-In QA and In Review both meant 'a pull request is open and being checked'. The sweep now keys off the evidence — a verdict bound to the head — instead of off which of two lanes the card sat in. The merged In Review lane keeps the longer 120-minute window.
-
-**Board step:** Archive the state through agent-bureau's config/linear-workspace.json and its apply script (DRE-2751) AFTER this pipeline change is live, then delete this entry — archiving first would fail every in-flight write.
-
 ## The rules the harness asserts
 
 | Rule | What it means | Enforcement |
 | --- | --- | --- |
 | `board.every_state_is_named` | No state exists in Linear that the contract does not name.  
-_In Design Review sat on the board with one card ever and zero code references, and nobody noticed for four months._ | Phase 2 — live |
+_A leftover design-review state sat on the board with one card ever and zero code references, and nobody noticed for four months (DRE-2726 retired it; DRE-2818 deleted the last entry naming it)._ | Phase 2 — live |
 | `board.every_lane_exists` | No lane is named that does not exist in Linear.  
 _The other half of the same pair: a contract that names a lane the board dropped is a contract nothing can satisfy._ | Phase 2 — live |
 | `board.retiring_lane_is_empty` | A retiring lane holds no cards.  
 _A lane the pipeline no longer writes to is a lane nothing will move a card out of. An occupied one is a stranded card._  
-_Waiting on: the sweep's drain (reconcile.drain_retiring_lanes) must have run at least once — until it has, cards the pre-DRE-2726 pipeline put in the folded lane are still on their way out, and failing on them would block the very change that empties them._ | Phase 3 — promised |
+_Waiting on: Phase 3 is when the wave asserts it. Nothing is retiring today (DRE-2818 deleted the last two entries once Linear archived their states), so the clause is vacuously satisfied and skipped; it earns its keep on the NEXT retirement, where the sweep's drain (reconcile.drain_retiring_lanes) empties the lane and this is what proves the drain finished._ | Phase 3 — promised |
 | `board.retired_entry_is_deleted` | A retiring entry whose Linear state is already gone is deleted from this file.  
 _A retirement that never finishes is drift too. Once the board catches up, the entry is the last copy of a lane that no longer exists._ | Phase 2 — live |
 | `console.state_lists_carry_every_lane` | Every lane the pipeline knows appears in the console's state lists, and the console names no state the contract does not carry.  
@@ -215,7 +199,7 @@ _A lane's writer list is only a contract if something reads the transition log a
 _Waiting on: needs the transition history the Phase-5 front door records._ | Phase 5 — promised |
 | `transition.required_evidence` | Every transition observed carried the evidence the destination lane requires.  
 _The evidence clause is the one that makes occupancy justifiable rather than assumed._  
-_Waiting on: needs routing verdicts (DRE-2724) and the plan artifact gate (DRE-2720) to be writing on every card._ | Phase 5 — promised |
+_Waiting on: the routing verdict exists and is readable (DRE-2724); still needed is the plan artifact gate (DRE-2720) and a writer that stamps every card at planning exit (DRE-2721)._ | Phase 5 — promised |
 
 ## Writers
 

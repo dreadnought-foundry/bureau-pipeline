@@ -12,8 +12,36 @@ on:
         description: PR number to fix
         required: true
 
+# Two lanes per PR (DRE-2810): everything that can DO work in one, every
+# no-op trigger in its own.
+#
+# GitHub keeps at most ONE pending run per group, so a newly queued run
+# cancels the pending one — and the fix agent's own "🔧 Fix attempt N pushed"
+# comment is an issue_comment on this PR, which queues a run here. That run
+# skips at the job gate (wrong author, no verdict), but it has already claimed
+# the slot: on PR #199, 2026-08-29, it evicted the pending REQUEST_CHANGES
+# trigger one second after that trigger was queued, and the PR sat 24 minutes
+# with a standing verdict, no agent working it, and every run reporting an
+# honest conclusion — success, cancelled, skipped, nothing red.
+#
+# So a run that will do nothing gets its own group and cannot evict one that
+# will. A qa-bot verdict and a workflow_dispatch (merge-gate's conflict route,
+# reconcile's backstops, the hand recovery) deliberately SHARE the `work`
+# lane: a conflicted PR that draws REQUEST_CHANGES dispatches both at once,
+# and two fix agents pushing one branch would leave the loser reporting "no
+# new commit" and parking the card for a human. Two verdicts in a row also
+# share it and serialize — cancel-in-progress stays false, so neither ever
+# kills a live fix agent.
+#
+# RENAME PROCEDURE (DRE-2120): the qa login below is a THIRD hardcoded site,
+# rostered in tests/test_qa_login_literal_roster.py with the two job-ifs.
+# Renaming the qa App must update every rostered site in one commit. Missing
+# this one degrades rather than goes dark: verdict runs get their own lane,
+# so an eviction is still impossible and only the work-lane sharing is lost.
+# scripts/fix_concurrency.py audits the properties above by evaluating this
+# expression, and the reconcile sweep runs that audit in every repo.
 concurrency:
-  group: agent-fix-${{ github.event.issue.number || inputs.pr_number }}
+  group: agent-fix-${{ github.event.issue.number || inputs.pr_number }}-${{ (github.event_name != 'issue_comment' || github.event.comment.user.login == 'agent-bureau-qa-bot[bot]') && 'work' || github.event.comment.user.login }}
   cancel-in-progress: false
 
 permissions:

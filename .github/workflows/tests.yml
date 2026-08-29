@@ -57,6 +57,13 @@ jobs:
       # the WIP band the fast path exists for.
       - name: WIP cap single-source check
         run: python3 scripts/check_wip_cap.py
+      # Red-main watcher coverage (DRE-2820): the repair rail watched ONE
+      # workflow by name, the harness shipped as a second one, and a red main
+      # was invisible for fourteen hours. The watched set is derived from the
+      # workflow files here — adding a workflow with no watcher fails this
+      # build rather than adding a silent failure surface.
+      - name: Red-main watcher coverage check
+        run: python3 scripts/check_workflow_watchers.py
 
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching

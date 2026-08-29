@@ -49,6 +49,20 @@ JOB_IF_EQUALITY = (
     "github.event.comment.user.login == 'agent-bureau-qa-bot[bot]'"
 )
 
+# The fix stub's concurrency lane (DRE-2810). A third site, and for the same
+# reason as the two job-ifs: a workflow-level `concurrency:` group is resolved
+# before any step can mint a token, so it cannot derive the login either. It
+# decides which triggers queue TOGETHER — a qa-bot verdict shares the `work`
+# lane with every workflow_dispatch, and every other commenter (the fix loop's
+# own "🔧 Fix attempt N pushed" notice) gets a lane of its own so it cannot
+# evict a pending verdict. A missed rename here degrades rather than goes
+# dark: verdict runs get their own lane, so the eviction stays impossible and
+# only the work-lane sharing is lost.
+CONCURRENCY_LANE_RE = re.compile(
+    r"group:.*github\.event\.comment\.user\.login == "
+    r"'agent-bureau-qa-bot\[bot\]'"
+)
+
 # In-step jq author filters (agent-fix.yml reads verdict/budget state back
 # from PR comments and must trust only qa-bot-authored bodies, DRE-1988).
 JQ_AUTHOR_FILTER_RE = re.compile(
@@ -57,9 +71,14 @@ JQ_AUTHOR_FILTER_RE = re.compile(
 
 # The exact roster: every workflow file allowed to contain the literal,
 # with per-kind occurrence counts. Anything off-roster is a regression.
+_KINDS = ("job-if", "jq-author-filter", "comment", "concurrency-group")
 ROSTER = {
-    "merge-gate.yml": {"job-if": 1, "jq-author-filter": 0, "comment": 1},
-    "agent-fix.yml": {"job-if": 1, "jq-author-filter": 3, "comment": 0},
+    "merge-gate.yml": {"job-if": 1, "jq-author-filter": 0, "comment": 1,
+                       "concurrency-group": 0},
+    "agent-fix.yml": {"job-if": 1, "jq-author-filter": 3, "comment": 0,
+                      "concurrency-group": 0},
+    "self-agent-fix.yml": {"job-if": 0, "jq-author-filter": 0, "comment": 0,
+                           "concurrency-group": 1},
 }
 
 
@@ -77,6 +96,10 @@ def classify(line):
     seen, which the roster test reports as a new hardcoded site."""
     if line.lstrip().startswith("#"):
         return "comment"
+    # Before the job-if check: the concurrency lane carries the same
+    # author-equality substring, in a `group:` line.
+    if CONCURRENCY_LANE_RE.search(line):
+        return "concurrency-group"
     if JOB_IF_EQUALITY in line:
         return "job-if"
     if JQ_AUTHOR_FILTER_RE.search(line):
@@ -126,16 +149,14 @@ class LiteralRosterTest(unittest.TestCase):
         unclassified = []
         for path in workflow_files():
             filename = os.path.basename(path)
-            counts = {"job-if": 0, "jq-author-filter": 0, "comment": 0}
+            counts = dict.fromkeys(_KINDS, 0)
             for lineno, line, count in occurrences(path):
                 kind = classify(line)
                 if kind is None:
                     unclassified.append(f"{filename}:{lineno}: {line.strip()}")
                 else:
                     counts[kind] += count
-            expected = ROSTER.get(
-                filename, {"job-if": 0, "jq-author-filter": 0, "comment": 0}
-            )
+            expected = ROSTER.get(filename, dict.fromkeys(_KINDS, 0))
             self.assertEqual(
                 counts, expected,
                 f"{filename}: hardcoded {QA_BOT_LOGIN} sites drifted from "

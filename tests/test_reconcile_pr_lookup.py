@@ -180,6 +180,12 @@ def _sweep_mocks(extra=None):
         # treatment (its own coverage lives in
         # test_operator_decision_restart.py).
         "restart_answered_blockers": MagicMock(),
+        # DRE-2810 added the evicted-fix-run report, which reads the Actions
+        # API on every full sweep; same treatment as its siblings above (its
+        # own coverage lives in test_fix_concurrency_eviction.py). Its
+        # partner report_fix_concurrency() reads local YAML and makes no gh
+        # call, so it runs here for real.
+        "report_evicted_fix_runs": MagicMock(),
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale
