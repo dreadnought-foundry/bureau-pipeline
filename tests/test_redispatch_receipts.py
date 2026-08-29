@@ -67,9 +67,18 @@ def _dispatch_run_factory(rc: int, calls: list):
         # this test's business — it asserts what the DISPATCH does. Answer
         # them with an empty result instead of failing, so registering a new
         # sweep cannot break a test about a different one. (DRE-2426 added the
-        # unowned-branch watchdog, which lists open PRs.)
+        # unowned-branch watchdog, which lists open PRs; DRE-2682 added the
+        # unlanded-work watchdog, which lists branches and compares them.)
         if argv[:2] == ["gh", "pr"]:
             return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+        if (
+            argv[:2] == ["gh", "api"]
+            and "-X" not in argv
+            and "/dispatches" not in argv[2]
+        ):
+            # A plain GET is never a dispatch — the assertion the test exists
+            # for is the one below, and it still stands untouched.
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         assert argv[0] == "gh" and argv[1] == "api" and "/dispatches" in argv[2], (
             f"unexpected gh call: {argv}"
         )

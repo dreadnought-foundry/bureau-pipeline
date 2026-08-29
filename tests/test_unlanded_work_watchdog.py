@@ -140,6 +140,17 @@ def _fake_gh(branches, pr_refs, pulls=None, compare=None, calls=None,
     return gh
 
 
+def _state_of(states):
+    """card_state stub: a mapped Exception is RAISED, so a test can stub an
+    unreadable card as well as a state."""
+    def state(identifier):
+        value = states.get(identifier, "In Progress")
+        if isinstance(value, Exception):
+            raise value
+        return value
+    return state
+
+
 def sweep(branches=None, pr_refs=(), pulls=None, compare=None, bodies=(),
           cards=(), states=None, listing=None):
     """Run flag_unlanded_work() once against a stubbed GitHub + Linear.
@@ -156,8 +167,7 @@ def sweep(branches=None, pr_refs=(), pulls=None, compare=None, bodies=(),
     ), mock.patch.object(
         reconcile, "active_cards", return_value=list(cards),
     ), mock.patch.object(
-        reconcile, "card_state",
-        side_effect=lambda ident: states.get(ident, "In Progress"),
+        reconcile, "card_state", side_effect=_state_of(states),
     ), mock.patch.object(
         reconcile.linear_ops, "comment_bodies", return_value=list(bodies),
     ), mock.patch.object(
@@ -262,11 +272,8 @@ def test_a_branch_whose_card_is_terminal_is_not_reported():
 
 
 def test_an_unreadable_card_state_reports_nothing():
-    def boom(ident):
-        raise RuntimeError("linear down")
-
-    with mock.patch.object(reconcile, "card_state", side_effect=boom):
-        comments, _, _ = sweep(states={})
+    """Linear being unreadable is not evidence the card is live."""
+    comments, _, _ = sweep(states={CARD: RuntimeError("linear down")})
     assert comments == []
 
 
