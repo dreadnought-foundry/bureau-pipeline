@@ -120,7 +120,7 @@ class TestTheFileExists:
         # An empty tuple would read as "this lane permits nobody", which is a
         # different and much quieter wrong answer than "there is no such lane".
         with pytest.raises(lane_contract.UnknownLane):
-            lane_contract.lane_writers("Plan Review")
+            lane_contract.lane_writers("Nowhere In Particular")
 
     def test_a_phase_at_or_before_the_current_one_has_shipped(self):
         order = lane_contract.phase_order()

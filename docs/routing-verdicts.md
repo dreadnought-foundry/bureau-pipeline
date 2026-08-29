@@ -5,22 +5,25 @@
 
 A verdict is a **routing decision, not a quality score**. It answers *who builds this, and how* — and every answer sends the card somewhere different. Framed as a score, a critic drifts toward marking things good so it looks useful; framed as routing there is no good or bad, only a wrong destination, which shows up immediately.
 
-This document is rendered from the same file the sweep and the write path read, so it cannot drift from the enforcement. Destinations and actors are bound to `config/lane-contract.json`: a route whose destination is not a lane, or whose actor is not a permitted writer, fails `python3 scripts/routing_verdict.py check`.
+This document is rendered from the same file the sweep and the write path read, so it cannot drift from the enforcement. Destinations and actors are bound to `config/lane-contract.json`: a route whose destination is not a lane, or whose actor is not a permitted writer of that lane, fails `python3 scripts/routing_verdict.py check`.
+
+The actor is who is **accountable for the card at the destination** — usually whoever picks it up, and where nobody does, the writer that performs the move. Being a writer somewhere is not enough: `operator` is a real writer and is not permitted on `Backlog`, which is why PARKED naming it sent cards to a lane that actor may not write (DRE-2824).
 
 ## The five routes
 
-| Verdict | Means | Destination | Who picks it up | Dispatched? |
+| Verdict | Means | Destination | Who handles it there | Dispatched? |
 | --- | --- | --- | --- | --- |
 | **FLEET** | Buildable unattended in one pull request. | Todo | `agent-task.yml` | yes |
 | **WORKBENCH** | Needs an interactive flow or live system state — driving an auth flow, forcing a token past expiry, confirming something in production. | Todo | `operator` | no |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret. | Todo | `operator` | no |
-| **PARKED** | Well-formed and deliberately not to be built. | Backlog | `operator` | no |
+| **PARKED** | Well-formed and deliberately not to be built. | Backlog | `plan.yml` | no |
 | **NEEDS WORK** | Not buildable as written. | Planning | `plan.yml` | no |
 
 - **FLEET** — The sweep promotes it out of Backlog and the relay dispatches a build run. This is the only verdict that may be dispatched.
 - **WORKBENCH** — It is real work and it goes on the board where work goes — but a person does it at an interactive session, so it carries `hand-built`, which is already the signal that stops the sweep dispatching a competing run or reporting the card as stranded (DRE-2524). Backlog was the old answer and Backlog is a dead end: nothing there ever moves a non-FLEET card on.  Marked `hand-built`.
 - **OPERATOR** — Same destination as WORKBENCH and the same actor, because the same person does it; the difference is that no code is produced. `no-code` is the existing marker for that, and it already stops a merged runbook auto-closing the card (linear_ops.auto_done_skip_reason — six false portico closes).  Marked `hand-built`, `no-code`.
-- **PARKED** — Backlog IS the right lane for a card that is deliberately inert — the dead end is the point. It is never promoted and never reported as stalled by any sweep; only a human revives it.
+- **PARKED** — Backlog IS the right lane for a card that is deliberately inert — the dead end is the point. It is never promoted and never reported as stalled by any sweep. The actor is the planning-exit writer that stamps this verdict and lands the card there, because Backlog is a lane only the process writes; it is not somebody waiting to pick the card up, because for PARKED nobody is.
+  - **Who takes it back out:** Only a human revives a PARKED card. Nothing in the pipeline takes it back out of Backlog — no sweep, no run, no label — so a person deciding the card is worth building again is a separate, later act, and never the actor of this routing decision.
 - **NEEDS WORK** — It returns to Planning with the specific missing thing named — the verdict comment carries it, so the planner is told what to add rather than asked to guess.
 
 ## The rule, and it is mechanical
