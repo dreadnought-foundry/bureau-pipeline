@@ -146,6 +146,33 @@ ANSWER_FORMAT = (
 
 NEAR_MISS_TAG = "operator-decision-near-miss"
 
+# The one worker-bot comment that does NOT consume an operator decision
+# (DRE-2813). The restart sweep arms on "no worker-bot comment is newer than
+# the answer", which is what stops one answer re-dispatching every fifteen
+# minutes forever — and is also how a hand `workflow_dispatch` silently
+# disarmed it: on a budget-exhausted PR that run fixes nothing, but it posted
+# a fresh 🛑 hold, and the hold outranked a standing answer (PR #199 /
+# DRE-2721, 2026-08-29: answer 15:27:14, hand dispatch 15:29:35, its hold
+# 15:29:46, sweep stands down 15:33:55, PR never moves).
+#
+# A dispatch that cannot act now posts THIS notice instead of a hold, and the
+# arming rule skips it. The exemption is deliberately one tag on one author:
+# the notice is the loop saying "I did nothing", so treating it as evidence
+# the loop moved is the lie. Every other worker-bot comment — a fix attempt,
+# a restart receipt, a fresh blocker — still consumes the answer, and a HUMAN
+# comment carrying the tag is not exempt (identity decides meaning, DRE-1995).
+NOOP_TAG = "dispatch-no-work"
+
+# Said in the holds themselves, so the PR that asks for an answer also says
+# the other recovery is not a second, independent one (DRE-2813). Pinned into
+# both inline workflow bodies by tests/test_hand_dispatch_no_work.py and
+# shell-safe for the same reason as DECISION_EXAMPLE.
+HAND_DISPATCH_NOTICE = (
+    "Dispatching the fix workflow by hand is not a second way out: with the "
+    "budget spent it cannot add an attempt, and while your answer is standing "
+    "it deliberately does nothing rather than post over it."
+)
+
 STATUS_OVERRIDE = (
     "STATUS: an operator decision ANSWERS the latest blocker — implement "
     "per the decision instead of re-escalating."
@@ -227,6 +254,43 @@ def operator_decision(comments, worker_login: str) -> Optional[dict]:
     for c in _humans_after_latest_blocker(comments, worker_login):
         if is_decision_body(c.get("body")):
             decision = c
+    return decision
+
+
+def is_noop_notice(c: dict, worker_login: str) -> bool:
+    """True for the worker bot's own "this dispatch did nothing" notice
+    (DRE-2813). Author-gated: the tag exempts the LOOP's own admission, never
+    a human comment that happens to quote it."""
+    return _is_worker(c, worker_login) and NOOP_TAG in (c.get("body") or "")
+
+
+def decision_consumed(comments, decision: dict, worker_login: str) -> bool:
+    """True when the loop has already moved on `decision`: any worker-bot
+    comment newer than it — this sweep's restart receipt, a fix attempt, a
+    push marker, a fresh blocker — except a no-work notice (DRE-2813).
+
+    Located by IDENTITY, not list.index: dicts compare by value, so an
+    operator who re-posts the same answer verbatim would otherwise be measured
+    against their FIRST copy — receipted, and silently unanswerable a second
+    time. A decision that is not in `comments` at all reads as unconsumed:
+    the caller has nothing newer to measure it against."""
+    at = next((i for i, c in enumerate(comments) if c is decision), -1)
+    if at < 0:
+        return False
+    return any(
+        _is_worker(c, worker_login) and not is_noop_notice(c, worker_login)
+        for c in comments[at + 1 :]
+    )
+
+
+def standing_decision(comments, worker_login: str) -> Optional[dict]:
+    """THE decision the restart is armed on: an operator_decision that the
+    loop has not acted on yet. None when there is no decision, or when one
+    was already consumed — the arming rule that gives each answer exactly one
+    dispatch, read here so the sweep and the fix job cannot disagree."""
+    decision = operator_decision(comments, worker_login)
+    if decision is None or decision_consumed(comments, decision, worker_login):
+        return None
     return decision
 
 

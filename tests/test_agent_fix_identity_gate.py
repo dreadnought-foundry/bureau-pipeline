@@ -12,14 +12,26 @@ Any commenter could mimic "🔧 Fix attempt" / "🔀 Conflict resolution" to bur
 the retry budgets, or plant the "pushed — CI and critic review re-running"
 marker to flip fix-vs-conflict mode routing. The BookkeepingAuthorFilterTest
 classes below pin the worker-bot author filter on all three reads, executing
-the workflow's real jq expressions against sample comment JSON (the same
-live-extraction harness as test_merge_gate_decision_table.py).
+the real filter against sample comment JSON (the same live-extraction harness
+as test_merge_gate_decision_table.py).
+
+DRE-2813 moved the two BUDGET counters out of the workflow's inline jq into
+scripts/fix_budget.py — a spent budget has to be read together with the
+operator decision that may re-arm it, through the same predicates the restart
+sweep uses. The identity filter did not move, and these harnesses follow the
+counter to where it lives rather than dropping the pin. The push marker is
+still read by jq in the workflow and is still pinned there.
 """
 import json
 import os
 import re
 import subprocess
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+import fix_budget  # noqa: E402
 
 WORKFLOW = os.path.join(
     os.path.dirname(__file__), "..", ".github", "workflows", "agent-fix.yml"
@@ -174,18 +186,29 @@ def comment(login: str, body: str) -> dict:
     return {"user": {"login": login, "type": "Bot" if login.endswith("[bot]") else "User"}, "body": body}
 
 
+def count_budget(comments, mode: str) -> int:
+    """The LIVE budget counter, called the way the workflow calls it — the
+    marker string comes out of fix_budget.BUDGETS, never re-typed here."""
+    marker, _cap = fix_budget.BUDGETS[mode]
+    return fix_budget.count_markers(comments, WORKER_BOT, marker)
+
+
 class BookkeepingSourceFilterTest(unittest.TestCase):
-    """Source pins: each of the three bookkeeping jq reads must carry the
+    """Source pins: each of the three bookkeeping reads must carry the
     worker-bot author filter (agent-fix posts these comments as
     agent-bureau-bot[bot], NOT qa-bot)."""
 
-    def test_fix_counter_jq_filters_by_worker_bot(self):
-        expr = extract_jq("🔧 Fix attempt")
-        self.assertIn(f'.user.login == "{WORKER_BOT}"', expr)
+    def test_fix_counter_filters_by_worker_bot(self):
+        self.assertEqual(count_budget([comment("mallory", FIX_MARKER)], "fix"), 0)
 
-    def test_conflict_counter_jq_filters_by_worker_bot(self):
-        expr = extract_jq("🔀 Conflict resolution")
-        self.assertIn(f'.user.login == "{WORKER_BOT}"', expr)
+    def test_conflict_counter_filters_by_worker_bot(self):
+        self.assertEqual(
+            count_budget([comment("mallory", CONFLICT_MARKER)], "conflict"), 0
+        )
+
+    def test_the_counter_is_the_one_the_workflow_calls(self):
+        # Non-vacuous: a counter nothing runs would pass every case above.
+        self.assertIn("fix_budget.py decide", workflow_src())
 
     def test_push_marker_jq_filters_by_worker_bot(self):
         # LAST_PUSH_IDX iterates to_entries, so the login lives under .value.
@@ -194,10 +217,23 @@ class BookkeepingSourceFilterTest(unittest.TestCase):
 
 
 class FixCounterHarnessTest(unittest.TestCase):
-    """Execute the real fix-attempt counter jq against sample comment JSON."""
+    """Execute the real fix-attempt counter against sample comment JSON."""
 
     def _count(self, comments) -> int:
-        return int(run_jq(extract_jq("🔧 Fix attempt"), comments))
+        return count_budget(comments, "fix")
+
+    def test_forged_markers_cannot_burn_the_budget(self):
+        # The consequence the filter exists to prevent, asserted on the whole
+        # decision rather than on the count: three forged attempts must leave
+        # the loop free to work.
+        forged = [comment("mallory", FIX_MARKER) for _ in range(3)]
+        self.assertEqual(
+            fix_budget.decide(forged, WORKER_BOT, mode="fix").action, "run"
+        )
+        genuine = [comment(WORKER_BOT, FIX_MARKER) for _ in range(3)]
+        self.assertEqual(
+            fix_budget.decide(genuine, WORKER_BOT, mode="fix").action, "hold"
+        )
 
     def test_genuine_worker_bot_marker_counts(self):
         self.assertEqual(self._count([comment(WORKER_BOT, FIX_MARKER)]), 1)
@@ -223,10 +259,10 @@ class FixCounterHarnessTest(unittest.TestCase):
 
 
 class ConflictCounterHarnessTest(unittest.TestCase):
-    """Execute the real conflict-round counter jq against sample comment JSON."""
+    """Execute the real conflict-round counter against sample comment JSON."""
 
     def _count(self, comments) -> int:
-        return int(run_jq(extract_jq("🔀 Conflict resolution"), comments))
+        return count_budget(comments, "conflict")
 
     def test_genuine_worker_bot_marker_counts(self):
         self.assertEqual(self._count([comment(WORKER_BOT, CONFLICT_MARKER)]), 1)

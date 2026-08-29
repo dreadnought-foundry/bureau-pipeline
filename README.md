@@ -102,6 +102,32 @@ seam instead: `linear_ops.add_label` and the planner's child-label path refuse
 the marker outright, and a marker applied by a bot actor (an integration we do
 not own) is not honored — the card bounces as if it were absent.
 
+## Releasing a held PR: one recovery, not two (DRE-2813)
+
+A PR the fix loop has held for a human decision is released by **answering on
+the PR** — a comment whose first line starts with the words `Operator
+decision`. The reconcile sweep reads it within about fifteen minutes and
+dispatches the fix loop. That is the whole procedure, and
+[docs/held-pr-recovery.md](docs/held-pr-recovery.md) is the operator page for
+it.
+
+`gh workflow run agent-fix.yml -f pr_number=<n>` is **not a second,
+independent recovery.** With the attempt budget spent it has no attempt to
+add — and until DRE-2813 it made things strictly worse: the run fixed nothing,
+concluded `success`, and posted a fresh 🛑 hold as the worker bot. The sweep
+arms only when no worker-bot comment is newer than the answer (which is what
+stops one answer re-dispatching forever), so that hold stood the sweep down
+permanently. PR #199, 2026-08-29: answer 15:27:14, hand dispatch 15:29:35, its
+hold 15:29:46, sweep stands down 15:33:55, PR never moves.
+
+Now such a dispatch does nothing, posts no hold, and posts one
+`dispatch-no-work` notice — the single worker-bot comment the arming rule
+ignores — saying the answer is already standing. The sweep's own dispatch
+(machine-initiated, `github-actions`) re-arms exactly one attempt, so an
+answer buys work instead of a repeat hold. `scripts/fix_budget.py` makes that
+decision and reads the answer through the same `fix_context` predicates the
+sweep reads, so the two cannot disagree.
+
 ## How a product repo consumes this
 
 Each pipeline workflow in the product repo is a thin stub: it owns the

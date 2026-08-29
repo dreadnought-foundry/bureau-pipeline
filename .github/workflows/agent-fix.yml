@@ -83,10 +83,35 @@ jobs:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # DRE-2813: the budget decision below is a script, not inline jq, so the
+      # pipeline scripts are checked out FIRST. It has to read the thread the
+      # restart sweep reads, through the same predicates (fix_context), or the
+      # two disagree about whether an operator answer is standing — which is
+      # exactly how a hand dispatch came to cancel one. The later checkouts of
+      # this path stay: a root `actions/checkout` clears the workspace, so
+      # every step that needs the scripts after one re-takes them.
+      - name: Checkout pipeline scripts (budget decision)
+        uses: actions/checkout@v7
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
       - name: Resolve PR, mode, and attempt budget
         id: pr
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          # The loop's own identity, from THIS run's minted token (DRE-1988
+          # discipline — never a hardcoded name that an App rename outdates).
+          WORKER_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          # How this run was started. `gh workflow run` under a workflow's
+          # github.token initiates as `github-actions[bot]` (DRE-2053), so the
+          # reconcile sweep's restart and merge-gate's conflict repair are
+          # machine dispatches; a person dispatching by hand carries their
+          # own login. Read from the event, never from anything a commenter
+          # can write.
+          EVENT_NAME: ${{ github.event_name }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           PR=${{ github.event.issue.number || github.event.inputs.pr_number }}
           INFO=$(gh pr view "$PR" --repo ${{ github.repository }} --json state,headRefName,headRefOid,mergeStateStatus)
@@ -170,66 +195,125 @@ jobs:
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
+          # THE BUDGETS (DRE-2813). Both of them — 3 review-fix attempts, 5
+          # conflict rounds — and what a SPENT one may do about a standing
+          # operator decision are decided by fix_budget.py. It counts only
+          # worker-bot-authored markers (DRE-1995: a planted marker must never
+          # burn a budget, nor free one) and it reads the answer through
+          # fix_context, the same predicates reconcile's restart sweep reads,
+          # so "the sweep is armed" and "this dispatch may act" cannot
+          # disagree. That disagreement is the bug: on a budget-exhausted PR a
+          # hand dispatch did no work but posted a fresh 🛑 hold, the hold was
+          # newer than a standing answer, and the sweep stood down forever
+          # (PR #199, 2026-08-29 — answer 15:27, hand dispatch 15:29, sweep
+          # stands down 15:33).
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+            > "$TMPD/fix-budget-thread.json" 2>/dev/null \
+            || echo '[]' > "$TMPD/fix-budget-thread.json"
+          # A hand dispatch is a workflow_dispatch a PERSON started. The
+          # reconcile sweep and merge-gate dispatch with the workflow's
+          # github.token, which initiates as `github-actions` (DRE-2053; the
+          # run records of the incident itself show `github-actions[bot]` on
+          # all four machine dispatches and `smeed652` on the hand one —
+          # tests/fixtures/agent-fix-runs-2026-08-29.json). Those are the
+          # pipeline restarting itself and are allowed to act.
+          #
+          # Any bot-shaped actor counts as machine — a token-triggered
+          # dispatch always initiates as one — so only a plain human login
+          # reads as a hand dispatch. That is the safe direction: misreading
+          # the sweep's OWN restart as a hand dispatch would strand the PR
+          # with its one answer already spent, while misreading a hand
+          # dispatch as machine only buys one attempt of real work.
+          HAND=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            HAND=true
+            case "$TRIGGERING_ACTOR" in
+              github-actions|*'[bot]') HAND=false ;;
+            esac
+          fi
+          python3 .bureau-pipeline/scripts/fix_budget.py decide \
+            --comments-file "$TMPD/fix-budget-thread.json" \
+            --worker-login "$WORKER_LOGIN" --mode "$MODE" \
+            --hand-dispatch "$HAND" --pr "$PR" \
+            --env-out "$TMPD/fix-budget.env" \
+            --note-out "$TMPD/fix-no-work-note.md" \
+            --summary-out "$TMPD/fix-no-work.txt"
+          # Sourced, not eval'd on stdout: every value it writes comes from a
+          # fixed vocabulary (a word or an integer), never from thread text.
+          . "$TMPD/fix-budget.env"
+          {
+            echo "number=$PR"; echo "branch=$BRANCH"; echo "card=$CARD"
+            echo "attempt=$ATTEMPT"; echo "rearmed=$REARMED"
+          } >> "$GITHUB_OUTPUT"
+
           if [ "$MODE" = "conflict" ]; then
-            # DRE-1995: count only worker-bot-authored rounds — forged
-            # markers would exhaust the 5-round budget instantly.
-            RESOLVED=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-              --jq '[.[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("🔀 Conflict resolution"))] | length')
-            ATTEMPT=$((RESOLVED + 1))
             {
-              echo "go=true"; echo "number=$PR"; echo "branch=$BRANCH"
-              echo "card=$CARD"; echo "attempt=$ATTEMPT"
               echo "escalation=MODE: merge-conflict resolution ONLY. The critic has not requested changes — do NOT rework the diff. Merge the default branch into this branch, resolve conflicts preserving BOTH sides' intent (renumber this branch's alembic migration to main's-head + 1 if that is the conflict). A GENERATED lockfile in conflict (package-lock.json, yarn.lock, pnpm-lock.yaml, poetry.lock, Cargo.lock) must NEVER be hand-merged — hand-merging one eats the whole turn budget: take the default branch's copy (git checkout origin/<default-branch> -- <lockfile>) and regenerate it from this branch's manifest with the package manager (e.g. npm install). Then run local checks and push. Commit message: \"merge: resolve conflicts with main (round $ATTEMPT)\". Nothing else."
             } >> "$GITHUB_OUTPUT"
-            if [ "$RESOLVED" -ge 5 ]; then
-              echo "go=false" >> "$GITHUB_OUTPUT"
-              # The hold states its own way out (DRE-2409). This step runs
-              # before the .bureau-pipeline checkout, so the format is inline
-              # here rather than read from fix_context.py --answer-format;
-              # tests/test_operator_decision_restart.py pins the example
-              # against fix_context.DECISION_EXAMPLE so the two cannot drift.
-              # DRE-2548 pins the two sentences after it the same way, to
-              # fix_context.RESTART_PROMISE / SKIP_NOTICE: the operator is
-              # told what actually starts the loop (the 15-minute reconcile
-              # sweep), because THIS job's own gate skips the comment they
-              # were asked to write.
-              gh pr comment "$PR" --repo ${{ github.repository }} \
-                --body "🛑 Conflict-resolution budget exhausted ($RESOLVED rounds) — main keeps moving under this branch; holding for a human decision.
-
-          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected."
-              echo "held=true" >> "$GITHUB_OUTPUT"
-            fi
-            exit 0
-          fi
-
-          # DRE-1995: count only worker-bot-authored attempts — forged
-          # markers would burn the 3-attempt budget and hold the PR.
-          ATTEMPTS=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-            --jq '[.[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("🔧 Fix attempt"))] | length')
-          ATTEMPT=$((ATTEMPTS + 1))
-          {
-            echo "go=true"; echo "number=$PR"; echo "branch=$BRANCH"
-            echo "card=$CARD"; echo "attempt=$ATTEMPT"
-          } >> "$GITHUB_OUTPUT"
-          # All three attempts ride the workhorse ladder. Attempt 3 escalates
-          # the FRAMING, not the model — re-derive the fix from scratch instead
-          # of patching the last one, because same-model retries share blind
-          # spots. The id itself is NOT pinned here: the "Select model" step
-          # below resolves it from config/models.yaml (DRE-2316), because this
-          # step runs before the .bureau-pipeline checkout. Then hold.
-          if [ "$ATTEMPT" -eq 3 ]; then
+          # All three fix attempts ride the workhorse ladder. Attempt 3
+          # escalates the FRAMING, not the model — re-derive the fix from
+          # scratch instead of patching the last one, because same-model
+          # retries share blind spots. The id itself is NOT pinned here: the
+          # "Select model" step below resolves it from config/models.yaml
+          # (DRE-2316).
+          elif [ "$ATTEMPT" -eq 3 ]; then
             echo "escalation=ESCALATION CONTEXT: Two previous fix attempts failed to satisfy the critic. Do NOT assume their approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in /tmp/fix-blocker.txt rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
           else
             echo "escalation=" >> "$GITHUB_OUTPUT"
           fi
-          if [ "$ATTEMPTS" -ge 3 ]; then
-            echo "go=false" >> "$GITHUB_OUTPUT"
+
+          if [ "$ACTION" = "run" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Nothing to do. `no_work` is the run record's qualification: the
+          # step at the end of this job turns it into a ::notice:: and a job
+          # summary, so a dispatch that fixed nothing cannot read as a plain
+          # success (DRE-2813).
+          echo "go=false" >> "$GITHUB_OUTPUT"
+          echo "no_work=true" >> "$GITHUB_OUTPUT"
+
+          if [ "$ACTION" = "noop" ]; then
+            # An operator answer is standing and the reconcile sweep owns the
+            # restart. Post NO hold: a hold here would be newer than the
+            # answer, and the sweep's arming rule would read it as the loop
+            # having moved. The notice that goes up instead is the ONE
+            # worker-bot comment that rule ignores, and fix_budget writes an
+            # empty file when the thread already carries one for this answer.
+            if [ -s "$TMPD/fix-no-work-note.md" ]; then
+              gh pr comment "$PR" --repo ${{ github.repository }} \
+                --body-file "$TMPD/fix-no-work-note.md"
+            fi
+            exit 0
+          fi
+
+          # ACTION=hold: the budget is spent and nobody has answered. The hold
+          # states its own way out (DRE-2409). It stays inline rather than
+          # reading fix_context.py --answer-format, and
+          # tests/test_operator_decision_restart.py pins the example against
+          # fix_context.DECISION_EXAMPLE so the two cannot drift. DRE-2548
+          # pins the two sentences after it the same way, to
+          # fix_context.RESTART_PROMISE / SKIP_NOTICE: the operator is told
+          # what actually starts the loop (the 15-minute reconcile sweep),
+          # because THIS job's own gate skips the comment they were asked to
+          # write. DRE-2813 pins the last sentence to
+          # fix_context.HAND_DISPATCH_NOTICE — the message that asks for an
+          # answer is also where the other recovery has to be reconciled.
+          if [ "$MODE" = "conflict" ]; then
+            gh pr comment "$PR" --repo ${{ github.repository }} \
+              --body "🛑 Conflict-resolution budget exhausted ($ATTEMPTS rounds) — main keeps moving under this branch; holding for a human decision.
+
+          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
+          else
             gh pr comment "$PR" --repo ${{ github.repository }} \
               --body "🛑 Fix budget exhausted ($ATTEMPTS attempts, including a fresh-eyes re-derivation) — holding for a human decision.
 
-          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected."
-            echo "held=true" >> "$GITHUB_OUTPUT"
+          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
           fi
+          echo "held=true" >> "$GITHUB_OUTPUT"
 
       - name: Notify hold on Linear
         if: steps.pr.outputs.held == 'true' && steps.pr.outputs.card != ''
@@ -250,6 +334,28 @@ jobs:
             MSG="🛑 Three fix attempts (two standard + one fresh-eyes re-derivation) couldn't satisfy the critic — this card needs a human decision. See PR for the full review trail."
           fi
           python3 .bureau-pipeline/scripts/linear_ops.py comment "${{ steps.pr.outputs.card }}" "$MSG"
+
+      # DRE-2813 (AC5): a dispatch that could not do any work must not read as
+      # a plain `success`. GitHub gives an Actions job no `neutral`
+      # conclusion, and failing on purpose would summon the medic to retry a
+      # run that is behaving correctly — so the qualification is written where
+      # the run record actually carries it: a distinctly named step that only
+      # a no-work dispatch executes, a ::notice:: annotation on the run, and a
+      # NO WORK DONE line at the top of the job summary.
+      - name: No work done (this dispatch could not act)
+        if: steps.pr.outputs.no_work == 'true'
+        run: |
+          LINE=$(cat "${RUNNER_TEMP:-/tmp}/fix-no-work.txt" 2>/dev/null || true)
+          [ -n "$LINE" ] || LINE="NO WORK DONE: this Agent Fix dispatch made no change."
+          echo "::notice::$LINE"
+          {
+            echo "### No work done"
+            echo
+            echo "$LINE"
+            echo
+            echo "See docs/held-pr-recovery.md — answering on the PR is the"
+            echo "recovery; a hand dispatch is not a second, independent one."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout PR branch
         if: steps.pr.outputs.go == 'true'
@@ -497,7 +603,12 @@ jobs:
           # never cost the fix run.
           [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py \
             remove-label "${{ steps.pr.outputs.card }}" needs-human || true
-          if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
+          if [ "${{ steps.pr.outputs.rearmed }}" = "true" ]; then
+            # DRE-2813: the budget was spent and an operator decision re-armed
+            # exactly one attempt, so "attempt 4/3" would be a lie about which
+            # budget this run is spending.
+            MSG="🔧 Fix agent dispatched on an operator decision (one attempt, re-armed) — PR #${{ steps.pr.outputs.number }}."
+          elif [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
             MSG="🔀 Conflict-resolution agent dispatched (round ${{ steps.pr.outputs.attempt }}/5) — merging main into PR #${{ steps.pr.outputs.number }}."
           else
             NOTE=""

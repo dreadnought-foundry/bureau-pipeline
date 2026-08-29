@@ -2871,6 +2871,14 @@ def restart_answered_blockers() -> None:
     only fires when NO worker-bot comment is newer than the decision, so each
     answer buys exactly one dispatch (a further answer re-arms it).
 
+    The one exception is DRE-2813's no-work notice. That arming rule was
+    satisfied in the wrong direction by a hand `workflow_dispatch` on a
+    budget-exhausted PR: the run fixed nothing but posted a fresh 🛑 hold, and
+    the hold outranked a standing answer, so this sweep stood down forever
+    (PR #199, 2026-08-29). The fix job now posts a tagged "I did nothing"
+    notice instead of that hold, and fix_context.decision_consumed skips it —
+    the loop saying it did not move must not read as the loop moving.
+
     DIRTY PRs are released but not dispatched — unstick_conflicts owns
     conflicted PRs, and un-parking the card is what lets it act on the next
     sweep. Otherwise the house pattern: back off while a fix run is in flight,
@@ -2896,16 +2904,12 @@ def restart_answered_blockers() -> None:
             continue
         # Consumed? Any worker-bot comment newer than the decision means the
         # loop already moved on it — this sweep's receipt, a fix attempt, a
-        # push marker. Only an UNANSWERED-side-newest decision restarts.
-        # Located by IDENTITY, not list.index: dicts compare by value, so an
-        # operator who re-posts the same answer verbatim would otherwise be
-        # measured against their FIRST copy — receipted, and silently
-        # unanswerable a second time.
-        at = next(i for i, c in enumerate(thread) if c is decision)
-        after = thread[at + 1:]
-        if any(
-            (c.get("user") or {}).get("login") == WORKER_REST_LOGIN for c in after
-        ):
+        # push marker. Only an UNANSWERED-side-newest decision restarts. The
+        # predicate lives in fix_context (identity-located, DRE-2813's
+        # no-work notice exempted) so this sweep and the fix job's own budget
+        # gate read one rule: a dispatch that did nothing must not be able to
+        # tell this sweep the loop has moved.
+        if fix_context.decision_consumed(thread, decision, WORKER_REST_LOGIN):
             continue
         if pr.get("mergeStateStatus") == "DIRTY":
             print(

@@ -103,7 +103,8 @@ def write_exec(path: str, body: str) -> None:
 # ── the Announce step, executed for real ───────────────────────────────────
 
 
-def run_announce(td: str, mode: str, card: str = CARD, linear_exit: int = 0):
+def run_announce(td: str, mode: str, card: str = CARD, linear_exit: int = 0,
+                 rearmed: str = "false"):
     """Execute the real 'Announce fix attempt' run block. Returns (proc, calls),
     where calls is the list of linear_ops.py argv lists it made."""
     os.makedirs(os.path.join(td, ".bureau-pipeline", "scripts"), exist_ok=True)
@@ -122,6 +123,9 @@ def run_announce(td: str, mode: str, card: str = CARD, linear_exit: int = 0):
             "steps.pr.outputs.attempt": "2",
             "steps.pr.outputs.number": PR,
             "steps.pr.outputs.card": card,
+            # DRE-2813: an attempt re-armed by an operator decision announces
+            # itself as that rather than as "attempt 4/3".
+            "steps.pr.outputs.rearmed": rearmed,
         },
     )
     script = os.path.join(td, "announce.sh")
@@ -268,6 +272,9 @@ def run_resolve(td: str, comments: list, merge_state: str = "CLEAN"):
     Returns the step outputs (last write wins, as Actions does)."""
     os.makedirs(os.path.join(td, "bin"), exist_ok=True)
     write_exec(os.path.join(td, "bin", "gh"), GH_STUB)
+    # The pipeline checkout the job takes before this step since DRE-2813 —
+    # the budget decision is scripts/fix_budget.py, not inline jq.
+    os.symlink(ROOT, os.path.join(td, ".bureau-pipeline"))
     info = os.path.join(td, "pr-info.json")
     with open(info, "w") as f:
         json.dump(
@@ -302,10 +309,17 @@ def run_resolve(td: str, comments: list, merge_state: str = "CLEAN"):
             os.environ,
             PATH=f"{td}/bin:{os.environ['PATH']}",
             GITHUB_OUTPUT=out_file,
+            RUNNER_TEMP=td,
             GH_PR_INFO=info,
             GH_COMMENTS=comments_file,
             GH_LOG=os.path.join(td, "gh-calls.jsonl"),
             GH_TOKEN="test",
+            # DRE-2813: the step reads its identity and how it was started
+            # from the env. A hand dispatch on a PR nobody has answered is
+            # still a hold, which is what these cases exercise.
+            WORKER_LOGIN=WORKER_BOT,
+            EVENT_NAME="workflow_dispatch",
+            TRIGGERING_ACTOR="github-actions",
         ),
         capture_output=True,
         text=True,
