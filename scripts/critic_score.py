@@ -494,16 +494,34 @@ def alert(row: dict, doc: dict | None = None) -> str:
     )
 
 
-def escalate(lops, result: dict, *, to: str | None = None) -> list:
+def already_alerted(comment_bodies) -> bool:
+    """Has this card already been alerted? Read off the card's own comments,
+    matched at the START of a body for the same reason every other marker in
+    this pipeline is anchored: a notice that QUOTES the tag is not the tag."""
+    return any(
+        (body or "").lstrip().startswith(f"🚨 {ESCALATE_TAG}:")
+        for body in comment_bodies or ()
+    )
+
+
+def escalate(lops, result: dict, *, to: str | None = None,
+             comments: dict | None = None) -> list:
     """Alert on every card the critic could not classify, and move it.
 
     The comment is posted BEFORE the move. If the move then fails, the card
     still carries the reason — which is the whole difference between this and
     the silent hold it replaces.
+
+    A card that already carries the alert is skipped (vendor boundary Q3). The
+    population is the reference set rather than a lane, so a re-run sees every
+    card again, and an alarm that fires on every pass is one nobody reads —
+    which is the cost the operator accepted with D3 and asked us to bound.
     """
     lane = to or escalation_lane()
     moved: list[str] = []
     for row in unclassified(result):
+        if already_alerted((comments or {}).get(row["card"], ())):
+            continue
         lops.cmd_comment(row["card"], alert(row))
         lops.cmd_state(row["card"], lane)
         moved.append(row["card"])
@@ -590,13 +608,16 @@ def render_report(result: dict, doc: dict | None = None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _live_score(doc: dict) -> dict:
+def _live_score(doc: dict) -> tuple:
+    """`(result, comments)` — the comments are handed back rather than
+    re-fetched, because the escalation reads the same thread to decide whether
+    it has already alerted this card."""
     import linear_ops
 
     cards = read_population(linear_ops, population(doc))
     comments = {c["identifier"]: linear_ops.comment_bodies(c["identifier"])
                 for c in cards}
-    return score(cards, doc=doc, comments=comments)
+    return score(cards, doc=doc, comments=comments), comments
 
 
 def main(argv=None) -> int:
@@ -624,7 +645,7 @@ def main(argv=None) -> int:
         return 1 if problems else 0
 
     if command == "score":
-        result = _live_score(doc)
+        result, _ = _live_score(doc)
         if args.out:
             with open(args.out, "w", encoding="utf-8") as fh:
                 json.dump(result, fh, indent=2)
@@ -638,14 +659,15 @@ def main(argv=None) -> int:
     if command == "escalate":
         import linear_ops
 
-        result = _live_score(doc)
-        rows = unclassified(result)
+        result, comments = _live_score(doc)
+        rows = [row for row in unclassified(result)
+                if not already_alerted(comments.get(row["card"], ()))]
         if args.dry_run:
             for row in rows:
                 print(f"would alert and move {row['card']} → "
                       f"{escalation_lane(doc)}")
             return 0
-        moved = escalate(linear_ops, result)
+        moved = escalate(linear_ops, result, comments=comments)
         print(f"alerted and moved {len(moved)} card(s) to {escalation_lane(doc)}: "
               + ", ".join(moved))
         return 0
