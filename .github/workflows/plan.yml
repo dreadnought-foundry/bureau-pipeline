@@ -970,7 +970,7 @@ jobs:
           path: .bureau-pipeline
 
       - name: Plan artifact — fetch source
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
           path: ${{ runner.temp }}
