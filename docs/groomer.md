@@ -58,8 +58,13 @@ rather than its own judgement.
 python3 scripts/groomer.py propose --lane Intake --capacity 20 --post DRE-2683
 ```
 
-`propose` writes nothing but a comment carrying the proposal. To approve, the
-CEO comments on that card, with the marker opening the comment:
+`propose` writes nothing but a comment carrying the proposal, and it writes that
+one at most once: before posting it reads the card and skips a proposal already
+there, so re-running it after a crash or a transient failure leaves the thread as
+it was rather than adding a duplicate copy. A population that MOVED has a
+different id and does post — the retry is silent, the groomer is not.
+
+To approve, the CEO comments on that card, with the marker opening the comment:
 
 ```
 🧺 groom-approved: <proposal id>

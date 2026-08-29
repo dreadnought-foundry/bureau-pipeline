@@ -52,8 +52,12 @@ because it was working from an explicit list rather than its own judgement.
 
 ## The approval gate
 
-`propose` writes nothing. `drain` moves the approved batch out of Intake and
-into Planning, and refuses unless the CEO has approved THIS batch: the proposal
+`propose` writes nothing but the proposal comment `--post` asks for, and writes
+that one at most once: it reads the card first and skips a proposal already
+there, so a retried run adds no duplicate (vendor boundary Q3).
+
+`drain` moves the approved batch out of Intake and into
+Planning, and refuses unless the CEO has approved THIS batch: the proposal
 id is derived from the batch's own contents, so a population that moved
 produces a different id and the old approval stops applying — the same
 sha-binding idea the merge gate uses for a verdict. An approval written by the
@@ -750,6 +754,45 @@ def proposal_comment(proposal: dict) -> str:
             + render_proposal(proposal))
 
 
+# The same anchoring as the approval line below, for the same reason: a comment
+# that mentions the marker mid-sentence is prose ABOUT a proposal, not one.
+_PROPOSAL_LINE = re.compile(rf"^\s*(?:{MARK}\s*)?{PROPOSAL_TAG}\s*:\s*([0-9a-f]{{6,}})")
+
+
+def already_proposed(proposal: dict, records: list[dict]) -> bool:
+    """Is THIS batch already proposed on the card?"""
+    pid = proposal["id"]
+    for record in records:
+        match = _PROPOSAL_LINE.match((record.get("body") or "").strip())
+        if match and match.group(1) == pid:
+            return True
+    return False
+
+
+def post_proposal(lops, card: str, proposal: dict) -> bool:
+    """Post the proposal to `card` unless the same batch is already there.
+
+    A retried `propose` must write nothing (vendor boundary Q3), and `--post` is
+    how the tool is actually run — `docs/groomer.md` documents that command and
+    `groomer.yml` passes `--post` whenever the `card` input is set. Linear's
+    `commentCreate` carries no idempotency key, so without this read a
+    re-dispatch after a crash (what `self-medic.yml` retries) posts a second
+    copy of the same proposal and the thread collects one per retry.
+
+    The proposal id is a digest of the batch's own contents, so "already
+    proposed" is decidable from the thread — and a population that MOVED
+    produces a different id and posts, because a retry that writes nothing must
+    not become a groomer that cannot say anything new. The read is
+    `comment_records`' last 50 comments, the same window the approval gate
+    reads; a proposal that has scrolled out of it is posted again.
+    """
+    if already_proposed(proposal, lops.comment_records(card)):
+        print(f"proposal {proposal['id']} is already on {card} — not posting again")
+        return False
+    lops.cmd_comment(card, proposal_comment(proposal))
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # the proposal, as the CEO reads it                                            #
 # --------------------------------------------------------------------------- #
@@ -1003,7 +1046,7 @@ def main(argv=None) -> int:
                 json.dump(proposal, fh, indent=2)
             print(f"wrote {args.out} ({proposal['id']})")
         if args.post:
-            linear_ops.cmd_comment(args.post, proposal_comment(proposal))
+            post_proposal(linear_ops, args.post, proposal)
         print(render_proposal(proposal))
         return 0
 

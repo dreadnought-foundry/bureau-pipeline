@@ -25,10 +25,12 @@
 # that workflow's own header. Retrying it is safe: it holds no write on the
 # channel and its Linear card is looked up by exact title, so a second run
 # comments where the first one would have. The Groomer (DRE-2683) is watched on
-# the same terms: a retried `propose` writes nothing, and a retried `drain`
-# re-derives the batch from live state — the cards the first attempt moved have
-# left Intake, so the batch id no longer matches the approval and the retry
-# refuses instead of moving anything twice.
+# the same terms: a retried `propose` writes nothing — it reads the card before
+# posting and skips a proposal already on it, so a re-dispatch adds no duplicate
+# copy of the same batch — and a retried `drain` re-derives the batch from live
+# state — the cards the first attempt moved have left Intake, so the batch id no
+# longer matches the approval and the retry refuses instead of moving anything
+# twice.
 name: Pipeline Medic
 
 on:
