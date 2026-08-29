@@ -60,30 +60,40 @@ class TestNoPromptNamesALaneThatDoesNotExist:
         findings = cwp.findings(WORKFLOWS)
         assert not findings, "\n".join(str(f) for f in findings)
 
+    def test_no_prompt_names_a_retired_lane_either(self):
+        # The deleted-outright half. It is passed IN rather than held in
+        # scripts/, because nothing under scripts/ or .github/workflows/ may
+        # spell a retired lane name — tests/test_lane_contract_conformance.py
+        # reads Python as an AST and would flag the constant itself.
+        found = cwp.findings(WORKFLOWS, extra=RETIRED_LANES)
+        assert not found, "\n".join(str(f) for f in found)
+
     def test_a_retired_lane_in_a_prompt_fails_red(self):
         # The whole point of the check: this class drifts again the next time a
         # lane is renamed unless something goes red.
         for name in RETIRED_LANES:
             body = f"Move the card to {name} when the review starts."
-            found = cwp.lanes_that_do_not_exist(body)
+            found = cwp.lanes_that_do_not_exist(body, extra=RETIRED_LANES)
             assert name in found, f"a prompt naming {name!r} passed the check"
 
     def test_a_live_lane_in_a_prompt_is_fine(self):
         assert cwp.lanes_that_do_not_exist("Park it in Green Light for the CEO.") == []
+        assert cwp.lanes_that_do_not_exist("Park it in Green Light.", extra=RETIRED_LANES) == []
 
     def test_the_denylist_covers_every_alias_the_contract_declares(self):
         # A rename is done by adding an alias entry. Feeding the denylist from
-        # there is what makes this check survive the NEXT rename rather than
-        # only the last one.
+        # there is what makes this check survive the NEXT rename with no edit to
+        # the script — the standalone CI step catches it on its own.
         with open(ROOT / "config" / "lane-contract.json", encoding="utf-8") as fh:
             aliases = [e["from"] for e in json.load(fh)["aliases"]["entries"]]
         denied = cwp.not_lanes()
         missing = [a for a in aliases if a not in denied]
         assert not missing, f"aliases absent from the denylist: {missing}"
 
-    def test_the_denylist_covers_the_retired_lanes(self):
-        denied = cwp.not_lanes()
-        assert all(name in denied for name in RETIRED_LANES)
+    def test_an_alias_readopted_as_a_live_lane_is_not_a_finding(self):
+        # The board has the name again; a prompt may use it.
+        live = cwp.live_lanes()[0]
+        assert live not in cwp.not_lanes(extra=[live])
 
     def test_a_live_lane_is_never_on_the_denylist(self):
         assert not (set(cwp.live_lanes()) & set(cwp.not_lanes()))

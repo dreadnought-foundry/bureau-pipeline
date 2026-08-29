@@ -17,12 +17,47 @@ Linear card → relay Lambda → repository_dispatch on the product repo
       reconcile    ~15-min sweep: dependency gate + WIP cap + unstick
       agent-fix    critic REQUEST_CHANGES / merge conflict → fixing agent
 ```
-- **One source of truth:** the reusable workflows live in
-  `dreadnought-foundry/bureau-pipeline`; product repos carry only ~20-line stubs
-  consuming `@main`. A fix here propagates everywhere on the next trigger.
+- **One source of truth:** the reusable workflows, briefs and standards live in
+  `dreadnought-foundry/bureau-pipeline`; product repos carry only ~20-line stubs.
+  **A merge here is not yet live in the fleet.** Each stub pins a release tag
+  (`@vN`, with a matching `pipeline_ref` so the workflow YAML and the scripts it
+  runs come from the same ref); only `agent-bureau` and `bureau-pipeline` ride
+  `@main`, as the canary. Cutting or re-pointing `vN` is a human act
+  (`docs/self-hosting.md`), so a change lands for the fleet when the channel
+  advances — not when the PR merges. `stable` is a moving tag this repo advances
+  by itself on every harness-proven commit on `main`; nothing pins it yet.
 - **The relay is dumb** — it verifies the HMAC signature, drops replays/stale
   events, routes the repo (explicit `**Repo:**`/`repo:` → inferred → default),
   and dispatches. All intelligence and enforcement live in the GitHub workflows.
+
+## The board (the lane contract)
+```
+Intake → Planning → Green Light → Backlog → Todo → In Progress → In Review → Done
+                                                   off to the side: Triage
+                                                   terminal:  Canceled · Duplicate
+```
+- **`Intake`** — every writer that creates work writes here first.
+- **`Planning`** — the card owes a decomposition; a build run that finds an epic
+  inside a one-off hands it back here.
+- **`Green Light`** — the CEO's "needs you" queue: a plan awaiting approval, and
+  an agent escalation awaiting a decision, in one lane. An epic activates when
+  the CEO moves ONLY the epic to `In Progress`.
+- **`Backlog`** — process-controlled: a card here carries a routing verdict, and
+  the sweep promotes only a FLEET one.
+- **`Todo` → `In Progress` → `In Review` → `Done`** — the build path. ONE review
+  lane: `In Review` means "a pull request is open and being checked". The two
+  lanes that preceded it were retired by DRE-2726 and deleted from the board and
+  the contract by DRE-2818; no document may still name them.
+- **`Triage`** — the BROKEN-CARD lane, and only that: an unroutable `repo:`
+  label, an archived repo, a card the readiness guard returned three times. A
+  card waiting on a judgement is not broken — that is `Green Light`.
+
+The lane contract is DATA, not prose: `config/lane-contract.json` carries each
+lane's entrance, exit, permitted writers and evidence; the guard, the sweep and
+the integration harness all read it, and `docs/lane-contract.md` is rendered
+from it. Read a lane there. Anything written about a lane anywhere else — this
+standard included — is a summary that can drift, and the file is what the
+pipeline actually enforces.
 
 ## The human contract
 The CEO is non-technical for code and does only three things: **writes

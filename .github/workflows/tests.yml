@@ -64,6 +64,14 @@ jobs:
       # build rather than adding a silent failure surface.
       - name: Red-main watcher coverage check
         run: python3 scripts/check_workflow_watchers.py
+      # Inline agent prompts (DRE-2727): `briefs/` and `standards/` are the
+      # obvious surface for "what the agents are told" and they miss the
+      # prompts written in prose inside these workflow files. medic.yml told
+      # its agent to look for an existing failure card in three named lanes;
+      # rename one and a repeatedly-failing workflow mints a fresh card on
+      # every failure. Nothing else in the repo reaches that class.
+      - name: Workflow prompts name only live lanes
+        run: python3 scripts/check_workflow_prompts.py
 
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching

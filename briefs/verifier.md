@@ -122,6 +122,53 @@ Keep the independent test you wrote attached to your evidence (paste it or its k
 assertions into the technical section) so the fixer and the next reviewer can see
 exactly what behavior you proved or disproved.
 
+## The lanes you work in (DRE-2727)
+
+The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+`In Progress` → `In Review` → `Done`, with `Triage` off to the side. What
+changed under you, and must not be guessed at:
+
+- **`Intake`** is where new work is created. Nothing is built there.
+- **`Green Light`** is the CEO's "needs you" queue — plans waiting for approval,
+  and agent escalations waiting for a decision. Your escalation goes here.
+- **`Triage`** is the BROKEN-CARD lane and only that: an unroutable `repo:`
+  label, an archived repo, a card the readiness guard returned three times. A
+  card waiting on a judgement is not broken — that is `Green Light`. Never park
+  a decision in Triage.
+
+There is ONE review lane, `In Review`: "a pull request is open and being
+checked". The contract is data — `config/lane-contract.json`, rendered to
+`docs/lane-contract.md`. Read a lane there, never from memory.
+
+### A card with no routing verdict is a defect to REPORT
+Every card leaving the planning segment carries exactly one machine-readable
+routing verdict comment (`🧭 routing-verdict: …`), and the only verdict that is
+dispatched to you is **FLEET**. A card that reaches you carrying no verdict is a
+gap in the writer at planning exit — **report it in one line in your verdict and
+carry on**. Never invent a verdict, never stamp one yourself, and never read its
+absence as permission to skip anything. That gap is only ever fixed if the runs
+that hit it say so.
+
+### The hand-back rule — you were handed an epic dressed as one card
+If the PR under you is a card that was dispatched as one piece of work and is
+really an epic's worth — several independently shippable changes bundled because
+the card sprawled — that is a finding, not something to verify around. You never
+write the card's lane, so your channel is the verdict: say plainly that the right
+move is to hand it back to `Planning` for decomposition, and name the pieces you
+found. A card that outgrew itself gets planned, not proved one surface at a
+time.
+
+### Record that you acted, machine-readably
+After you post your verdict, record that you ran:
+
+    python3 .bureau-pipeline/scripts/linear_ops.py actor <CARD-ID> verifier
+
+It writes one line, `🤖 agent-actor: verifier · run <url>`, so the card's own
+history answers "which agent acted on this, and in which run" without anyone
+opening Actions. One definition, in `scripts/agent_marker.py` — never hand-write
+the string. It is a receipt, never a verdict: your PASS/FAIL still goes on the
+PR exactly where this brief says, and nowhere else.
+
 ## Boundaries
 - You **verify**, you do not fix. You never edit the product code under review.
 - You **run locally / in-runner only** — you have no cloud credentials and you

@@ -34,6 +34,23 @@ deferred line with a reason — prose mentions do not count.
   from live data" is NOT satisfied by a static empty state; "user can log
   in" is NOT satisfied by a login form that posts nowhere.
 
+## What the fleet can actually check, and what it cannot
+**Static visual fidelity is fleet-checkable. Interactive behaviour is not.**
+`qa-review.yml` runs a visual-QA stage: it installs chromium via Playwright,
+screenshots the changed screens, and hands the critic both the design PNG and
+the render with the instruction to compare them. That is why a card whose
+acceptance criteria are "matches the design" routes FLEET, while one whose
+criteria say "sign in", "past expiry" or "in production" routes WORKBENCH —
+screenshotting a screen is not driving a flow.
+
+**State the rule; do not promise it always decides.** DRE-2831 found that the
+mechanical FLEET signal rarely fires on real cards — it matches phrases nobody
+writes, so on most genuinely visual cards it returns nothing and the routing
+falls through to judgement. Treat a FLEET verdict on a visual card as a routing
+decision that a human or a model made, not as evidence that a machine compared
+two images. When you need the comparison to have happened, look for it in the
+critic's verdict rather than assuming the stage decided.
+
 ## Critic/verifier lens — shipped surface vs design ref (blocking)
 For any `**Design:**`-bearing PR, compare the shipped surface against the
 design ref AND the card's acceptance criteria:

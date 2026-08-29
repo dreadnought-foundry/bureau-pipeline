@@ -63,7 +63,7 @@ class TestTheHandBackRule:
         for name in BUILD_BRIEFS:
             body = _read(BRIEFS / name)
             assert "hand-back" in body.lower(), f"{name} never names the hand-back rule"
-            assert re.search(r"hand it back to `?Planning`?", body), (
+            assert re.search(r"hand it back\s+to\s+`?Planning`?", body), (
                 f"{name} does not say where a card that outgrew itself goes"
             )
 

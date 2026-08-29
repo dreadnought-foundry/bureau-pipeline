@@ -132,6 +132,80 @@ governs how you consume it.
   DeltaSolv gap audit, 2026-07-13 — ~67 designed screens never carded, the
   epic closed anyway.)
 
+## The lanes, and the verdict you owe every card (DRE-2724 / DRE-2824)
+
+The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+`In Progress` → `In Review` → `Done`, with `Triage` off to the side. Three
+things you must not get from memory:
+
+- **`Green Light`** is the CEO's "needs you" queue — a plan waiting for
+  approval, and an agent's escalation waiting for a decision, sit in the same
+  lane. Your plan reaches the CEO there.
+- **`Triage`** is the BROKEN-CARD lane and only that: an unroutable `repo:`
+  label, an archived repo, a card the readiness guard returned three times. A
+  card waiting on a judgement is not broken. Never send a decision to Triage.
+- **`Intake`** is where new work is created; nothing is decided there.
+- There is ONE review lane, `In Review`. The contract is data
+  (`config/lane-contract.json`, rendered to `docs/lane-contract.md`) — read a
+  lane there rather than describing one from memory.
+
+**An epic activates at `In Progress`, not `Todo`.** The CEO moves ONLY the epic
+to `In Progress` and stops; the dependency gate promotes the unblocked children
+in order. Never tell them to move a child by hand — that double-dispatches and
+reverts in-progress work. Your plan comment must end with that instruction.
+
+### Every card leaving planning carries exactly one routing verdict
+A verdict is a **routing decision, not a quality score**. It answers *who builds
+this, and how*, and each answer sends the card somewhere different. Framed as a
+score, a critic drifts toward marking things good so it looks useful; framed as
+routing there is no good or bad, only a wrong destination — which shows up
+immediately. It is written as a machine-readable comment
+(`🧭 routing-verdict: …`); the vocabulary is data in
+`config/routing-verdicts.json` and `docs/routing-verdicts.md` is rendered from
+it. Read the file, not this table, when the two ever disagree.
+
+| Verdict | Means | Destination | Who acts there |
+| -- | -- | -- | -- |
+| **FLEET** | Buildable unattended in one PR | `Todo` | the build run — the ONLY verdict that is dispatched |
+| **WORKBENCH** | Needs an interactive flow or live system state | `Todo`, marked `hand-built` | the operator, at an interactive session |
+| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Todo`, marked `hand-built` + `no-code` | the operator |
+| **PARKED** | Well-formed and deliberately not to be built | `Backlog` | the planning-exit writer lands it; nobody picks it up |
+| **NEEDS WORK** | Not buildable as written | `Planning` | you, with the specific missing thing named |
+
+**PARKED is landed by the process, not by a person (DRE-2824).** `Backlog` is
+process-controlled and no human writes it, so the actor on a PARKED card is the
+planning-exit writer that stamps the verdict and lands the card there — not
+somebody waiting to pick it up, because for PARKED nobody is. Reviving a PARKED
+card is a separate, later human act: nothing in the pipeline takes it back out,
+no sweep, no run, no label, and it is never reported as stalled.
+
+### The rule is mechanical: read the acceptance criteria
+Route on whether an unattended agent can **SATISFY the acceptance criteria** —
+not on whether it could write the code. That reads the card's own stated exit
+condition instead of guessing from the title, and it is why the criteria have to
+be observable before the verdict is worth anything.
+
+Read in strict precedence, and stop at the first that answers:
+1. **An explicit role label** (`agent:ops`, `no-code`) — exact match, never a
+   prefix.
+2. **The title convention**, anchored at the START of the title, never a
+   substring: `SIGN-OFF (OPERATOR): …` → OPERATOR, `DEMO: …` → WORKBENCH.
+3. **The acceptance-criteria rule** — a criterion naming an interactive flow or
+   live system state ("sign in", "past expiry", "in production", "by hand") is
+   WORKBENCH; a criterion naming static visual fidelity ("matches the design",
+   "screenshot") is FLEET.
+
+Only what survives all three is a judgement call worth thinking about. Order is
+load-bearing where the two criteria signals overlap: interactive wins over
+visual. Screenshotting a screen is not driving a flow — but driving a flow that
+ends at a screen is still driving a flow. See `standards/design-parity.md` for
+what the visual check does and does not actually decide today.
+
+**An epic never gets a buildability verdict.** "Could an agent build this
+unattended" is meaningless for a card you own. An epic gets a plan test instead:
+does it have children, do they carry inheritable labels, is there an acceptance
+criterion for the set.
+
 ## Creating each sub-issue — write the file's CONTENTS, never its path
 Draft each card body to a temp file, then create it with:
 ```

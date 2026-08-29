@@ -137,6 +137,63 @@ At each phase boundary post one line to the card (LINEAR_API_KEY is in env):
 30 chars; never skip 1/5 (it is also your "agent is alive" signal). If a
 comment fails to post, keep working — progress reporting must never block.
 
+## The lanes you work in (DRE-2727)
+
+The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+`In Progress` → `In Review` → `Done`, with `Triage` off to the side. What
+changed under you, and must not be guessed at:
+
+- **`Intake`** is where new work is created. Nothing is built there.
+- **`Green Light`** is the CEO's "needs you" queue — plans waiting for approval,
+  and agent escalations waiting for a decision. Your escalation goes here.
+- **`Triage`** is the BROKEN-CARD lane and only that: an unroutable `repo:`
+  label, an archived repo, a card the readiness guard returned three times. A
+  card waiting on a judgement is not broken — that is `Green Light`. Never park
+  a decision in Triage.
+
+There is ONE review lane, `In Review`: "a pull request is open and being
+checked". The contract is data — `config/lane-contract.json`, rendered to
+`docs/lane-contract.md`. Read a lane there, never from memory.
+
+### A card with no routing verdict is a defect to REPORT
+Every card leaving the planning segment carries exactly one machine-readable
+routing verdict comment (`🧭 routing-verdict: …`), and the only verdict that is
+dispatched to you is **FLEET**. A card that reaches you carrying no verdict is a
+gap in the writer at planning exit — **report it in one line in your PR body and
+carry on**. Never invent a verdict, never stamp one yourself, and never read its
+absence as permission to skip anything. That gap is only ever fixed if the runs
+that hit it say so.
+
+### The hand-back rule — you opened a one-off and found an epic
+If the card was dispatched as one piece of work and is really an epic's worth —
+several independently shippable PRs, contracts between them, files two of those
+PRs would both own — do NOT sprawl it into one unreviewable pull request, and do
+not silently build a fragment and call the card done.
+
+The rule in one line: **you opened a one-off, you found an epic — hand it back
+to `Planning` rather than sprawling.** In practice that means open no PR, write
+the pieces you found one line each in plain English to
+**`/tmp/agent-handback.txt`**, and stop. The workflow posts your list and moves
+the card to the lane that owes a decomposition. That is a normal, cheap
+outcome; a 40-file PR that half-does five things is not.
+
+Hand-back is the THIRD exit, and the three are distinct:
+`/tmp/agent-escalation.txt` when a human DECISION unblocks you (→ `Green
+Light`); `/tmp/agent-blocker.txt` when the card cannot be built as written at
+all (→ `Backlog`); `/tmp/agent-handback.txt` when the card is fine but is bigger
+than one PR (→ `Planning`). Write at most ONE of the three.
+
+### Record that you acted, machine-readably
+As the last thing you do — after the PR is open, or on any of the stop paths —
+post the observability marker:
+
+    python3 .bureau-pipeline/scripts/linear_ops.py actor <CARD-ID> devops
+
+It writes one line, `🤖 agent-actor: devops · run <url>`, so the card's own
+history answers "which agent acted on this, and in which run" without anyone
+opening Actions. One definition, in `scripts/agent_marker.py` — never hand-write
+the string.
+
 ## Acceptance
 Your PR merges only when every check is green and the QA critic's verdict is
 APPROVE. The deploy itself is the operator's step, run AFTER merge — your job
