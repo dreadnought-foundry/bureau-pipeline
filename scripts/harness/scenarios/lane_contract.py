@@ -5,8 +5,10 @@ never looked at lane movement, which is why a lane left over from an April epic
 sat on the board for four months with one card ever and zero code references,
 and why the console's vocabulary carried two words that are not Linear states at
 all. Both are drift a conformance check finds immediately and no human ever
-noticed. (The retired lanes are named in config/lane-contract.json, which is the
-one place they may be — naming one here would be the very drift this checks for.)
+noticed. (Those retired lanes are named nowhere in this repo's scripts or
+workflows any more — DRE-2818 deleted the last entries carrying them once Linear
+archived the states — and naming one here would be the very drift this checks
+for.)
 
 This scenario reads three things and runs `lane_contract.check()` over them:
 
