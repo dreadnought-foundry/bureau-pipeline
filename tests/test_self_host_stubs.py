@@ -65,6 +65,9 @@ EXPECTED_STUBS = {
     "self-agent-fix.yml": ("agent-fix.yml", "Agent Fix"),
     "self-red-main-repair.yml": ("red-main-repair.yml", "Red-Main Repair"),
     "pr-review.yml": ("qa-review.yml", "QA Review"),
+    # DRE-2683. Manual dispatch only, by decision D5 — the trigger shape is
+    # asserted in tests/test_groomer_wiring.py, which fails if a cron appears.
+    "self-groomer.yml": ("groomer.yml", "Groomer"),
     # verify.yml deliberately has NO stub: its scope gate targets UI cards
     # (**Design:** lines) / multi-system app diffs, and bureau-pipeline has no
     # runnable app surface to verify behaviorally.

@@ -1,0 +1,55 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo.
+# @main on purpose: this repo is the canary channel; the fleet rides tags.
+#
+# workflow_dispatch AND NOTHING ELSE (DRE-2683, decision D5 approved
+# 2026-08-23): the groomer runs on demand until its judgement has been audited.
+# The cost is stated rather than hidden — on demand means it runs when someone
+# remembers — and the cadence is revisited once its calls have been checked
+# against a real batch, not by adding a cron here.
+name: Groomer
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: propose (read-only) or drain (moves the APPROVED batch)
+        type: choice
+        options: [propose, drain]
+        default: propose
+      lane:
+        description: the lane to groom
+        type: string
+        default: Intake
+      capacity:
+        description: how many cards one cycle is proposed at a time
+        type: string
+        default: "20"
+      batch_cycles:
+        description: how many cycles the batch covers
+        type: string
+        default: "1"
+      priority:
+        description: comma-separated repo slugs, highest first
+        type: string
+        default: portico
+      card:
+        description: the card the proposal is posted to and approved on
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/groomer.yml@main
+    with:
+      pipeline_ref: main
+      mode: ${{ inputs.mode }}
+      lane: ${{ inputs.lane }}
+      capacity: ${{ inputs.capacity }}
+      batch_cycles: ${{ inputs.batch_cycles }}
+      priority: ${{ inputs.priority }}
+      card: ${{ inputs.card }}
+    secrets: inherit

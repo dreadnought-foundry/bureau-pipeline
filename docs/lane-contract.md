@@ -53,8 +53,8 @@ _Waiting on: DRE-2719._ | Phase 5 — promised |
 _Waiting on: DRE-2719._ | Phase 5 — promised |
 | **exit** | A plan artifact exists. No artifact, no exit.  
 _Waiting on: DRE-2720 writes the artifact; the gate that refuses exit without one is Phase 5._ | Phase 5 — promised |
-| **writers** | The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, and a human.  
-Permitted writers: `plan.yml`, `reconcile.py`, `agent-task.yml`, `operator` | Phase 2 — live |
+| **writers** | The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, the groomer draining a batch the CEO approved, and a human.  
+Permitted writers: `plan.yml`, `reconcile.py`, `agent-task.yml`, `groomer.py`, `operator` | Phase 2 — live |
 | **evidence** | The plan artifact on the card: business case, KPIs as data, risk, outcome.  
 _Waiting on: DRE-2720._ | Phase 5 — promised |
 
@@ -217,5 +217,6 @@ _Waiting on: the routing verdict exists and is readable (DRE-2724); still needed
 | `linear_ops.py` | the guarded write layer every other writer goes through | `scripts/linear_ops.py` |
 | `mid_epic.py` | mid-epic discovery — files a sibling into an approved epic | `scripts/mid_epic.py` |
 | `dead_run.py` | the dead-run cap — parks a card that keeps dying | `scripts/dead_run.py` |
+| `groomer.py` | the groomer — moves ONE approved batch out of Intake, in order | `scripts/groomer.py` |
 | `guard` | the lane guard — returns a card whose occupancy is unjustified | DRE-2725, built in agent-bureau; reads its scope from lane_scope.py |
 
