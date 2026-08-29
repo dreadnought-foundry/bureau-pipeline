@@ -62,14 +62,14 @@ _Waiting on: DRE-2720._ | Phase 5 — promised |
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | A plan is waiting on the CEO, or an agent has escalated a question only the CEO can answer.  
-_Waiting on: DRE-2721's second critic decides what may wait here._ | Phase 5 — promised |
-| **exit** | The CEO answers: an approved plan activates, an answered escalation returns to Todo, a rejected one goes to Backlog.  
-_Waiting on: DRE-2721._ | Phase 5 — promised |
+| **entrance** | A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, or the post-approval critic sent an approved plan back with a stated reason (DRE-2721).  
+_Waiting on: needs the transition history the Phase-5 front door records — the three entrances exist, nothing yet reads a card's arrival against them._ | Phase 5 — promised |
+| **exit** | The CEO answers: an approved plan activates — and its children promote only once the post-approval critic has read it (DRE-2721) — an answered escalation returns to Todo, a rejected one goes to Backlog.  
+_Waiting on: needs the transition history the Phase-5 front door records._ | Phase 5 — promised |
 | **writers** | The planner, the two agent runs that escalate, and a human.  
 Permitted writers: `plan.yml`, `agent-task.yml`, `agent-fix.yml`, `operator` | Phase 2 — live |
-| **evidence** | A plan artifact, or an escalation comment written in business terms — never code, never a diff.  
-_Waiting on: DRE-2721._ | Phase 5 — promised |
+| **evidence** | A plan artifact, an escalation comment written in business terms — never code, never a diff — or a `plan-critic:` marker recording the round that sent the plan back (DRE-2721).  
+_Waiting on: needs routing verdicts (DRE-2724) writing on every card before arrival can be judged against the evidence._ | Phase 5 — promised |
 
 ### Backlog
 

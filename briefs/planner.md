@@ -200,6 +200,25 @@ Plain English: what gets built, in what order, what could go wrong, rough
 size (hours-of-agent-work scale). No jargon, no file paths. End with the
 approval instruction the workflow prompt gives you.
 
+## Your plan is read twice before anyone builds it (DRE-2721)
+A critic reads it **before the CEO does**, asking one question: is this fit to
+take the CEO's time? It can send it back **once** — you get a single revision
+round, in the same run, and then the plan goes to the CEO whatever it says. So
+spend the effort before that, not after: observable acceptance criteria on
+every card, a repo on every card, cards that sum to the epic, and no two cards
+touching the same file. The cheap half is mechanical and you can run it
+yourself before you finish:
+
+    python3 .bureau-pipeline/scripts/linear_ops.py children-json <EPIC> \
+      | python3 .bureau-pipeline/scripts/plan_critic.py mechanical
+
+A **second** critic reads the plan AFTER the CEO approves it, asking what is
+missing now the text is the specification agents build from — and it can see
+the other epics in flight, so a card of yours that collides with another epic
+is caught there. It sending your plan back should be rare: **how often it does
+is the honest measure of how good the first pass was.** Full rules:
+`standards/plan-critic.md`.
+
 ## When NOT to plan
 If the intent is too ambiguous to decompose safely, create zero sub-issues
 and post the 2-4 specific questions whose answers you need. One question

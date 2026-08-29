@@ -83,7 +83,7 @@ kinds:
   # diff, so a shallow review is a silent failure. It gets the strongest model.
   advisory:
     ladder: advisory
-    roles: critic, verifier, medic
+    roles: critic, verifier, medic, plan-critic-pre, plan-critic-post
 
 ladders:
   # The WORKHORSE ladder: what every build agent runs on. Opus-first since
@@ -140,6 +140,13 @@ agents:
   critic: advisory
   verifier: advisory
   medic: advisory
+  # The two plan critics (DRE-2721). Bounded consults at the two decision
+  # points around the CEO's green light — one before a plan takes their
+  # attention, one after the approved text becomes the specification agents
+  # build from. Both judge rather than build, so both are advisory; and both
+  # are capped at two rounds per epic, so the volume stays bounded by design.
+  plan-critic-pre: advisory
+  plan-critic-post: advisory
 
 discovery:
   # A model id we SEE but do not name here may, at most, be proposed for the

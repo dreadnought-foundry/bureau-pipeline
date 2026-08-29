@@ -259,8 +259,10 @@ WATCHDOG_TAG = "stranded-watchdog"
 
 # Planning's own lane and threshold (DRE-2736). Longer than WATCHDOG_MINUTES
 # on purpose: what a Planning card owes is a CLASSIFICATION, and producing one
-# is a planner run — plan.yml's job alone is capped at 30 minutes, so sharing
-# the 30-minute threshold would alarm on runs that are simply still going.
+# is a planner run — plan.yml's job alone is capped at 45 minutes (DRE-2721
+# widened it for the pre-approval critic's two rounds and the one re-plan
+# between them), so sharing the 30-minute threshold would alarm on runs that
+# are simply still going.
 # Every receipt the planner posts bumps updatedAt, so this clock only runs on
 # a card nothing is happening to.
 # The default is the contract's own stall window for the lane (DRE-2726), so

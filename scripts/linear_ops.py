@@ -1270,6 +1270,65 @@ def cmd_child_descriptions(identifier: str) -> None:
             sys.stdout.write(body.rstrip("\n") + "\n")
 
 
+def cmd_children_json(identifier: str) -> None:
+    """Every child card as `{"identifier", "body"}` records, as a JSON array.
+
+    `child-descriptions` concatenates the bodies, which is right for the
+    "is this UI work?" question and useless for anything that has to say WHICH
+    card is wrong. The plan critics (DRE-2721) report per card — "DRE-9001
+    carries no acceptance criteria" — so they need the identity beside the
+    body, and `plan_critic.py mechanical` reads exactly this shape on stdin.
+    """
+    data = gql(
+        """query($id: String!) {
+             issue(id: $id) { children { nodes { identifier description } } }
+           }""",
+        {"id": identifier},
+    )
+    issue = data.get("issue") or {}
+    nodes = ((issue.get("children") or {}).get("nodes")) or []
+    print(json.dumps([
+        {"identifier": (n or {}).get("identifier"), "body": (n or {}).get("description") or ""}
+        for n in nodes
+    ]))
+
+
+def cmd_epics_in_flight() -> None:
+    """Every epic in flight, as `{"identifier", "title", "state"}` records.
+
+    The post-approval critic's cross-epic sight (DRE-2721 D3). An epic is a
+    card WITH CHILDREN — Linear-native parent/child, never a label
+    (standards/card-quality.md) — so the child count is fetched and filtered
+    here rather than guessed from a title convention.
+
+    The states are `plan_critic.IN_FLIGHT_EPIC_STATES`, imported rather than
+    restated: the critic's charter tells the CEO exactly which lanes it looked
+    in, and a second copy of that tuple here would let the sentence and the
+    query drift apart.
+    """
+    import plan_critic
+
+    nodes = gql_paged(
+        """query($states: [String!]!, $after: String) {
+             issues(first: 100, after: $after, filter: {
+               team: {key: {eq: "DRE"}},
+               state: {name: {in: $states}}
+             }) { nodes {
+               identifier title state { name } children { nodes { id } }
+             } pageInfo { hasNextPage endCursor } } }""",
+        {"states": list(plan_critic.IN_FLIGHT_EPIC_STATES)},
+    )
+    print(json.dumps([
+        {
+            "identifier": n.get("identifier"),
+            "title": n.get("title"),
+            "state": (n.get("state") or {}).get("name"),
+        }
+        for n in nodes
+        if ((n.get("children") or {}).get("nodes"))
+    ]))
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     try:
@@ -1291,6 +1350,8 @@ if __name__ == "__main__":
             "remove-label": remove_label,
             "description": cmd_description,
             "child-descriptions": cmd_child_descriptions,
+            "children-json": cmd_children_json,
+            "epics-in-flight": cmd_epics_in_flight,
         }[cmd](*args)
     except LinearError as e:
         # The ONLY process abort: explicit, at top level, CLI-only. Library

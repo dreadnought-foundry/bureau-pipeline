@@ -56,7 +56,7 @@ def _cards(*pairs):
 
 GOOD_CARD = (
     "**Repo:** bureau-pipeline\n"
-    "Add the send-back marker to scripts/plan_critic.py.\n"
+    "Add the send-back marker the next round reads.\n"
     "## Acceptance criteria\n"
     "- [ ] the marker parses back out of a comment thread\n"
 )

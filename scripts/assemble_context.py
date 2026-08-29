@@ -86,6 +86,22 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # judges plan artifacts, so it reads the same definition of a complete
     # one the planner writes to (DRE-2720).
     "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md"],
+    # The two PLAN critics (DRE-2721). Their standards sets differ on purpose,
+    # because their questions do:
+    #   pre  — "is this fit to take the CEO's time?" It judges the SHAPE of a
+    #          plan that is still moving: cards against the card contract, the
+    #          surfaces accounting, and the artifact the CEO would read. It is
+    #          deliberately NOT given the engineering floor or the system shape
+    #          — it is not there to review the design, and reading them is how
+    #          it starts.
+    #   post — "given this is now the specification, what is missing?" It reads
+    #          the frozen text as an agent would, so it gets everything the
+    #          BUILD agents are held to (engineering, architecture) plus the
+    #          vendor premortem, which is the checklist that catches a plan
+    #          asserting something false about a vendor.
+    "plan-critic-pre": ["card-quality.md", "design-parity.md", "plan-artifact.md", "plan-critic.md"],
+    "plan-critic-post": ["card-quality.md", "engineering.md", "architecture.md",
+                         "vendor-boundaries.md", "plan-artifact.md", "plan-critic.md"],
     # The verifier proves the feature works (comms for its verdict) and checks
     # UI against the design standard + the design-parity no-fake-states lens.
     "verifier": ["design.md", "design-parity.md"],
@@ -112,6 +128,11 @@ ROLE_BRIEF: dict[str, str | None] = {
     "database-architect": "database-architect.md",
     "planner": "planner.md",
     "verifier": "verifier.md",
+    # Standards only. Their whole charter is generated from
+    # scripts/plan_critic.py and interpolated into the prompt, so a brief would
+    # be a second copy of it that nothing checks.
+    "plan-critic-pre": None,
+    "plan-critic-post": None,
     "critic": None,
     "fix": None,
     "medic": None,
