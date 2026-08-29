@@ -99,8 +99,12 @@ def card(identifier, *, title=None, description=None, labels=(), children=False)
     return {
         "identifier": identifier,
         "title": title if title is not None else f"{identifier} · a card",
+        # A card the classifier can actually resolve: a static-visual criterion
+        # is FLEET-checkable, so the default fixture routes without a model and
+        # the tests that need an UNRESOLVED card say so explicitly.
         "description": description if description is not None else (
-            "Some prose.\n\n## Acceptance criteria\n\n- [ ] the thing works\n"
+            "Some prose.\n\n## Acceptance criteria\n\n"
+            "- [ ] the screen matches the design\n"
         ),
         "labels": list(labels),
         "has_children": children,
@@ -201,10 +205,12 @@ class ScoringTest(unittest.TestCase):
     def test_agreement_and_disagreement_are_both_results(self):
         doc = reference(
             judgement("DRE-1", "not-buildable"),
-            judgement("DRE-2", "buildable"),
+            judgement("DRE-2", "not-buildable"),
         )
         cards = [
+            # states no acceptance criteria at all — the critic agrees
             card("DRE-1", description="no criteria here at all"),
+            # states a criterion the critic can satisfy — the critic does not
             card("DRE-2"),
         ]
         result = critic_score.score(cards, doc=doc)
