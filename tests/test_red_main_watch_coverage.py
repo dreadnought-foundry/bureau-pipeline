@@ -48,20 +48,18 @@ import red_main_repair  # noqa: E402
 REPAIR_STUB = "self-red-main-repair.yml"
 HARNESS_WORKFLOW_NAME = "Integration Harness"
 
-# The 2026-08-29 harness failure, in the shape the driver actually prints
-# (scripts/harness/scenarios/lane_contract.py: ScenarioFailure listing each
-# failing clause). It names both stale lanes and the file to edit — a real
-# code/config failure, NOT an infra fingerprint, so the classifier must let it
-# through to a repair agent.
+# The 2026-08-29 failure, VERBATIM from run 33233917939's `--log-failed`
+# output (Integration Harness, push, main, 04:28:55Z). It named both stale
+# lanes and the file to edit for fourteen hours while nothing read it. A real
+# config failure, NOT an infra fingerprint, so the classifier must let it
+# through to a repair agent rather than back off.
 HARNESS_LANE_CONTRACT_LOG = """\
-[lane_contract] Linear carries 8 state(s): Backlog (226), Done (1411), ...
-[lane_contract] the live system does not match the lane contract
-harness: scenario lane_contract FAILED
-  - board-parity: lane 'Building' is in config/lane-contract.json with status
-    'live' but the Linear board carries no such state
-  - board-parity: lane 'Ready for review' is in config/lane-contract.json with
-    status 'live' but the Linear board carries no such state
-1 scenario failed
+[lane_contract] verify
+[lane_contract] 16 asserted, 2 failed, 36 skipped (phase not shipped), 1 unevaluated
+  [FAIL       ] board.retired_entry_is_deleted: the contract still carries the retiring entry 'In Design Review', and Linear no longer has that state — the board caught up; delete the entry from config/lane-contract.json
+  [FAIL       ] board.retired_entry_is_deleted: the contract still carries the retiring entry 'In QA', and Linear no longer has that state — the board caught up; delete the entry from config/lane-contract.json
+  lane_contract: FAIL at verify
+    - verify: ScenarioFailure: the live system does not match the lane contract:
 """
 
 
@@ -268,10 +266,16 @@ class NewWorkflowCannotSlipThroughTest(unittest.TestCase):
 
 
 class HarnessFailureOnMainTest(unittest.TestCase):
-    """The live case, as a fixture: 2026-08-29, Integration Harness red on
-    main. Every joint the event passes through, asserted."""
+    """The live case, as the fixture: run 33233917939 — Integration Harness,
+    push, main, conclusion=failure at 2026-08-29T04:28:55Z, head sha
+    494d943e…, actor agent-bureau-qa-bot[bot] (the merge of PR #200),
+    triggering actor github-actions[bot] (a rerun). The Red-Main Repair run
+    that followed at 04:31:24Z concluded `skipped`.
 
-    FAILING_SHA = "494d943" + "a" * 33
+    Every joint that event passes through, asserted."""
+
+    FAILING_SHA = "494d943e43e90a29357fde700220101e8647357f"
+    ACTORS = ("agent-bureau-qa-bot", "github-actions")
 
     def _event(self):
         return {
@@ -284,6 +288,16 @@ class HarnessFailureOnMainTest(unittest.TestCase):
             },
             "repository": {"default_branch": "main"},
         }
+
+    def test_the_repair_agent_admits_the_events_actors(self):
+        # Premortem Q1 on the widened trigger, against the recorded actors: a
+        # trigger that fires into an agent step that refuses the actor would
+        # trade a silent skip for a red crash.
+        reusable = (WF_DIR / "red-main-repair.yml").read_text()
+        line = next(ln for ln in reusable.splitlines()
+                    if "allowed_bots:" in ln)
+        for actor in self.ACTORS:
+            self.assertIn(actor, line, f"{actor} fired this event")
 
     def test_the_stub_trigger_admits_the_event(self):
         # This is the joint that failed: the event fired, and the stub's
