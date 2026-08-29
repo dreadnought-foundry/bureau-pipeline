@@ -25,7 +25,10 @@ Three rules baked in, each one bought:
 
   * THE BOUND. Two failed rounds at either critic and the plan reaches the CEO
     regardless, with the critic's stated reason attached. An unbounded loop is
-    how 17 cards sat in a lane for 27 days.
+    how 17 cards sat in a lane for 27 days. The budget is per planning ATTEMPT,
+    counted from the `plan-cycle:` boundary the plan route writes — a
+    re-planned epic gets its revision round back, because the plan the earlier
+    rounds argued about no longer exists.
   * A CRASH IS NOT A REJECTION (standards/console-honesty.md rule 1). A critic
     that produced no result did not decide anything, and must never be the
     reason a plan stops moving.
@@ -40,6 +43,7 @@ CLI:
   decide --stage S --result-file F [--github-output F] [--note-file F]
                                      comment thread (JSON array) on stdin
   sight --this <EPIC>                epics in flight (JSON array) on stdin
+  cycle-start --epic <EPIC>          the note that opens a planning attempt
   rate --stage S                     comment thread on stdin
   collisions                         comment thread on stdin
   late-collision --epic E --with E2 --detail "…"   print the marker line
@@ -93,6 +97,15 @@ RESULT_PREFIX = "PLAN-CRITIC:"
 # The durable record, posted to the epic. Lowercase and distinct from
 # RESULT_PREFIX so a marker can quote a result line without becoming one.
 MARKER_PREFIX = "plan-critic:"
+
+# The boundary between one planning CYCLE and the next, posted by plan.yml the
+# moment an epic is routed to plan — the first attempt and every RE-plan alike.
+# The bound is "two failed rounds at this critic ON THIS ATTEMPT", never over
+# the epic's lifetime: an epic sent back to Triage is re-planned from scratch,
+# and a fresh plan counted against a budget the previous attempt already spent
+# would be pushed to the CEO on its FIRST send-back with no revision round at
+# all — reading exactly like a normal pass.
+CYCLE_PREFIX = "plan-cycle:"
 
 # A collision found AFTER the cards reached Backlog — the D3 tripwire. Counted
 # in its own bucket, never mixed with the ones the post critic caught, because
@@ -287,6 +300,11 @@ _MARKER = re.compile(
     re.MULTILINE,
 )
 
+_CYCLE = re.compile(
+    rf"^{re.escape(CYCLE_PREFIX)}\s+start\s+epic=(?P<epic>\S+)\s*$",
+    re.MULTILINE,
+)
+
 _LATE_COLLISION = re.compile(
     rf"^{re.escape(LATE_COLLISION_PREFIX)}\s+epic=(?P<epic>\S+)\s+with=(?P<with>\S+)"
     r"(?:\s+—\s+(?P<detail>.*))?$",
@@ -338,10 +356,56 @@ def parse_markers(bodies: list[str]) -> list[dict]:
     return rows
 
 
+def cycle_marker(epic: str) -> str:
+    """The line that opens a planning cycle. One per planning attempt."""
+    return f"{CYCLE_PREFIX} start epic={epic}"
+
+
+def cycle_start_note(epic: str) -> str:
+    """What plan.yml posts to the epic when a planning attempt begins.
+
+    The human half says what the machine half means, because the CEO reads
+    this thread: the line is why a re-planned epic gets its rounds back.
+    """
+    return "\n\n".join([
+        "📋 A fresh planning attempt starts here. Both critics count their "
+        "rounds from this line, so a re-planned epic gets its own revision "
+        "round rather than inheriting a budget the last attempt already spent.",
+        cycle_marker(epic),
+    ])
+
+
+def current_cycle(bodies: list[str]) -> list[str]:
+    """The comment bodies that belong to the CURRENT planning attempt.
+
+    Everything before the last boundary belongs to a plan that no longer
+    exists. A thread with no boundary at all is one cycle — epics planned
+    before this existed keep counting exactly the way they did.
+
+    A comment carrying a critic-round marker never opens a cycle: the reason
+    field is written by an agent that has just read untrusted epic prose, and
+    a reason quoting a boundary line must not hand its own stage a fresh
+    budget. Beyond that the boundary is trusted no more and no less than the
+    round markers beside it — and a forged one still cannot make a plan
+    circle, because the rail runs at most MAX_ROUNDS rounds per run whatever
+    the decider says.
+    """
+    start = 0
+    for i, body in enumerate(bodies or []):
+        if _CYCLE.search(body or "") and not _MARKER.search(body or ""):
+            start = i + 1
+    return list(bodies or [])[start:]
+
+
 def send_backs(bodies: list[str], stage: str) -> int:
-    """Failed rounds recorded for this stage. The two stages count separately —
-    `two failed rounds at EITHER critic` — so a pre-stage send-back never
-    spends the post stage's budget."""
+    """Failed rounds recorded for this stage, in the bodies you hand it.
+
+    The two stages count separately — `two failed rounds at EITHER critic` —
+    so a pre-stage send-back never spends the post stage's budget. The SCOPE is
+    the caller's: `decide` is fed `current_cycle(thread)`, because the bound
+    belongs to one planning attempt, while `rate` over the whole thread stays
+    the epic's lifetime measurement.
+    """
     return sum(1 for r in parse_markers(bodies)
                if r["stage"] == stage and r["result"] == SEND_BACK)
 
@@ -588,9 +652,13 @@ def _cmd_decide(args) -> int:
     thread = _stdin_json([])
     result, reason = read_result(_read(args.result_file))
     collisions = collisions_declared(_read(args.result_file))
-    prior = send_backs(thread, args.stage)
+    # The budget, and the round number, belong to THIS planning attempt. A
+    # re-planned epic counted against the whole thread would spend a budget it
+    # never used, and say "round 3 of 2" while doing it.
+    cycle = current_cycle(thread)
+    prior = send_backs(cycle, args.stage)
     action, note = decide(result, prior, reason)
-    stats = rate(thread, args.stage)
+    stats = rate(cycle, args.stage)
     # The round NUMBER counts every round this stage has run, including ones it
     # passed or crashed on; the BOUND counts only the failed ones. Two different
     # questions, and conflating them would spend the budget on a crash.
@@ -609,9 +677,11 @@ def _cmd_decide(args) -> int:
     icon = {"hold": "🛑", "proceed": "✅"}[action] if result != NO_RESULT else "⚠️"
     seen = stats["rounds"]
     rate_text = (
-        f"send-back rate at this critic so far on this epic: "
+        f"send-back rate at this critic so far on this planning attempt: "
         f"{stats['send_backs']}/{seen} rounds"
-        if seen else "send-back rate at this critic so far on this epic: first round"
+        if seen
+        else "send-back rate at this critic so far on this planning attempt: "
+             "first round"
     )
     body = "\n\n".join([
         f"{icon} **{title}** — round {round_n} of {MAX_ROUNDS}: {note}",
@@ -639,6 +709,11 @@ def _cmd_rate(args) -> int:
 
 def _cmd_collisions(_args) -> int:
     print(json.dumps(collision_counts(_stdin_json([]))))
+    return 0
+
+
+def _cmd_cycle_start(args) -> int:
+    print(cycle_start_note(args.epic))
     return 0
 
 
@@ -675,6 +750,10 @@ def main(argv: list[str]) -> int:
     r = sub.add_parser("rate", help="send-back rate; comment thread on stdin")
     r.add_argument("--stage", required=True, choices=sorted(STAGES))
     r.set_defaults(fn=_cmd_rate)
+
+    y = sub.add_parser("cycle-start", help="the note that opens a planning attempt")
+    y.add_argument("--epic", required=True)
+    y.set_defaults(fn=_cmd_cycle_start)
 
     x = sub.add_parser("collisions", help="both collision counters; thread on stdin")
     x.set_defaults(fn=_cmd_collisions)

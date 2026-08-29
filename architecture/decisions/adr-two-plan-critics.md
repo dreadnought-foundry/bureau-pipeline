@@ -48,6 +48,14 @@ Nothing circles a third time — an unbounded loop is how 17 cards sat in a lane
 for 27 days. A round the critic passed is not a failure and a round it crashed
 on was never a decision, so neither spends the budget.
 
+**The bound is scoped to one planning attempt.** An epic sent back to Triage is
+re-planned from scratch, and the new plan gets its own rounds; the plan route
+posts a `plan-cycle:` boundary when an attempt starts and each critic counts
+from the last one. Counting over the epic's lifetime instead would push a
+re-planned epic to the CEO on its first send-back with no revision round — and
+nothing about the note would say so, which makes it a silent failure of the
+one promise this feature makes.
+
 **The second critic's send-back rate is the measurement of the first one.** If
 the post-approval pass routinely finds significant gaps, the fix is upstream —
 a better first critic — not another round. Each round writes one

@@ -64,6 +64,18 @@ and a round it **crashed** on was never a decision: a critic that produced no
 result has not rejected anything and never holds a plan
 (`standards/console-honesty.md` rule 1).
 
+**The budget belongs to one planning attempt, not to the epic.** An epic sent
+back to Triage is re-planned from scratch, and the new plan gets its own
+rounds — the earlier ones argued about a plan that no longer exists. The plan
+route posts a boundary line when an attempt starts:
+
+    plan-cycle: start epic=DRE-2721
+
+and each critic counts its failed rounds from the last of those. Without it a
+re-planned epic inherits a budget it already spent, so its first send-back
+reads as the bound and the plan reaches the CEO with no revision round at
+all — indistinguishable, from the outside, from a normal pass.
+
 A send-back before approval returns the plan to the planner for one revision.
 A send-back after approval returns the epic to `Green Light` with the findings
 and **stops the children promoting** — which is the only moment stopping them
@@ -82,6 +94,10 @@ them:
 
     python3 scripts/linear_ops.py dump-comments <EPIC> \
       | python3 scripts/plan_critic.py rate --stage post
+
+That reads the epic's WHOLE history on purpose: the rate is a measurement
+across attempts, while the bound above is scoped to the current one. Two
+questions, and the scope is what separates them.
 
 The marker is the record — durable, timestamped, and on the epic it belongs to,
 the same convention as the design-parity ledger and the `model-attempt:`

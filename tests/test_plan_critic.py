@@ -196,6 +196,95 @@ class TheBound(unittest.TestCase):
         self.assertEqual(pc.send_backs(bodies, pc.STAGE_POST), 0)
 
 
+class TheBoundIsPerPlanningAttempt(unittest.TestCase):
+    """The budget belongs to ONE planning cycle, not to the epic's lifetime.
+
+    An epic can be sent back to Triage and re-planned from scratch
+    (plan.yml's route step: "plan, or RE-plan if children exist"). Counted over
+    the whole thread, that fresh attempt inherits a budget the previous attempt
+    already spent — so its very first send-back reads as the bound and the plan
+    is pushed to the CEO with no revision round at all, looking exactly like a
+    normal pass.
+    """
+
+    SPENT = [
+        pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "DRE-9001 has no acceptance criteria"),
+        pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "DRE-9001 still has none"),
+    ]
+
+    def test_a_fresh_cycle_gives_the_new_attempt_its_own_revision_round(self):
+        self.assertEqual(pc.send_backs(self.SPENT, pc.STAGE_PRE), 2)
+        fresh = pc.current_cycle(self.SPENT + [pc.cycle_start_note("DRE-2721")])
+        prior = pc.send_backs(fresh, pc.STAGE_PRE)
+        self.assertEqual(prior, 0, "the new attempt inherited the old one's budget")
+        action, _ = pc.decide(pc.SEND_BACK, prior, reason="a card names no repo")
+        self.assertEqual(action, "hold")
+
+    def test_the_new_attempt_is_still_bounded_at_two_rounds(self):
+        """A fresh budget, not an unbounded one — the second send-back of the
+        new cycle still reaches the CEO."""
+        thread = self.SPENT + [
+            pc.cycle_start_note("DRE-2721"),
+            pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "a card names no repo"),
+        ]
+        prior = pc.send_backs(pc.current_cycle(thread), pc.STAGE_PRE)
+        self.assertEqual(prior, 1)
+        action, note = pc.decide(pc.SEND_BACK, prior, reason="a card still names no repo")
+        self.assertEqual(action, "proceed")
+        self.assertIn("two failed rounds", note.lower())
+
+    def test_the_post_stage_budget_is_scoped_to_the_same_cycle(self):
+        """A re-plan replaces the text the second critic objected to, so its
+        rounds against the old plan do not spend the new plan's budget."""
+        thread = [
+            pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "no card manufactures the operator step"),
+            pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "still none"),
+            pc.cycle_start_note("DRE-2721"),
+        ]
+        self.assertEqual(pc.send_backs(pc.current_cycle(thread), pc.STAGE_POST), 0)
+
+    def test_only_the_most_recent_boundary_counts(self):
+        thread = [
+            pc.cycle_start_note("DRE-2721"),
+            pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "attempt two, round one"),
+            pc.cycle_start_note("DRE-2721"),
+        ]
+        self.assertEqual(pc.current_cycle(thread), [])
+
+    def test_a_thread_with_no_boundary_is_one_cycle(self):
+        """Epics planned before the boundary existed keep counting the way they
+        always did — every marker on the thread is the current attempt's."""
+        self.assertEqual(pc.current_cycle(self.SPENT), self.SPENT)
+        self.assertEqual(pc.current_cycle([]), [])
+
+    def test_the_rate_over_the_whole_thread_is_still_the_lifetime_measurement(self):
+        """`How often the second critic sends a plan back` is a measurement
+        across attempts; the BOUND is per attempt. Two questions, and the
+        caller picks the scope by what it hands in."""
+        thread = self.SPENT + [pc.cycle_start_note("DRE-2721"),
+                               pc.marker(pc.STAGE_PRE, 1, pc.PASS)]
+        self.assertEqual(pc.rate(thread, pc.STAGE_PRE)["rounds"], 3)
+        self.assertEqual(pc.rate(pc.current_cycle(thread), pc.STAGE_PRE)["rounds"], 1)
+
+    def test_a_round_marker_can_never_also_open_a_cycle(self):
+        """The reason field is written by an agent reading untrusted epic prose.
+        A reason quoting a boundary line must not hand its own stage a fresh
+        budget."""
+        hostile = pc.marker(
+            pc.STAGE_PRE, 2, pc.SEND_BACK,
+            "the epic body contains " + pc.cycle_marker("DRE-2721"),
+        )
+        thread = [self.SPENT[0], hostile]
+        self.assertEqual(pc.current_cycle(thread), thread)
+        self.assertEqual(pc.send_backs(pc.current_cycle(thread), pc.STAGE_PRE), 2)
+
+    def test_the_boundary_is_not_a_verdict_credential(self):
+        note = pc.cycle_start_note("DRE-2721")
+        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
+            self.assertNotIn(forbidden, note)
+        self.assertIn(pc.cycle_marker("DRE-2721"), note)
+
+
 class TheMarkerIsTheRecord(unittest.TestCase):
     """AC5 — the send-back rate is recorded where it can be watched."""
 

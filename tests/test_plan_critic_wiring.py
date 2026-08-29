@@ -9,10 +9,12 @@ rail:
      it), and the second runs AFTER approval and BEFORE the children promote
      (an adversarial pass is only worth much against a fixed target, and after
      promotion the gap is no longer free to fix).
-  2. THE BOUND — the plan route carries at most two critic rounds, and the
-     epic reaches Green Light on `always`-style conditions rather than only
-     when the critic passed. An unbounded loop is how 17 cards sat in a lane
-     for 27 days.
+  2. THE BOUND — the plan route carries at most two critic rounds, opens the
+     planning cycle those rounds are counted from, and the epic reaches Green
+     Light on `always`-style conditions rather than only when the critic
+     passed. An unbounded loop is how 17 cards sat in a lane for 27 days; a
+     budget counted over the epic's lifetime instead of the current attempt is
+     how a re-planned epic loses its revision round.
   3. DIFFERENCE — the two prompts are visibly different: each carries its own
      stage charter, and neither carries the other's question.
   4. SIGHT — the second critic's prompt is handed the cross-epic scope block,
@@ -93,6 +95,7 @@ REPLAN = "re-plan after send-back"
 GREEN_LIGHT = "Epic → Green Light"
 ACTIVATE = "Activate the approved epic"
 SIGHT = "second critic — cross-epic sight"
+ROUTE = "Route — plan or activate"
 
 
 class TheFirstCriticRunsBeforeTheCeo(unittest.TestCase):
@@ -194,6 +197,15 @@ class TheBoundIsWired(unittest.TestCase):
         self.assertLess(index_of(FIRST_R1), index_of(REPLAN))
         self.assertLess(index_of(REPLAN), index_of(FIRST_R2))
         self.assertIn("hold", str(step_named(REPLAN).get("if") or ""))
+
+    def test_a_planning_attempt_opens_the_cycle_the_bound_is_counted_from(self):
+        """The budget is per planning ATTEMPT. The route step is the one place
+        that decides an epic is being planned (or RE-planned), so it is where
+        the boundary the critics count from has to be written — before either
+        critic reads the thread."""
+        route = str(step_named(ROUTE).get("run") or "")
+        self.assertIn("plan_critic.py cycle-start", route)
+        self.assertLess(index_of(ROUTE), index_of(FIRST_R1))
 
     def test_every_decision_step_routes_through_the_one_decider(self):
         deciders = [s for s in steps()

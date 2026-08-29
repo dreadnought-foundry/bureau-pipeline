@@ -20,6 +20,9 @@ The walk, one method per observable the card asks for:
      run wrote, over as many rounds as the epic has had.
   6. A real collision between two epics in flight is caught here and read from
      the critic's own output — and counted apart from one found later.
+  7. An epic re-planned from Triage after a previous attempt spent its whole
+     budget gets its own revision round, rather than being pushed straight to
+     the CEO on the first send-back of the new plan.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_critic_scenario.py -v
 """
@@ -138,12 +141,14 @@ class CriticWalk(unittest.TestCase):
 
     # --- the seams --------------------------------------------------------
 
-    def _shell(self, fragment: str, **env_extra):
+    def _shell(self, fragment: str, subs: dict | None = None, **env_extra):
         """Run a plan.yml step's shell with the run's expressions resolved."""
         script = step(fragment)["run"]
         script = script.replace("${{ runner.temp }}", self.tmp)
         script = script.replace("${{ github.event.client_payload.identifier }}", EPIC)
         script = script.replace("${{ github.repository }}", "dreadnought-foundry/bureau-pipeline")
+        for expression, value in (subs or {}).items():
+            script = script.replace(expression, value)
         leftover = re.findall(r"\$\{\{[^}]*\}\}", script)
         self.assertEqual(leftover, [], f"unmodelled expressions in {fragment!r}")
         env = dict(
@@ -263,6 +268,46 @@ class CriticWalk(unittest.TestCase):
         out = self._outputs()
         self.assertEqual(out["action"], "proceed")
         self.assertIn("still no card", self._thread()[-1])
+        self.assertIn("two failed rounds", self._thread()[-1].lower())
+
+    # --- 7: a re-plan is a fresh attempt ----------------------------------
+
+    def test_a_re_planned_epic_gets_its_own_rounds(self):
+        """The bound is per planning ATTEMPT. An epic sent back to Triage is
+        re-planned from scratch (the route step: "plan, or RE-plan if children
+        exist"), and the new plan must get the one revision round the design
+        promises — not be pushed to the CEO on its first send-back because a
+        previous, unrelated attempt spent the budget."""
+        self._critic_writes("pre", pc.SEND_BACK, "the cards do not sum to the epic")
+        self._shell("first critic — round 1 decision")
+        self._critic_writes("pre", pc.SEND_BACK, "the cards still do not sum to the epic")
+        self._shell("first critic — round 2 decision")
+        self.assertEqual(self._outputs()["action"], "proceed")
+        self.assertEqual(pc.send_backs(self._thread(), pc.STAGE_PRE), 2)
+
+        # The CEO sends it back to Triage; the route step re-plans it. That is
+        # where the new attempt's boundary is written.
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "triage"},
+        )
+        self.assertIn("state Planning", self._log())
+
+        # Round 1 of the NEW attempt: a send-back holds it for the revision
+        # round, and says round 1 rather than counting the old attempt's.
+        self._critic_writes("pre", pc.SEND_BACK, "DRE-9005 carries no acceptance criteria")
+        self._shell("first critic — round 1 decision")
+        out = self._outputs()
+        self.assertEqual(out["action"], "hold",
+                         "a re-planned epic inherited the previous attempt's spent budget")
+        self.assertEqual(out["round"], "1")
+        self.assertIn("round 1 of 2", self._thread()[-1])
+
+        # ...and it is still bounded: the second send-back of the NEW attempt
+        # reaches the CEO with the reason attached.
+        self._critic_writes("pre", pc.SEND_BACK, "DRE-9005 still carries none")
+        self._shell("first critic — round 2 decision")
+        self.assertEqual(self._outputs()["action"], "proceed")
         self.assertIn("two failed rounds", self._thread()[-1].lower())
 
     # --- 5: the rate ------------------------------------------------------

@@ -176,6 +176,15 @@ jobs:
           else
             echo "mode=plan" >> "$GITHUB_OUTPUT"
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
+            # DRE-2721: open a planning CYCLE. Both critics count their failed
+            # rounds from this line, so a RE-plan gets its own revision round
+            # instead of inheriting a budget the previous attempt already
+            # spent — which would push the new plan to the CEO on its first
+            # send-back, looking exactly like a normal pass. This is the one
+            # step that knows an attempt is starting, so it is where the
+            # boundary belongs.
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC")"
           fi
 
       # Heartbeat: record which model this plan attempt uses so the board/
@@ -443,6 +452,11 @@ jobs:
       # cards sat in a lane for 27 days. The bound is in scripts/plan_critic.py
       # (`decide`), not in this YAML: the YAML only runs at most two rounds,
       # and the decider is what says which one may hold.
+      #
+      # The budget is per planning ATTEMPT, counted from the `plan-cycle:`
+      # boundary the route step wrote above — an epic re-planned from Triage
+      # gets its revision round back, because the plan the earlier rounds
+      # argued about no longer exists.
       #
       # Skipped when the planner asked clarifying questions instead — there are
       # no cards to review, and that epic goes back to Backlog either way.
@@ -713,7 +727,9 @@ jobs:
       # Same bound as the first critic: two failed rounds and the children
       # promote regardless, with the reason attached for the CEO. The rounds
       # are counted from the markers on the epic, so they survive across the
-      # separate runs a re-approval produces.
+      # separate runs a re-approval produces — and only back as far as this
+      # planning attempt's `plan-cycle:` boundary, so a re-plan does not carry
+      # the old plan's rounds into the new one.
       - name: Select model — second critic
         id: postmodel
         if: steps.route.outputs.mode == 'activate'
