@@ -1,0 +1,496 @@
+{
+  "_readme": [
+    "THE HELD-BACK REVIEW (DRE-2685). One human review, transcribed once, scored against.",
+    "",
+    "DRE-2649 read both Forms epics, all their children, B7 and the link-out epic",
+    "by hand on 2026-08-22 and recorded fourteen findings on the card. The",
+    "classifier has never seen it. This file is that review's per-card judgements,",
+    "and nothing else: `scripts/critic_score.py` compares what the critic says",
+    "against these rows and reports agreement AND disagreement.",
+    "",
+    "EVERY ROW QUOTES THE REVIEW. A transcribed judgement nobody can check against",
+    "the source is a claim, so `basis` says whether the review NAMED the card or",
+    "covered it by a blanket statement, `finding` cites where, and `quote` carries",
+    "the review's own words. Where the transcription took a reading, `note` says so",
+    "in the row rather than in a commit message.",
+    "",
+    "THE `hand-built` DIMENSION IS EXCLUDED AS CONTAMINATED. That judgement was read",
+    "during planning and quoted in the plan: the `hand-built` labels and the",
+    "`DEMO:`/`SIGN-OFF (OPERATOR)` title conventions the critic resolves it from",
+    "were set by the answer. Scoring it grades the critic on a card it was handed",
+    "face-up. The rows are kept and reported, never deleted — a number with rows",
+    "silently removed is worse than no number.",
+    "",
+    "Cards the review read that are already Done (DRE-2493, DRE-2494, DRE-2495) are",
+    "out of the population rather than missed, the same way the groomer's audit",
+    "treated DRE-2494.",
+    "",
+    "Check this file against the routing vocabulary and the lane contract:",
+    "  python3 scripts/critic_score.py check"
+  ],
+  "version": 1,
+  "source": {
+    "card": "DRE-2649",
+    "title": "CRITIC: review the whole forms card set before any of it starts",
+    "reviewed_on": "2026-08-22",
+    "record": "the review comment on DRE-2649 (two parts), and portico `docs/design/forms/card-set-review.md` merged in PR #340",
+    "why_it_is_blind": "It was written by a human reading the code, before the routing vocabulary existed, and no part of it is in the critic's prompt, its config, or the cards it reads."
+  },
+  "dimensions": {
+    "buildability": {
+      "question": "Can this card be worked from what it says, without going back to the author?",
+      "scored": true,
+      "values": [
+        "buildable",
+        "not-buildable"
+      ],
+      "why": "This is the axis the routing vocabulary answers with NEEDS WORK, and the only one the review reached independently."
+    },
+    "plan": {
+      "question": "Does the epic's plan hold — children, inheritable labels, an acceptance criterion for the set?",
+      "scored": true,
+      "values": [
+        "plan-test"
+      ],
+      "why": "An epic never gets a buildability verdict: 'could an agent build this unattended' is meaningless for a card the planner owns. The critic must answer the plan question instead, and answering the other one is itself the failure."
+    },
+    "hand-built": {
+      "question": "Must a person look at it?",
+      "scored": false,
+      "values": [
+        "needs-a-person",
+        "dispatchable"
+      ],
+      "contaminated": "read during planning and quoted in the plan — the `hand-built` labels and title conventions the critic resolves this from were set by the answer, so a score on it measures the labelling, not the critic. It is the difference between a real blind comparison and one that flatters itself."
+    }
+  },
+  "judgements": [
+    {
+      "card": "DRE-2628",
+      "dimension": "plan",
+      "judgement": "plan-test",
+      "basis": "named",
+      "finding": "scope",
+      "quote": "Read: both forms epics, all nineteen children (DRE-2630…DRE-2648 — that range is nineteen cards, not eighteen), B7/DRE-2654, and DRE-2492 with its eight children.",
+      "note": "Epic A was read as a plan — its children, their relations and the acceptance for the set — and never asked whether an agent could build it."
+    },
+    {
+      "card": "DRE-2629",
+      "dimension": "plan",
+      "judgement": "plan-test",
+      "basis": "named",
+      "finding": "scope",
+      "quote": "Read: both forms epics, all nineteen children (DRE-2630…DRE-2648 — that range is nineteen cards, not eighteen), B7/DRE-2654, and DRE-2492 with its eight children.",
+      "note": "Epic B was read as a plan — its children, their relations and the acceptance for the set — and never asked whether an agent could build it."
+    },
+    {
+      "card": "DRE-2492",
+      "dimension": "plan",
+      "judgement": "plan-test",
+      "basis": "named",
+      "finding": "scope",
+      "quote": "Read: both forms epics, all nineteen children (DRE-2630…DRE-2648 — that range is nineteen cards, not eighteen), B7/DRE-2654, and DRE-2492 with its eight children.",
+      "note": "the link-out epic was read as a plan — its children, their relations and the acceptance for the set — and never asked whether an agent could build it."
+    },
+    {
+      "card": "DRE-2630",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec.",
+      "note": "F1 is named in finding 5, which is against the plan (the spec file is not on `main`) and not against what the card says."
+    },
+    {
+      "card": "DRE-2631",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "11 · MEDIUM",
+      "quote": "A1's question shape does not match the template it must parse. … As written the card either rejects that section or silently drops fields. Add both to the shape, or say explicitly that unknown *keys* are ignored while unknown *types* are refused."
+    },
+    {
+      "card": "DRE-2632",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "2 · BLOCKING",
+      "quote": "A2 is `size:M`, one PR, and its acceptance says “No new access resolver, and `assertItemWrite` is not weakened.” As written it must edit `access_lib.ts` and `routes/content.ts` to work at all — a sweep through the security surface.",
+      "note": "Finding 3 lands on the same card: nothing makes an instantiated form answerable and nobody owns the server render."
+    },
+    {
+      "card": "DRE-2633",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec.",
+      "note": "Finding 10 concerns A3 only as the PR A7's UI half is folded into; the defect is recorded against A7."
+    },
+    {
+      "card": "DRE-2634",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "named",
+      "finding": "6 · HIGH",
+      "quote": "A4 ↔ DRE-2497 is `related` only. … Set a formal blocker in whichever direction you want them run.",
+      "note": "A missing relation between two cards, not a defect in what A4 says."
+    },
+    {
+      "card": "DRE-2635",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "named",
+      "finding": "7 · HIGH",
+      "quote": "A5 and B1 both edit `infra/lambda/responses_lib.ts` and `routes/responses.ts`. … Both are blocked by A2 alone, so both unblock together.",
+      "note": "A file collision to record, not a defect in what A5 says."
+    },
+    {
+      "card": "DRE-2636",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "4 · HIGH",
+      "quote": "A6 cannot be built as written, and the obvious workaround weakens `assertItemWrite`. … A6 needs the decision written into it."
+    },
+    {
+      "card": "DRE-2637",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "1 · BLOCKING",
+      "quote": "A7 — the submitted payload is one organisation's answers.",
+      "note": "Finding 1 is a product decision that has to be made before the card can be written correctly: “There is no third option where the cards stay as written.”"
+    },
+    {
+      "card": "DRE-2638",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec."
+    },
+    {
+      "card": "DRE-2639",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec."
+    },
+    {
+      "card": "DRE-2640",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "13 · MEDIUM",
+      "quote": "B1 never says who may accept, and B7 assumes an answer B1 does not give. … Decide it in B1, for both subjects, with a test.",
+      "note": "Finding 1 lands on B1 as well: “B1's acceptance criterion passes a unit test against a Map while the feature is broken live.”"
+    },
+    {
+      "card": "DRE-2641",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "1 · BLOCKING",
+      "quote": "*Epic A's decisions table, Epic B, B1, B2, B4, A7, DRE-2646.*",
+      "note": "TRANSCRIPTION CALL: finding 1 names B2 among the cards the partition decision breaks and does not break the B2 case down further. Recorded as named-but-unelaborated rather than dropped."
+    },
+    {
+      "card": "DRE-2642",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec.",
+      "note": "B3 appears in the Thread.tsx chain (finding 6 and the third direct question) as a serialisation question, not a defect in the card."
+    },
+    {
+      "card": "DRE-2643",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "1 · BLOCKING",
+      "quote": "B4 — the operator's quote is *“See it across groups and people”*, and the card says everyone on the form sees everyone. Presence derives from the poll; the poll returns one group. “No new presence store” is only achievable inside one domain."
+    },
+    {
+      "card": "DRE-2644",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec."
+    },
+    {
+      "card": "DRE-2645",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec."
+    },
+    {
+      "card": "DRE-2646",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "1 · BLOCKING",
+      "quote": "DRE-2646 claim 1 uses Hagen and Yannan, who share a domain. **The demo passes while the cross-side case is broken.** That is the most expensive shape a demo can have.",
+      "note": "Finding 8 adds that B-DEMO's seven claims contain nothing about a passage, so Epic B signs off without B7."
+    },
+    {
+      "card": "DRE-2647",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec."
+    },
+    {
+      "card": "DRE-2648",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "blanket",
+      "finding": "closing",
+      "quote": "The set is sound in construction. The waves are argued rather than asserted, most dependencies are real relations, the security posture is named in nearly every card, and the prototype is a real spec.",
+      "note": "Finding 14 asks for a number to be reconciled when OP1 transcribes the real section; it decides nothing by itself."
+    },
+    {
+      "card": "DRE-2654",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "named",
+      "finding": "direct question 2",
+      "quote": "**Yes.** … There is nothing to rewrite in place, and the card is shaped around a constraint that genuinely exists.",
+      "note": "One sentence in B7 is imprecise and the review says how to word it; its central claim was checked and is true."
+    },
+    {
+      "card": "DRE-2496",
+      "dimension": "buildability",
+      "judgement": "not-buildable",
+      "basis": "named",
+      "finding": "direct question 3",
+      "quote": "DRE-2496's stated premise — “Today the rail would break on one” — is largely already handled by DRE-2493, which is Done. … **It probably need not touch `Thread.tsx` at all**, and its remaining scope is smaller than `size:M`. … re-scope and re-size 2496 against what 2493 already shipped before anyone plans around it."
+    },
+    {
+      "card": "DRE-2497",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "named",
+      "finding": "6 · HIGH",
+      "quote": "A4 ↔ DRE-2497 is `related` only. … The engineering standard is explicit that prose leaves the reconcile gate blind.",
+      "note": "A missing relation, not a defect in what the card says."
+    },
+    {
+      "card": "DRE-2498",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "named",
+      "finding": "8 · MEDIUM",
+      "quote": "DRE-2498 forks its copy by kind *including* `form` and is blocked only by 2494. Both need a blocker on A2, or the sentence taken out.",
+      "note": "A missing dependency, not a defect in what the card asks for."
+    },
+    {
+      "card": "DRE-2650",
+      "dimension": "buildability",
+      "judgement": "buildable",
+      "basis": "named",
+      "finding": "8 · MEDIUM",
+      "quote": "DRE-2650 says “a Google Doc and a **form** side by side” and is blocked by no forms card.",
+      "note": "A missing dependency, not a defect in what the card asks for."
+    },
+    {
+      "card": "DRE-2633",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2634",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2638",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2641",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2642",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2643",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2644",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2646",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2654",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2496",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2497",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2498",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2650",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2639",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2647",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2648",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2630",
+      "dimension": "hand-built",
+      "judgement": "dispatchable",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2631",
+      "dimension": "hand-built",
+      "judgement": "dispatchable",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2632",
+      "dimension": "hand-built",
+      "judgement": "dispatchable",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2635",
+      "dimension": "hand-built",
+      "judgement": "dispatchable",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2636",
+      "dimension": "hand-built",
+      "judgement": "dispatchable",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2640",
+      "dimension": "hand-built",
+      "judgement": "dispatchable",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2645",
+      "dimension": "hand-built",
+      "judgement": "dispatchable",
+      "basis": "blanket",
+      "finding": "4 · the labelling question",
+      "quote": "Correct in every case I could test against the “must a person look at it” rule, with one exception in the direction that costs most: A7 is dispatched and carves out a UI half it hides inside A3's PR."
+    },
+    {
+      "card": "DRE-2637",
+      "dimension": "hand-built",
+      "judgement": "needs-a-person",
+      "basis": "named",
+      "finding": "10 · MEDIUM",
+      "quote": "This is also the labelling failure the card asks about, in the reverse direction: **a dispatched card with a human-eye half.** Split A7 the way B5 is split.",
+      "note": "The review's one exception to the blanket above, and the reason this dimension would have been the audit's most interesting row had it not been contaminated."
+    }
+  ]
+}

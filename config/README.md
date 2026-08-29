@@ -1,13 +1,20 @@
 # `config/` — the data files the pipeline reads at run time
 
-Two canonical files live here. Both exist for the same reason: the workflows
-that read them run in a product repo's GitHub Actions with **no AWS credentials**
-and **no token for a private repo**, so anything they need must be a file in the
-public `bureau-pipeline` checkout they already do (`.bureau-pipeline` @ `main`).
-Neither is ever a runtime lookup.
+Everything here exists for the same reason: the workflows that read these files
+run in a product repo's GitHub Actions with **no AWS credentials** and **no
+token for a private repo**, so anything they need must be a file in the public
+`bureau-pipeline` checkout they already do (`.bureau-pipeline` @ `main`). None
+of it is ever a runtime lookup.
 
 - **`models.yaml`** — which model each agent runs on (see below).
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
+- **`lane-contract.json`** — the board's lanes, their clauses and their
+  permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`routing-verdicts.json`** — the routing vocabulary (DRE-2724).
+  `docs/routing-verdicts.md` is rendered from it.
+- **`critic-audit-dre2649.json`** — the held-back review the critic is scored
+  against (DRE-2685), transcribed once with a quote per judgement.
+  `docs/critic-score-dre2649.md` records the run.
 
 ---
 
