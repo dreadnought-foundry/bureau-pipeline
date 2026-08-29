@@ -298,6 +298,23 @@ class UnclassifiedTest(unittest.TestCase):
             critic_score.escalate(lops, result)
         self.assertEqual(len(lops.comments), 1, "the card moved with nothing said")
 
+    def test_a_second_pass_does_not_alert_the_same_card_twice(self):
+        """Vendor boundary Q3 — what the retry does. A pass that crashes after
+        three cards is re-run, and the population is the reference set rather
+        than a lane, so every card comes round again. An alert per run is an
+        alarm nobody reads, which is the failure mode the operator accepted the
+        cost of and asked us to bound."""
+        lops = FakeLinear()
+        result = self.unclassified_result()
+        first = critic_score.escalate(lops, result)
+        again = critic_score.escalate(
+            lops, result, comments={"DRE-1": [body for _, body in lops.comments]}
+        )
+        self.assertEqual(first, ["DRE-1"])
+        self.assertEqual(again, [])
+        self.assertEqual(len(lops.comments), 1)
+        self.assertEqual(len(lops.states), 1)
+
     def test_the_escalation_lane_is_read_from_the_vocabulary_not_a_literal(self):
         lane = critic_score.escalation_lane()
         self.assertEqual(lane, routing_verdict.destination("NEEDS WORK"))
