@@ -173,6 +173,32 @@ def test_full_sweep_runs_the_escalation():
     esc.assert_called_once_with()
 
 
+def test_an_unreadable_intake_costs_the_sweep_nothing_else_and_exits_red():
+    """DRE-2034: an unreadable lane is not an empty lane. The rest of the sweep
+    still runs, and the run still fails so medic picks it up."""
+    reconcile._write_failures.clear()
+    reconcile._read_failures.clear()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(
+            mock.patch.object(
+                reconcile,
+                "escalate_aged_intake",
+                side_effect=reconcile.linear_ops.LinearError("Linear is down"),
+            )
+        )
+        mocks = {}
+        for m in _main_mocks():
+            mocks[m.attribute] = stack.enter_context(m)
+        stack.enter_context(
+            mock.patch.object(reconcile, "active_cards", return_value=[])
+        )
+        with pytest.raises(SystemExit):
+            reconcile.main()
+    assert mocks["promote_ready"].called, "the rest of the sweep must still run"
+    assert any("intake" in f for f in reconcile._read_failures)
+    reconcile._read_failures.clear()
+
+
 def test_promote_only_mode_does_not_escalate():
     """The event hooks run the dependency gate alone — an Intake sweep on every
     merge would move cards on a code path nobody asked for one."""

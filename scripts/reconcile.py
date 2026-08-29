@@ -4201,6 +4201,12 @@ def main(
         except ReconcileWriteError as e:
             _write_failures.append(str(e))
             print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
+        except linear_ops.LinearError as e:
+            # An unreadable Intake is not an empty Intake (DRE-2034): recorded
+            # as a read failure — the sweep finishes its other work and still
+            # exits red, so medic sees it and the next sweep retries.
+            _read_failures.append(f"intake: {e}")
+            print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
     mine = [c for c in active_cards() if card_repo(c) == REPO_SLUG]
     epics = repo_epics(mine)
     if not promote_only:
