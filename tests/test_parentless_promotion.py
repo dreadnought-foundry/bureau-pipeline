@@ -209,14 +209,18 @@ class TestTheRefusalsAreDistinguishable:
         _Board(_card(identifier="DRE-2", parent_state=None, comments=[])).promote()
         verdict_out = capsys.readouterr().out
 
-        assert "DRE-1" in parent_out and "parent" in parent_out.lower()
+        assert "DRE-1" in parent_out
+        assert "not active (Planning)" in parent_out
         assert "DRE-2700" in parent_out, "the log must name the epic that held it"
+
         assert "DRE-2" in verdict_out
         assert routing_verdict.NO_VERDICT_TAG in verdict_out
-        # The distinguishing property, stated as such: the verdict refusal must
-        # not read as a parent problem, and vice versa.
+        assert "carries no routing verdict" in verdict_out
+
+        # The distinguishing property, stated as such: neither cause's wording
+        # appears in the other's output.
         assert routing_verdict.NO_VERDICT_TAG not in parent_out
-        assert "parent" not in verdict_out.split("routing-no-verdict")[1].split("\n")[0]
+        assert "not active" not in verdict_out
 
     def test_the_refusal_is_surfaced_on_the_card_exactly_once(self):
         """The DEAD_TAG shape: an invisible refusal is silent accretion."""
@@ -348,6 +352,21 @@ class TestParentlessPromotionRefusal:
         )
         assert refusal is not None
         assert routing_verdict.NOT_FLEET_TAG in refusal
+
+    def test_the_tag_is_read_off_the_refusal_it_belongs_to(self):
+        """The sweep posts each refusal at most once, keyed on the tag — pair a
+        notice with the wrong tag and the two refusals silence each other."""
+        no_verdict = routing_verdict.parentless_promotion_refusal("DRE-2735", [])
+        not_fleet = routing_verdict.parentless_promotion_refusal("DRE-2735", [WORKBENCH])
+        assert routing_verdict.refusal_tag(no_verdict) == routing_verdict.NO_VERDICT_TAG
+        assert routing_verdict.refusal_tag(not_fleet) == routing_verdict.NOT_FLEET_TAG
+
+    def test_a_foreign_string_has_no_tag(self):
+        """Never guess: a body this module did not write gets None, not a tag
+        that would key someone else's notice."""
+        assert routing_verdict.refusal_tag(None) is None
+        assert routing_verdict.refusal_tag("") is None
+        assert routing_verdict.refusal_tag("🚨 mid-epic-no-verdict: DRE-1 …") is None
 
     def test_the_two_tags_are_distinct(self):
         assert routing_verdict.NO_VERDICT_TAG != routing_verdict.NOT_FLEET_TAG
