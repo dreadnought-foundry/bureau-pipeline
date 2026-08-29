@@ -115,6 +115,10 @@ from datetime import UTC, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
+# DRE-2687: ONE source for the critic's own alert tag — the aged-Intake
+# escalation carries the reason the critic already stated, and must read the
+# marker from the module that writes it.
+import critic_score  # noqa: E402
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
@@ -289,6 +293,48 @@ WATCHDOG_TAG = "stranded-watchdog"
 PLANNING_LANE = ("Planning",)
 PLANNING_MINUTES = int(
     os.environ.get("PLANNING_MINUTES", STALE_MINUTES["Planning"])
+)
+
+# Intake's own lane and threshold (DRE-2687). Until this card, Intake was in NO
+# lane set any live sweep read: SWEEP_STATES is the work-segment lanes and
+# WATCHDOG_LANES is Todo / In Progress, so a card that entered Intake and was
+# never drained was examined by nothing, ever — the Backlog this wave exists to
+# empty, one lane earlier and with a new name.
+#
+# THE THRESHOLD IS ONE NAMED CONSTANT, and its value is the contract's own
+# stall window for the lane (the PLANNING_MINUTES rule): the number a reader
+# finds in docs/lane-contract.md is the number that runs. 48 hours, because
+# what an Intake card owes is a classification and the thing that produces one
+# runs ON DEMAND (groomer D5, 2026-08-23) — a shorter window alarms on a queue
+# that is simply waiting for the next batch, and a longer one is a lane nothing
+# drains. Two days is the point at which nothing is coming.
+#
+# Past it the card MOVES to Green Light. Not a report: DRE-2670's ~480
+# consecutive green sweeps printed, in plain English, the exact reason five
+# cards were frozen, and nobody read one. A report is a record; a move is a
+# gate.
+INTAKE_LANE = ("Intake",)
+INTAKE_MAX_AGE_MINUTES = int(
+    os.environ.get("INTAKE_MAX_AGE_MINUTES", STALE_MINUTES["Intake"])
+)
+INTAKE_AGED_TAG = "intake-aged"
+
+# How many aged cards one sweep may move. The cutover (backlog_cutover.py) puts
+# the whole legacy Backlog into Intake at once, so every one of those cards
+# crosses the threshold within minutes of each other: uncapped, the first sweep
+# after the window would empty ~220 cards into the CEO's queue, which is a lane
+# nobody can read — the failure this mechanism exists to prevent, achieved from
+# the other side. The cap HOLDS the remainder; it never forgets one. They stay
+# in Intake, still the oldest, and the next sweep takes the next three.
+INTAKE_ESCALATION_CAP = int(os.environ.get("INTAKE_ESCALATION_CAP", "3"))
+
+# What the escalation says when the card carries no stated reason at all.
+# Console-honesty rule 2: absent data is rendered as absent, never as an
+# invented one — "nothing has ever been said about this card" is itself the
+# finding, and a different fact from "the critic could not classify it".
+NO_STATED_REASON = (
+    "No reason has ever been stated on this card — nothing has classified it, "
+    "and nothing has said why not. That is the finding."
 )
 
 # Hand-built work is not stranded work (DRE-2524). On 2026-08-17 five portico
@@ -752,6 +798,17 @@ SWEEP_STATES = tuple(
     if name in STALE_MINUTES and lane_contract.lane(name)["segment"] == "work"
 )
 
+# Every lane a full sweep actually READS, declared once (DRE-2687). Four lane
+# sets had grown up beside each other — the nudge loop's, the watchdog's,
+# Planning's and now Intake's — and no single place answered "is this lane
+# looked at by anything?". That question has a live cost: Intake was in none of
+# them, so a card that entered it was examined by no mechanism, ever. This is
+# the union, and tests/test_intake_escalation.py asserts it against the states
+# the sweep really queries rather than against this tuple alone.
+SWEPT_LANES = tuple(
+    dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES + PLANNING_LANE + INTAKE_LANE)
+)
+
 
 def drain_retiring_lanes() -> None:
     """Move every card out of a lane the contract is retiring (DRE-2726).
@@ -1119,6 +1176,138 @@ PARKED_STATE = "Triage"
 ESCALATED_STATE = "Green Light"
 PARKED_STATES = (PARKED_STATE, ESCALATED_STATE)
 _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
+
+
+# The markers that carry a STATED REASON about a card, newest wins. Both are
+# read from the module that writes them — a copied string here would be a
+# second definition of somebody else's marker, and the escalation would quietly
+# stop finding reasons the day either one changed.
+_STATED_REASON_MARKERS = (
+    f"🚨 {critic_score.ESCALATE_TAG}:",       # the critic could not classify it
+    f"{routing_verdict.VERDICT_MARK} {routing_verdict.VERDICT_TAG}:",
+)
+
+
+def intake_stated_reason(bodies) -> str | None:
+    """The most recent reason stated on the card, or None.
+
+    An escalation with no reason on it is a card nobody can act on, and the
+    reason almost always already exists — the critic's unclassified alert, or
+    the routing verdict. This finds the newest one and hands it on verbatim.
+    Anchored at the START of a body, like every other marker read in this
+    pipeline: a notice that QUOTES a tag is not that tag.
+    """
+    for body in reversed(list(bodies or ())):
+        text = (body or "").lstrip()
+        if text.startswith(_STATED_REASON_MARKERS):
+            return text.strip()
+    return None
+
+
+def intake_escalation_note(identifier: str, minutes: float, reason: str | None) -> str:
+    """What the card carries into the CEO's queue."""
+    days = minutes / 1440
+    return (
+        f"🚨 {INTAKE_AGED_TAG}: {identifier} has sat in Intake for "
+        f"{days:.1f} days — past the {INTAKE_MAX_AGE_MINUTES // 60}-hour window "
+        f"the lane contract gives it — with nothing happening to it. Moved to "
+        f"**{ESCALATED_STATE}**, the queue you already open.\n\n"
+        "**Why you are seeing it:** Intake's exit is a classification, and no "
+        "classification arrived. This is a move rather than a report on "
+        "purpose — about 480 consecutive green sweeps once printed, in plain "
+        "English, the exact reason five cards were frozen, and nobody read "
+        "one. A report is a record; a move is a gate.\n\n"
+        f"**What is already on the card:**\n\n{reason or NO_STATED_REASON}\n\n"
+        "**What happens next:** move it back to Intake once it is worth "
+        "classifying and the groomer will sequence it, or answer it here."
+    )
+
+
+def escalate_aged_intake() -> set[str]:
+    """Move Intake cards past INTAKE_MAX_AGE_MINUTES into Green Light (DRE-2687).
+
+    The lane the whole wave is built around had no timer on it at all: nothing
+    swept Intake, so "Intake must not become the new Backlog" was a hope. This
+    is the gate that makes it a rule, and it MOVES the card — into the CEO's
+    existing "needs you" queue, carrying whatever reason is already stated on
+    it — because the wave exists on the evidence that recording is not
+    enforcing.
+
+    Idempotent BY CONSTRUCTION, which is the second reason a move beats a
+    report: an escalated card is no longer in Intake, so no marker, tag or
+    comment count is needed to stop it escalating twice. `cmd_advance` is
+    guarded on the from-lane, so a card a human moved mid-sweep is left alone.
+
+    Oldest first, capped per sweep (INTAKE_ESCALATION_CAP). The cap holds the
+    remainder in Intake — still the oldest, so the next sweep takes them. It
+    may hold a card; it may not forget one.
+
+    NO REPO FILTER, deliberately, and it has two consequences worth stating.
+    An Intake card has no `repo:` label yet — assigning one is what Planning
+    does — so filtering by repo would make this fire on nothing at all
+    (flag_stalled_planning is unfiltered for the same reason). But every
+    product repo's sweep reads the same board, so the effective rate across the
+    fleet is a multiple of the per-sweep cap, and two sweeps landing together
+    can both post the note before either move lands. The move itself never
+    doubles — cmd_advance is guarded on the from-lane — so the cost of the race
+    is a duplicated comment on a card that has just left the lane. Suppressing
+    the second one permanently would be worse: a card a human returns to Intake
+    must be able to age out again.
+
+    Hand-built cards are skipped on DRE-2524's rule: no classification is
+    coming from the pipeline for work a person is doing by hand, so time spent
+    in Intake is not a strand.
+
+    Returns the identifiers escalated this sweep.
+    """
+    escalated: set[str] = set()
+    aged = []
+    for card in active_cards(INTAKE_LANE):
+        if card["state"]["name"] != "Intake":
+            continue  # this rule speaks for one lane only
+        if hand_built(card):
+            print(
+                f"intake: {card['identifier']} is labeled '{HAND_BUILT_LABEL}' — "
+                "the pipeline is not classifying this card, so time spent in "
+                "Intake is not a strand"
+            )
+            continue
+        age = age_minutes(card["updatedAt"])
+        if age >= INTAKE_MAX_AGE_MINUTES:
+            aged.append((age, card))
+    aged.sort(key=lambda pair: pair[0], reverse=True)  # oldest first
+    for age, card in aged[:INTAKE_ESCALATION_CAP]:
+        ident = card["identifier"]
+        try:
+            reason = intake_stated_reason(linear_ops.comment_bodies(ident))
+        except linear_ops.LinearError as e:
+            # An unreadable card is not a card with no reason (DRE-2034): say
+            # so on the escalation rather than claiming nothing was ever said.
+            print(f"ERROR: intake: could not read {ident}'s comments: {e}", file=sys.stderr)
+            reason = None
+        try:
+            # The reason is posted BEFORE the move (critic_score.escalate's
+            # rule): a move that then fails still leaves the reason on the card.
+            linear_ops.cmd_comment(ident, intake_escalation_note(ident, age, reason))
+            linear_ops.cmd_advance(ident, ESCALATED_STATE, "Intake")
+        except linear_ops.LinearError as e:
+            # A move that did not happen NEVER reads as done: recorded as a
+            # write failure, which exits the sweep red for medic.
+            _write_failures.append(f"{ident} intake escalation: {e}")
+            print(
+                f"ERROR: failed to escalate {ident} out of Intake: {e}",
+                file=sys.stderr,
+            )
+            continue
+        escalated.add(ident)
+        print(f"intake: {ident} aged out ({age / 1440:.1f}d) — moved to {ESCALATED_STATE}")
+    held_back = len(aged) - len(aged[:INTAKE_ESCALATION_CAP])
+    if held_back:
+        print(
+            f"intake: {held_back} more card(s) past the window, held for the "
+            f"next sweep (cap {INTAKE_ESCALATION_CAP}/sweep)"
+        )
+    return escalated
 
 
 # --- branch ownership: ONE definition, three named questions (DRE-2426) ------
@@ -4002,6 +4191,22 @@ def main(
         # card flagged this very sweep is skipped below (its fetched labels
         # predate the hold label the watchdog just added).
         flagged = flag_stranded()
+        # The Intake gate (DRE-2687). Full sweeps only: the event hooks run
+        # the dependency gate alone, and moving cards on every merge is not a
+        # code path anybody asked for one on. Its own try, like the backstops
+        # above — an Intake read that fails must not cost the sweep the rest
+        # of its work.
+        try:
+            escalate_aged_intake()
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
+        except linear_ops.LinearError as e:
+            # An unreadable Intake is not an empty Intake (DRE-2034): recorded
+            # as a read failure — the sweep finishes its other work and still
+            # exits red, so medic sees it and the next sweep retries.
+            _read_failures.append(f"intake: {e}")
+            print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
     mine = [c for c in active_cards() if card_repo(c) == REPO_SLUG]
     epics = repo_epics(mine)
     if not promote_only:

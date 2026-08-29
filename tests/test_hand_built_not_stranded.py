@@ -299,29 +299,46 @@ _WATCHDOG_OWNERS = {
     "flag_stranded", "flag_stalled_planning", "main", "_flag_hand_built_idle",
 }
 
+#: The Intake gate (DRE-2687) reads hand-built and NOT held, and the difference
+#: is the point of the lane. Hand-built means no classification is coming from
+#: the pipeline, so time spent in Intake is not a strand — the same exemption
+#: every other member of this family honours. `needs-human` is the opposite
+#: case: it says a person owes the card an action, and a card in Intake is
+#: sitting where nobody looks, so the escalation MOVES it into the queue people
+#: actually open rather than leaving it labelled and invisible. Skipping a held
+#: card there would rebuild the hole the gate exists to close, one label wide.
+_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {"escalate_aged_intake"}
+
 
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     """Structural guard, not a sentinel: if a later change wires hand-built
     into a PR-keyed repair path, this says so.
 
-    Three readers in the "would the pipeline start or restart an agent on this
+    Four readers in the "would the pipeline start or restart an agent on this
     card" family: flag_stranded (the alarm), flag_stalled_planning (the same
-    alarm for the Planning lane, DRE-2736) and main (the no-PR dispatch the
-    alarm was reporting on). Every PR-level backstop stays label-blind.
+    alarm for the Planning lane, DRE-2736), escalate_aged_intake (the same
+    question for Intake, DRE-2687) and main (the no-PR dispatch the alarm was
+    reporting on). Every PR-level backstop stays label-blind.
 
-    The fourth reader is the other direction, and it is why the guard exists
+    The fifth reader is the other direction, and it is why the guard exists
     rather than a bare count: _flag_hand_built_idle (DRE-2682) fires ONLY on
     hand-built work — the alarm that replaces what this label suppresses. A
     label that switches off the only thing which would say the work had
     stopped, with nothing put in its place, is what left DRE-2655's finished
     work invisible on a pushed branch for nineteen hours.
     """
-    assert _call_owners("hand_built") == _WATCHDOG_OWNERS
+    assert _call_owners("hand_built") == _HAND_BUILT_OWNERS
 
 
 def test_the_owner_sweep_can_actually_see_a_call():
-    """Guard the guard: a detector that matches nothing would pass forever."""
+    """Guard the guard: a detector that matches nothing would pass forever.
+
+    `held` also pins the other half of the Intake gate's decision — it is NOT
+    in this set, because a `needs-human` card in Intake is exactly a card that
+    belongs in the queue a human opens (see _HAND_BUILT_OWNERS).
+    """
     assert _call_owners("held") == _WATCHDOG_OWNERS
+    assert "escalate_aged_intake" not in _call_owners("held")
 
 
 # --------------------------------------------------------------------------
