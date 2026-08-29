@@ -319,6 +319,63 @@ class BudgetTest(unittest.TestCase):
         # runs three PR legs. The job cap must cover a slow-but-honest run.
         self.assertGreaterEqual(_job(_doc()).get("timeout-minutes", 0), 90)
 
+    def test_the_verdict_wait_covers_the_critics_own_wall_clock(self):
+        """The driver may not give up while the critic is still allowed to
+        be working.
+
+        A verdict wait is not an assertion about the pipeline — it is the
+        driver's answer to "how long can the shipped critic legitimately
+        take?", and qa-review.yml is the only place that answers it. The
+        wait was written when that job's cap was 25 minutes; DRE-2466
+        raised the cap to 65 (attempt 1 + the mandatory backoff + the
+        retry is 42.8 min on its own) and this default stayed behind. A
+        review that takes the retry path then CANNOT land inside the
+        driver's wait, so the harness reports FAIL on a healthy pipeline —
+        run 33274348041, where gate_paths' named leg timed out with the PR
+        untouched, the gate's own waiting-for-human state posted, and
+        nothing the scenario asserts broken.
+
+        Read from the workflow, so raising that cap again re-opens this
+        test instead of silently re-opening the gap.
+        """
+        from harness import framework as hf
+
+        qa = yaml.safe_load(
+            (WORKFLOW.parent / "qa-review.yml").read_text()
+        )
+        budget = qa["jobs"]["review"]["timeout-minutes"] * 60
+        wait = hf.HarnessContext(gh=None, repo=SANDBOX, run_id="x").verdict_timeout
+        self.assertGreaterEqual(
+            wait, budget,
+            f"the driver waits {wait:.0f}s for a verdict the critic job has "
+            f"{budget:.0f}s to produce — a slow-but-honest review is reported "
+            f"as a pipeline failure",
+        )
+
+    def test_the_job_cap_holds_the_longest_wait_after_a_wasted_one(self):
+        """A cancelled job proves nothing and stamps nothing.
+
+        The cap is not a sum of worst cases (it never was — five verdict
+        waits exceeded it even at 25 minutes each). It has to hold the
+        shape of a real bad day: one earlier scenario burns a full verdict
+        wait, and gate_paths still needs its longest single chain (a
+        verdict wait plus the merge wait that follows it). Below that, a
+        run that would have FAILED honestly is cancelled at the cap
+        instead — and the release-gate stamp, which runs on
+        `success() || failure()`, never posts at all.
+        """
+        from harness import framework as hf
+
+        ctx = hf.HarnessContext(gh=None, repo=SANDBOX, run_id="x")
+        needed = (2 * ctx.verdict_timeout + ctx.merge_timeout) / 60
+        cap = _job(_doc()).get("timeout-minutes", 0)
+        self.assertGreaterEqual(
+            cap, needed,
+            f"timeout-minutes: {cap} cannot hold one wasted verdict wait "
+            f"plus gate_paths' longest chain ({needed:.0f} min) — the run is "
+            f"cancelled mid-scenario instead of failing with a reason",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
