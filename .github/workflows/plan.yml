@@ -707,7 +707,7 @@ jobs:
       # workspace, and the portal deliberately never enters this one.
       - name: Plan artifact — upload source
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
           path: ${{ runner.temp }}/plan-artifact.md
@@ -1014,7 +1014,7 @@ jobs:
       # when no portal is configured (console-honesty rule 2: the run says
       # where it is rather than pointing at a URL that does not resolve).
       - name: Plan artifact — upload build output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plan-artifact-${{ github.event.client_payload.identifier }}
           path: |
