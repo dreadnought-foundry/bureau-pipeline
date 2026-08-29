@@ -1,0 +1,134 @@
+[
+  {
+    "actor": "smeed652",
+    "conclusion": null,
+    "created_at": "2026-08-29T03:52:34Z",
+    "display_title": "Agent Fix",
+    "event": "workflow_dispatch",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33232467097",
+    "id": 33232467097,
+    "status": "in_progress",
+    "updated_at": "2026-08-29T03:52:39Z"
+  },
+  {
+    "actor": "agent-bureau-bot[bot]",
+    "conclusion": "skipped",
+    "created_at": "2026-08-29T03:32:16Z",
+    "display_title": "feat(DRE-2721): two critics, one before you read it, one after you approve it",
+    "event": "issue_comment",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33231646316",
+    "id": 33231646316,
+    "status": "completed",
+    "updated_at": "2026-08-29T03:32:18Z"
+  },
+  {
+    "actor": "agent-bureau-qa-bot[bot]",
+    "conclusion": "cancelled",
+    "created_at": "2026-08-29T03:26:47Z",
+    "display_title": "feat(DRE-2721): two critics, one before you read it, one after you approve it",
+    "event": "issue_comment",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33231413617",
+    "id": 33231413617,
+    "status": "completed",
+    "updated_at": "2026-08-29T03:32:17Z"
+  },
+  {
+    "actor": "agent-bureau-bot[bot]",
+    "conclusion": "cancelled",
+    "created_at": "2026-08-29T03:03:37Z",
+    "display_title": "feat(DRE-2721): two critics, one before you read it, one after you approve it",
+    "event": "issue_comment",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33230448792",
+    "id": 33230448792,
+    "status": "completed",
+    "updated_at": "2026-08-29T03:26:48Z"
+  },
+  {
+    "actor": "agent-bureau-qa-bot[bot]",
+    "conclusion": "success",
+    "created_at": "2026-08-29T03:02:25Z",
+    "display_title": "feat(DRE-2721): two critics, one before you read it, one after you approve it",
+    "event": "issue_comment",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33230398428",
+    "id": 33230398428,
+    "status": "completed",
+    "updated_at": "2026-08-29T03:32:18Z"
+  },
+  {
+    "actor": "agent-bureau-bot[bot]",
+    "conclusion": "skipped",
+    "created_at": "2026-08-29T02:56:14Z",
+    "display_title": "feat(DRE-2682): report the work that never became a pull request",
+    "event": "issue_comment",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33230150506",
+    "id": 33230150506,
+    "status": "completed",
+    "updated_at": "2026-08-29T02:56:17Z"
+  },
+  {
+    "actor": "agent-bureau-qa-bot[bot]",
+    "conclusion": "cancelled",
+    "created_at": "2026-08-29T02:54:48Z",
+    "display_title": "feat(DRE-2682): report the work that never became a pull request",
+    "event": "issue_comment",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33230096718",
+    "id": 33230096718,
+    "status": "completed",
+    "updated_at": "2026-08-29T02:56:15Z"
+  },
+  {
+    "actor": "agent-bureau-qa-bot[bot]",
+    "conclusion": "success",
+    "created_at": "2026-08-29T02:48:20Z",
+    "display_title": "feat(DRE-2721): two critics, one before you read it, one after you approve it",
+    "event": "issue_comment",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33229848642",
+    "id": 33229848642,
+    "status": "completed",
+    "updated_at": "2026-08-29T03:03:38Z"
+  },
+  {
+    "actor": "github-actions[bot]",
+    "conclusion": "cancelled",
+    "created_at": "2026-08-29T02:40:04Z",
+    "display_title": "Agent Fix",
+    "event": "workflow_dispatch",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33229525670",
+    "id": 33229525670,
+    "status": "completed",
+    "updated_at": "2026-08-29T02:54:49Z"
+  },
+  {
+    "actor": "github-actions[bot]",
+    "conclusion": "cancelled",
+    "created_at": "2026-08-29T02:36:55Z",
+    "display_title": "Agent Fix",
+    "event": "workflow_dispatch",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33229394509",
+    "id": 33229394509,
+    "status": "completed",
+    "updated_at": "2026-08-29T02:40:08Z"
+  },
+  {
+    "actor": "github-actions[bot]",
+    "conclusion": "cancelled",
+    "created_at": "2026-08-29T02:36:25Z",
+    "display_title": "Agent Fix",
+    "event": "workflow_dispatch",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33229375175",
+    "id": 33229375175,
+    "status": "completed",
+    "updated_at": "2026-08-29T02:36:58Z"
+  },
+  {
+    "actor": "github-actions[bot]",
+    "conclusion": "cancelled",
+    "created_at": "2026-08-29T02:36:04Z",
+    "display_title": "Agent Fix",
+    "event": "workflow_dispatch",
+    "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/33229360165",
+    "id": 33229360165,
+    "status": "completed",
+    "updated_at": "2026-08-29T02:36:27Z"
+  }
+]

@@ -116,6 +116,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
+import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
@@ -3689,6 +3690,142 @@ def report_break_glass() -> None:
     except Exception as exc:  # noqa: BLE001 — a KPI read never fails the sweep
         print(break_glass.count_line(None, None, error=str(exc)))
 
+#: How far back the eviction report looks. Wider than the sweep's own 15
+#: minutes on purpose (GitHub's cron delivers sweeps 78-100 minutes apart in
+#: practice), so a dropped verdict is named at least once rather than falling
+#: between two ticks. A run named twice costs a log line; one never named is
+#: the DRE-2810 stall.
+FIX_EVICTION_WINDOW_MIN = 180
+
+
+def report_fix_concurrency(workflows: str = _WORKFLOWS_DIR) -> None:
+    """Audit THIS repo's agent-fix stub on every full sweep (DRE-2810).
+
+    The concurrency group is written in each consumer repo's stub, not in the
+    reusable workflow, so "every stub in the fleet carries the grouping" cannot
+    be answered from one repository. It can be answered in every repository, on
+    the sweep that already runs there: the stub is in the checkout this sweep
+    is standing in.
+
+    A stub that still groups on the PR alone is a WARN, not a failure. The
+    condition is latent — it costs nothing until a critic returns a verdict
+    while a fix run is finishing — and taking a fleet of sweeps red over a
+    stub only that repo's own PR can change would be an alarm people learn to
+    ignore (standards: WARN at the threshold, CRITICAL when it breaks).
+    """
+    try:
+        problems = fix_concurrency.audit_workflows_dir(workflows)
+    except Exception as exc:  # noqa: BLE001 — a report never fails the sweep
+        print(f"fix-concurrency: UNKNOWN — could not audit {workflows} ({exc})")
+        return
+    if not problems:
+        print(
+            "fix-concurrency: this repo carries no agent-fix stub — nothing "
+            "to check."
+        )
+        return
+    for name, found in sorted(problems.items()):
+        if not found:
+            print(
+                f"fix-concurrency: {name} groups Agent Fix runs by PR and "
+                "commenter — a bot notice cannot evict a pending "
+                "REQUEST_CHANGES trigger."
+            )
+            continue
+        for line in found:
+            print(f"fix-concurrency: WARN — {line}")
+
+
+def _fix_run_job_count(run_id) -> int | None:
+    """How many jobs GitHub listed for a run. None when unreadable — never 0,
+    which is the very fact the caller is looking for."""
+    args = ("api", f"repos/{REPO}/actions/runs/{run_id}/jobs", "--jq", ".total_count")
+    out, detail = _actions_read(args)
+    if detail is not None:
+        _note_actions_read_failure(args, detail)
+        return None
+    try:
+        return int((out or "").strip())
+    except ValueError:
+        return None
+
+
+def report_evicted_fix_runs(now: str | None = None) -> None:
+    """Name every Agent Fix run cancelled before it started a job (DRE-2810).
+
+    A `cancelled` Agent Fix run has two meanings and GitHub records them
+    identically: a duplicate dispatch nobody was waiting on, and a
+    REQUEST_CHANGES verdict evicted from the concurrency queue by a run that
+    went on to skip. The second one stalls a PR indefinitely with every run
+    reporting success, and on PR #199 it read as the first.
+
+    The actor tells them apart — on an `issue_comment` run it is the commenter
+    — so a run triggered by the qa-bot and cancelled before any job started is
+    a verdict that never reached the fix agent, and it is reported as one.
+
+    This is a report, not a repair: the grouping fix is what stops the
+    eviction, and re-dispatching off a log line would race the sweeps that
+    already own PR recovery.
+    """
+    workflow = fix_workflow()
+    args = ("api", f"repos/{REPO}/actions/workflows/{workflow}/runs?per_page=30",
+            "--jq", fix_concurrency.RUNS_JQ)
+    out, detail = _actions_read(args)
+    if detail is not None:
+        # Absence is a third answer, never a failure (DRE-2525): adjudicate it
+        # BEFORE recording, or a repo with no fix stub takes the sweep red.
+        if workflow_on_default_branch(workflow) is False:
+            return
+        _note_actions_read_failure(args, detail)
+        print(
+            "evicted-fix-run: UNKNOWN — the Agent Fix run listing was "
+            "unreadable, so this sweep cannot say whether a verdict trigger "
+            "was evicted."
+        )
+        return
+    try:
+        runs = json.loads(out) if out else None
+    except ValueError:
+        runs = None
+    if not isinstance(runs, list):
+        print(
+            "evicted-fix-run: UNKNOWN — the Agent Fix run listing did not "
+            "parse, so this sweep cannot say whether a verdict trigger was "
+            "evicted."
+        )
+        return
+
+    lost = duplicates = 0
+    for run in runs:
+        if not fix_concurrency.is_cancelled(run):
+            continue
+        try:
+            if age_minutes(run.get("created_at") or "", now) > FIX_EVICTION_WINDOW_MIN:
+                continue
+        except ValueError:
+            continue
+        jobs = _fix_run_job_count(run.get("id"))
+        if jobs is None:
+            print(
+                f"evicted-fix-run: UNKNOWN — could not read the job list for "
+                f"run {run.get('id')}, so whether it ever started is unknown."
+            )
+            continue
+        if not fix_concurrency.never_started(jobs):
+            continue  # cancelled mid-work: a timeout or a human, not an eviction
+        if fix_concurrency.trigger_kind(run) != fix_concurrency.TRIGGER_VERDICT:
+            duplicates += 1
+            continue
+        lost += 1
+        print(fix_concurrency.eviction_report(
+            run, fix_concurrency.evictor_of(run, runs)))
+    print(
+        f"evicted-fix-run: {lost} verdict trigger(s) and {duplicates} no-op "
+        f"trigger(s) were cancelled before starting in the last "
+        f"{FIX_EVICTION_WINDOW_MIN} minutes."
+    )
+
+
 def report_epic_growth(epics: set[str]) -> None:
     """Refresh each active epic's growth artifact on every full sweep (DRE-2739).
 
@@ -4017,6 +4154,12 @@ def main(
     # The epic-growth KPI (DRE-2739), beside the sweep's own numbers: green-lit
     # at N, running M, and any card that joined without the plan moving with it.
     report_epic_growth(epics)
+    # The fix loop's own grouping (DRE-2810), audited where the stub lives —
+    # the only way "every stub in the fleet carries it" is checked rather than
+    # remembered — and any REQUEST_CHANGES trigger GitHub cancelled before it
+    # could start, which otherwise reads as a harmless duplicate dispatch.
+    report_fix_concurrency()
+    report_evicted_fix_runs()
     print(f"sweep complete: {nudges} nudge(s)")
     if _write_failures or _read_failures:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0

@@ -142,6 +142,50 @@ Division of labor:
 | `permissions:` (constrains `GITHUB_TOKEN`) | — (jobs inherit the caller's token scope) |
 | `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on all three promotion paths) | `secrets:`/`inputs:` declarations |
 
+### The agent-fix stub's concurrency group (DRE-2810)
+
+Because the group lives in the stub, this one is not fixable from here — every
+`agent-fix` stub in the fleet must carry it:
+
+```yaml
+concurrency:
+  group: agent-fix-${{ github.event.issue.number || inputs.pr_number }}-${{ (github.event_name != 'issue_comment' || github.event.comment.user.login == 'agent-bureau-qa-bot[bot]') && 'work' || github.event.comment.user.login }}
+  cancel-in-progress: false
+```
+
+Two lanes per PR: everything that can **do work** in one, every no-op trigger
+in its own.
+
+GitHub keeps at most **one pending run per group**, so a newly queued run
+cancels the previously pending one — and the fix agent's own `🔧 Fix attempt N
+pushed` comment is an `issue_comment` on the same PR, which queues an Agent Fix
+run. That run skips at the job gate (wrong author, no verdict), but it has
+already claimed the slot. On PR #199, 2026-08-29, it evicted the pending
+REQUEST_CHANGES trigger one second after it was queued: the PR held a standing
+verdict for 24 minutes with no agent working it, `success` / `cancelled` /
+`skipped` across the three runs, and nothing red for the medic to find.
+
+A qa-bot verdict and every `workflow_dispatch` share the `work` lane on
+purpose. merge-gate routes a merge conflict here by dispatch *before* it looks
+at the verdict, so a conflicted PR that draws REQUEST_CHANGES fires both
+triggers at once; in one lane they serialize as they always have, and in two
+they would put two fix agents on one branch. Two verdicts in a row also share
+it and serialize behind `cancel-in-progress: false`. The qa login is a
+hardcoded site like the two job-ifs — see the rename procedure in
+`tests/test_qa_login_literal_roster.py`.
+
+Audit a repo's stub — no credentials, no network:
+
+```bash
+python3 .bureau-pipeline/scripts/fix_concurrency.py audit   # .github/workflows
+```
+
+The reconcile sweep runs the same audit in every repo it sweeps and prints a
+`fix-concurrency:` line, so drift is checked rather than remembered. Beside it,
+`evicted-fix-run:` names any Agent Fix run GitHub cancelled before it started a
+job whose trigger was a qa-bot verdict — the case that otherwise reads as the
+harmless duplicate-dispatch cancel it shares a conclusion with.
+
 What the product repo still carries:
 
 - `.github/workflows/ci.yml` (+ any other product CI) — product-specific.
@@ -661,7 +705,10 @@ mechanical:
 
 1. Copy another product repo's eight stub workflows; adjust the
    `workflow_run` lists in `medic.yml`/`merge-gate.yml` to include the repo's
-   own CI workflow names.
+   own CI workflow names. Then run
+   `python3 scripts/fix_concurrency.py audit .github/workflows` against the new
+   stubs — the `agent-fix` group is the one a copy gets silently wrong
+   (DRE-2810).
 2. Write `.github/bureau/overrides.md` (and `setup.sh` if agents need an
    environment beyond a bare runner).
 3. Set the six secrets, install both bureau Apps, and register the repo slug
