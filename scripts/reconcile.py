@@ -27,6 +27,17 @@ human-parked card suppresses every repair without raising a hand (DRE-2180
 sat invisible five hours; portico PR #21 thirteen days). Alert-only: never
 dispatches, so the DRE-2024 fix-loop cannot come back.
 
+Unlanded-work watchdog (DRE-2682): every gate here keys off a PULL REQUEST, so
+a pushed branch that never became one is outside the system entirely — DRE-2655
+sat that way nineteen hours with the work finished, found by eye. Any
+`agent/DRE-*` branch carrying commits with no PR ever opened (open, closed or
+merged) is reported on its card after UNLANDED_MINUTES, naming the route out;
+and a hand-built card in a working lane with no branch and no PR is reported
+after HAND_IDLE_MINUTES, which is the alarm that replaces what `hand-built`
+suppresses (DRE-2524). Alert-only, and nothing here reads git authorship — it
+misleads in both directions. The full census of ways work escapes the one path
+is docs/escape-census.md.
+
 Crashed-review recovery (DRE-2282): an open agent PR whose review CRASHED
 (FAILURE review check, no verdict at the head — the critic fails its job on
 purpose and the medic correctly skips it, DRE-1921) gets ONE re-dispatch of
@@ -125,6 +136,9 @@ from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E
 # DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
 # card, who picks it up there, and which of the five may be dispatched at all.
 import routing_verdict  # noqa: E402
+# DRE-2682: ONE source for "this card is finished" — the terminal states the
+# structural sweep already names, read here rather than spelled a fifth time.
+import structural_repair  # noqa: E402
 import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 import verdict_content  # noqa: E402 — the content-binding algorithm
 
@@ -300,6 +314,14 @@ PLANNING_MINUTES = int(
 # hand-built card whose PR wedges is still caught, and once the human opens a
 # PR the sweep shepherds it exactly as before — see
 # test_hand_built_not_stranded.py, which asserts both halves structurally.
+#
+# WHAT SUPPRESSION OWES (DRE-2682). Silencing an alarm without replacing it is
+# how DRE-2655's finished work sat invisible for nineteen hours: the label that
+# says "no agent is coming" also switched off the only thing that would have
+# said the work had stopped. So this label now has a counterpart alarm that
+# measures what hand-built work actually owes — _flag_hand_built_idle, plus the
+# branch half beside it — and the suppression above is legitimate only for as
+# long as that counterpart exists.
 HAND_BUILT_LABEL = "hand-built"
 
 # The sweep's own Todo-redispatch receipt (posted in main() below). It bumps
@@ -2070,6 +2092,50 @@ NO_CHECKS_TAG = "no-checks-watchdog"
 UNOWNED_MINUTES = int(os.environ.get("UNOWNED_MINUTES", "120"))
 UNOWNED_MARKER = "unowned-branch-watchdog"
 
+# --- unlanded-work watchdog (DRE-2682) ---------------------------------------
+# Every gate in this pipeline keys off a PULL REQUEST — CI, the critic, the
+# merge gate and linear-sync all read one — so a pushed branch that never
+# became a PR is outside the system entirely. On 2026-08-22 that is exactly
+# where DRE-2655's finished work sat: three files, tests green, pushed to
+# `agent/DRE-2655-drift-count-out-of-the-pill`, for NINETEEN HOURS, while the
+# card read "In Progress" — true, and carrying no information. An operator
+# found it by eye. The branch was named perfectly and that bought nothing:
+# every gate matches the head ref OF A PULL REQUEST, so the naming convention
+# only starts paying once one exists.
+#
+# The unowned-branch watchdog above covers the MIRROR case (a PR on a branch
+# the pipeline does not own). This covers the branch that never became a PR —
+# and the hand-built card with nothing to point at at all, which is the alarm
+# that REPLACES what HAND_BUILT_LABEL suppresses. DRE-2524 correctly silenced
+# flag_stranded for hand-built work and left nothing measuring the HAND thing
+# (no branch, or a branch with no PR) in place of the FLEET thing (in a
+# working lane with no dispatched run, which for hand-built work is normal).
+#
+# Alert-only, like both backstops above: one comment per branch (or per card
+# for the no-branch half), no state move, no hold label — the hold label would
+# stand down repairs and block promotion forever, and noticing is not parking.
+#
+# AUTHORSHIP IS NEVER THE SIGNAL. DRE-2655's commits were authored
+# `agent-bureau-bot[bot]` and were written by hand; DRE-2694's hand-built work
+# wore the operator's identity. Git authorship misleads in BOTH directions, so
+# nothing here reads it: the facts are the branch, the pull request, and the
+# card's own label.
+#
+# One hour, not thirty minutes: pushing a branch and opening its PR are two
+# deliberate acts a person does minutes apart, and an agent run that pushes
+# opens the PR in the same run — so an hour of a branch with no PR is already
+# a stall, while anything shorter greets a normal push.
+UNLANDED_MINUTES = int(os.environ.get("UNLANDED_MINUTES", "60"))
+# Longer again for the no-branch half: what a hand-built card owes is a
+# person's own work, and a person who picked a card up an hour ago is not
+# late. The clock only runs on a card nothing is happening to — every comment
+# on it bumps updatedAt.
+HAND_IDLE_MINUTES = int(os.environ.get("HAND_IDLE_MINUTES", "180"))
+UNLANDED_TAG = "unlanded-work-watchdog"
+
+#: REPO's default branch, read at most once per sweep (see default_branch()).
+_default_branch: str | None = None
+
 
 def open_prs(limit: int = 50) -> list[dict]:
     """Open PRs with the fields the watchdogs need.
@@ -2286,6 +2352,256 @@ def _flag_one_silent_pr(pr: dict) -> None:
         f"no-checks: PR #{pr['number']} ({pr['headRefName']}) silent "
         f"{silent:.0f}m — reported on {card}"
     )
+
+
+def default_branch() -> str:
+    """REPO's default branch, read at most once per sweep.
+
+    Silent gh() with a `main` fallback: this helper HAS its own answer, and a
+    wrong base only makes the compare below unreadable, which the caller
+    already treats as "say nothing this sweep".
+    """
+    global _default_branch
+    if _default_branch is None:
+        _default_branch = gh("api", f"repos/{REPO}", "--jq", ".default_branch") or "main"
+    return _default_branch
+
+
+def card_branches() -> list[dict] | None:
+    """Every `agent/DRE-*` branch head in REPO — `{name, sha}` each, or None
+    when the listing is unreadable.
+
+    Emitted as JSON LINES (a per-object `--jq`) rather than one array: gh
+    `--paginate` concatenates one array PER PAGE, so a whole-array jq hands
+    back a stream no json.loads can read — and the sweep would then see zero
+    branches on exactly the busy repos this watchdog is for.
+
+    Read LOUDLY (gh_read), and None — never [] — on failure. Those JSON lines
+    are exactly why: an array listing betrays a failed read by parsing to
+    nothing, but a per-object stream makes a 403 and a genuinely branchless
+    repo byte-identical empty stdout. The silent gh() helper would hand both
+    back as [], and _flag_hand_built_idle would then tell a person "no branch,
+    no pull request" about a branch it simply could not see. Same discipline,
+    same reason, as pr_head_refs below (DRE-2034).
+    """
+    try:
+        out = gh_read(
+            "api", f"repos/{REPO}/branches", "--paginate",
+            "--jq", ".[] | {name: .name, sha: .commit.sha}",
+        )
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"unlanded watchdog: branch listing failed: {e}")
+        print(
+            f"ERROR: unlanded watchdog: branch listing failed: {e}",
+            file=sys.stderr,
+        )
+        return None
+    found: list[dict] = []
+    for line in (out or "").splitlines():
+        try:
+            branch = json.loads(line)
+        except ValueError:
+            continue  # a partial page or an error body — not a branch
+        if not isinstance(branch, dict):
+            continue
+        name = branch.get("name") or ""
+        if card_branch(name) and branch_card(name):
+            found.append(branch)
+    return found
+
+
+def pr_head_refs() -> set[str] | None:
+    """Head refs of every PR in ANY state, or None when the listing is unreadable.
+
+    `--state all`, not `open`, is the load-bearing part: a squash-merged
+    branch stays "ahead" of the default branch forever, so an open-only
+    listing would report every merged branch that was not deleted. None
+    (never an empty set) on an unreadable answer — a blip must not read as
+    "nothing here has a pull request" (DRE-2034).
+    """
+    try:
+        raw = gh(
+            "pr", "list", "--repo", REPO, "--state", "all",
+            "--limit", "100", "--json", "headRefName",
+        )
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"unlanded watchdog: PR listing failed: {e}")
+        print(f"ERROR: unlanded watchdog: PR listing failed: {e}", file=sys.stderr)
+        return None
+    try:
+        prs = json.loads(raw) if raw else None
+    except ValueError:
+        prs = None
+    if not isinstance(prs, list):
+        return None
+    return {pr.get("headRefName") or "" for pr in prs if isinstance(pr, dict)}
+
+
+def flag_unlanded_work() -> None:
+    """DRE-2682 watchdog: report work that never became a pull request.
+
+    Two halves over one branch listing and one PR listing:
+
+      (A) an `agent/DRE-*` branch carrying commits that are not on the default
+          branch, with NO pull request ever opened for it — open, closed or
+          merged — is reported on its card after UNLANDED_MINUTES. This is the
+          hole DRE-2655 fell through: nineteen hours of finished work on a
+          correctly-named branch that no gate could see.
+      (C) a HAND-BUILT card in a working lane with nothing to point at — no
+          card branch, no PR — is reported after HAND_IDLE_MINUTES
+          (_flag_hand_built_idle). That is the alarm which replaces what the
+          label suppresses; without it, routing work to a hand-built lane
+          makes DRE-2655's failure mode more common, not less.
+
+    Both halves only ever ADD a notice, so every unreadable answer means "say
+    nothing this sweep" rather than "nothing has a PR": the PR listing, the
+    BRANCH listing, the per-branch confirm, the compare and the card read each
+    fail closed. A per-branch failure is recorded on the fail-loudly rail and
+    the rest of the sweep continues (the DRE-2035 isolation discipline).
+    """
+    pr_refs = pr_head_refs()
+    if pr_refs is None:
+        print("unlanded: PR listing unreadable — reporting nothing this sweep")
+        return  # fail closed: a blip is not "nothing has a pull request"
+    branches = card_branches()
+    if branches is None:
+        print("unlanded: branch listing unreadable — reporting nothing this sweep")
+        return  # fail closed: a blip is not "this card has no branch"
+    for branch in branches:
+        try:
+            _flag_one_unlanded_branch(branch, pr_refs)
+        except Exception as e:  # noqa: BLE001 — isolate one branch, sweep the rest
+            _write_failures.append(
+                f"unlanded watchdog on branch {branch.get('name')}: {e}"
+            )
+            print(
+                f"ERROR: unlanded watchdog on branch {branch.get('name')}: {e}",
+                file=sys.stderr,
+            )
+    _flag_hand_built_idle(branches, pr_refs)
+
+
+def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str]) -> None:
+    """Evaluate ONE card branch and report it if no PR was ever opened."""
+    name, sha = branch["name"], branch.get("sha") or ""
+    if name in pr_refs or not sha:
+        return  # a PR exists (any state) — every other backstop applies
+    pulls = gh("api", f"repos/{REPO}/commits/{sha}/pulls", "--jq", "[.[].number]")
+    if not pulls:
+        return  # unreadable — a 403 is not "no PR was ever opened" (DRE-2034)
+    try:
+        if json.loads(pulls):
+            return  # a PR older than the listing window — confirmed, not guessed
+    except ValueError:
+        return
+    base = default_branch()
+    raw = gh(
+        "api", f"repos/{REPO}/compare/{base}...{name}",
+        "--jq", "{ahead: .ahead_by, last: ([.commits[].commit.committer.date] | last)}",
+    )
+    try:
+        compared = json.loads(raw) if raw else None
+    except ValueError:
+        compared = None
+    if not isinstance(compared, dict):
+        return  # unreadable — never alarm on a fabricated empty
+    ahead, last = compared.get("ahead") or 0, compared.get("last")
+    if ahead < 1 or not last:
+        return  # nothing of its own on this branch — an old or empty ref
+    idle = age_minutes(last)
+    if idle < UNLANDED_MINUTES:
+        return  # still moving; the PR may be seconds away
+    card = branch_card(name)
+    try:
+        state = card_state(card)
+    except Exception as e:  # noqa: BLE001 — any Linear/transport error -> defer
+        print(f"unlanded: could not read {card}: {e} — deferring to a later sweep")
+        return
+    if state in structural_repair.TERMINAL_STATES:
+        return  # a finished card's leftover branch is route F/I, not this alarm
+    # Keyed on the BRANCH, not the card: a card whose first attempt was
+    # reported must still speak when a second branch strands the same way.
+    marker = f"{UNLANDED_TAG} branch {name}:"
+    if any(marker in b for b in linear_ops.comment_bodies(card)):
+        return  # said once, and once is the point
+    linear_ops.cmd_comment(card, (
+        f"🚨 {marker} the branch `{name}` carries {ahead} commit(s) that are "
+        f"not on `{base}`, and no pull request has ever been opened for it — "
+        f"so nothing in the pipeline can see this work. CI, the critic, the "
+        f"merge gate and the Linear sync all key off a pull request; a branch "
+        f"on its own passes through no gate at all and closes no card. Last "
+        f"commit {idle:.0f} minutes ago.\n\n"
+        f"Where it goes from here: open a pull request from `{name}` into "
+        f"`{base}`. Hand-built work lands exactly the way dispatched work "
+        f"does — the branch, then the pull request, then the same checks and "
+        f"the same critic verdict. What changes is who writes the code, never "
+        f"how it lands.\n\n"
+        f"_Posted once per branch. Opening the pull request ends it._"
+    ))
+    print(
+        f"unlanded: branch {name} has {ahead} commit(s), no PR, idle "
+        f"{idle:.0f}m — reported on {card}"
+    )
+
+
+def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
+    """The alarm that replaces what HAND_BUILT_LABEL suppresses (DRE-2682).
+
+    A hand-built card in Todo / In Progress with NO card branch and NO pull
+    request has nothing to point at: the board says work is happening and
+    there is no artifact anywhere that agrees. flag_stranded cannot say so —
+    it is silenced on this label by design and correctly, because the thing it
+    measures (no dispatched run receipt) is normal here. So this measures what
+    hand-built work actually owes, and says what is missing rather than
+    calling the card "stalled".
+
+    A card with a branch is the other half's business (it names the specific
+    gap), a card with a PR belongs to the PR-level backstops, and a card
+    without the label belongs to flag_stranded — one alarm per card, always
+    the one that knows what is wrong.
+    """
+    with_branch = {branch_card(b["name"]) for b in branches}
+    with_pr = {branch_card(ref) for ref in pr_refs if branch_card(ref)}
+    for card in active_cards(WATCHDOG_LANES):
+        ident = card["identifier"]
+        try:
+            if not hand_built(card):
+                continue  # a dispatched card with no run is flag_stranded's case
+            if held(card):
+                continue  # already in a human's queue — never spam
+            if card_repo(card) != REPO_SLUG:
+                continue  # that repo's own sweep sees its own branches
+            if ident in with_branch or ident in with_pr:
+                continue  # there IS something to point at
+            if age_minutes(card["updatedAt"]) < HAND_IDLE_MINUTES:
+                continue  # a person picked this up recently — not a stall
+            marker = f"{UNLANDED_TAG} no branch:"
+            if any(marker in b for b in linear_ops.comment_bodies(ident)):
+                continue  # reported once already — idempotent forever
+            state, idle = card["state"]["name"], age_minutes(card["updatedAt"])
+            linear_ops.cmd_comment(ident, (
+                f"🚨 {marker} this card has sat in {state} for {idle:.0f} "
+                f"minutes with nothing to point at: no branch, no pull "
+                f"request. It is labelled '{HAND_BUILT_LABEL}', so no "
+                f"dispatched run is coming by design — which also means the "
+                f"stranded-card watchdog stays silent on it (DRE-2524). This "
+                f"notice is what stands in its place.\n\n"
+                f"What is missing, in order: a branch named "
+                f"`agent/{ident}-<slug>`, then a pull request from it. "
+                f"Hand-built work meets the same checks and the same critic "
+                f"verdict as dispatched work — the only difference is who "
+                f"writes the code. If the work is deliberately paused, say so "
+                f"on the card, so the pause is a decision rather than a "
+                f"silence.\n\n"
+                f"_Posted once per card._"
+            ))
+            print(
+                f"unlanded: {ident} is hand-built, in {state} {idle:.0f}m with "
+                f"no branch and no PR — reported"
+            )
+        except Exception as e:  # noqa: BLE001 — isolate one card, sweep the rest
+            _write_failures.append(f"unlanded watchdog on {ident}: {e}")
+            print(f"ERROR: unlanded watchdog on {ident}: {e}", file=sys.stderr)
 
 
 def fix_approved_but_red() -> None:
@@ -3465,6 +3781,7 @@ def main(
             retrigger_dead_heads,
             flag_no_checks_prs,
             flag_unowned_prs,
+            flag_unlanded_work,
             fix_approved_but_red,
             retry_dead_fix_runs,
             restart_answered_blockers,
