@@ -760,15 +760,29 @@ def drain_retiring_lanes() -> None:
     this drains into it, every sweep, until the board catches up.
 
     Order matters and is the reason this exists at all: the code stops writing
-    the lane first, the sweep drains it second, and only then is archiving the
-    state safe. Archiving first would fail every in-flight write instead.
+    the lane first, the sweep drains it second, the board archives the state
+    third, and the contract entry is deleted fourth. Archiving before the drain
+    would fail every in-flight write instead.
+
+    NOTHING IS RETIRING TODAY, and that is deliberate rather than neglect
+    (DRE-2818): the operator confirmed DRE-2726's drain was finished, Linear
+    archived both states, and the two entries were deleted — a retiring entry
+    whose state Linear already dropped is itself drift, and
+    `board.retired_entry_is_deleted` fails on it. This function stays because
+    it is step two of a protocol the contract still defines: `retiring` remains
+    a validated lane status with a mandatory board step, and the Phase-3 rule
+    `board.retiring_lane_is_empty` names this drain as its prerequisite. With
+    an empty retiring set it returns before it reads anything from Linear, and
+    tests/test_lane_fold_in_review.py pins both that inertness and — against an
+    injected retiring lane, since the real file no longer has one — the
+    behaviour it will have on the next retirement.
 
     Idempotent by construction — `cmd_advance` moves a card only while it is
     still in the lane named, so a second sweep finds nothing and a race between
     two repos' sweeps costs one no-op.
     """
     draining = {
-        lane["name"]: lane["replaced_by"]
+        lane["name"]: lane
         for lane in lane_contract.lanes(status="retiring")
         if lane.get("replaced_by")
     }
@@ -781,16 +795,17 @@ def drain_retiring_lanes() -> None:
     for card in stranded:
         ident = card["identifier"]
         was = card["state"]["name"]
-        to = draining.get(was)
-        if to is None:
+        lane = draining.get(was)
+        if lane is None:
             continue  # not a retiring lane: the state filter is the query's job
+        to = lane["replaced_by"]
         try:
             linear_ops.cmd_advance(ident, to, was)
             linear_ops.cmd_comment(
                 ident,
-                f"🧹 Reconcile: the '{was}' lane is being retired (DRE-2726) and "
-                f"nothing writes to it any more — moved to '{to}', which is where "
-                "the work now continues.",
+                f"🧹 Reconcile: the '{was}' lane is being retired "
+                f"({lane['retired_by']}) and nothing writes to it any more — "
+                f"moved to '{to}', which is where the work now continues.",
             )
         except Exception as e:
             raise ReconcileWriteError(f"{ident} drain {was}->{to}: {e}") from e
