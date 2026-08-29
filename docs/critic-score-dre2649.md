@@ -38,10 +38,13 @@ Both numbers, from the same run:
 | Contaminated dimension included | 14 | 1 | 36 |
 
 The contaminated rows would have added **six agreements and no
-disagreements** — a clean 6/6 on every row it could answer. That is the entire
-difference between "the critic agrees with the human 89% of the time" and what
-this run actually found, and it is why the exclusion is enforced in code rather
-than remembered: `scripts/critic_score.py` refuses to score a dimension the
+disagreements** — a clean 6/6 on every row it could answer, and every one of
+them decided by a label or a title convention planning had already written.
+Counted that way the headline reads 14 of 15; counted honestly it is 8 of 9, on
+a set where the critic could not answer two thirds of the questions at all. The
+flattery is not in the percentage — it is in six rows that could never have
+disagreed. That is why the exclusion is enforced in code rather than
+remembered: `scripts/critic_score.py` refuses to score a dimension the
 reference marks unscored, and prints the excluded rows rather than dropping
 them.
 
