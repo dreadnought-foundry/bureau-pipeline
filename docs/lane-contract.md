@@ -75,27 +75,27 @@ _Waiting on: DRE-2721._ | Phase 5 — promised |
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | It carries a verdict.  
-_Waiting on: DRE-2724 writes routing verdicts._ | Phase 5 — promised |
-| **exit** | The dependency gate clears, the WIP cap has room, and the sweep promotes it to Todo.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
+| **entrance** | It carries a routing verdict — one of the five in config/routing-verdicts.json, machine-readable on the card.  
+_Waiting on: the vocabulary exists (DRE-2724); what is still missing is a writer that puts a verdict on EVERY card at planning exit — DRE-2721's second critic._ | Phase 5 — promised |
+| **exit** | The verdict's destination is reached. The sweep promotes a FLEET card to Todo once the dependency gate clears and the WIP cap has room; a human moves a WORKBENCH or OPERATOR card to Todo and works it there; a PARKED card does not leave, and is never reported as stalled.  
+_Waiting on: the sweep already refuses to promote a non-FLEET card (DRE-2724); asserting the transitions needs the history Phase 5 records._ | Phase 5 — promised |
 | **writers** | The planner and mid-epic discovery create here; the sweep and the dead-run cap park here.  
 Permitted writers: `plan.yml`, `mid_epic.py`, `reconcile.py`, `dead_run.py`, `linear_ops.py` | Phase 2 — live |
-| **evidence** | A routing verdict; and, for a child of an epic, an epic that has passed Planning exit.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
+| **evidence** | A routing verdict comment; and, for a child of an epic, an epic that has passed Planning exit.  
+_Waiting on: the marker exists and the sweep reads it (DRE-2724); asserting that every Backlog card carries one needs the writer at planning exit (DRE-2721)._ | Phase 5 — promised |
 
 ### Todo
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | Its verdict is FLEET — the acceptance criteria are ones an agent can satisfy.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
-| **exit** | A dispatched run posts its start receipt, and the card moves to In Progress.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
+| **entrance** | Its verdict names who builds it here: FLEET for a dispatched agent run, WORKBENCH or OPERATOR for a person — marked `hand-built`, which is what already stops the sweep dispatching a competing run or reporting the card as stranded.  
+_Waiting on: the sweep promotes only a FLEET card (DRE-2724); asserting occupancy needs the transition history Phase 5 records._ | Phase 5 — promised |
+| **exit** | A dispatched run posts its start receipt and the card moves to In Progress — or, on a hand-built card, the person working it opens the pull request.  
+_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 | **writers** | The sweep promotes into it; the build run takes cards out of it.  
 Permitted writers: `reconcile.py`, `agent-task.yml`, `linear_ops.py`, `operator` | Phase 2 — live |
-| **evidence** | A FLEET verdict, no unmet blocking relation, and room under the WIP cap.  
-_Waiting on: DRE-2724._ | Phase 5 — promised |
+| **evidence** | A verdict whose destination is this lane, no unmet blocking relation, and — for a FLEET card — room under the WIP cap.  
+_Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 
 ### In Progress
 
@@ -215,7 +215,7 @@ _A lane's writer list is only a contract if something reads the transition log a
 _Waiting on: needs the transition history the Phase-5 front door records._ | Phase 5 — promised |
 | `transition.required_evidence` | Every transition observed carried the evidence the destination lane requires.  
 _The evidence clause is the one that makes occupancy justifiable rather than assumed._  
-_Waiting on: needs routing verdicts (DRE-2724) and the plan artifact gate (DRE-2720) to be writing on every card._ | Phase 5 — promised |
+_Waiting on: the routing verdict exists and is readable (DRE-2724); still needed is the plan artifact gate (DRE-2720) and a writer that stamps every card at planning exit (DRE-2721)._ | Phase 5 — promised |
 
 ## Writers
 
