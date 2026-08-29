@@ -8,6 +8,27 @@
 # job in the system). The repair stage never watches itself — its own
 # failures are the medic's job (self-medic.yml watches "Red-Main Repair").
 #
+# THE LIST IS NOT REMEMBERED (DRE-2820). It used to name "Pipeline Tests"
+# alone, and DRE-2726 shipped the lane-contract harness as its own workflow
+# — so on 2026-08-29 the harness sat red on main for fourteen hours while
+# every Red-Main Repair run concluded `skipped`, including the one three
+# minutes after the failure. Two approved PRs inherited the breakage. Every
+# workflow that validates a commit on main must appear here, and
+# scripts/check_workflow_watchers.py DERIVES that set from the workflow
+# files as a Pipeline Tests step: adding a workflow with no watcher fails
+# CI rather than passing quietly.
+#
+# Premortem (standards/vendor-boundaries.md) on widening the trigger:
+# Q1 actor — a push-to-main run's actor is the merger (qa-bot), a pool bot,
+# `github-actions` (a medic rerun) or a human; the reusable's allowed_bots
+# roster already admits every bot case. Q2 secrets — workflow_run always
+# runs from the default branch with the full store, whatever fired the
+# watched run. Q3 retry/rebase — a second failing workflow on the SAME main
+# sha (tests red and harness red together) queues behind the concurrency
+# lock and then debounces on the repair/<sha> branch record, so two watched
+# workflows still buy exactly one repair. Q4 command limits — none used
+# here. Q5 our own crash — a repair run that dies is the medic's, as before.
+#
 # github.token needs actions:read so the failed run's logs can be fetched
 # for classification (guardrail 2); contents/pull-requests write mirror the
 # agent-task stub — the fix agent authors a branch + PR here.
@@ -15,7 +36,7 @@ name: Red-Main Repair
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests]
+    workflows: [Pipeline Tests, Integration Harness]
     types: [completed]
 
 permissions:
