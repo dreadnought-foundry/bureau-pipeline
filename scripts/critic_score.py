@@ -420,7 +420,7 @@ def score(cards, *, doc: dict | None = None, comments: dict | None = None) -> di
             "observed": None,
             "observed_source": None,
         }
-        if not block.get("scored"):
+        if not is_scored(dimension, doc):
             rows.append({**row, "outcome": "excluded", "why": (
                 f"the {dimension!r} dimension is excluded as contaminated — "
                 f"{block.get('contaminated', '')}")})
