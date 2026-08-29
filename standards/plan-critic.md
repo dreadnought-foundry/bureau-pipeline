@@ -71,10 +71,21 @@ route posts a boundary line when an attempt starts:
 
     plan-cycle: start epic=DRE-2721
 
-and each critic counts its failed rounds from the last of those. Without it a
-re-planned epic inherits a budget it already spent, so its first send-back
-reads as the bound and the plan reaches the CEO with no revision round at
-all — indistinguishable, from the outside, from a normal pass.
+and each critic counts its failed rounds from the last of those — the last one
+the PIPELINE wrote, naming THIS epic. Without it a re-planned epic inherits a
+budget it already spent, so its first send-back reads as the bound and the plan
+reaches the CEO with no revision round at all — indistinguishable, from the
+outside, from a normal pass.
+
+**The round history is only what the pipeline itself wrote.** The line above is
+a real one, and anyone with comment access on an epic can post it. Left
+unchecked, two comments carrying a `SEND_BACK` marker made a critic's real,
+current rejection read as "the budget is already spent" and promoted the
+children to build; one carrying the boundary refunded a budget that had been
+spent, so the plan could circle indefinitely. Both are quiet — nothing a person
+sees looks wrong. So the thread is read with authorship
+(`linear_ops.py dump-comments <EPIC> --with-authors`) and a marker or boundary
+from any other author is ignored. Quoting this page on an epic is inert.
 
 A send-back before approval returns the plan to the planner for one revision.
 A send-back after approval returns the epic to `Green Light` with the findings
@@ -92,7 +103,7 @@ them:
 
     plan-critic: stage=post round=1 result=SEND_BACK collisions=1 — <reason>
 
-    python3 scripts/linear_ops.py dump-comments <EPIC> \
+    python3 scripts/linear_ops.py dump-comments <EPIC> --with-authors \
       | python3 scripts/plan_critic.py rate --stage post
 
 That reads the epic's WHOLE history on purpose: the rate is a measurement
@@ -110,7 +121,7 @@ no plan critic may mint one (`standards/untrusted-content.md`).
 Collisions **caught by the second critic** and collisions **found later** are
 counted separately, so the tripwire is measurable rather than remembered:
 
-    python3 scripts/linear_ops.py dump-comments <EPIC> \
+    python3 scripts/linear_ops.py dump-comments <EPIC> --with-authors \
       | python3 scripts/plan_critic.py collisions
     {"caught_at_review": 1, "found_later": 0}
 

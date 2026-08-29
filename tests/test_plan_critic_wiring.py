@@ -213,6 +213,26 @@ class TheBoundIsWired(unittest.TestCase):
         self.assertGreaterEqual(len(deciders), 3,
                                 "each critic round must decide through plan_critic.py")
 
+    def test_every_decider_reads_an_author_bound_thread(self):
+        """The bound is counted out of markers in the epic's comment thread, so
+        those markers are this gate's credential. A decider fed the plain
+        `dump-comments` shape believes every commenter on the epic equally —
+        which is how two stray comments could spend a budget nobody spent, and
+        one could refund a budget that was. The flag is the difference between
+        a thread with authors and a thread of anonymous text.
+        """
+        deciders = [s for s in steps()
+                    if "plan_critic.py decide" in str(s.get("run") or "")]
+        self.assertTrue(deciders)
+        for s in deciders:
+            run = str(s.get("run"))
+            name = s.get("name")
+            self.assertIn("dump-comments", run, name)
+            self.assertIn("--with-authors", run, name)
+            # ...and the boundary that refunds a budget must name THIS epic,
+            # so the standard's own worked example stays inert elsewhere.
+            self.assertIn("--epic", run, name)
+
     def test_the_job_timeout_leaves_room_for_two_planner_runs_and_two_reviews(self):
         doc = yaml.safe_load(wf_src())
         timeout = doc["jobs"]["plan"]["timeout-minutes"]

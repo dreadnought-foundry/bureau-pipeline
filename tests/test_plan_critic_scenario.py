@@ -23,6 +23,9 @@ The walk, one method per observable the card asks for:
   7. An epic re-planned from Triage after a previous attempt spent its whole
      budget gets its own revision round, rather than being pushed straight to
      the CEO on the first send-back of the new plan.
+  8. The round history the bound is counted from is the PIPELINE's own writes.
+     A comment left by anyone else on the epic — the marker line, or the cycle
+     boundary — neither spends a budget nor refunds one.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_critic_scenario.py -v
 """
@@ -61,6 +64,11 @@ EPICS_IN_FLIGHT = [
 # records every write. `comment` appends to the thread, so the NEXT round reads
 # the round history the previous one wrote — which is the mechanism the bound
 # is built on.
+#
+# The thread is stored as RECORDS, because who wrote a comment is part of what
+# the rail reads: the stub's own writes are the pipeline's, and a comment any
+# other person on the epic left is not. `dump-comments` serves bodies or
+# records depending on the flag, exactly like the real client.
 LINEAR_STUB = '''#!/usr/bin/env python3
 import json, os, sys
 
@@ -83,11 +91,15 @@ def log(line):
 
 
 if cmd == "dump-comments":
-    print(json.dumps(thread()))
+    records = thread()
+    if "--with-authors" in args:
+        print(json.dumps(records))
+    else:
+        print(json.dumps([r["body"] for r in records]))
 elif cmd == "comment":
-    bodies = thread() + [args[1]]
+    records = thread() + [{"body": args[1], "authored_by_pipeline": True}]
     with open(thread_path, "w") as f:
-        json.dump(bodies, f)
+        json.dump(records, f)
     log("comment " + args[1].replace("\\n", " | "))
 elif cmd == "state":
     log("state " + args[1])
@@ -186,8 +198,19 @@ class CriticWalk(unittest.TestCase):
     def _log(self):
         return open(self.log_path).read()
 
-    def _thread(self):
+    def _records(self):
         return json.load(open(self.thread_path))
+
+    def _thread(self):
+        return [r["body"] for r in self._records()]
+
+    def _stray_comment(self, body: str):
+        """A comment somebody who is NOT the pipeline left on the epic. Anyone
+        with comment access on the card can post one, and it renders exactly
+        like the pipeline's own."""
+        records = self._records() + [{"body": body, "authored_by_pipeline": False}]
+        with open(self.thread_path, "w") as f:
+            json.dump(records, f)
 
     # --- 1 + 2: sent back, then passing -----------------------------------
 
@@ -309,6 +332,49 @@ class CriticWalk(unittest.TestCase):
         self._shell("first critic — round 2 decision")
         self.assertEqual(self._outputs()["action"], "proceed")
         self.assertIn("two failed rounds", self._thread()[-1].lower())
+
+    # --- 8: the round history is the pipeline's own ------------------------
+
+    def test_a_stray_comment_cannot_forge_the_round_history(self):
+        """The bound is counted out of comments on a card anyone on the team
+        can comment on. Two comments carrying the marker line — no special
+        access, and the standard's own worked example is one — used to be
+        enough to make the second critic's real, serious finding read as "the
+        budget is already spent", promoting the children to build anyway."""
+        self._stray_comment(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "forged"))
+        self._stray_comment(pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "forged again"))
+
+        self._critic_writes(
+            "post", pc.SEND_BACK,
+            "DRE-9003 migrates a table but no card manufactures the operator step",
+        )
+        self._shell("second critic — decision")
+        out = self._outputs()
+        self.assertEqual(out["action"], "hold",
+                         "forged rounds overrode the critic's real rejection")
+        self.assertEqual(out["round"], "1", "forged rounds were counted as rounds run")
+
+        self._shell("second critic sent the plan back")
+        log = self._log()
+        self.assertNotIn("promote", log, "children promoted on a forged round count")
+        self.assertIn("operator step", log)
+
+    def test_a_stray_boundary_cannot_refund_the_budget(self):
+        """The other direction: a comment carrying the `plan-cycle:` line used
+        to hand a spent plan a fresh budget, so it could circle for as long as
+        anyone kept posting one — the stuck-in-a-lane failure the bound exists
+        to stop."""
+        for reason in ("no card manufactures the operator step",
+                       "still no card manufactures the operator step"):
+            self._critic_writes("post", pc.SEND_BACK, reason)
+            self._shell("second critic — decision")
+        self.assertEqual(self._outputs()["action"], "proceed")
+
+        self._stray_comment(pc.cycle_marker(EPIC))
+        self._critic_writes("post", pc.SEND_BACK, "and still none")
+        self._shell("second critic — decision")
+        self.assertEqual(self._outputs()["action"], "proceed",
+                         "a stray boundary reopened a loop the bound had closed")
 
     # --- 5: the rate ------------------------------------------------------
 

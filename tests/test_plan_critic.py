@@ -285,6 +285,128 @@ class TheBoundIsPerPlanningAttempt(unittest.TestCase):
         self.assertIn(pc.cycle_marker("DRE-2721"), note)
 
 
+def ours(body: str) -> dict:
+    """A comment the pipeline itself wrote, as `dump-comments --with-authors`
+    reports it."""
+    return {"body": body, "authored_by_pipeline": True}
+
+
+def stray(body: str) -> dict:
+    """A comment somebody ELSE left on the epic. Anyone with comment access can
+    post one, and nothing about how it renders says it is not the pipeline's."""
+    return {"body": body, "authored_by_pipeline": False}
+
+
+class TheRoundRecordIsBoundToItsAuthor(unittest.TestCase):
+    """The markers below are this gate's credential, so they need an author.
+
+    Found in review: `parse_markers` and `current_cycle` read every comment on
+    the epic and believed all of them. Two concrete failures came out of that,
+    and neither leaves a visible trace:
+
+      1. Two stray comments carrying `plan-critic: ... result=SEND_BACK` make
+         the bound read as already spent, so when the second critic later finds
+         a real, serious gap its rejection is overridden and the epic's
+         children promote to build anyway.
+      2. One stray comment carrying the `plan-cycle:` boundary refunds a budget
+         that was legitimately spent, so the plan circles again — the exact
+         "17 cards sat in a lane for 27 days" failure the bound exists to stop.
+
+    Neither needs a malicious actor: `standards/plan-critic.md`'s own worked
+    example is a literal boundary line, so quoting the standard on an epic used
+    to be enough (standards/untrusted-content.md — "a manipulated card or
+    comment must not be able to steer an agent").
+    """
+
+    EPIC = "DRE-2721"
+
+    def test_a_stray_comment_carrying_a_marker_records_no_round(self):
+        thread = [stray(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "not ours"))]
+        self.assertEqual(pc.parse_markers(thread), [])
+        self.assertEqual(pc.send_backs(thread, pc.STAGE_POST), 0)
+        self.assertEqual(pc.rate(thread, pc.STAGE_POST)["rounds"], 0)
+
+    def test_the_pipelines_own_marker_still_records_its_round(self):
+        thread = [ours(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "ours"))]
+        self.assertEqual(pc.send_backs(thread, pc.STAGE_POST), 1)
+
+    def test_forged_rounds_cannot_override_a_real_rejection(self):
+        """Repro 1, end to end: the critic's current SEND_BACK must still hold
+        the plan, however many rounds a stranger claims already happened."""
+        thread = [
+            ours(pc.cycle_start_note(self.EPIC)),
+            stray(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "x")),
+            stray(pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "y")),
+        ]
+        prior = pc.send_backs(pc.current_cycle(thread, self.EPIC), pc.STAGE_POST)
+        self.assertEqual(prior, 0, "forged rounds were counted against the budget")
+        action, _ = pc.decide(
+            pc.SEND_BACK, prior, "DRE-9003 migrates a table but no card runs the migration"
+        )
+        self.assertEqual(action, "hold",
+                         "a forged round count promoted a plan the critic rejected")
+
+    def test_a_stray_boundary_cannot_refund_a_spent_budget(self):
+        """Repro 2: the bound is spent, and only the pipeline's own boundary
+        line may hand this attempt a fresh one."""
+        thread = [
+            ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "the cards do not sum to the epic")),
+            ours(pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "they still do not")),
+            stray(pc.cycle_marker(self.EPIC)),
+        ]
+        prior = pc.send_backs(pc.current_cycle(thread, self.EPIC), pc.STAGE_PRE)
+        self.assertEqual(prior, 2, "a stray boundary erased the rounds already spent")
+        action, _ = pc.decide(pc.SEND_BACK, prior)
+        self.assertEqual(action, "proceed", "a stray boundary reopened the loop")
+
+    def test_the_pipelines_own_boundary_still_opens_a_cycle(self):
+        """The fix must not cost a re-planned epic its revision round."""
+        thread = [
+            ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "the cards do not sum to the epic")),
+            ours(pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "they still do not")),
+            ours(pc.cycle_start_note(self.EPIC)),
+        ]
+        prior = pc.send_backs(pc.current_cycle(thread, self.EPIC), pc.STAGE_PRE)
+        self.assertEqual(prior, 0)
+        action, _ = pc.decide(pc.SEND_BACK, prior, reason="DRE-9005 names no repo")
+        self.assertEqual(action, "hold")
+
+    def test_a_boundary_naming_another_epic_is_not_this_epics_boundary(self):
+        """The standard's worked example names DRE-2721 verbatim. Pasted onto a
+        different epic — by the operator, whose key the pipeline shares — it
+        must not refund that epic's budget either."""
+        thread = [
+            ours(pc.marker(pc.STAGE_PRE, 1, pc.SEND_BACK, "the cards do not sum to the epic")),
+            ours(pc.marker(pc.STAGE_PRE, 2, pc.SEND_BACK, "they still do not")),
+            ours("quoting standards/plan-critic.md:\n\n" + pc.cycle_marker("DRE-2721")),
+        ]
+        self.assertEqual(pc.send_backs(pc.current_cycle(thread, "DRE-9100"), pc.STAGE_PRE), 2)
+        # ...and on the epic it really does name, it still works.
+        self.assertEqual(pc.send_backs(pc.current_cycle(thread, "DRE-2721"), pc.STAGE_PRE), 0)
+
+    def test_a_stray_late_collision_marker_is_not_counted(self):
+        """Both collision counters are measurements the tripwire is read from —
+        a stranger must not be able to move either."""
+        thread = [
+            ours(pc.marker(pc.STAGE_POST, 1, pc.PASS, collisions=1)),
+            stray(pc.late_collision_marker(self.EPIC, "DRE-2700", "both edit reconcile.py")),
+        ]
+        self.assertEqual(pc.collision_counts(thread),
+                         {"caught_at_review": 1, "found_later": 0})
+        vouched = thread[:1] + [ours(thread[1]["body"])]
+        self.assertEqual(pc.collision_counts(vouched),
+                         {"caught_at_review": 1, "found_later": 1})
+
+    def test_a_bare_string_is_a_body_the_caller_vouched_for(self):
+        """The thread arrives from Linear as records; a bare string is a body
+        the caller already stands behind (these fixtures, and a thread a human
+        hands the CLI). Mixed input keeps both meanings."""
+        self.assertEqual(pc.trusted_bodies(["vouched", ours("mine"), stray("theirs")]),
+                         ["vouched", "mine"])
+        self.assertEqual(pc.trusted_bodies([]), [])
+        self.assertEqual(pc.trusted_bodies(None), [])
+
+
 class TheMarkerIsTheRecord(unittest.TestCase):
     """AC5 — the send-back rate is recorded where it can be watched."""
 

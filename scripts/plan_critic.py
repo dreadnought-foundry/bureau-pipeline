@@ -36,12 +36,18 @@ Three rules baked in, each one bought:
     merge gate reads verdicts out of comments, so these markers deliberately
     share no prefix with one, and every reason an agent writes is collapsed to
     a single line before it can reach `$GITHUB_OUTPUT`.
+  * ...BUT THE MARKERS ARE THIS GATE'S OWN CREDENTIAL, so they are bound to
+    the identity that may write them: only the pipeline's own comments are
+    read (`trusted_bodies`, fed by `dump-comments --with-authors`). Without
+    that, two comments anyone on the epic could post overrode a real critic
+    rejection, and one refunded a spent budget — both silently.
 
 CLI:
   charter <stage> [--sight-file F]   the stage's prompt block
   mechanical [--plan-comment-file F] [--surfaces-dir D]   cards on stdin
-  decide --stage S --result-file F [--github-output F] [--note-file F]
-                                     comment thread (JSON array) on stdin
+  decide --stage S --result-file F [--epic E] [--github-output F] [--note-file F]
+                                     comment thread (JSON array) on stdin,
+                                     from `dump-comments --with-authors`
   sight --this <EPIC>                epics in flight (JSON array) on stdin
   cycle-start --epic <EPIC>          the note that opens a planning attempt
   rate --stage S                     comment thread on stdin
@@ -334,15 +340,47 @@ def late_collision_marker(epic: str, other: str, detail: str) -> str:
             f" — {one_line(detail)}")
 
 
-def parse_markers(bodies: list[str]) -> list[dict]:
+def trusted_bodies(entries) -> list[str]:
+    """The comment bodies this module may read a round record out of.
+
+    A thread entry is either a plain STRING — a body the caller already stands
+    behind (the tests' fixtures, and a thread a human hands the CLI) — or a
+    RECORD from `linear_ops.py dump-comments --with-authors`, which says who
+    wrote it. A record counts only when the pipeline itself wrote it.
+
+    Why (DRE-2721 review): the markers below are this gate's credential, and
+    they used to be read off every comment on the epic. Two comments carrying a
+    forged `plan-critic: ... result=SEND_BACK` line were enough to make the
+    second critic's real, current rejection read as "the bound is already
+    spent" — promoting the epic's children to build with the finding
+    discarded; one carrying a forged `plan-cycle:` boundary was enough to
+    refund a budget that had been legitimately spent, so the plan could circle
+    for as long as anyone kept posting one. Anyone with comment access on the
+    epic can post either, and `standards/plan-critic.md`'s own worked example
+    is a literal boundary line — so this is an accident as much as an attack
+    (standards/untrusted-content.md: "a manipulated card or comment must not be
+    able to steer an agent").
+    """
+    out = []
+    for entry in entries or []:
+        if isinstance(entry, dict):
+            if entry.get("authored_by_pipeline"):
+                out.append(entry.get("body") or "")
+        else:
+            out.append(entry or "")
+    return out
+
+
+def parse_markers(bodies: list) -> list[dict]:
     """Every critic-round marker in a comment thread, oldest→newest.
 
     At most ONE marker per comment (the first): the reason field is written by
     an agent reading untrusted epic prose, and a reason quoting a marker line
-    must not be able to add a round nobody ran.
+    must not be able to add a round nobody ran. And only the pipeline's own
+    comments are read at all — see `trusted_bodies`.
     """
     rows = []
-    for body in bodies or []:
+    for body in trusted_bodies(bodies):
         m = _MARKER.search(body or "")
         if not m:
             continue
@@ -375,29 +413,48 @@ def cycle_start_note(epic: str) -> str:
     ])
 
 
-def current_cycle(bodies: list[str]) -> list[str]:
+def current_cycle(bodies: list, epic: str | None = None) -> list[str]:
     """The comment bodies that belong to the CURRENT planning attempt.
 
     Everything before the last boundary belongs to a plan that no longer
     exists. A thread with no boundary at all is one cycle — epics planned
     before this existed keep counting exactly the way they did.
 
-    A comment carrying a critic-round marker never opens a cycle: the reason
-    field is written by an agent that has just read untrusted epic prose, and
-    a reason quoting a boundary line must not hand its own stage a fresh
-    budget. Beyond that the boundary is trusted no more and no less than the
-    round markers beside it — and a forged one still cannot make a plan
-    circle, because the rail runs at most MAX_ROUNDS rounds per run whatever
-    the decider says.
+    Three things a boundary has to be, because it hands a stage a fresh budget
+    and an unbounded loop is how 17 cards sat in a lane for 27 days:
+
+      * Its own comment. A comment carrying a critic-round marker never opens a
+        cycle: the reason field is written by an agent that has just read
+        untrusted epic prose, and a reason quoting a boundary line must not
+        hand its own stage a fresh budget.
+      * The pipeline's. Only the run that decides an epic is being planned
+        writes one, so only its own comments are read (`trusted_bodies`).
+      * About THIS epic, when the caller says which one. The standard's worked
+        example names a real epic verbatim, so a boundary is scoped to the epic
+        being decided rather than to any epic named anywhere in the thread.
+        `epic=None` keeps the old behaviour for callers with no epic in hand
+        (the metrics CLIs, and every fixture that names one epic only).
+
+    An earlier version of this docstring claimed a forged boundary could not
+    make a plan circle "because the rail runs at most MAX_ROUNDS rounds per
+    run". That was only ever true of the PRE stage, where plan.yml hardcodes
+    two rounds per job run. The POST stage runs ONE round per run and its bound
+    lives entirely in these persisted markers — which is exactly what a forged
+    boundary defeated.
     """
+    bodies = trusted_bodies(bodies)
     start = 0
-    for i, body in enumerate(bodies or []):
-        if _CYCLE.search(body or "") and not _MARKER.search(body or ""):
-            start = i + 1
-    return list(bodies or [])[start:]
+    for i, body in enumerate(bodies):
+        m = _CYCLE.search(body)
+        if not m or _MARKER.search(body):
+            continue
+        if epic and m.group("epic") != epic:
+            continue
+        start = i + 1
+    return bodies[start:]
 
 
-def send_backs(bodies: list[str], stage: str) -> int:
+def send_backs(bodies: list, stage: str) -> int:
     """Failed rounds recorded for this stage, in the bodies you hand it.
 
     The two stages count separately — `two failed rounds at EITHER critic` —
@@ -410,7 +467,7 @@ def send_backs(bodies: list[str], stage: str) -> int:
                if r["stage"] == stage and r["result"] == SEND_BACK)
 
 
-def rate(bodies: list[str], stage: str) -> dict:
+def rate(bodies: list, stage: str) -> dict:
     """`{rounds, send_backs, rate}` for a stage.
 
     With no rounds the rate is None, not 0.0 (console-honesty rule 2): "this
@@ -427,11 +484,11 @@ def rate(bodies: list[str], stage: str) -> dict:
     }
 
 
-def collision_counts(bodies: list[str]) -> dict:
+def collision_counts(bodies: list) -> dict:
     """The two counters, kept apart: caught by the post critic, and found later."""
     caught = sum(r["collisions"] for r in parse_markers(bodies)
                  if r["stage"] == STAGE_POST)
-    later = sum(1 for body in bodies or [] if _LATE_COLLISION.search(body or ""))
+    later = sum(1 for body in trusted_bodies(bodies) if _LATE_COLLISION.search(body))
     return {"caught_at_review": caught, "found_later": later}
 
 
@@ -655,7 +712,7 @@ def _cmd_decide(args) -> int:
     # The budget, and the round number, belong to THIS planning attempt. A
     # re-planned epic counted against the whole thread would spend a budget it
     # never used, and say "round 3 of 2" while doing it.
-    cycle = current_cycle(thread)
+    cycle = current_cycle(thread, args.epic)
     prior = send_backs(cycle, args.stage)
     action, note = decide(result, prior, reason)
     stats = rate(cycle, args.stage)
@@ -738,6 +795,10 @@ def main(argv: list[str]) -> int:
 
     d = sub.add_parser("decide", help="apply the bound; comment thread on stdin")
     d.add_argument("--stage", required=True, choices=sorted(STAGES))
+    # The epic this decision is about, so a `plan-cycle:` boundary naming a
+    # DIFFERENT epic cannot refund this one's budget. Optional: a caller with
+    # no epic in hand keeps the old any-boundary behaviour.
+    d.add_argument("--epic", default=None)
     d.add_argument("--result-file", required=True)
     d.add_argument("--github-output", default=None)
     d.add_argument("--note-file", default=None)

@@ -549,10 +549,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
+          # --with-authors: the round history the bound is counted from is
+          # this gate's credential, so the decider must be able to tell the
+          # pipeline's own markers from a comment anyone on the epic left.
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
-            > "${{ runner.temp }}/plan-critic-thread.json"
+            --with-authors > "${{ runner.temp }}/plan-critic-thread.json"
           python3 .bureau-pipeline/scripts/plan_critic.py decide \
             --stage pre \
+            --epic "$EPIC" \
             --result-file "${{ runner.temp }}/plan-critic-pre.md" \
             --github-output "$GITHUB_OUTPUT" \
             --note-file "${{ runner.temp }}/plan-critic-note.md" \
@@ -665,10 +669,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
+          # --with-authors: the round history the bound is counted from is
+          # this gate's credential, so the decider must be able to tell the
+          # pipeline's own markers from a comment anyone on the epic left.
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
-            > "${{ runner.temp }}/plan-critic-thread.json"
+            --with-authors > "${{ runner.temp }}/plan-critic-thread.json"
           python3 .bureau-pipeline/scripts/plan_critic.py decide \
             --stage pre \
+            --epic "$EPIC" \
             --result-file "${{ runner.temp }}/plan-critic-pre.md" \
             --github-output "$GITHUB_OUTPUT" \
             --note-file "${{ runner.temp }}/plan-critic-note.md" \
@@ -834,10 +842,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
+          # --with-authors: the round history the bound is counted from is
+          # this gate's credential, so the decider must be able to tell the
+          # pipeline's own markers from a comment anyone on the epic left.
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
-            > "${{ runner.temp }}/plan-critic-thread.json"
+            --with-authors > "${{ runner.temp }}/plan-critic-thread.json"
           python3 .bureau-pipeline/scripts/plan_critic.py decide \
             --stage post \
+            --epic "$EPIC" \
             --result-file "${{ runner.temp }}/plan-critic-post.md" \
             --github-output "$GITHUB_OUTPUT" \
             --note-file "${{ runner.temp }}/plan-critic-note.md" \

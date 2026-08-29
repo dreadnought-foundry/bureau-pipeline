@@ -62,6 +62,17 @@ a better first critic — not another round. Each round writes one
 `plan-critic:` marker to the epic and the rate is read back out of them
 (`plan_critic.py rate`), the same convention as the design-parity ledger.
 
+**A marker counts only if the pipeline wrote it.** Because the bound is
+enforced entirely out of those markers, they are this gate's credential — and a
+Linear comment thread is writable by anyone with access to the card. The thread
+is therefore read with authorship (`dump-comments --with-authors`) and only the
+pipeline's own comments are parsed, with the cycle boundary additionally scoped
+to the epic being decided. Without that, two ordinary comments overrode a real
+critic rejection and promoted the children to build, and one refunded a spent
+budget so the plan could circle indefinitely — both silently, and neither
+needing a hostile actor, since this standard's own worked example is a literal
+boundary line (`standards/untrusted-content.md`).
+
 ### Why the second critic gets cross-epic sight (D3, answered 2026-08-25)
 
 It is the cheapest home for collision detection: that critic is already reading

@@ -1071,9 +1071,60 @@ def comment_bodies(identifier: str) -> list[str]:
     return [c.get("body") or "" for c in data["issue"]["comments"]["nodes"]]
 
 
-def cmd_dump_comments(identifier: str) -> None:
-    """Print the card's comment bodies as a JSON array (oldest→newest) so the
-    workflow can feed them to model_fallback.py without a second API client."""
+def comment_records(identifier: str) -> list[dict]:
+    """Every comment on the card WITH who wrote it, oldest→newest.
+
+    `[{"body": str, "authored_by_pipeline": bool}]`. The one authorship fact
+    anything downstream needs: this pipeline's writes all go through a single
+    `LINEAR_API_KEY` that resolves to one Linear user (README — "the relay,
+    reconcile, the planner and every agent share one LINEAR_API_KEY and resolve
+    to the operator's own Linear user"), so "the pipeline wrote this" is
+    exactly "the key's own `viewer` wrote this". A comment from anyone else on
+    the card — a teammate, a guest with comment access — resolves to a
+    different user, and an integration's comment has no `user` at all, which is
+    the same rule README already states for break-glass labels: "a marker
+    applied by a bot actor (an integration we do not own) is not honored."
+
+    Why it exists (DRE-2721 review): `plan_critic.py` counts a plan's review
+    rounds out of markers in this thread, and `comment_bodies` selected bodies
+    and nothing else — so a marker nobody could attribute was a credential
+    anyone could mint. Two stray comments carrying the marker line overrode a
+    real critic rejection and promoted an epic's children to build; one
+    carrying the cycle boundary refunded a budget that had been spent. Neither
+    needs a hostile actor: `standards/plan-critic.md`'s worked example is a
+    literal boundary line.
+
+    An unknown viewer vouches for nobody. That is the safe direction: the round
+    history reads as absent rather than as whatever a stranger wrote.
+    """
+    data = gql(
+        """query($id: String!) { viewer { id } issue(id: $id) {
+             comments(last: 50) { nodes { body user { id } } } } }""",
+        {"id": identifier},
+    )
+    me = (data.get("viewer") or {}).get("id")
+    rows = []
+    for c in data["issue"]["comments"]["nodes"]:
+        author = (c.get("user") or {}).get("id")
+        rows.append({
+            "body": c.get("body") or "",
+            "authored_by_pipeline": bool(me) and author == me,
+        })
+    return rows
+
+
+def cmd_dump_comments(identifier: str, *flags: str) -> None:
+    """`dump-comments <DRE-N> [--with-authors]`.
+
+    Bare: the card's comment bodies as a JSON array (oldest→newest) so the
+    workflow can feed them to model_fallback.py without a second API client.
+
+    `--with-authors`: the same thread as `comment_records` rows instead, for
+    callers that read a machine record out of it and must know who wrote it.
+    """
+    if "--with-authors" in flags:
+        print(json.dumps(comment_records(identifier)))
+        return
     print(json.dumps(comment_bodies(identifier)))
 
 
