@@ -98,6 +98,12 @@ VERDICT_MARK = "🧭"
 # verdict itself.
 NOT_FLEET_TAG = "routing-not-fleet"
 
+# The other refusal, and a DIFFERENT fact: the card is parentless and carries no
+# verdict at all, so nothing has approved it (DRE-2735). Separate tag because
+# "routed somewhere else on purpose" and "nobody has routed this" have different
+# next actions, and a sweep log that collapsed them would tell a reader neither.
+NO_VERDICT_TAG = "routing-no-verdict"
+
 # The marker must OPEN the comment. Anchored for the reason above, and for the
 # same reason the title patterns are.
 _VERDICT_LINE = re.compile(
@@ -474,6 +480,57 @@ def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) 
         "If that routing is wrong, the card needs a different verdict — not a "
         "nudge from the sweep."
     )
+
+
+def parentless_promotion_refusal(
+    identifier: str, comment_bodies, doc: dict | None = None
+) -> str | None:
+    """`promotion_refusal` for a card with NO parent epic (DRE-2735).
+
+    A child's approval is its epic's state: a human moved that epic, and that
+    decision covers everything under it. A one-off has no such approval to
+    inherit, so the verdict IS the approval — written at Planning exit, which is
+    the design's whole claim about why a one-off never reaches the CEO. Absent
+    it, nothing has approved this card and the sweep must not dispatch it.
+
+    The wrong-destination refusal is unchanged and takes precedence: "routed
+    WORKBENCH" and "routed nowhere" are different facts, and the first already
+    says who picks the card up instead.
+    """
+    refusal = promotion_refusal(identifier, comment_bodies, doc)
+    if refusal is not None:
+        return refusal
+    if verdict_on(comment_bodies, doc) is not None:
+        return None
+    return (
+        f"🚨 {NO_VERDICT_TAG}: {identifier} has no parent epic and carries no "
+        "routing verdict, so nothing has approved it — the sweep is not "
+        "promoting it.\n\n"
+        "A card under an epic inherits that epic's approval: a human moved the "
+        "epic, and the sweep reads its state. A one-off inherits nothing, so "
+        "its verdict is the approval, and it is written at Planning exit.\n\n"
+        "**To let it through:** stamp the routing decision —\n"
+        "`python3 scripts/routing_verdict.py stamp <CARD> FLEET "
+        '--why "<one line>"`\n\n'
+        "This refusal is only about carrying NO verdict. A verdict that is not "
+        "FLEET routes the card somewhere else on purpose, and says where."
+    )
+
+
+def refusal_tag(refusal: str | None) -> str | None:
+    """The idempotency tag `refusal` is surfaced under, or None if it is not
+    one of this module's refusals.
+
+    Every refusal here OPENS with its own tag, so the tag is read off the
+    notice rather than inferred by the caller from context. That matters
+    because the sweep posts each refusal at most once, keyed on the tag: pair a
+    notice with the wrong tag and the two refusals silence each other.
+    """
+    first = ((refusal or "").splitlines() or [""])[0]
+    for tag in (NO_VERDICT_TAG, NOT_FLEET_TAG):
+        if first.startswith(f"🚨 {tag}:"):
+            return tag
+    return None
 
 
 # --------------------------------------------------------------------------- #

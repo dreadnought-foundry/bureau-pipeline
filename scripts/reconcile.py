@@ -1782,12 +1782,22 @@ def skip_bad_reference(identifier: str, err: Exception) -> None:
 
 
 def promote_ready(active_count: int) -> int:
-    """Auto-promote Backlog children whose blockers are all Done."""
+    """Auto-promote Backlog cards whose blockers are all Done.
+
+    Two gates, because there are two ways a card can have been approved
+    (DRE-2735). A CHILD is gated on its parent epic's state: a human moved that
+    epic, and that decision covers everything under it (DRE-1893). A PARENTLESS
+    card — the one-off, which goes straight to Backlog and which nothing
+    escalates by design — has no approval to inherit, so its VERDICT is the
+    approval, written at Planning exit. Refusing it for want of a parent left
+    the most common thing anyone files sitting in Backlog forever.
+    """
     budget = MAX_WIP - active_count
     if budget <= 0:
         print(f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — none promoted")
         return 0
     promoted = 0
+    parentless = 0  # of `promoted` — the new path, reported rather than inferred
     # Cache the epic-level gate per parent epic: it is the same answer for every
     # child of that epic, so consult Linear once per epic per sweep (DRE-1772).
     epic_gate: dict[str, bool] = {}
@@ -1806,8 +1816,16 @@ def promote_ready(active_count: int) -> int:
         if HOLD_LABEL in labels:
             continue  # held for a human (DRE-1403) — never auto-promote
         parent = card.get("parent")
-        if not parent or parent["state"]["name"] not in EPIC_ACTIVE_STATES:
-            continue  # parent epic not approved/active (Todo or In Progress; DRE-1893)
+        if parent and parent["state"]["name"] not in EPIC_ACTIVE_STATES:
+            # DRE-1893 unchanged: a child must not build while its epic is
+            # unapproved, whatever verdict the child itself carries. Said out
+            # loud so the sweep log distinguishes this from the parentless
+            # refusal below — different facts, different next actions.
+            print(
+                f"promotion: {card['identifier']}'s epic {parent['identifier']} is "
+                f"not active ({parent['state']['name']}) — skipping"
+            )
+            continue
         # Per-card isolation (DRE-2035): everything from here on reads Linear
         # per THIS card — a blocker reference that doesn't resolve raises
         # LinearError, which must skip this one card (loudly, with a one-time
@@ -1827,16 +1845,18 @@ def promote_ready(active_count: int) -> int:
             # must not start its children while the epic itself is blocked-by a
             # prerequisite epic that has not shipped. Composes with the
             # card-level gate, MAX_WIP, and the DRE-1585 agent-blocker guard
-            # below.
-            epic_id = parent["identifier"]
-            if epic_id not in epic_gate:
-                epic_gate[epic_id] = epic_blockers_unmet(epic_id)
-            if epic_gate[epic_id]:
-                print(
-                    f"promotion: {card['identifier']}'s epic {epic_id} is blocked by "
-                    "an unfinished epic — skipping"
-                )
-                continue
+            # below. A parentless card has no epic to gate on — asking Linear
+            # about one would be a query about a card that does not exist.
+            epic_id = parent["identifier"] if parent else None
+            if epic_id is not None:
+                if epic_id not in epic_gate:
+                    epic_gate[epic_id] = epic_blockers_unmet(epic_id)
+                if epic_gate[epic_id]:
+                    print(
+                        f"promotion: {card['identifier']}'s epic {epic_id} is blocked by "
+                        "an unfinished epic — skipping"
+                    )
+                    continue
             unmet = {
                 b for b in blockers_of(card) if card_state(b) not in ("Done", "Canceled", "Duplicate")
             }
@@ -1858,32 +1878,43 @@ def promote_ready(active_count: int) -> int:
             # verdict before it joins: Layer 1 is not waived, only the green
             # light is. An epic whose green light Linear cannot report abstains
             # (mid_epic.promotion_refusal) — never refuses the whole roster.
-            if epic_id not in green_light:
-                green_light[epic_id] = mid_epic.last_green_light(linear_ops, epic_id)
+            # There is no green light to read for a card with no epic.
             bodies = [
                 n.get("body") or ""
                 for n in (card.get("comments") or {}).get("nodes", [])
             ]
-            refusal = mid_epic.promotion_refusal(
-                card["identifier"],
-                card.get("createdAt"),
-                green_light[epic_id],
-                bodies,
-            )
+            if epic_id is not None:
+                if epic_id not in green_light:
+                    green_light[epic_id] = mid_epic.last_green_light(linear_ops, epic_id)
+                refusal = mid_epic.promotion_refusal(
+                    card["identifier"],
+                    card.get("createdAt"),
+                    green_light[epic_id],
+                    bodies,
+                )
             # Routing verdict (DRE-2724): the verdict answers WHO builds this
             # card, and only FLEET means "an unattended agent, in one pull
             # request". WORKBENCH needs an interactive flow, OPERATOR is not
             # code at all, PARKED is deliberately not built, NEEDS WORK is not
             # buildable as written — dispatching any of them sends the fleet at
-            # a card it cannot close. A card with NO verdict promotes exactly as
+            # a card it cannot close. A CHILD with NO verdict promotes exactly as
             # before: Backlog's "it carries a verdict" clause is enforced from
             # Phase 5, and refusing the whole verdictless board today would
             # freeze it rather than route it.
+            #
+            # A PARENTLESS card is the one case where no verdict is itself the
+            # refusal (DRE-2735): a child inherits its epic's approval and this
+            # one has none to inherit, so the verdict IS the approval.
             if refusal is None:
-                refusal = routing_verdict.promotion_refusal(
-                    card["identifier"], bodies
+                refusal = (
+                    routing_verdict.promotion_refusal(card["identifier"], bodies)
+                    if epic_id is not None
+                    else routing_verdict.parentless_promotion_refusal(
+                        card["identifier"], bodies
+                    )
                 )
-                refusal_tag = routing_verdict.NOT_FLEET_TAG
+                if refusal is not None:
+                    refusal_tag = routing_verdict.refusal_tag(refusal)
         except linear_ops.LinearError as e:
             skip_bad_reference(card["identifier"], e)
             continue
@@ -1911,9 +1942,15 @@ def promote_ready(active_count: int) -> int:
         # the run red for medic) instead of the bad-reference diagnostic.
         try:
             linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
+            # The receipt names what actually approved this card. "parent epic
+            # active" on a card with no parent would be a confident wrong
+            # answer about the one thing the reader is asking.
             linear_ops.cmd_comment(
                 card["identifier"],
-                "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done.",
+                "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done."
+                if parent
+                else "🧹 Auto-promoted Backlog → Todo: no parent epic, a FLEET "
+                     "verdict, and all blockers Done.",
             )
         except linear_ops.LinearError as e:
             _write_failures.append(f"{card['identifier']} advance/comment: {e}")
@@ -1923,7 +1960,15 @@ def promote_ready(active_count: int) -> int:
             )
             continue
         promoted += 1
-    print(f"promotion: {promoted} card(s) promoted (WIP {active_count}+{promoted}/{MAX_WIP})")
+        if not parent:
+            parentless += 1
+    # The parentless count is printed on EVERY sweep, zero included: the new
+    # path is meant to be visible rather than inferred from a total, and "no
+    # line" and "none promoted" must not render the same (DRE-2735).
+    print(
+        f"promotion: {promoted} card(s) promoted, {parentless} parentless "
+        f"one-off(s) (WIP {active_count}+{promoted}/{MAX_WIP})"
+    )
     if _card_skips:
         # A red pattern the run log can't miss (DRE-2035) — pairs with the
         # per-card ERROR lines above; the sweep itself stays alive and green.
