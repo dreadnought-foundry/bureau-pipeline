@@ -260,3 +260,17 @@ def test_the_proposal_states_what_is_deprioritised_and_for_how_long():
 def test_the_render_says_why_a_cycle_is_not_sprint_planning():
     proposal = groomer.propose(_portico_population(), cycles=CYCLES)
     assert groomer.CYCLE_IS_NOT_SPRINT_PLANNING in groomer.render_proposal(proposal)
+
+
+def test_an_epic_card_in_the_lane_moves_with_its_own_children():
+    """The live shape on 2026-08-29: epic DRE-2628 sits in the lane alongside
+    its eleven children. It joins their unit — an epic that drains a cycle
+    ahead of its own children is the split this rule exists to prevent — and
+    the unit still reports which epic it is."""
+    cards = [card("DRE-900", title="[EPIC] Forms")]
+    cards += [card(f"DRE-9{n:02d}", parent="DRE-900") for n in range(10, 14)]
+    proposal = groomer.propose(cards, cycles=CYCLES)
+    rows = {r["identifier"]: r for r in proposal["sequence"]}
+    assert rows["DRE-900"]["unit"] == "DRE-900"
+    assert {r["epic"] for r in rows.values()} == {"DRE-900"}
+    assert len({r["cycle"] for r in rows.values()}) == 1

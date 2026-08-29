@@ -1,0 +1,123 @@
+# The groomer (DRE-2683): sequence the whole Intake population into cycles and
+# propose ONE batch — Portico first — for the CEO to approve. `propose` writes
+# nothing but a comment; `drain` moves the approved batch to Planning and
+# refuses without an approval naming that exact batch.
+#
+# ON DEMAND, NEVER ON A SCHEDULE (decision D5, approved 2026-08-23): a groomer
+# running unattended over two hundred cards before anyone has checked its calls
+# is the same mistake as trusting a critic's verdicts before comparing them to a
+# held-back set. The calling stub carries workflow_dispatch and nothing else,
+# and tests/test_groomer_wiring.py fails the build if a cron appears.
+#
+# Reusable workflow: permissions live in the calling stub (contents: read).
+name: Groomer (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: >-
+          bureau-pipeline ref for the INTERNAL checkout (scripts). REQUIRED
+          since DRE-2689: a caller must pass the same ref it pins in `uses:`,
+          or it runs channel workflow YAML over another ref's scripts.
+        type: string
+        required: true
+      mode:
+        description: >-
+          `propose` reads and writes nothing but a comment. `drain` moves the
+          APPROVED batch onward, and refuses without an approval naming that
+          batch. Default is the read-only one.
+        type: string
+        required: false
+        default: propose
+      lane:
+        description: the lane to groom
+        type: string
+        required: false
+        default: Intake
+      capacity:
+        description: how many cards one cycle is proposed at a time
+        type: string
+        required: false
+        default: "20"
+      batch_cycles:
+        description: how many cycles the batch covers
+        type: string
+        required: false
+        default: "1"
+      priority:
+        description: comma-separated repo slugs, highest first
+        type: string
+        required: false
+        default: portico
+      card:
+        description: >-
+          the card the proposal is posted to, and where its approval is read
+          from. REQUIRED for `drain`.
+        type: string
+        required: false
+        default: ""
+    secrets:
+      LINEAR_API_KEY:
+        required: true
+
+jobs:
+  groom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: groomer
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      - name: Groom
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          REPO: ${{ github.repository }}
+          MODE: ${{ inputs.mode }}
+          LANE: ${{ inputs.lane }}
+          CAPACITY: ${{ inputs.capacity }}
+          BATCH_CYCLES: ${{ inputs.batch_cycles }}
+          PRIORITY: ${{ inputs.priority }}
+          CARD: ${{ inputs.card }}
+        run: |
+          set -euo pipefail
+          # Every input through env, never interpolated into the shell line.
+          SHAPING=(--lane "$LANE" --capacity "$CAPACITY"
+                   --batch-cycles "$BATCH_CYCLES" --priority "$PRIORITY")
+          if [ "$MODE" = "drain" ]; then
+            if [ -z "$CARD" ]; then
+              echo "drain needs the card the approval lives on" >&2
+              exit 1
+            fi
+            python3 .bureau-pipeline/scripts/groomer.py drain \
+              --card "$CARD" "${SHAPING[@]}" | tee proposal.txt
+          else
+            POST=()
+            if [ -n "$CARD" ]; then POST=(--post "$CARD"); fi
+            python3 .bureau-pipeline/scripts/groomer.py propose \
+              "${SHAPING[@]}" "${POST[@]}" --out proposal.json | tee proposal.txt
+          fi
+          {
+            echo "### Groomer — $MODE"
+            echo
+            cat proposal.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the proposal
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: groom-proposal
+          path: |
+            proposal.json
+            proposal.txt
+          if-no-files-found: ignore
+          retention-days: 30

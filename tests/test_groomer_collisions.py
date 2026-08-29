@@ -12,8 +12,8 @@ stop working:
   * a shared file makes an order, and the order is reported with the file that
     caused it — a constraint nobody can see is a constraint nobody can argue
     with;
-  * a path cited by half the set (the branch-rule banner naming
-    `linear-sync.yml` sits on thirteen live cards) is REFERENCE, not
+  * a path cited by a large slice of the set (the branch-rule banner naming
+    `linear-sync.yml` sits on nineteen live Backlog cards) is REFERENCE, not
     ownership — treating it as a collision would serialise the whole batch on
     a boilerplate line;
   * a card that names no files at all is REPORTED as unreadable. Five of the
@@ -105,13 +105,13 @@ def test_a_formal_blocked_by_relation_beats_the_age_tiebreak():
 
 
 def test_a_path_everybody_cites_is_reference_not_ownership():
-    """The live shape: thirteen Forms cards carry a branch-rule banner naming
+    """The live shape: nineteen Backlog cards carry a branch-rule banner naming
     `.github/workflows/linear-sync.yml`. None of them edits it."""
     cards = [card(f"DRE-{n}", description="branch rule: `.github/workflows/linear-sync.yml`")
-             for n in range(1, 9)]
+             for n in range(1, 20)]
     report = groomer.collision_report(cards)
     assert report["pairs"] == []
-    assert report["boilerplate"]["linear-sync.yml"] == 8
+    assert report["boilerplate"]["linear-sync.yml"] == 19
 
 
 def test_a_card_that_names_no_files_is_reported_as_unreadable():
