@@ -27,6 +27,14 @@ opinion, and an opinion cannot be re-checked when the wave closes and the
 number disagrees. Cite it inline where the claim is made, not in a footnote
 nobody follows.
 
+A number you cannot source is marked ***(unverified)*** — the convention
+`architecture/audits/` already uses — and the plan never carries a citation
+nobody has followed. **A citation that does not check out is worse than an
+absent one:** it looks solid, so nobody opens it, and the first reader who
+does has to distrust the whole file. Where an unverified number is
+load-bearing for an open decision, say so at that decision (§3), so it cannot
+close on evidence nobody has.
+
 ### 2. Where the research contradicted the wave
 
 Name the places the evidence went **against** the thing you set out to build,
