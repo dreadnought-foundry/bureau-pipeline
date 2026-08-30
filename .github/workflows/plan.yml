@@ -395,9 +395,25 @@ jobs:
                size. End with: "To start the build: move ONLY this epic to
                In Progress — the children promote automatically, in order.
                Do not move the children by hand."
-            6. If the intent is too ambiguous to plan, create NO sub-issues,
-               write NO artifact, and instead post a comment asking the
-               specific questions you need answered.
+            6. ESCALATE — the one way out of Planning that is not a plan.
+               Use it when the reasoning ITSELF is the deliverable (the
+               thinking needs a person and cannot be done by an agent), or
+               when the intent is too ambiguous to decompose safely. Create
+               NO sub-issues, write NO artifact, and write your reason with
+               the `Write` tool to EXACTLY this path:
+                 ${{ runner.temp }}/planner-escalation.txt
+               Write it in PLAIN ENGLISH for a non-technical reader: what the
+               decision is, why it needs a person, and what getting it wrong
+               costs. No code, no diffs, no file paths, no commands — a reason
+               written in technical terms is not put in front of the CEO at
+               all, so the card parks with the reason missing.
+               The run posts it to the card and parks the card in Green Light,
+               the CEO's decision queue — the same lane a plan waits in. Never
+               Triage: an escalated card is not broken, it is waiting on a
+               judgement.
+               There is no label, flag or lane that skips Planning. This
+               escalation is the only route, and it leaves FROM Planning
+               rather than around it.
 
       # Record an is_error PLANNER death so the fallback engages on retry
       # (DRE-1354). Unlike agent-task, a plan death has no PR/requeue path — the
@@ -462,8 +478,35 @@ jobs:
               exit 1
             fi
           else
-            echo "no children created (planner asked questions) — nothing to validate"
+            echo "no children created (the planner escalated) — nothing to validate"
           fi
+
+      # --- Hand-planning is an escalation and nothing else (DRE-2848) -------
+      #
+      # The planner produced no cards. Sometimes that is the RIGHT answer: the
+      # reasoning itself is the deliverable, or the intent cannot be decomposed
+      # safely. The case is real whether or not the design gives it a route —
+      # and given none, people invent one: a label, a lane, a habit of typing
+      # cards straight into the build queue. An escape hatch with a name and a
+      # record is a route; an escape hatch without one is a hole.
+      #
+      # So the card parks in the CEO's decision queue carrying a stated reason,
+      # the same lane a plan waits in — read from the shape vocabulary by
+      # `planning_escalation.py`, never written here. It used to go to
+      # `Backlog`, which is process-controlled and means "ready work": a
+      # question nobody sees, waiting for nobody.
+      #
+      # NOT Triage. An escalated card is not broken — it is correct and waiting
+      # on a judgement, and mixing the two is what turned Triage into a dead end
+      # the first time (DRE-2723, DRE-2776).
+      - name: Planner escalation — hand-planning parks for the CEO
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count == '0'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
+            "${{ github.event.client_payload.identifier }}" \
+            --reason-file "${{ runner.temp }}/planner-escalation.txt"
       # --- The plan artifact (DRE-2720) ------------------------------------
       #
       # What the CEO green-lights. The planner wrote ONE markdown file with
@@ -775,26 +818,25 @@ jobs:
           if-no-files-found: error
 
       # Green Light holds a card waiting on a human JUDGEMENT: an epic's plan
-      # awaiting approval — this step — and, since DRE-2776, an agent's
-      # escalate-by-exception question. The name says what the CEO does with
+      # awaiting approval — this step — an agent's escalate-by-exception
+      # question (DRE-2776), and the planner's own escalation, which the step
+      # above parks there (DRE-2848). The name says what the CEO does with
       # one: green-light it, send it back, or park it. Triage is the other
       # human lane and holds the other case, a card that went WRONG
       # (DRE-2723). Same tuple in `scripts/reconcile.py` (PARKED_STATES) —
       # both lanes stop the dispatch loop, for different reasons.
+      #
+      # Children-bearing only. A planner that produced no cards escalated, and
+      # the escalation step above has already parked it with its reason — a
+      # second move here would either race it or send the question to a lane
+      # nobody reads.
       - name: Epic → Green Light
-        if: steps.route.outputs.mode == 'plan'
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
-          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
-          if [ "$KIDS" -gt 0 ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
-          else
-            # Planner asked clarifying questions instead — back to Backlog so
-            # answering + re-Todo restarts planning cleanly.
-            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Backlog"
-          fi
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
 
       # --- The SECOND critic (DRE-2721) -------------------------------------
       #
