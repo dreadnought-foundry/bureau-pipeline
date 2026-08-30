@@ -130,7 +130,17 @@ def load(path: str | None = None) -> dict:
 
 
 def _records(doc: dict | None = None) -> tuple:
-    return tuple((doc or load())["shapes"])
+    """The shape entries of `doc`, or of the shipped file when none is given.
+
+    `None` means "read the file", and nothing else does: a doc that is merely
+    empty was still passed in deliberately, and quietly answering from the real
+    config instead would answer a question nobody asked.
+    """
+    doc = doc if doc is not None else load()
+    try:
+        return tuple(doc["shapes"])
+    except (KeyError, TypeError) as e:
+        raise ShapeError(f"this vocabulary declares no shapes: {e}") from e
 
 
 def shapes(doc: dict | None = None) -> tuple:
@@ -479,10 +489,23 @@ def _cmd_read(identifier: str) -> int:
 
     bodies = linear_ops.comment_bodies(identifier)
     notice = fault(identifier, bodies)
-    if notice is not None:
+    try:
+        name = shape_on(bodies)
+    except (ConflictingShapes, UnknownShape):
+        name = None
+
+    if name is None:
+        # Every branch `shape_on` declines on has a fault, so there is always a
+        # notice to print here.
         print(notice, file=sys.stderr)
         return 1
-    name = shape_on(bodies)
+
+    # A recognised stamp IS the decision (`shape_on`), so a notice alongside one
+    # is the noise of a stray unrecognised stamp: worth saying, never worth
+    # losing the card's real shape over.
+    if notice is not None:
+        print(notice, file=sys.stderr)
+
     print(json.dumps({
         "shape": name,
         "means": means(name),
