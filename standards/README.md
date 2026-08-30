@@ -42,7 +42,7 @@ commit (the channel note above). The per-role mapping:
 | engineer | engineering, architecture, card-quality, vendor-boundaries, console-honesty |
 | devops | engineering, architecture, card-quality, vendor-boundaries |
 | frontend | engineering, architecture, card-quality, design, vendor-boundaries, console-honesty |
-| planner | card-quality, engineering, vendor-boundaries, design-parity, plan-artifact |
+| planner | card-quality, engineering, vendor-boundaries, design-parity, plan-artifact, wave-plan |
 | critic | engineering, architecture, vendor-boundaries, console-honesty, design-parity, plan-artifact |
 | verifier | design, design-parity |
 | plan-critic-pre | card-quality, design-parity, plan-artifact, plan-critic |
@@ -63,7 +63,7 @@ commit (the channel note above). The per-role mapping:
 | `vendor-boundaries.md` | The vendor-behavior premortem checklist for anything touching an external trigger/event/command, seeded with the 2026-07-12 GitHub-boundary incidents; the critic treats an unanswered question as a finding. |
 | `plan-artifact.md` | What an epic produces for the CEO to green-light — the seven sections, KPIs as a machine-readable ```kpis block, the token-built mockup rule, the generated version record, and the stable `plans/<epic>/` publish path. |
 | `plan-critic.md` | The two plan critics — the first asks whether a plan is fit to take the CEO's time, the second asks what is missing now the approved text IS the specification; the two-failed-round bound, the send-back rate as the measurement, the stated cross-epic scope, and the collision tripwire. |
-| `wave-plan.md` | What a wave plan must state before the CEO green-lights it — research with provenance, where the research contradicted the wave, the decisions still open, what the plan cuts, every phase with how it will be proven in production, and the KPIs predicted before the run. |
+| `wave-plan.md` | What a wave plan must state before the CEO green-lights it — research with provenance, where the research contradicted the wave, the decisions still open, what the plan cuts, every phase with how it will be proven in production, and the KPIs predicted before the run; plus the ```epics block naming what the wave commits to, in dependency order. `scripts/wave_plan.py` reads this file and refuses a plan that misses any of it. |
 | `console-honesty.md` | Badges derive from what actually happened — console state fetched from the source of truth, never inferred from adjacent signals; explicit stale/absent rendering; every state element ships a stale-data test; the critic checks all three on console cards. |
 
 ## How to add or update a standard

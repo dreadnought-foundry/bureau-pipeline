@@ -80,10 +80,55 @@ after the fact they are not predictions, and the wave cannot be wrong.
 > *"Predicting two and moving two is a result; moving two and then naming them
 > is a story."* — objective O10
 
-That is the whole reason the prediction is dated. At the epic level the same
-objective is enforced mechanically, as a machine-readable block that a
-close-out diffs prediction against outcome — see
+That is the whole reason the prediction is dated. So the predictions are
+carried the way the epic artifact carries them — a fenced block with the
+info-string `kpis`, each record naming a `name`, a NUMERIC `baseline` and a
+`direction` — with the prose beside it saying how each baseline was measured.
+One grammar at both levels, so a close-out reads a wave and the epics under it
+the same way; the fields and the close-out are specified in
 [`plan-artifact.md`](plan-artifact.md).
+
+## The epics it commits to
+
+A wave plan names the epics the wave signs up to, **in dependency order**, as a
+fenced block with the info-string `epics`:
+
+    ```epics
+    [
+      {"key": "standard", "title": "The standard moves where agents read it",
+       "depends_on": []},
+      {"key": "route", "title": "The wave route and its checker",
+       "depends_on": ["standard"]}
+    ]
+    ```
+
+Per record: a `key` unique within the plan, a `title` that names the epic in
+the words the CEO will read, and `depends_on` — the keys it cannot start
+without. **The order of the list is the order of the wave**, so an epic listed
+before something it depends on is a defect, and so is a cycle: one rule catches
+both, because a cycle is a set of epics that cannot all be listed after what
+they depend on.
+
+Approving a wave approves this shape and this order. It is not an approval of
+each epic — what an epic owes when its turn comes is the plan artifact at the
+epic level.
+
+## The checker
+
+[`../scripts/wave_plan.py`](../scripts/wave_plan.py) is the mechanical form of
+this file, and it **reads this file**: the six sections above are parsed out of
+it when the check runs, so editing this standard changes what a plan must state
+without touching the code. It refuses; it does not warn.
+
+    python3 scripts/wave_plan.py headings          # the sections, from here
+    python3 scripts/wave_plan.py check wave-plan.md
+
+It reports a missing section by name, an `epics` list that is not in dependency
+order, a claim in §1 carrying a number with neither a source nor the
+*(unverified)* marker, and any citation that does not resolve. A URL is never
+called broken — the check did not open it, and a checker that failed a link on
+evidence it never gathered would be the failure it exists to catch
+([`console-honesty.md`](console-honesty.md) rule 2).
 
 ## When the wave closes
 
