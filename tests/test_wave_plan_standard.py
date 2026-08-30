@@ -38,38 +38,48 @@ README = os.path.join(STANDARDS, "README.md")
 OLD_PATH = "architecture/wave-plans/README.md"
 
 # The six things a wave plan must state, each as (label, heading regex,
-# substance regex). The heading proves the section is there; the substance
-# proves the section still says the thing.
+# substance regexes). The heading proves the section is there; every substance
+# regex proves the section still says one of the things it must say — a
+# requirement with more than one half needs more than one of them, or half of
+# it can be dropped with the tests still green.
 REQUIREMENTS = (
     (
         "research with provenance",
         r"^#{2,3} .*provenance",
-        r"where it came from|who said it|source|cite",
+        (
+            r"where it came from|who said it|source|cite",
+            # An unsourced number is marked, not omitted…
+            r"\(unverified\)",
+            # …and a citation that does not check out is itself the defect.
+            # DRE-2845's wave-route checker enforces exactly these two, so a
+            # standard that states neither leaves it nothing to enforce.
+            r"citation that (does not|doesn't|cannot) (check out|resolve)",
+        ),
     ),
     (
         "where research contradicted the wave",
         r"^#{2,3} .*contradict",
-        r"contradict",
+        (r"contradict",),
     ),
     (
         "decisions still open",
         r"^#{2,3} .*still open",
-        r"open|undecided|unresolved",
+        (r"open|undecided|unresolved",),
     ),
     (
         "what the plan cuts",
         r"^#{2,3} .*cuts",
-        r"cut|out of scope|not doing",
+        (r"cut|out of scope|not doing",),
     ),
     (
         "every phase, and how it will be proven in production",
         r"^#{2,3} .*prov(en|ing) in production",
-        r"in production",
+        (r"in production",),
     ),
     (
         "the KPIs predicted before the run",
         r"^#{2,3} .*KPI",
-        r"before the (wave|run|work) (starts|begins|runs)|predicted before",
+        (r"before the (wave|run|work) (starts|begins|runs)|predicted before",),
     ),
 )
 
@@ -101,16 +111,19 @@ class TheStandardExistsHereTest(unittest.TestCase):
 
     def test_it_states_all_six_requirements(self):
         text = body()
-        for label, heading, substance in REQUIREMENTS:
+        for label, heading, substances in REQUIREMENTS:
             with self.subTest(requirement=label):
                 self.assertRegex(
                     text, re.compile(heading, re.I | re.M),
                     f"the standard has no section for {label!r}",
                 )
-                self.assertRegex(
-                    text, re.compile(substance, re.I),
-                    f"the {label!r} section states no requirement",
-                )
+            for substance in substances:
+                with self.subTest(requirement=label, states=substance):
+                    self.assertRegex(
+                        text, re.compile(substance, re.I),
+                        f"the {label!r} section states no requirement "
+                        f"matching {substance!r}",
+                    )
 
     def test_it_is_the_standard_not_a_pointer(self):
         # The agent-bureau copy becomes a one-line pointer; this one must not.
