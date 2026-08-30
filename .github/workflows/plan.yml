@@ -458,7 +458,8 @@ jobs:
       # in Backlog for the operator to hand-repair. The create seam
       # (linear_ops.py subissue) already rejects these at creation; this is the
       # belt-and-braces sweep that closes any path that skipped the seam.
-      # Skipped when the planner created zero children (it asked questions).
+      # Skipped when the planner created zero children — that run escalated
+      # (DRE-2848) and there is nothing to validate.
       - name: Validate created children
         id: kids
         if: steps.route.outputs.mode == 'plan'
@@ -518,9 +519,8 @@ jobs:
       # scripts/plan_artifact.py.
       #
       # Plan-route only (the activate route runs no agent) AND
-      # children-bearing only: a planner that asked clarifying questions
-      # created no cards and wrote no artifact, and must not be failed for the
-      # absence of one.
+      # children-bearing only: a planner that escalated created no cards and
+      # wrote no artifact, and must not be failed for the absence of one.
 
       # Is this UI work? Read it off the CARDS the planner just created — a
       # child carrying a **Design:** ref is evidence — never off the plan's
@@ -569,8 +569,9 @@ jobs:
       # gets its revision round back, because the plan the earlier rounds
       # argued about no longer exists.
       #
-      # Skipped when the planner asked clarifying questions instead — there are
-      # no cards to review, and that epic goes back to Backlog either way.
+      # Skipped when the planner escalated instead — there are no cards to
+      # review, and that card parks in Green Light with its reason either way
+      # (DRE-2848).
       - name: Select model — first critic
         id: premodel
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
