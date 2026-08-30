@@ -5,9 +5,8 @@ An epic used to produce a plain-text Linear comment: a medium that cannot hold
 a mockup, cannot be navigated, and whose KPI section is prose. Prose is the
 whole problem — "did it move the number" becomes a memory exercise, which is
 the failure KPI objective O10 exists to prevent
-(architecture/wave-plans/README.md:54 — "predicting two and moving two is a
-result; moving two and then naming them is a story"), reintroduced one level
-down.
+(standards/wave-plan.md §6 — "predicting two and moving two is a result;
+moving two and then naming them is a story"), reintroduced one level down.
 
 So the artifact is markdown with a fixed shape, and this module is the
 mechanical form of that shape (the human form is standards/plan-artifact.md):

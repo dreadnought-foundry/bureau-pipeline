@@ -10,8 +10,8 @@ section against the card's acceptance criteria:
   2. KPIs AS DATA — a fenced ```kpis block of JSON records (name, baseline,
      direction), so a close-out can DIFF prediction against outcome instead
      of re-reading prose. This is O10 pushed down one level
-     (architecture/wave-plans/README.md:54 — "predicting two and moving two
-     is a result; moving two and then naming them is a story"): an outcome
+     (standards/wave-plan.md §6 — "predicting two and moving two is a
+     result; moving two and then naming them is a story"): an outcome
      reported for a KPI nobody predicted comes back as `unpredicted`, which
      is the story case, mechanically.
   3. A STABLE URL — the publish path is a pure function of the epic id, so
