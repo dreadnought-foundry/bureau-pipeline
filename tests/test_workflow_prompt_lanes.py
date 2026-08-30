@@ -31,7 +31,7 @@ EXPECTED_PROMPT_FILES = {
     "agent-fix.yml": 1,
     "agent-task.yml": 1,
     "medic.yml": 1,
-    "plan.yml": 5,
+    "plan.yml": 6,
     "qa-review.yml": 2,
     "red-main-repair.yml": 1,
     "verify.yml": 2,

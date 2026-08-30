@@ -93,6 +93,9 @@ _HEADING_ALIASES: dict[str, str] = {
 
 _DIRECTIONS = ("up", "down", "flat")
 
+# The KPI record fields the rendered table shows, in order.
+KPI_COLUMNS = ["name", "baseline", "unit", "direction", "target"]
+
 # A section heading, and the separators that introduce a trailing clause:
 # planners write "## KPIs — as structured data", and the section is still KPIs.
 _HEADING = re.compile(r"^(#{1,6})\s+(?P<text>.+?)\s*$", re.MULTILINE)
@@ -222,26 +225,41 @@ def normalize_heading(line: str) -> str:
     return _HEADING_ALIASES.get(text, "")
 
 
-def sections(md: str) -> dict[str, str]:
-    """Canonical section key → body text, for every recognised heading.
+def heading_marks(md: str) -> list[tuple[int, int, str, int]]:
+    """`(start, end, line, level)` for every markdown heading — the scanner
+    both artifacts split on. Public because the wave plan (DRE-2845) splits
+    the same way against a different vocabulary; two scanners would be two
+    answers to "where does this section end"."""
+    return [(m.start(), m.end(), m.group(0), len(m.group(1)))
+            for m in _HEADING.finditer(md)]
 
-    A body stops at the next heading of ANY level, so a `###` sub-heading
-    inside a section stays with that section's body while the next `##`
-    starts a new one.
+
+def section_bodies(md: str, resolve) -> dict[str, str]:
+    """Section key → body text, for every heading `resolve` recognises.
+
+    `resolve(line)` returns the canonical key a heading names, or "" for a
+    heading that is not one of the document's sections. A body stops at the
+    next heading of ANY level, so a `###` sub-heading inside a section stays
+    with that section's body while the next `##` starts a new one.
     """
     found: dict[str, str] = {}
-    marks = [(m.start(), m.end(), m.group(0), len(m.group(1))) for m in _HEADING.finditer(md)]
-    for i, (start, end, line, level) in enumerate(marks):
-        key = normalize_heading(line)
+    marks = heading_marks(md)
+    for i, (_start, end, line, level) in enumerate(marks):
+        key = resolve(line)
         if not key:
             continue
         stop = len(md)
         for nstart, _e, nline, nlevel in marks[i + 1:]:
-            if nlevel <= level or normalize_heading(nline):
+            if nlevel <= level or resolve(nline):
                 stop = nstart
                 break
         found[key] = md[end:stop].strip("\n")
     return found
+
+
+def sections(md: str) -> dict[str, str]:
+    """Canonical section key → body text, for every recognised heading."""
+    return section_bodies(md, normalize_heading)
 
 
 def missing_sections(md: str) -> list[str]:
@@ -250,8 +268,10 @@ def missing_sections(md: str) -> list[str]:
     return [s for s in REQUIRED_SECTIONS if s not in have]
 
 
-def _fences(md: str, lang: str) -> list[str]:
+def fenced_blocks(md: str, lang: str) -> list[str]:
+    """Every fenced block carrying this info-string, in document order."""
     return [m.group("body") for m in _FENCE.finditer(md) if m.group("lang").lower() == lang]
+
 
 
 def kpis(md: str) -> list[dict]:
@@ -260,7 +280,7 @@ def kpis(md: str) -> list[dict]:
     Raises ArtifactError when the block is absent or does not parse — callers
     that want a report (defects, the CLI) catch it; there is no silent [].
     """
-    blocks = _fences(md, "kpis")
+    blocks = fenced_blocks(md, "kpis")
     if not blocks:
         raise ArtifactError(
             "the KPIs section carries no ```kpis block — a prose KPI cannot "
@@ -278,7 +298,7 @@ def kpis(md: str) -> list[dict]:
 def mockup(md: str) -> str | None:
     """The live mockup markup from the visual-model section, if any."""
     visual = sections(md).get("visual model", "")
-    blocks = _fences(visual, "mockup")
+    blocks = fenced_blocks(visual, "mockup")
     return blocks[0] if blocks else None
 
 
@@ -772,14 +792,23 @@ def _table(rows: list[str]) -> str:
     return "\n".join(out)
 
 
-def _render_section(key: str, body: str) -> str:
+def render_section(key: str, body: str, title: str | None = None,
+                   tables: dict[str, list[str]] | None = None) -> str:
     """One section: an anchored <section>, and an anchored id per paragraph.
 
     Paragraph ids are numbered WITHIN the section, so editing the business
     case does not renumber the anchors a comment on the outcome is bound to.
+
+    `title` overrides the spelling this module derives from the key, and
+    `tables` names the fenced blocks rendered AS TABLES rather than as escaped
+    code. Both exist for the wave plan (DRE-2845), whose sections come from
+    standards/wave-plan.md and whose commitment block is `epics` — one
+    renderer, because the sanitiser and the CSP below are the ground DRE-2720
+    covered under adversarial review and a second one would re-open it.
     """
     anchor = key.replace(" ", "-")
-    title = section_title(key)
+    title = title if title is not None else section_title(key)
+    tables = tables if tables is not None else {"kpis": KPI_COLUMNS}
     out = [f'<section id="{anchor}" data-anchor>',
            f'<a class="anchor" href="#{anchor}">#</a>',
            f"<h2>{_esc(title)}</h2>"]
@@ -807,8 +836,8 @@ def _render_section(key: str, body: str) -> str:
                            f'data-anchor>'
                            f'<a class="anchor" href="#{anchor}-mockup">#</a>'
                            f"\n{safe}\n</div>")
-            elif lang == "kpis":
-                out.append(_kpi_table(raw, anchor))
+            elif lang in tables:
+                out.append(_json_table(raw, anchor, tables[lang]))
             else:
                 out.append(f"<pre><code>{_esc(raw)}</code></pre>")
             continue
@@ -849,19 +878,28 @@ def _render_section(key: str, body: str) -> str:
     return "\n".join(out)
 
 
-def _kpi_table(raw: str, anchor: str) -> str:
+def _cell(value) -> str:
+    """One record field as page text. A list reads as a list — `depends_on`
+    rendered as its repr would be JSON wearing a table."""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    return "" if value is None else str(value)
+
+
+def _json_table(raw: str, anchor: str, cols: list[str]) -> str:
+    """A fenced JSON block as a table the CEO can read. Unparseable JSON falls
+    back to escaped source — a block nobody can read is still not markup."""
     try:
         records = json.loads(raw)
     except json.JSONDecodeError:
         return f"<pre><code>{_esc(raw)}</code></pre>"
-    cols = ["name", "baseline", "unit", "direction", "target"]
     out = [f'<table id="{anchor}-table"><thead><tr>'
            + "".join(f"<th>{c}</th>" for c in cols) + "</tr></thead><tbody>"]
-    for k in records:
+    for k in records if isinstance(records, list) else []:
         if not isinstance(k, dict):
             continue
         out.append("<tr>" + "".join(
-            f"<td>{_esc(str(k.get(c, '')))}</td>" for c in cols) + "</tr>")
+            f"<td>{_esc(_cell(k.get(c)))}</td>" for c in cols) + "</tr>")
     out.append("</tbody></table>")
     return "\n".join(out)
 
@@ -873,16 +911,28 @@ def render(md: str, epic: str, tokens_href: str | None = None) -> str:
     title_m = re.search(r"^#\s+(?P<t>.+)$", md, re.MULTILINE)
     title = title_m.group("t").strip() if title_m else epic
     order = [VERSION_RECORD] + REQUIRED_SECTIONS
-    body = "\n".join(_render_section(k, found[k]) for k in order if k in found)
+    body = "\n".join(render_section(k, found[k]) for k in order if k in found)
     try:
         payload = json.dumps(kpis(md))
     except ArtifactError:
         payload = "[]"
+    return render_page(f"{epic} — {title}" if epic and epic not in title else title,
+                       body, kpi_payload=payload, tokens_href=tokens_href)
+
+
+def render_page(title: str, body: str, kpi_payload: str = "[]",
+                tokens_href: str | None = None) -> str:
+    """The hardened page shell around already-rendered sections.
+
+    The ONE place this repo emits a plan page: the CSP, the token stylesheet
+    and the JSON data island are written here once, so the wave plan cannot
+    ship a page with a weaker header than the epic artifact's.
+    """
     return _PAGE.format(
-        title=_esc(f"{epic} — {title}" if epic and epic not in title else title),
+        title=_esc(title),
         tokens=_esc(tokens_href or DEFAULT_TOKENS_HREF),
         body=body,
-        kpis=payload.replace("</", "<\\/"),
+        kpis=(kpi_payload or "[]").replace("</", "<\\/"),
     )
 
 

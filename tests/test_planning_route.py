@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -593,6 +594,10 @@ class TestPlanYmlBranchesThreeWays:
 
         Two steps run on a critic's DECISION rather than on the mode directly,
         so the chain is walked: the decision steps themselves are mode-gated.
+
+        The wave route's own agent (DRE-2845) hangs off the SHAPE instead —
+        there is no mode on that branch — so an agent step qualifies either
+        way, as long as the shape it waits for is not the one-off.
         """
         for producer in ("First critic — round 1 decision", "Second critic — decision"):
             assert "steps.route.outputs.mode" in _step(producer)["if"], (
@@ -603,8 +608,12 @@ class TestPlanYmlBranchesThreeWays:
         for step in _steps():
             if str(step.get("uses", "")).startswith("anthropics/claude-code-action"):
                 condition = step.get("if", "")
-                assert any(g in condition for g in gated), (
-                    f"agent step {step.get('name')!r} is not gated on the mode"
+                shapes = re.findall(
+                    r"steps\.shape\.outputs\.route == '([a-z-]+)'", condition)
+                assert any(g in condition for g in gated) or (
+                    shapes and "one-off" not in shapes), (
+                    f"agent step {step.get('name')!r} is gated on neither the "
+                    f"mode nor a shape a one-off cannot be"
                 )
         for fragment in ("Plan artifact — check", "Plan artifact — upload source"):
             assert "steps.route.outputs.mode == 'plan'" in _step(fragment)["if"]

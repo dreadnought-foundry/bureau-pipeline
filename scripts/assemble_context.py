@@ -77,8 +77,10 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # engineering floor, writes plan comments the CEO reads (comms), bakes
     # the vendor-boundary answers into boundary-touching cards, must account
     # for every designed surface (design-parity — DRE-2116), and produces the
-    # epic's CEO-facing artifact (plan-artifact — DRE-2720).
-    "planner": ["card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md", "plan-artifact.md"],
+    # epic's CEO-facing artifact (plan-artifact — DRE-2720). It also writes the
+    # WAVE plan on the wave route (DRE-2845) — the checker enforces
+    # wave-plan.md, so the author has to have read it.
+    "planner": ["card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md", "plan-artifact.md", "wave-plan.md"],
     # The critic reviews diffs AGAINST the engineering + architecture
     # standards — walks the vendor-boundaries checklist on boundary-touching
     # PRs, the console-honesty rules on console cards, and the design-parity
