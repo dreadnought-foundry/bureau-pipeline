@@ -12,6 +12,11 @@ of it is ever a runtime lookup.
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
 - **`routing-verdicts.json`** — the routing vocabulary (DRE-2724).
   `docs/routing-verdicts.md` is rendered from it.
+- **`planning-shapes.json`** — the planning shape vocabulary (DRE-2843):
+  one-off, epic, wave, and per shape the lane it goes to, the actor accountable
+  for it there, whether the sweep may promote it and the marks it applies. Read
+  through `scripts/planning_shape.py`. Shape is **not** size — `size:XS`…`size:XL`
+  mean effort, and a `size:L` one-off is legitimate.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.
