@@ -47,7 +47,7 @@ a field name), and `direction` (`up`, `down` or `flat`). Optional: `unit`,
 say how the baseline was measured — but the block is what a close-out reads.
 
 The reason is KPI objective O10, pushed down one level from the wave to the
-epic (`architecture/wave-plans/README.md:54` — *"predicting two and moving two
+epic (`standards/wave-plan.md` §6 — *"predicting two and moving two
 is a result; moving two and then naming them is a story"*). As prose, "did it
 move the number" becomes a memory exercise. As data,
 `plan_artifact.py closeout` diffs prediction against outcome and reports three
