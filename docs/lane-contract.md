@@ -51,8 +51,8 @@ _Waiting on: DRE-2719._ | Phase 5 — promised |
 | --- | --- | --- |
 | **entrance** | The card has been classified as needing a plan.  
 _Waiting on: DRE-2719._ | Phase 5 — promised |
-| **exit** | A plan artifact exists. No artifact, no exit.  
-_Waiting on: DRE-2720 writes the artifact; the gate that refuses exit without one is Phase 5._ | Phase 5 — promised |
+| **exit** | The card leaves by the route its shape declares (DRE-2844): a one-off goes straight to the build queue, carrying its routing verdict and owing no plan artifact and no green light; an epic leaves for the CEO on a plan artifact, and for an epic it is still no artifact, no exit; a wave leaves to be decomposed into epics before anything is approved. A card carrying no shape does not leave at all — it is refused, with the reason naming the missing stamp.  
+_Waiting on: DRE-2720 writes the epic's artifact and DRE-2844 branches the exit on the shape; the gate that refuses an epic's exit without an artifact is Phase 5._ | Phase 5 — promised |
 | **writers** | The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, the groomer draining a batch the CEO approved, the critic's audit moving a card it could not classify, and a human.  
 Permitted writers: `plan.yml`, `reconcile.py`, `agent-task.yml`, `groomer.py`, `critic_score.py`, `operator` | Phase 2 — live |
 | **evidence** | The plan artifact on the card: business case, KPIs as data, risk, outcome.  

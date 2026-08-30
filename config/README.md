@@ -16,7 +16,10 @@ of it is ever a runtime lookup.
   one-off, epic, wave, and per shape the lane it goes to, the actor accountable
   for it there, whether the sweep may promote it and the marks it applies. Read
   through `scripts/planning_shape.py`. Shape is **not** size — `size:XS`…`size:XL`
-  mean effort, and a `size:L` one-off is legitimate.
+  mean effort, and a `size:L` one-off is legitimate. `scripts/planning_route.py`
+  turns a shape into the route a card takes out of Planning (DRE-2844): the
+  destinations below are the ones `plan.yml` sends cards to, and a card carrying
+  no shape is refused rather than defaulted.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.
