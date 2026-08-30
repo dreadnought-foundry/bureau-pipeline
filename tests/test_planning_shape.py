@@ -35,6 +35,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -46,6 +47,7 @@ os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
+import linear_ops  # noqa: E402
 import planning_shape  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -435,6 +437,149 @@ class TestTheVocabularyIsWrittenDown:
         assert planning_shape.shapes(doc) == THE_THREE + ("spike",)
         assert planning_shape.config_problems(doc) == []
         assert planning_shape.destination("spike", doc) == "Planning"
+
+    def test_a_document_passed_in_is_the_document_read(self):
+        """`None` means "read the shipped file", and nothing else does. A doc
+        that is merely EMPTY was still passed in deliberately — silently
+        answering from the real config instead would answer a question nobody
+        asked, which is the guessing this module exists to refuse."""
+        with pytest.raises(planning_shape.ShapeError):
+            planning_shape.shapes({})
+
+
+# ===========================================================================
+# The CLI — the half a caller actually runs, and where the shape gets lost
+# ===========================================================================
+class _Card:
+    """One card's comments, with the CLI's writes recorded rather than posted.
+
+    `_cmd_read`/`_cmd_stamp` import `linear_ops` inside the function body, so
+    patching the module object is what reaches them.
+    """
+
+    def __init__(self, comments):
+        self.comments = list(comments)
+        self.posted: list[tuple[str, str]] = []
+        self.labelled: list[tuple[str, str]] = []
+
+    def run(self, fn):
+        with patch.object(
+            linear_ops, "comment_bodies", side_effect=lambda i: list(self.comments)
+        ), patch.object(
+            linear_ops, "cmd_comment",
+            side_effect=lambda i, b: self.posted.append((i, b)),
+        ), patch.object(
+            linear_ops, "add_label",
+            side_effect=lambda i, label: self.labelled.append((i, label)),
+        ):
+            return fn()
+
+
+class TestTheReadCommand:
+    def test_a_clean_card_reads_the_whole_record(self, capsys):
+        card = _Card([planning_shape.shape_comment("wave", "a programme of epics")])
+        assert card.run(lambda: planning_shape._cmd_read("DRE-1")) == 0
+        out = capsys.readouterr()
+        assert json.loads(out.out) == {
+            "shape": "wave",
+            "means": planning_shape.means("wave"),
+            "destination": planning_shape.destination("wave"),
+            "actor": planning_shape.actor("wave"),
+            "promotable": planning_shape.is_promotable("wave"),
+            "marks": list(planning_shape.marks("wave")),
+        }
+        assert out.err == "", "a card with nothing wrong with it says nothing"
+
+    def test_a_stray_stamp_beside_a_real_one_does_not_lose_the_shape(self, capsys):
+        """The recognised stamp IS the decision (`shape_on`), so a read that
+        bailed on the noise beside it would report a fully classified card as
+        unclassified — and anything downstream would stall on it."""
+        body = planning_shape.shape_comment("one-off", "one card, one PR")
+        card = _Card([body, SAGA])
+        assert card.run(lambda: planning_shape._cmd_read("DRE-1")) == 0
+        out = capsys.readouterr()
+        assert json.loads(out.out)["shape"] == "one-off"
+        assert "saga" in out.err, "the stray word is still worth saying"
+
+    def test_an_unclassified_card_fails_the_read(self, capsys):
+        card = _Card(["🤖 dispatched", "looks like an epic to me"])
+        assert card.run(lambda: planning_shape._cmd_read("DRE-1")) == 1
+        out = capsys.readouterr()
+        assert out.out == "", "nothing may be printed as if it were a shape"
+        assert planning_shape.fault_tag(out.err) == planning_shape.NO_SHAPE_TAG
+
+    def test_a_card_stamped_only_with_an_unknown_word_fails_the_read(self, capsys):
+        card = _Card([SAGA])
+        assert card.run(lambda: planning_shape._cmd_read("DRE-1")) == 1
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert planning_shape.fault_tag(out.err) == planning_shape.UNKNOWN_SHAPE_TAG
+
+    def test_two_shapes_fail_the_read_rather_than_one_being_picked(self, capsys):
+        card = _Card([
+            planning_shape.shape_comment("epic", "a set of cards"),
+            planning_shape.shape_comment("wave", "a programme of epics"),
+        ])
+        assert card.run(lambda: planning_shape._cmd_read("DRE-1")) == 1
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert planning_shape.fault_tag(out.err) == planning_shape.TWO_SHAPES_TAG
+
+
+class TestTheStampCommand:
+    def test_stamping_a_clean_card_writes_the_comment_and_the_marks(self, capsys):
+        card = _Card([])
+        assert card.run(
+            lambda: planning_shape._cmd_stamp("DRE-1", "epic", "a set of cards")
+        ) == 0
+        assert [identifier for identifier, _ in card.posted] == ["DRE-1"]
+        assert planning_shape.shape_on([body for _, body in card.posted]) == "epic"
+        assert [label for _, label in card.labelled] == list(planning_shape.marks("epic"))
+
+    def test_a_card_already_stamped_is_refused_and_nothing_is_written(self, capsys):
+        card = _Card([planning_shape.shape_comment("wave", "a programme of epics")])
+        assert card.run(
+            lambda: planning_shape._cmd_stamp("DRE-1", "epic", "a set of cards")
+        ) == 1
+        assert card.posted == [] and card.labelled == []
+        assert "wave" in capsys.readouterr().err
+
+    def test_a_stamp_written_over_a_stray_word_reads_back(self, capsys):
+        """The round trip the two halves have to agree on: an unrecognised stray
+        does not stop a real stamp being WRITTEN (`stamp_refusal` reads
+        recognised shapes only), so it must not stop that same stamp being READ
+        a moment later."""
+        card = _Card([SAGA])
+        assert card.run(
+            lambda: planning_shape._cmd_stamp("DRE-1", "one-off", "one card, one PR")
+        ) == 0
+        card.comments.extend(body for _, body in card.posted)
+        capsys.readouterr()
+        assert card.run(lambda: planning_shape._cmd_read("DRE-1")) == 0
+        assert json.loads(capsys.readouterr().out)["shape"] == "one-off"
+
+
+class TestTheCommandLine:
+    def test_check_is_the_default_command_and_the_shipped_file_passes(self, capsys):
+        assert planning_shape.main([]) == 0
+        assert "0 problem(s)" in capsys.readouterr().out
+        assert planning_shape.main(["check"]) == 0
+
+    def test_read_reaches_the_read_command(self, capsys):
+        card = _Card([planning_shape.shape_comment("epic", "a set of cards")])
+        assert card.run(lambda: planning_shape.main(["read", "DRE-1"])) == 0
+        assert json.loads(capsys.readouterr().out)["shape"] == "epic"
+
+    def test_stamp_reaches_the_stamp_command_and_owes_a_reason(self):
+        card = _Card([])
+        assert card.run(
+            lambda: planning_shape.main(
+                ["stamp", "DRE-1", "wave", "--why", "a programme of epics"]
+            )
+        ) == 0
+        assert planning_shape.shape_on([body for _, body in card.posted]) == "wave"
+        with pytest.raises(SystemExit):
+            planning_shape.main(["stamp", "DRE-1", "wave"])
 
 
 if __name__ == "__main__":
