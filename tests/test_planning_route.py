@@ -270,10 +270,22 @@ class TestTheOneOffExit:
     def test_it_carries_the_routing_verdict_the_sweep_needs(self):
         """A one-off inherits no epic's approval, so its verdict IS the
         approval — and without one the sweep refuses to promote it (DRE-2735).
-        The check is the mechanical rule, no model asked."""
+
+        The shape is what decides it: "one card, one pull request" is a
+        statement that an unattended agent builds this, which is what the
+        fleet verdict means. The mechanical rule then OVERRIDES, below.
+        """
         exit_plan = planning_route.exit_plan(_read_card(), [_stamp("one-off")])
         assert exit_plan.verdict == "FLEET"
         assert exit_plan.reason.strip()
+
+    def test_the_default_is_the_one_verdict_the_sweep_promotes(self):
+        """Derived from the routing vocabulary, not named here: exactly one
+        verdict is promotable, and that is the one a one-off leaves with."""
+        promotable = [v for v in routing_verdict.verdicts()
+                      if routing_verdict.is_promotable(v)]
+        assert planning_route.fleet_verdict() == promotable[0]
+        assert len(promotable) == 1
 
     def test_a_card_that_already_carries_a_verdict_is_not_stamped_twice(self):
         already = routing_verdict.verdict_comment("FLEET", "decided at intake")
@@ -283,15 +295,23 @@ class TestTheOneOffExit:
         assert exit_plan.verdict is None
         assert "FLEET" in exit_plan.reason
 
-    def test_a_judgement_call_is_not_invented(self):
-        """Criteria that name neither signal are a judgement call — the one
-        place a model is worth asking, and never a verdict this route makes
-        up on its way past."""
-        body = "## Acceptance criteria\n\n- [ ] It feels faster\n"
-        exit_plan = planning_route.exit_plan(
-            _read_card(description=body), [_stamp("one-off")]
-        )
-        assert exit_plan.verdict is None
+    def test_the_mechanical_check_overrides_the_shape(self):
+        """The check has to be able to say no. A criterion naming an
+        interactive flow, an explicit role label, and a card with no exit
+        condition at all each route somewhere other than the fleet — and the
+        shape does not talk over them."""
+        interactive = "## Acceptance criteria\n\n- [ ] I can sign in and see the board\n"
+        assert planning_route.exit_plan(
+            _read_card(description=interactive), [_stamp("one-off")]
+        ).verdict == "WORKBENCH"
+
+        assert planning_route.exit_plan(
+            _read_card(labels=("repo:bureau-pipeline", "no-code")), [_stamp("one-off")]
+        ).verdict == "OPERATOR"
+
+        assert planning_route.exit_plan(
+            _read_card(description="Just do the thing."), [_stamp("one-off")]
+        ).verdict == "NEEDS WORK"
 
     def test_the_note_says_it_needs_no_plan_and_no_green_light(self):
         exit_plan = planning_route.exit_plan(_read_card(), [_stamp("one-off")])
@@ -302,9 +322,11 @@ class TestTheOneOffExit:
 
     def test_the_note_is_plain_english(self):
         """Card text is read by the person who filed it. No code, no diffs, no
-        file paths (standards/comms.md)."""
+        commands, no file paths (standards/comms.md). The ACTOR is named as the
+        vocabulary names it — `reconcile.py` is who picks the card up, and
+        `planning_shape.shape_comment` already writes it the same way."""
         note = planning_route.exit_plan(_read_card(), [_stamp("one-off")]).note
-        for forbidden in ("```", "python3", ".py", ".json", "scripts/"):
+        for forbidden in ("```", "python3", ".json", "scripts/", "config/"):
             assert forbidden not in note, f"the note must not contain {forbidden!r}"
 
     def test_the_epic_route_has_no_exit_here(self):
@@ -377,6 +399,139 @@ class TestTheOneOffIsActuallyPromoted:
 
 
 # ===========================================================================
+# The CLI — the seam the run actually calls, where the writes happen
+# ===========================================================================
+class _Card:
+    """One card, with the CLI's writes recorded rather than posted.
+
+    `_cmd_decide`/`_cmd_exit` import `linear_ops` inside the function body, so
+    patching the module object is what reaches them.
+    """
+
+    def __init__(self, comments, *, description: str = ONE_OFF_BODY,
+                 labels=ONE_OFF_LABELS):
+        self.comments = list(comments)
+        self.description = description
+        self.labels = list(labels)
+        self.posted: list[tuple[str, str]] = []
+        self.labelled: list[tuple[str, str]] = []
+        self.states: list[tuple[str, str]] = []
+
+    def run(self, fn):
+        import critic_score
+        import linear_ops
+
+        def post(identifier, body):
+            self.posted.append((identifier, body))
+            self.comments.append(body)
+
+        with patch.object(
+            linear_ops, "comment_bodies", side_effect=lambda i: list(self.comments)
+        ), patch.object(
+            linear_ops, "cmd_comment", side_effect=post
+        ), patch.object(
+            linear_ops, "add_label",
+            side_effect=lambda i, label: self.labelled.append((i, label)),
+        ), patch.object(
+            linear_ops, "cmd_state",
+            side_effect=lambda i, lane, *f: self.states.append((i, lane)),
+        ), patch.object(
+            linear_ops, "count_comments",
+            side_effect=lambda i, needle, **kw: sum(
+                1 for body in self.comments if needle in body
+            ),
+        ), patch.object(
+            critic_score, "read_card",
+            side_effect=lambda lops, i: _read_card(
+                i, description=self.description, labels=self.labels
+            ),
+        ):
+            return fn()
+
+    def bodies(self) -> str:
+        return "\n".join(body for _, body in self.posted)
+
+
+class TestTheExitCommand:
+    def test_a_one_off_is_stamped_told_and_moved_in_one_pass(self):
+        card = _Card([_stamp("one-off")])
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+
+        assert routing_verdict.verdict_on([b for _, b in card.posted]) == "FLEET"
+        assert planning_route.ROUTE_TAG in card.bodies()
+        assert card.states == [(CARD, planning_shape.destination("one-off"))]
+
+    def test_the_route_note_is_not_read_back_as_a_second_shape(self):
+        """The note names the shape it is describing. A reader that matched the
+        marker anywhere in a body would read the note back as a stamp — and a
+        card with two stamps is refused."""
+        card = _Card([_stamp("one-off")])
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        assert planning_shape.shape_on(card.comments) == "one-off"
+
+    def test_re_running_the_exit_writes_nothing_twice(self):
+        """Vendor boundary Q3/Q5: a run that crashed after the comments and
+        before the move is retried, and a retry must converge rather than turn
+        one decision into a thread."""
+        card = _Card([_stamp("one-off")])
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        first = list(card.posted)
+        card.run(lambda: planning_route.main(["exit", CARD]))
+
+        assert card.posted == first, "the second pass posted a comment again"
+        assert card.states == [(CARD, "Backlog"), (CARD, "Backlog")]
+
+    def test_a_wave_is_moved_and_given_no_verdict(self):
+        card = _Card([_stamp("wave")])
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert card.states == [(CARD, planning_shape.destination("wave"))]
+        assert routing_verdict.verdicts_on([b for _, b in card.posted]) == ()
+
+    def test_the_marks_the_shape_declares_are_applied(self):
+        card = _Card([_stamp("wave")])
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        assert [label for _, label in card.labelled] == list(planning_shape.marks("wave"))
+
+
+class TestTheDecideCommand:
+    def test_a_stamped_card_writes_its_route_to_the_step_outputs(self, tmp_path):
+        out = tmp_path / "out.txt"
+        card = _Card([_stamp("one-off")])
+        assert card.run(
+            lambda: planning_route.main(["decide", CARD, "--github-output", str(out)])
+        ) == 0
+        written = dict(
+            line.split("=", 1) for line in out.read_text().splitlines() if line
+        )
+        assert written["route"] == "one-off"
+        assert written["destination"] == planning_shape.destination("one-off")
+        assert written["refused"] == "false"
+        assert written["plan_artifact"] == "false"
+        assert card.posted == [], "reading a shape must not write to the card"
+
+    def test_an_unclassified_card_is_told_once_and_routes_nowhere(self, tmp_path):
+        """Refused, not defaulted — and not a red run either: a card nobody has
+        classified is owed a message, not a failed workflow that summons the
+        medic."""
+        out = tmp_path / "out.txt"
+        card = _Card([])
+        assert card.run(
+            lambda: planning_route.main(["decide", CARD, "--github-output", str(out)])
+        ) == 0
+        written = dict(
+            line.split("=", 1) for line in out.read_text().splitlines() if line
+        )
+        assert written["refused"] == "true"
+        assert written["route"] == ""
+        assert planning_shape.NO_SHAPE_TAG in card.bodies()
+
+        # Told once: the sweep re-triggers Planning, and a fault must not
+        # become a thread.
+        card.run(lambda: planning_route.main(["decide", CARD]))
+        assert len(card.posted) == 1
+
+
+# ===========================================================================
 # The run itself: plan.yml branches three ways, and the epic path is untouched
 # ===========================================================================
 def _jobs() -> dict:
@@ -432,12 +587,23 @@ class TestPlanYmlBranchesThreeWays:
 
     def test_a_one_off_run_reaches_no_agent_and_no_artifact(self):
         """Everything the epic route owes — the planner, both critics, the
-        artifact check, the publish job — is gated on the plan/activate mode
-        that only the epic route sets. A one-off run therefore writes no plan
-        artifact and asks no model."""
+        artifact check, the publish job — hangs off the plan/activate mode that
+        only the epic route sets. A one-off run therefore writes no plan
+        artifact and asks no model.
+
+        Two steps run on a critic's DECISION rather than on the mode directly,
+        so the chain is walked: the decision steps themselves are mode-gated.
+        """
+        for producer in ("First critic — round 1 decision", "Second critic — decision"):
+            assert "steps.route.outputs.mode" in _step(producer)["if"], (
+                f"{producer!r} must itself be mode-gated, or the steps that "
+                "hang off it escape the branch"
+            )
+        gated = ("steps.route.outputs.mode", "steps.pre1.outputs", "steps.post1.outputs")
         for step in _steps():
-            if step.get("uses", "").startswith("anthropics/claude-code-action"):
-                assert "steps.route.outputs.mode" in step.get("if", ""), (
+            if str(step.get("uses", "")).startswith("anthropics/claude-code-action"):
+                condition = step.get("if", "")
+                assert any(g in condition for g in gated), (
                     f"agent step {step.get('name')!r} is not gated on the mode"
                 )
         for fragment in ("Plan artifact — check", "Plan artifact — upload source"):
@@ -446,12 +612,15 @@ class TestPlanYmlBranchesThreeWays:
         assert "needs.plan.outputs.mode == 'plan'" in publish
 
     def test_the_epic_still_stops_where_the_vocabulary_says_it_stops(self):
-        """The epic path is unchanged in behaviour — it still moves the epic to
-        the CEO's queue — and it takes that lane from the shape, so the
-        destination is read in one place for all three routes."""
+        """The epic path is UNCHANGED — the same step still hands Linear the
+        same lane, which `test_green_light_rename.py` has pinned since the
+        rename. What this adds is the binding: that lane is the one the shape
+        vocabulary declares, so moving `epic` in the file turns this red rather
+        than letting the two drift apart in silence.
+        """
         step = _step("Epic → Green Light")
-        assert "steps.shape.outputs.destination" in step["run"]
-        assert planning_route.route_for("epic").destination == "Green Light"
+        destination = planning_route.route_for("epic").destination
+        assert f'state "$EPIC" "{destination}"' in step["run"]
         assert "steps.route.outputs.mode == 'plan'" in step["if"]
 
     def test_the_plan_and_activate_split_is_untouched(self):

@@ -110,6 +110,30 @@ jobs:
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
 
+      # --- Planning branches three ways on the shape (DRE-2844) -------------
+      #
+      # The shape is stamped by `planning_shape.py` (DRE-2843) and answers how
+      # the work is STRUCTURED and what gate it owes. It is read ONCE, here,
+      # before anything else routes: a one-off owes no plan artifact and no
+      # green light, an epic owes both, and a wave owes a decomposition into
+      # epics before either is meaningful. Every destination comes from
+      # `config/planning-shapes.json`, which is bound to the lane contract —
+      # routing repeated in this file is routing that drifts from it.
+      #
+      # A card carrying NO shape is REFUSED, never defaulted: it gets the
+      # notice naming the missing stamp, posted once, and this run stops
+      # there. Deliberately not a red run — an unclassified card is owed a
+      # message, not a failed workflow that summons the medic.
+      - name: Planning shape — which route this card takes
+        id: shape
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_route.py decide \
+            "${{ github.event.client_payload.identifier }}" \
+            --github-output "$GITHUB_OUTPUT"
+
       # The slug this repo's cards route by. `subissue` inherits the
       # `repo:<slug>` LABEL from the epic (DRE-1699 — the label is canonical
       # and the `**Repo:**` body stamp is a deprecated legacy fallback); the
@@ -152,12 +176,16 @@ jobs:
           # Never silent: a run that did NOT get the top of its ladder says so.
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
+      # The EPIC route, unchanged (DRE-2844 gates it, it does not rewrite it).
       # The CEO's two verbs: Triage = "planner, deal with this" (plan, or
       # RE-plan if children exist); Todo = "approved — build" (activate; or
       # plan first if the epic was never planned, as a forgiving fallback).
+      # The shape says WHICH route a card takes; it never says whether an
+      # approved epic activates — that is still the CEO's move and this step's
+      # question.
       - name: Route — plan or activate
         id: route
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.shape.outputs.route == 'epic'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The caller's cap, never a literal (DRE-2529). Through env, not
@@ -195,6 +223,33 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC" --record)"
           fi
+
+      # The ONE-OFF route. It is checked on the way out and goes straight to
+      # the build queue: no plan artifact, no green light, and it never reaches
+      # the CEO. The verdict it leaves carrying is what lets the sweep promote
+      # a card that has no parent epic to inherit an approval from — the
+      # DRE-2735 hole, which `tests/test_planning_route.py` exercises rather
+      # than assumes. The lane it moves to is the vocabulary's, so it is not
+      # written here.
+      - name: One-off route — straight to the build queue
+        if: steps.shape.outputs.route == 'one-off'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_route.py exit \
+            "${{ github.event.client_payload.identifier }}"
+
+      # The WAVE route. A wave cannot be green-lit as one plan — what a CEO
+      # would be approving is not written yet — so it is handed to the route
+      # that owes a decomposition into epics first. DRE-2845 builds what is on
+      # the other side of this hand-off; this step is the hand-off.
+      - name: Wave route — hand off
+        if: steps.shape.outputs.route == 'wave'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_route.py exit \
+            "${{ github.event.client_payload.identifier }}"
 
       # Heartbeat: record which model this plan attempt uses so the board/
       # console can surface per-attempt model (DRE-1354 AC), using the same
