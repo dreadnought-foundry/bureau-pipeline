@@ -51,8 +51,8 @@ _Waiting on: DRE-2719._ | Phase 5 — promised |
 | --- | --- | --- |
 | **entrance** | The card has been classified as needing a plan.  
 _Waiting on: DRE-2719._ | Phase 5 — promised |
-| **exit** | The card leaves by the route its shape declares (DRE-2844): a one-off goes straight to the build queue, carrying its routing verdict and owing no plan artifact and no green light; an epic leaves for the CEO on a plan artifact, and for an epic it is still no artifact, no exit; a wave leaves to be decomposed into epics before anything is approved. A card carrying no shape does not leave at all — it is refused, with the reason naming the missing stamp.  
-_Waiting on: DRE-2720 writes the epic's artifact and DRE-2844 branches the exit on the shape; the gate that refuses an epic's exit without an artifact is Phase 5._ | Phase 5 — promised |
+| **exit** | The card leaves by the route its shape declares (DRE-2844): a one-off goes straight to the build queue, carrying its routing verdict and owing no plan artifact and no green light; an epic leaves for the CEO on a plan artifact, and for an epic it is still no artifact, no exit; a wave leaves to be decomposed into epics before anything is approved. A card carrying no shape does not leave at all — it is refused, with the reason naming the missing stamp. There is a fourth exit and it is the only one that is not a plan: the planner ESCALATES, with a reason stated in business terms, and the card parks in Green Light (DRE-2848). Hand-planning is that escalation and nothing else — no label, flag or lane skips this lane, and the one sanctioned bypass past the Todo gate, `break-glass`, returns the card here for the classification it went round.  
+_Waiting on: DRE-2720 writes the epic's artifact, DRE-2844 branches the exit on the shape and DRE-2848 adds the escalation exit; the gate that refuses an epic's exit without an artifact is Phase 5._ | Phase 5 — promised |
 | **writers** | The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, the groomer draining a batch the CEO approved, the critic's audit moving a card it could not classify, and a human.  
 Permitted writers: `plan.yml`, `reconcile.py`, `agent-task.yml`, `groomer.py`, `critic_score.py`, `operator` | Phase 2 — live |
 | **evidence** | The plan artifact on the card: business case, KPIs as data, risk, outcome.  
@@ -62,8 +62,8 @@ _Waiting on: DRE-2720._ | Phase 5 — promised |
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, the post-approval critic sent an approved plan back with a stated reason (DRE-2721), or a card has aged out of Intake and the sweep moved it here (DRE-2687).  
-_Waiting on: needs the transition history the Phase-5 front door records — the three entrances exist, nothing yet reads a card's arrival against them._ | Phase 5 — promised |
+| **entrance** | A plan is waiting on the CEO, an agent has escalated a question only the CEO can answer, the planner has escalated a card whose reasoning is itself the deliverable and stated why (DRE-2848), the post-approval critic sent an approved plan back with a stated reason (DRE-2721), or a card has aged out of Intake and the sweep moved it here (DRE-2687).  
+_Waiting on: needs the transition history the Phase-5 front door records — the four entrances exist, nothing yet reads a card's arrival against them._ | Phase 5 — promised |
 | **exit** | The CEO answers: an approved plan activates — and its children promote only once the post-approval critic has read it (DRE-2721) — an answered escalation returns to Todo, a rejected one goes to Backlog.  
 _Waiting on: needs the transition history the Phase-5 front door records._ | Phase 5 — promised |
 | **writers** | The planner, the two agent runs that escalate, the sweep that moves a card out of Intake once it has aged past the window, and a human.  

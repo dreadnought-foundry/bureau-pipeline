@@ -293,7 +293,25 @@ is caught there. It sending your plan back should be rare: **how often it does
 is the honest measure of how good the first pass was.** Full rules:
 `standards/plan-critic.md`.
 
-## When NOT to plan
-If the intent is too ambiguous to decompose safely, create zero sub-issues
-and post the 2-4 specific questions whose answers you need. One question
-answered before planning beats three PRs reworked after.
+## When NOT to plan — hand-planning is an escalation (DRE-2848)
+Sometimes the reasoning IS the deliverable: the thinking needs a person and
+cannot be done by an agent. And sometimes the intent is simply too ambiguous to
+decompose safely. Both take the same route, and it is the only route out of
+`Planning` that is not a plan.
+
+Create **zero sub-issues**, write **no artifact**, and write your reason with
+`Write` to exactly `$RUNNER_TEMP/planner-escalation.txt` (the workflow prompt
+gives you the full path). The run posts it to the card and parks the card in
+**`Green Light`** — the CEO's decision queue, the same lane a plan waits in.
+Never `Triage`: an escalated card is not broken, it is waiting on a judgement.
+
+Write the reason in **plain English, in business terms**: what the decision is,
+why it needs a person, what getting it wrong costs. No code, no diffs, no file
+paths, no commands — a reason written in technical terms is not shown to the
+CEO at all, and the card parks with the reason missing instead.
+
+**There is no label, flag or lane that skips `Planning`.** This escalation
+leaves FROM Planning rather than around it. If you find yourself wanting a way
+past the lane, this is it — there is no other, and inventing one is the hole
+this rule exists to close. One question answered before planning beats three PRs
+reworked after.

@@ -100,6 +100,30 @@ written, whoever answers).
 There is **no propose-first hard stop**: cards are not gated awaiting
 approval before any work — autonomy is the default, the human is the exception.
 
+## Hand-planning is an escalation and nothing else (DRE-2848)
+
+Sometimes the reasoning IS the deliverable: the thinking cannot be done by an
+agent and needs a person. When that happens **the planner escalates with a
+stated reason and the card parks in `Green Light`** — the CEO's decision queue,
+the same lane a plan waits in. The reason is written in business terms, never a
+diff; a reason written as code is not put in front of the CEO at all
+(`scripts/planning_escalation.py`).
+
+**No label, flag or lane skips `Planning`.** Hand-planning
+is an escalation OUT of Planning, not a way around it, and that distinction is
+the whole rule: an escape hatch with a name and a record is a route; an escape
+hatch without one is a hole nobody is accountable for. The absence is checked
+rather than asserted — `python3 scripts/planning_escalation.py check` reads the
+lane contract, the shape and verdict vocabularies, the pipeline's own label
+constants and the planner workflow, and names anything that would let a card
+past. It is the same `Green Light`/`Triage` split as above: an escalated card is
+not broken, so it never goes to Triage.
+
+`break-glass` is unchanged by this and is not an exception to it. It is a
+bypass of the **Todo-entry gate**, applied by hand by the operator, recorded and
+counted — and the card comes back to `Planning` for the classification it
+skipped once its work merges. It defers Planning; it does not skip it.
+
 ## Routing verdicts (DRE-2724)
 
 Every card leaving the planning segment carries **exactly one** verdict, as a
