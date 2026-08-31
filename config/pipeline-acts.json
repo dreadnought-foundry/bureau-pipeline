@@ -1,0 +1,307 @@
+{
+  "_readme": [
+    "THE ACT REGISTRY (DRE-2825). One file, read by everything.",
+    "",
+    "An ACT is something the pipeline does on its own and then announces: a",
+    "refusal, a recovery, or a hold. Until this file existed every act",
+    "announced itself in prose and every reader scraped that prose",
+    "independently — ten tag constants scattered through scripts/reconcile.py,",
+    "the console pattern-matching separate string markers, a sweep deciding",
+    "'was that the bot' from an emoji prefix. The vocabulary was remembered in",
+    "six places instead of declared in one.",
+    "",
+    "Per act: the TAG it is keyed on, its KIND, the STATE it leaves the work",
+    "in, the NEXT ACTOR, what it DISCHARGES, and its SUBSCRIBER — the workflow",
+    "expected to act on it.",
+    "",
+    "THE TRAILER IS ADDITIVE. THIS IS THE PART TO GET RIGHT.",
+    "",
+    "The tags below are not prose. They are IDEMPOTENCY KEYS and PER-SHA",
+    "BUDGET COUNTERS: reconcile suppresses a repeat notice with `tag in body`,",
+    "and _worker_receipt_count enforces CRASHED_REVIEW_RETRY_CAP and",
+    "DEPENDABOT_RECEIPT_CAP by counting the receipts that carry one. Change the",
+    "grammar and every in-flight pull request's existing receipts become",
+    "invisible: budgets re-arm from zero and suppressed comments re-post. So",
+    "this file ADOPTS those tags as data — `adopted: true` — and",
+    "pipeline_act.receipt() reproduces the existing body BYTE-IDENTICALLY,",
+    "appending a trailer and nothing else. No constant is deleted, and",
+    "reconcile._AGENT_COMMENT_PREFIXES in particular stays until every",
+    "commenter emits a trailer; its removal is a separate, later card.",
+    "",
+    "`adopted: false` means the act has a live receipt but no idempotency key",
+    "yet, so its tag is declared here and emitted by a later card. The check",
+    "proves such a tag is genuinely absent from the tree — the registry cannot",
+    "quietly claim an emission it does not have.",
+    "",
+    "NAMES ARE NOT TAGS, and that is load-bearing. A trailer carries its own",
+    "act's name and the name of whatever it discharges; if a name contained",
+    "another act's tag, an idempotency check keyed on that tag would read this",
+    "receipt as the other act's and suppress it forever — the additive trailer",
+    "would stop being additive. problems() refuses it.",
+    "",
+    "SUBSCRIBER IS DECLARED HERE AND RESOLVED ELSEWHERE. Asserting that every",
+    "subscriber names a workflow that exists and accepts that trigger is",
+    "DRE-2827, and it has to be an extension of the shipped",
+    "scripts/check_workflow_watchers.py: `workflow_call` reusables run under",
+    "the CALLER's workflow name, and most bureau-pipeline workflows are",
+    "reusables. A second, independent derivation of the same fact beside the",
+    "shipped one is the hazard this epic exists for.",
+    "",
+    "JSON, not YAML: scripts/reconcile.py imports the reader on every product",
+    "repo's sweep, where there is no pip install and PyYAML is not guaranteed.",
+    "",
+    "Check this file against the code that emits it:",
+    "  python3 scripts/pipeline_act.py check"
+  ],
+  "version": 1,
+
+  "kinds": {
+    "_readme": [
+      "What the act IS, in three words the whole pipeline can share. The kind",
+      "is not severity: a hold can be routine and a refusal can be trivial."
+    ],
+    "refusal": "The pipeline declined to act, and says why. The work stays exactly where it was.",
+    "recovery": "The pipeline acted to move the work on by itself — a dispatch, a re-dispatch, a restart.",
+    "hold": "The pipeline stopped and handed the work to a person. Nothing else is coming until they act."
+  },
+
+  "states": {
+    "_readme": [
+      "The state the act leaves the WORK in — the card or the pull request —",
+      "never the state of the run that took the act. A reader asks 'what is",
+      "true now', and these are the only four answers."
+    ],
+    "unchanged": "Nothing moved. The notice is the whole act, and it is on the record.",
+    "held": "Stopped and labelled for a person; no run will be dispatched at it.",
+    "escalated": "Moved into a human queue lane — the work is now somebody's to answer.",
+    "dispatched": "A run has been dispatched and is expected to report back."
+  },
+
+  "acts": [
+    {
+      "name": "blocker-reference-broken",
+      "tag": "unresolvable-blocker-reference",
+      "adopted": true,
+      "kind": "refusal",
+      "means": "A blocker reference on the card does not resolve in Linear, so the dependency gate cannot evaluate it.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "One bad reference used to kill the WHOLE sweep (DRE-2035). The gate now skips just the unevaluable card and says so once; the rest of the fleet is unaffected. Nothing is repaired here, which is why this is a refusal and not a hold: the card is not stopped, it is merely not read.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "a blocker reference on this card doesn't"
+      }
+    },
+    {
+      "name": "card-stranded",
+      "tag": "stranded-watchdog",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A card sits in an active lane with no evidence any run ever started — no route, no run receipt, or nothing at all recorded in Planning.",
+      "state": "held",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "The board said work was happening while nothing ran; DRE-1978 sat in Planning for seven days and the CEO found it by asking. One tag covers the three conditions that all mean the same thing to a reader — no run has begun — because it is one idempotency key and splitting it would let the same card be flagged three times.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "no agent run has started. Observed: this card has sat in"
+      }
+    },
+    {
+      "name": "intake-overdue",
+      "tag": "intake-aged",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A card has sat in Intake past the window the lane contract gives it with nothing happening to it, and has been moved into the CEO's queue.",
+      "state": "escalated",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "A move rather than a report, on purpose: about 480 consecutive green sweeps once printed, in plain English, the exact reason five cards were frozen, and nobody read one. A report is a record; a move is a gate (DRE-2687).",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "Intake's exit is a classification, and no"
+      }
+    },
+    {
+      "name": "pr-without-checks",
+      "tag": "no-checks-watchdog",
+      "adopted": true,
+      "kind": "hold",
+      "means": "An open pull request has had zero completed check runs on its head commit — no CI, no verdict and no merge gate will ever fire on it.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "A conflicted or event-starved pull request is invisible to every other backstop: nothing is red, so nothing alarms. The notice names whether the card is human-parked, because that changes entirely what the reader should do about it.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "pipeline cannot see it: no CI, no critic verdict, no merge"
+      }
+    },
+    {
+      "name": "work-never-landed",
+      "tag": "unlanded-work-watchdog",
+      "adopted": true,
+      "kind": "hold",
+      "means": "Work exists that no pull request has ever been opened for — a branch ahead of the default with no PR, or a hand-built card with neither.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "CI, the critic, the merge gate and the Linear sync all key off a pull request; a branch on its own passes through no gate at all and closes no card. Keyed on the branch rather than the card, so a second branch that strands the same way still speaks.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "and no pull request has ever been opened for it"
+      }
+    },
+    {
+      "name": "fix-loop-restarted",
+      "tag": "fix-restart-on-operator-decision",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "An operator decision landed after the fix agent's last blocker, so the sweep re-dispatched the fix agent — no hand dispatch needed.",
+      "state": "dispatched",
+      "next_actor": "agent-fix.yml",
+      "discharges": "fix-attempt-disputed",
+      "subscriber": "agent-fix.yml",
+      "why": "The one act in this file that answers another: the fix agent's blocker notice put the work in a human's queue, and this is what takes it back out (DRE-2409). One restart per answer; a further decision comment re-arms it.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "an operator decision landed after the"
+      }
+    },
+    {
+      "name": "dependabot-review-forced",
+      "tag": "dependabot-review-dispatch",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A dependabot pull request cannot review itself — its runs get GitHub's empty Dependabot secrets store — so the sweep dispatched the critic instead.",
+      "state": "dispatched",
+      "next_actor": "qa-review.yml",
+      "discharges": null,
+      "subscriber": "qa-review.yml",
+      "why": "DRE-2047 at the vendor boundary: `secrets: inherit` passes nothing from the Dependabot store, so the token mint died at required-secret validation with zero steps. The receipt is bound to the head sha and CAPPED per sha (DEPENDABOT_RECEIPT_CAP) — which is exactly why its tag may never be reworded.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "pull_request runs get GitHub's empty Dependabot secrets store"
+      }
+    },
+    {
+      "name": "review-retried-after-crash",
+      "tag": "crashed-review-redispatch",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "The review run for this head crashed without producing a verdict — an infra failure, not a code rejection — so the sweep re-dispatched it.",
+      "state": "dispatched",
+      "next_actor": "qa-review.yml",
+      "discharges": null,
+      "subscriber": "qa-review.yml",
+      "why": "DRE-2282. At most CRASHED_REVIEW_RETRY_CAP automatic re-dispatch per head sha; a new commit re-arms a fresh budget. The count lives in the sha-bound receipts, so repeated sweeps cannot spend it twice — the tag IS the counter.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "run for this head crashed (an infra failure"
+      }
+    },
+    {
+      "name": "reviewer-unavailable",
+      "tag": "reviewer-down",
+      "adopted": true,
+      "kind": "hold",
+      "means": "The adversarial reviewer is down: its run crashed on this commit and the sweep's automatic re-dispatches crashed too.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": "review-retried-after-crash",
+      "subscriber": "reconcile.yml",
+      "why": "Past the retry cap the stall is reported rather than retried — a bounded vendor-boundary retry, the DRE-1921 lesson. It discharges the re-dispatch: the obligation that act created was 'a verdict will post', and this is the other way that obligation ends.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "the adversarial reviewer is DOWN for open PR"
+      }
+    },
+    {
+      "name": "verdict-left-behind",
+      "tag": "stale-verdict-watchdog",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A pull request's newest verdict binds an older commit than its head, and no review is running or queued.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "The merge gate rightly ignores a stale verdict (DRE-1990), so nothing is red and nothing re-reviews on its own — PR #128 carried an APPROVE two commits behind its head through the 2026-08-07 outage. The tenth reconcile tag; the card that opened this registry counted nine.",
+      "emits": {
+        "file": "scripts/reconcile.py",
+        "anchor": "has its newest review verdict bound to"
+      }
+    },
+    {
+      "name": "conflict-agent-dispatched",
+      "tag": "conflict-resolution-dispatch",
+      "adopted": false,
+      "kind": "recovery",
+      "means": "A pull request went DIRTY, so the conflict sweep dispatched the fix agent in conflict mode to merge the default branch into it.",
+      "state": "dispatched",
+      "next_actor": "agent-fix.yml",
+      "discharges": null,
+      "subscriber": "agent-fix.yml",
+      "why": "A conflicted pull request emits no workflow events at all — GitHub cannot build a merge commit, so no CI runs and the merge gate's DIRTY path never fires (PR #25 sat 17 minutes for a hand-nudge). The receipt is the dispatch announcement the fix run posts; it carries no idempotency key today, because the busy-guard rather than a marker is what bounds it.",
+      "emits": {
+        "file": ".github/workflows/agent-fix.yml",
+        "anchor": "🔀 Conflict-resolution agent dispatched (round ${{ steps.pr.outputs.attempt }}/5) — merging main into PR #${{ steps.pr.outputs.number }}."
+      }
+    },
+    {
+      "name": "fix-attempt-landed",
+      "tag": "fix-attempt-pushed",
+      "adopted": false,
+      "kind": "recovery",
+      "means": "The fix agent pushed a new commit, so CI and the critic review re-run on it.",
+      "state": "dispatched",
+      "next_actor": "qa-review.yml",
+      "discharges": null,
+      "subscriber": "qa-review.yml",
+      "why": "Only a NEW commit re-triggers CI and the critic; the workflow verifies the head sha actually advanced before saying this, because announcing 'review re-running' when it did not is a lie that stalls the card in the review lane (DeltaSolv PR #74).",
+      "emits": {
+        "file": ".github/workflows/agent-fix.yml",
+        "anchor": "🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
+      }
+    },
+    {
+      "name": "fix-attempt-disputed",
+      "tag": "fix-attempt-blocked",
+      "adopted": false,
+      "kind": "hold",
+      "means": "The fix agent hit a blocker — it disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong.",
+      "state": "escalated",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "The fixer pushed nothing, so the branch holds a stale REQUEST_CHANGES the critic will never lift on its own. The card is parked for a human rather than left to stall invisibly in the review lane. Its answer is picked up by the sweep and discharged by `fix-loop-restarted`.",
+      "emits": {
+        "file": ".github/workflows/agent-fix.yml",
+        "anchor": "blocked: $(cat /tmp/fix-blocker.txt)"
+      }
+    },
+    {
+      "name": "run-failure-diagnosed",
+      "tag": "medic-diagnosis",
+      "adopted": false,
+      "kind": "hold",
+      "means": "A workflow failed twice — the original run and one automatic retry — so the medic diagnosed it in plain English on the card.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "Not a transient flake by the time it gets here: the retry already happened, and on a critic infra-crash or an upstream 5xx the medic deliberately neither retries nor diagnoses, because re-running against an exhausted limit cannot succeed and only deepens it (DRE-1921). The body is written by the diagnosis agent, so the anchor pins the WRITE CALL rather than any wording.",
+      "emits": {
+        "file": ".github/workflows/medic.yml",
+        "anchor": "linear_ops.py comment DRE-N \"<report>\"",
+        "note": "The medic's report is agent-authored prose, so there is no fixed wording to pin. The anchor is the write call in the medic's own prompt — the point at which the receipt is emitted."
+      }
+    }
+  ]
+}

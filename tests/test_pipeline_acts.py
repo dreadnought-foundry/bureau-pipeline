@@ -175,11 +175,16 @@ class TestTheTrailerIsAdditive:
             assert out[: len(body)] == body
 
     def test_receipt_only_appends(self):
+        """Adversarial on purpose: leading and trailing whitespace, an inner
+        double space, and no trailing newline. A `.strip()` anywhere in the
+        writer changes the body, and a changed body is an idempotency key that
+        no longer covers the receipt it was counted on."""
+        body = "  \U0001f6a8 leading space, inner  gap, no trailing newline  "
         for name in pipeline_act.acts():
-            body = "any body at all —   trailing spaces   \nand newlines\n"
             out = pipeline_act.receipt(name, body)
-            assert out.startswith(body)
-            assert out[len(body):].strip() == pipeline_act.trailer(name)
+            trailer = pipeline_act.trailer(name)
+            assert out == f"{body}\n\n{trailer}"
+            assert len(out) == len(body) + 2 + len(trailer)
 
     def test_the_pinned_wording_is_still_the_live_wording(self):
         """The pin tracks the source. Reword a receipt in reconcile.py or
