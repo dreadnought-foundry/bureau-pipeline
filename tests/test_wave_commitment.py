@@ -76,6 +76,21 @@ def ledger_of(md: str = PLAN) -> dict:
     return wc.ledger_from_plan(WAVE, md)
 
 
+def _asking(seen: list):
+    """A stand-in for the planner-run ask that records who it was asked for."""
+    def dispatch(card: dict) -> bool:
+        seen.append(card["identifier"])
+        return True
+    return dispatch
+
+
+@pytest.fixture(autouse=True)
+def _never_the_real_dispatch(monkeypatch):
+    """No test in this file may reach the `gh` CLI. The default ask fires a
+    repository_dispatch; a test that forgot to pass its own would shell out."""
+    monkeypatch.setattr(wc, "_redispatch", _asking([]))
+
+
 # ===========================================================================
 # 1: the state — recorded, machine-readable, and not the same as approved
 # ===========================================================================
@@ -168,6 +183,41 @@ class TestApprovingTheWaveGreenLightsNothing:
         moved = [ident for ident, _ in ops.advanced_to]
         assert len(moved) == 1
         assert ops.title_of(moved[0]).startswith("The standard moves")
+
+    def test_committing_a_wave_asks_for_the_first_epics_planner_run(self):
+        """The lane move is NOT the trigger. Nothing dispatches off the lane
+        that owes a plan artifact — it is not in the sweep's states and has no
+        nudge (DRE-2736), which is exactly why the sweep's own turn path asks
+        for the run explicitly.
+
+        Every wave's FIRST epic arrives at its turn through THIS path instead:
+        it has no predecessor whose completion would take it through the sweep.
+        A lane move on its own leaves it sitting silently until the
+        stalled-planning alarm asks a human, hours later — and since every wave
+        starts with one, that is the normal first step of the feature."""
+        ops = _FakeOps(description=wc.render_ledger(ledger_of()), green_lit_at=APPROVED)
+        asked: list[str] = []
+        wc.commit(ops, WAVE, dispatch=_asking(asked))
+        moved = [ident for ident, _ in ops.advanced_to]
+        assert asked == moved, "the epic whose turn it is was moved, not started"
+        assert ops.title_of(asked[0]).startswith("The standard moves")
+
+    def test_no_planner_run_is_asked_for_an_epic_still_waiting_its_turn(self):
+        """One ask, for one turn. Starting the whole sequence at wave-approval
+        time is the blank cheque this card removes."""
+        ops = _FakeOps(description=wc.render_ledger(ledger_of()), green_lit_at=APPROVED)
+        asked: list[str] = []
+        wc.commit(ops, WAVE, dispatch=_asking(asked))
+        assert len(asked) == 1
+
+    def test_a_planner_run_that_did_not_start_says_so_on_the_epic(self):
+        """A receipt nobody can check is the DRE-1254 false-receipt class: the
+        arrival note must never claim a run that did not start."""
+        ops = _FakeOps(description=wc.render_ledger(ledger_of()), green_lit_at=APPROVED)
+        wc.commit(ops, WAVE, dispatch=lambda card: False)
+        moved = [ident for ident, _ in ops.advanced_to]
+        said = "\n".join(ops.comments_on(moved[0]))
+        assert "could NOT be started" in said
 
     def test_a_run_that_died_mid_commit_adopts_rather_than_duplicates(self):
         """Q5 of the vendor-boundary premortem: our own crash. A run that
@@ -436,6 +486,19 @@ class _FakeOps:
         return linear_ops.parent_inherited_labels(labels)
 
     def gql(self, query, variables=None):
+        # The wave, or one of the epics under it — the turn reads the epic it
+        # is about to ask a planner run for, and a committed epic is created
+        # CHILDLESS, which is what makes that ask legal.
+        wanted = (variables or {}).get("id", WAVE)
+        if wanted != WAVE:
+            child = next(c for c in self.created if c["identifier"] == wanted)
+            return {"issue": {
+                "id": child["id"], "identifier": wanted, "title": child["title"],
+                "description": "",
+                "labels": {"nodes": [{"name": n}
+                                     for n in self.labels.get(wanted, [])]},
+                "children": {"nodes": []},
+            }}
         history = ([{"createdAt": self.green_lit_at, "toState": {"name": "Todo"}}]
                    if self.green_lit_at else [])
         return {"issue": {

@@ -226,6 +226,39 @@ class TheSweepReadsTheRecordTest(unittest.TestCase):
         self.assertNotIn(arrival.lane, reconcile.EPIC_ACTIVE_STATES)
 
 
+class OneAskForThePlannerRunTest(unittest.TestCase):
+    """Two paths send an epic to the lane that owes a plan artifact — the
+    sweep, when the predecessor reaches Done, and the wave commitment itself,
+    for the epic that has no predecessor to wait for. Nothing dispatches off
+    that lane, so BOTH have to ask for the run, and a second copy of the ask is
+    how one of them silently stops asking."""
+
+    def source_of(self, module: str, func: str) -> str:
+        src = open(os.path.join(SCRIPTS, module), encoding="utf-8").read()
+        return src.split(f"def {func}", 1)[1].split("\ndef ", 1)[0]
+
+    def test_there_is_one_place_that_asks(self):
+        import plan_run
+
+        self.assertTrue(callable(plan_run.note))
+
+    def test_the_sweeps_turn_asks_through_it(self):
+        self.assertIn("plan_run.note",
+                      self.source_of("reconcile.py", "_plan_run_note"))
+
+    def test_the_waves_own_turn_asks_through_it(self):
+        self.assertIn("plan_run.note",
+                      self.source_of("wave_commitment.py", "advance"))
+
+    def test_the_commit_step_carries_what_a_dispatch_needs(self):
+        """`gh api repos/<repo>/dispatches` needs the App token and the repo.
+        Without them the first epic of every wave is moved and never started —
+        and the step would stay green while it happened."""
+        env = step_named("commit the approved wave").get("env") or {}
+        self.assertIn("GH_TOKEN", env)
+        self.assertIn("REPO", env)
+
+
 class NoSecondVocabularyTest(unittest.TestCase):
     def test_the_lanes_are_derived_not_typed(self):
         src = open(os.path.join(SCRIPTS, "wave_commitment.py"), encoding="utf-8").read()
