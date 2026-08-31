@@ -1187,10 +1187,19 @@ jobs:
       # creates the epics as committed-in-sequence and starts the one whose turn
       # it is, which goes to the lane that owes a plan artifact and comes back
       # for its OWN green light. It never green-lights an epic.
+      #
+      # GH_TOKEN + REPO because "starts" is a repository_dispatch, not a lane
+      # move: nothing dispatches off the lane the turn sends the epic to
+      # (DRE-2736), so the turn asks for the planner run explicitly through
+      # `plan_run.py` — the same ask the reconcile sweep makes for every LATER
+      # epic in the sequence. The App token, because the dispatches API needs
+      # contents:write.
       - name: Wave route — commit the approved wave
         if: steps.shape.outputs.route == 'wave'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
         run: |
           python3 .bureau-pipeline/scripts/wave_commitment.py commit \
             "${{ github.event.client_payload.identifier }}" --if-approved

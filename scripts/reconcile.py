@@ -111,7 +111,6 @@ import os
 import re
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
-import tempfile
 import time
 from datetime import UTC, datetime
 
@@ -138,6 +137,9 @@ import merge_gate  # noqa: E402
 # DRE-2739: ONE source for the mid-epic discovery route — what counts as a card
 # added after the green light, and the verdict it must carry before it promotes.
 import mid_epic  # noqa: E402
+# DRE-2846: ONE source for "ask for this epic's planner run" — shared with the
+# wave's own turn, because nothing dispatches off the lane either path uses.
+import plan_run  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
@@ -1703,36 +1705,17 @@ def redispatch(card: dict) -> bool:
     contents:write, which the App token holds — GH_DISPATCH_TOKEN (the
     stub's github.token) is contents:read and exists only for
     `gh workflow run` (actions:write), so gh_dispatch would 403 here.
+
+    The dispatch itself is `plan_run.fire`, shared with the wave's own turn
+    (DRE-2846) — one payload, one event rule, one place to fix. What stays here
+    is the sweep's half: a failure lands in the write ledger, so the run goes
+    red for medic.
     """
-    labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
-    event = "agent-plan" if "agent:planner" in labels else "agent-execute"
-    payload = {
-        "card_id": card["id"],
-        "identifier": card["identifier"],
-        "title": card["title"],
-        "description": card["description"] or "",
-        "labels": labels,
-        "url": f"https://linear.app/dreadnoughtfoundry/issue/{card['identifier']}",
-    }
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-        json.dump({"event_type": event, "client_payload": payload}, f)
-        path = f.name
-    try:
-        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
-            ["gh", "api", f"repos/{REPO}/dispatches", "--input", path],
-            capture_output=True, text=True, check=False,
-        )
-    finally:
-        os.unlink(path)
-    if p.returncode != 0:
-        err = (
-            f"redispatch {card['identifier']}: gh api repos/{REPO}/dispatches "
-            f"failed rc={p.returncode}: {p.stderr.strip()[:400]}"
-        )
+    ok, err = plan_run.fire(card, REPO)
+    if not ok:
         _write_failures.append(err)
         print(f"ERROR: {err}", file=sys.stderr)
-        return False
-    return True
+    return ok
 
 
 def backlog_children() -> list[dict]:
@@ -1964,37 +1947,18 @@ def _plan_run_note(identifier: str) -> str:
     epic does not belong in the broken-card lane (DRE-2776). So the turn asks
     for the run explicitly rather than relying on a lane's side effect.
 
-    Childless epics only. `plan.yml` routes an epic with children to ACTIVATE,
-    which green-lights it and promotes its children — the exact blank cheque
-    this card removes. A committed-in-sequence epic is created childless, so
-    this is the whole of the normal path; an epic that somehow has children
-    already is moved and left for a human, and says so.
+    The ask itself is `plan_run.note` — shared with `wave_commitment.advance`,
+    which is where a wave's FIRST epic reaches its turn. Two copies of it is
+    how one path stops asking without anything saying so.
 
-    Returns the sentence to append to the arrival note — never raises, because
-    a failed dispatch is a receipt to be honest about (the DRE-1254
-    false-receipt class), not a reason to stop advancing the rest of the chain.
+    What the sweep adds is its own half: the failure goes in the write ledger
+    so the run turns red, and the next sweep comes round again.
     """
-    try:
-        card = linear_ops.gql(
-            """query($id: String!) { issue(id: $id) {
-                 id identifier title description
-                 labels { nodes { name } }
-                 children(first: 1) { nodes { identifier } } } }""",
-            {"id": identifier},
-        )["issue"]
-        if (card.get("children") or {}).get("nodes"):
-            return ("\n\nThis epic already carries a plan, so no planner run "
-                    "was started: re-planning it from here would activate it "
-                    "instead, and its green light is the CEO's. Read the plan "
-                    "and move it on when you are ready.")
-        started = redispatch(card)
-    except Exception as e:  # noqa: BLE001 — an unreadable card is not a crash
-        _write_failures.append(f"{identifier} plan dispatch: {e}")
-        started = False
-    if started:
-        return "\n\nThe planner run has been started."
-    return ("\n\n🚨 The planner run could NOT be started — the dispatch did "
-            "not go through. The sweep run is red; the next sweep retries.")
+    return plan_run.note(
+        linear_ops, identifier, redispatch,
+        if_not_started="The sweep run is red; the next sweep retries.",
+        record_failure=_write_failures.append,
+    )
 
 
 def has_unresolved_blocker(card: dict) -> bool:
