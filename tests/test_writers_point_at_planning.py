@@ -24,16 +24,22 @@ job" by moving the children too.
 
 import io
 import os
+import re
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest import mock
+
+import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import linear_ops  # noqa: E402
 import validate_card  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[1]
 
 # The lane Planning owns — the destination this card points every one of the
 # three writers at.
@@ -261,6 +267,49 @@ class AnEpicsChildrenStayWhereTheSweepLooksForThem(unittest.TestCase):
         with mock.patch.object(linear_ops, "_reject_unless_creatable", lambda *a, **k: None):
             _run(fake, linear_ops.cmd_subissue, "DRE-100", "A child", GOOD_BODY)
         self.assertEqual(fake.lane_of(fake.created["stateId"]), "Backlog")
+
+
+class TheRedMainAlertStillLandsInTriage(unittest.TestCase):
+    """The one CALL SITE that must not follow `cmd_create` to Planning.
+
+    `red-main-repair.yml` mints two cards, and both are broken-build alerts
+    that its own prose routes to Triage: "budget exhausted" (the repair robot
+    gave up, main stays red, the fleet's top blocker) and "needs a decision"
+    (the repair agent paused for a human). The second already sets `Triage`
+    itself after `create`; the first rode `cmd_create`'s old unconditional
+    `Triage` and so had no step of its own. Nothing pinned that, so pointing
+    the seam at Planning demoted the loudest alert we have into the ordinary
+    classification queue with no test going red.
+
+    Written over the FILE rather than one named step: a third `create` added
+    to this workflow inherits the guard instead of rediscovering the bug.
+    """
+
+    WORKFLOW = ROOT / ".github" / "workflows" / "red-main-repair.yml"
+
+    def _run_blocks_that_create_a_card(self):
+        doc = yaml.safe_load(self.WORKFLOW.read_text(encoding="utf-8"))
+        blocks = []
+        for job in doc["jobs"].values():
+            for step in job.get("steps", []):
+                script = step.get("run") or ""
+                if re.search(r"linear_ops\.py create\b", script):
+                    blocks.append((step.get("name", "<unnamed>"), script))
+        return blocks
+
+    def test_both_alert_steps_are_found(self):
+        # Guards the guard: if the grep stops matching, the assertions below
+        # pass over an empty list and prove nothing.
+        self.assertEqual(len(self._run_blocks_that_create_a_card()), 2)
+
+    def test_every_card_this_workflow_mints_is_pinned_to_triage(self):
+        for name, script in self._run_blocks_that_create_a_card():
+            self.assertRegex(
+                script,
+                r'linear_ops\.py state "\$\w+" "Triage"',
+                f"{name!r} creates a card without setting Triage — it lands "
+                f"in {PLANNING!r}, the lane cmd_create now writes",
+            )
 
 
 if __name__ == "__main__":
