@@ -83,6 +83,18 @@ class TheRunRecordsTheCommitmentTest(unittest.TestCase):
                            "a commitment recorded from an unchecked plan "
                            "commits the wave to epics the gate would refuse")
 
+    def test_the_turn_lands_the_epic_where_the_run_parks_it_for_the_ceo(self):
+        """The other half of the turn, closed mechanically: the lane a turn
+        sends an epic to is the one plan.yml runs the planner in, and that run
+        ends by parking the epic in the decision lane on its fresh artifact.
+        Without this the claim 'it arrives in Green Light on its own' would be
+        prose."""
+        self.assertIn(wc.decision_lane(), body_of(step_named("Epic → Green Light")))
+        route = body_of(step_named("Route — plan or activate"))
+        self.assertIn(wc.turn_lane(), route,
+                      "the planner run's own plan route puts the epic in the "
+                      "lane a turn sends it to")
+
     def test_the_announcement_still_says_nothing_is_approved(self):
         body = body_of(step_named("wave plan — announce"))
         self.assertIn("own", body.lower())
@@ -118,18 +130,86 @@ class TheSweepReadsTheRecordTest(unittest.TestCase):
             {"key": "route", "title": "The wave route", "depends_on": ["standard"],
              "status": wc.COMMITTED},
             position=2, total=3)
-        relations = {"issue": {"relations": {"nodes": [
-            {"type": "blocks", "issue": {"identifier": "DRE-2901"}}]}}}
-        with patch.object(reconcile.linear_ops, "gql", return_value=relations), \
+        answers = [
+            {"issue": {"relations": {"nodes": [
+                {"type": "blocks", "issue": {"identifier": "DRE-2901"}}]}}},
+            {"issue": {"id": "u", "identifier": "DRE-2901", "title": "route",
+                       "description": "x",
+                       "labels": {"nodes": [{"name": "agent:planner"}]},
+                       "children": {"nodes": []}}},
+        ]
+        with patch.object(reconcile.linear_ops, "gql", side_effect=answers), \
             patch.object(reconcile.linear_ops, "comment_bodies", return_value=[record]), \
             patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
             patch.object(reconcile, "card_state", return_value="Backlog"), \
             patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+            patch.object(reconcile, "redispatch", return_value=True) as dispatch, \
             patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
             patch.object(reconcile.linear_ops, "cmd_comment") as comment:
             reconcile.advance_unblocked_epics("DRE-2900")
         advance.assert_called_once_with("DRE-2901", wc.turn_lane(), "Backlog")
         self.assertIn("plan artifact", comment.mock_calls[0].args[1].lower())
+        dispatch.assert_called_once()
+
+    def test_the_turn_starts_the_planner_rather_than_relying_on_a_lane(self):
+        """Nothing dispatches off the lane that owes a plan artifact — Triage
+        happened to, which is the only reason the old path used it. The turn
+        asks for the run, and says honestly when it did not start."""
+        from unittest.mock import patch
+
+        answers = [
+            {"issue": {"relations": {"nodes": [
+                {"type": "blocks", "issue": {"identifier": "DRE-2901"}}]}}},
+            {"issue": {"id": "u", "identifier": "DRE-2901", "title": "route",
+                       "description": "x",
+                       "labels": {"nodes": [{"name": "agent:planner"}]},
+                       "children": {"nodes": []}}},
+        ]
+        record = wc.commitment_comment(
+            "DRE-2719",
+            {"key": "route", "title": "The wave route", "depends_on": ["standard"],
+             "status": wc.COMMITTED},
+            position=2, total=3)
+        with patch.object(reconcile.linear_ops, "gql", side_effect=answers), \
+            patch.object(reconcile.linear_ops, "comment_bodies", return_value=[record]), \
+            patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
+            patch.object(reconcile, "card_state", return_value="Backlog"), \
+            patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+            patch.object(reconcile, "redispatch", return_value=False), \
+            patch.object(reconcile.linear_ops, "cmd_advance"), \
+            patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+            reconcile.advance_unblocked_epics("DRE-2900")
+        self.assertIn("could NOT be started", comment.mock_calls[0].args[1])
+
+    def test_an_epic_that_already_has_a_plan_is_not_re_dispatched(self):
+        """`plan.yml` routes an epic with children to ACTIVATE — which
+        green-lights it and promotes its children. That is the blank cheque
+        this card removes, so the turn never asks for that run."""
+        from unittest.mock import patch
+
+        answers = [
+            {"issue": {"relations": {"nodes": [
+                {"type": "blocks", "issue": {"identifier": "DRE-2901"}}]}}},
+            {"issue": {"id": "u", "identifier": "DRE-2901", "title": "route",
+                       "description": "x",
+                       "labels": {"nodes": [{"name": "agent:planner"}]},
+                       "children": {"nodes": [{"identifier": "DRE-2950"}]}}},
+        ]
+        record = wc.commitment_comment(
+            "DRE-2719",
+            {"key": "route", "title": "The wave route", "depends_on": ["standard"],
+             "status": wc.COMMITTED},
+            position=2, total=3)
+        with patch.object(reconcile.linear_ops, "gql", side_effect=answers), \
+            patch.object(reconcile.linear_ops, "comment_bodies", return_value=[record]), \
+            patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
+            patch.object(reconcile, "card_state", return_value="Backlog"), \
+            patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+            patch.object(reconcile, "redispatch") as dispatch, \
+            patch.object(reconcile.linear_ops, "cmd_advance"), \
+            patch.object(reconcile.linear_ops, "cmd_comment"):
+            reconcile.advance_unblocked_epics("DRE-2900")
+        dispatch.assert_not_called()
 
     def test_the_sweep_never_sends_a_committed_epic_to_an_active_lane(self):
         """Its turn is a turn to be PLANNED, not a turn to be built: an

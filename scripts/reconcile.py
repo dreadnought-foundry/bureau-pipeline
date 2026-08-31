@@ -1942,7 +1942,7 @@ def advance_unblocked_epics(done_epic: str) -> None:
             arrival = None
         if arrival is not None:
             linear_ops.cmd_advance(dep, arrival.lane, "Backlog")
-            linear_ops.cmd_comment(dep, arrival.note)
+            linear_ops.cmd_comment(dep, arrival.note + _plan_run_note(dep))
             continue
         linear_ops.cmd_advance(dep, "Triage", "Backlog")
         linear_ops.cmd_comment(
@@ -1951,6 +1951,50 @@ def advance_unblocked_epics(done_epic: str) -> None:
             "and all blocker epics are now complete. The planner will take it from "
             "here; a human still approves the plan (→ In Progress).",
         )
+
+
+def _plan_run_note(identifier: str) -> str:
+    """Start the planner run for an epic whose turn has come, and say honestly
+    whether it started (DRE-2846).
+
+    The lane move is NOT the trigger. The lane a turn sends an epic to is the
+    one that owes a plan artifact, and nothing dispatches off that lane — it is
+    not in SWEEP_STATES and has no nudge (DRE-2736). Triage happened to
+    dispatch, which is the only reason the path above uses it, and a healthy
+    epic does not belong in the broken-card lane (DRE-2776). So the turn asks
+    for the run explicitly rather than relying on a lane's side effect.
+
+    Childless epics only. `plan.yml` routes an epic with children to ACTIVATE,
+    which green-lights it and promotes its children — the exact blank cheque
+    this card removes. A committed-in-sequence epic is created childless, so
+    this is the whole of the normal path; an epic that somehow has children
+    already is moved and left for a human, and says so.
+
+    Returns the sentence to append to the arrival note — never raises, because
+    a failed dispatch is a receipt to be honest about (the DRE-1254
+    false-receipt class), not a reason to stop advancing the rest of the chain.
+    """
+    try:
+        card = linear_ops.gql(
+            """query($id: String!) { issue(id: $id) {
+                 id identifier title description
+                 labels { nodes { name } }
+                 children(first: 1) { nodes { identifier } } } }""",
+            {"id": identifier},
+        )["issue"]
+        if (card.get("children") or {}).get("nodes"):
+            return ("\n\nThis epic already carries a plan, so no planner run "
+                    "was started: re-planning it from here would activate it "
+                    "instead, and its green light is the CEO's. Read the plan "
+                    "and move it on when you are ready.")
+        started = redispatch(card)
+    except Exception as e:  # noqa: BLE001 — an unreadable card is not a crash
+        _write_failures.append(f"{identifier} plan dispatch: {e}")
+        started = False
+    if started:
+        return "\n\nThe planner run has been started."
+    return ("\n\n🚨 The planner run could NOT be started — the dispatch did "
+            "not go through. The sweep run is red; the next sweep retries.")
 
 
 def has_unresolved_blocker(card: dict) -> bool:

@@ -561,7 +561,13 @@ def render_ledger(ledger: dict) -> str:
     for position, record in enumerate(epics, 1):
         card = f" — {record['card']}" if record.get("card") else ""
         waits = record.get("depends_on") or []
-        after = " · waits for " + ", ".join(f"`{k}`" for k in waits) if waits else ""
+        # A dropped epic waits for nothing — it is out of the sequence, and
+        # saying what it "waits for" would read as a turn that is still coming.
+        after = (
+            " · waits for " + ", ".join(f"`{k}`" for k in waits)
+            if waits and record.get("status") != DROPPED
+            else ""
+        )
         lines.append(
             f"{position}. `{record.get('key')}` — {record.get('title')}{card} — "
             f"**{record.get('status')}**{after}"
