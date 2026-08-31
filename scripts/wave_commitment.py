@@ -174,6 +174,20 @@ def turn_lane(contract: dict | None = None) -> str:
     return hits[0]
 
 
+def _epic_mark(doc: dict | None = None) -> str:
+    """The label that makes a card an epic, from the shape vocabulary's own
+    marks. Read rather than typed: the same reuse `planning_shape` makes of
+    `agent:planner` in the first place, so renaming it there renames it here."""
+    marks = planning_shape.marks(EPIC_SHAPE, doc)
+    if not marks:
+        raise CommitmentError(
+            f"the {EPIC_SHAPE!r} shape in config/planning-shapes.json applies no "
+            "marks, so nothing would make a committed epic an epic — the sweep "
+            "would promote it as work"
+        )
+    return marks[0]
+
+
 def decision_lane(doc: dict | None = None) -> str:
     """Where an epic's own green light is given — the `epic` shape's own
     destination in `config/planning-shapes.json`. The turn never goes here
@@ -752,19 +766,42 @@ def commit(linear_ops, wave: str, if_approved: bool = False) -> list:
     strip = [
         label for label in linear_ops.parent_inherited_labels(
             [n["name"] for n in (issue.get("labels") or {}).get("nodes", [])])
-        if label.startswith("agent:") and label != planning_shape.marks(EPIC_SHAPE)[0]
+        if label.startswith("agent:") and label != _epic_mark()
     ]
 
     created = []
     total = len(ledger["epics"])
+    # Crash recovery, and it is the reason this is not a bare create loop: a run
+    # that dies between creating a card and writing the ledger would, on the
+    # retry, create the same epic twice — and a wave whose sequence names one
+    # epic under two card numbers is worse than no sequence at all. So an entry
+    # with no card ADOPTS a child of this wave that already carries its title
+    # before it creates one. Titles come from the plan the CEO approved and are
+    # unique within it (`wave_plan.epic_defects` refuses a duplicate key, and
+    # the title is what the CEO reads).
+    adoptable = {
+        (node.get("title") or ""): node["identifier"]
+        for node in (issue.get("children") or {}).get("nodes", [])
+    }
     for position, record_ in enumerate(ledger["epics"], 1):
         if record_.get("card") or record_.get("status") != COMMITTED:
+            continue
+        adopted = adoptable.get(record_["title"])
+        if adopted:
+            print(f"wave commitment: adopting the existing {adopted} for "
+                  f"`{record_['key']}` — a previous run created it and did not "
+                  "get to record it")
+            record_["card"] = adopted
+            _write_ledger(linear_ops, wave, issue, ledger)
+            if linear_ops.count_comments(adopted, COMMITMENT_TAG) == 0:
+                linear_ops.cmd_comment(
+                    adopted, commitment_comment(wave, record_, position, total))
             continue
         blockers = [
             (entry(ledger, dep) or {}).get("card")
             for dep in record_.get("depends_on") or []
         ]
-        flags = ["--label", planning_shape.marks(EPIC_SHAPE)[0]]
+        flags = ["--label", _epic_mark()]
         named = [b for b in blockers if b]
         if named:
             flags += ["--blocked-by", ",".join(named)]
@@ -772,6 +809,12 @@ def commit(linear_ops, wave: str, if_approved: bool = False) -> list:
             wave, record_["title"], _epic_body(wave, record_, ledger), *flags)
         record_["card"] = child["identifier"]
         created.append(child["identifier"])
+        # ORDER IS LOAD-BEARING, the `mid_epic._add` rule. The ledger is written
+        # BEFORE the stamp, so a crash between the two leaves the safe half: a
+        # recorded epic that is not yet stamped is still held by `agent:planner`
+        # and is picked up by the next run, where an unrecorded one would be
+        # created a second time.
+        _write_ledger(linear_ops, wave, issue, ledger)
         # The role a child normally inherits is a BUILD role, and this child is
         # an epic. Leaving `agent:engineer` on it would let the relay dispatch a
         # build agent at a container — the blank cheque, one label over.

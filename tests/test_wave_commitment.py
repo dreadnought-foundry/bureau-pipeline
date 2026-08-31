@@ -169,6 +169,35 @@ class TestApprovingTheWaveGreenLightsNothing:
         assert len(moved) == 1
         assert ops.title_of(moved[0]).startswith("The standard moves")
 
+    def test_a_run_that_died_mid_commit_adopts_rather_than_duplicates(self):
+        """Q5 of the vendor-boundary premortem: our own crash. A run that
+        created a card and died before recording it must not create it again on
+        the retry — a wave whose sequence names one epic under two card numbers
+        is worse than no sequence at all."""
+        ops = _FakeOps(description=wc.render_ledger(ledger_of()), green_lit_at=APPROVED)
+        orphan = ops.cmd_subissue(
+            WAVE, "The standard moves where agents read it", "body")
+        wc.commit(ops, WAVE)
+        assert len(ops.created) == 3, "the orphan was created a second time"
+        assert wc.entry(wc.parse_ledger(ops.description), "standard")["card"] == \
+            orphan["identifier"]
+
+    def test_the_committed_epics_carry_the_label_that_makes_them_epics(self):
+        """Without it the relay dispatches a BUILD agent at a container — the
+        blank cheque, one label over. The label comes from the shape
+        vocabulary's own marks, never typed here."""
+        import planning_shape
+
+        ops = _FakeOps(description=wc.render_ledger(ledger_of()), green_lit_at=APPROVED)
+        wc.commit(ops, WAVE)
+        mark = planning_shape.marks("epic")[0]
+        for issue in ops.created:
+            assert mark in ops.labels[issue["identifier"]]
+            assert not [
+                l for l in ops.labels[issue["identifier"]]
+                if l.startswith("agent:") and l != mark
+            ], "a build role survived on an epic"
+
     def test_the_turn_comes_when_the_predecessor_is_done(self):
         ledger = ledger_of()
         assert wc.turn(ledger, settled=()) == ("standard",)
@@ -428,9 +457,14 @@ class _FakeOps:
         issue = {"id": f"uuid-{ident}", "identifier": ident, "title": title,
                  "state": "Backlog", "url": f"https://linear.app/x/{ident}"}
         self.created.append(issue)
-        self.labels[ident] = ["repo:bureau-pipeline", "initiative:intake"] + [
-            flags[i + 1] for i, f in enumerate(flags) if f == "--label"
-        ]
+        # The REAL label rule, not a stand-in: `linear_ops.child_labels_from`
+        # inherits a BUILD role from the parent (agent:engineer / agent:devops)
+        # and explicitly does NOT inherit agent:planner — "children are work,
+        # not epics". An epic created under a wave has to survive that.
+        self.labels[ident] = linear_ops.child_labels_from(
+            [n["name"] for n in self.gql("")["issue"]["labels"]["nodes"]],
+            [flags[i + 1] for i, f in enumerate(flags) if f == "--label"],
+        )
         return issue
 
     def cmd_comment(self, identifier, body):
