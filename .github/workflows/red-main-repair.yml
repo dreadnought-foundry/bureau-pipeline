@@ -181,6 +181,11 @@ jobs:
           WF_NAME: ${{ github.event.workflow_run.name }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          # The repo this run is in — the repo whose main is red, and the slug
+          # its card must carry (DRE-2680). Same derivation plan.yml uses; this
+          # workflow is reusable, so a literal would file every fleet failure
+          # against one repo.
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           TITLE="Red main needs a human — repair budget exhausted (${HEAD_SHA:0:7})"
           EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
           if [ -n "$EXISTING" ]; then
@@ -199,7 +204,7 @@ jobs:
             # classification — main is red, the robot is out of swings, and the
             # card exists because something is already broken. Same shape as the
             # repair-question escalation below, which has always said so itself.
-            CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-triage.md | grep -oE 'DRE-[0-9]+' | head -1 || true)
+            CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-triage.md --repo "$REPO_SLUG" | grep -oE 'DRE-[0-9]+' | head -1 || true)
             [ -n "$CREATED" ] && python3 .bureau-pipeline/scripts/linear_ops.py state "$CREATED" "Triage" || true
           fi
 
@@ -436,6 +441,9 @@ jobs:
             # Triage and not Green Light, which DRE-2776 made the queue for a
             # card waiting on a JUDGEMENT: the subject here is a broken default
             # branch, and the card exists because something is already wrong.
+            # The repo this run is in, same derivation as the budget-exhausted
+            # card above (DRE-2680) — the slug this card must carry.
+            REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
             TITLE="Red main needs a decision — $WF_NAME failing on the default branch"
             EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
             {
@@ -448,7 +456,7 @@ jobs:
             if [ -n "$EXISTING" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EXISTING" "$(cat /tmp/repair-question.md)"
             else
-              CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-question.md | grep -oE 'DRE-[0-9]+' | head -1 || true)
+              CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-question.md --repo "$REPO_SLUG" | grep -oE 'DRE-[0-9]+' | head -1 || true)
               [ -n "$CREATED" ] && python3 .bureau-pipeline/scripts/linear_ops.py state "$CREATED" "Triage" || true
             fi
           else

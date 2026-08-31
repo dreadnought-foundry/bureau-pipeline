@@ -175,6 +175,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HEADLINE: ${{ steps.decide.outputs.headline }}
         run: |
+          # The repo this alarm is about — the one whose channel stopped moving,
+          # which is the repo this run is in. Derived, not hardcoded (DRE-2680):
+          # the card needs a repo:<slug> label or the readiness gate cannot
+          # route it out of Planning.
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           TITLE="$(cat "$RUNNER_TEMP/alarm-title.txt")"
           EXISTING="$(python3 scripts/linear_ops.py find-open "$TITLE" || true)"
           if [ -n "$EXISTING" ]; then
@@ -186,5 +191,5 @@ jobs:
               echo ""
               echo "Watch run: $RUN_URL"
             } > "$RUNNER_TEMP/alarm-card.md"
-            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/alarm-card.md"
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/alarm-card.md" --repo "$REPO_SLUG"
           fi

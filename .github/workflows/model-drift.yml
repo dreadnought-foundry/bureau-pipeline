@@ -124,12 +124,16 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
+          # The repo whose pins drifted — this one. Derived, not hardcoded
+          # (DRE-2680): a card with no repo:<slug> label carries no product key
+          # and the readiness gate cannot route it out of Planning.
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           TITLE=$(cat "$RUNNER_TEMP/drift-title.txt")
           EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
           if [ -n "$EXISTING" ]; then
             echo "already open as $EXISTING — not duplicating"
           else
-            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/drift-body.md"
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/drift-body.md" --repo "$REPO_SLUG"
           fi
 
       # Discovery (DRE-2317): a model id the catalog offers that
@@ -163,12 +167,15 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
+          # Same derivation as the drift card above (DRE-2680) — the repo whose
+          # configuration has never named this model is the repo we are in.
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           TITLE=$(cat "$RUNNER_TEMP/new-model-title.txt")
           EXISTING=$(python3 scripts/linear_ops.py find-open "$TITLE")
           if [ -n "$EXISTING" ]; then
             echo "already open as $EXISTING — not duplicating"
           else
-            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/new-model-body.md"
+            python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/new-model-body.md" --repo "$REPO_SLUG"
           fi
 
       # DATA ONLY, and proven so: stage exactly one path, then refuse to commit

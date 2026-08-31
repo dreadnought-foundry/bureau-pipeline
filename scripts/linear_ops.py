@@ -56,7 +56,18 @@ Subcommands:
                                          --label repo:<slug> --label agent:<role>
                                          --label initiative:<x>
                                          --blocked-by DRE-N,DRE-M
-  create <title> <description-file>    create a standalone card in Planning
+  create <title> <description-file> --repo <slug>
+                                       create a standalone card in Planning —
+                                       the medic / red-main-repair / channel-
+                                       watch / model-drift failure-report seam.
+                                       `--repo` is REQUIRED and becomes the
+                                       card's repo:<slug> label: without it the
+                                       card carries no product key and the
+                                       readiness gate cannot route it out of
+                                       Planning (DRE-2680). An unrecognised
+                                       slug is REFUSED here rather than left
+                                       for the relay to reject after the card
+                                       exists.
   find-open <title>                    print the identifier of an existing
                                        non-terminal (not Done/Canceled) card
                                        with exactly this title, else nothing —
@@ -1000,9 +1011,59 @@ def _issue_label_names(issue_id: str) -> list[str]:
     return [n["name"] for n in (issue.get("labels") or {}).get("nodes", [])]
 
 
-def cmd_create(title: str, description_file: str) -> None:
+def required_repo_slug(flags) -> str:
+    """The `--repo <slug>` a `create` call MUST carry, validated against the
+    routing snapshot (DRE-2680). Pure; raises `LinearError` rather than
+    returning a fallback.
+
+    Required, never defaulted, and that is the whole point. Every card this
+    seam minted arrived with no labels whatsoever, so the medic's, the repair
+    rail's, the channel watcher's and the drift sweep's own failure reports
+    carried nothing that told the pipeline what to do with them — and under the
+    front door a card's `repo:` label is the only product key, so they landed in
+    Planning and could not leave it. A default would read to a caller exactly
+    like the defect it replaces: everything looks fine and the label is silently
+    absent. A required argument makes an unlabelled call impossible to write.
+
+    An unrecognised slug is refused HERE, before the card exists. The relay does
+    catch one later — it comments with the bad value and parks the card — but a
+    failure report that has to be rescued by hand is the failure report not
+    arriving. The valid set is `validate_card.VALID_SLUGS`, derived from
+    config/repo-map.json, so onboarding a repo is a data edit and this seam
+    follows it with no code change.
+    """
+    import validate_card
+
+    slug = ""
+    it = iter(flags)
+    for tok in it:
+        if tok == "--repo":
+            slug = next(it, "").strip()
+    valid = ", ".join(sorted(validate_card.VALID_SLUGS))
+    if not slug:
+        raise LinearError(
+            "create REFUSED: --repo <slug> is required. A card minted without a "
+            "repo:<slug> label carries no product key, so the readiness gate "
+            f"cannot route it and it cannot leave Planning. Valid slugs: {valid}."
+        )
+    if slug not in validate_card.VALID_SLUGS:
+        raise LinearError(
+            f"create REFUSED: --repo {slug!r} is not a repo the pipeline serves, "
+            f"so nothing could route the card. Valid slugs: {valid}."
+        )
+    return slug
+
+
+def cmd_create(title: str, description_file: str, *flags: str) -> None:
     """Create a standalone card in Planning — the seam the medic, red-main-repair,
     channel-watch and model-drift mint a card through.
+
+    `--repo <slug>` is REQUIRED and becomes the card's `repo:<slug>` label; see
+    `required_repo_slug` for why it is required rather than defaulted. The
+    caller always knows the answer — the workflow that failed knows its own
+    repository. An `agent:*` label is deliberately NOT set: these are diagnosis
+    cards whose role depends on what failed, and guessing one would be worse
+    than the readiness gate inferring it.
 
     Planning, not Triage (DRE-2858). Triage is the BROKEN-CARD lane and only
     that: an unroutable `repo:` label, an archived repo, a card the readiness
@@ -1010,11 +1071,13 @@ def cmd_create(title: str, description_file: str) -> None:
     WORK, correctly formed and owing a classification — which is Planning's
     question, not Triage's. A caller that genuinely wants the broken-card lane
     still says so itself, in its own step (red-main-repair.yml does)."""
+    slug = required_repo_slug(flags)
     teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
     team_id = teams["teams"]["nodes"][0]["id"]
     with open(description_file) as f:
         description = f.read()
     sid = state_id(team_id, "Planning")
+    label = f"repo:{slug}"
     data = gql(
         """mutation($input: IssueCreateInput!) {
              issueCreate(input: $input) { success issue { identifier url } } }""",
@@ -1024,11 +1087,12 @@ def cmd_create(title: str, description_file: str) -> None:
                 "title": title,
                 "description": description,
                 "stateId": sid,
+                "labelIds": _team_label_ids(team_id, [label]),
             }
         },
     )
     issue = data["issueCreate"]["issue"]
-    print(f"created {issue['identifier']} {issue['url']}")
+    print(f"created {issue['identifier']} {issue['url']} labels={label}")
 
 
 def cmd_find_open(title: str) -> None:
