@@ -203,6 +203,33 @@ permanently, with nothing saying so. `linear_ops.py subissue` refuses a parent
 that is not already an epic. Neither a `DRE-1234a` suffix nor a sub-issue: the
 new work is a **sibling card under the same epic**, with its own number.
 
+## Every epic ends with a proof card and a demo card (DRE-2746)
+The last two children of every epic are a `PROOF: …` card and a `DEMO: …` card.
+They answer different questions and neither substitutes for the other:
+**proof** answers *did it work* — not a green suite, but the mechanism observed
+running against real state, with the observation recorded in the repo so the
+record merges; **demo** answers *can the CEO see it*, because a merged PR and a
+passing suite are invisible to the person who green-lit the epic. An epic that
+produces neither has no way of being wrong in public.
+
+Three conditions, and each is checked on the planner's OUTPUT rather than on
+any document that states the convention — a convention nothing checks is a
+convention that drifts:
+
+1. Both are the epic's **last two children** (either order between themselves).
+2. Both are **blocked by every other child**, as real Linear `blockedBy`
+   relations. Prose is not a relation and the gate reads the relation.
+3. **Neither may carry `FLEET`** — both route to `WORKBENCH` or `OPERATOR`,
+   because a proof the fleet can close by merging its own code is not a proof.
+   The whole value is that something other than the builder confirms it. The
+   pair of acceptable verdicts is derived from `config/routing-verdicts.json`
+   (the verdicts whose accountable actor is a human), never restated in code.
+
+An epic missing either card is bounced back to `Planning` with the reason
+named, the same way an epic with invalid children is. The enforcer is
+`scripts/proof_and_demo.py`, run over `linear_ops.py children-detail` in
+`plan.yml`; `briefs/planner.md` tells the planner how to satisfy it.
+
 ## Mid-epic discovery (DRE-2739)
 A finding made **while building**, about an epic that is already approved and
 already running, does not go back to Intake. It is filed against the epic with

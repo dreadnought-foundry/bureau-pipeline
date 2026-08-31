@@ -27,6 +27,13 @@ section, not a substitute.
 | **The cards** | The decomposition, in dependency order, collisions named |
 | **Proof and demo** | How we will know it works, and how the CEO will be shown |
 
+**Proof and demo is a section AND two cards (DRE-2746).** This section says how
+the epic will be proven and shown; the epic's last two children — a `PROOF: …`
+card and a `DEMO: …` card, blocked by every sibling and never `FLEET` — are
+where it actually happens. The section is prose the planner writes; the cards
+are checked on the planner's output, and an epic missing either is bounced back
+to `Planning`. `standards/card-quality.md` carries the full rule.
+
 ## KPIs are data, not prose
 
 This is the difference between trackable and decorative. The KPIs section

@@ -1456,6 +1456,70 @@ def cmd_children_json(identifier: str) -> None:
     ]))
 
 
+def child_detail_records(nodes: list) -> list:
+    """The `children-detail` records for `nodes`, IN CREATION ORDER.
+
+    Pure (no I/O) so the ordering and the relation filter are pinned by test
+    rather than by a live board. Two things it does that the raw nodes do not:
+
+      * **sorts by `createdAt` ascending.** "The epic's last two children"
+        (DRE-2746) is only meaningful against a stable order, and the planner
+        creates the pair last. Sorted here rather than asked for with an
+        `orderBy`, so the answer does not depend on which direction Linear
+        happens to paginate a connection in.
+      * **reads `blocked_by` off the FORMAL `blocks` relations only** — the
+        same source `reconcile.blockers_of` honours. A `**Blocked by:**` body
+        line is prose, and prose leaves the gates blind (DRE-2670).
+    """
+    out = []
+    for node in nodes or []:
+        node = node or {}
+        relations = ((node.get("inverseRelations") or {}).get("nodes")) or []
+        out.append({
+            "identifier": node.get("identifier"),
+            "title": node.get("title") or "",
+            "body": node.get("description") or "",
+            "labels": [
+                (l or {}).get("name") or ""
+                for l in ((node.get("labels") or {}).get("nodes")) or []
+            ],
+            "blocked_by": [
+                ((r or {}).get("issue") or {}).get("identifier")
+                for r in relations
+                if (r or {}).get("type") == "blocks"
+                and ((r or {}).get("issue") or {}).get("identifier")
+            ],
+            "created_at": node.get("createdAt") or "",
+        })
+    return sorted(out, key=lambda r: (r["created_at"], r["identifier"] or ""))
+
+
+def cmd_children_detail(identifier: str) -> None:
+    """Every child card as a full record, as a JSON array in creation order.
+
+    `children-json` answers "which card is wrong" for the plan critics and
+    carries only identity and body. The proof/demo gate (DRE-2746) asks three
+    more questions of the same cards — what is this card called, what labels
+    does it carry, and what formally blocks it — so it gets its own read rather
+    than widening the critics' one with fields they never look at.
+    """
+    data = gql(
+        """query($id: String!) {
+             issue(id: $id) { children { nodes {
+               identifier title description createdAt
+               labels { nodes { name } }
+               inverseRelations(first: 50) { nodes {
+                 type issue { identifier }
+               } }
+             } } }
+           }""",
+        {"id": identifier},
+    )
+    issue = data.get("issue") or {}
+    nodes = ((issue.get("children") or {}).get("nodes")) or []
+    print(json.dumps(child_detail_records(nodes)))
+
+
 def cmd_epics_in_flight() -> None:
     """Every epic in flight, as `{"identifier", "title", "state"}` records.
 
@@ -1515,6 +1579,7 @@ if __name__ == "__main__":
             "description": cmd_description,
             "child-descriptions": cmd_child_descriptions,
             "children-json": cmd_children_json,
+            "children-detail": cmd_children_detail,
             "epics-in-flight": cmd_epics_in_flight,
         }[cmd](*args)
     except LinearError as e:
