@@ -44,6 +44,7 @@ otherwise is worse than none
   is that guarantee.
 """
 
+import copy
 import os
 import sys
 import unittest
@@ -90,15 +91,27 @@ class TheReadyWorkLanesAreDerived(unittest.TestCase):
         self.assertEqual(rlw.ready_lanes(), ("Backlog", "Todo"))
 
     def test_a_lane_becomes_ready_work_because_the_vocabulary_says_so(self):
-        # Move a verdict's destination and the set moves with it. A hardcoded
-        # pair would not, and the check would then police the wrong lanes.
+        # Re-point a shape's exit and the set moves with it. A hardcoded pair
+        # would not, and the check would then police the wrong lanes.
         doc = {
-            "verdicts": [
-                {"name": "FLEET", "destination": "In Progress", "means": "x",
-                 "actor": "y", "marks": [], "dispatched": True},
-            ]
+            "version": 1,
+            "shapes": [
+                {"name": "one-off", "means": "x", "destination": "In Progress",
+                 "actor": "reconcile.py", "promotable": True, "marks": [],
+                 "why": "the vocabulary decides, not this test"},
+            ],
         }
         self.assertIn("In Progress", rlw.ready_lanes(doc=doc))
+
+    def test_a_lane_stops_being_ready_work_when_the_contract_moves_it(self):
+        # The other half of the derivation: the segment comes from the lane
+        # contract, so a lane the contract stops calling work stops being
+        # policed as ready work.
+        contract = copy.deepcopy(lane_contract.load())  # load() is cached, shared
+        for entry in contract["lanes"]:
+            if entry.get("name") == "Todo":
+                entry["segment"] = "planning"
+        self.assertNotIn("Todo", rlw.ready_lanes(contract=contract))
 
 
 class TheDiscoveryActuallyFindsSomething(unittest.TestCase):
@@ -120,8 +133,19 @@ class TheDiscoveryActuallyFindsSomething(unittest.TestCase):
         ):
             self.assertIn(expected, pairs)
 
-    def test_every_destination_in_this_repository_was_read(self):
-        unread = [w for w in rlw.writes() if w.lane is None]
+    def test_every_unread_destination_belongs_to_a_writer_declared_everywhere(self):
+        # Some destinations are computed from data and cannot be read from the
+        # source. Each one that survives here belongs to a writer the contract
+        # already permits in EVERY ready-work lane, so wherever it goes it was
+        # allowed to go there. Any OTHER unread destination is reported —
+        # `test_a_new_writer_whose_destination_cannot_be_read_is_reported` is
+        # that half, and this one is why the suppression is not a blind spot.
+        everywhere = set.intersection(
+            *[set(lane_contract.lane_writers(n)) for n in rlw.ready_lanes()]
+        )
+        unread = [
+            w for w in rlw.writes() if w.lane is None and w.writer not in everywhere
+        ]
         self.assertEqual(
             unread, [],
             "a destination nothing here can read is a writer nothing here can "

@@ -79,8 +79,8 @@ _Waiting on: needs routing verdicts (DRE-2724) writing on every card before arri
 _Waiting on: the vocabulary exists (DRE-2724); what is still missing is a writer that puts a verdict on EVERY card at planning exit — DRE-2721's second critic._ | Phase 5 — promised |
 | **exit** | The verdict's destination is reached. The sweep promotes a FLEET card to Todo once the dependency gate clears and the WIP cap has room; a human moves a WORKBENCH or OPERATOR card to Todo and works it there; a PARKED card does not leave, and is never reported as stalled.  
 _Waiting on: the sweep already refuses to promote a non-FLEET card (DRE-2724); asserting the transitions needs the history Phase 5 records._ | Phase 5 — promised |
-| **writers** | The planner and mid-epic discovery create here; the sweep and the dead-run cap park here.  
-Permitted writers: `plan.yml`, `mid_epic.py`, `reconcile.py`, `dead_run.py`, `linear_ops.py` | Phase 2 — live |
+| **writers** | The planner and mid-epic discovery create here; the sweep and the dead-run cap park here; and the build run parks the card it could not build — a stated blocker, or a run that kept dying past the cap (DRE-2859).  
+Permitted writers: `plan.yml`, `mid_epic.py`, `reconcile.py`, `dead_run.py`, `linear_ops.py`, `agent-task.yml` | Phase 2 — live |
 | **evidence** | A routing verdict comment; and, for a child of an epic, an epic that has passed Planning exit.  
 _Waiting on: the marker exists and the sweep reads it (DRE-2724); asserting that every Backlog card carries one needs the writer at planning exit (DRE-2721)._ | Phase 5 — promised |
 

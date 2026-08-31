@@ -338,8 +338,8 @@
           "pending": "the sweep already refuses to promote a non-FLEET card (DRE-2724); asserting the transitions needs the history Phase 5 records"
         },
         "writers": {
-          "text": "The planner and mid-epic discovery create here; the sweep and the dead-run cap park here.",
-          "who": ["plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py", "linear_ops.py"],
+          "text": "The planner and mid-epic discovery create here; the sweep and the dead-run cap park here; and the build run parks the card it could not build — a stated blocker, or a run that kept dying past the cap (DRE-2859).",
+          "who": ["plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py", "linear_ops.py", "agent-task.yml"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },

@@ -351,12 +351,19 @@ def label_census(paths=None) -> tuple:
     return tuple(found)
 
 
-def _work_lanes_reachable_from_planning(contract: dict | None, doc: dict | None) -> tuple:
+def work_lanes_reachable_from_planning(
+    contract: dict | None = None, doc: dict | None = None
+) -> tuple:
     """The work-segment lanes the planning segment can send a card to.
 
     Discovered from the two vocabularies rather than named here: a new shape or
     a new routing verdict pointing at a lane nothing gates is caught without
     anybody remembering to widen a list.
+
+    Public because it is the definition of "a lane the pipeline treats as ready
+    work" and `ready_lane_writers.py` (DRE-2859) asks the same question of the
+    writers. Two derivations of one set is how the two checks end up policing
+    different lanes.
     """
     wanted: list[str] = []
     for route in planning_route.routes(doc):
@@ -450,7 +457,7 @@ def bypass_problems(
     # The lane half: the routing verdict is written at Planning's exit and
     # nowhere else, so a work lane that does not require one can be entered by
     # a card that was never planned.
-    for name in _work_lanes_reachable_from_planning(contract, doc):
+    for name in work_lanes_reachable_from_planning(contract, doc):
         clauses = lane_contract.lane(name, contract=contract)["clauses"]
         stated = " ".join(
             (clauses.get(kind) or {}).get("text") or "" for kind in ("entrance", "evidence")
