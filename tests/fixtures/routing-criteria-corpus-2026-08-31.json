@@ -1,0 +1,428 @@
+{
+  "_readme": [
+    "The evidence behind config/routing-verdicts.json's criteria signals (DRE-2831).",
+    "",
+    "Every phrase in the vocabulary is attested here by a REAL acceptance criterion,",
+    "copied verbatim from a real Linear card, and every card body below is a real",
+    "card read from the workspace — none of it is written for the test.",
+    "",
+    "DRE-2831's finding was that the FLEET half matched phrases nobody writes: six",
+    "of its nine phrases appear in ZERO of the 1,561 carded issues in this",
+    "workspace, so real UI cards fell through to a model. The remedy is not a",
+    "longer guessed list — it is that a phrase may only be in the vocabulary if a",
+    "real card contains it, which is what this file records and the tests enforce."
+  ],
+  "read_on": "2026-08-31",
+  "source": "Linear, dreadnoughtfoundry workspace (team DRE) — every issue, read through scripts/linear_ops.py; criteria extracted with routing_verdict.acceptance_criteria()",
+  "corpus": {
+    "issues": 2773,
+    "with_checkbox_criteria": 1561,
+    "frontend_labelled_with_checkbox_criteria": 86
+  },
+  "measured": {
+    "_note": "routing_verdict.criteria_verdict() over the 1,561 carded issues, before and after this card's phrases.",
+    "all_carded_issues": {
+      "before": {
+        "FLEET": 32,
+        "WORKBENCH": 90,
+        "judgement": 1439
+      },
+      "after": {
+        "FLEET": 237,
+        "WORKBENCH": 99,
+        "judgement": 1225
+      }
+    },
+    "frontend_labelled": {
+      "before": {
+        "FLEET": 3,
+        "WORKBENCH": 1,
+        "judgement": 82
+      },
+      "after": {
+        "FLEET": 50,
+        "WORKBENCH": 4,
+        "judgement": 32
+      }
+    },
+    "workbench_lost": 0
+  },
+  "attestations": {
+    "renders": {
+      "cards": 184,
+      "examples": [
+        {
+          "card": "DRE-1829",
+          "criterion": "`/events/:id` renders the full Overview detail wired to the live"
+        },
+        {
+          "card": "DRE-1298",
+          "criterion": "PhaseMeter renders on In Progress cards only"
+        },
+        {
+          "card": "DRE-2216",
+          "criterion": "`slots/` contains exactly the six placeholders listed above plus `slots/index.ts`; each renders nothing"
+        }
+      ]
+    },
+    "rendered": {
+      "cards": 46,
+      "examples": [
+        {
+          "card": "DRE-2148",
+          "criterion": "Screen matches its PNG export rendered dark"
+        },
+        {
+          "card": "DRE-1316",
+          "criterion": "PT timestamps rendered in JetBrains Mono"
+        },
+        {
+          "card": "DRE-2232",
+          "criterion": "All / Access / Content pills filter the rendered list by event `kind`, and the selected pill is exposed as pressed state in the DOM, not by colour alone"
+        }
+      ]
+    },
+    "re-renders": {
+      "cards": 5,
+      "examples": [
+        {
+          "card": "DRE-2501",
+          "criterion": "No action re-renders on failure"
+        },
+        {
+          "card": "DRE-2222",
+          "criterion": "A stale write (409) refetches and re-renders rather than blindly retrying"
+        }
+      ]
+    },
+    "screenshot": {
+      "cards": 31,
+      "examples": [
+        {
+          "card": "DRE-904",
+          "criterion": "First app screen renders (screenshot attached to PR)"
+        },
+        {
+          "card": "DRE-344",
+          "criterion": "Dashboard screenshot shows the new label + legend"
+        }
+      ]
+    },
+    "design tokens": {
+      "cards": 23,
+      "examples": [
+        {
+          "card": "DRE-1289",
+          "criterion": "No hardcoded hex — all colors via design tokens"
+        },
+        {
+          "card": "DRE-1410",
+          "criterion": "Tiles uniform size; matches design tokens"
+        },
+        {
+          "card": "DRE-2206",
+          "criterion": "All seven molecules exist and render from design tokens only — no literal colour value anywhere in `components/molecules/`"
+        }
+      ]
+    },
+    "match the design": {
+      "cards": 1,
+      "examples": [
+        {
+          "card": "DRE-2004",
+          "criterion": "Copy is customer-facing (no dev-speak); visuals match the Design files' structure and tokens."
+        }
+      ]
+    },
+    "sign in": {
+      "cards": 14,
+      "examples": [
+        {
+          "card": "DRE-2695",
+          "criterion": "**Looked at in a running browser**, not only in tests: sign in, force the access token past `exp`, and confirm the session continues with no prompt. Two footer fixes this week passed every test and shipped visible defects; [DRE-2678](https://linear.app/dreadnoughtfoundry/issue/DRE-2678/the-epic-row-says-waiting-for-the-next-card-to-start-when-it-cannot) was caught the same way."
+        },
+        {
+          "card": "DRE-1621",
+          "criterion": "A user can sign in with an enrolled passkey."
+        },
+        {
+          "card": "DRE-1561",
+          "criterion": "The CEO can sign in to the production console and see data."
+        }
+      ]
+    },
+    "sign out": {
+      "cards": 3,
+      "examples": [
+        {
+          "card": "DRE-605",
+          "criterion": "UserMenu \"Sign out\" clears `ds_token` cookie + localStorage user keys + navigates to `/login`"
+        },
+        {
+          "card": "DRE-603",
+          "criterion": "Avatar button: click opens a dropdown with `Profile / Settings / Sign out` items. Sign out calls `auth.logout()` and redirects to login."
+        }
+      ]
+    },
+    "log in": {
+      "cards": 2,
+      "examples": [
+        {
+          "card": "DRE-604",
+          "criterion": "Brief docs entry in `docs/` (or `CLAUDE.md` Running section) explaining how to log in locally"
+        }
+      ]
+    },
+    "past `exp`": {
+      "cards": 1,
+      "examples": [
+        {
+          "card": "DRE-2695",
+          "criterion": "**Looked at in a running browser**, not only in tests: sign in, force the access token past `exp`, and confirm the session continues with no prompt. Two footer fixes this week passed every test and shipped visible defects; [DRE-2678](https://linear.app/dreadnoughtfoundry/issue/DRE-2678/the-epic-row-says-waiting-for-the-next-card-to-start-when-it-cannot) was caught the same way."
+        }
+      ]
+    },
+    "confirm the session": {
+      "cards": 2,
+      "examples": [
+        {
+          "card": "DRE-2695",
+          "criterion": "**Looked at in a running browser**, not only in tests: sign in, force the access token past `exp`, and confirm the session continues with no prompt. Two footer fixes this week passed every test and shipped visible defects; [DRE-2678](https://linear.app/dreadnoughtfoundry/issue/DRE-2678/the-epic-row-says-waiting-for-the-next-card-to-start-when-it-cannot) was caught the same way."
+        }
+      ]
+    },
+    "in production": {
+      "cards": 26,
+      "examples": [
+        {
+          "card": "DRE-2553",
+          "criterion": "**Observed in production:** a card runs end to end on the pinned channel"
+        },
+        {
+          "card": "DRE-2532",
+          "criterion": "Verified in production, not only against an injected fake"
+        }
+      ]
+    },
+    "against the live": {
+      "cards": 7,
+      "examples": [
+        {
+          "card": "DRE-1274",
+          "criterion": "Demonstrated against the live backend (real data, not fixtures)"
+        },
+        {
+          "card": "DRE-2598",
+          "criterion": "`make cred-doctor CHECK=fleet-freshness` still passes against the live fleet."
+        }
+      ]
+    },
+    "on the live": {
+      "cards": 8,
+      "examples": [
+        {
+          "card": "DRE-2715",
+          "criterion": "Observed working on the live console by the operator — not asserted by tests alone"
+        },
+        {
+          "card": "DRE-2753",
+          "criterion": "One real batch is observed proposed, approved, and drained — end to end, on the live console."
+        }
+      ]
+    },
+    "in the live product": {
+      "cards": 1,
+      "examples": [
+        {
+          "card": "DRE-2308",
+          "criterion": "Verified in the live product after publish: the `Comment` button and `Open · 0` tab render cream on green"
+        }
+      ]
+    },
+    "verified live": {
+      "cards": 8,
+      "examples": [
+        {
+          "card": "DRE-2310",
+          "criterion": "Verified live after publish on the 2026 Universal Pricing Model"
+        },
+        {
+          "card": "DRE-2414",
+          "criterion": "Verified live on a real card, not by a green suite"
+        },
+        {
+          "card": "DRE-1839",
+          "criterion": "`make rollback VERSION=<version>` restores a prior version, verified live."
+        }
+      ]
+    },
+    "by hand": {
+      "cards": 24,
+      "examples": [
+        {
+          "card": "DRE-2771",
+          "criterion": "A card is put in `Intake` by hand and appears on the CEO's board in order — DRE-2679's own production criterion, which could not be met while the lane did not exist."
+        },
+        {
+          "card": "DRE-2792",
+          "criterion": "The chain re-wired by `make phase-apply`, not by hand"
+        }
+      ]
+    },
+    "manually": {
+      "cards": 10,
+      "examples": [
+        {
+          "card": "DRE-419",
+          "criterion": "Red: stop sqs-poller manually, wait 6 minutes, run sweeper tick, verify alert"
+        },
+        {
+          "card": "DRE-1176",
+          "criterion": "Re-test by manually staging a contaminating commit in `/opt/bureau/state/pool-cwds/engineer-0/` and verifying the next worker's pre-push hook only sees its own diff"
+        }
+      ]
+    }
+  },
+  "rejected": {
+    "shows": {
+      "cards": 189,
+      "why": "Common enough (189 cards) and not visual: `synth shows`, `the log shows`, `launchctl print ... shows disabled=1`. A phrase that fires as often on a CLI card as on a screen does not tell the two apart."
+    },
+    "render": {
+      "cards": 95,
+      "why": "The bare infinitive names an action or an endpoint rather than an outcome — `GET /d/{docId}/render`, `enough detail to render a row`. The inflected forms (`renders`, `rendered`, `re-renders`) are the ones that assert a rendered result."
+    },
+    "matches the design": {
+      "cards": 0,
+      "why": "Zero cards write it. It is the phrase this rule was built on and the reason DRE-2831 exists."
+    },
+    "renders identically": {
+      "cards": 1,
+      "why": "Attested once, and already matched by `renders` — a second phrase for the same card buys nothing."
+    },
+    "render identically": {
+      "cards": 0,
+      "why": "Zero cards write it."
+    },
+    "pixel-identical": {
+      "cards": 0,
+      "why": "Zero cards write it."
+    },
+    "pixel-perfect": {
+      "cards": 0,
+      "why": "Zero cards write it."
+    },
+    "visual parity": {
+      "cards": 0,
+      "why": "Zero cards write it."
+    },
+    "design png": {
+      "cards": 0,
+      "why": "Zero cards write it — cards name the PNG by path, inside a `**Design:**` line, not in a criterion."
+    },
+    "log out": {
+      "cards": 0,
+      "why": "Zero cards write it; the workspace writes `sign out`."
+    },
+    "force the token": {
+      "cards": 0,
+      "why": "Zero cards write it; DRE-2695 writes `force the access token past `exp``, which `past `exp`` catches."
+    },
+    "past expiry": {
+      "cards": 0,
+      "why": "Zero cards write it."
+    },
+    "walk through": {
+      "cards": 0,
+      "why": "Zero cards write it; the workspace writes `by hand` (24 cards) and `manually` (10)."
+    },
+    "step through": {
+      "cards": 0,
+      "why": "Zero cards write it."
+    },
+    "in the browser": {
+      "cards": 0,
+      "why": "Zero cards write it; DRE-2695 writes `Looked at in a running browser` and is caught by `sign in`."
+    },
+    "interactively": {
+      "cards": 0,
+      "why": "Zero cards write it."
+    },
+    "past `exp`": {
+      "cards": 1,
+      "why": "Attested once, by DRE-2695 — the same criterion `sign in` already catches. A second phrase for one card buys nothing."
+    },
+    "confirm the session": {
+      "cards": 2,
+      "why": "One attestation is DRE-2695, which `sign in` already catches; the other is DRE-416's `confirm the session fails with the expected error`, which is a pytest session. Attested and wrong is still wrong."
+    }
+  },
+  "cards": [
+    {
+      "identifier": "DRE-1829",
+      "title": "Web: Change-event detail screen (read-only — overview, evidence, activity, metadata)",
+      "why_this_card": "The card DRE-2831 was written about: a real UI card whose criteria state rendered outcomes. It returned no verdict under the shipped phrases and fell through to a model.",
+      "expect": {
+        "verdict": "FLEET",
+        "source": "criteria",
+        "needs_model": false
+      },
+      "description": "**Design:** design/screens/web-event-detail.html\n\nBuild the **Change-event detail** screen (read-only this card — the action\nbuttons are a separate sibling). Route `/events/:id`, reached from the list. The\nheader card carries the category stripe, category pill (`CO · Change Order`),\nevent id, title, status badge, and the meta row (severity · site/unit · WO ·\nvendor · assignee · opened). Below the header render the tab strip (Overview /\nTimeline / Documents / Related — **Overview functional this card**, the other\ntabs may be present-but-empty placeholders) and the two-column Overview body:\nleft column = Description, Equipment card, Evidence thumbnails (\"N photos ·\ndigitally signed\" with signed badges), and the Activity timeline; right column =\nthe Change-Order Details metadata panel (vendor, PO #, equipment #, estimate,\nactual-to-date, cost code) and the Routing panel (status, reviewer, severity,\nSLA). A \"← Change Events\" back link returns to `/events`. Reuse the category /\nseverity / status badge components the list card exports — do **not** redefine\nthem. Wire to the single-event GraphQL query exposed by the backend (E1.3a/b) —\n**introspect the live** `/graphql` **schema for the exact query and field names; do****\n****not invent them**; render only fields the schema provides and degrade\ngracefully on absent optional fields. Loading / not-found / error states per\n`design/components/states.html`.\n\n## Contract (shared with siblings)\n\n* Route: `/events/:id` (identical to the list card's detail link target).\n* Imports the category pill / severity indicator / status badge from the\n  `change-events` feature module established by the list card — single source of\n  truth, no duplicate definitions.\n* The action bar in the header (Generate form / Approve / Reject) is rendered as\n  static affordances ONLY this card; the sibling actions card makes Reject / RFI\n  / Suspend live and OWNS edits to the header action region.\n* GraphQL field names follow the backend schema; the frontend does not define\n  them.\n\n## Acceptance criteria\n\n- [ ] `/events/:id` renders the full Overview detail wired to the live\n      single-event GraphQL query (real tenant-scoped data).\n- [ ] Header shows category pill + stripe, id, title, status badge, and meta\n      row per the design.\n- [ ] Overview body renders Description, Equipment card, Evidence thumbnails,\n      Activity timeline, and the Change-Order Details + Routing sidebars.\n- [ ] Tab strip renders with Overview active (other tabs may be placeholders).\n- [ ] Back link returns to `/events`.\n- [ ] Badge components are imported from the list card's module, not redefined.\n- [ ] Loading, not-found, and error states render.\n- [ ] Visual fidelity to `design/screens/web-event-detail.html`.\n\n**Blocked by:** DRE-1818"
+    },
+    {
+      "identifier": "DRE-2216",
+      "title": "P3-B1 · Library screen + complete `queries/` + `slots/` placeholders",
+      "why_this_card": "A second real UI card, from a different epic and a different repo — the same prose shape, so the signal is not fitted to one card.",
+      "expect": {
+        "verdict": "FLEET",
+        "source": "criteria",
+        "needs_model": false
+      },
+      "description": "The library screen is the app's front door: breadcrumbs, the folder grid, document rows, and the per-row kebab menu. It renders the v2 library payload from E2 — ancestors, per-child `accessSummary`, the folder access classification, draft counts, status and `epoch` — and it includes the **amber private-folder card**: icon tile `--amber-soft` / `--amber`, card border `1px solid var(--amber)`, footer warning with the 12px triangle. That card is rendered from the server's `classification` field (`direct` | `inherited` | `private`) and is **never** inferred on the client; the client has no business deciding what is private.\n\n**This card is the foundation for the entire library feature, and its most important output is not the screen.**\n\nFive later cards need to mount into this screen and need the same queries: drag-to-move (P3-B2), the change-log rail (P3-B3), the add-document modal and the draft-status control (both E4), and the Drive source card (E6, conditional). If each of them created what it needed, they would collide in the same files on the same day. So this card ships, up front and complete:\n\n* a complete `queries/` directory — one file per query/mutation family, plus a barrel written **once** — against routes that are already specified. Later cards **import** from it and never edit it.\n* a `slots/` directory containing **one empty placeholder file per known future consumer**, plus a barrel written **once**. Later cards fill **exactly one** placeholder each.\n\n**Say this out loud to whoever picks up a later card, because an agent that does not understand it will \"helpfully\" add its query to an existing file or wire its component into** `LibraryScreen.tsx`**:** `LibraryScreen.tsx`, `Grid.tsx`, `Rows.tsx`, `Kebab.tsx`, everything under `queries/`, and `slots/index.ts` are **frozen the moment this card merges**. If a later card needs something they do not offer, that is a follow-on card to this one, not an edit. This is the mechanism that lets four cards work inside one feature concurrently.\n\n`queries/` **is item CRUD only, and that boundary is deliberate.** The seven families below are the complete set: there is **no** `changelog.ts` and one must never be added. The change-log rail reads `GET /changelog`, which is a different resource with a different cache lifetime and a different failure mode from item CRUD, so its fetch is **co-located inside** `ChangeLogRail.tsx` and P3-B3 owns it there — which is why that card owns only two files and never opens this directory. Both cards state this; neither may change it alone. The same rule answers the general case: a later card that needs a query this directory does not offer either co-locates it in its own owned component or files a follow-on to this card. It does not add a file here.\n\nThe slot placeholders and their eventual owners:\n\n| Placeholder | Filled by |\n| -- | -- |\n| `slots/dragAdapter.tsx` | P3-B2 — drag-to-move |\n| `slots/rowAction.move.tsx` | P3-B2 — the `Move…` menu item |\n| `slots/rail.changelog.tsx` | P3-B3 — change-log rail |\n| `slots/modal.addDocument.tsx` | E4 — add-document modal |\n| `slots/rowAction.status.tsx` | E4 — draft-status control |\n| `slots/gdrive.source.tsx` | E6 — Drive source card (conditional) |\n\nEach placeholder exports a no-op component of a fixed signature that `LibraryScreen` **already renders**, so filling one file is sufficient to make the feature appear. That is the property to test.\n\n**One follow-on to this card already exists and is expected to reopen the four screen files:** the responsive implementation for the library and share screens. It lands after P3-B2 and P3-B3, so it is the sole toucher at that point. That is the freeze working as designed, not an exception to it — but it does mean this card should not leave layout geometry hardcoded in a way a media query cannot reach: use `--rail-w`, `--appbar-h` and `--content-max` from `tokens.local.css`, never magic pixel numbers.\n\nTwo invariants to carry into the implementation. Item ids are deterministic slugs and **never change on rename**, so no route, cache key or DOM key may derive from a title. And `epoch` is echoed on every mutation: a stale write returns 409, which the query layer must surface as a distinct, catchable result rather than a generic error — the drag card depends on being able to tell 409 apart from a network failure, because the two need opposite responses.\n\nDepends on E2's library payload v2 card for the response shape (cross-epic).\n\n**Owns (touch ONLY these files):** `client/app/src/features/library/LibraryScreen.tsx`, `client/app/src/features/library/Grid.tsx`, `client/app/src/features/library/Rows.tsx`, `client/app/src/features/library/Kebab.tsx`, `client/app/src/features/library/PrivateFolderCard.tsx`, `client/app/src/features/library/queries/{index,list,create,rename,move,remove,status,upload}.ts`, `client/app/src/features/library/slots/{index.ts,rail.changelog.tsx,modal.addDocument.tsx,rowAction.move.tsx,rowAction.status.tsx,dragAdapter.tsx,gdrive.source.tsx}`, `client/app/src/features/library/LibraryScreen.test.tsx`, and `client/app/src/features/library/index.tsx` (replacing P3-A1's placeholder)\n\n## Acceptance criteria\n\n- [ ] `queries/` is complete and contains exactly one file per family — `list`, `create`, `rename`, `move`, `remove`, `status`, `upload` — plus `queries/index.ts` written once as the barrel\n- [ ] `queries/` contains **no** `changelog.ts` and no non-CRUD query; the PR states that the change-log fetch is deliberately co-located in P3-B3's `ChangeLogRail.tsx` and that this directory is item CRUD only\n- [ ] Every mutation sends and echoes `epoch`, and a 409 is surfaced as a distinct, catchable stale-write result rather than a generic error\n- [ ] `slots/` contains exactly the six placeholders listed above plus `slots/index.ts`; each renders nothing\n- [ ] A test asserts every slot placeholder is already mounted by `LibraryScreen`, so that filling one file is sufficient for its feature to appear\n- [ ] The amber private-folder card renders from the server's `classification` field; a test proves the client computes no classification of its own\n- [ ] Breadcrumbs render the payload's ancestors, with the synthetic root shown as \"Portico\"\n- [ ] No route, react-query key or React key derives from an item title — ids only\n- [ ] Folder and document rows render through the `FolderCard` / `DocRow` molecules; no rival row component is defined in this feature\n- [ ] Layout geometry uses `--rail-w`, `--appbar-h` and `--content-max` from `tokens.local.css`; no magic pixel number, so the responsive follow-on has something to override\n- [ ] Vitest covers grid, rows and kebab against a fixture payload; no snapshot test of rendered markup\n- [ ] No literal colour value anywhere in `features/library/`\n- [ ] The PR description states that `queries/`, `slots/index.ts` and the four screen files are frozen after merge"
+    },
+    {
+      "identifier": "DRE-2206",
+      "title": "P3-A2b · Molecules + Playwright visual regression",
+      "why_this_card": "A third real UI card: design-token fidelity, the other phrasing this workspace really uses for a visual criterion.",
+      "expect": {
+        "verdict": "FLEET",
+        "source": "criteria",
+        "needs_model": false
+      },
+      "description": "The second half of the component library: the molecules every screen composes from, plus the Playwright visual-regression job that turns the specimen from a nice page into a gate.\n\nSeven molecules, built on the atoms P3-A2a landed: `GrantRow`, `FolderCard`, `DocRow`, `Breadcrumbs`, `ChangeLogEntry`, `InheritanceLadder`, `Toast`.\n\n`GrantRow` **is the one that carries the whole design's argument.** The entire point of this product's sharing UI is that inheritance is obvious: a direct grant and an inherited grant must be visually distinct, never mixed in one list, and an inherited row is **read-only and names the ancestor folder that granted it**. An inherited row that looks removable is the single most damaging visual defect available here — it offers the user a control that cannot exist, because there is no per-item deny in this access model. Solid chips for direct, dashed read-only rows for inherited, grouped under and linking to their source folder.\n\nThe visual-regression specs render the specimen in both themes and compare against committed screenshot baselines, so a token or component drift fails the PR instead of reaching a portal. Screenshot baselines are the sanctioned exception to the no-snapshot rule — component *behaviour* is still asserted directly, never by snapshotting markup.\n\nMolecules appear in `/specimen` automatically: P3-A2a's `registry.ts` discovers components by glob. Do not open `registry.ts`, `Specimen.tsx` or anything under `components/atoms/`. If an atom does not do what a molecule needs, that is a follow-on card to P3-A2a, not an edit.\n\n`ChangeLogEntry` is consumed later by the change-log rail (P3-B3) and `Toast` by the drag card (P3-B2) — build them as general components with no library-feature knowledge.\n\n**Owns (touch ONLY these files):** `client/app/src/components/molecules/GrantRow.tsx`, `client/app/src/components/molecules/FolderCard.tsx`, `client/app/src/components/molecules/DocRow.tsx`, `client/app/src/components/molecules/Breadcrumbs.tsx`, `client/app/src/components/molecules/ChangeLogEntry.tsx`, `client/app/src/components/molecules/InheritanceLadder.tsx`, `client/app/src/components/molecules/Toast.tsx`, `client/app/e2e/visual/specimen-light.spec.ts`, `client/app/e2e/visual/specimen-dark.spec.ts`\n\n## Acceptance criteria\n\n- [ ] All seven molecules exist and render from design tokens only — no literal colour value anywhere in `components/molecules/`\n- [ ] `GrantRow` renders direct grants as solid chips and inherited grants as dashed, read-only rows that name and link to the ancestor that granted them\n- [ ] An inherited `GrantRow` exposes no remove affordance and no role dropdown — asserted by test, not by inspection\n- [ ] An `owner` principal renders as a locked chip: no ✕, no dropdown\n- [ ] `InheritanceLadder`'s top row is the synthetic root, labelled \"Portico\"\n- [ ] `Toast` is centred by a full-width fixed flex wrapper and sets no positioning transform\n- [ ] All seven molecules appear at `/specimen` without any edit to `registry.ts` or `Specimen.tsx`\n- [ ] Screenshot baselines are committed for both light and dark, and the visual job fails on a pixel diff — demonstrated by a deliberate one-token change in the PR discussion\n- [ ] Behaviour is asserted by direct Vitest assertions; no snapshot test of rendered markup\n- [ ] The visual job runs credential-free against `vite preview`"
+    },
+    {
+      "identifier": "DRE-2695",
+      "title": "The console signs you out every hour — Cognito issues a 30-day refresh token and nothing keeps it",
+      "why_this_card": "The interactive control. DRE-2724's other live observation, and it must keep routing WORKBENCH after the visual half is widened.",
+      "expect": {
+        "verdict": "WORKBENCH",
+        "source": "criteria",
+        "needs_model": false
+      },
+      "description": "**Operator, 2026-08-23:** *\"can you change my login to [app.agent-bureau.com](<http://app.agent-bureau.com>) to last longer, I'm having to re-enter my credentials all the time\"*\n\nThe obvious knob is the wrong one. Cognito is already configured generously — the session dies for a different reason.\n\n| setting (`infra/lib/cognito-stack.ts:113-115`) | value |\n| -- | -- |\n| `accessTokenValidity` | 1 hour |\n| `idTokenValidity` | 1 hour |\n| `refreshTokenValidity` | **30 days** |\n\n**The refresh token is issued and then thrown away.** At the token exchange the proxy stores only the access token —\n\n```\nconst tokenCookie = cookieHeader('bureau_access_token', data.access_token ?? '', {…})\n```\n\n— at `console/web/src/proxy.ts:138`, `:165` and `:280`. `data.refresh_token` is never read, never stored, never used. And there is no refresh code anywhere in the app: `src/vendor/dreadnought-auth/` is 102 lines that can *decode* a JWT and *check* expiry (`isTokenExpired`), and does not exchange anything.\n\nSo after 60 minutes `handleMe` (`proxy.ts:298`) sees the expired cookie, returns 401, and the operator signs in again. Hourly, forever, while a valid 30-day refresh token that was minted at login has already been discarded.\n\n## Why not simply raise the access-token validity\n\nBecause access tokens are bearer credentials that **cannot be revoked before they expire**. Extending them to 8 or 12 hours would stop the prompts and, for the same window, make \"sign this person out\" meaningless and a leaked token valid. That is a real security downgrade traded for convenience — on the console that holds the fleet's credentials and can re-point every repo.\n\nRaising `refreshTokenValidity` does nothing at all, since nothing reads it. Worth stating so the obvious-looking knob is not tried first.\n\nThe refresh token exists precisely to give long sessions without either cost.\n\n## Scope\n\n1. **Persist the refresh token.** A second httpOnly cookie (`bureau_refresh_token`), `Secure`, `SameSite=Lax`, `Max-Age` matched to the pool's 30 days, and **path-scoped to the refresh endpoint alone** so it is not sent on every request the way the access cookie is.\n2. **A refresh endpoint in the proxy** that exchanges it against the pool's `/oauth2/token` with `grant_type=refresh_token`, and re-issues the access cookie. Server-side, so the refresh token never reaches page JavaScript.\n3. **Call it before the access token dies** — on a 401 from `/api/auth/me`, or pre-emptively when the token is within a few minutes of `exp`. Prefer the reactive path first; a timer that fires in a background tab is a second thing to get wrong.\n4. **Sign-out clears both cookies.** A cleared access cookie beside a live refresh cookie is a sign-out that does not sign out — [DRE-2411](https://linear.app/dreadnoughtfoundry/issue/DRE-2411/sign-out-from-the-in-document-comment-rail-has-the-same-re-login-bug) is the same bug in Portico's comment rail.\n\n## Out of scope\n\n* Any change to `cognito-stack.ts`. The validity values are already right; this card makes the app use what they grant.\n* \"Remember this device\" / MFA behaviour.\n\n## Acceptance\n\n- [ ] Red first: a test drives an expired access token plus a valid refresh cookie and asserts the session survives — it must fail on today's code, where nothing refreshes.\n- [ ] The refresh token is never readable from page JavaScript, and is not sent on ordinary API calls (path-scoped, httpOnly).\n- [ ] A refresh failure (revoked, expired, pool rejects) signs the operator out cleanly rather than looping on a dead token.\n- [ ] Sign-out clears the refresh cookie too, verified by attempting a refresh afterwards and getting refused.\n- [ ] **Looked at in a running browser**, not only in tests: sign in, force the access token past `exp`, and confirm the session continues with no prompt. Two footer fixes this week passed every test and shipped visible defects; [DRE-2678](https://linear.app/dreadnoughtfoundry/issue/DRE-2678/the-epic-row-says-waiting-for-the-next-card-to-start-when-it-cannot) was caught the same way.\n- [ ] Access-token validity stays at 1 hour. If this card ends up raising it, the fix did not work.\n\n---\n\n## Observed live in production, 2026-08-24 (added when this card was picked up)\n\nEvery claim above re-verified against `main` at `b05c269f` — line numbers `cognito-stack.ts:113-115` and `proxy.ts:138/:165/:280` are still exact, `refresh_token` appears **0 times** in `proxy.ts`, and `vendor/dreadnought-auth/` is still exactly 102 lines. One drift: `handleMe` is at `proxy.ts:294`, not `:298`.\n\n**This is worse than an hourly prompt, and the card should not be built as if it were one.** Measured from the console backend's App Runner logs:\n\n|  |  |\n| -- | -- |\n| last successful `POST /graphql` | **13:16:10 PT** — exactly 60 minutes after a session that began ~12:16 |\n| 401s in the following 10 minutes | **1,455** (~2.5 per second, sustained) |\n| successful requests in that window | **0** |\n| duration before anyone noticed | 65+ minutes, still climbing when found |\n\nProved which 401 it is: the middleware has two branches, and only the *invalid-token* branch fetches JWKS. **No JWKS fetch occurred for 65 minutes of continuous 401s**, so every one is the *missing header* branch — the cookie is gone, and the proxy sends no `Authorization` at all.\n\n### Why the tab never redirects, and why it storms\n\n1. `proxy.ts:578` routes `/graphql` and `/api/v1/*` to the backend **before** the `hasValidToken` page gate at `proxy.ts:597`. Only a *navigation* is redirected to sign-in; an already-open tab never is.\n2. `console/web/src/lib/graphqlClient.ts` (126 lines) has **no 401 handling at all** — no interceptor, no sign-out, no refresh.\n3. `useLiveQuery.ts:39` `FALLBACK_POLL_MS = 20_000` plus React Query retries plus the socket reconnect timer at `useLiveQuery.ts:197` produce the ~2.5/sec loop.\n4. `handleUpgrade` (`proxy.ts:494`) destroys the websocket, giving the **\"Reconnecting… on a timer\"** banner.\n\nThe user-visible result is not a login prompt. It is a dashboard showing **stale data with soft warnings** (\"can't read this epic's cards right now\"), which reads as a Linear outage. The server-side Linear poller was green throughout.\n\n**The comment at** `proxy.ts:576` **asserts the opposite of the truth** — *\"the backend's own 401, which the SPA's data layer already handles\"*. It does not handle it. Correct that comment as part of this card; it is what makes the gap invisible to the next reader.\n\nHelpful for the implementer: `vendor/dreadnought-auth/types.ts:16` already declares `refreshToken: string`, so the type shape anticipates this — it is simply never populated.\n\n### One acceptance criterion this adds\n\n- [ ] With refresh unavailable or failed, an open tab **stops issuing requests** and goes to sign-in. Verified by observing request volume, not just a redirect: today's failure mode was an unbounded retry loop, and a fix that redirects the *next navigation* while leaving the loop running has not fixed it."
+    },
+    {
+      "identifier": "DRE-2308",
+      "title": "Unlayered handoff reset beats every Tailwind text utility — dark ink on green buttons app-wide",
+      "why_this_card": "The adversarial case for the widening: a criterion that states a rendered outcome AND live-product verification. Interactive wins, or a card that needs a person routes to the fleet.",
+      "expect": {
+        "verdict": "WORKBENCH",
+        "source": "criteria",
+        "needs_model": false
+      },
+      "description": "Found live on `share.everybite.com` at bundle `84adb37`, 2026-08-09, while walking the Phase 3 sign-off. The `Comment` button and the `Open · 0` tab in the viewer's comment rail render **dark ink on dark green** — unreadable.\n\n## Root cause\n\n`client/app/src/styles/tokens.css:261`:\n\n```css\nbutton, input, textarea, select { font: inherit; color: inherit; }\n```\n\n`theme.css` imports it **outside any cascade layer**, before Tailwind:\n\n```css\n@import \"./tokens.css\";        /* unlayered */\n@import \"./tokens.local.css\";  /* unlayered */\n@import \"tailwindcss\";         /* utilities land in @layer utilities */\n```\n\n**Unlayered styles beat layered styles regardless of specificity.** Verified against the deployed CSS by walking its layer nesting:\n\n```\nbutton,input,textarea,select{...}   -> <<UNLAYERED>>\n.text-ink-inv{color:var(--ink-inv)} -> @layer utilities\n```\n\nSo `color: inherit` outranks **every** Tailwind text-colour utility on **every** `<button>` in the app. The button inherits `--ink` (`#1E2A24`) instead of `--ink-inv` (`#FBF7EF`).\n\n## The evidence chain, because four plausible explanations were wrong\n\nRuled out in order, each with live measurement:\n\n1. **Token wrong?** No — `--ink-inv` is `#fbf7ef` at `:root` **and at the button itself**, unchanged up the whole ancestor chain.\n2. **Class missing from the build?** No — `.text-ink-inv{color:var(--ink-inv)}` is present in the **deployed** CSS (fetched directly; `/_app/assets/*` is an open path at the edge).\n3. **Class not applied?** No — `el.matches('.text-ink-inv')` returns `true` on both elements.\n4. **An ancestor redefining the token?** No — the walk from button to `<html>` shows no change.\n\nOnly after all four did the layer model explain it. A console scan that reported the class \"missing\" earlier was an artefact of not recursing into `@layer` blocks — worth knowing, because it nearly became a bogus bug report.\n\n## The learning — this is why the card exists\n\n**The handoff reset is correct, and the verbatim-copy rule is correct, and together they produce a bug.**\n\nThat line is at `design_handoff_portico_library/tokens.css:187`. P3-A1's acceptance criteria require `tokens.css` be copied verbatim with exactly one edit, and `tokens.parity.test.ts` fails on any drift. The file obeys its own contract exactly.\n\nThe handoff was authored as a **standalone stylesheet**, where `button { color: inherit }` is an ordinary reset. Dropped into **Tailwind 4**, where utilities live in `@layer utilities`, the same line becomes an app-wide override of every text utility. Neither artefact is wrong; the interaction is.\n\nGeneralise it: **any unlayered CSS imported alongside Tailwind 4 silently outranks all utilities.** The verbatim-copy discipline guarantees more unlayered rules arrive unreviewed for this interaction.\n\nIt also explains the symptom's shape — it affects every button, but only *looks* broken where the inherited colour fails against the background. Green is simply where dark-on-dark shows.\n\n## The fix, and the constraint\n\n`tokens.css` may **not** be edited — the parity test enforces the verbatim copy, correctly.\n\nPreferred: wrap the import in `theme.css` so the reset joins the base layer and utilities outrank it:\n\n```css\n@layer base { @import \"./tokens.css\"; }\n```\n\nFixes the whole class rather than one property, and leaves the verbatim rule untouched. If `@import` inside `@layer` is awkward under the build, use `@import \"./tokens.css\" layer(base);` — same effect, one line.\n\nRejected: overriding `color` from `tokens.local.css`. That treats one symptom and leaves every other unlayered rule outranking utilities.\n\n## Acceptance criteria\n\n- [ ] `tokens.css` is byte-identical to the handoff — `tokens.parity.test.ts` still passes unmodified\n- [ ] The reset is layered, so `.text-ink-inv` wins on buttons\n- [ ] A test asserts a `bg-green` + `text-ink-inv` button computes to `--ink-inv`, not `--ink`, and fails against today's build\n- [ ] A guard fails the build if any **unlayered** rule ships in the CSS, so the next verbatim copy cannot reintroduce the class silently. State plainly if this is impractical rather than skipping it\n- [ ] Verified in the live product after publish: the `Comment` button and `Open · 0` tab render cream on green"
+    },
+    {
+      "identifier": "DRE-2523",
+      "title": "Land the clickable console prototype from ui/workbench",
+      "why_this_card": "The fallthrough is still real: a UI card whose criteria name no rendered outcome is still a judgement call, and nothing here pretends otherwise.",
+      "expect": {
+        "verdict": null,
+        "source": "judgement",
+        "needs_model": true
+      },
+      "description": "Land the last of the 9 files from `ui/workbench`: the single-file clickable prototype of the whole console.\n\n* `console/design/screens/web-console-every-control.html` (**10,871 insertions**)\n\nZero deletions. No app code — a self-contained prototype, opened directly in a browser.\n\n## Expect an oversized-review verdict, and that is the honest outcome\n\nThis is **one file of 10,871 lines** and cannot be split further without becoming nonsense: it is a single prototype document where every screen shares state and styling. The critic's size strategy will likely return a neutral *\"too large to review\"* rather than a verdict.\n\n**That is acceptable here and should be recorded as a deliberate exception, not worked around.** It is design material with no runtime path — nothing imports it, nothing serves it, no test depends on it. The review value of an adversarial pass over a prototype is low; the cost of pretending otherwise is a wedged pull request.\n\nIf the gate blocks on it, the correct resolution is an explicit documented exception on this card — **not** a hand-merge that bypasses the gate, and **not** splitting the file artificially to slip under a size threshold.\n\n## Acceptance\n\n- [ ] File on `main`, byte-identical to `origin/ui/workbench`\n- [X] ~~Opens standalone in a browser and the screen index navigates~~ — **criterion was wrong and is withdrawn.** The file's own header states it \"Stays a fragment (no doctype/html/head/body) so it can be published as an Artifact.\" It is an Artifact fragment by design and cannot be a standalone document. Replaced by: **zero external hosts referenced** (verified — fully self-contained). A visual check would mean publishing it as an Artifact; available on request.\n- [ ] Nothing in the app imports or serves it — confirmed by grep\n- [ ] If the size gate blocks: the exception is written down here with its reason\n\n**hand-built:** done by hand, not dispatched."
+    }
+  ]
+}

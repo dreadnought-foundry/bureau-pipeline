@@ -101,10 +101,12 @@ def card(identifier, *, title=None, description=None, labels=(), children=False)
         "title": title if title is not None else f"{identifier} · a card",
         # A card the classifier can actually resolve: a static-visual criterion
         # is FLEET-checkable, so the default fixture routes without a model and
-        # the tests that need an UNRESOLVED card say so explicitly.
+        # the tests that need an UNRESOLVED card say so explicitly. The wording
+        # is a real card's (DRE-1298), not an invented one — "matches the
+        # design" is the phrase nobody writes that DRE-2831 removed.
         "description": description if description is not None else (
             "Some prose.\n\n## Acceptance criteria\n\n"
-            "- [ ] the screen matches the design\n"
+            "- [ ] PhaseMeter renders on In Progress cards only\n"
         ),
         "labels": list(labels),
         "has_children": children,

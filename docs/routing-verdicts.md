@@ -62,17 +62,45 @@ Exact match, lower-cased. `no-codegen` is not `no-code`, and reading it as one i
 
 Checkbox criteria only, never free prose, matched on whole words. Signals are tried in the order below, and the order is load-bearing: **screenshotting a screen is not driving a flow**, but driving a flow that ends at a screen is still driving a flow.
 
+**Every phrase names the real cards that write it (DRE-2831).** The first version of this rule was written from phrases a card author imagined, and six of the nine visual ones appear in zero of this workspace's 1,561 carded issues — so the FLEET half almost never fired and real UI cards were routed by a model instead. A phrase with no card behind it now fails `python3 scripts/routing_verdict.py check`.
+
 ### interactive → WORKBENCH
 
 The criterion names an interactive flow or live system state. An unattended agent has no browser session, no live console and no clock it can move.
 
-Phrases: `sign in`, `sign out`, `log in`, `log out`, `force the token`, `past expiry`, `past `exp``, `confirm the session`, `in production`, `against the live`, `on the live`, `walk through`, `step through`, `in the browser`, `by hand`, `manually`, `interactively`.
+| Phrase | Cards that write it | Read from |
+| --- | --- | --- |
+| `sign in` | 14 | DRE-1621, DRE-1561 |
+| `sign out` | 3 | DRE-605, DRE-603 |
+| `log in` | 2 | DRE-604 |
+| `in production` | 26 | DRE-2553, DRE-2532 |
+| `against the live` | 7 | DRE-1274, DRE-2598 |
+| `on the live` | 8 | DRE-2715, DRE-2753 |
+| `in the live product` | 1 | DRE-2308 |
+| `verified live` | 8 | DRE-2310, DRE-2414, DRE-1839 |
+| `by hand` | 24 | DRE-2771, DRE-2792 |
+| `manually` | 10 | DRE-419, DRE-1176 |
+
+Read on 2026-08-31 across every issue in the Linear DRE workspace — 2,773 cards, 1,561 of them carrying `- [ ]` acceptance criteria.
+
+Attested the same way as the visual half, and seven phrases went the same way as its guesses: 'log out', 'force the token', 'past expiry', 'walk through', 'step through', 'in the browser' and 'interactively' matched no card at all and were dropped, and two more — 'past `exp`' and 'confirm the session' — matched only cards 'sign in' already catches, or a pytest session ('confirm the session fails with the expected error') — this workspace writes 'by hand' (24 cards) and 'manually' (10). 'in the live product' and 'verified live' were ADDED, and only because the visual half was widened: a criterion that states a rendered outcome and then says it is verified in the running product must reach a person, and interactive is read first.
 
 ### static_visual → FLEET
 
-Static visual fidelity is FLEET-checkable. qa-review.yml runs a visual-QA stage (DRE-1481): it installs chromium via Playwright, screenshots the changed screens, and hands the critic both the design PNG and the render, with the instruction to read both images and compare.
+The criterion states a RENDERED OUTCOME, and static visual fidelity is FLEET-checkable: the agent's own suite asserts the render, and where the surface is a screen, qa-review.yml runs a visual-QA stage (DRE-1481) that installs chromium via Playwright, screenshots the changed screens, and hands the critic both the design PNG and the render, with the instruction to read both images and compare.
 
-Phrases: `matches the design`, `match the design`, `renders identically`, `render identically`, `pixel-identical`, `pixel-perfect`, `visual parity`, `screenshot`, `design png`.
+| Phrase | Cards that write it | Read from |
+| --- | --- | --- |
+| `renders` | 184 | DRE-1829, DRE-1298, DRE-2216 |
+| `rendered` | 46 | DRE-2148, DRE-1316, DRE-2232 |
+| `re-renders` | 5 | DRE-2501, DRE-2222 |
+| `screenshot` | 31 | DRE-904, DRE-344 |
+| `design tokens` | 23 | DRE-1289, DRE-1410, DRE-2206 |
+| `match the design` | 1 | DRE-2004 |
+
+Read on 2026-08-31 across every issue in the Linear DRE workspace — 2,773 cards, 1,561 of them carrying `- [ ]` acceptance criteria.
+
+How this workspace really writes a visual criterion: 'Overview body renders Description, Equipment card, Evidence thumbnails' (DRE-1829), 'No hardcoded hex — all colors via design tokens' (DRE-1289). Two frequent candidates were tested and REJECTED rather than added: 'shows' (189 cards) reads the same on 'synth shows' and 'the log shows', so it cannot tell a screen from a CLI; the bare 'render' (95 cards) names an action or an endpoint — 'GET /d/{docId}/render' — rather than an outcome. Frequency alone is not evidence.
 
 Criteria that name neither signal are a judgement call — the one place a model is worth asking. A card with no acceptance criteria at all is NEEDS WORK: there is no exit condition to route on.
 

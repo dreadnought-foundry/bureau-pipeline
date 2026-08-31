@@ -421,12 +421,16 @@ The console signs you out every hour.
       continues with no prompt
 """
 
+# Written the way this workspace's UI cards are really written — the phrases
+# come from DRE-1829 and DRE-1289, not from imagination. The first version of
+# this fixture said "pixel-identical", which no card in the workspace has ever
+# written (DRE-2831); the rule passed the test and fired on nothing.
 VISUAL_CARD = """\
 The board columns do not match the design.
 
 ## Acceptance criteria
-- [ ] the rendered board matches the design PNG at desktop width
-- [ ] the column header spacing is pixel-identical to the design
+- [ ] the board renders one column per lane at desktop width
+- [ ] no hardcoded hex — all colours via design tokens
 """
 
 PLAIN_CARD = """\
@@ -507,7 +511,10 @@ class TestTheAcceptanceCriteriaAreTheRule:
         [
             "- [ ] sign in, force the token past expiry, and confirm the session holds",
             "- [ ] confirm in production that the alert fires",
-            "- [ ] walk through the invite flow and confirm the email arrives",
+            # The prose this workspace really writes for the same thing —
+            # `walk through` is one of the phrases DRE-2831 found matching no
+            # card at all, and the vocabulary no longer carries it.
+            "- [ ] the invite flow is driven by hand and the email arrives",
         ],
     )
     def test_live_state_and_interactive_criteria_all_route_workbench(self, criterion):

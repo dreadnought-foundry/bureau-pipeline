@@ -162,10 +162,13 @@ what survives all three is a judgement call worth asking a model about.
 **Split the visual case carefully.** Static visual fidelity is FLEET-checkable —
 `qa-review.yml` screenshots the changed screens and hands the critic both the
 design PNG and the render. Interactive or live-state behaviour is WORKBENCH.
-Screenshotting a screen is not driving a flow. That is the RULE; do not read it
-as a promise that the mechanical signal decides the case, because on real cards
-it usually does not fire (DRE-2831) — `standards/design-parity.md` states the
-live caveat.
+Screenshotting a screen is not driving a flow. The signal reads the phrases
+real cards write — `renders`, `rendered`, `design tokens`, each one naming the
+cards it was read from — after DRE-2831 found the shipped list matching phrases
+nobody writes and sending real UI cards to a model. It still does not decide
+every visual card: about four in ten name no rendered outcome and fall through
+to judgement, which is the designed behaviour and not a promise broken.
+`standards/design-parity.md` states the live caveat.
 
 **PARKED is landed by the process, not by a person (DRE-2824).** `Backlog` is
 process-controlled and no human may write it, so the actor on a PARKED card is

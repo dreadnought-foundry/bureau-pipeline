@@ -39,17 +39,25 @@ deferred line with a reason — prose mentions do not count.
 `qa-review.yml` runs a visual-QA stage: it installs chromium via Playwright,
 screenshots the changed screens, and hands the critic both the design PNG and
 the render with the instruction to compare them. That is why a card whose
-acceptance criteria are "matches the design" routes FLEET, while one whose
-criteria say "sign in", "past expiry" or "in production" routes WORKBENCH —
-screenshotting a screen is not driving a flow.
+acceptance criteria say the screen "renders" its content routes FLEET, while
+one whose criteria say "sign in", "verified live" or "in production" routes
+WORKBENCH — screenshotting a screen is not driving a flow.
 
-**State the rule; do not promise it always decides.** DRE-2831 found that the
-mechanical FLEET signal rarely fires on real cards — it matches phrases nobody
-writes, so on most genuinely visual cards it returns nothing and the routing
-falls through to judgement. Treat a FLEET verdict on a visual card as a routing
-decision that a human or a model made, not as evidence that a machine compared
-two images. When you need the comparison to have happened, look for it in the
-critic's verdict rather than assuming the stage decided.
+**State the rule; do not promise it always decides.** DRE-2831 found the
+mechanical FLEET signal firing on almost nothing: it matched phrases nobody
+writes — `pixel-perfect`, `visual parity`, `matches the design`, none of them
+in a single one of this workspace's 1,561 carded issues — so genuinely visual
+cards returned nothing and fell through to a model. The phrases are now read
+off real cards (`renders`, `rendered`, `design tokens`), and on the same
+corpus the signal decides 50 of the 86 carded UI cards instead of 3.
+
+**The other 36 still fall through, and that is the honest half.** A criterion
+like *"File on `main`, byte-identical to `origin/ui/workbench`"* names no
+rendered outcome, and nothing here pretends a machine can route it. So a FLEET
+verdict on a visual card does not always mean the mechanical rule decided it,
+and it never means a machine compared two images. When you need the comparison
+to have happened, look for it in the critic's verdict rather than assuming the
+stage decided.
 
 ## Critic/verifier lens — shipped surface vs design ref (blocking)
 For any `**Design:**`-bearing PR, compare the shipped surface against the
