@@ -168,6 +168,19 @@ def routes(doc: dict | None = None) -> tuple:
     return tuple(route_for(name, doc) for name in planning_shape.shapes(doc))
 
 
+def destinations(doc: dict | None = None) -> tuple:
+    """Every lane this module can put a card in.
+
+    `_cmd_exit` writes `plan.destination` — a lane the vocabulary picked, which
+    means the destination is not readable at the call site. This is where it is
+    readable, and `ready_lane_writers.py` (DRE-2859) asks for it by name: a
+    writer whose lane is computed says which lanes it can reach, or it is
+    reported as a writer nothing can check. Read from the file like everything
+    else here, so a shape re-pointed at a new lane is covered by saying so once.
+    """
+    return tuple(dict.fromkeys(route.destination for route in routes(doc)))
+
+
 def route_problems(doc: dict | None = None) -> list:
     """Everything wrong with the routing, or an empty list.
 

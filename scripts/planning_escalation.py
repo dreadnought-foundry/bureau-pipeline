@@ -74,10 +74,16 @@ DERIVED from data the pipeline already carries and each one can be made to fail:
     round. Break any of those three and this reports it.
 
 WHAT IT DOES NOT PROVE, said plainly rather than left to be discovered: this
-reads the pipeline's own declarations. A writer outside this repository — the
-relay, a Linear automation, a person dragging a card — is out of its reach, and
-closing those is the sibling card's job (DRE-2847, the writers into Backlog and
-Todo). What this module guarantees is that nothing HERE declares a way past
+reads the pipeline's own DECLARATIONS — the vocabularies, the labels, the
+planner workflow's inputs. It says nothing about the WRITERS that act on them,
+which is the other half and is `ready_lane_writers.py`'s (DRE-2859, splitting
+DRE-2847 with DRE-2858): that module discovers every writer that can put a card
+in a ready-work lane and checks each against the contract, and it reads its
+definition of "ready work" from `work_lanes_reachable_from_planning` below so
+the two checks cannot end up policing different lanes. Between them a writer
+outside this repository is still out of reach — the relay, a Linear automation,
+a person dragging a card — and both modules say so. What this module guarantees
+is that nothing HERE declares a way past
 Planning.
 
 CLI:
@@ -351,12 +357,19 @@ def label_census(paths=None) -> tuple:
     return tuple(found)
 
 
-def _work_lanes_reachable_from_planning(contract: dict | None, doc: dict | None) -> tuple:
+def work_lanes_reachable_from_planning(
+    contract: dict | None = None, doc: dict | None = None
+) -> tuple:
     """The work-segment lanes the planning segment can send a card to.
 
     Discovered from the two vocabularies rather than named here: a new shape or
     a new routing verdict pointing at a lane nothing gates is caught without
     anybody remembering to widen a list.
+
+    Public because it is the definition of "a lane the pipeline treats as ready
+    work" and `ready_lane_writers.py` (DRE-2859) asks the same question of the
+    writers. Two derivations of one set is how the two checks end up policing
+    different lanes.
     """
     wanted: list[str] = []
     for route in planning_route.routes(doc):
@@ -450,7 +463,7 @@ def bypass_problems(
     # The lane half: the routing verdict is written at Planning's exit and
     # nowhere else, so a work lane that does not require one can be entered by
     # a card that was never planned.
-    for name in _work_lanes_reachable_from_planning(contract, doc):
+    for name in work_lanes_reachable_from_planning(contract, doc):
         clauses = lane_contract.lane(name, contract=contract)["clauses"]
         stated = " ".join(
             (clauses.get(kind) or {}).get("text") or "" for kind in ("entrance", "evidence")

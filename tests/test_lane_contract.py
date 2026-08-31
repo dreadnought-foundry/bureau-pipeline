@@ -105,8 +105,14 @@ class TestTheFileExists:
         """DRE-2824: binding an actor to a lane needs the lane's OWN writer
         list, not the glossary of every writer anywhere. Reading it out of the
         clause dict at each call site is how a second copy starts."""
+        # `agent-task.yml` joined the list on DRE-2859: it has parked a stated
+        # blocker and a past-the-cap dead run in Backlog since long before the
+        # contract existed, and nothing named it until a check that DISCOVERS
+        # writers rather than listing them went looking
+        # (tests/test_no_unplanned_ready_lane_writer.py).
         assert lane_contract.lane_writers("Backlog") == (
-            "plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py", "linear_ops.py"
+            "plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py",
+            "linear_ops.py", "agent-task.yml",
         )
         assert lane_contract.lane_writers("Canceled") == ("operator",)
 
