@@ -88,7 +88,8 @@ class GateBehaviorTest(unittest.TestCase):
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
         self.assertIn("Repo:", fake.comments[0][1])
-        self.assertIn("Returned to Backlog", fake.comments[0][1])
+        self.assertIn("Returned to Planning", fake.comments[0][1])
+        self.assertNotIn("move to Todo again", fake.comments[0][1])
 
     def test_missing_agent_label_is_auto_fixed_not_bounced(self):
         # Behavior change (fix-first): a card with a resolvable repo but no agent

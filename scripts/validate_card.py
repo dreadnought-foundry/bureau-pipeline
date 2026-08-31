@@ -567,13 +567,18 @@ def _bounce(linear_ops, identifier: str, gaps: list[str], why: str,
     up again and walk it back into this same refusal. What the card owes is the
     classification it is missing, and Planning is the lane that owes one.
 
-    The comment body is deliberately UNCHANGED: a refused card still carries its
-    plain-English reason, and `tests/test_writers_point_at_planning.py` asserts
-    it byte for byte rather than assuming it."""
+    The comment body moves with the lane. It used to say "Returned to Backlog;
+    fix and move to Todo again", which after this change was wrong twice: the
+    card is not in Backlog, and moving it straight to Todo skips the very
+    classification the bounce is asking for — the shortcut this card closes. A
+    refused card still carries its plain-English reason, and
+    `tests/test_writers_point_at_planning.py` asserts the text byte for byte
+    rather than assuming it."""
     body = (
         "🚧 Not ready for build — missing: "
         + ", ".join(gaps)
-        + ". Returned to Backlog; fix and move to Todo again."
+        + ". Returned to Planning; fix what is missing and Planning routes it "
+          "on from there — do not move it straight to Todo."
         + (f"\n\n{detail}" if detail else "")
     )
     linear_ops.cmd_comment(identifier, body)

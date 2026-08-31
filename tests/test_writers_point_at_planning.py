@@ -205,9 +205,12 @@ class TheTodoGateRefusesToPlanning(unittest.TestCase):
         self.assertTrue(_gate(fake))
         self.assertEqual(fake.states, [("DRE-999", PLANNING)])
 
-    def test_the_bounce_comment_is_unchanged(self):
-        # The refusal still carries its plain-English reason, byte for byte:
-        # a refused card tells its author what is missing and what to do.
+    def test_the_bounce_comment_names_the_lane_the_card_actually_lands_in(self):
+        # The refusal still carries its plain-English reason, byte for byte —
+        # and that reason has to describe the move it just made. Naming Backlog
+        # here would be false, and "move to Todo again" would tell the author to
+        # skip the classification the bounce is asking for, which is the exact
+        # shortcut this card closes.
         fake = self._uninferable()
         _gate(fake)
         self.assertEqual(
@@ -215,8 +218,9 @@ class TheTodoGateRefusesToPlanning(unittest.TestCase):
             [(
                 "DRE-999",
                 "🚧 Not ready for build — missing: repo: label (or legacy "
-                "**Repo:** line). Returned to Backlog; fix and move to Todo "
-                "again.",
+                "**Repo:** line). Returned to Planning; fix what is missing "
+                "and Planning routes it on from there — do not move it "
+                "straight to Todo.",
             )],
         )
 
