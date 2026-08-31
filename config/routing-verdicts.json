@@ -144,7 +144,19 @@
       "",
       "Order is load-bearing: interactive wins over visual. Screenshotting a",
       "screen is not driving a flow, but driving a flow that ends at a screen is",
-      "still driving a flow."
+      "still driving a flow.",
+      "",
+      "EVERY PHRASE NAMES A REAL CARD THAT WRITES IT (DRE-2831). The first",
+      "version of this block was written from phrases a card author imagined,",
+      "and six of the nine static_visual phrases appear in ZERO of the 1,561",
+      "carded issues in this workspace — so the FLEET half almost never fired,",
+      "and real UI cards were routed by a model, at cost, on the exact case the",
+      "rule was supposed to decide for free. The remedy is not a longer guessed",
+      "list, which is the same defect made longer: it is the 'evidence' block on",
+      "each signal, which config_problems() refuses to let a phrase into the",
+      "vocabulary without. The verbatim criteria behind every phrase, the real",
+      "card bodies they were read from, and the measured before/after are in",
+      "tests/fixtures/routing-criteria-corpus-2026-08-31.json."
     ],
     "order": ["interactive", "static_visual"],
     "signals": {
@@ -155,36 +167,56 @@
           "sign in",
           "sign out",
           "log in",
-          "log out",
-          "force the token",
-          "past expiry",
-          "past `exp`",
-          "confirm the session",
           "in production",
           "against the live",
           "on the live",
-          "walk through",
-          "step through",
-          "in the browser",
+          "in the live product",
+          "verified live",
           "by hand",
-          "manually",
-          "interactively"
-        ]
+          "manually"
+        ],
+        "evidence": {
+          "read_on": "2026-08-31",
+          "corpus": "every issue in the Linear DRE workspace — 2,773 cards, 1,561 of them carrying `- [ ]` acceptance criteria",
+          "note": "Attested the same way as the visual half, and seven phrases went the same way as its guesses: 'log out', 'force the token', 'past expiry', 'walk through', 'step through', 'in the browser' and 'interactively' matched no card at all and were dropped, and two more — 'past `exp`' and 'confirm the session' — matched only cards 'sign in' already catches, or a pytest session ('confirm the session fails with the expected error') — this workspace writes 'by hand' (24 cards) and 'manually' (10). 'in the live product' and 'verified live' were ADDED, and only because the visual half was widened: a criterion that states a rendered outcome and then says it is verified in the running product must reach a person, and interactive is read first.",
+          "phrases": {
+            "sign in": { "cards": 14, "examples": ["DRE-1621", "DRE-1561"] },
+            "sign out": { "cards": 3, "examples": ["DRE-605", "DRE-603"] },
+            "log in": { "cards": 2, "examples": ["DRE-604"] },
+            "in production": { "cards": 26, "examples": ["DRE-2553", "DRE-2532"] },
+            "against the live": { "cards": 7, "examples": ["DRE-1274", "DRE-2598"] },
+            "on the live": { "cards": 8, "examples": ["DRE-2715", "DRE-2753"] },
+            "in the live product": { "cards": 1, "examples": ["DRE-2308"] },
+            "verified live": { "cards": 8, "examples": ["DRE-2310", "DRE-2414", "DRE-1839"] },
+            "by hand": { "cards": 24, "examples": ["DRE-2771", "DRE-2792"] },
+            "manually": { "cards": 10, "examples": ["DRE-419", "DRE-1176"] }
+          }
+        }
       },
       "static_visual": {
         "verdict": "FLEET",
-        "why": "Static visual fidelity is FLEET-checkable. qa-review.yml runs a visual-QA stage (DRE-1481): it installs chromium via Playwright, screenshots the changed screens, and hands the critic both the design PNG and the render, with the instruction to read both images and compare.",
+        "why": "The criterion states a RENDERED OUTCOME, and static visual fidelity is FLEET-checkable: the agent's own suite asserts the render, and where the surface is a screen, qa-review.yml runs a visual-QA stage (DRE-1481) that installs chromium via Playwright, screenshots the changed screens, and hands the critic both the design PNG and the render, with the instruction to read both images and compare.",
         "phrases": [
-          "matches the design",
-          "match the design",
-          "renders identically",
-          "render identically",
-          "pixel-identical",
-          "pixel-perfect",
-          "visual parity",
+          "renders",
+          "rendered",
+          "re-renders",
           "screenshot",
-          "design png"
-        ]
+          "design tokens",
+          "match the design"
+        ],
+        "evidence": {
+          "read_on": "2026-08-31",
+          "corpus": "every issue in the Linear DRE workspace — 2,773 cards, 1,561 of them carrying `- [ ]` acceptance criteria",
+          "note": "How this workspace really writes a visual criterion: 'Overview body renders Description, Equipment card, Evidence thumbnails' (DRE-1829), 'No hardcoded hex — all colors via design tokens' (DRE-1289). Two frequent candidates were tested and REJECTED rather than added: 'shows' (189 cards) reads the same on 'synth shows' and 'the log shows', so it cannot tell a screen from a CLI; the bare 'render' (95 cards) names an action or an endpoint — 'GET /d/{docId}/render' — rather than an outcome. Frequency alone is not evidence.",
+          "phrases": {
+            "renders": { "cards": 184, "examples": ["DRE-1829", "DRE-1298", "DRE-2216"] },
+            "rendered": { "cards": 46, "examples": ["DRE-2148", "DRE-1316", "DRE-2232"] },
+            "re-renders": { "cards": 5, "examples": ["DRE-2501", "DRE-2222"] },
+            "screenshot": { "cards": 31, "examples": ["DRE-904", "DRE-344"] },
+            "design tokens": { "cards": 23, "examples": ["DRE-1289", "DRE-1410", "DRE-2206"] },
+            "match the design": { "cards": 1, "examples": ["DRE-2004"] }
+          }
+        }
       }
     }
   },

@@ -289,12 +289,13 @@ def _one_off_check(card: dict, comment_bodies, doc: dict | None = None) -> tuple
     card with no exit condition at all is not buildable as written.
 
     That default is load-bearing, not a convenience. The mechanical rule
-    reaches FLEET only through the static-visual phrases, which real cards
-    rarely write (DRE-2831) — so a route that stamped only what the rule
-    decided would leave nearly every one-off in Backlog with no verdict, which
-    is the DRE-2735 loop this card exists to stay out of. No model is asked
-    either way: this run is the cheap route, and asking one would put the
-    planner cost back into the shape that exists to avoid it.
+    reaches FLEET only through the static-visual phrases, and those now match
+    the prose real cards write rather than phrases nobody does (DRE-2831) — but
+    they still decide only about one carded card in six, so a route that
+    stamped only what the rule decided would leave most one-offs in Backlog
+    with no verdict, which is the DRE-2735 loop this card exists to stay out
+    of. No model is asked either way: this run is the cheap route, and asking
+    one would put the planner cost back into the shape that exists to avoid it.
     """
     carried = routing_verdict.verdicts_on(comment_bodies)
     if carried:

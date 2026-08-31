@@ -53,6 +53,22 @@ stage (DRE-1481) that screenshots the changed screens and hands the critic both
 the design PNG and the render. Interactive or live-state behaviour is
 WORKBENCH. **Screenshotting a screen is not driving a flow.**
 
+## And the phrases are read off real cards, not imagined (DRE-2831)
+
+The rule above was right and the FLEET half of it still almost never fired:
+`static_visual` matched `pixel-perfect`, `visual parity`, `matches the design`
+— phrases that appear in ZERO of the 1,561 carded issues in this workspace, so
+real UI cards fell through to a model, at cost, on the exact case the rule
+exists to decide for free. What this workspace actually writes is `renders`
+(184 cards), `rendered` (46), `design tokens` (23).
+
+The remedy is not a longer guessed list, which is the same defect made longer.
+Every phrase now names the real cards that write it (`phrase_evidence`), and
+`config_problems()` refuses one that names none. `shows` (189 cards) was tested
+and rejected: it reads the same on `synth shows` and `the log shows`, so it
+cannot tell a screen from a CLI. The corpus, the verbatim criteria and the real
+card bodies are in `tests/fixtures/routing-criteria-corpus-2026-08-31.json`.
+
 ## Epics
 
 "Could an agent build this unattended" is meaningless for a card the planner
@@ -240,6 +256,23 @@ def _signals(doc: dict | None = None) -> tuple:
     return tuple((key, block["signals"][key]) for key in block["order"])
 
 
+def phrase_evidence(phrase: str, key: str | None = None, doc: dict | None = None) -> tuple:
+    """The real cards that write `phrase`, as identifiers — empty if none do.
+
+    The vocabulary's phrases are not guesses (DRE-2831): each one was read off
+    the workspace's own acceptance criteria, and each one names the cards it
+    was read from. `config_problems()` refuses a phrase that names none, so the
+    imagined-phrase defect cannot come back quietly.
+    """
+    for candidate, signal in _signals(doc):
+        if key is not None and candidate != key:
+            continue
+        entry = ((signal.get("evidence") or {}).get("phrases") or {}).get(phrase)
+        if entry:
+            return tuple(entry.get("examples") or ())
+    return ()
+
+
 # --------------------------------------------------------------------------- #
 # the file checks itself                                                       #
 # --------------------------------------------------------------------------- #
@@ -348,6 +381,54 @@ def config_problems(doc: dict | None = None) -> list:
             problems.append(f"the {key!r} signal declares no phrases")
         if not (signal.get("why") or "").strip():
             problems.append(f"the {key!r} signal says nothing about why it routes there")
+        problems.extend(_evidence_problems(key, signal))
+    return problems
+
+
+def _evidence_problems(key: str, signal: dict) -> list:
+    """The half that keeps the next phrase list from being written from
+    imagination (DRE-2831).
+
+    `static_visual` shipped nine phrases, six of which appear in ZERO of the
+    1,561 carded issues in this workspace, so the FLEET half of the rule almost
+    never fired and real UI cards were decided by a model — at cost, on the
+    exact case the rule exists to decide for free. A longer guessed list is the
+    same defect made longer, so a phrase may only enter the vocabulary naming
+    the real cards that write it, and the count it was read at.
+    """
+    problems: list[str] = []
+    evidence = signal.get("evidence") or {}
+    if not (evidence.get("read_on") or "").strip():
+        problems.append(
+            f"the {key!r} signal's evidence does not say when the cards were "
+            "read — evidence with no date cannot be re-checked"
+        )
+    if not (evidence.get("corpus") or "").strip():
+        problems.append(
+            f"the {key!r} signal's evidence does not say WHICH cards were read"
+        )
+    attested = evidence.get("phrases") or {}
+    for phrase in signal.get("phrases") or ():
+        entry = attested.get(phrase) or {}
+        examples = [e for e in (entry.get("examples") or []) if (e or "").strip()]
+        if not examples:
+            problems.append(
+                f"the {key!r} phrase {phrase!r} names no real card that writes "
+                "it — a phrase a card author only imagined never fires, and the "
+                "half of the rule that owns it silently becomes a model call "
+                "(DRE-2831)"
+            )
+        if not isinstance(entry.get("cards"), int):
+            problems.append(
+                f"the {key!r} phrase {phrase!r} does not say how many cards were "
+                "found to write it"
+            )
+    for phrase in attested:
+        if phrase not in (signal.get("phrases") or ()):
+            problems.append(
+                f"the {key!r} signal carries evidence for {phrase!r}, which is "
+                "not one of its phrases"
+            )
     return problems
 
 
@@ -843,13 +924,35 @@ def render_markdown(doc: dict | None = None) -> str:
         "that ends at a screen is still driving a flow."
     )
     w("")
+    w(
+        "**Every phrase names the real cards that write it (DRE-2831).** The "
+        "first version of this rule was written from phrases a card author "
+        "imagined, and six of the nine visual ones appear in zero of this "
+        "workspace's 1,561 carded issues — so the FLEET half almost never "
+        "fired and real UI cards were routed by a model instead. A phrase with "
+        "no card behind it now fails "
+        "`python3 scripts/routing_verdict.py check`."
+    )
+    w("")
     for key, signal in _signals(doc):
         w(f"### {key} → {signal['verdict']}")
         w("")
         w(signal["why"])
         w("")
-        w("Phrases: " + ", ".join(f"`{p}`" for p in signal["phrases"]) + ".")
+        evidence = signal.get("evidence") or {}
+        attested = evidence.get("phrases") or {}
+        w("| Phrase | Cards that write it | Read from |")
+        w("| --- | --- | --- |")
+        for phrase in signal["phrases"]:
+            entry = attested.get(phrase) or {}
+            examples = ", ".join(entry.get("examples") or ()) or "—"
+            w(f"| `{phrase}` | {entry.get('cards', '—')} | {examples} |")
         w("")
+        if evidence:
+            w(f"Read on {evidence.get('read_on')} across {evidence.get('corpus')}.")
+            w("")
+            w(evidence.get("note", ""))
+            w("")
     w(
         "Criteria that name neither signal are a judgement call — the one place "
         "a model is worth asking. A card with no acceptance criteria at all is "

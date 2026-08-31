@@ -140,7 +140,8 @@ class TestEveryPhraseIsAttested:
             block = signal.get("evidence") or {}
             assert block.get("read_on"), f"the {key!r} signal does not say when it was read"
             assert block.get("corpus"), f"the {key!r} signal does not say what was read"
-            assert str(EVIDENCE["corpus"]["with_checkbox_criteria"]) in json.dumps(block), (
+            written = json.dumps(block, ensure_ascii=False).replace(",", "")
+            assert str(EVIDENCE["corpus"]["with_checkbox_criteria"]) in written, (
                 f"the {key!r} signal's evidence does not say how many cards were "
                 "read, so a reader cannot weigh it"
             )

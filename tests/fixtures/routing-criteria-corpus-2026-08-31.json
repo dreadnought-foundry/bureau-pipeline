@@ -347,6 +347,14 @@
     "interactively": {
       "cards": 0,
       "why": "Zero cards write it."
+    },
+    "past `exp`": {
+      "cards": 1,
+      "why": "Attested once, by DRE-2695 — the same criterion `sign in` already catches. A second phrase for one card buys nothing."
+    },
+    "confirm the session": {
+      "cards": 2,
+      "why": "One attestation is DRE-2695, which `sign in` already catches; the other is DRE-416's `confirm the session fails with the expected error`, which is a pytest session. Attested and wrong is still wrong."
     }
   },
   "cards": [
