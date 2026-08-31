@@ -383,6 +383,23 @@ jobs:
                only if it needs a decision. Use `subissue`, NOT `oneoff`, for
                anything that belongs to THIS epic's decomposition — a parentless
                card never promotes with the epic.
+            3c. EVERY epic's LAST TWO children are a `PROOF: <…>` card and a
+               `DEMO: <…>` card — always, not when it feels warranted. Proof
+               answers "did it work" and is NOT a green test suite: it is the
+               mechanism observed running against real state, with the
+               observation recorded in the repo. Demo answers "can the CEO see
+               it": a merged pull request is invisible to the person who
+               green-lit the epic. Create them last, give each a
+               `**Blocked by:**` line naming EVERY other child (so the
+               relations, not the ordering, hold them), and make sure neither
+               is fleet-buildable — write acceptance criteria naming the live
+               observation, or add `--label no-code` for work an operator runs.
+               The run checks the cards you created and sends the epic back to
+               Planning if they are missing, so check your own work first:
+                 python3 .bureau-pipeline/scripts/linear_ops.py children-detail \
+                   "${{ github.event.client_payload.identifier }}" \
+                   | python3 .bureau-pipeline/scripts/proof_and_demo.py check \
+                       --epic "${{ github.event.client_payload.identifier }}"
             4. Write the PLAN ARTIFACT — the thing the CEO green-lights —
                with `Write`, to EXACTLY this path:
                  ${{ runner.temp }}/plan-artifact.md
@@ -493,6 +510,44 @@ jobs:
             fi
           else
             echo "no children created (the planner escalated) — nothing to validate"
+          fi
+
+      # --- Every epic carries a proof card and a demo card (DRE-2746) -------
+      #
+      # The convention was already written down (standards/plan-artifact.md
+      # gives the artifact a "Proof and demo" section) and nothing made any
+      # planner follow it. A brief is guidance a model can skip, so the check
+      # runs on the PLANNER'S OUTPUT — the cards it created, read out of
+      # Linear — and an epic missing either card goes back to Planning with
+      # the reason named, exactly the way an epic with invalid children does
+      # one step up.
+      #
+      # Proof is not a green test suite: it is the mechanism observed running
+      # against real state, recorded in the repo. Demo is what the CEO sees.
+      # Neither may be fleet-buildable — a proof the fleet can close by merging
+      # its own code is not a proof.
+      #
+      # The read is done FIRST, into a file: a crashed read decided nothing and
+      # must never bounce a plan (standards/console-honesty.md rule 1), so the
+      # reason is only posted when the checker actually wrote one.
+      - name: Proof and demo cards — the epic's last two children
+        id: proofdemo
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          CHILDREN="${{ runner.temp }}/proof-demo-children.json"
+          BOUNCE_FILE="${{ runner.temp }}/proof-demo-bounce.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+          if ! python3 .bureau-pipeline/scripts/proof_and_demo.py check \
+                 --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
+            if [ -s "$BOUNCE_FILE" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "$(cat "$BOUNCE_FILE")"
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
+            fi
+            exit 1
           fi
 
       # --- Hand-planning is an escalation and nothing else (DRE-2848) -------

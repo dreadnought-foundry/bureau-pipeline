@@ -250,6 +250,43 @@ is a deprecated legacy fallback, not part of new cards.
 **Blocked by:** DRE-N   <- only if it must wait for a sibling; omit otherwise
 ```
 
+## Every epic ends with a proof card and a demo card (DRE-2746)
+The last two children of EVERY epic — not a one-off, not when it feels
+warranted — are a card titled `PROOF: …` and a card titled `DEMO: …`. They
+answer two different questions and neither substitutes for the other:
+
+- **Proof** answers *did it work* — and it is **not a green test suite**. It is
+  the mechanism observed running against real state, with the observation
+  recorded in the repo: what was read, when, and what it said. That record
+  merges, so the card produces a written artifact rather than a claim.
+- **Demo** answers *can the CEO see it*. A merged PR and a passing suite are
+  invisible to the person who green-lit the epic. Without a demo the epic
+  completes and nobody outside the pipeline knows what changed.
+
+An epic that produces neither has no way of being wrong in public.
+
+Three conditions, all checked on the cards you create:
+
+1. **Last.** They are the epic's last two children, in either order between
+   themselves.
+2. **Blocked by every other child** — a real Linear `blockedBy` relation, so
+   write `**Blocked by:** DRE-A, DRE-B, …` naming every sibling and let
+   `subissue` turn it into relations. Ordering is not a relation, and the
+   check reads the relation.
+3. **Never `FLEET`.** Both must route to `WORKBENCH` or `OPERATOR` — a proof
+   the fleet can close by merging its own code is not a proof. **The whole
+   value is that something other than the builder confirms it.** `DEMO:` routes
+   to WORKBENCH by title convention; for the proof card, write acceptance
+   criteria that name the live observation ("observed in production", "against
+   the live …", "by hand"), or label it `no-code` when a person runs it.
+
+The run checks your OUTPUT, not this text — an epic missing either card is
+bounced back to Planning with the reason named, the same way an epic with
+invalid children is. Check it yourself before you finish:
+
+    python3 .bureau-pipeline/scripts/linear_ops.py children-detail <EPIC> \
+      | python3 .bureau-pipeline/scripts/proof_and_demo.py check --epic <EPIC>
+
 ## The plan artifact (what the CEO green-lights)
 Every epic produces ONE artifact — business case, KPIs as structured data,
 risk assessment, outcome, visual model, the cards, proof and demo — written

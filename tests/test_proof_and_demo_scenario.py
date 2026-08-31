@@ -104,6 +104,9 @@ class GateWalkTest(unittest.TestCase):
         self.pipeline = os.path.join(self.tmp, ".bureau-pipeline")
         os.makedirs(self.pipeline)
         shutil.copytree(SCRIPTS, os.path.join(self.pipeline, "scripts"))
+        # The real checkout carries the config the vocabularies are read from.
+        shutil.copytree(os.path.join(REPO, "config"),
+                        os.path.join(self.pipeline, "config"))
         # The stub REPLACES the real client inside the walk's checkout.
         with open(os.path.join(self.pipeline, "scripts", "linear_ops.py"), "w") as fh:
             fh.write(STUB)

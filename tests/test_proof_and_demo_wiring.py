@@ -74,7 +74,8 @@ class BriefAndStandardTest(unittest.TestCase):
         text = open(PLANNER_BRIEF).read().lower()
         self.assertIn("last two", text)
         self.assertIn("blocked by every", text)
-        self.assertRegex(text, r"never fleet|not fleet|no fleet")
+        # `never `FLEET`` — markdown emphasis around the verdict is allowed.
+        self.assertRegex(text, r"(never|not|no)\W{0,3}fleet")
 
     def test_the_card_standard_carries_the_convention(self):
         text = open(STANDARD).read()
