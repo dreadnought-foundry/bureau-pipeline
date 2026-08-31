@@ -20,6 +20,16 @@ of it is ever a runtime lookup.
   turns a shape into the route a card takes out of Planning (DRE-2844): the
   destinations below are the ones `plan.yml` sends cards to, and a card carrying
   no shape is refused rather than defaulted.
+- **`pipeline-acts.json`** — every autonomous act the pipeline can take
+  (DRE-2825): a refusal, a recovery or a hold, and per act its tag, the state
+  it leaves the work in, the next actor, what it discharges and the workflow
+  expected to act on it. Read and written through `scripts/pipeline_act.py`,
+  which reproduces each existing receipt body **byte-identically** and only
+  appends a trailer — the tags are live idempotency keys and per-sha budget
+  counters, so rewording one makes every in-flight PR's receipts invisible.
+  `python3 scripts/pipeline_act.py check` binds the file to the code both
+  ways: a declared tag no code emits fails, and an emitted tag nothing
+  declares fails.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.
