@@ -364,7 +364,13 @@ class TestTheTrailerCarriesNoForeignTag:
 
     def test_nothing_changes_behaviour_yet(self):
         """This card lands the vocabulary and the writer and nothing else.
-        No call site emits a trailer, so no live receipt changes shape."""
+        No call site emits a trailer, so no live receipt changes shape — which
+        is what makes the foundation card safe to go first.
+
+        The card that wires emission DELETES this test. That is the point of
+        it: the change of behaviour becomes a deliberate act with a diff on it,
+        rather than something that leaks in while nobody is looking.
+        """
         for path in sorted((ROOT / "scripts").glob("*.py")):
             if path.name == "pipeline_act.py":
                 continue
