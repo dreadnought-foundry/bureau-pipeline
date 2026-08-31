@@ -194,7 +194,13 @@ jobs:
               echo ""
               echo "A human needs to look at this one. Until main is green again, the merge gate keeps holding new work, so this is the fleet's top blocker."
             } > /tmp/repair-triage.md
-            python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-triage.md
+            # Triage explicitly, in this step (DRE-2858): `create` lands a card
+            # in Planning now, and this alert is not new work owing a
+            # classification — main is red, the robot is out of swings, and the
+            # card exists because something is already broken. Same shape as the
+            # repair-question escalation below, which has always said so itself.
+            CREATED=$(python3 .bureau-pipeline/scripts/linear_ops.py create "$TITLE" /tmp/repair-triage.md | grep -oE 'DRE-[0-9]+' | head -1 || true)
+            [ -n "$CREATED" ] && python3 .bureau-pipeline/scripts/linear_ops.py state "$CREATED" "Triage" || true
           fi
 
       # ---- Dispatch-pool worker selection (guardrail 4, DRE-2013) ----

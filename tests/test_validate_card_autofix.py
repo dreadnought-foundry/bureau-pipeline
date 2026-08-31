@@ -217,7 +217,7 @@ class GateFixFirstTest(unittest.TestCase):
             "Todo", "Do the thing.", ["agent:engineer"], project="Dev Sandbox"
         )
         self.assertTrue(self._run(fake))
-        self.assertEqual(fake.states, [("DRE-999", "Backlog")])
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
         # No repo: label / description written when we can't infer.
         self.assertEqual(fake.descriptions, [])
         self.assertFalse(any(l[1].startswith("repo:") for l in fake.added_labels))
@@ -225,7 +225,7 @@ class GateFixFirstTest(unittest.TestCase):
     def test_missing_repo_no_project_bounces(self):
         fake = FakeLinear("Todo", "Do the thing.", ["agent:engineer"], project=None)
         self.assertTrue(self._run(fake))
-        self.assertEqual(fake.states, [("DRE-999", "Backlog")])
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
 
     def test_inference_yields_unmapped_slug_bounces(self):
         # initiative:foundry → "foundry" → real candidate, NOT a real repo.
@@ -234,19 +234,19 @@ class GateFixFirstTest(unittest.TestCase):
             "Todo", "Do the thing.", ["agent:engineer", "initiative:foundry"]
         )
         self.assertTrue(self._run(fake))
-        self.assertEqual(fake.states, [("DRE-999", "Backlog")])
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
         self.assertEqual(fake.descriptions, [])
 
     def test_retired_vericorr_project_bounces(self):
         # DRE-2672: vericorr left the fleet. A card still filed under a
         # "VeriCorr: …" project must NOT be routed — the prefix no longer
-        # resolves, so the gate bounces it to Backlog and writes no repo
+        # resolves, so the gate bounces it to Planning and writes no repo
         # label. Fails if vericorr ever returns to VALID_SLUGS.
         fake = FakeLinear(
             "Todo", "Do the thing.", ["agent:engineer"], project="VeriCorr: Forms"
         )
         self.assertTrue(self._run(fake))
-        self.assertEqual(fake.states, [("DRE-999", "Backlog")])
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
         self.assertFalse(any(l[1].startswith("repo:") for l in fake.added_labels))
 
     # --- no-op paths ---

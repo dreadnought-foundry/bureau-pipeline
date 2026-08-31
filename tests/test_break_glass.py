@@ -199,7 +199,7 @@ def test_a_break_glass_card_is_not_returned_by_the_gate():
     fixture proves the guard would have fired.
 
     MUTATION CHECK: remove the break_glass consult in validate_card.cmd_gate
-    and this card bounces to Backlog — red here.
+    and this card bounces to Planning — red here.
     """
     fake = FakeLinear("Todo", "no repo line", ["agent:engineer", "break-glass"])
     assert _run_gate(fake) is False
@@ -211,7 +211,7 @@ def test_the_same_card_without_the_marker_still_bounces():
     difference between these two tests."""
     fake = FakeLinear("Todo", "no repo line", ["agent:engineer"])
     assert _run_gate(fake) is True
-    assert fake.states == [("DRE-999", "Backlog")]
+    assert fake.states == [("DRE-999", "Planning")]
 
 
 def test_the_bypass_posts_the_notice_and_stamps_the_receipt():
@@ -247,7 +247,7 @@ def test_the_gate_refuses_a_marker_a_bot_applied():
         actor=None, bot="Some Automation",
     )
     assert _run_gate(fake) is True
-    assert fake.states == [("DRE-999", "Backlog")]
+    assert fake.states == [("DRE-999", "Planning")]
     body = "\n".join(b for _, b in fake.comments)
     assert break_glass.REFUSED_TAG in body
     assert "Some Automation" in body

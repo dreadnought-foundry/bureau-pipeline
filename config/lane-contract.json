@@ -276,8 +276,8 @@
           "pending": "DRE-2720 writes the epic's artifact, DRE-2844 branches the exit on the shape and DRE-2848 adds the escalation exit; the gate that refuses an epic's exit without an artifact is Phase 5"
         },
         "writers": {
-          "text": "The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, the groomer draining a batch the CEO approved, the critic's audit moving a card it could not classify, and a human.",
-          "who": ["plan.yml", "reconcile.py", "agent-task.yml", "groomer.py", "critic_score.py", "operator"],
+          "text": "The planner, the sweep that re-triggers it, a build run handing back a card that turned out to be an epic, the groomer draining a batch the CEO approved, the critic's audit moving a card it could not classify, the guarded write layer every automated card-minting seam goes through — the Todo gate returning a card it cannot repair, the one-off producer, and the medic/watch seams that file a fresh card (DRE-2858) — and a human.",
+          "who": ["plan.yml", "reconcile.py", "agent-task.yml", "groomer.py", "critic_score.py", "linear_ops.py", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },

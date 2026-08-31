@@ -2,7 +2,9 @@
 # infrastructure flakes once automatically (e.g. Docker Hub pull timeouts).
 # If the retry fails too, summon a diagnosis agent that reads the logs and
 # reports in plain English to Linear — to the card if one is involved,
-# otherwise as a new Triage card. Machines watch; agents think.
+# otherwise as a new card in Planning, which owes it a classification
+# (DRE-2858 — a pipeline failure is new work, not a broken card).
+# Machines watch; agents think.
 #
 # EXCEPTION (DRE-1921, the #1 quota-burn fix): a QA critic that crashed on
 # INFRASTRUCTURE (a GitHub rate-limit, or an auth/startup death) is NOT a
@@ -303,7 +305,8 @@ jobs:
                  "Pipeline failure: ${{ github.event.workflow_run.name }}"
                  that is not Done, Canceled or Duplicate. Search by title and
                  open-ness, NOT by a list of lanes: a failure card can sit in
-                 Intake, Triage, Backlog, Todo, In Progress or In Review, and a
+                 Intake, Planning, Triage, Backlog, Todo, In Progress or In
+                 Review, and a
                  lane list that misses the one the card is actually in mints a
                  fresh card on every failure instead of commenting on the one
                  that exists. `linear_ops.py find-open "<title>"` answers this

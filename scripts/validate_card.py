@@ -18,7 +18,7 @@ bouncing (the original behavior). It:
      set VALID_SLUGS — and adds the `repo:<slug>` LABEL (and ONLY the label,
      DRE-1699 — it no longer prepends the deprecated `**Repo:**` stamp).
 On a successful repair the card PROCEEDS (no bounce) and gets a 🔧 comment.
-It is BOUNCED to Backlog ONLY when the repo cannot be inferred (no initiative
+It is BOUNCED to Planning ONLY when the repo cannot be inferred (no initiative
 label, unknown/absent project) or the inference yields a slug that isn't a real
 repo — the one case where a fix would be a wrong-repo guess. See infer_repo /
 VALID_SLUGS for the mapping (mirrors the relay's REPO_MAP, single source).
@@ -559,15 +559,31 @@ def _resolve_unknown_slug(linear_ops, identifier: str, card: dict,
 
 def _bounce(linear_ops, identifier: str, gaps: list[str], why: str,
             detail: str | None = None) -> None:
+    """Refuse a card the gate cannot repair, and return it to Planning.
+
+    Planning, not Backlog (DRE-2858). This is the one writer that knows for
+    CERTAIN a card is invalid, and it was putting it in the lane the rest of the
+    system reads as ready work — where `reconcile.promote_ready` would pick it
+    up again and walk it back into this same refusal. What the card owes is the
+    classification it is missing, and Planning is the lane that owes one.
+
+    The comment body moves with the lane. It used to say "Returned to Backlog;
+    fix and move to Todo again", which after this change was wrong twice: the
+    card is not in Backlog, and moving it straight to Todo skips the very
+    classification the bounce is asking for — the shortcut this card closes. A
+    refused card still carries its plain-English reason, and
+    `tests/test_writers_point_at_planning.py` asserts the text byte for byte
+    rather than assuming it."""
     body = (
         "🚧 Not ready for build — missing: "
         + ", ".join(gaps)
-        + ". Returned to Backlog; fix and move to Todo again."
+        + ". Returned to Planning; fix what is missing and Planning routes it "
+          "on from there — do not move it straight to Todo."
         + (f"\n\n{detail}" if detail else "")
     )
     linear_ops.cmd_comment(identifier, body)
-    linear_ops.cmd_state(identifier, "Backlog")
-    print(f"{identifier} bounced to Backlog ({why}; missing: {gaps})")
+    linear_ops.cmd_state(identifier, "Planning")
+    print(f"{identifier} bounced to Planning ({why}; missing: {gaps})")
     _emit(True)
     _emit_role("engineer")
 

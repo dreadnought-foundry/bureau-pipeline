@@ -5,7 +5,7 @@ the fix-first extension the gate REPAIRS what it can rather than bouncing — th
 fine-grained repair/proceed/bounce cases live in test_validate_card_autofix.py.
 These pin the surviving invariants:
   - clean card        → no bounce, bounced=false, untouched
-  - missing repo, NOT inferable → comment + Backlog, bounced=true
+  - missing repo, NOT inferable → comment + Planning, bounced=true
   - already past Todo  → untouched, bounced=false (gate validates the Todo-entry
                          transition only; never drags work backward)
 """
@@ -86,9 +86,10 @@ class GateBehaviorTest(unittest.TestCase):
         # case the fix-first gate still bounces (can't guess a repo).
         fake = FakeLinear("Todo", "no repo line", ["agent:engineer"], project=None)
         self.assertTrue(self._run(fake))
-        self.assertEqual(fake.states, [("DRE-999", "Backlog")])
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
         self.assertIn("Repo:", fake.comments[0][1])
-        self.assertIn("Returned to Backlog", fake.comments[0][1])
+        self.assertIn("Returned to Planning", fake.comments[0][1])
+        self.assertNotIn("move to Todo again", fake.comments[0][1])
 
     def test_missing_agent_label_is_auto_fixed_not_bounced(self):
         # Behavior change (fix-first): a card with a resolvable repo but no agent
@@ -120,7 +121,7 @@ class GateBehaviorTest(unittest.TestCase):
         # Triage planner card, no repo and nothing to infer one from → bounce.
         fake = FakeLinear("Triage", "no repo", ["agent:planner"], project=None)
         self.assertTrue(self._run(fake))
-        self.assertEqual(fake.states, [("DRE-999", "Backlog")])
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
 
 
 if __name__ == "__main__":

@@ -192,7 +192,7 @@ jobs:
       # Linear, so a malformed card (no resolvable repo, or no agent: role
       # label) would otherwise either silently vanish at the relay or dispatch
       # a broken build here. Validate the LIVE card and, if malformed AND still
-      # in Todo/Triage, bounce it to Backlog with a diagnostic comment — and
+      # in Todo/Triage, bounce it to Planning with a diagnostic comment — and
       # skip every downstream step. Runs BEFORE Card → In Progress so a bounced
       # card never flips In Progress first.
       - name: Card-validation gate

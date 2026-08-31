@@ -3,14 +3,16 @@
 
 `cmd_subissue` requires a parent and derives the child's `repo:` label from
 `parent_inherited_labels()`. A one-off has no parent by definition, so the
-one-off route Wave 1.5 designs — Planning → structural check → Backlog, never
-reaching the CEO — had no producer at all, and no source for the `repo:` label
+one-off route Wave 1.5 designs — Planning → structural check → the build
+queue, never reaching the CEO — had no producer at all, and no source for the `repo:` label
 that DRE-2744 makes the only routing key.
 
 `cmd_oneoff` is that producer. It is `cmd_subissue` minus the parent: the same
-path-guard on the body, the same `validate_card` gate, the same Backlog landing
-and the same `--blocked-by` relation handling — with labels supplied by the
-plan rather than inherited.
+path-guard on the body, the same `validate_card` gate and the same
+`--blocked-by` relation handling — with labels supplied by the plan rather than
+inherited. It lands in Planning, not Backlog (DRE-2858): a card minted here has
+been through nobody's planning run of its own, so it owes the classification
+Planning makes.
 """
 
 import io
@@ -60,6 +62,7 @@ class FakeLinear:
             return {
                 "workflowStates": {
                     "nodes": [
+                        {"id": "state-planning", "name": "Planning", "type": "backlog"},
                         {"id": "state-backlog", "name": "Backlog", "type": "backlog"},
                         {"id": "state-triage", "name": "Triage", "type": "unstarted"},
                     ]
@@ -107,12 +110,13 @@ class TestOneOffCreation:
         ]
         assert "labels=repo:atlas,initiative:bureau,agent:engineer" in out
 
-    def test_lands_in_backlog(self, tmp_path):
-        # A one-off leaves Planning with its structural check done — it goes
-        # straight to Backlog and never reaches the CEO.
+    def test_lands_in_planning(self, tmp_path):
+        # DRE-2858: a card this seam mints carries no shape stamp and no routing
+        # verdict, so it lands in the lane that makes one — never straight into
+        # the lane the rest of the system reads as ready work.
         fake = FakeLinear()
         _run_oneoff(fake, tmp_path, GOOD_BODY, *PLAN_LABELS)
-        assert fake.created["stateId"] == "state-backlog"
+        assert fake.created["stateId"] == "state-planning"
 
     def test_body_is_inlined_contents_not_a_path(self, tmp_path):
         fake = FakeLinear()

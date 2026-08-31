@@ -25,7 +25,7 @@ duplicates.
 
 The Todo gate is **fix-first**: it auto-repairs a missing piece when it can infer
 it (from an `initiative:<x>` label or the Linear project-name prefix) and only
-**bounces** to Backlog when the repo can't be inferred deterministically. Get it
+**bounces** to Planning when the repo can't be inferred deterministically. Get it
 right and the gate is a no-op.
 
 ## Optional — only when applicable

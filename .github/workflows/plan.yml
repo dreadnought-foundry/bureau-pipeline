@@ -109,7 +109,7 @@ jobs:
       # only via agent-plan, which the relay emits only when agent:planner is
       # present — so the agent-label check is moot on this path; the gate here
       # effectively enforces the resolvable-repo rule (and the still-in-Todo/
-      # Triage guard) before any planning runs. Bounce → Backlog + comment,
+      # Triage guard) before any planning runs. Bounce → Planning + comment,
       # skip all downstream steps.
       - name: Card-validation gate
         id: gate
@@ -377,7 +377,9 @@ jobs:
                    "<title>" <desc-file> \
                    --label repo:${{ steps.repo.outputs.slug }} \
                    --label agent:<role> --label initiative:<x>
-               It lands in Backlog with no epic above it, and reaches the CEO
+               It lands in Planning with no epic above it — it has been
+               through nobody's planning run of its own, so it owes the
+               classification Planning makes (DRE-2858) — and reaches the CEO
                only if it needs a decision. Use `subissue`, NOT `oneoff`, for
                anything that belongs to THIS epic's decomposition — a parentless
                card never promotes with the epic.
