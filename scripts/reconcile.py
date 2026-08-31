@@ -92,10 +92,13 @@ EPICS. Before promoting an epic's children, it checks that EPIC's own
 "blocked-by" relations (read the same way as a card's); if any blocker epic is
 not Done, none of that epic's children promote this sweep — regardless of the
 epic's own state. And when a blocker epic reaches Done, every epic blocked-by
-it whose blockers are now ALL Done is auto-advanced from Backlog to Triage
-(which re-triggers the planner) — never to In Progress, so the Green Light
-human-approval gate is preserved. Both behaviors fail SAFE on unreadable
-relation data (don't promote / don't advance on uncertainty).
+it whose blockers are now ALL Done is auto-advanced out of Backlog — to Triage
+(which re-triggers the planner), or, for an epic recorded committed-in-sequence
+inside an approved wave, to the lane no epic leaves without a plan artifact, so
+it writes its own plan now and comes back for its own green light (DRE-2846).
+Never to In Progress either way, so the Green Light human-approval gate is
+preserved. Both behaviors fail SAFE on unreadable relation data (don't promote /
+don't advance on uncertainty).
 
 Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 """
@@ -108,7 +111,6 @@ import os
 import re
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
-import tempfile
 import time
 from datetime import UTC, datetime
 
@@ -135,6 +137,9 @@ import merge_gate  # noqa: E402
 # DRE-2739: ONE source for the mid-epic discovery route — what counts as a card
 # added after the green light, and the verdict it must carry before it promotes.
 import mid_epic  # noqa: E402
+# DRE-2846: ONE source for "ask for this epic's planner run" — shared with the
+# wave's own turn, because nothing dispatches off the lane either path uses.
+import plan_run  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
@@ -146,6 +151,9 @@ import routing_verdict  # noqa: E402
 import structural_repair  # noqa: E402
 import validate_card  # noqa: E402 — VALID_SLUGS, the canonical routing snapshot
 import verdict_content  # noqa: E402 — the content-binding algorithm
+# DRE-2846: ONE source for "is this epic committed in sequence inside an
+# approved wave, and has it had a green light of its own?"
+import wave_commitment  # noqa: E402
 
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
@@ -1697,36 +1705,17 @@ def redispatch(card: dict) -> bool:
     contents:write, which the App token holds — GH_DISPATCH_TOKEN (the
     stub's github.token) is contents:read and exists only for
     `gh workflow run` (actions:write), so gh_dispatch would 403 here.
+
+    The dispatch itself is `plan_run.fire`, shared with the wave's own turn
+    (DRE-2846) — one payload, one event rule, one place to fix. What stays here
+    is the sweep's half: a failure lands in the write ledger, so the run goes
+    red for medic.
     """
-    labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
-    event = "agent-plan" if "agent:planner" in labels else "agent-execute"
-    payload = {
-        "card_id": card["id"],
-        "identifier": card["identifier"],
-        "title": card["title"],
-        "description": card["description"] or "",
-        "labels": labels,
-        "url": f"https://linear.app/dreadnoughtfoundry/issue/{card['identifier']}",
-    }
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-        json.dump({"event_type": event, "client_payload": payload}, f)
-        path = f.name
-    try:
-        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
-            ["gh", "api", f"repos/{REPO}/dispatches", "--input", path],
-            capture_output=True, text=True, check=False,
-        )
-    finally:
-        os.unlink(path)
-    if p.returncode != 0:
-        err = (
-            f"redispatch {card['identifier']}: gh api repos/{REPO}/dispatches "
-            f"failed rc={p.returncode}: {p.stderr.strip()[:400]}"
-        )
+    ok, err = plan_run.fire(card, REPO)
+    if not ok:
         _write_failures.append(err)
         print(f"ERROR: {err}", file=sys.stderr)
-        return False
-    return True
+    return ok
 
 
 def backlog_children() -> list[dict]:
@@ -1880,8 +1869,12 @@ def advance_unblocked_epics(done_epic: str) -> None:
 
     For each epic that `done_epic` `blocks` (its forward `relations`): if ALL of
     that epic's own blocker epics are now Done AND it is still in Backlog, move
-    it to **Triage** (which triggers the planner). NEVER to In Progress — the
-    Green Light approval gate stays human-owned. Idempotent and safe:
+    it to **Triage** (which triggers the planner) — or, when the epic carries a
+    committed-in-sequence record, to the lane that owes a plan artifact, which
+    is what an epic inside an approved wave is waiting its turn for (DRE-2846).
+    NEVER to In Progress — the Green Light approval gate stays human-owned, and
+    a wave's approval was never an approval of the epics under it. Idempotent
+    and safe:
       * only acts on epics still in Backlog (never re-advances one already past
         it, never thrashes an operator-parked or already-running epic);
       * never revives a Canceled/Duplicate/Done dependent;
@@ -1911,6 +1904,29 @@ def advance_unblocked_epics(done_epic: str) -> None:
             continue  # idempotent: only ever advance a still-Backlog epic
         if epic_blockers_unmet(dep):
             continue  # another blocker epic isn't Done yet — hold
+        # Progressive commitment (DRE-2846). An epic committed in sequence
+        # inside an approved wave has NOT been approved to build — the wave's
+        # approval covered the shape and the order. Its turn sends it to the
+        # lane no epic leaves without a plan artifact, so the document the CEO
+        # green-lights is written NOW, not when the wave was approved. Only a
+        # card carrying the record pays for the green-light read.
+        # Fails SAFE like the rest of this function: a record we cannot read is
+        # not a record we may act on, so the epic takes the unchanged Triage
+        # path rather than the sweep guessing or freezing.
+        try:
+            bodies = linear_ops.comment_bodies(dep)
+            arrival = wave_commitment.turn_arrival(
+                dep, bodies,
+                mid_epic.last_green_light(linear_ops, dep)
+                if wave_commitment.state(bodies) is not None else None,
+            )
+        except Exception as e:  # noqa: BLE001 — an unreadable record is unknown
+            print(f"epic-advance: could not read {dep}'s wave commitment: {e}")
+            arrival = None
+        if arrival is not None:
+            linear_ops.cmd_advance(dep, arrival.lane, "Backlog")
+            linear_ops.cmd_comment(dep, arrival.note + _plan_run_note(dep))
+            continue
         linear_ops.cmd_advance(dep, "Triage", "Backlog")
         linear_ops.cmd_comment(
             dep,
@@ -1918,6 +1934,31 @@ def advance_unblocked_epics(done_epic: str) -> None:
             "and all blocker epics are now complete. The planner will take it from "
             "here; a human still approves the plan (→ In Progress).",
         )
+
+
+def _plan_run_note(identifier: str) -> str:
+    """Start the planner run for an epic whose turn has come, and say honestly
+    whether it started (DRE-2846).
+
+    The lane move is NOT the trigger. The lane a turn sends an epic to is the
+    one that owes a plan artifact, and nothing dispatches off that lane — it is
+    not in SWEEP_STATES and has no nudge (DRE-2736). Triage happened to
+    dispatch, which is the only reason the path above uses it, and a healthy
+    epic does not belong in the broken-card lane (DRE-2776). So the turn asks
+    for the run explicitly rather than relying on a lane's side effect.
+
+    The ask itself is `plan_run.note` — shared with `wave_commitment.advance`,
+    which is where a wave's FIRST epic reaches its turn. Two copies of it is
+    how one path stops asking without anything saying so.
+
+    What the sweep adds is its own half: the failure goes in the write ledger
+    so the run turns red, and the next sweep comes round again.
+    """
+    return plan_run.note(
+        linear_ops, identifier, redispatch,
+        if_not_started="The sweep run is red; the next sweep retries.",
+        record_failure=_write_failures.append,
+    )
 
 
 def has_unresolved_blocker(card: dict) -> bool:
@@ -1970,6 +2011,25 @@ def skip_bad_reference(identifier: str, err: Exception) -> None:
         print(f"ERROR: could not post skip comment on {identifier}: {e}", file=sys.stderr)
 
 
+def _surface_once(identifier: str, tag: str | None, notice: str) -> None:
+    """Post a promotion refusal to the card, at most once across sweeps.
+
+    Keyed on the tag the notice OPENS with (read off the notice by its own
+    module, never inferred here) — pair a notice with the wrong tag and two
+    refusals silence each other. A WRITE, deliberately outside the promotion
+    gate's read-guard: a failure here is a write failure, not a bad blocker
+    reference, and reporting must never block the sweep.
+    """
+    try:
+        if linear_ops.count_comments(identifier, tag) == 0:
+            linear_ops.cmd_comment(identifier, notice)
+    except linear_ops.LinearError as e:
+        print(
+            f"ERROR: could not surface the promotion refusal on {identifier}: {e}",
+            file=sys.stderr,
+        )
+
+
 def promote_ready(active_count: int) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -2004,6 +2064,34 @@ def promote_ready(active_count: int) -> int:
             continue  # epics are promoted by humans, never by the sweep
         if HOLD_LABEL in labels:
             continue  # held for a human (DRE-1403) — never auto-promote
+        # Progressive commitment (DRE-2846). An epic inside an approved wave is
+        # recorded `committed-in-sequence`: the wave's approval covered the
+        # SHAPE and the ORDER and nothing else, so it is not an approval to
+        # build. Read off the card's own RECORD, deliberately not off the
+        # `agent:planner` skip above — that is a LABEL, a human edits labels in
+        # Linear, and one edit must not turn a wave's approval into an approval
+        # of everything under it. The comments come free with the dependency-gate
+        # query; the green-light history is bought only for a card that actually
+        # carries the record.
+        bodies = [
+            n.get("body") or ""
+            for n in (card.get("comments") or {}).get("nodes", [])
+        ]
+        if wave_commitment.state(bodies) is not None:
+            committed = wave_commitment.promotion_refusal(
+                card["identifier"], bodies,
+                mid_epic.last_green_light(linear_ops, card["identifier"]),
+            )
+            if committed is not None:
+                print(
+                    f"promotion: {card['identifier']} is not being promoted — "
+                    f"{committed.splitlines()[0]}"
+                )
+                _surface_once(
+                    card["identifier"], wave_commitment.refusal_tag(committed),
+                    committed,
+                )
+                continue
         parent = card.get("parent")
         if parent and parent["state"]["name"] not in EPIC_ACTIVE_STATES:
             # DRE-1893 unchanged: a child must not build while its epic is
@@ -2068,10 +2156,9 @@ def promote_ready(active_count: int) -> int:
             # light is. An epic whose green light Linear cannot report abstains
             # (mid_epic.promotion_refusal) — never refuses the whole roster.
             # There is no green light to read for a card with no epic.
-            bodies = [
-                n.get("body") or ""
-                for n in (card.get("comments") or {}).get("nodes", [])
-            ]
+            # `bodies` is read once above, before the wave-commitment gate — a
+            # pure comprehension over the query's own inline comments, so
+            # hoisting it buys the second reader nothing and costs nothing.
             if epic_id is not None:
                 if epic_id not in green_light:
                     green_light[epic_id] = mid_epic.last_green_light(linear_ops, epic_id)
@@ -2116,15 +2203,7 @@ def promote_ready(active_count: int) -> int:
             # and an invisible refusal is the silent-accretion problem wearing a
             # different hat. A WRITE, so deliberately outside the read-guard —
             # and guarded itself, because reporting never blocks the sweep.
-            try:
-                if linear_ops.count_comments(card["identifier"], refusal_tag) == 0:
-                    linear_ops.cmd_comment(card["identifier"], refusal)
-            except linear_ops.LinearError as e:
-                print(
-                    f"ERROR: could not surface the promotion refusal on "
-                    f"{card['identifier']}: {e}",
-                    file=sys.stderr,
-                )
+            _surface_once(card["identifier"], refusal_tag, refusal)
             continue
         # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
         # bad reference: record it on the existing _write_failures path (fails

@@ -193,8 +193,13 @@ def _forward_blocks(done_epic, *blocked_epics):
 
 
 def test_done_blocker_epic_advances_dependent_backlog_to_triage():
-    """A→Done, B blocked-by only A, B in Backlog → B moves Backlog→Triage."""
+    """A→Done, B blocked-by only A, B in Backlog → B moves Backlog→Triage.
+
+    B carries no wave-commitment record, so it takes this unchanged path —
+    the wave route's own arrival is DRE-2846's, and tests/test_wave_commitment*
+    own it."""
     with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
+        patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
         patch.object(reconcile, "card_state", return_value="Backlog"), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
@@ -208,6 +213,7 @@ def test_advance_never_moves_epic_to_in_progress():
     """The Green Light approval gate is preserved: target is Triage, NOT
     In Progress — assert the literal transition target."""
     with patch.object(reconcile.linear_ops, "gql", return_value=_forward_blocks("DRE-700", "DRE-800")), \
+        patch.object(reconcile.linear_ops, "comment_bodies", return_value=[]), \
         patch.object(reconcile, "card_state", return_value="Backlog"), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
