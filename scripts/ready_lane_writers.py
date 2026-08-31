@@ -501,6 +501,13 @@ def _attribution(root: str, contract: dict | None) -> dict:
     reported when it reaches a ready-work lane, which is the point.
     """
     known = set(lane_contract.writers(contract))
+    workflows = []
+    for wf in _workflow_files(root):
+        try:
+            with open(wf, encoding="utf-8") as fh:
+                workflows.append((os.path.basename(wf), fh.read()))
+        except OSError:
+            continue
     out: dict = {}
     for path in sorted(glob.glob(os.path.join(root, "scripts", "**", "*.py"),
                                  recursive=True)):
@@ -508,15 +515,8 @@ def _attribution(root: str, contract: dict | None) -> dict:
         if base in known:
             out[base] = (base,)
             continue
-        runners = []
-        for wf in _workflow_files(root):
-            try:
-                with open(wf, encoding="utf-8") as fh:
-                    text = fh.read()
-            except OSError:
-                continue
-            if re.search(rf"scripts/{re.escape(base)}\b", text):
-                runners.append(os.path.basename(wf))
+        pattern = re.compile(rf"scripts/{re.escape(base)}\b")
+        runners = [name for name, text in workflows if pattern.search(text)]
         out[base] = tuple(runners) or (base,)
     return out
 
@@ -535,7 +535,7 @@ def _python_writes(root: str, seam: tuple, live: set, contract: dict | None,
                                  recursive=True)):
         base = os.path.basename(path)
         module_name = base[:-3]
-        tree, source = _parse(path)
+        tree, _ = _parse(path)
         if tree is None:
             continue
         rel = os.path.relpath(path, root)
