@@ -113,6 +113,46 @@ Approving a wave approves this shape and this order. It is not an approval of
 each epic — what an epic owes when its turn comes is the plan artifact at the
 epic level.
 
+## Progressive commitment — each epic gets its own green light (DRE-2846)
+
+That last paragraph is the whole gate, so it is recorded rather than assumed.
+Approving a wave approves **the shape and the order, and nothing more.** Every
+epic in the block above is recorded on its own card as
+**committed-in-sequence**: it belongs to a wave whose shape was approved, and
+nothing else about it has been. That is a state the sweep reads — it will not
+promote a committed-in-sequence epic that has had no green light of its own,
+and it says so on the card.
+
+**When an epic's turn comes** — everything it depends on has finished — it
+moves to the lane no epic leaves without a plan artifact, writes that artifact
+**then**, and reaches the CEO on it. Not the artifact that existed when the
+wave was approved: by then the world has moved, and the epic the wave sketched
+in week one may not be the epic worth building in week five. Wave 1.5 is the
+argument — approved 2026-08-23 as a shape, and by 2026-08-29 two of its cards
+had been rewritten, one had been split into four, and its phase count had gone
+from seven to nine. Every one of those changes was right, and a single approval
+covering all of them would have been an approval of something nobody had read.
+
+**Reordering or dropping an epic inside an approved wave needs no
+re-approval.** The wave committed to a set and an order, and both were always
+going to move. What a change owes is a record — its reason and its date — and
+that record is written into the wave card's own description, where the CEO
+reads the plan:
+
+    python3 scripts/wave_commitment.py reorder <WAVE> <key> --after <key> --because "…"
+    python3 scripts/wave_commitment.py reorder <WAVE> <key> --first --because "…"
+    python3 scripts/wave_commitment.py drop <WAVE> <key> --because "…"
+
+A change that would put an epic before something it depends on, or that would
+strand an epic waiting on one being dropped, is **refused** — judged by the
+same dependency rule that judges the `epics` block above, because it is the
+same rule.
+
+[`../scripts/wave_commitment.py`](../scripts/wave_commitment.py) is the
+mechanical form of this section; the lane an epic's turn sends it to is read
+from `config/lane-contract.json`, so it cannot drift from the clause that makes
+the artifact compulsory.
+
 ## The checker
 
 [`../scripts/wave_plan.py`](../scripts/wave_plan.py) is the mechanical form of

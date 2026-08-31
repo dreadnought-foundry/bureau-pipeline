@@ -1161,6 +1161,40 @@ jobs:
           python3 .bureau-pipeline/scripts/wave_plan.py check \
             "${{ runner.temp }}/wave-plan.md"
 
+      # Progressive commitment (DRE-2846). The plan names the epics the wave
+      # commits to; this records that commitment where the CEO reads the plan —
+      # the wave card's own description — with every epic marked
+      # committed-in-sequence. AFTER the check on purpose: a commitment recorded
+      # from an unchecked plan would commit the wave to epics the gate refuses.
+      #
+      # A sequence that is already committed is never replaced. A wave is
+      # approved on a shape and an order, and a later re-plan silently swapping
+      # them for different ones is exactly the unread approval this card exists
+      # to prevent.
+      - name: Wave route — record the commitment
+        if: steps.shape.outputs.route == 'wave'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/wave_commitment.py record \
+            "${{ github.event.client_payload.identifier }}" \
+            --plan "${{ runner.temp }}/wave-plan.md"
+
+      # The far side of the same step, and the reason it is `--if-approved`:
+      # this job runs on EVERY dispatch of the wave card, including the one the
+      # CEO's approval fires. On an unapproved wave this is a no-op that says
+      # so — nothing is committed, which is the point. On an approved one it
+      # creates the epics as committed-in-sequence and starts the one whose turn
+      # it is, which goes to the lane that owes a plan artifact and comes back
+      # for its OWN green light. It never green-lights an epic.
+      - name: Wave route — commit the approved wave
+        if: steps.shape.outputs.route == 'wave'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/wave_commitment.py commit \
+            "${{ github.event.client_payload.identifier }}" --if-approved
+
       # Through plan_artifact.py's renderer — same anchors, same sanitiser,
       # same hardened page shell, so a wave plan can never ship a weaker page
       # than an epic's artifact.

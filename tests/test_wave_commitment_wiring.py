@@ -106,6 +106,31 @@ class TheSweepReadsTheRecordTest(unittest.TestCase):
         advance = src.split("def advance_unblocked_epics", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("wave_commitment.turn_arrival", advance)
 
+    def test_a_committed_epic_reaching_its_turn_goes_to_the_artifact_lane(self):
+        """The sweep, run for real. Its predecessor is Done and its turn has
+        come — and it goes to the lane that owes a plan artifact, never onward
+        into the build path and never to Triage, which is the broken-card lane
+        and not a turn."""
+        from unittest.mock import patch
+
+        record = wc.commitment_comment(
+            "DRE-2719",
+            {"key": "route", "title": "The wave route", "depends_on": ["standard"],
+             "status": wc.COMMITTED},
+            position=2, total=3)
+        relations = {"issue": {"relations": {"nodes": [
+            {"type": "blocks", "issue": {"identifier": "DRE-2901"}}]}}}
+        with patch.object(reconcile.linear_ops, "gql", return_value=relations), \
+            patch.object(reconcile.linear_ops, "comment_bodies", return_value=[record]), \
+            patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
+            patch.object(reconcile, "card_state", return_value="Backlog"), \
+            patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+            patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+            patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+            reconcile.advance_unblocked_epics("DRE-2900")
+        advance.assert_called_once_with("DRE-2901", wc.turn_lane(), "Backlog")
+        self.assertIn("plan artifact", comment.mock_calls[0].args[1].lower())
+
     def test_the_sweep_never_sends_a_committed_epic_to_an_active_lane(self):
         """Its turn is a turn to be PLANNED, not a turn to be built: an
         active lane is the green light, and the wave's approval was not it."""
