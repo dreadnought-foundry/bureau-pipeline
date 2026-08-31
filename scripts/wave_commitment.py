@@ -377,16 +377,16 @@ def ledger_from_plan(wave: str, plan_md: str) -> dict:
     as one that was.
     """
     epics = []
-    for record in wave_plan.epics(plan_md):
-        if not isinstance(record, dict):
+    for record_ in wave_plan.epics(plan_md):
+        if not isinstance(record_, dict):
             raise CommitmentRefused(
                 "the plan's ```epics block carries something that is not a "
                 "record, so the wave commits to nothing readable"
             )
         epics.append({
-            "key": record.get("key"),
-            "title": record.get("title"),
-            "depends_on": list(record.get("depends_on") or []),
+            "key": record_.get("key"),
+            "title": record_.get("title"),
+            "depends_on": list(record_.get("depends_on") or []),
             "card": None,
             "status": COMMITTED,
         })
@@ -420,9 +420,9 @@ def order_defects(epics) -> list:
 
 
 def entry(ledger: dict, key: str) -> dict | None:
-    for record in ledger.get("epics") or []:
-        if record.get("key") == key:
-            return record
+    for record_ in ledger.get("epics") or []:
+        if record_.get("key") == key:
+            return record_
     return None
 
 
@@ -446,13 +446,13 @@ def turn(ledger: dict, settled=()) -> tuple:
     """
     done = set(settled or ())
     ready = []
-    for record in ledger.get("epics") or []:
-        if record.get("status") != COMMITTED:
+    for record_ in ledger.get("epics") or []:
+        if record_.get("status") != COMMITTED:
             continue
-        if record.get("key") in done:
+        if record_.get("key") in done:
             continue
-        if all(dep in done for dep in record.get("depends_on") or []):
-            ready.append(record["key"])
+        if all(dep in done for dep in record_.get("depends_on") or []):
+            ready.append(record_["key"])
     return tuple(ready)
 
 
@@ -509,9 +509,10 @@ def reorder(ledger: dict, key: str, *, after: str | None = None,
             )
 
     epics = [dict(e) for e in ledger["epics"]]
-    moved = next(e for e in epics if e["key"] == key)
+    # By INDEX, never `list.remove`: that matches on equality, and the thing
+    # being moved is a dict whose contents are about to change.
+    moved = epics.pop(next(i for i, e in enumerate(epics) if e["key"] == key))
     moved["depends_on"] = [] if first else [after]
-    epics.remove(moved)
     where = 0 if first else next(i for i, e in enumerate(epics) if e["key"] == after) + 1
     epics.insert(where, moved)
 
@@ -535,9 +536,9 @@ def drop(ledger: dict, key: str, because: str = "") -> dict:
     because = _reason(because)
     _require(ledger, key)
     epics = [dict(e) for e in ledger["epics"]]
-    for record in epics:
-        if record["key"] == key:
-            record["status"] = DROPPED
+    for record_ in epics:
+        if record_["key"] == key:
+            record_["status"] = DROPPED
     problems = order_defects(epics)
     if problems:
         raise CommitmentRefused(
@@ -572,19 +573,19 @@ def render_ledger(ledger: dict) -> str:
         "The order:",
         "",
     ]
-    for position, record in enumerate(epics, 1):
-        card = f" — {record['card']}" if record.get("card") else ""
-        waits = record.get("depends_on") or []
+    for position, record_ in enumerate(epics, 1):
+        card = f" — {record_['card']}" if record_.get("card") else ""
+        waits = record_.get("depends_on") or []
         # A dropped epic waits for nothing — it is out of the sequence, and
         # saying what it "waits for" would read as a turn that is still coming.
         after = (
             " · waits for " + ", ".join(f"`{k}`" for k in waits)
-            if waits and record.get("status") != DROPPED
+            if waits and record_.get("status") != DROPPED
             else ""
         )
         lines.append(
-            f"{position}. `{record.get('key')}` — {record.get('title')}{card} — "
-            f"**{record.get('status')}**{after}"
+            f"{position}. `{record_.get('key')}` — {record_.get('title')}{card} — "
+            f"**{record_.get('status')}**{after}"
         )
     lines += ["", "Changes since the wave was approved:", ""]
     changes = ledger.get("changes") or []
