@@ -10,13 +10,14 @@ adding a new writer and watching the check name it.
 ## What the mechanism sees
 
 `scripts/ready_lane_writers.py` reads the lane-write seam out of
-`scripts/linear_ops.py` (every function that reaches the guarded state write or
-mints a card with a `stateId`), then finds every call of that seam in
-`scripts/**.py` and every `linear_ops.py` invocation in `.github/workflows/*.yml`
-that hands the write layer a live lane name. The destination of each is
-resolved — literal, module constant, parameter default, or the module's own
-published `destinations()` — and a ready-work destination is checked against the
-lane contract's permitted writers for that lane.
+`scripts/linear_ops.py` — every function there that touches Linear's own
+`stateId` field or one of the two lookups that turn a lane NAME into one — and
+then finds every call of that seam in `scripts/**.py`, and every `linear_ops.py`
+invocation in `.github/workflows/*.yml` that hands the write layer a lane. The
+destination of each is resolved from the callee's own lane parameter: a literal,
+a module constant, a parameter default, a vocabulary reader called with literal
+arguments, or the module's published `destinations()`. A ready-work destination
+is then checked against the lane contract's permitted writers for that lane.
 
 ## WHAT THE MECHANISM CANNOT SEE — said plainly, because a test that implies
 otherwise is worse than none
@@ -180,7 +181,30 @@ class TheSeamIsTheOnlyWayToWriteALane(unittest.TestCase):
 
 class TheRepositoryIsClean(unittest.TestCase):
     def test_no_writer_here_reaches_a_ready_work_lane_it_is_not_declared_for(self):
-        self.assertEqual(rlw.writer_problems(), [])
+        problems = rlw.writer_problems()
+        # Every problem opens with the writer and the file:line it was found at,
+        # so a failure here is actionable without opening this test.
+        self.assertEqual(problems, [], "\n".join(problems))
+
+
+class ADeclaredWriterIsOneThatPassedThroughPlanning(unittest.TestCase):
+    """Why "declared" is the same claim as "passed through Planning".
+
+    The writer census is one half. The other is the lane itself: a ready-work
+    lane's entrance asks for the routing verdict, and the verdict is written at
+    Planning's exit and nowhere else. Asserted here rather than assumed, because
+    the census leans on it — a ready-work lane that stopped asking for a verdict
+    would make every declared writer above a way in without a plan.
+    """
+
+    def test_every_ready_work_lane_asks_for_the_routing_verdict(self):
+        for name in rlw.ready_lanes():
+            clauses = lane_contract.lane(name)["clauses"]
+            stated = " ".join(
+                (clauses.get(kind) or {}).get("text") or ""
+                for kind in ("entrance", "evidence")
+            )
+            self.assertIn("verdict", stated.lower(), name)
 
 
 class ANewWriterWithAWrongDestinationIsCaught(unittest.TestCase):

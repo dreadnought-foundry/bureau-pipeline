@@ -74,10 +74,16 @@ DERIVED from data the pipeline already carries and each one can be made to fail:
     round. Break any of those three and this reports it.
 
 WHAT IT DOES NOT PROVE, said plainly rather than left to be discovered: this
-reads the pipeline's own declarations. A writer outside this repository — the
-relay, a Linear automation, a person dragging a card — is out of its reach, and
-closing those is the sibling card's job (DRE-2847, the writers into Backlog and
-Todo). What this module guarantees is that nothing HERE declares a way past
+reads the pipeline's own DECLARATIONS — the vocabularies, the labels, the
+planner workflow's inputs. It says nothing about the WRITERS that act on them,
+which is the other half and is `ready_lane_writers.py`'s (DRE-2859, splitting
+DRE-2847 with DRE-2858): that module discovers every writer that can put a card
+in a ready-work lane and checks each against the contract, and it reads its
+definition of "ready work" from `work_lanes_reachable_from_planning` below so
+the two checks cannot end up policing different lanes. Between them a writer
+outside this repository is still out of reach — the relay, a Linear automation,
+a person dragging a card — and both modules say so. What this module guarantees
+is that nothing HERE declares a way past
 Planning.
 
 CLI:

@@ -119,6 +119,18 @@ constants and the planner workflow, and names anything that would let a card
 past. It is the same `Green Light`/`Triage` split as above: an escalated card is
 not broken, so it never goes to Triage.
 
+**And no WRITER puts a card past it either** (DRE-2859). The check above reads
+the pipeline's declarations; `python3 scripts/ready_lane_writers.py check` reads
+the writers. It discovers every place a card can be put in a lane — the write
+layer's own seam, every call of it in the scripts, every invocation of it in the
+workflows, and Linear's team-level default, which no code path touches — and
+names any that reaches a lane the pipeline treats as ready work without the lane
+contract permitting it there. Discovered, never listed: the writer nobody
+remembered is exactly the one still open, and a check that enumerated today's
+would only prove today's are still fixed. What it CANNOT see is in its own
+docstring — above all a hand write in the Linear UI, which nothing in the
+pipeline can prevent.
+
 `break-glass` is unchanged by this and is not an exception to it. It is a
 bypass of the **Todo-entry gate**, applied by hand by the operator, recorded and
 counted — and the card comes back to `Planning` for the classification it
