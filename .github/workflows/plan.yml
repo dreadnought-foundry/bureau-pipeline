@@ -793,12 +793,27 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          CHILDREN="${{ runner.temp }}/proof-demo-children.json"
+          BOUNCE_FILE="${{ runner.temp }}/proof-demo-bounce.md"
           rm -f "${{ runner.temp }}/plan-critic-pre.md"
-          python3 .bureau-pipeline/scripts/validate_card.py check-children \
-            "${{ github.event.client_payload.identifier }}"
+          python3 .bureau-pipeline/scripts/validate_card.py check-children "$EPIC"
           python3 .bureau-pipeline/scripts/plan_artifact.py check \
             "${{ runner.temp }}/plan-artifact.md" \
             ${{ steps.uiepic.outputs.ui == 'true' && '--ui' || '' }}
+          # A revision is the planner's output too (DRE-2746). A re-plan that
+          # adds a card after the pair, or drops one of them, must not reach
+          # the CEO just because the first pass was clean.
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$CHILDREN"
+          if ! python3 .bureau-pipeline/scripts/proof_and_demo.py check \
+                 --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
+            if [ -s "$BOUNCE_FILE" ]; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "$(cat "$BOUNCE_FILE")"
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
+            fi
+            exit 1
+          fi
 
       - name: First critic — round 2
         id: preb

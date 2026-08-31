@@ -144,7 +144,7 @@ def _ident(card: dict) -> str:
 def _verdict(card: dict, doc: dict | None = None):
     decision = routing_verdict.route(
         card.get("title") or "", card.get("body") or "",
-        card.get("labels") or (),
+        card.get("labels") or (), doc=doc,
     )
     return decision.verdict, decision.reason
 

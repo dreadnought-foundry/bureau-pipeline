@@ -145,6 +145,16 @@ class TheRunChecksThePlannersOutputTest(unittest.TestCase):
         step = step_named(GATE)
         self.assertNotIn("continue-on-error", step)
 
+    def test_a_revised_plan_is_checked_again(self):
+        """A revision is the planner's output too. The re-check step already
+        re-runs the child validation and the artifact check for exactly this
+        reason — a re-plan that adds a card after the pair, or drops one of
+        them, must not reach the CEO because the first pass was clean."""
+        run = step_named("Re-check the revised plan")["run"]
+        self.assertIn("children-detail", run)
+        self.assertIn("proof_and_demo.py check", run)
+        self.assertRegex(run, r'linear_ops\.py state "\$EPIC" "Planning"')
+
 
 class TheReadSeamTest(unittest.TestCase):
     """3 — `children-detail`, the one query that answers the gate's question."""
