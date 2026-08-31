@@ -218,6 +218,16 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of medic context"
 
+      # The slug this repo's cards route by — the SAME derivation plan.yml
+      # uses. Every failure card the medic mints must carry `repo:<slug>` or it
+      # lands in Planning with no product key and the readiness gate cannot
+      # route it out (DRE-2680). This workflow is reusable and runs in whichever
+      # product repo called it, so the repo that failed is the repo we are in —
+      # never a literal.
+      - name: Resolve repo slug
+        id: repo
+        run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       # DRE-1996: the head branch is agent-chosen (agent/* refs) — attacker-
       # influenceable text headed into the diagnosis prompt. Hand it to the
       # sanitizer via env (no shell expansion) to collapse any hostile shape
@@ -314,6 +324,9 @@ jobs:
                  that title, or nothing.
                  If one exists, ADD A COMMENT to it ("failed again at <run url>;
                  diagnosis unchanged/changed: ...") instead of creating a card.
-                 Only if none exists: write the report to /tmp/diag.md, then:
-                 python3 .bureau-pipeline/scripts/linear_ops.py create "Pipeline failure: ${{ github.event.workflow_run.name }}" /tmp/diag.md
+                 Only if none exists: write the report to /tmp/diag.md, then
+                 create the card. `--repo` is required and is the repo this
+                 failure happened in — pass it exactly as written below, do
+                 not substitute a different slug:
+                 python3 .bureau-pipeline/scripts/linear_ops.py create "Pipeline failure: ${{ github.event.workflow_run.name }}" /tmp/diag.md --repo "${{ steps.repo.outputs.slug }}"
             Do NOT attempt to fix anything — diagnose and report only.

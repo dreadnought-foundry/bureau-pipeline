@@ -139,7 +139,11 @@ class TheStandaloneCreateSeamCreatesInPlanning(unittest.TestCase):
             f.write(GOOD_BODY)
             body_file = f.name
         try:
-            _run(fake, linear_ops.cmd_create, "Pipeline failure: ci", body_file)
+            # `--repo` is required at this seam since DRE-2680 — a card minted
+            # without one carries no product key. See
+            # tests/test_created_cards_carry_a_repo_label.py.
+            _run(fake, linear_ops.cmd_create, "Pipeline failure: ci", body_file,
+                 "--repo", "atlas")
         finally:
             os.unlink(body_file)
         self.assertEqual(fake.lane_of(fake.created["stateId"]), PLANNING)
