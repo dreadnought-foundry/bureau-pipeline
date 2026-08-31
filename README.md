@@ -392,6 +392,34 @@ identity, which must therefore be installed there. Not the portal's "Add
 document" button: that strips scripts, and an interactive mockup uploaded that
 way renders looking complete while being dead.
 
+## Every epic ends with a proof card and a demo card (DRE-2746)
+
+The artifact's "Proof and demo" section states how the epic will be proven and
+shown. Two **cards** are where it happens, and they are the epic's last two
+children:
+
+- **`PROOF: …`** answers *did it work* — and it is **not a green test suite**.
+  It is the mechanism observed running against real state, with the observation
+  recorded in the repo: what was read, when, and what it said. That record
+  merges, so the card produces a written artifact rather than a claim.
+- **`DEMO: …`** answers *can the CEO see it*. A merged PR and a passing suite
+  are invisible to the person who green-lit the epic.
+
+Both are blocked by every other child — the Linear `blocks` relation, never the
+ordering and never a `**Blocked by:**` body line — and **neither may carry
+`FLEET`**: a proof the fleet can close by merging its own code is not a proof.
+The verdicts that MAY confirm an epic are derived from
+`config/routing-verdicts.json` (the ones whose accountable actor is a human,
+today `WORKBENCH` and `OPERATOR`), so the rule moves when the file does.
+
+The convention was already written down and nothing made any planner follow it,
+which is the point: **the check runs on the planner's output, not on the
+brief's text.** `scripts/proof_and_demo.py` reads the cards the planner
+actually created (`linear_ops.py children-detail`) and `plan.yml` bounces an
+epic missing either card back to `Planning` with the reason named — on the
+first pass and again after a revision. A crashed read posts nothing, because a
+crash decided nothing.
+
 ## Shared CI plumbing (DRE-2550)
 
 Product CI is product-specific — different stacks, different suites — but its

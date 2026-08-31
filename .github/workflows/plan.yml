@@ -531,7 +531,6 @@ jobs:
       # must never bounce a plan (standards/console-honesty.md rule 1), so the
       # reason is only posted when the checker actually wrote one.
       - name: Proof and demo cards — the epic's last two children
-        id: proofdemo
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -796,7 +795,9 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           CHILDREN="${{ runner.temp }}/proof-demo-children.json"
           BOUNCE_FILE="${{ runner.temp }}/proof-demo-bounce.md"
-          rm -f "${{ runner.temp }}/plan-critic-pre.md"
+          # Both bounce notes are written into the job's shared temp, so the
+          # revision's verdict must never be read off the first pass's file.
+          rm -f "${{ runner.temp }}/plan-critic-pre.md" "$BOUNCE_FILE"
           python3 .bureau-pipeline/scripts/validate_card.py check-children "$EPIC"
           python3 .bureau-pipeline/scripts/plan_artifact.py check \
             "${{ runner.temp }}/plan-artifact.md" \
