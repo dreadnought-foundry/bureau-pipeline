@@ -47,7 +47,7 @@ Subcommands:
                                          --label <name>   (repeatable) extra label
                                          --blocked-by DRE-N,DRE-M  (also parsed
                                                           from the body line)
-  oneoff <title> <description-file>    create a PARENTLESS card (Backlog) — the
+  oneoff <title> <description-file>    create a PARENTLESS card (Planning) — the
                                        one-off route's producer (DRE-2754). Same
                                        body guard, validate_card gate and
                                        blockedBy handling as `subissue`, but the
@@ -56,7 +56,7 @@ Subcommands:
                                          --label repo:<slug> --label agent:<role>
                                          --label initiative:<x>
                                          --blocked-by DRE-N,DRE-M
-  create <title> <description-file>    create a standalone card in Triage
+  create <title> <description-file>    create a standalone card in Planning
   find-open <title>                    print the identifier of an existing
                                        non-terminal (not Done/Canceled) card
                                        with exactly this title, else nothing —
@@ -821,11 +821,18 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
 
 
 def _create_card(team_id: str, title: str, description: str, labels: list[str],
-                 blockers: list[str], *, parent_id: str | None = None) -> None:
-    """Create a validated card in `Backlog` with its labels and blockedBy
+                 blockers: list[str], *, parent_id: str | None = None,
+                 lane: str = "Planning") -> None:
+    """Create a validated card in `lane` with its labels and blockedBy
     relations, and print the receipt. `parent_id=None` creates a PARENTLESS card
-    — the one-off route has no epic to hang under (DRE-2754)."""
-    sid = state_id(team_id, "Backlog")
+    — the one-off route has no epic to hang under (DRE-2754).
+
+    `lane` defaults to Planning, the lane Planning owns (DRE-2858): a card this
+    seam mints has not been classified, has no shape stamp and carries no
+    routing verdict, so landing it in Backlog puts unproven work in the lane the
+    rest of the system reads as ready. The ONE caller that passes something else
+    is `cmd_subissue` — see the note there."""
+    sid = state_id(team_id, lane)
     label_ids = _team_label_ids(team_id, labels)
     card_input = {
         "teamId": team_id,
@@ -900,16 +907,27 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # 5 — CREATE, under the epic, in Backlog. The children sit there while the
     # epic is still pre-approval, and the guard leaves them alone until the epic
     # passes Planning exit (DRE-2754 — see scripts/lane_scope.py).
+    #
+    # THE ONE ROUTE THROUGH `_create_card` THAT STAYS IN BACKLOG, and it is not
+    # an oversight (DRE-2858). A child's approval is its epic's — the CEO moved
+    # that epic, and that decision covers everything under it (DRE-1893) — so a
+    # child owes no classification of its own and never passes through Planning
+    # separately. It is also the lane the sweep looks in: `reconcile.
+    # promote_ready` reads `backlog_children()`, whose query is
+    # `state: {name: {eq: "Backlog"}}`, and a child carrying no routing verdict
+    # promotes exactly as before. Children created anywhere else are children
+    # nothing ever promotes.
+    #
     # RETURNED, not just printed: the mid-epic route needs the identifier it
     # just created so it can record the growth on the epic in the same motion
     # (DRE-2739, consumed at mid_epic.py:483). The CLI path ignores the value,
     # so behaviour there is unchanged.
     return _create_card(parent["team"]["id"], title, description, child_labels,
-                        blockers, parent_id=parent["id"])
+                        blockers, parent_id=parent["id"], lane="Backlog")
 
 
 def cmd_oneoff(title: str, description_file: str, *flags) -> None:
-    """Create a PARENTLESS card in Backlog — the one-off route's producer.
+    """Create a PARENTLESS card in Planning — the one-off route's producer.
 
     `cmd_subissue` requires a parent and takes the child's `repo:` label from
     `parent_inherited_labels()`. A one-off has no parent by definition, so it
@@ -919,8 +937,12 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> None:
         linear_ops.py oneoff "<title>" <desc-file> \\
           --label repo:<slug> --label initiative:<x> --label agent:engineer
 
-    Same body path-guard, same validate_card gate, same **Blocked by:** →
-    relation handling, same Backlog landing as a planned child (DRE-2754).
+    Same body path-guard, same validate_card gate and same **Blocked by:** →
+    relation handling as a planned child (DRE-2754). It lands in Planning, not
+    Backlog (DRE-2858): a card minted here has been through nobody's Planning
+    run — it carries no shape stamp and no routing verdict, and the sweep
+    refuses a parentless card without one anyway, so Backlog was a lane it could
+    only sit in. Planning is where the classification it is missing is made.
     """
     description = _card_body(description_file)
     labels, cli_blockers = _parse_flags(flags)
@@ -979,11 +1001,20 @@ def _issue_label_names(issue_id: str) -> list[str]:
 
 
 def cmd_create(title: str, description_file: str) -> None:
+    """Create a standalone card in Planning — the seam the medic, red-main-repair,
+    channel-watch and model-drift mint a card through.
+
+    Planning, not Triage (DRE-2858). Triage is the BROKEN-CARD lane and only
+    that: an unroutable `repo:` label, an archived repo, a card the readiness
+    guard has returned three times. A pipeline failure or a drifted model is new
+    WORK, correctly formed and owing a classification — which is Planning's
+    question, not Triage's. A caller that genuinely wants the broken-card lane
+    still says so itself, in its own step (red-main-repair.yml does)."""
     teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
     team_id = teams["teams"]["nodes"][0]["id"]
     with open(description_file) as f:
         description = f.read()
-    sid = state_id(team_id, "Triage")
+    sid = state_id(team_id, "Planning")
     data = gql(
         """mutation($input: IssueCreateInput!) {
              issueCreate(input: $input) { success issue { identifier url } } }""",

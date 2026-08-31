@@ -162,7 +162,7 @@ class GateUnknownSlugTest(unittest.TestCase):
     def test_confirmed_bogus_slug_is_bounced(self):
         fake = FakeLinear(["repo:nonsense", "agent:engineer"])
         self.assertTrue(self._run(fake, canonical={"atlas", "agent-bureau"}))
-        self.assertEqual(fake.states, [("DRE-999", "Backlog")])
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
 
     def test_the_bounce_names_the_bad_value_and_the_valid_set(self):
         """Same courtesy the relay's escalation extends — the reader must not
