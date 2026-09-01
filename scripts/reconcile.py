@@ -1820,10 +1820,12 @@ def epic_blockers_unmet(epic_identifier: str) -> bool:
         _report_epic_prose_defect(epic_identifier, undeclared)
         return True
     states = prose_blockers.blocker_states(epic)
-    for blocker in sorted(prose_blockers.relation_blockers(epic)):  # deterministic
+    held = sorted(prose_blockers.relation_blockers(epic))  # sorted: deterministic
+    if held:
+        named = "; ".join(f"{blocker} ({states[blocker]})" for blocker in held)
         print(
             f"epic-gate: {epic_identifier} is held by a formal blockedBy "
-            f"relation on {blocker} ({states[blocker]}), which is not Done"
+            f"relation on {named} — not Done"
         )
         return True
     return False
@@ -2228,9 +2230,14 @@ def promote_ready(active_count: int) -> int:
                 if epic_id not in epic_gate:
                     epic_gate[epic_id] = epic_blockers_unmet(epic_id)
                 if epic_gate[epic_id]:
+                    # The epic gate printed WHICH fact holds the epic — an
+                    # unfinished blocker epic, or a prose defect on the epic
+                    # itself (DRE-2676) — so this line points at it rather
+                    # than naming one of the two and being wrong half the time.
                     print(
-                        f"promotion: {card['identifier']}'s epic {epic_id} is blocked by "
-                        "an unfinished epic — skipping"
+                        f"promotion: {card['identifier']}'s epic {epic_id} is not "
+                        "releasing its children — see the epic-gate line above "
+                        "for which — skipping"
                     )
                     continue
             # THE GATE (DRE-2676): the non-terminal formal `blocks` relations,

@@ -111,7 +111,10 @@ passes against the unmodified codebase proves nothing and the critic rejects it.
 - **Blocked-by is a relation, not prose.** Every dependency is a real Linear
   `blockedBy` relation, never just English in the description (prose leaves the
   reconcile/auto-close gates blind). Never name the parent epic as a blocker —
-  epics stay In Progress and would deadlock.
+  epics stay In Progress and would deadlock. A `**Blocked by:**` line is
+  documentation of the relation and cannot create one: since DRE-2676 a line
+  claiming a dependency the board does not hold is a defect in the card, and
+  the sweep routes it to `Triage` (`standards/card-quality.md`).
 - **Heartbeats:** post one line per phase to the card
   (`⏳ <n>/5 <label>`): 1/5 plan · 2/5 RED · 3/5 green · 4/5 local checks ·
   5/5 PR opened. Never skip 1/5 (it is your "alive" signal). Reporting must
