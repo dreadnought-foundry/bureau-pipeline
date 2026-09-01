@@ -641,6 +641,27 @@ class AtomicParkTest(unittest.TestCase):
         # card walks back in with a budget it already spent.
         self.assertIn(dead_run.DEAD_TAG, dead_run.park_unlanded_comment())
 
+    def test_the_unlanded_note_spends_the_budget_that_was_actually_held(self):
+        # decide() reaches "hold" from TWO caps, and the unlanded receipt
+        # REPLACES whichever body decide() wrote. A turn-exhaustion hold that
+        # fails to park must still spend the turn budget — a hardcoded
+        # DEAD_TAG here loses the turn strike and bills an unrelated one.
+        note = dead_run.park_unlanded_comment(tag=dead_run.TURN_TAG)
+        self.assertIn(dead_run.TURN_TAG, note)
+        self.assertNotIn(dead_run.DEAD_TAG, note)
+
+    def test_the_unlanded_cli_is_told_which_budget_was_in_play(self):
+        # Mirrors how `decide` already takes --turn-exhaustion, so the tag
+        # strings stay in the module and never get retyped into the shell.
+        p = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "dead_run.py"),
+             "park-unlanded", "--turn-exhaustion"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(dead_run.TURN_TAG, p.stdout)
+        self.assertNotIn(dead_run.DEAD_TAG, p.stdout)
+
     def test_the_park_cli_exits_nonzero_when_it_writes_nothing(self):
         p = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS, "dead_run.py"), "park",
@@ -759,6 +780,21 @@ class WorkflowWiringTest(unittest.TestCase):
         # And no longer writes the label and the state as two independent
         # `|| true` calls, either of which can land without the other.
         self.assertNotIn("add-label \"$CARD\" needs-human", step)
+
+    def test_the_unlanded_receipt_is_told_which_cap_the_hold_came_from(self):
+        # The park step is uniform for any "hold", but the hold itself came
+        # from one of two caps. The turn branch has to hand that fact on, or
+        # the unlanded receipt tags the wrong budget.
+        step = emitted(report_step("agent-task.yml"))
+        m = re.search(r"park-unlanded[^\n]*", step)
+        self.assertIsNotNone(m, "the park-unlanded call is gone")
+        self.assertIn("PARK_TAG_FLAGS", m.group(0))
+        turn = re.search(
+            r'elif \[ "\$DEATH_CLASS" = "turn_exhaustion" \]; then(.*?)\n            else',
+            step, re.S)
+        self.assertIsNotNone(turn, "turn-exhaustion branch not found")
+        self.assertIn("--turn-exhaustion", turn.group(1))
+        self.assertIn("PARK_TAG_FLAGS=", turn.group(1))
 
     def test_the_gate_step_does_not_fail_on_a_skipped_agent_step(self):
         # A red gate summons the medic to re-run a job whose agent never even

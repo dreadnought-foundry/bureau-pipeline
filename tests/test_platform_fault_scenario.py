@@ -456,5 +456,50 @@ class UnlandedParkScenario(unittest.TestCase):
         self.assertEqual(ops(journal, "add_label"), [])
 
 
+class UnlandedTurnExhaustionParkScenario(unittest.TestCase):
+    """The OTHER hold decide() can reach, with Linear refusing the state write.
+
+    `decide()` produces "hold" from two independent caps, and the workflow's
+    park step is uniform for either. When the park does not land, the whole
+    receipt is replaced — so a receipt hardcoded to the dead-run tag loses the
+    turn strike that was actually spent and bills the dead-run budget for a
+    death that never happened. The overlap is exactly the one DRE-2931 is
+    written around: a real cap reached while Linear is refusing writes.
+    """
+
+    def report(self, **kw):
+        with tempfile.TemporaryDirectory() as td:
+            return run_report(
+                td,
+                execution=TURN_CAP_DEATH,
+                prior=str(dead_run.TURN_REQUEUE_CAP),
+                fail="state",
+                **kw,
+            )
+
+    def test_the_park_is_attempted_and_does_not_land(self):
+        proc, journal = self.report()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [e["args"][1] for e in ops(journal, "remove_label")],
+            [dead_run.HOLD_LABEL],
+        )
+        self.assertIn("did NOT land", comments(journal)[0])
+
+    def test_the_receipt_spends_the_turn_budget_not_the_dead_run_budget(self):
+        _, journal = self.report()
+        body = comments(journal)[0]
+        self.assertIn(dead_run.TURN_TAG, body)
+        self.assertNotIn(dead_run.DEAD_TAG, body)
+
+    def test_it_still_read_the_turn_budget_to_get_here(self):
+        # Guards the fixture itself: if this drove the dead-run cap instead,
+        # the assertion above would pass for the wrong reason.
+        _, journal = self.report()
+        counted = ops(journal, "count-comments")
+        self.assertEqual(len(counted), 1)
+        self.assertIn(dead_run.TURN_TAG, counted[0]["args"])
+
+
 if __name__ == "__main__":
     unittest.main()
