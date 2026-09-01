@@ -665,6 +665,58 @@ jobs:
         }])
         assert any("matches 2 receipt site" in p for p in guard.problems(doc, root))
 
+    def test_a_step_tells_apart_two_identical_postings(self, tmp_path):
+        """The coordinate a lookback window cannot supply.
+
+        `plan.yml` runs the plan critic three times and posts its note the same
+        way each time — byte-identical for ten lines back, because the lines
+        above are the same `--note-file` flags. What tells them apart is the
+        STEP, so a declaration may name one and then only has to be unique
+        inside it.
+        """
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - name: First critic — round 1 decision
+        run: |
+          python3 scripts/linear_ops.py comment "$EPIC" "$(cat /tmp/note.md)"
+      - name: Second critic — decision
+        run: |
+          python3 scripts/linear_ops.py comment "$EPIC" "$(cat /tmp/note.md)"
+""")
+        assert [s.step for s in guard.sites(root)] == [
+            "First critic — round 1 decision", "Second critic — decision"]
+        stepless = _doc([{
+            "file": ".github/workflows/thing.yml",
+            "anchor": "/tmp/note.md",
+            "why": "a reason",
+        }])
+        assert any("matches 2 receipt site" in p
+                   for p in guard.problems(stepless, root)), (
+            "without the step the anchor covers both — the anti-mute rule, "
+            "working exactly as it should"
+        )
+        both = _doc([
+            {"file": ".github/workflows/thing.yml", "step": step,
+             "anchor": "/tmp/note.md", "why": "a reason"}
+            for step in ("First critic — round 1 decision",
+                         "Second critic — decision")
+        ])
+        assert guard.problems(both, root) == []
+
+    def test_a_step_that_names_no_step_matches_nothing(self, tmp_path):
+        """A step is checked as hard as an anchor: renaming the step rots the
+        declaration, and the rot is a finding rather than a silent pass."""
+        root = _tree(tmp_path, workflow=UNWRAPPED_WORKFLOW)
+        doc = _doc([{
+            "file": ".github/workflows/thing.yml",
+            "step": "a step this file has never had",
+            "anchor": "🚑 a deliberate non-act",
+            "why": "a reason",
+        }])
+        assert any("matches 0 receipt site" in p for p in guard.problems(doc, root))
+
     def test_a_declaration_without_a_reason_fails(self, tmp_path):
         root = _tree(tmp_path, workflow=UNWRAPPED_WORKFLOW)
         doc = _doc([{

@@ -53,16 +53,20 @@ Every declared act now composes its receipt here. `reconcile.py` calls
 through the two CLI seams below (`pipeline_act.py receipt … --out` for a PR
 comment, `linear_ops.py comment … --act=` for a card comment). Which of them
 still does not is not a matter of memory:
-`scripts/check_act_receipts.py` reads every `gh pr comment`, `gh issue comment`,
-`_post_pr_note` and `linear_ops.cmd_comment` in `scripts/` and
-`.github/workflows/` and fails CI on any whose body is not composed here —
-unless the registry's `unconverted` block names it, with the reason. The last of
-those four is the pathway most of these receipts actually take: a card comment
-goes straight to the Linear GraphQL API and never touches `gh`, so a guard
-reading only the `gh` forms would be blind to eight of the ten `reconcile.py`
-sites this card converts. That block is the countable record of the receipts
-this repo posts with no trailer, and a row in it must match exactly one real
-site or the check fails on the row itself.
+`scripts/check_act_receipts.py` reads every call in `scripts/` and
+`.github/workflows/` that WRITES a comment — the three `gh` forms, both the
+Python and the shell spelling of a card comment, and `gate_note.py` with the
+`gh api …/comments` it posts through — and fails CI on any whose body is not
+composed here, unless the registry's `unconverted` block names it, with the
+reason. The forms past the first three are where the traffic actually is: a
+card comment goes straight to the Linear GraphQL API and never touches `gh`
+(eight of the ten `reconcile.py` sites this card converts), and the workflow
+side posts through the shell spelling of it forty-odd times. A guard reading
+only the `gh` forms sees none of that, and reports zero problems while it does.
+That block is the countable record of the receipts this repo posts with no
+trailer, and a row in it must match exactly one real site — by file, anchor,
+and the workflow step when a file posts the same command from several — or the
+check fails on the row itself.
 
 ## What this module does NOT do
 

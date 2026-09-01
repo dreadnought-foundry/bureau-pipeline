@@ -769,6 +769,365 @@
       "kind": "not-an-act",
       "means": "An epic dropped from an approved wave is told so on its own card, with the reason.",
       "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. The other half of the change record above, said where the dropped epic's own readers will see it."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🛑 Five conflict-resolution rounds couldn't keep this PR mergeable",
+      "step": "Notify hold on Linear",
+      "kind": "undeclared-act",
+      "means": "The card-side half of the fix loop's budget-exhausted hold — three fix attempts or five conflict rounds are spent, and the work waits on a person.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its two PR-side halves are declared above (`🛑 Fix budget exhausted`, `🛑 Conflict-resolution budget exhausted`); this is the same hold, said where the CEO's queue reads it."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "/tmp/unfixable-card-final.md",
+      "step": "Escalate checks the loop structurally cannot fix",
+      "kind": "undeclared-act",
+      "means": "The card-side half of the hold on a PR whose red checks the fix loop structurally cannot fix.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its PR-side half sits eight lines above it in the same step and is declared with it; its body is written by scripts/unfixable_checks.py, so converting it also moves a seam this card does not own."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 The fix agent disagrees with the reviewer's blocking finding",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The card-side half of `fix-attempt-disputed`: the fixer refused the finding, pushed nothing, and the card goes to a human.",
+      "why": "The CARD-SIDE half of an act the registry already declares, and the registry pins ONE `emits` site per act. Admitting a second surface for it is a REGISTRY change — not an emission change, and this card converts what the registry declares. Named here so the pair stays countable rather than invisible. Its PR-side half composes `fix-attempt-disputed` eleven lines above it in this same step."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🤖 The AI service was unavailable during the last fix run",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The model died mid-run — an outage, not a rejection — and the pipeline retries by itself.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its PR-side half is written by scripts/fix_dead_run.py, which owns the marker the reconcile sweep re-dispatches on, so converting it also moves a seam this card does not own."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🤖 The last fix run ran out of steps before it could finish",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The fix run hit its step limit rather than failing, and the pipeline buys exactly one more (DRE-2312).",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its PR-side half is written by scripts/fix_dead_run.py, which owns the marker the reconcile sweep re-dispatches on, so converting it also moves a seam this card does not own."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 Two fix runs in a row ran out of steps on this PR",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The second step-limit exhaustion: the pipeline stops buying identical attempts and hands the split decision to a person.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its PR-side half is written by scripts/fix_dead_run.py, so converting it also moves a seam this card does not own."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 The AI service failed several fix runs in a row on this PR",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "Past the model-death cap the stall is reported rather than retried, and the card waits on a person.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its PR-side half is written by scripts/fix_dead_run.py, so converting it also moves a seam this card does not own."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 The fix agent ran but produced no change the reviewer can re-check",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The fixer pushed no commit, so no review re-runs and the card cannot move on its own — a hold.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its PR-side half is the `🛑 Fix attempt … pushed no new commit` note eight lines above it in this same step."
+    },
+    {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting.",
+      "step": "Card → In Progress",
+      "kind": "not-an-act",
+      "means": "Which model this run started on, and why — the line the DRE-1354 fallback reads to pick the alternate.",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes an AGENT's run rather than something the pipeline decided. Two grammars on one line would give its readers two keys to disagree over. Its grammar is `model-attempt:`, owned by scripts/model_fallback.py and read back by the medic's rerun."
+    },
+    {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "🤖 PR already merged:",
+      "step": "Report result to Linear",
+      "kind": "not-an-act",
+      "means": "The card's work shipped while the run was finishing, so there is nothing to requeue.",
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact."
+    },
+    {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "🤖 PR opened:",
+      "step": "Report result to Linear",
+      "kind": "not-an-act",
+      "means": "The agent opened its pull request; CI and the critic are running.",
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact."
+    },
+    {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "/tmp/handback-comment.md",
+      "step": "Report result to Linear",
+      "kind": "not-an-act",
+      "means": "The agent found an epic where a one-off was dispatched, and hands the card back for decomposition.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. The judgement is the AGENT's, about the shape of the card it was given."
+    },
+    {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "/tmp/escalation-comment.md",
+      "step": "Report result to Linear",
+      "kind": "not-an-act",
+      "means": "The agent's question for the CEO — the decision it could not safely make for itself.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. A question is the opposite of an act: the pipeline did nothing precisely because it would not guess."
+    },
+    {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "🛑 Agent blocked:",
+      "step": "Report result to Linear",
+      "kind": "undeclared-act",
+      "means": "The card cannot be built as written, so the pipeline parks it in Backlog rather than redispatching agents into the same wall.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The blocker prose is the agent's; the park is the pipeline's, and it is the park a trailer would describe."
+    },
+    {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "⚠️ Could not read this card's PR state from GitHub",
+      "step": "Report result to Linear",
+      "kind": "undeclared-act",
+      "means": "GitHub was unreadable, so the pipeline refuses to record a dead agent and leaves the re-check to the sweep.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. A fail-open refusal is still a refusal, and it names the reconcile sweep as the next actor."
+    },
+    {
+      "file": ".github/workflows/agent-task.yml",
+      "anchor": "dead_run.py decide",
+      "step": "Report result to Linear",
+      "kind": "undeclared-act",
+      "means": "The dead-run budget's answer — requeue this run, or hold the card for a person.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its body is written by scripts/dead_run.py, which owns the `dead-run-requeue` and `turn-exhaustion-requeue` tags the budget counts, so converting it also moves a seam this card does not own."
+    },
+    {
+      "file": ".github/workflows/channel-watch.yml",
+      "anchor": "🔔 Still true today:",
+      "step": "Raise the alarm where a human will see it",
+      "kind": "not-an-act",
+      "means": "A standing alarm is re-confirmed on its existing card rather than filed again.",
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact. Its subject is the world outside the pipeline, not a piece of work the pipeline moved."
+    },
+    {
+      "file": ".github/workflows/medic.yml",
+      "anchor": "🔌 The code reviewer was temporarily unavailable",
+      "step": "Note reviewer-down (infra) on the card — no rerun",
+      "kind": "undeclared-act",
+      "means": "The reviewer was down on infrastructure grounds, so the medic deliberately does NOT retry and says so on the card.",
+      "why": "The CARD-SIDE half of an act the registry already declares, and the registry pins ONE `emits` site per act. Admitting a second surface for it is a REGISTRY change — not an emission change, and this card converts what the registry declares. Named here so the pair stays countable rather than invisible. The registry's `reviewer-unavailable` row pins its emission in scripts/reconcile.py, where the sweep reports the same stall past the retry cap; this is the medic's own, earlier surface of it, and giving the pair one row is the registry change."
+    },
+    {
+      "file": ".github/workflows/merge-gate.yml",
+      "anchor": "--body-file /tmp/human-note.md",
+      "step": "Evaluate and merge",
+      "kind": "undeclared-act",
+      "means": "The gate will never merge this PR by itself, so it posts the honest state exactly once and hands it to a person.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. It is posted through scripts/gate_note.py, whose whole contract is that the body carries the MARKER it dedupes on (DRE-2508) and no verdict-shaped text; a trailer here is a change to that contract, and the card that makes it owns the re-derivation of the idempotence key."
+    },
+    {
+      "file": ".github/workflows/merge-gate.yml",
+      "anchor": "🔀 Auto-merged by qa-bot:",
+      "step": "Evaluate and merge",
+      "kind": "not-an-act",
+      "means": "The gate merged the pull request; the card says so.",
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact. It reports an outcome of the work rather than a refusal, a recovery or a hold, and its only reader is a person looking at the card."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "cycle-start --epic \"$EPIC\")\"",
+      "step": "Route — plan or activate",
+      "kind": "not-an-act",
+      "means": "The plan critic's round counter is opened for a new cycle (dry run — nothing recorded).",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. Its body and its round grammar belong to scripts/plan_critic.py, which counts them."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "--record)\"",
+      "step": "Route — plan or activate",
+      "kind": "not-an-act",
+      "means": "The plan critic's round counter is opened for a new cycle, and recorded.",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. Its body and its round grammar belong to scripts/plan_critic.py, which counts them."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — planner agent starting.",
+      "step": "Plan heartbeat",
+      "kind": "not-an-act",
+      "means": "Which model the planner started on, and why.",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes an AGENT's run rather than something the pipeline decided. Two grammars on one line would give its readers two keys to disagree over. Its grammar is `model-attempt:`, owned by scripts/model_fallback.py and read back by the medic's rerun."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<plan>\"",
+      "step": "Plan epic",
+      "kind": "not-an-act",
+      "means": "The line in the planner's prompt that tells it where to post the plan it wrote.",
+      "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own document. The medic's equivalent line DOES carry `--act=` because the medic's diagnosis is a declared act; this one has no registry row, and a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🪦 planner died with API/model error",
+      "step": "Record is_error death",
+      "kind": "undeclared-act",
+      "means": "The planner died on a model error, and the medic's rerun will switch to the alternate model.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. It already carries its own machine-readable key on the next line (`model_fallback.error_marker`), which is what the fallback actually reads; a trailer beside it is a second grammar for one decision, and choosing which key wins is the registry change."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🪦 the planner ran out of steps before it finished this plan",
+      "step": "Record is_error death",
+      "kind": "undeclared-act",
+      "means": "The planner hit its step limit rather than failing, and the retry is bought without switching models.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. It is the turn-exhaustion arm of the death note above it and shares that note's marker problem."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚧 The plan produced one or more INVALID child cards",
+      "step": "Validate created children",
+      "kind": "undeclared-act",
+      "means": "The plan's children failed validation, so nothing builds until the planner re-emits them.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. A refusal to let a plan proceed is act-shaped; the registry has no row for the planning segment's refusals at all."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "step": "Proof and demo cards — the epic's last two children",
+      "kind": "not-an-act",
+      "means": "The proof-and-demo check sends an epic back: its last two children are missing or wrong.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/proof_and_demo.py, which owns the bounce."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "step": "Re-check the revised plan",
+      "kind": "not-an-act",
+      "means": "The same proof-and-demo send-back, re-run against a revised plan (DRE-2746).",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/proof_and_demo.py, which owns the bounce."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "step": "First critic — round 1 decision",
+      "kind": "not-an-act",
+      "means": "The plan critic's round 1 note — the judgement the CEO reads.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_critic.py."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "step": "First critic — round 1 decision",
+      "kind": "not-an-act",
+      "means": "The plan critic's round 1 record, posted alone because it is only a credential while nothing else shares its comment.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. It is an approval credential in its own grammar, and a second grammar in the same comment is exactly what its 'alone' rule forbids."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "step": "First critic — round 2 decision",
+      "kind": "not-an-act",
+      "means": "The plan critic's round 2 note — the judgement the CEO reads.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_critic.py."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "step": "First critic — round 2 decision",
+      "kind": "not-an-act",
+      "means": "The plan critic's round 2 record, posted alone because it is only a credential while nothing else shares its comment.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. It is an approval credential in its own grammar, and a second grammar in the same comment is exactly what its 'alone' rule forbids."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "step": "Second critic — decision",
+      "kind": "not-an-act",
+      "means": "The plan critic's the post-approval round note — the judgement the CEO reads.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_critic.py."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "step": "Second critic — decision",
+      "kind": "not-an-act",
+      "means": "The plan critic's the post-approval round record, posted alone because it is only a credential while nothing else shares its comment.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. It is an approval credential in its own grammar, and a second grammar in the same comment is exactly what its 'alone' rule forbids."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🛑 The post-approval review found a gap",
+      "step": "Second critic sent the plan back",
+      "kind": "undeclared-act",
+      "means": "The second critic sent the plan back, so nothing has started building and the epic waits on the CEO.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. A refusal to let a plan proceed is act-shaped; the registry has no row for the planning segment's refusals at all."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "▶️ Epic activated",
+      "step": "Activate the approved epic",
+      "kind": "undeclared-act",
+      "means": "The approved epic is activated and its children are handed to the dependency gate.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The pipeline moved the work on by itself, which is the definition of a recovery; the registry declares none for the planning segment."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<summary>\"",
+      "step": "Wave route — write the wave plan",
+      "kind": "not-an-act",
+      "means": "The line in the wave planner's prompt that tells it where to post its summary.",
+      "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own document. The medic's equivalent line DOES carry `--act=` because the medic's diagnosis is a declared act; this one has no registry row, and a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🌊 The wave plan is written and checked against the standard",
+      "step": "Wave plan — announce",
+      "kind": "not-an-act",
+      "means": "The wave plan exists and names the epics it commits to; nothing is approved yet.",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "linear_ops.py comment \"$EPIC\" \"$MSG\"",
+      "step": "Plan artifact — announce",
+      "kind": "not-an-act",
+      "means": "Where to read the plan — the published artifact's address, which anchored CEO feedback binds to, or the run to read it from when no portal is configured.",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist."
+    },
+    {
+      "file": ".github/workflows/qa-review.yml",
+      "anchor": "/tmp/qa-linear.md",
+      "step": "Post verdict or neutral status",
+      "kind": "not-an-act",
+      "means": "The card-side half of the critic's verdict.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. The PR-side half is declared just above it, for the same reason: the merge gate reads that one as an approval credential, and standards/untrusted-content.md forbids verdict-shaped text anywhere else."
+    },
+    {
+      "file": ".github/workflows/red-main-repair.yml",
+      "anchor": "🛑 Main is still red at this commit and the automated repair budget is spent",
+      "step": "Budget exhausted → triage card for a human",
+      "kind": "undeclared-act",
+      "means": "The automated repair budget for a red default branch is spent, and the work goes to a person.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The registry declares no act for the red-main repair loop at all; this is its terminal hold."
+    },
+    {
+      "file": ".github/workflows/red-main-repair.yml",
+      "anchor": "/tmp/repair-question.md",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The repair agent paused rather than guess at a broken main build, and asks for a human call.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. The registry declares no act for the red-main repair loop at all; this is its escalation."
+    },
+    {
+      "file": ".github/workflows/verify.yml",
+      "anchor": "comment \"$CARD\" \"$(cat /tmp/verify-comment.md)\"",
+      "step": "Post verdict or neutral status",
+      "kind": "not-an-act",
+      "means": "The card-side half of the verifier's verdict.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. The PR-side half is declared with it, for the same reason: the merge gate reads that one too."
+    },
+    {
+      "file": "scripts/gate_note.py",
+      "anchor": "api.create_comment(body)",
+      "kind": "seam",
+      "means": "The merge gate's post-exactly-once write, after the late re-read that makes it safe under a racing peer.",
+      "why": "A SEAM, not a site with a body of its own: it takes a body its callers own and decides only whether to post it, exactly as `_post_pr_note` does. `_post_pr_note` is excluded in code because the card named it; excluding this one is a change to the guard's model of what a seam is, and the card that makes that call also has to convert the callers. Named here so the shape is countable rather than invisible. It is also the point where the DRE-2508 marker contract is enforced on the body it was handed, which is a second reason its callers own the wording."
     }
   ]
 }

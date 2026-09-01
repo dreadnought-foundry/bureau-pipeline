@@ -14,13 +14,26 @@ by incident.
 
 ## What is checked
 
-Every `gh pr comment`, `gh issue comment`, `_post_pr_note` and
-`linear_ops.cmd_comment` call in `scripts/*.py` and `.github/workflows/*.yml`.
-The card named the first three; the fourth is the one that matters most and was
-missed, because a card comment never touches `gh` at all — `cmd_comment` posts
-straight to the Linear GraphQL API, and eight of the ten `reconcile.py` sites
-this epic converts go that way. A guard that reads only the `gh` forms is
-already false on the day it merges, for the majority of its own corpus.
+Every call in `scripts/*.py` and `.github/workflows/*.yml` that WRITES a
+comment. The card named three of them (`gh pr comment`, `gh issue comment`,
+`_post_pr_note`); the corpus has been widened twice since, both times because a
+real posting pathway was invisible and the guard's own "0 problem(s)" was a
+fact about the scanner rather than about the tree:
+
+  * `linear_ops.cmd_comment` — a card comment never touches `gh` at all, it
+    posts straight to the Linear GraphQL API, and eight of the ten
+    `reconcile.py` sites this epic converts go that way.
+  * `python3 …/linear_ops.py comment` — the SAME write from shell, which is how
+    the workflow side posts: forty-odd calls across seven files.
+  * `scripts/gate_note.py` and the `gh api --method POST …/comments` it posts
+    through — the merge gate's post-exactly-once writer (DRE-2508), and the
+    pathway its hand-off to a human takes.
+
+The rule that produced each widening: a form nobody scans is a form nobody
+converts, so the question to ask of this file is never "does it pass?" but
+"which ways of writing a comment can it see?" — and the answer belongs in a
+test (`tests/test_check_act_receipts.py`), because that is the only place it
+cannot quietly regress.
 
 Each site is in exactly one of three states:
 
@@ -32,10 +45,12 @@ Each site is in exactly one of three states:
   * **neither** — a finding, and CI goes red.
 
 A declaration is checked as hard as the thing it excuses: it names a file and an
-anchor, and it must match **exactly one** site in the corpus. A declaration that
-matches nothing has rotted (the site it excused was moved or reworded and the
-excuse outlived it); a declaration that matches two is excusing a site nobody
-chose. Both fail, so the block cannot quietly become a place to put things.
+anchor (and optionally the workflow STEP, when a file posts the same command
+from several steps), and it must match **exactly one** site in the corpus. A
+declaration that matches nothing has rotted (the site it excused was moved or
+reworded and the excuse outlived it); a declaration that matches two is excusing
+a site nobody chose. Both fail, so the block cannot quietly become a place to
+put things.
 
 ## Why the two directions are not symmetrical
 
@@ -66,25 +81,53 @@ import pipeline_act  # noqa: E402
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
 
-# The corpus, and the four call forms — the three the card names plus the card
-# comment they all forgot. `scripts/` and `.github/workflows/` are where the
-# pipeline writes from; a receipt posted from anywhere else does not exist.
+# The corpus, and every call form that writes a comment. `scripts/` and
+# `.github/workflows/` are where the pipeline writes from; a receipt posted
+# from anywhere else does not exist.
 SCRIPT_GLOB = "scripts/*.py"
 WORKFLOW_GLOB = ".github/workflows/*.yml"
 
-# The shell posters. Matched as whole words so `gh pr comments` (a listing) is
-# not read as a write.
-_SHELL_POSTERS = ("gh pr comment", "gh issue comment")
+# The shell posters: `(the invocation, what its whole command must ALSO contain
+# to be a write)`. Anchored so a listing is not read as a write — `gh pr
+# comments` fails the word boundary, and `linear_ops.py add-label` is not
+# `comment`.
+#
+#   * the two `gh` forms the card names.
+#   * `linear_ops.py comment` — THE SAME `cmd_comment()` GraphQL write the
+#     Python form makes, reached from shell instead. This is how the workflow
+#     side posts: forty-odd calls across seven files, none of which a
+#     `gh`-only scanner could see. The module docstring below says this guard
+#     exists to catch "a recovery added in a hurry"; added in this form it was
+#     invisible, and the "0 problem(s)" it reported was a fact about the
+#     scanner (DRE-2826 review, round 1).
+#   * `gate_note.py` — the merge gate's post-exactly-once writer (DRE-2508),
+#     and the pathway its hand-off to a human takes. Required to look like an
+#     INVOCATION, because `harness.yml` also names the file in a `paths:` list
+#     and a guard that reads a trigger path as a receipt site is a guard
+#     nobody keeps.
+#   * `gh api --method POST …/comments` — what `gate_note.py` posts through,
+#     and a third mechanism the literal `gh pr comment` match never sees. The
+#     endpoint is the discriminator: `promote-channel.yml` POSTs a git ref.
+_SHELL_POSTERS = (
+    (re.compile(r"gh pr comment\b"), None),
+    (re.compile(r"gh issue comment\b"), None),
+    (re.compile(r"linear_ops\.py comment\b"), None),
+    (re.compile(r"python3?\s+\S*gate_note\.py\b"), None),
+    (re.compile(r"gh api --method POST\b"), re.compile(r"/comments\b")),
+)
 
-# The Python posters. `_post_pr_note` is reconcile's own seam over the first of
-# them; `cmd_comment` is `linear_ops`' card-side write, and it is the pathway
-# MOST receipts actually take — eight of the ten `reconcile.py` sites this epic
-# converts post through it and never touch `gh` at all, because it goes straight
-# to the Linear GraphQL API. A guard that reads only the `gh` forms would be
-# blind exactly where the traffic is (DRE-2826 review). Both take a body they
-# cannot know the meaning of — that is what makes them seams — so their CALLERS
-# are the sites and their own bodies are not scanned again.
-_PY_POSTER_FUNCTIONS = ("_post_pr_note", "cmd_comment")
+# The Python posters, and where each one's BODY sits in its argument list.
+# `_post_pr_note` is reconcile's own seam over `gh pr comment`; `cmd_comment`
+# is `linear_ops`' card-side write, and it is the pathway MOST receipts
+# actually take — eight of the ten `reconcile.py` sites this epic converts post
+# through it and never touch `gh` at all, because it goes straight to the
+# Linear GraphQL API. A guard that reads only the `gh` forms would be blind
+# exactly where the traffic is (DRE-2826 review). `create_comment` is
+# `gate_note.py`'s own write, and it takes the body FIRST — reading every
+# poster at index 1 would report a composed call as raw. All three take a body
+# they cannot know the meaning of — that is what makes them seams — so their
+# CALLERS are the sites and their own bodies are not scanned again.
+_PY_POSTER_FUNCTIONS = {"_post_pr_note": 1, "cmd_comment": 1, "create_comment": 0}
 _PY_POSTER_ARGV = (("gh", "pr", "comment"), ("gh", "issue", "comment"))
 
 # `python3 …/pipeline_act.py receipt <act> … --out <path>` — the shell seam.
@@ -104,6 +147,11 @@ _SHELL_ACT_FLAG = re.compile(r"--act[=\s]+(?P<act>[a-z0-9-]+)")
 # agent-fix.yml). Anchored at an assignment so prose about the flag is not read
 # as one — a line beginning `#` cannot match.
 _SHELL_ACT_ASSIGNMENT = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=[\"']?--act[=\s]")
+_SHELL_ACT_VARIABLE = re.compile(
+    r"^\s*(?P<var>[A-Za-z_][A-Za-z0-9_]*)=[\"']?--act[=\s](?P<act>[a-z0-9-]+)"
+)
+# `$ACT_FLAG` / `${ACT_FLAG}` — how the assembled flag reaches the call.
+_SHELL_VARIABLE_USE = re.compile(r"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*)\}?")
 
 
 # How far back a declaration's anchor may reach. A shell receipt is routinely
@@ -114,17 +162,26 @@ _SHELL_ACT_ASSIGNMENT = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=[\"']?--act[=\s]
 # anchor that belongs to one of them.
 _LOOKBACK = 6
 
+# The other coordinate, and the one a lookback window cannot supply. plan.yml
+# runs the plan critic three times and posts its note and its round record the
+# same way each time; the three call sites are byte-identical for ten lines
+# back, and what tells them apart is the STEP they sit in ("First critic —
+# round 1 decision" / "round 2" / "Second critic"). A declaration may name that
+# step, and then the anchor only has to be unique WITHIN it.
+_STEP_NAME = re.compile(r"^\s*-\s+name:\s*(?P<name>\S.*?)\s*$")
+
 
 class Site:
     """One place a receipt is posted."""
 
     def __init__(self, path: str, line: int, text: str, composed_as: str | None,
-                 context: str | None = None):
+                 context: str | None = None, step: str | None = None):
         self.path = path
         self.line = line
         self.text = text
         self.context = context if context is not None else text
         self.composed_as = composed_as  # the act name, when it composes
+        self.step = step  # the workflow step it sits in, when it is one
 
     @property
     def where(self) -> str:
@@ -209,8 +266,26 @@ def _command_span(lines: list, start: int) -> tuple:
     return "\n".join(buf), index
 
 
+def _shell_flag_act(span: str, line: int, variables: dict) -> str | None:
+    """The act a shell command composes through `--act=`, flag or variable.
+
+    Literal first, then the assembled form: `ACT_FLAG="--act=…"` a few lines
+    above and `$ACT_FLAG` on the call. The assignment must come BEFORE the
+    call, the same order rule `--body-file` already obeys — a variable set
+    below the post is not what the post passed.
+    """
+    match = _SHELL_ACT_FLAG.search(span)
+    if match:
+        return match.group("act")
+    for use in _SHELL_VARIABLE_USE.finditer(span):
+        assigned = variables.get(use.group("var"))
+        if assigned and assigned[1] < line:
+            return assigned[0]
+    return None
+
+
 def shell_sites(root: str | None = None) -> list:
-    """Every `gh pr comment` / `gh issue comment` in the workflows."""
+    """Every comment-writing invocation in the workflows (see _SHELL_POSTERS)."""
     root = root or ROOT
     out: list = []
     for path in _paths(WORKFLOW_GLOB, root):
@@ -219,7 +294,14 @@ def shell_sites(root: str | None = None) -> list:
         lines = text.splitlines()
         # act name -> the file it writes its composed receipt to, and where.
         composed: dict = {}
+        # shell variable -> the act its `--act=` flag names, and where.
+        variables: dict = {}
         for number, line in enumerate(lines, start=1):
+            assignment = _SHELL_ACT_VARIABLE.match(line)
+            if assignment:
+                variables[assignment.group("var")] = (
+                    assignment.group("act"), number
+                )
             match = _SHELL_RECEIPT.search(line)
             if not match or _commented(line, match.start()):
                 continue
@@ -230,11 +312,21 @@ def shell_sites(root: str | None = None) -> list:
                     match.group("act"), number
                 )
         previous_end = 0  # 1-based line of the last site's final line
+        step = None
         for number, line in enumerate(lines, start=1):
-            found = [line.find(p) for p in _SHELL_POSTERS if p in line]
-            if not found or all(_commented(line, at) for at in found):
+            named = _STEP_NAME.match(line)
+            if named:
+                step = named.group("name")
+            found = [
+                requires for pattern, requires in _SHELL_POSTERS
+                if (m := pattern.search(line)) and not _commented(line, m.start())
+            ]
+            if not found:
                 continue
             span, end = _command_span(lines, number - 1)
+            # A form that only writes at one endpoint is a site only there.
+            if all(r is not None and not r.search(span) for r in found):
+                continue
             body_file = _BODY_FILE.search(span)
             act = None
             if body_file:
@@ -242,9 +334,11 @@ def shell_sites(root: str | None = None) -> list:
                 # Written BEFORE the post, or the post reads last run's file.
                 if written and written[1] < number:
                     act = written[0]
+            if act is None:
+                act = _shell_flag_act(span, number, variables)
             start = max(previous_end + 1, number - _LOOKBACK)
             context = "\n".join(lines[start - 1:end + 1])
-            out.append(Site(relative, number, span, act, context))
+            out.append(Site(relative, number, span, act, context, step))
             previous_end = end + 1
     return out
 
@@ -293,27 +387,31 @@ def _receipt_act(node) -> str | None:
     return first.value if isinstance(first, ast.Constant) else "<computed>"
 
 
-def _poster_call(func) -> bool:
-    """Is `func` one of the Python posters, plain or attributed?
+def _poster_call(func) -> int | None:
+    """Where this call's body sits, if `func` is a Python poster — else None.
 
     `linear_ops.cmd_comment(...)`, `lops.cmd_comment(...)` and the bare
     `cmd_comment(...)` inside `linear_ops` itself are the same write, so the
     attribute's name is what decides — not the module alias in front of it,
-    which every caller spells differently.
+    which every caller spells differently. The index matters because the
+    posters do not agree on arity: `create_comment(body)` takes it first,
+    `cmd_comment(identifier, body)` second.
     """
     if isinstance(func, ast.Name):
-        return func.id in _PY_POSTER_FUNCTIONS
-    return isinstance(func, ast.Attribute) and func.attr in _PY_POSTER_FUNCTIONS
+        return _PY_POSTER_FUNCTIONS.get(func.id)
+    if isinstance(func, ast.Attribute):
+        return _PY_POSTER_FUNCTIONS.get(func.attr)
+    return None
 
 
-def _flag_act(node) -> str | None:
+def _flag_act(node, after: int) -> str | None:
     """The act named by an `--act=<name>` flag among a poster call's extra args.
 
     `cmd_comment(identifier, body, *flags)` takes the same flags the CLI seam
     does, so a caller can compose through `--act=` instead of wrapping the body
     — the Python mirror of `_SHELL_ACT_FLAG`.
     """
-    for argument in node.args[2:]:
+    for argument in node.args[after:]:
         if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
             match = _SHELL_ACT_FLAG.search(argument.value)
             if match:
@@ -377,10 +475,11 @@ def python_sites(root: str | None = None) -> list:
                 body = None
                 found = False
                 flagged = None
-                if _poster_call(node.func):
+                at = _poster_call(node.func)
+                if at is not None:
                     found = True
-                    body = node.args[1] if len(node.args) > 1 else None
-                    flagged = _flag_act(node)
+                    body = node.args[at] if len(node.args) > at else None
+                    flagged = _flag_act(node, at + 1)
                 else:
                     found, body = _argv_body(node)
                 if not found:
@@ -423,10 +522,19 @@ def declarations(doc: dict | None = None) -> tuple:
 
 
 def _matches(declaration: dict, site: Site) -> bool:
-    return (
-        declaration.get("file") == site.path
-        and (declaration.get("anchor") or "\0") in site.context
-    )
+    """Does this declaration name this site — file, step (if given), anchor?
+
+    `step` is optional and narrowing only: a declaration that gives one is
+    saying "this anchor is unique inside that step", which is the only way to
+    tell apart three byte-identical plan-critic postings. Omitting it keeps the
+    old rule, so it can never make a declaration match MORE than it did.
+    """
+    if declaration.get("file") != site.path:
+        return False
+    step = declaration.get("step")
+    if step and step != site.step:
+        return False
+    return (declaration.get("anchor") or "\0") in site.context
 
 
 def problems(doc: dict | None = None, root: str | None = None) -> list:
@@ -514,6 +622,7 @@ def main(argv=None) -> int:
         print(json.dumps([
             {
                 "site": s.where,
+                "step": s.step,
                 "composes": s.composed_as,
                 "declared_unconverted": any(_matches(d, s) for d in declared),
             }
