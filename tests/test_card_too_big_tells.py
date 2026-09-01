@@ -217,8 +217,24 @@ class TestTheTells:
 
     def test_the_sixth_tell_says_the_rule_already_existed(self):
         section = _flat(_section())
-        assert re.search(r"a file footprint per card", section), (
-            "the wave plan already required a file footprint per card — quote it"
+        assert re.search(r"standards/engineering\.md", section), (
+            "the disjoint-files rule already existed in the engineering "
+            "standard — cite the document that actually carries it"
+        )
+        assert re.search(r"owns DISJOINT files", section), (
+            "quote the existing rule verbatim, so a reader who checks the "
+            "citation finds it"
+        )
+        # Not content-shaped: the quoted rule is read out of the document the
+        # tell names, so a citation this section invents — or one that goes
+        # stale when the rule is reworded — fails here. A standard that cites a
+        # source nothing backs is the failure this document exists to prevent.
+        engineering = (ROOT / "standards" / "engineering.md").read_text(
+            encoding="utf-8"
+        )
+        assert "Each card/agent owns DISJOINT files" in engineering, (
+            "the sixth tell quotes standards/engineering.md — that quote must "
+            "actually be in standards/engineering.md"
         )
         assert re.search(r"was not applied", section, re.IGNORECASE), (
             "the failure was application, not absence; say so or the reader "

@@ -292,10 +292,12 @@ readable **before the card is filed**. Any ONE of them means split.
    both split cleanly on the problem, and every resulting piece edited the same
    console files: three PRs — #2206, #2207, #2213 — passed full review and went
    `DIRTY` within an hour of each other, purely on merge order, with **no defect
-   in any of them**. The wave plan already required "a file footprint per card —
-   parallel where disjoint, native `blockedBy` where they overlap"; the rule
-   existed and **was not applied**. Name the files each piece touches, and where
-   two share one, wire `blockedBy` rather than letting the gate release both.
+   in any of them**. `standards/engineering.md` already required that "Each
+   card/agent owns DISJOINT files, and that is checked at PLAN TIME", and
+   `briefs/planner.md` already carried the **contention pre-flight** that checks
+   it; the rule existed and **was not applied**. Name the files each piece
+   touches, and where two share one, wire `blockedBy` rather than letting the
+   gate release both.
 
 **What it cost.** DRE-2719, DRE-2847 and DRE-2838 between them burned six dead
 runs and roughly $65, and produced zero pull requests. Every split then shipped
