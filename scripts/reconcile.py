@@ -115,6 +115,7 @@ import time
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 # DRE-2687: ONE source for the critic's own alert tag — the aged-Intake
@@ -416,41 +417,15 @@ def hand_built(card: dict) -> bool:
 
 # "**Blocked by:** DRE-1204 + DRE-1205", "Serialize after: DRE-1226", "Depends
 # on DRE-N" — blockers are every DRE-N on a line that DECLARES a dependency.
-# Line-scoped on purpose: parent-epic links appear all over card bodies and
-# must not count as blockers.
 #
-# ANCHORED on purpose (DRE-2670). A bare substring match read a blocker out of
-# any sentence that merely MENTIONED one, so epic DRE-2492 — zero formal
-# `blockedBy` relations, a well-written plan — was jammed by its own prose:
-# "B3 is formally blocked by it" and "neither depends on the other" each named
-# one of the epic's own CHILDREN, the epic-level gate then held those children,
-# and the children were what would have unblocked it. Five cards, five days,
-# ~480 consecutive GREEN sweeps. A sentence whose literal meaning is "there are
-# no dependencies here" was parsed as declaring one.
-#
-# So the phrase must OPEN the line (after list/quote/heading/emphasis markup)
-# and be followed by a colon or the ids themselves. Same anchored idea as
-# `linear_ops._BLOCKED_BY_RE`, which turns these lines into real relations —
-# that one is deliberately narrower (bold-or-bare "Blocked by:" only), and
-# narrower is safe here: this gate reading MORE declarations than the creation
-# path writes relations for can only hold a card, never release one early.
-#
-# The prefix accepts ORDERED list markers too (`1.` / `2)`). card-quality.md
-# promises the declaration may sit "inside a list item" without naming a style,
-# and numbered acceptance-criteria lists are common on these cards — dropping
-# them failed UNSAFE (the opposite of DRE-2492): a card with a real, undone
-# dependency would have read as free to promote. The marker only widens what
-# may PRECEDE the phrase, so a numbered line that merely mentions a dependency
-# mid-sentence still declares nothing.
-_BLOCKER_LINE = re.compile(
-    r"^[\s>*_`~+#-]*"                             # -, *, >, #, **bold**, `code`
-    r"(?:\d+[.)][\s>*_`~+#-]*)?"                  # 1. / 2) ordered list item
-    r"(?:blocked by|serialize after|depends on)"
-    r"[\s*_`]*"                                   # closing emphasis markers
-    r"(?::|(?=\s*DRE-\d+))",                      # a colon, or the ids directly
-    re.IGNORECASE,
-)
-_CARD_REF = re.compile(r"DRE-\d+")
+# THE GRAMMAR LIVES IN `blocker_prose` NOW (DRE-2922) — this gate's own regex,
+# moved verbatim, not rewritten. It stayed anchored (DRE-2670) and it kept the
+# ordered-list clause; what changed is that the CREATE SEAM reads the same
+# grammar instead of a narrower one of its own. That narrowness was never
+# "safe": it was how a prose-only blocker got created in the first place, since
+# the sentence this gate would honour never became a relation at the door.
+# `blocker_prose.blocker_ids` is the one answer, and its fixture corpus is
+# driven through every consumer at once.
 
 
 def gh(*args: str) -> str:
@@ -1753,7 +1728,7 @@ def card_state(identifier: str) -> str:
 def blockers_of(card: dict) -> set[str]:
     """Every live blocker of `card`: its non-terminal formal `blocks` relations,
     plus every DRE-N on a description line that DECLARES a dependency
-    (`_BLOCKER_LINE` — a mention is not a declaration; DRE-2670)."""
+    (`blocker_prose` — a mention is not a declaration; DRE-2670/DRE-2922)."""
     found: set[str] = set()
     for rel in card["inverseRelations"]["nodes"]:
         if rel["type"] == "blocks" and rel["issue"]["state"]["name"] not in (
@@ -1768,11 +1743,9 @@ def blockers_of(card: dict) -> set[str]:
     # "Serialize after: all other DRE-1200 work"). The planner brief bans
     # epic ids on blocker lines; this makes the gate immune regardless.
     parent_id = (card.get("parent") or {}).get("identifier")
-    for line in (card["description"] or "").splitlines():
-        if _BLOCKER_LINE.search(line):
-            for ref in _CARD_REF.findall(line):
-                if ref not in (card["identifier"], parent_id):
-                    found.add(ref)
+    for ref in blocker_prose.blocker_ids(card["description"]):
+        if ref not in (card["identifier"], parent_id):
+            found.add(ref)
     return found
 
 

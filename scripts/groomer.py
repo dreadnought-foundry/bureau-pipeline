@@ -96,6 +96,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
 import linear_ops  # noqa: E402
 
 # --------------------------------------------------------------------------- #
@@ -312,8 +313,9 @@ def file_references(description: str | None) -> set[str]:
 
 def blockers_of(card: dict) -> set[str]:
     """Cards that must come before this one: formal `blocks` relations plus the
-    description's own `Blocked by:` declaration (parsed by linear_ops, so both
-    readers agree on what counts as a declaration)."""
+    description's own dependency declaration (`blocker_prose` — the ONE anchored
+    grammar the sweep and the create seam also read, so no two readers can
+    disagree about what counts as a declaration; DRE-2922)."""
     found = set()
     for rel in ((card.get("inverseRelations") or {}).get("nodes") or []):
         if rel.get("type") == "blocks":
@@ -321,7 +323,7 @@ def blockers_of(card: dict) -> set[str]:
             if (issue.get("state") or {}).get("name") not in ("Done", "Canceled",
                                                               "Duplicate"):
                 found.add(issue.get("identifier"))
-    found |= set(linear_ops.parse_blocked_by(card.get("description") or ""))
+    found |= set(blocker_prose.blocker_ids(card.get("description")))
     found.discard(card.get("identifier"))
     parent = (card.get("parent") or {}).get("identifier")
     found.discard(parent)                    # an epic never blocks its own child
