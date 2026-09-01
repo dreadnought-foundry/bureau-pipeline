@@ -274,7 +274,7 @@ children through the dependency gate at it:
 |---|---|
 | `reconcile.yml` | the `*/15` cron sweep (GitHub delivers it 78–100 min apart in practice) |
 | `plan.yml` | the moment an epic is activated |
-| `linear-sync.yml` | the moment a merge marks a card Done |
+| `linear-sync.yml` | the moment a merge marks a card Done — **and only when that merge actually unblocked a card** (DRE-2930) |
 
 The last two are the anti-stall fast paths: they exist purely to promote work
 *now* instead of up to ~80 minutes later. They used to hardcode `MAX_WIP=8`
@@ -282,6 +282,15 @@ while `reconcile.yml` took the caller's value — so on a repo capped at 12,
 between 8 and 11 cards in flight both fast paths refused and the cron sweep
 promoted the same card an hour later at 12. The optimisation switched itself
 off exactly inside the band it was built for, and nothing reported it.
+
+The merge path is also **gated** (DRE-2930), because it is the one whose cost
+scales with how hard we ship: it used to run a promotion sweep *and* an
+epic-close sweep on every merge, so 47 merges in a day bought ~94 extra
+full-board passes and helped exhaust Linear's 2,500/hour quota.
+`scripts/merge_sweep_gate.py` reads the merged card once and runs a sweep only
+when that merge cleared a blocker (promotion) or finished the card's own parent
+epic (epic-close). The `*/15` cron is unchanged and remains the backstop for
+everything the gate declines.
 
 All three now take a `max_wip` input. To override the cap, pass it on **all
 three stubs or none** — a half-repointed stub set gives the repo two caps
