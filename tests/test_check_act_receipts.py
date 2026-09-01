@@ -1,16 +1,27 @@
 """RED-first tests: the completeness guard (DRE-2826).
 
 Wrapping today's receipt sites is true for one day. `scripts/check_act_receipts.py`
-is what makes it stay true: any `gh pr comment`, `gh issue comment`,
-`_post_pr_note` or `linear_ops.cmd_comment` call in `scripts/` or
-`.github/workflows/` whose body is not composed through
-`pipeline_act.receipt()` fails CI.
+is what makes it stay true: every call in `scripts/` or `.github/workflows/`
+that writes a comment, and whose body is not composed through
+`pipeline_act.receipt()`, fails CI.
 
-The fourth form is the one a guard built from the `gh` forms alone cannot see,
-and it is where most of the traffic goes — a CARD comment posts straight to the
-Linear GraphQL API. Eight of the ten `reconcile.py` sites this epic converts go
-that way, so leaving it out made the guard pass on a hand-reverted
-`flag_stranded()`. `TestACardCommentIsAReceiptSite` is the test that says so.
+"Every call" is the whole difficulty, and it has cost two review rounds. The
+guard was built from the three `gh` forms the card names, and each widening
+since found the same class of gap one layer further out:
+
+  * a CARD comment never touches `gh` at all — `linear_ops.cmd_comment` posts
+    straight to the Linear GraphQL API, and eight of the ten `reconcile.py`
+    sites this epic converts go that way. Leaving it out made the guard pass on
+    a hand-reverted `flag_stranded()`. `TestACardCommentIsAReceiptSite` says so.
+  * the SAME write from SHELL — `python3 …/linear_ops.py comment "$CARD"` — is
+    how the workflow side posts, forty-odd times across seven files, and none
+    of them were sites. `TestAShellCardCommentIsAReceiptSite` says so.
+  * `scripts/gate_note.py` and the `gh api --method POST …/comments` underneath
+    it are a third mechanism, and the merge gate's hand-off to a human takes
+    it. `TestTheOtherPRCommentMechanismsAreReceiptSites` says so.
+
+The lesson each of those encodes: "0 problem(s)" is evidence about the SCANNER
+until a test proves the scanner can see the form.
 
 WHAT THESE TESTS PIN, and what they deliberately do not.
 
@@ -269,6 +280,210 @@ def flag_stranded(ident, reason):
         assert guard.problems(_doc(), _tree(tmp_path, script=composed)) == []
         assert any("thing.py" in p for p in
                    guard.problems(_doc(), _tree(tmp_path, script=reverted)))
+
+
+class TestAShellCardCommentIsAReceiptSite:
+    """The same write, one layer further out — and the one that survived.
+
+    `TestACardCommentIsAReceiptSite` above closed the PYTHON form. The
+    IDENTICAL write reaches the IDENTICAL `cmd_comment()` GraphQL call from
+    SHELL, `python3 …/linear_ops.py comment "$CARD" "$BODY"`, and that is how
+    most of the workflow side posts: forty-odd calls across seven workflow
+    files. A scanner that reads only `gh pr comment` in a `.yml` sees none of
+    them.
+
+    This module's own docstring says it exists to catch "a recovery added in a
+    hurry". Added in THIS form it was invisible, and "0 problem(s)" meant only
+    that the guard was not looking (DRE-2826 review, round 1).
+    """
+
+    def test_a_bare_shell_card_comment_is_found(self, tmp_path):
+        """The reviewer's reproduction, as a test rather than a hand-run."""
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \\
+            "🚑 a brand new recovery, in a hurry, no trailer at all"
+""")
+        found = guard.problems(_doc(), root)
+        assert any("thing.yml" in p for p in found), (
+            "the CLI seam reaches the same GraphQL write the Python form does "
+            "— a guard blind to it is blind to most of the workflow side"
+        )
+
+    def test_the_act_flag_composes_a_shell_card_comment(self, tmp_path):
+        root = _tree(tmp_path, workflow=f"""
+jobs:
+  x:
+    steps:
+      - run: |
+          python3 scripts/linear_ops.py comment "$CARD" "$MSG" --act={AN_ACT}
+""")
+        assert guard.problems(_doc(), root) == []
+        assert [s.composed_as for s in guard.sites(root)] == [AN_ACT]
+
+    def test_an_act_flag_built_into_a_variable_composes_it_too(self, tmp_path):
+        """`agent-fix.yml` assembles the flag in the branch that owns the act
+        and passes it positionally. Reading only the call line would report the
+        converted site as unconverted and push someone to declare it."""
+        root = _tree(tmp_path, workflow=f"""
+jobs:
+  x:
+    steps:
+      - run: |
+          if [ "$MODE" = "conflict" ]; then
+            ACT_FLAG="--act={AN_ACT}"
+          fi
+          python3 scripts/linear_ops.py comment "$CARD" "$MSG" $ACT_FLAG || true
+""")
+        assert guard.problems(_doc(), root) == []
+        assert [s.composed_as for s in guard.sites(root)] == [AN_ACT]
+
+    def test_a_flag_assigned_AFTER_the_post_does_not_compose_it(self, tmp_path):
+        """Same order rule the `--body-file` form already obeys: a variable set
+        below the call is not what the call passed."""
+        root = _tree(tmp_path, workflow=f"""
+jobs:
+  x:
+    steps:
+      - run: |
+          python3 scripts/linear_ops.py comment "$CARD" "$MSG" $ACT_FLAG
+          ACT_FLAG="--act={AN_ACT}"
+""")
+        assert any("thing.yml" in p for p in guard.problems(_doc(), root))
+
+    def test_another_linear_ops_subcommand_is_not_a_receipt_site(self, tmp_path):
+        """`linear_ops.py` is the pipeline's whole card CLI — labels, states,
+        counts. Only `comment` writes a receipt, and reading the rest as sites
+        would demand a trailer on a state transition."""
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          python3 scripts/linear_ops.py add-label "$CARD" needs-human
+          python3 scripts/linear_ops.py advance "$CARD" "In Review" "Todo"
+          python3 scripts/linear_ops.py count-comments "$CARD" "$KEY"
+""")
+        assert guard.sites(root) == []
+
+    def test_prose_about_the_cli_is_not_a_receipt_site(self, tmp_path):
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          # python3 scripts/linear_ops.py comment "$CARD" "$MSG" would go here
+          echo nothing
+""")
+        assert guard.sites(root) == []
+
+
+class TestTheOtherPRCommentMechanismsAreReceiptSites:
+    """Two more ways this repo writes a PR comment, neither of them `gh pr
+    comment`.
+
+    `scripts/gate_note.py` is the merge gate's post-exactly-once writer
+    (DRE-2508) — invoked from shell with a `--body-file`, and the pathway the
+    "waiting for human merge" hold takes. Underneath it posts through
+    `gh api --method POST …/issues/<pr>/comments`, a third form the literal
+    `gh pr comment` match never sees. Both are act-shaped surfaces, so both are
+    sites (DRE-2826 review, round 1).
+    """
+
+    def test_a_gate_note_post_is_found(self, tmp_path):
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          printf '%s\\n' "⏸️ waiting for a human" > /tmp/note.md
+          python3 scripts/gate_note.py --repo "$REPO" --pr "$PR" \\
+            --author "$QA_LOGIN" --marker "$MARK" --body-file /tmp/note.md
+""")
+        assert any("thing.yml" in p for p in guard.problems(_doc(), root))
+
+    def test_a_gate_note_post_composed_through_the_receipt_cli_passes(self, tmp_path):
+        root = _tree(tmp_path, workflow=f"""
+jobs:
+  x:
+    steps:
+      - run: |
+          python3 scripts/pipeline_act.py receipt {AN_ACT} \\
+            --body "⏸️ waiting for a human" --out /tmp/note.md
+          python3 scripts/gate_note.py --repo "$REPO" --pr "$PR" \\
+            --author "$QA_LOGIN" --marker "$MARK" --body-file /tmp/note.md
+""")
+        assert guard.problems(_doc(), root) == []
+        assert [s.composed_as for s in guard.sites(root)] == [AN_ACT]
+
+    def test_naming_the_script_in_a_path_list_is_not_an_invocation(self, tmp_path):
+        """`harness.yml` lists it as a trigger path. A guard that reads a
+        `paths:` entry as a receipt site is a guard nobody keeps."""
+        root = _tree(tmp_path, workflow="""
+on:
+  pull_request:
+    paths:
+      - "scripts/gate_note.py"
+""")
+        assert guard.sites(root) == []
+
+    def test_a_gh_api_comment_post_is_found(self, tmp_path):
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          gh api --method POST \\
+            "repos/$REPO/issues/$PR/comments" \\
+            -f body="🚑 a brand new recovery, in a hurry"
+""")
+        assert any("thing.yml" in p for p in guard.problems(_doc(), root))
+
+    def test_a_gh_api_post_to_another_endpoint_is_not_a_site(self, tmp_path):
+        """`promote-channel.yml` POSTs a git ref. Only the comments endpoint
+        writes a receipt."""
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          gh api --method POST \\
+            "repos/$REPO/git/refs" \\
+            -f ref="refs/tags/stable" -f sha="$CANDIDATE"
+""")
+        assert guard.sites(root) == []
+
+    def test_a_create_comment_caller_is_found(self, tmp_path):
+        root = _tree(tmp_path, script='''
+def create_comment(body):
+    pass
+
+
+def announce(api):
+    api.create_comment("🚑 a brand new recovery, in a hurry")
+''')
+        found = guard.problems(_doc(), root)
+        assert len([p for p in found if "thing.py" in p]) == 1, (
+            "the writer's own `gh api` call is not a second site — it takes a "
+            "body it cannot know the meaning of, exactly as `_post_pr_note` does"
+        )
+
+    def test_a_composed_create_comment_passes(self, tmp_path):
+        """Its body is its FIRST argument, not its second. Reading the poster
+        arity wrong would report a composed call as raw and push the next
+        author to declare a site that is already fine."""
+        root = _tree(tmp_path, script=f'''
+import pipeline_act
+
+
+def announce(api):
+    api.create_comment(pipeline_act.receipt("{AN_ACT}", "⏸️ a body"))
+''')
+        assert guard.problems(_doc(), root) == []
+        assert [s.composed_as for s in guard.sites(root)] == [AN_ACT]
 
 
 # --------------------------------------------------------------------------- #
