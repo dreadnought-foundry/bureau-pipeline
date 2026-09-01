@@ -2054,16 +2054,41 @@ def promote_ready(active_count: int) -> int:
     # history read per epic per sweep, shared by all its children.
     green_light: dict[str, str | None] = {}
     candidates = sorted(backlog_children(), key=lambda c: int(c["identifier"].split("-")[1]))
-    for card in candidates:
+    for index, card in enumerate(candidates):
         if promoted >= budget:
+            # ONE line per sweep, not one per card (DRE-2918): a 200-card
+            # Backlog must not print 200 lines. `candidates` is sorted ascending
+            # by card number, so the cards cut off here are always the newest,
+            # every sweep — and the summary at the end reports only a total.
+            unconsidered = candidates[index:]
+            print(
+                f"promotion: WIP budget spent ({promoted}/{budget} promoted) — "
+                f"{len(unconsidered)} candidate(s) not considered this sweep, "
+                f"lowest-numbered {unconsidered[0]['identifier']}"
+            )
             break
+        # The ONE deliberately silent exit in this loop (DRE-2918). The sweep is
+        # per-repo over the whole team's Backlog, so speaking here would make
+        # every repo print a line for every other repo's every card, every
+        # fifteen minutes — burying the exits that must speak.
         if card_repo(card) != REPO_SLUG:
-            continue
+            continue  # deliberately silent: another repo's card, see above
         labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
         if "agent:planner" in labels:
-            continue  # epics are promoted by humans, never by the sweep
+            print(
+                f"promotion: {card['identifier']} carries agent:planner — epics "
+                "are promoted by humans, never by the sweep; skipping"
+            )
+            continue
         if HOLD_LABEL in labels:
-            continue  # held for a human (DRE-1403) — never auto-promote
+            # A deliberately held card is exactly what "why is this not moving"
+            # is asking about, so it says so (DRE-1403 held it, DRE-2918 made
+            # the hold legible).
+            print(
+                f"promotion: {card['identifier']} is held for a human "
+                f"('{HOLD_LABEL}' label) — never auto-promoted; skipping"
+            )
+            continue
         # Progressive commitment (DRE-2846). An epic inside an approved wave is
         # recorded `committed-in-sequence`: the wave's approval covered the
         # SHAPE and the ORDER and nothing else, so it is not an approval to
@@ -2134,10 +2159,34 @@ def promote_ready(active_count: int) -> int:
                         "an unfinished epic — skipping"
                     )
                     continue
+            # The relation-declared blockers, read inline off the query — the
+            # same split the epic gate makes (`epic_blockers_unmet`), because a
+            # formal relation and a description line no relation corroborates
+            # are different facts with different fixes (DRE-2670).
+            relation_blockers = {
+                rel["issue"]["identifier"]
+                for rel in card["inverseRelations"]["nodes"]
+                if rel["type"] == "blocks"
+            }
             unmet = {
-                b for b in blockers_of(card) if card_state(b) not in ("Done", "Canceled", "Duplicate")
+                b: card_state(b) for b in sorted(blockers_of(card))
+            }
+            unmet = {
+                b: s for b, s in unmet.items() if s not in ("Done", "Canceled", "Duplicate")
             }
             if unmet:
+                # This is the exit that froze DRE-2826 for a sweep while saying
+                # nothing at all (DRE-2918): the card was held by a formal
+                # blockedBy relation to DRE-2825, then In Review, and the run
+                # mentioned the card zero times. Name the blocker, its state,
+                # and its SOURCE.
+                held = "; ".join(
+                    f"{b} ({s}), declared by "
+                    + ("a formal blockedBy relation" if b in relation_blockers
+                       else "a description line")
+                    for b, s in unmet.items()
+                )
+                print(f"promotion: {card['identifier']} is held by {held} — skipping")
                 continue
             # Formal blockers are clear, but the engineer may have parked this card
             # on a *deterministic* blocker it flagged itself (DRE-1585). Re-promoting
