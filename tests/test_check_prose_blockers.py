@@ -136,6 +136,17 @@ def test_a_short_relation_page_is_not_reported_as_truncated():
 # ---------------------------------------------------------------------------
 # what it prints, and what it exits
 # ---------------------------------------------------------------------------
+def test_the_live_count_survives_a_one_shot_iterator():
+    """`live` and the per-card walk read the same cards. Handed a generator the
+    second read would find it exhausted and report a board of zero cards — a
+    clean-looking survey of nothing, which is the one answer this check must
+    never give (DRE-2034's rule, on the input side)."""
+    cards = [_card("DRE-1", "**Blocked by:** DRE-9"), _card("DRE-2")]
+    result = check.survey(iter(cards))
+    assert result.live == 2
+    assert result.prose_only == (("DRE-1", "DRE-9"),)
+
+
 def test_the_report_states_every_measure_the_card_asked_for():
     survey = check.survey([
         _card("DRE-1", "**Blocked by:** DRE-9", [_relation("DRE-9")]),
