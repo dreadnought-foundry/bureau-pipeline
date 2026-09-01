@@ -69,6 +69,16 @@ def _section() -> str:
     return body[start : nxt.start()] if nxt else body[start:]
 
 
+def _flat(text: str) -> str:
+    """The section with its line wrapping collapsed.
+
+    Every phrase assertion below reads this: the standard is prose wrapped at 80
+    columns, so "six dead runs" is legitimately "six dead\nruns" in the file and
+    a raw-substring test would pin the line breaks rather than the sentence.
+    """
+    return re.sub(r"\s+", " ", text)
+
+
 class TestTheFourTells:
     """Every tell is readable before the card is filed, and carries the card it
     was measured on so the next reader can check rather than trust."""
@@ -106,19 +116,28 @@ class TestTheFourTells:
         ],
     )
     def test_each_tell_is_stated_with_its_evidence(self, tell, evidence):
-        section = _section()
+        section = _flat(_section())
         match = re.search(tell, section, re.IGNORECASE)
         assert match, f"the tells do not state {tell!r}"
-        # The card id must sit in the tell's own paragraph, not somewhere else
-        # in the section — an unevidenced tell is the thing this card is fixing.
-        para_end = section.find("\n\n", match.end())
-        paragraph = section[match.start() : para_end if para_end != -1 else len(section)]
+        # The card id must sit in the tell's OWN item, not somewhere else in the
+        # section — an unevidenced tell is the thing this card is fixing. The
+        # item ends at the next numbered tell or the next heading, whichever
+        # comes first (the text is flattened, so those are the only boundaries).
+        ends = [
+            m.start()
+            for m in (
+                re.compile(r"\d+\. \*\*").search(section, match.end()),
+                re.compile(r"#+ ").search(section, match.end()),
+            )
+            if m
+        ]
+        paragraph = section[match.start() : min(ends) if ends else len(section)]
         assert evidence in paragraph, (
             f"the {tell!r} tell does not name the card it was measured on ({evidence})"
         )
 
     def test_bounded_is_not_the_same_as_small(self):
-        assert re.search(r"bounded is not the same as small", _section(), re.IGNORECASE), (
+        assert re.search(r"bounded is not the same as small", _flat(_section()), re.IGNORECASE), (
             "DRE-2838 was well-bounded and still too big — the tell is useless "
             "without that distinction"
         )
@@ -129,7 +148,7 @@ class TestTwoDeathsMeansSplit:
     attempt never happens on its own."""
 
     def test_two_turn_cap_deaths_means_split(self):
-        section = _section()
+        section = _flat(_section())
         assert re.search(r"two turn-cap deaths", section, re.IGNORECASE), (
             "the two-deaths rule is not stated as a rule"
         )
@@ -141,13 +160,13 @@ class TestTwoDeathsMeansSplit:
         """Read out of dead_run.py, not restated: the standard's claim about how
         many retries happen is checked against the cap that decides it."""
         word = ATTEMPT_WORD[dead_run.TURN_REQUEUE_CAP]
-        assert re.search(rf"requeues (?:the card )?{word}", _section()), (
+        assert re.search(rf"requeues the card {word}", _flat(_section())), (
             f"the standard must say the pipeline requeues {word} "
             f"(dead_run.TURN_REQUEUE_CAP={dead_run.TURN_REQUEUE_CAP})"
         )
 
     def test_the_park_is_named_with_the_label_the_pipeline_writes(self):
-        section = _section()
+        section = _flat(_section())
         assert dead_run.HOLD_LABEL in section, (
             f"the park must name the label the pipeline writes "
             f"({dead_run.HOLD_LABEL!r}) — a reader has to recognise it on the card"
@@ -159,7 +178,7 @@ class TestTwoDeathsMeansSplit:
         assert "Backlog" in section, "the park lands the card in Backlog; say so"
 
     def test_the_sweep_skips_a_parked_card(self):
-        section = _section()
+        section = _flat(_section())
         assert re.search(r"sweep skips", section, re.IGNORECASE), (
             "why nothing retries a parked card must be stated, not implied"
         )
@@ -184,10 +203,10 @@ class TestEveryClaimCarriesItsEvidence:
         ],
     )
     def test_the_measurement_is_in_the_section(self, claim):
-        assert claim in _section(), f"the section does not carry {claim!r}"
+        assert claim in _flat(_section()), f"the section does not carry {claim!r}"
 
     def test_the_agents_were_not_the_problem(self):
-        section = _section()
+        section = _flat(_section())
         assert "2/5 failing tests written" in section and "3/5 implementation green" in section, (
             "the runs that died were doing real work — quote the milestones they "
             "reached, or the next reader blames the agent"
@@ -196,24 +215,24 @@ class TestEveryClaimCarriesItsEvidence:
 
 class TestHowToSplit:
     def test_cut_on_independence_not_size(self):
-        assert re.search(r"independence, not size", _section(), re.IGNORECASE)
+        assert re.search(r"independence, not size", _flat(_section()), re.IGNORECASE)
 
     def test_each_piece_ships_alone_and_names_its_sibling(self):
-        section = _section()
+        section = _flat(_section())
         assert re.search(r"shippable and reviewable alone", section, re.IGNORECASE)
         assert re.search(r"does NOT depend on", section), (
             "each new card must name the sibling it does not depend on"
         )
 
     def test_read_the_hand_back_first(self):
-        section = _section()
+        section = _flat(_section())
         assert re.search(r"read the hand-back first", section, re.IGNORECASE), (
             "a hand-back is a split two agents already agreed on; deriving one "
             "from the code is slower and less reliable"
         )
 
     def test_cancel_the_original_never_done(self):
-        section = _section()
+        section = _flat(_section())
         assert re.search(r"cancel the original, never done", section, re.IGNORECASE), (
             "no code shipped — Canceled clears the blocker without claiming delivery"
         )

@@ -262,6 +262,48 @@ A clear, **one-PR-scoped** description with its own `## Acceptance criteria`
 route, type, env var) is written **identically** in both — that string is a
 contract; the planner greps `main` first to confirm the name is free.
 
+## When a card is too big for one run (DRE-2893)
+"One-PR-scoped" above is the rule; these are its tells, and every one of them is
+readable **before the card is filed**. Any ONE of them means split.
+
+1. **Contracts between the pieces.** If deliverable B reads what deliverable A
+   writes, it is not one card. Strongest tell. DRE-2719 held six such pieces,
+   three of which would have edited the same workflow file.
+2. **Two languages or two tiers.** DRE-2838 held a backend correctness defect,
+   four frontend surfaces and one file's contradictory rule. It was well-bounded
+   and still too big — **bounded is not the same as small**.
+3. **A criterion counting something never enumerated.** DRE-2837's headline said
+   "the nine derivations" and the nine were named nowhere, so an agent had to
+   redo the whole sweep before writing a line. The real number was ~73 across 18
+   groups.
+4. **An unbounded quantifier** — "every surface", "all call sites". DRE-2838's
+   "every surface rendering a work state" was 57 mount sites.
+
+**What it cost.** DRE-2719, DRE-2847 and DRE-2838 between them burned six dead
+runs and roughly $65, and produced zero pull requests. Every split then shipped
+within hours, several inside 90 minutes. The agents were never the problem:
+DRE-2838's second run reached "2/5 failing tests written" at 151 turns before
+the cap took it, and DRE-2847's reached "3/5 implementation green". Those were
+capable runs against impossible cards.
+
+### Two turn-cap deaths on one card means SPLIT (operator rule, 2026-09-01)
+There is **no third attempt**, and nothing starts one for you. On turn
+exhaustion the pipeline requeues the card once (counted by the
+`turn-exhaustion-requeue` tag; the cap is in `scripts/dead_run.py`), and the
+second death parks it in `Backlog` with the `needs-human` label. The reconcile
+sweep skips a held card entirely — no requeue, no nudge, no dispatch — so
+nothing retries it until a human acts. **That park is the signal to split**, not
+a queue position.
+
+### How to split
+- **Cut on independence, not size.** Each piece must be shippable and reviewable
+  alone, and each new card names the sibling it does NOT depend on.
+- **Read the hand-back first if there is one.** DRE-2719's two agents both wrote
+  the split and agreed; DRE-2847's and DRE-2838's died before writing one, so
+  those had to be derived from the code — slower and less reliable.
+- **Cancel the original, never Done.** No code shipped, and `Canceled` clears
+  the blocker without claiming delivery.
+
 ## Dead — do not use
 The 8-section XML tags, `**Size:**`, and `scripts/orch/v4` references — v1
 conventions the cloud pipeline ignores.
