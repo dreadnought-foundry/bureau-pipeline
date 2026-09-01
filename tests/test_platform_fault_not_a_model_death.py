@@ -407,13 +407,24 @@ class Dre2911TrioTest(unittest.TestCase):
             ).comments[0]
         )
         # Attempts 2 and 3 — ~20 seconds, $0, no execution result at all,
-        # because the Linear quota was exhausted at `Card → In Progress`.
+        # because the Linear quota was exhausted at `Card → In Progress`. The
+        # class is DERIVED from each run's own record, not asserted by the
+        # fixture: agent_started() is the same predicate the workflow calls.
         actions = []
         for _ in range(2):
+            self.assertFalse(
+                check_agent_result.agent_started(
+                    PRE_AGENT, claude_outcome="skipped"
+                )
+            )
             d = dead_run.decide(
                 dead_run.count_of(bodies, dead_run.DEAD_TAG),
-                pre_agent=True,
-                rate_limited=True,
+                pre_agent=not check_agent_result.agent_started(
+                    PRE_AGENT, claude_outcome="skipped"
+                ),
+                rate_limited=medic_classify.is_linear_rate_limited(
+                    RATELIMIT_LOG
+                ),
                 failed_step="Card → In Progress",
             )
             actions.append(d.action)
@@ -461,6 +472,68 @@ class Dre2911TrioTest(unittest.TestCase):
         )
         self.assertEqual(d.action, "requeue")
         self.assertIn(f"dead run 1/{dead_run.REQUEUE_CAP + 1}", d.comments[0])
+
+
+class DriveTheGateWithNoExecutionFileTest(unittest.TestCase):
+    """AC 1, end to end through the two CLIs the Report step actually runs.
+
+    No execution file on disk, no branch, no PR — the shape DRE-2911's
+    attempts 2 and 3 left behind. The count the pipeline reads afterwards must
+    be exactly the count it read before.
+    """
+
+    def _drive(self, *, claude_outcome, branch="", thread=()):
+        """What the Report step's dead-run branch would post, run for real."""
+        with tempfile.TemporaryDirectory() as td:
+            missing = os.path.join(td, "claude-execution-output.json")
+            self.assertFalse(os.path.exists(missing))
+            started = subprocess.run(
+                [sys.executable,
+                 os.path.join(SCRIPTS, "check_agent_result.py"), "started",
+                 missing, "--claude-outcome", claude_outcome,
+                 "--branch", branch],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(started.returncode, 0, started.stderr)
+            flags = (["--pre-agent", "--failed-step", "Card → In Progress"]
+                     if started.stdout.strip() == "no" else [])
+            prior = dead_run.count_of(thread, dead_run.DEAD_TAG)
+            decided = subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, "dead_run.py"),
+                 "decide", str(prior), *flags,
+                 "--run-url", "https://runs/33468806067"],
+                capture_output=True, text=True,
+            )
+        self.assertEqual(decided.returncode, 0, decided.stderr)
+        lines = decided.stdout.split("\n")
+        return lines[0], "\n".join(lines[2:])
+
+    def test_the_count_is_unchanged_after_a_pre_agent_failure(self):
+        thread = []
+        for _ in range(3):
+            action, body = self._drive(
+                claude_outcome="skipped", thread=thread
+            )
+            self.assertEqual(action, "infra")
+            thread.append(body)
+        # Three platform faults in a row, and the budget the pipeline reads is
+        # still untouched — where DRE-2911 was parked after two of them.
+        self.assertEqual(dead_run.count_of(thread, dead_run.DEAD_TAG), 0)
+        self.assertEqual(dead_run.count_of(thread, dead_run.TURN_TAG), 0)
+
+    def test_the_receipt_names_the_step_and_no_model(self):
+        _, body = self._drive(claude_outcome="skipped")
+        self.assertIn("Card → In Progress", body)
+        self.assertNotIn(dead_run.ERROR_MARKER_PREFIX, body)
+        self.assertIn("https://runs/33468806067", body)
+
+    def test_a_missing_file_from_a_run_that_pushed_still_counts(self):
+        # The guard against over-reach: no execution file but a branch on the
+        # remote means the agent ran, so a silent death still spends a strike.
+        action, body = self._drive(claude_outcome="failure",
+                                   branch="agent/DRE-2911-x")
+        self.assertEqual(action, "requeue")
+        self.assertIn(dead_run.DEAD_TAG, body)
 
 
 class AtomicParkTest(unittest.TestCase):
