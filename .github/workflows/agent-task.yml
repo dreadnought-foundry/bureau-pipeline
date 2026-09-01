@@ -745,11 +745,11 @@ jobs:
             # the card sat In Progress for seven and a half hours while its own
             # comment said it was in Backlog, and nothing retried it, because
             # the label is what tells every sweep a held card is already
-            # handled. `dead_run.py park` writes the STATE first and the label
-            # second, retries each, and rolls back rather than leave half a
-            # park behind; when it writes neither it exits nonzero and the
-            # receipt above says so instead of claiming a hold that never
-            # happened. The sweep re-attempts on its next pass.
+            # handled. `dead_run.py park` retries each write and takes its OWN
+            # label back off if the state never lands, so neither survives
+            # alone; when it writes neither it exits nonzero and the receipt
+            # above says so instead of claiming a hold that never happened.
+            # The sweep re-attempts on its next pass.
             if [ "$ACTION" = "hold-unlanded" ]; then
               echo "::error title=Park did not land::$CARD reached the dead-run cap but Linear refused the writes — the card is NOT parked and carries no label. The reconcile sweep re-attempts it."
             elif [ "$ACTION" = "requeue" ]; then
