@@ -115,7 +115,6 @@ import time
 from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
 import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE-2316)
 # DRE-2687: ONE source for the critic's own alert tag — the aged-Intake
@@ -147,6 +146,10 @@ import plan_run  # noqa: E402
 # The tags below stay exactly where they are — they are live idempotency keys
 # and per-sha budget counters, not prose.
 import pipeline_act  # noqa: E402
+# DRE-2676: ONE source for "what is a dependency" — the formal `blocks`
+# relations are the gate, the description's declaring lines are evidence, and a
+# claim the board does not corroborate is a defect in the card.
+import prose_blockers  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
@@ -462,6 +465,20 @@ _write_failures: list[str] = []
 #: Read failures (unreadable PR lookups) collected the same way — the sweep
 #: skips the unreadable card, sweeps the rest, and still exits 1 (DRE-2034).
 _read_failures: list[str] = []
+
+#: Card defects the sweep has been reporting for longer than the window and
+#: nobody has fixed (DRE-2676). A THIRD ledger rather than a write failure,
+#: because it is neither: nothing failed, a card is wrong. It joins the same
+#: exit-1 so there is one place a red sweep is decided — the escalation an EPIC
+#: gets in place of the lane move a defective CARD gets, since Triaging an epic
+#: would dispatch a planning run at a problem that is a sentence.
+_stale_defects: list[str] = []
+
+#: How long a prose defect may stand before the sweep goes red for it. Two
+#: hours ≈ eight sweeps: long enough that the run that FINDS one stays green
+#: and whoever is looking at the card can fix it, short enough that an ignored
+#: defect reaches the medic the same working day.
+PROSE_DEFECT_RED_MINUTES = 120
 
 
 def gh_read(*args: str) -> str:
@@ -1734,36 +1751,13 @@ def card_state(identifier: str) -> str:
     return data["issue"]["state"]["name"]
 
 
-def blockers_of(card: dict) -> set[str]:
-    """Every live blocker of `card`: its non-terminal formal `blocks` relations,
-    plus every DRE-N on a description line that DECLARES a dependency
-    (`blocker_prose` — a mention is not a declaration; DRE-2670/DRE-2922)."""
-    found: set[str] = set()
-    for rel in card["inverseRelations"]["nodes"]:
-        if rel["type"] == "blocks" and rel["issue"]["state"]["name"] not in (
-            "Done",
-            "Canceled",
-            "Duplicate",
-        ):
-            found.add(rel["issue"]["identifier"])
-    # A card's own id and its PARENT EPIC's id are never blockers: an epic
-    # only closes when its children finish, so an epic ref on a blocker line
-    # deadlocks the card forever (bit DRE-1207, DRE-1216, and DRE-1233 —
-    # "Serialize after: all other DRE-1200 work"). The planner brief bans
-    # epic ids on blocker lines; this makes the gate immune regardless.
-    parent_id = (card.get("parent") or {}).get("identifier")
-    for ref in blocker_prose.blocker_ids(card["description"]):
-        if ref not in (card["identifier"], parent_id):
-            found.add(ref)
-    return found
-
-
 def _fetch_epic_relations(epic_identifier: str) -> dict | None:
     """Read an epic's identifier, description, and `blocked-by` relations.
 
-    Returns the same shape `blockers_of` consumes (identifier, description,
-    inverseRelations) so the epic-level gate can reuse it verbatim. Returns
-    None on any read failure so callers can fail SAFE (DRE-1772).
+    Returns the same shape `prose_blockers` consumes (identifier, description,
+    inverseRelations) so the epic-level gate reads a card and an epic with one
+    set of functions. Returns None on any read failure so callers can fail SAFE
+    (DRE-1772).
     """
     try:
         data = linear_ops.gql(
@@ -1782,67 +1776,100 @@ def _fetch_epic_relations(epic_identifier: str) -> dict | None:
 
 
 def epic_blockers_unmet(epic_identifier: str) -> bool:
-    """True if EPIC `epic_identifier` is itself blocked-by another epic/card
-    that is not yet Done — in which case none of its children may promote this
-    sweep (DRE-1772, epic-level gate).
+    """True if EPIC `epic_identifier` may not release its children this sweep
+    (DRE-1772, epic-level gate).
 
-    Reuses the exact card-level blocker detection (`blockers_of`: native
-    `blocks` relations + "Blocked by:/serialize after/depends on" description
-    lines), just applied to the epic. A blocker counts as MET only when its
-    state is Done/Canceled/Duplicate. Fails SAFE: if the epic's relation data
-    can't be read, returns True (treat as blocked, do not promote).
+    Two different facts, both of which hold the children, and the log says which:
 
-    Logs WHICH KIND of blocker holds the epic (DRE-2670): a formal relation and
-    a description line that no relation corroborates are different facts with
-    different fixes, and "this epic is frozen by its own documentation" is the
-    one nobody ever noticed — the sweep stayed green while it printed.
+      * a formal `blocks` relation to something that is not terminal — an
+        ordinary, correct dependency. The relation carries its blocker's state
+        inline, so a relation blocker needs no extra read to evaluate;
+      * a PROSE DEFECT (DRE-2676) — the description declares a dependency the
+        board holds no relation for. That is not a dependency, it is a sentence
+        that is wrong, and the sweep will not release work under an epic that
+        says something about itself the board contradicts.
+
+    The second is the same rule the card gate now applies, and it must be: if
+    the card gate stops honouring prose and this one keeps honouring it, the
+    system holds two answers to "is prose authoritative" — the drift this work
+    exists to end. What differs is the ESCALATION. A card is routed to Triage;
+    an epic is not moved at all, because `advance_unblocked_epics` moves an epic
+    to Triage to trigger the planner and a planning run cannot fix a sentence.
+    The epic's escalation is time: `_report_epic_prose_defect` turns the run red
+    once the defect has stood for PROSE_DEFECT_RED_MINUTES.
+
+    Fails SAFE: if the epic's relation data can't be read, returns True (treat
+    as blocked, do not promote).
     """
     epic = _fetch_epic_relations(epic_identifier)
     if epic is None:
         return True  # ambiguous/unreadable -> fail safe (blocked)
     epic.setdefault("parent", None)
     epic.setdefault("identifier", epic_identifier)
-    # Native `blocks` relations: `blockers_of` already filters these to
-    # NON-terminal blockers (state not in Done/Canceled/Duplicate), reading the
-    # state inline from the relation — so any relation-blocker it returns is, by
-    # construction, unmet and needs no extra fetch.
-    relation_blockers = {
-        rel["issue"]["identifier"]
-        for rel in epic["inverseRelations"]["nodes"]
-        if rel["type"] == "blocks"
-    }
-    for blocker in sorted(blockers_of(epic)):  # sorted: a deterministic log line
-        if blocker in relation_blockers:
-            print(
-                f"epic-gate: {epic_identifier} is held by a formal blockedBy "
-                f"relation on {blocker}, which is not Done"
-            )
-            return True  # relation blocker, already known non-terminal
-        # A description-line blocker ("Blocked by: DRE-N"): state unknown, fetch.
-        try:
-            state = card_state(blocker)
-        except linear_ops.LinearError as e:
-            # A reference that doesn't resolve (typo'd id) must not kill the
-            # sweep (DRE-2035) — same fail-safe as unreadable relation data:
-            # treat the epic as blocked, loudly, and keep sweeping.
-            print(
-                f"epic-gate: blocker reference {blocker} on {epic_identifier} "
-                f"doesn't resolve ({e}) — treating epic as blocked"
-            )
-            return True
-        if state not in ("Done", "Canceled", "Duplicate"):
-            # PROSE ONLY: a description line declares this blocker and no formal
-            # relation corroborates it. The gate still honors it (prose has been
-            # load-bearing since DRE-1233), but it says so — an epic frozen by
-            # its own documentation should be readable as exactly that, not as
-            # an ordinary dependency (DRE-2670).
-            print(
-                f"epic-gate: {epic_identifier} is held by PROSE ONLY — a description "
-                f"line declares {blocker} ({state}) a blocker and no formal blockedBy "
-                "relation corroborates it; set the relation or reword the line"
-            )
-            return True
+    # The defect first: an epic can be BOTH legitimately blocked and wrong about
+    # itself, and the wrong sentence is the one nobody is coming to fix unless
+    # something says so.
+    undeclared = prose_blockers.undeclared_claims(epic)
+    if undeclared:
+        print(
+            f"epic-gate: {epic_identifier} is held by a PROSE DEFECT "
+            f"({prose_blockers.CARD_TAG}) — its description declares "
+            f"{', '.join(sorted(undeclared))} a blocker and no formal blockedBy "
+            "relation corroborates it; set the relation or reword the line"
+        )
+        _report_epic_prose_defect(epic_identifier, undeclared)
+        return True
+    states = prose_blockers.blocker_states(epic)
+    for blocker in sorted(prose_blockers.relation_blockers(epic)):  # deterministic
+        print(
+            f"epic-gate: {epic_identifier} is held by a formal blockedBy "
+            f"relation on {blocker} ({states[blocker]}), which is not Done"
+        )
+        return True
     return False
+
+
+def _report_epic_prose_defect(epic_identifier: str, claims: set[str]) -> None:
+    """Say the epic's prose defect ONCE, and turn the run red once it is stale.
+
+    Everything here is reporting, so nothing here may raise: `epic_blockers_unmet`
+    is called per epic per sweep from the promotion gate AND from
+    `advance_unblocked_epics`, which has no read-guard of its own.
+
+    The clock is the receipt's own age. "How long has this stood" is a question
+    only the record can answer, and the record is the comment the first sweep
+    that noticed posted — never elapsed time since some adjacent event
+    (`standards/console-honesty.md`, rule 1). A defect found this minute is not
+    an ignored defect; one still standing two hours later is, and by then it has
+    survived roughly eight sweeps.
+    """
+    _surface_once(
+        epic_identifier,
+        prose_blockers.EPIC_TAG,
+        prose_blockers.epic_refusal(epic_identifier, claims),
+    )
+    try:
+        first_seen = linear_ops.first_comment_at(epic_identifier, prose_blockers.EPIC_TAG)
+    except linear_ops.LinearError as e:
+        # Unknown is not "fresh" and it is not "stale" either — it is unknown,
+        # so nothing is claimed. The next sweep asks again.
+        print(
+            f"ERROR: could not read how long {epic_identifier}'s prose defect "
+            f"has stood: {e}",
+            file=sys.stderr,
+        )
+        return
+    if first_seen is None:
+        return  # nothing on the card yet — this sweep is the one that spoke
+    age = age_minutes(first_seen)
+    if age >= PROSE_DEFECT_RED_MINUTES:
+        entry = (
+            f"{epic_identifier}: a prose blocker declaring "
+            f"{', '.join(sorted(claims))} with no blockedBy relation has stood "
+            f"for {age / 60:.1f}h"
+        )
+        _stale_defects.append(entry)
+        print(f"ERROR: {entry}", file=sys.stderr)
 
 
 def advance_unblocked_epics(done_epic: str) -> None:
@@ -2015,6 +2042,42 @@ def _surface_once(identifier: str, tag: str | None, notice: str) -> None:
         )
 
 
+def _route_to_defect_lane(identifier: str) -> None:
+    """Move a card whose own text is malformed into the broken-card lane
+    (DRE-2676).
+
+    Triage, not Green Light: the lane contract's Triage entrance is exactly
+    this — "the card itself is malformed and cannot proceed as written" — and a
+    sentence that claims a dependency the board does not hold is a mechanical
+    fix, not a decision. Green Light is the queue that costs CEO time.
+
+    A move rather than a comment alone, for DRE-2687's reason: about 480
+    consecutive green sweeps once printed, in plain English, the exact reason
+    five cards were frozen, and nobody read one. A report is a record; a move is
+    a gate.
+
+    IDEMPOTENT BY CONSTRUCTION, which is why the move is not tag-guarded the
+    way the notice is: `cmd_advance` is guarded on the from-lane, so a card
+    already in Triage — or one a human moved mid-sweep — is left alone, and a
+    card that IS still in Backlog with the defect unfixed is one the sweep
+    should route again rather than leave sitting (the failure mode where the
+    first sweep's comment landed and its move did not). The next sweep does not
+    see the card at all: it is no longer a Backlog candidate.
+
+    A WRITE, so its failure is a write failure: the ledger fails the run red for
+    medic, and it never blocks the rest of the sweep.
+    """
+    try:
+        linear_ops.cmd_advance(identifier, prose_blockers.DEFECT_LANE, "Backlog")
+    except linear_ops.LinearError as e:
+        _write_failures.append(f"{identifier} prose-blocker triage move: {e}")
+        print(
+            f"ERROR: failed to move {identifier} to "
+            f"{prose_blockers.DEFECT_LANE}: {e}",
+            file=sys.stderr,
+        )
+
+
 def promote_ready(active_count: int) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -2113,16 +2176,42 @@ def promote_ready(active_count: int) -> int:
                 f"not active ({parent['state']['name']}) — skipping"
             )
             continue
-        # Per-card isolation (DRE-2035): everything from here on reads Linear
-        # per THIS card — a blocker reference that doesn't resolve raises
-        # LinearError, which must skip this one card (loudly, with a one-time
-        # comment), never kill the gate for the rest of the fleet.
-        # The read-guard covers ONLY the gate-evaluation reads: a LinearError
-        # here means a blocker reference doesn't resolve, so this one card is
-        # skipped as unevaluable (DRE-2035). The mutations that follow are
+        # A dependency is a `blockedBy` relation (DRE-2676). A description line
+        # that CLAIMS one the board does not hold is a defect in the card, not a
+        # dependency — so it refuses the card, out loud, and routes it, rather
+        # than adding a phantom blocker nothing will ever clear.
+        #
+        # Checked first, and outside the read-guard below, because it is pure
+        # computation over the card this sweep already fetched: no Linear read,
+        # and the sentence is wrong whatever the card's epic, verdict or
+        # blockers say.
+        undeclared = prose_blockers.undeclared_claims(card)
+        if undeclared:
+            notice = prose_blockers.card_refusal(card["identifier"], undeclared)
+            print(
+                f"promotion: {card['identifier']} is not being promoted — "
+                f"{notice.splitlines()[0]}"
+            )
+            # Told once, then routed. Both are WRITES, so both sit outside the
+            # read-guard and neither may end the sweep for anyone else.
+            _surface_once(card["identifier"], prose_blockers.CARD_TAG, notice)
+            _route_to_defect_lane(card["identifier"])
+            continue
+        # Per-card isolation (DRE-2035): everything from here on may read Linear
+        # per THIS card, and a LinearError from any of those gate-evaluation
+        # reads must skip this one card (loudly, with a one-time comment), never
+        # kill the gate for the rest of the fleet. The mutations that follow are
         # DELIBERATELY outside it — a write failure there is a write failure,
         # not a bad reference, and must not stamp the card with a false
         # "reference doesn't resolve" diagnostic (critic PR #89).
+        #
+        # Since DRE-2676 the reads inside report their own failures and return
+        # (`_fetch_epic_relations`, `mid_epic.last_green_light`), and the gate
+        # no longer resolves a prose reference's state at all — so the typo'd id
+        # this guard was built for is now caught above and routed. The guard
+        # stays because this is where the gate's reads live, and an unguarded
+        # one added later is what took the whole fleet's sweep down.
+        #
         # Two refusals can hold a card here, each with its own idempotency tag
         # so one does not silence the other's notice (DRE-2739, DRE-2724).
         refusal: str | None = None
@@ -2144,32 +2233,24 @@ def promote_ready(active_count: int) -> int:
                         "an unfinished epic — skipping"
                     )
                     continue
-            # The relation-declared blockers, read inline off the query — the
-            # same split the epic gate makes (`epic_blockers_unmet`), because a
-            # formal relation and a description line no relation corroborates
-            # are different facts with different fixes (DRE-2670).
-            relation_blockers = {
-                rel["issue"]["identifier"]
-                for rel in card["inverseRelations"]["nodes"]
-                if rel["type"] == "blocks"
-            }
-            unmet = {
-                b: card_state(b) for b in sorted(blockers_of(card))
-            }
-            unmet = {
-                b: s for b, s in unmet.items() if s not in ("Done", "Canceled", "Duplicate")
-            }
+            # THE GATE (DRE-2676): the non-terminal formal `blocks` relations,
+            # and nothing else. Read inline off the query the candidates came
+            # from — a relation carries its blocker's state, so a blocker it
+            # returns is unmet by construction and the gate never spends a
+            # read per blocker per card per sweep to learn what it was handed.
+            states = prose_blockers.blocker_states(card)
+            unmet = sorted(prose_blockers.relation_blockers(card))
             if unmet:
                 # This is the exit that froze DRE-2826 for a sweep while saying
                 # nothing at all (DRE-2918): the card was held by a formal
                 # blockedBy relation to DRE-2825, then In Review, and the run
                 # mentioned the card zero times. Name the blocker, its state,
-                # and its SOURCE.
+                # and its SOURCE — which since DRE-2676 is always a relation,
+                # said out loud rather than assumed, because "declared by a
+                # description line" is now a defect and never a hold.
                 held = "; ".join(
-                    f"{b} ({s}), declared by "
-                    + ("a formal blockedBy relation" if b in relation_blockers
-                       else "a description line")
-                    for b, s in unmet.items()
+                    f"{b} ({states[b]}), declared by a formal blockedBy relation"
+                    for b in unmet
                 )
                 print(f"promotion: {card['identifier']} is held by {held} — skipping")
                 continue
@@ -4497,9 +4578,13 @@ def main(
     promote_ready(active_count=len(mine))
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {len(mine)})")
-        if _write_failures:
+        # The event-driven gate runs the epic gate too, so it can find a stale
+        # prose defect — and a red run is the epic's whole escalation, so it
+        # must be red on this path as well (DRE-2676).
+        if _write_failures or _stale_defects:
             sys.exit(
-                f"reconcile: {len(_write_failures)} write failure(s) — see ERROR lines above"
+                f"reconcile: {len(_write_failures)} write failure(s), "
+                f"{len(_stale_defects)} unfixed card defect(s) — see ERROR lines above"
             )
         return
     for card in mine:
@@ -4715,13 +4800,16 @@ def main(
     report_fix_concurrency()
     report_evicted_fix_runs()
     print(f"sweep complete: {nudges} nudge(s)")
-    if _write_failures or _read_failures:
+    if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
-        # when a write we claimed to make didn't happen (DRE-1254 lesson) or
-        # when a card's PR state was unreadable (DRE-2034 lesson).
+        # when a write we claimed to make didn't happen (DRE-1254 lesson), when
+        # a card's PR state was unreadable (DRE-2034 lesson), or when a card
+        # defect the sweep reported hours ago is still standing (DRE-2676 —
+        # a report nobody reads is how five cards froze for five days).
         sys.exit(
             f"reconcile: {len(_write_failures)} write / {len(_read_failures)} read "
-            "failure(s) — see ERROR lines above"
+            f"failure(s), {len(_stale_defects)} unfixed card defect(s) — see "
+            "ERROR lines above"
         )
 
 

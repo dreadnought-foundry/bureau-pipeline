@@ -34,18 +34,35 @@ right and the gate is a no-op.
   cards; its absence is normal. (See `standards/design.md`.)
 - **`**Spec:** openspec/changes/<id>/`** — only when the work needs a
   cross-component contract; read it before coding.
-- **`**Blocked by:** DRE-N, DRE-M`** — a body line the console parses into the
-  dependency gate. It must **open its own line** (`Blocked by:` /
-  `Serialize after:` / `Depends on:`, optionally inside a list item — bulleted
-  or numbered — or bold markup) — the gate reads a declaration, never a
-  mention, so an ordinary sentence that happens to say "blocked by" or
-  "depends on" is just prose
-  (DRE-2670: epic DRE-2492 froze five of its own children for five days on the
-  sentence *"neither depends on the other"*). **Never name the parent epic
-  here** (epics stay In Progress → deadlock). Also set the Linear formal
-  `blockedBy` relation — that relation is the source of truth the
-  reconcile/auto-close gates honor; prose is not, and an epic held by prose
-  alone now says so in the sweep log.
+- **A dependency is a Linear `blockedBy` relation.** That relation is the
+  dependency — the only thing the promotion gate, the epic gate, the console
+  and the auto-close path read. Linear models dependencies natively and renders
+  them in the UI; leverage what the source system already tracks rather than
+  reinventing it with our own tag. **Never name the parent epic** as a blocker
+  (epics stay In Progress → deadlock).
+- **`**Blocked by:** DRE-N, DRE-M`** — an optional body line that DOCUMENTS the
+  relation for human readers. It is not the dependency and cannot create one.
+  `linear_ops.py` materialises the line into real `blockedBy` relations at
+  creation (`subissue` / `oneoff`), so writing it is the easiest way to GET the
+  relation — and if the relation is not there afterwards, the sentence is
+  wrong. To be read as a declaration at all it must **open its own line**
+  (`Blocked by:` / `Serialize after:` / `Depends on:`, optionally inside a list
+  item — bulleted or numbered — or bold markup); a sentence that merely
+  mentions "blocked by" or "depends on" is ordinary prose (DRE-2670: epic
+  DRE-2492 froze five of its own children for five days on the sentence
+  *"neither depends on the other"*).
+- **A prose line claiming a dependency the board does not hold sends the card to
+  `Triage`** (DRE-2676). The sweep refuses to promote it, says so once on the
+  card naming both fixes — set the relation, or reword the line so it does not
+  open with a declaring phrase — and moves it to the broken-card lane; the card
+  returns to `Backlog`, where the gate re-evaluates it, never to `Todo`. The
+  refusal is named `prose-blocker-no-relation` in the sweep log and on the card.
+  On an EPIC the same defect refuses and comments but moves nothing, and the
+  sweep run goes red once it has stood two hours. Nothing rewrites a
+  description: the sentence is the author's to fix. Measured on 2026-08-31,
+  every one of the board's 44 prose declarations was corroborated by a relation
+  and none was prose-only — `python3 scripts/check_prose_blockers.py`
+  recomputes that, and the number is never remembered.
 - **Labels:** `initiative:<x>` (the cross-project filter); `no-code` for
   operator/non-build cards.
 - **`break-glass`** — the ONE sanctioned way past the Todo-entry gate at 2am

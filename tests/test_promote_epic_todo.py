@@ -37,20 +37,27 @@ def _pin_repo_slug(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
 
 
-def _child(parent_state: str, *, blocked_by: str = "", identifier: str = "DRE-2"):
+def _child(parent_state: str, *, blocked_by: str = "", identifier: str = "DRE-2",
+           blocker_state: str = "In Progress"):
     """A Backlog child of an epic in `parent_state`, repo by label, no agent
-    blocker. `blocked_by` adds a "Blocked by: DRE-N" description line so the
-    blocker gate can hold it; empty = no formal blocker."""
+    blocker. `blocked_by` gives it a real `blockedBy` relation — which is what
+    the gate reads (DRE-2676) — plus the `**Blocked by:**` line that documents
+    it for humans; empty = no blocker at all."""
     desc = "Wire the thing."
+    relations = []
     if blocked_by:
         desc += f"\n\n**Blocked by:** {blocked_by}"
+        relations.append({
+            "type": "blocks",
+            "issue": {"identifier": blocked_by, "state": {"name": blocker_state}},
+        })
     return {
         "identifier": identifier,
         "description": desc,
         "parent": {"identifier": "DRE-1", "state": {"name": parent_state}},
         "labels": {"nodes": [{"name": "agent:engineer"}, {"name": "repo:agent-bureau"}]},
         "comments": {"nodes": []},
-        "inverseRelations": {"nodes": []},
+        "inverseRelations": {"nodes": relations},
     }
 
 

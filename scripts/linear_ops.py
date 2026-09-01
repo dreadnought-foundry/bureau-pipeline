@@ -1238,6 +1238,35 @@ def cmd_count_comments(identifier: str, needle: str, *flags: str) -> None:
     print(count_comments(identifier, needle, since=since))
 
 
+def first_comment_at(identifier: str, needle: str) -> str | None:
+    """When the OLDEST comment containing `needle` was posted, ISO — or None.
+
+    "How long has this stood?" is a question only the record can answer, and
+    the record is the receipt the first sweep that noticed posted. The sweep's
+    prose-defect escalation (DRE-2676) reads its own comment's age rather than
+    inferring one from an adjacent signal — the console-honesty rule, applied
+    to a clock: elapsed time since the card was updated, or since the sweep
+    started, would each answer a question nobody asked.
+
+    OLDEST, not newest: `_surface_once` posts exactly one of these, so the two
+    agree today — but if a reset ever re-arms the notice, "since it was first
+    said" is the age that means what the caller thinks it means.
+
+    Same `comments(last: 50)` window every other reader here uses. None when no
+    comment carries the marker, which callers must treat as UNKNOWN rather than
+    as zero: nothing has been ignored if nothing was ever said.
+    """
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             comments(last: 50) { nodes { body createdAt } } } }""",
+        {"id": identifier},
+    )
+    for node in data["issue"]["comments"]["nodes"]:  # oldest -> newest
+        if needle in (node.get("body") or ""):
+            return node.get("createdAt") or None
+    return None
+
+
 def comment_bodies(identifier: str) -> list[str]:
     """All comment bodies on the card, oldest→newest. Used by the model-fallback
     selector (DRE-1354) to read which model each prior attempt used / died on."""
