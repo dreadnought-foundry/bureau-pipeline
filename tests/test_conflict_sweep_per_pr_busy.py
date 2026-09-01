@@ -69,7 +69,8 @@ def _fake_gh(listed, runs, jobs):
 
     def gh(*args):
         if args[:2] == ("run", "list"):
-            return json.dumps(runs)
+            # A str is a raw (possibly unparseable) payload, not a run list.
+            return runs if isinstance(runs, str) else json.dumps(runs)
         if args[0] == "api" and args[1].endswith("/jobs"):
             return json.dumps(jobs.get(int(args[1].rsplit("/", 2)[1]), []))
         if args[:2] == ("pr", "list"):
@@ -85,7 +86,10 @@ def _sweep(listed, runs=(), jobs=None, parked=()):
     calls = []
     out = io.StringIO()
     with mock.patch.object(
-        reconcile, "gh", side_effect=_fake_gh(listed, list(runs), jobs or {})
+        reconcile, "gh",
+        side_effect=_fake_gh(
+            listed, runs if isinstance(runs, str) else list(runs), jobs or {}
+        ),
     ), mock.patch.object(
         reconcile, "gh_dispatch", side_effect=lambda *a: calls.append(a)
     ), mock.patch.object(
@@ -186,9 +190,53 @@ class UnreadableStillBusyTest(unittest.TestCase):
         self.assertIn("unreadable", out.getvalue().lower())
 
     def test_unparseable_run_listing_defers_every_pr(self):
-        dispatched, log = _sweep([_pr(2206)], runs="not json")
+        before = list(reconcile._read_failures)
+        try:
+            dispatched, log = _sweep([_pr(2206)], runs="not json")
+        finally:
+            del reconcile._read_failures[len(before):]
         self.assertEqual(dispatched, [])
         self.assertIn("unreadable", log.lower())
+
+
+class AbsentStubIsNotUnreadableTest(unittest.TestCase):
+    """DRE-2525 survives the rewrite: a repo with no agent-fix stub has an
+    EMPTY lane, not an unreadable one — 61 consecutive red sweeps in 18h37m
+    came from conflating the two."""
+
+    def test_absent_workflow_leaves_the_lane_empty_and_dispatches(self):
+        from types import SimpleNamespace
+
+        calls = []
+        before = list(reconcile._read_failures)
+
+        def fake_run(argv, **kwargs):
+            calls.append(list(argv))
+            if argv[1:3] == ["run", "list"]:
+                return SimpleNamespace(
+                    returncode=1, stdout="",
+                    stderr="HTTP 404: Not Found (workflow does not exist)")
+            if argv[1:3] == ["pr", "list"]:
+                return SimpleNamespace(
+                    returncode=0, stdout=json.dumps([_pr(2206)]), stderr="")
+            return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+        try:
+            with mock.patch.dict(
+                os.environ, {"GH_DISPATCH_TOKEN": "ghs_dispatch"}
+            ), mock.patch.object(
+                reconcile.subprocess, "run", side_effect=fake_run
+            ), mock.patch.object(
+                reconcile, "workflow_on_default_branch", return_value=False
+            ), mock.patch.object(
+                reconcile, "card_parked_for_human", return_value=False
+            ), contextlib.redirect_stdout(io.StringIO()):
+                reconcile.unstick_conflicts()
+            dispatched = [c for c in calls if c[1:3] == ["workflow", "run"]]
+            self.assertEqual(len(dispatched), 1)
+            self.assertEqual(reconcile._read_failures[len(before):], [])
+        finally:
+            del reconcile._read_failures[len(before):]
 
 
 class UnattributedRunsAreCappedTest(unittest.TestCase):

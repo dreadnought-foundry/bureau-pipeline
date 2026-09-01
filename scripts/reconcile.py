@@ -2281,13 +2281,166 @@ CONFLICT_POLL_TRIES = 3
 CONFLICT_POLL_SECONDS = 20
 
 
-def _dispatch_conflict_fix(pr: dict) -> None:
-    """Dispatch the fix agent for one DIRTY agent PR (human-park gated)."""
+#: How many Agent Fix runs may be in flight before the conflict sweep stops
+#: dispatching (DRE-2908). This is the quota protection that used to be a
+#: workflow-wide boolean: the old guard's cap was effectively ONE, which is
+#: why a fix run on any branch stranded every other conflicted PR. Three
+#: keeps the burst bounded — the fix lane serializes per PR on its own
+#: concurrency group, so three in flight are three distinct branches — while
+#: leaving the queue able to drain. Overridable for a repo that wants a
+#: different ceiling.
+CONFLICT_FIX_CAP = int(os.environ.get("CONFLICT_FIX_CAP", "3"))
+
+
+class FixLane:
+    """What the Agent Fix lane is working right now, per pull request.
+
+    The conflict route dispatches PER PR (`-f pr_number=N`), so "is the fix
+    agent busy?" was always the wrong question: runs on different branches are
+    independent work. This answers the right one — is a run in flight FOR THIS
+    PR — and falls back to a cap for the runs GitHub will not attribute.
+
+    `by_pr` is exact and suppresses: two fix agents must never push one
+    branch. `unattributed` is a count and only ever bounds: a run pending on
+    its concurrency group lists zero jobs, and a repo on a release tag older
+    than DRE-2908 names its job without the PR number, so "unattributed" means
+    "could be any PR" — treating it as "is this PR" is the defect this class
+    replaces.
+    """
+
+    def __init__(self, by_pr: dict[int, object], unattributed: int) -> None:
+        self.by_pr = dict(by_pr)
+        self.unattributed = int(unattributed)
+
+    def in_flight(self) -> int:
+        return len(self.by_pr) + self.unattributed
+
+    def defer_reason(self, number: int) -> str | None:
+        """Why this PR must not be dispatched now, in words that name it —
+        or None to go ahead. The old line ("fix agent busy") named no PR at
+        all, so a reader could not tell "this PR is being worked" from "some
+        other PR is being worked" (DRE-2908)."""
+        run = self.by_pr.get(number)
+        if run is not None:
+            return (
+                f"conflict sweep: PR #{number} — Agent Fix run {run} is already "
+                f"in flight FOR THIS PR; not dispatching a second agent onto "
+                f"one branch"
+            )
+        if self.in_flight() >= CONFLICT_FIX_CAP:
+            others = ", ".join(f"#{n}" for n in sorted(self.by_pr)) or "none"
+            return (
+                f"conflict sweep: PR #{number} deferred — {self.in_flight()} "
+                f"Agent Fix run(s) in flight at the cap of {CONFLICT_FIX_CAP}, "
+                f"none of them #{number} (attributed: {others}; "
+                f"{self.unattributed} unattributed) — retry next sweep"
+            )
+        return None
+
+    def record_dispatch(self, number: int) -> None:
+        """A dispatch this sweep just made is in flight too — it counts
+        against the cap for the PRs after it, and it must never be dispatched
+        twice in one pass."""
+        self.by_pr[number] = "dispatched this sweep"
+
+
+def _fix_runs_in_flight(workflow: str) -> list[dict] | None:
+    """The Agent Fix runs GitHub says are queued or in progress.
+
+    **None means UNREADABLE and every caller fails closed** — the same answer
+    `_actions_runs_busy` gives, and for the same reason: deferring one sweep
+    costs 15 minutes, while dispatching off a fabricated empty list
+    burst-drains the App and LLM quotas (2026-06-28). Only the SCOPE of the
+    deferral changed (DRE-2908), never this.
+
+    A workflow ABSENT from the target repo is a third answer, not a failure
+    (DRE-2525): no run of a file that does not exist can be in flight, so the
+    lane is empty and the sweep stays green.
+    """
+    args = ("run", "list", "--repo", REPO, "--workflow", workflow,
+            "--limit", "10", "--json", "status,databaseId")
+    out, detail = _actions_read(args)
+    if detail is not None:
+        if workflow_on_default_branch(workflow) is False:
+            print(
+                f"busy-guard: {workflow} is not on {REPO}'s default branch — "
+                "this repo has no such stub, so no run of it can be in "
+                "flight. Nothing to check, and nothing to report."
+            )
+            return []
+        _note_actions_read_failure(args, detail)
+        return None
+    if out is None:
+        return None
+    try:
+        runs = json.loads(out or "[]")
+    except ValueError:
+        _read_failures.append(
+            f"unparseable run listing for {workflow}: {out[:200]!r}")
+        return None
+    if not isinstance(runs, list):
+        _read_failures.append(
+            f"unparseable run listing for {workflow}: {out[:200]!r}")
+        return None
+    return [
+        r for r in runs
+        if isinstance(r, dict) and r.get("status") in ("queued", "in_progress")
+    ]
+
+
+def _fix_run_pr(run_id) -> int | None:
+    """Which PR one in-flight Agent Fix run is working — read from its job
+    name, the only place the number survives into the Actions API (see
+    fix_concurrency.JOB_PR_PREFIX). None is UNATTRIBUTED, never "no PR".
+
+    One extra call per IN-FLIGHT run only, so a healthy sweep with an idle
+    lane costs exactly what it did before. Same shape as
+    `_fix_run_job_count`, which reads the same endpoint for DRE-2810.
+    """
+    args = ("api", f"repos/{REPO}/actions/runs/{run_id}/jobs",
+            "--jq", "[.jobs[].name]")
+    out, detail = _actions_read(args)
+    if detail is not None:
+        _note_actions_read_failure(args, detail)
+        return None
+    try:
+        names = json.loads(out) if out else []
+    except ValueError:
+        names = []
+    return fix_concurrency.pr_of_job_names(
+        names if isinstance(names, list) else [])
+
+
+def fix_lane_state() -> FixLane | None:
+    """Read the fix lane once per sweep. None when the listing is unreadable —
+    the caller defers the WHOLE sweep, unchanged."""
+    runs = _fix_runs_in_flight(fix_workflow())
+    if runs is None:
+        return None
+    by_pr: dict[int, object] = {}
+    unattributed = 0
+    for run in runs:
+        number = _fix_run_pr(run.get("databaseId"))
+        if number is None:
+            unattributed += 1
+        else:
+            by_pr.setdefault(number, run.get("databaseId"))
+    return FixLane(by_pr, unattributed)
+
+
+def _dispatch_conflict_fix(pr: dict, lane: FixLane) -> None:
+    """Dispatch the fix agent for one DIRTY agent PR (human-park + per-PR
+    busy gated)."""
     if fix_dispatch_blocked(pr):
         return  # human-parked card (DRE-2024) — the loop is over
+    reason = lane.defer_reason(pr["number"])
+    if reason:
+        print(reason)
+        return
     print(f"conflict: PR #{pr['number']} ({pr['headRefName']}) DIRTY — dispatching fix agent")
     gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                 "-f", f"pr_number={pr['number']}")
+    lane.record_dispatch(pr["number"])
 
 
 def unstick_conflicts() -> None:
@@ -2308,12 +2461,26 @@ def unstick_conflicts() -> None:
     (bounded: CONFLICT_POLL_TRIES × CONFLICT_POLL_SECONDS) until each
     resolves, then acted on — at most one dispatch per PR per invocation.
     Still UNKNOWN at the cap: log loudly and leave it to the cron backstop.
+
+    The busy guard is PER PR (DRE-2908). It used to ask "is any Agent Fix run
+    queued or in progress?" — workflow-wide — while the dispatch below is per
+    PR number, so a fix run on PR A blocked the sweep from ever reaching
+    conflicted PR B. On a busy night the lane is rarely idle and the sweep
+    deferred forever: agent-bureau #2206 sat 1h40m carrying an APPROVING
+    verdict and took a hand dispatch, while its sibling #2207 resolved only
+    because the lane happened to clear. Every agent in that trace behaved
+    correctly; the wrong loop answered. What did NOT change is what an
+    unreadable read means — still BUSY, still the whole sweep.
     """
     # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
     # API, and the old `or "[]"` turned that into "nothing running" — the
     # backoff failed OPEN at every one of these sites.
-    if _actions_runs_busy(fix_workflow()):
-        print("conflict sweep: fix agent busy — retry next sweep")
+    lane = fix_lane_state()
+    if lane is None:
+        print(
+            "conflict sweep: the Agent Fix run listing was unreadable — "
+            "treating as BUSY and deferring the whole sweep; no PR dispatched"
+        )
         return
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
@@ -2327,7 +2494,7 @@ def unstick_conflicts() -> None:
         if status == "UNKNOWN":
             pending.append(pr)
         elif status == "DIRTY":
-            _dispatch_conflict_fix(pr)
+            _dispatch_conflict_fix(pr, lane)
     for attempt in range(1, CONFLICT_POLL_TRIES + 1):
         if not pending:
             return
@@ -2345,7 +2512,7 @@ def unstick_conflicts() -> None:
             ) or "{}")
             status = fresh.get("mergeStateStatus")
             if status == "DIRTY":
-                _dispatch_conflict_fix(fresh)
+                _dispatch_conflict_fix(fresh, lane)
             elif status in (None, "UNKNOWN"):
                 # Unreadable counts as unresolved — keep polling, never guess.
                 still_unknown.append(fresh or pr)

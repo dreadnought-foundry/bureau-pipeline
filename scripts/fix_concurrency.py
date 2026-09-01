@@ -495,6 +495,35 @@ RUNS_JQ = (
     "updated_at, actor: .actor.login, display_title, html_url}]"
 )
 
+#: How a run says which pull request it is working (DRE-2908). The Actions
+#: run listing carries NO PR attribution for a `workflow_dispatch` run —
+#: measured on this repo, `display_title` is the bare workflow name "Agent
+#: Fix" and `pull_requests` is empty — so the ONE place the number survives
+#: into the API is the job name, which the reusable agent-fix workflow builds
+#: from the same expression the concurrency group uses. Producer (the YAML)
+#: and consumer (this parser) are pinned together by
+#: tests/test_conflict_sweep_per_pr_busy.py.
+JOB_PR_PREFIX = "fix PR #"
+_JOB_PR = re.compile(re.escape(JOB_PR_PREFIX) + r"(\d+)")
+
+
+def pr_of_job_names(names) -> int | None:
+    """The pull request an Agent Fix run is working, read from its job names.
+
+    None means UNATTRIBUTED, never "no PR": GitHub lists zero jobs for a run
+    still pending on its concurrency group (see `never_started`), and a repo
+    pinned to a release tag older than DRE-2908 names its job without the
+    number. Callers must treat None as "could be any PR" and bound it with a
+    cap rather than blocking on it — blocking on it is the bug this exists to
+    end.
+    """
+    for name in names or []:
+        match = _JOB_PR.search(name or "")
+        if match:
+            return int(match.group(1))
+    return None
+
+
 TRIGGER_VERDICT = "verdict"   # a qa-bot REQUEST_CHANGES comment
 TRIGGER_NOTICE = "notice"     # the fix loop's own bookkeeping comment
 TRIGGER_DISPATCH = "dispatch"  # `gh workflow run` / the hand recovery
