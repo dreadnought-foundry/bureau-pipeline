@@ -55,11 +55,29 @@ client's "non-200 OK status code: 503"), or the CLI's self-identifying
 a card body quoted into an agent log — must NOT classify, or a genuine failure
 would be silently swallowed.
 
+THIRD CLASS — LINEAR RATE LIMIT (DRE-2923). On 2026-09-01 four consecutive
+reconcile sweeps in agent-bureau died because the Linear workspace's
+2500/hour quota was exhausted by read-only diagnostics minutes earlier. That
+is a transient, SELF-HEALING condition needing no code change at all — but it
+is not a defect in the estate either, and retrying into an exhausted quota
+deepens it exactly the way DRE-1921's loop did. So it gets the same shape as
+the two classes above: no retry, no diagnosis agent, one `::notice::`, and the
+medic's own run stays green. The sweep itself still exits non-zero, so a board
+that has stopped being reconciled never goes quiet.
+
+Detection is anchored to the CLIENT'S ERROR LINE — a single line naming
+Linear's API host AND carrying the rate-limit fingerprint (the `RATELIMITED`
+code, or the named condition the client now composes). Line-anchored for the
+same reason as the class above: DRE-2923's own card body quotes the
+RATELIMITED payload, so an agent-task log that merely repeats it must NOT
+classify, or a genuine failure would be silently swallowed.
+
 CLI:
     python3 medic_classify.py <workflow-name> <log-file>
 prints two lines — `infra_crash=true|false` (the DRE-1921 gate, unchanged) and
-`class=critic_infra_crash|upstream_5xx|normal` — plus a human line on stderr;
-exit 0 either way. The caller (medic.yml) reads the stdout lines.
+`class=critic_infra_crash|upstream_5xx|linear_ratelimited|normal` — plus a
+human line on stderr; exit 0 either way. The caller (medic.yml) reads the
+stdout lines.
 """
 
 from __future__ import annotations
@@ -123,10 +141,43 @@ def is_upstream_5xx(log_text: str) -> bool:
     return False
 
 
+# ── Linear rate limit (DRE-2923) ─────────────────────────────────────────────
+# Linear's API host. The client's error line always names the endpoint it
+# called (that is half of DRE-2923's fix); prose quoting a rate-limit body does
+# not. Requiring it ON THE SAME LINE as the fingerprint is what keeps this
+# card's own text, quoted into an agent log, out of this class.
+_LINEAR_API_HOST = "api.linear.app"
+
+# The fingerprints. `RATELIMITED` is Linear's own extension code, carried in
+# the body the client now captures; the second is the named condition
+# linear_ops composes in front of it (`rate limited: 2500 requests/hour
+# exhausted`) — matched so the class survives a body we truncated past the code.
+_LINEAR_RATELIMIT_SHAPES = (
+    re.compile(r"\bRATELIMITED\b"),
+    re.compile(r"rate limited:\s*[\d,]+\s+requests/\w+\s+exhausted", re.I),
+    re.compile(r"rate limited:\s*workspace request quota exhausted", re.I),
+)
+
+
+def is_linear_rate_limited(log_text: str) -> bool:
+    """True iff the failed run's logs show LINEAR answering a rate limit — a
+    self-healing quota exhaustion the medic must back off from (no retry, no
+    diagnosis), not a defect in the estate. Line-anchored on purpose: see the
+    module docstring.
+    """
+    for line in (log_text or "").splitlines():
+        if _LINEAR_API_HOST in line and any(
+            s.search(line) for s in _LINEAR_RATELIMIT_SHAPES
+        ):
+            return True
+    return False
+
+
 def classify(workflow_name: str, log_text: str) -> str:
     """The failed run's class: `critic_infra_crash` (DRE-1921 — back off, the
     reviewer was down), `upstream_5xx` (DRE-2488 — GitHub is down, back off),
-    or `normal` (retry once, then diagnose).
+    `linear_ratelimited` (DRE-2923 — the workspace quota is exhausted, back
+    off), or `normal` (retry once, then diagnose).
 
     The critic infra-crash is checked FIRST so its established handling (the
     plain-English "reviewer down" note on the card) is untouched.
@@ -135,6 +186,8 @@ def classify(workflow_name: str, log_text: str) -> str:
         return "critic_infra_crash"
     if is_upstream_5xx(log_text):
         return "upstream_5xx"
+    if is_linear_rate_limited(log_text):
+        return "linear_ratelimited"
     return "normal"
 
 
@@ -185,6 +238,14 @@ def main(argv: list[str]) -> int:
             "medic classify: UPSTREAM OUTAGE — GitHub's API returned 5xx. "
             "Backing off: no retry (it would hit the same outage), no "
             "diagnosis (nobody in the fleet can fix GitHub).",
+            file=sys.stderr,
+        )
+    elif kind == "linear_ratelimited":
+        print(
+            "medic classify: LINEAR RATE LIMIT — the workspace request quota is "
+            "exhausted. Backing off: no retry (it would deepen the limit), no "
+            "diagnosis (there is no defect to find). The quota refills on its "
+            "own and the next scheduled sweep reconciles the board.",
             file=sys.stderr,
         )
     else:

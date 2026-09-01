@@ -28,6 +28,19 @@
 # themselves) nor diagnoses (GitHub is not ours to fix) — it emits one
 # ::notice:: naming the outage and ENDS GREEN, so no red email goes out.
 #
+# THIRD EXCEPTION (DRE-2923): a LINEAR RATE LIMIT is a self-healing quota
+# exhaustion, not a defect in the estate. On 2026-09-01 four consecutive
+# reconcile sweeps in agent-bureau died on it — Linear answers a rate limit
+# with HTTP 400 on the wire and 429 only inside the response body, so the log
+# said `HTTP Error 400: Bad Request` and nothing else, which reads as OUR
+# request being malformed. The workspace's 2500/hour quota had simply been
+# exhausted. So on class `linear_ratelimited` the medic neither retries
+# (re-running into an exhausted quota deepens it — the DRE-1921 loop) nor
+# diagnoses (there is no defect to find, and the diagnosis agent would burn
+# more of the same quota): one ::notice::, and the medic run ENDS GREEN. The
+# sweep's own run still exits non-zero, so a board that has stopped being
+# reconciled never goes quiet.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -71,9 +84,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
-      # DRE-2488: the failure's class — critic_infra_crash | upstream_5xx |
-      # normal. The classifier prints both lines; infra_crash stays as-is so
-      # the DRE-1921 gates below are untouched.
+      # DRE-2488/DRE-2923: the failure's class — critic_infra_crash |
+      # upstream_5xx | linear_ratelimited | normal. The classifier prints both
+      # lines; infra_crash stays as-is so the DRE-1921 gates below are
+      # untouched.
       class: ${{ steps.c.outputs.class }}
     steps:
       - uses: actions/checkout@v7
@@ -111,7 +125,8 @@ jobs:
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1 &&
       needs.classify.outputs.infra_crash != 'true' &&
-      needs.classify.outputs.class != 'upstream_5xx'
+      needs.classify.outputs.class != 'upstream_5xx' &&
+      needs.classify.outputs.class != 'linear_ratelimited'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -182,13 +197,42 @@ jobs:
         run: |
           echo "::notice::Upstream GitHub outage — the GitHub API returned 5xx (502/503/504), so ${FAILED_WORKFLOW} could not finish. This is an outage at GitHub, not a pipeline failure: not retrying (the retry hits the same outage) and not diagnosing (nobody here can fix GitHub). The workflow runs again on its own. Failed run: ${RUN_URL}"
 
+  # Linear rate-limit back-off (DRE-2923). The workspace request quota is
+  # exhausted, which is a transient, SELF-HEALING condition and not a defect in
+  # the estate: there is nothing to retry (re-running into an exhausted quota
+  # deepens it, the DRE-1921 loop) and nothing to diagnose (the diagnosis agent
+  # would burn more of the same quota to report "we were over quota"). One
+  # ::notice:: naming the condition, and this job ENDS GREEN so the failure is
+  # not escalated as a defect. The failing workflow's OWN run stays red — a
+  # board that has stopped being reconciled must still say so — and it recovers
+  # by itself: the quota refills within the hour and scheduled sweeps re-run.
+  # No attempt gate, for the same reason as upstream_outage above: a notice is
+  # a per-run annotation, so repeating it on a rerun costs nothing.
+  linear_rate_limited:
+    needs: classify
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      needs.classify.outputs.class == 'linear_ratelimited'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Note the Linear rate limit — no rerun, no diagnosis
+        env:
+          # env, not inline ${{ }} (DRE-1996): keep run-supplied text out of
+          # the shell line.
+          FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          echo "::notice::Linear rate limit — the workspace request quota is exhausted, so ${FAILED_WORKFLOW} could not finish. This is a transient, self-healing condition, NOT a defect in the estate: not retrying (the retry deepens the limit) and not diagnosing (there is no defect to find). The quota refills on its own and the workflow runs again. Failed run: ${RUN_URL}"
+
   diagnose:
     needs: classify
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt >= 2 &&
       needs.classify.outputs.infra_crash != 'true' &&
-      needs.classify.outputs.class != 'upstream_5xx'
+      needs.classify.outputs.class != 'upstream_5xx' &&
+      needs.classify.outputs.class != 'linear_ratelimited'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
