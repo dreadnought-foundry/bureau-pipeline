@@ -13,7 +13,11 @@ Subcommands:
   advance <DRE-N> <to-state> <from-states-csv>
                                        move ONLY if current state is in the csv
                                        (guards against dragging Done cards back)
-  comment <DRE-N> <body>               add a comment to a card
+  comment <DRE-N> <body> [--act=<name>]
+                                       add a comment to a card. With --act the
+                                       body is composed as that pipeline act's
+                                       receipt — byte-identical, plus the
+                                       machine-readable trailer (DRE-2826).
   actor <DRE-N> <role>                 record WHICH agent acted on this card, in
                                        the one machine-readable form
                                        (scripts/agent_marker.py). The briefs tell
@@ -110,6 +114,7 @@ import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
 import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
 import mid_epic  # noqa: E402 — ONE source for "a card has no children" (DRE-2739)
+import pipeline_act  # noqa: E402 — ONE writer for an act's receipt (DRE-2825)
 
 API = "https://api.linear.app/graphql"
 
@@ -503,7 +508,27 @@ def set_description(identifier: str, body: str) -> None:
     print(f"{identifier} description updated")
 
 
-def cmd_comment(identifier: str, body: str) -> None:
+def cmd_comment(identifier: str, body: str, *flags: str) -> None:
+    """Comment on a card. `--act=<name>` composes the body as that act's
+    receipt (DRE-2826).
+
+    The flag is how a WORKFLOW reaches the one receipt writer: the conflict
+    sweep and the medic both post their receipt through this CLI, and building
+    a trailer in bash would be a second grammar for the same line. Without the
+    flag the body is posted exactly as it always was — every other caller of
+    this command is unchanged, which is what keeps the seam safe to add here.
+    """
+    act = None
+    for flag in flags:
+        if flag.startswith("--act="):
+            act = flag.split("=", 1)[1]
+        elif flag:
+            raise LinearError(f"comment: unknown option {flag!r}")
+    if act:
+        # Raises on an unknown act rather than posting the bare body: a
+        # receipt that quietly loses its trailer is the silence this whole
+        # mechanism exists to end.
+        body = pipeline_act.receipt(act, body)
     issue = get_issue(identifier)
     gql(
         """mutation($input: CommentCreateInput!) {

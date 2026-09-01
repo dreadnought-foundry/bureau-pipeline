@@ -72,6 +72,21 @@ jobs:
       # every failure. Nothing else in the repo reaches that class.
       - name: Workflow prompts name only live lanes
         run: python3 scripts/check_workflow_prompts.py
+      # The act registry, and the emission that makes it real (DRE-2825/2826).
+      # The first binds the registry to the code — every declared act is
+      # emitted, every emitted tag is declared. The second binds the code to
+      # the registry: every `gh pr comment` / `gh issue comment` /
+      # `_post_pr_note` / `linear_ops.cmd_comment` either composes its body
+      # through pipeline_act.receipt() or is named in the `unconverted` block
+      # with the reason — the last of those four being how a CARD comment is
+      # posted, which is most of them. Without the
+      # second, this stays true for exactly as long as nobody adds a recovery
+      # in a hurry — and a receipt with no trailer looks like nothing happened,
+      # which is the failure signature the whole wave is named after.
+      - name: Act registry binds to the code that emits it
+        run: python3 scripts/pipeline_act.py check
+      - name: Every receipt composes through the one writer
+        run: python3 scripts/check_act_receipts.py
 
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching

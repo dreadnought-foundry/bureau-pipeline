@@ -141,6 +141,12 @@ import mid_epic  # noqa: E402
 # DRE-2846: ONE source for "ask for this epic's planner run" — shared with the
 # wave's own turn, because nothing dispatches off the lane either path uses.
 import plan_run  # noqa: E402
+# DRE-2825/2826: ONE writer for an act's receipt. Every notice this sweep posts
+# for one of the ten acts declared in config/pipeline-acts.json goes through
+# receipt(), which returns the body BYTE-IDENTICALLY and appends the trailer.
+# The tags below stay exactly where they are — they are live idempotency keys
+# and per-sha budget counters, not prose.
+import pipeline_act  # noqa: E402
 # DRE-2291: ONE source for the head-bound review check's name — the sweep
 # must read the same record qa-review.yml writes.
 from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E402
@@ -1058,7 +1064,8 @@ def flag_stranded() -> set[str]:
                 f"Absent from this sweep's routing snapshot [{snapshot}]"
                 f"{live_confirmed}. Labeled '{HOLD_LABEL}' for a human."
             )
-        linear_ops.cmd_comment(ident, f"🚨 {WATCHDOG_TAG}: {reason}")
+        linear_ops.cmd_comment(ident, pipeline_act.receipt(
+            "card-stranded", f"🚨 {WATCHDOG_TAG}: {reason}"))
         linear_ops.add_label(ident, HOLD_LABEL)
         flagged.add(ident)
         print(f"watchdog: {ident} in {state} flagged ({'no-run' if routable else 'no-route'})")
@@ -1126,7 +1133,8 @@ def flag_stalled_planning() -> set[str]:
             f"the '{HOLD_LABEL}' label and it will carry on; otherwise this "
             "card needs a human to look."
         )
-        linear_ops.cmd_comment(ident, f"🚨 {WATCHDOG_TAG}: {reason}")
+        linear_ops.cmd_comment(ident, pipeline_act.receipt(
+            "card-stranded", f"🚨 {WATCHDOG_TAG}: {reason}"))
         linear_ops.add_label(ident, HOLD_LABEL)
         flagged.add(ident)
         print(f"watchdog: {ident} in Planning flagged (no-classification)")
@@ -1271,7 +1279,8 @@ def escalate_aged_intake() -> set[str]:
         try:
             # The reason is posted BEFORE the move (critic_score.escalate's
             # rule): a move that then fails still leaves the reason on the card.
-            linear_ops.cmd_comment(ident, intake_escalation_note(ident, age, reason))
+            linear_ops.cmd_comment(ident, pipeline_act.receipt(
+                "intake-overdue", intake_escalation_note(ident, age, reason)))
             linear_ops.cmd_advance(ident, ESCALATED_STATE, "Intake")
         except linear_ops.LinearError as e:
             # A move that did not happen NEVER reads as done: recorded as a
@@ -1975,10 +1984,13 @@ def skip_bad_reference(identifier: str, err: Exception) -> None:
         if linear_ops.count_comments(identifier, BAD_REF_TAG) == 0:
             linear_ops.cmd_comment(
                 identifier,
-                f"🚨 {BAD_REF_TAG}: a blocker reference on this card doesn't "
-                "resolve in Linear (likely a typo'd card id on a blocker "
-                "line) — fix the reference. The reconcile sweep skips this "
-                "card until then; the rest of the fleet is unaffected.",
+                pipeline_act.receipt(
+                    "blocker-reference-broken",
+                    f"🚨 {BAD_REF_TAG}: a blocker reference on this card doesn't "
+                    "resolve in Linear (likely a typo'd card id on a blocker "
+                    "line) — fix the reference. The reconcile sweep skips this "
+                    "card until then; the rest of the fleet is unaffected.",
+                ),
             )
     except Exception as e:  # noqa: BLE001 — reporting never blocks the sweep
         print(f"ERROR: could not post skip comment on {identifier}: {e}", file=sys.stderr)
@@ -2861,14 +2873,14 @@ def _flag_one_silent_pr(pr: dict) -> None:
         "acting; if this alert recurs, check the fix-agent rail."
     )
     silent = age_minutes(when)
-    linear_ops.cmd_comment(card, (
+    linear_ops.cmd_comment(card, pipeline_act.receipt("pr-without-checks", (
         f"🚨 {marker} open PR #{pr['number']} "
         f"(branch {pr['headRefName']}, mergeStateStatus "
         f"{pr.get('mergeStateStatus')}) has had ZERO completed check "
         f"runs on its head commit for {silent:.0f} minutes — the "
         "pipeline cannot see it: no CI, no critic verdict, no merge "
         f"gate will ever fire on this commit. {park_note}"
-    ))
+    )))
     print(
         f"no-checks: PR #{pr['number']} ({pr['headRefName']}) silent "
         f"{silent:.0f}m — reported on {card}"
@@ -3045,7 +3057,7 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str]) -> None:
     marker = f"{UNLANDED_TAG} branch {name}:"
     if any(marker in b for b in linear_ops.comment_bodies(card)):
         return  # said once, and once is the point
-    linear_ops.cmd_comment(card, (
+    linear_ops.cmd_comment(card, pipeline_act.receipt("work-never-landed", (
         f"🚨 {marker} the branch `{name}` carries {ahead} commit(s) that are "
         f"not on `{base}`, and no pull request has ever been opened for it — "
         f"so nothing in the pipeline can see this work. CI, the critic, the "
@@ -3058,7 +3070,7 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str]) -> None:
         f"the same critic verdict. What changes is who writes the code, never "
         f"how it lands.\n\n"
         f"_Posted once per branch. Opening the pull request ends it._"
-    ))
+    )))
     print(
         f"unlanded: branch {name} has {ahead} commit(s), no PR, idle "
         f"{idle:.0f}m — reported on {card}"
@@ -3100,7 +3112,7 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
             if any(marker in b for b in linear_ops.comment_bodies(ident)):
                 continue  # reported once already — idempotent forever
             state, idle = card["state"]["name"], age_minutes(card["updatedAt"])
-            linear_ops.cmd_comment(ident, (
+            linear_ops.cmd_comment(ident, pipeline_act.receipt("work-never-landed", (
                 f"🚨 {marker} this card has sat in {state} for {idle:.0f} "
                 f"minutes with nothing to point at: no branch, no pull "
                 f"request. It is labelled '{HAND_BUILT_LABEL}', so no "
@@ -3115,7 +3127,7 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str]) -> None:
                 f"on the card, so the pause is a decision rather than a "
                 f"silence.\n\n"
                 f"_Posted once per card._"
-            ))
+            )))
             print(
                 f"unlanded: {ident} is hand-built, in {state} {idle:.0f}m with "
                 f"no branch and no PR — reported"
@@ -3421,11 +3433,12 @@ def restart_answered_blockers() -> None:
                 f"answered blocker: PR #{pr['number']} is DIRTY — releasing "
                 "the card and leaving the dispatch to the conflict sweep"
             )
-            _post_pr_note(pr["number"], (
+            _post_pr_note(pr["number"], pipeline_act.receipt(
+                "fix-loop-restarted", (
                 f"🔓 {DECISION_RESTART_TAG}: your decision was picked up. This "
                 "PR is conflicted with the default branch, so the conflict "
                 "sweep resolves it first and the fix loop follows (DRE-2409)."
-            ))
+            )))
             _release_card(pr, (
                 f"🔓 Your answer on PR #{pr['number']} was picked up — this "
                 "card is out of your queue. The PR needs a merge conflict "
@@ -3438,12 +3451,13 @@ def restart_answered_blockers() -> None:
         )
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
-        _post_pr_note(pr["number"], (
+        _post_pr_note(pr["number"], pipeline_act.receipt(
+            "fix-loop-restarted", (
             f"🔓 {DECISION_RESTART_TAG}: an operator decision landed after the "
             "last blocker, so the reconcile sweep re-dispatched the fix agent "
             "(DRE-2409) — no hand dispatch needed. One restart per answer; a "
             "further decision comment re-arms it."
-        ))
+        )))
         _release_card(pr, (
             f"🔓 Your answer on PR #{pr['number']} was picked up — the fix "
             "agent is running again and this card is out of your queue. "
@@ -3575,14 +3589,14 @@ def _post_dependabot_receipt(pr: dict) -> None:
     the sweep's default GH_TOKEN). A failed post is recorded, not raised:
     the dispatch DID happen; the next sweep merely re-dispatches one extra
     review, and the red run tells medic why."""
-    body = (
+    body = pipeline_act.receipt("dependabot-review-forced", (
         f"🔁 {DEPENDABOT_DISPATCH_TAG} @{pr['headRefOid']}: dependabot-triggered "
         "pull_request runs get GitHub's empty Dependabot secrets store, so the "
         "reconcile sweep dispatched the critic via workflow_dispatch instead "
         f"(DRE-2047). At most {DEPENDABOT_RECEIPT_CAP} dispatches per head sha "
         "— a crashed review run earns one retry (DRE-2071); a rebase re-arms "
         "a fresh budget."
-    )
+    ))
     p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
         ["gh", "pr", "comment", str(pr["number"]), "--repo", REPO, "--body", body],
         capture_output=True, text=True, check=False,
@@ -3773,7 +3787,7 @@ def _post_rereview_receipt(pr: dict) -> None:
     the sweep's default GH_TOKEN). A failed post is recorded, not raised:
     the dispatch DID happen; the next sweep merely re-dispatches one extra
     review, and the red run tells medic why."""
-    body = (
+    body = pipeline_act.receipt("review-retried-after-crash", (
         f"🔁 {CRASHED_REVIEW_DISPATCH_TAG} @{pr['headRefOid']}: the review "
         "run for this head crashed (an infra failure — it never produced a "
         "verdict, so this is NOT a code rejection), and the reconcile sweep "
@@ -3781,7 +3795,7 @@ def _post_rereview_receipt(pr: dict) -> None:
         f"{CRASHED_REVIEW_RETRY_CAP} automatic re-dispatch per head sha — a "
         "new commit re-arms a fresh budget; past the cap the stall is "
         "reported on the Linear card instead of retried."
-    )
+    ))
     p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
         ["gh", "pr", "comment", str(pr["number"]), "--repo", REPO, "--body", body],
         capture_output=True, text=True, check=False,
@@ -3818,7 +3832,7 @@ def _report_reviewer_down(pr: dict, receipts: int) -> None:
     marker = f"{REVIEWER_DOWN_TAG} PR #{pr['number']} @{pr['headRefOid']}:"
     if any(marker in b for b in linear_ops.comment_bodies(card)):
         return  # reported once for this head already — idempotent forever
-    linear_ops.cmd_comment(card, (
+    linear_ops.cmd_comment(card, pipeline_act.receipt("reviewer-unavailable", (
         f"🚨 {marker} the adversarial reviewer is DOWN for open PR "
         f"#{pr['number']} (branch {pr['headRefName']}). Its review run "
         f"crashed on this commit and the sweep's {receipts} automatic "
@@ -3828,7 +3842,7 @@ def _report_reviewer_down(pr: dict, receipts: int) -> None:
         "fix the reviewer (check the critic's auth/token and its run "
         "logs), then push a new commit to the PR or dispatch "
         f"{review_workflow()} by hand — either re-arms the review."
-    ))
+    )))
     print(
         f"crashed-review: PR #{pr['number']} reviewer-down reported on {card}"
     )
@@ -3857,14 +3871,14 @@ def _report_stale_verdict(pr: dict) -> None:
         merge_gate.first_line(bodies[-1]) if bodies else ""
     )
     old = f"an older commit ({reviewed[:8]})" if reviewed else "an older commit"
-    linear_ops.cmd_comment(card, (
+    linear_ops.cmd_comment(card, pipeline_act.receipt("verdict-left-behind", (
         f"🚨 {marker} open PR #{pr['number']} (branch {pr['headRefName']}) "
         f"has its newest review verdict bound to {old}, not to the current "
         f"head ({sha[:8]}), and no review is running or queued. The merge "
         "gate rightly ignores stale verdicts, so nothing will re-review or "
         "merge this PR on its own — a fresh review of the current commit "
         "is needed. This is NOT a code rejection."
-    ))
+    )))
     print(f"stale-verdict: PR #{pr['number']} reported on {card}")
 
 

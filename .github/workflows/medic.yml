@@ -308,7 +308,11 @@ jobs:
                whoever fixes it.
             4. Deliver the report:
                - If the head branch matches agent/DRE-N, comment on that card:
-                 python3 .bureau-pipeline/scripts/linear_ops.py comment DRE-N "<report>"
+                 python3 .bureau-pipeline/scripts/linear_ops.py comment DRE-N "<report>" --act=run-failure-diagnosed
+                 The --act flag is required: it appends the machine-readable
+                 act trailer to your report (DRE-2826). Your report itself is
+                 posted byte for byte — the flag adds a line, it never edits
+                 what you wrote.
                - Otherwise: FIRST check for an existing open card for this same
                  failure — search Linear (GraphQL via curl with LINEAR_API_KEY,
                  or linear_ops) for ANY issue titled

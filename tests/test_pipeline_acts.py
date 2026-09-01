@@ -362,21 +362,16 @@ class TestTheTrailerCarriesNoForeignTag:
                 act["discharges"] = "reviewer-down-report"
         assert any("reviewer-down" in p for p in pipeline_act.problems(doc))
 
-    def test_nothing_changes_behaviour_yet(self):
-        """This card lands the vocabulary and the writer and nothing else.
-        No call site emits a trailer, so no live receipt changes shape — which
-        is what makes the foundation card safe to go first.
-
-        The card that wires emission DELETES this test. That is the point of
-        it: the change of behaviour becomes a deliberate act with a diff on it,
-        rather than something that leaks in while nobody is looking.
-        """
-        for path in sorted((ROOT / "scripts").glob("*.py")):
-            if path.name == "pipeline_act.py":
-                continue
-            assert "pipeline_act" not in path.read_text(encoding="utf-8"), (
-                f"{path.name} imports the writer — emission is its own card"
-            )
+    # `test_nothing_changes_behaviour_yet` stood here until DRE-2826. It
+    # asserted that no `scripts/` module imported the writer, and its own
+    # docstring said the card that wires emission deletes it — so that the
+    # change of behaviour would be a deliberate act with a diff on it rather
+    # than something that leaked in while nobody was looking. This is that
+    # diff. What replaced it is stronger than what it forbade:
+    # tests/test_act_emission.py drives every emission site and pins the body
+    # it posts against a capture of the live wording, and
+    # scripts/check_act_receipts.py fails CI on any receipt site that does not
+    # compose through the writer.
 
     def test_no_existing_constant_was_deleted(self):
         text = RECONCILE.read_text(encoding="utf-8")

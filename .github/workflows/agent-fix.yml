@@ -617,6 +617,12 @@ jobs:
           # never cost the fix run.
           [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py \
             remove-label "${{ steps.pr.outputs.card }}" needs-human || true
+          # DRE-2826: the conflict-mode announcement is a declared act
+          # (`conflict-agent-dispatched`) and composes its receipt through the
+          # one writer; the other two branches are dispatch notices with no
+          # registry row, so they post exactly as they always have. The flag is
+          # unquoted on purpose — empty must expand to no argument at all.
+          ACT_FLAG=""
           if [ "${{ steps.pr.outputs.rearmed }}" = "true" ]; then
             # DRE-2813: the budget was spent and an operator decision re-armed
             # exactly one attempt, so "attempt 4/3" would be a lie about which
@@ -624,13 +630,14 @@ jobs:
             MSG="🔧 Fix agent dispatched on an operator decision (one attempt, re-armed) — PR #${{ steps.pr.outputs.number }}."
           elif [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
             MSG="🔀 Conflict-resolution agent dispatched (round ${{ steps.pr.outputs.attempt }}/5) — merging main into PR #${{ steps.pr.outputs.number }}."
+            ACT_FLAG="--act=conflict-agent-dispatched"
           else
             NOTE=""
             [ "${{ steps.pr.outputs.attempt }}" = "3" ] && NOTE=" — fresh-eyes re-derivation"
             MSG="🔧 Fix agent dispatched (attempt ${{ steps.pr.outputs.attempt }}/3$NOTE) — addressing critic findings on PR #${{ steps.pr.outputs.number }}."
           fi
           [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment \
-            "${{ steps.pr.outputs.card }}" "$MSG" || true
+            "${{ steps.pr.outputs.card }}" "$MSG" $ACT_FLAG || true
 
       # Assemble the fixing agent's context = the engineering standard (it
       # works to the same discipline floor as the engineer) + the comms standard
@@ -965,10 +972,26 @@ jobs:
           }
 
           if [ -f /tmp/fix-blocker.txt ]; then
-            gh pr comment "$PR" --repo ${{ github.repository }} \
-              --body "🛑 Fix attempt ${{ steps.pr.outputs.attempt }} blocked: $(cat /tmp/fix-blocker.txt)
+            # DRE-2826: composed through the one receipt writer, which returns
+            # this body byte-identically and appends the act trailer. The body
+            # itself is untouched — reconcile's restart sweep reads the 🛑 that
+            # opens it, and fix_budget counts it.
+            #
+            # The body goes into a variable first so the fallback can reuse it
+            # without a second copy of the wording. `|| printf` is the fail-soft
+            # rule this repo keeps everywhere the report is the escalation:
+            # composition can only fail on a broken checkout (the act name and
+            # the registry are both checked in CI), and a lost trailer is a
+            # missing machine-readable line, while a lost comment is a disputed
+            # fix nobody is told about.
+            BLOCKED_BODY="🛑 Fix attempt ${{ steps.pr.outputs.attempt }} blocked: $(cat /tmp/fix-blocker.txt)
 
           $FORMAT"
+            python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+              --body "$BLOCKED_BODY" --out /tmp/act-fix-blocked.md \
+              || printf '%s' "$BLOCKED_BODY" > /tmp/act-fix-blocked.md
+            gh pr comment "$PR" --repo ${{ github.repository }} \
+              --body-file /tmp/act-fix-blocked.md
             # Escalate, don't just narrate. The fixer disputed the critic's
             # findings and (per its instructions) pushed NOTHING — so the branch
             # holds a stale REQUEST_CHANGES the critic will never lift on its own.
@@ -1068,6 +1091,13 @@ jobs:
               else
                 BODY="🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
               fi
-              gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY"
+              # DRE-2826: both wordings are the same act — the fixer pushed a
+              # commit, so CI and the critic re-run. The read-back above keys on
+              # "pushed — CI and critic review re-running", which the composed
+              # body still opens with.
+              python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
+                --body "$BODY" --out /tmp/act-fix-pushed.md \
+                || printf '%s' "$BODY" > /tmp/act-fix-pushed.md
+              gh pr comment "$PR" --repo ${{ github.repository }} --body-file /tmp/act-fix-pushed.md
             fi
           fi
