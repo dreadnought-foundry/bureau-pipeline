@@ -148,12 +148,19 @@ class GateDecisionTest(unittest.TestCase):
         self.assertEqual([gate.PROMOTE], gate.sweeps(card))
 
     def test_the_card_is_never_its_own_dependent(self):
-        """The relation-direction trap. A forward `blocks` node names the card
-        itself under `issue`; a gate reading that side sees a Done card,
-        concludes nothing is blocked, and skips every promotion forever —
-        silently. Here the ONLY non-terminal id is on the `relatedIssue` side,
-        so reading the wrong one turns this red."""
-        card = _card(state="Done", relations=[_rel("blocks", "DRE-3", "Backlog")])
+        """The relation-direction trap, pinned on the read itself. A forward
+        `blocks` node names the card under `issue` and the dependent under
+        `relatedIssue`; `reconcile.advance_unblocked_epics` reads the `issue`
+        side, which is the card asking the question. A gate that did the same
+        would decide off its own state and never promote anybody — silently,
+        and permanently. So assert WHICH card comes back, not just that some
+        sweep did."""
+        card = _card(
+            identifier="DRE-1", relations=[_rel("blocks", "DRE-3", "Backlog", of="DRE-1")]
+        )
+        self.assertEqual(
+            ["DRE-3"], [dep["identifier"] for dep in gate._dependents(card)]
+        )
         self.assertEqual([gate.PROMOTE], gate.sweeps(card))
 
     def test_a_related_relation_is_not_a_blocker(self):
