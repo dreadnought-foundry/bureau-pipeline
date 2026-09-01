@@ -262,7 +262,7 @@ A clear, **one-PR-scoped** description with its own `## Acceptance criteria`
 route, type, env var) is written **identically** in both — that string is a
 contract; the planner greps `main` first to confirm the name is free.
 
-## When a card is too big for one run (DRE-2893)
+## When a card is too big for one run (DRE-2893, DRE-2913)
 "One-PR-scoped" above is the rule; these are its tells, and every one of them is
 readable **before the card is filed**. Any ONE of them means split.
 
@@ -278,6 +278,24 @@ readable **before the card is filed**. Any ONE of them means split.
    groups.
 4. **An unbounded quantifier** — "every surface", "all call sites". DRE-2838's
    "every surface rendering a work state" was 57 mount sites.
+5. **Specific is not small.** DRE-2871 was the best-written card of its night —
+   eight sites each with a file and a line, what each one asserts it never read,
+   and an explicit not-in-this-card section. **Six runs died on it**, the last
+   at 151 turns and $17.44. Countable, and still too big: eight sites across a
+   backend **and** a frontend, plus a declared rule, plus an AST guard, is
+   **four deliverables in two languages** however precisely each is named.
+   DRE-2838 taught the same thing from the other direction — an audit had
+   already bounded it from 57 sites to five, and it still died twice.
+   **Bounded is not small. Specific is not small.** Both are necessary; neither
+   is sufficient.
+6. **Cut on FILE FOOTPRINT, not only on concern.** DRE-2837 and DRE-2838 were
+   both split cleanly on the problem, and every resulting piece edited the same
+   console files: three PRs — #2206, #2207, #2213 — passed full review and went
+   `DIRTY` within an hour of each other, purely on merge order, with **no defect
+   in any of them**. The wave plan already required "a file footprint per card —
+   parallel where disjoint, native `blockedBy` where they overlap"; the rule
+   existed and **was not applied**. Name the files each piece touches, and where
+   two share one, wire `blockedBy` rather than letting the gate release both.
 
 **What it cost.** DRE-2719, DRE-2847 and DRE-2838 between them burned six dead
 runs and roughly $65, and produced zero pull requests. Every split then shipped
@@ -285,6 +303,29 @@ within hours, several inside 90 minutes. The agents were never the problem:
 DRE-2838's second run reached "2/5 failing tests written" at 151 turns before
 the cap took it, and DRE-2847's reached "3/5 implementation green". Those were
 capable runs against impossible cards.
+
+### The arithmetic that catches all six tells
+The tells are what you notice; this is what you run. Count, **before filing,
+with nothing run**:
+
+1. How many **independent deliverables**?
+2. How many **languages or tiers**?
+3. Is any deliverable a **CONTRACT the others read**?
+
+DRE-2871 scored **4 / 2 / yes** — the unknown-direction rule was a contract its
+eight sites all depended on. That is three cards, and it was **visible at filing
+time**.
+
+**A card whose pieces read a shared rule splits that rule out FIRST**, and the
+siblings are `blockedBy` it, so they cite a declared answer instead of each
+inventing one. That is precisely how DRE-2871's sites 6 and 7 came to resolve
+the same absence in opposite directions — `alerts._advanced_recently` says
+*stalled*, `project_rollups.is_stale` says *healthy*, over the same field, in
+the same codebase.
+
+**A split is not a one-time act: run the arithmetic on every replacement card,
+not only on the original.** DRE-2871 was itself one third of an earlier split of
+DRE-2837, and was still too big.
 
 ### Two turn-cap deaths on one card means SPLIT (operator rule, 2026-09-01)
 There is **no third attempt**, and nothing starts one for you. On turn
