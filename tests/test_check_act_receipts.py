@@ -1,9 +1,16 @@
 """RED-first tests: the completeness guard (DRE-2826).
 
 Wrapping today's receipt sites is true for one day. `scripts/check_act_receipts.py`
-is what makes it stay true: any `gh pr comment`, `gh issue comment` or
-`_post_pr_note` call in `scripts/` or `.github/workflows/` whose body is not
-composed through `pipeline_act.receipt()` fails CI.
+is what makes it stay true: any `gh pr comment`, `gh issue comment`,
+`_post_pr_note` or `linear_ops.cmd_comment` call in `scripts/` or
+`.github/workflows/` whose body is not composed through
+`pipeline_act.receipt()` fails CI.
+
+The fourth form is the one a guard built from the `gh` forms alone cannot see,
+and it is where most of the traffic goes — a CARD comment posts straight to the
+Linear GraphQL API. Eight of the ten `reconcile.py` sites this epic converts go
+that way, so leaving it out made the guard pass on a hand-reverted
+`flag_stranded()`. `TestACardCommentIsAReceiptSite` is the test that says so.
 
 WHAT THESE TESTS PIN, and what they deliberately do not.
 
@@ -148,6 +155,122 @@ jobs:
         assert guard.sites(root) == []
 
 
+class TestACardCommentIsAReceiptSite:
+    """The pathway the `gh` forms cannot see, and the majority of the corpus.
+
+    `linear_ops.cmd_comment` posts to the Linear GraphQL API — no `gh`, no
+    `_post_pr_note`, no argv to pattern-match. A guard that misses it reports
+    "0 problem(s)" on a `reconcile.py` whose stranded-card receipt has been
+    hand-reverted to a raw f-string, which is precisely the regression the
+    guard exists to catch.
+    """
+
+    def test_an_unwrapped_card_comment_is_found(self, tmp_path):
+        root = _tree(tmp_path, script='''
+import linear_ops
+
+
+def announce(ident):
+    linear_ops.cmd_comment(ident, "🚑 a new recovery, in a hurry")
+''')
+        found = guard.problems(_doc(), root)
+        assert any("thing.py" in p for p in found), (
+            "a card comment is how most of these receipts are posted — a guard "
+            "blind to it is false on the day it merges"
+        )
+
+    def test_the_module_alias_does_not_hide_a_site(self, tmp_path):
+        """Callers spell the import three ways (`linear_ops`, `lops`, and the
+        bare name inside linear_ops itself). It is the same write each time."""
+        root = _tree(tmp_path, script='''
+import linear_ops as lops
+
+
+def announce(ident):
+    lops.cmd_comment(ident, "🚑 one")
+
+
+def announce_again(ident):
+    cmd_comment(ident, "🚑 two")
+''')
+        assert len(guard.sites(root)) == 2
+
+    def test_the_posters_own_body_is_not_a_second_site(self, tmp_path):
+        """`cmd_comment` is a seam: it takes a body it cannot know the meaning
+        of. Its callers are the sites, so its definition is not scanned."""
+        root = _tree(tmp_path, script='''
+def cmd_comment(identifier, body, *flags):
+    gql(identifier, body)
+
+
+def announce(ident):
+    cmd_comment(ident, "🚑 a new recovery, in a hurry")
+''')
+        assert len([s for s in guard.sites(root)]) == 1
+
+    def test_a_composed_card_comment_passes(self, tmp_path):
+        root = _tree(tmp_path, script=f'''
+import linear_ops
+import pipeline_act
+
+
+def announce(ident):
+    linear_ops.cmd_comment(ident, pipeline_act.receipt("{AN_ACT}", "🔧 a body"))
+''')
+        assert guard.problems(_doc(), root) == []
+        assert [s.composed_as for s in guard.sites(root)] == [AN_ACT]
+
+    def test_the_act_flag_composes_a_card_comment(self, tmp_path):
+        """`cmd_comment(ident, body, *flags)` takes the same `--act=` the CLI
+        seam does — the Python mirror of the shell form."""
+        root = _tree(tmp_path, script=f'''
+import linear_ops
+
+
+def announce(ident, body):
+    linear_ops.cmd_comment(ident, body, "--act={AN_ACT}")
+''')
+        assert guard.problems(_doc(), root) == []
+        assert [s.composed_as for s in guard.sites(root)] == [AN_ACT]
+
+    def test_an_act_flag_naming_an_undeclared_act_fails(self, tmp_path):
+        root = _tree(tmp_path, script='''
+import linear_ops
+
+
+def announce(ident, body):
+    linear_ops.cmd_comment(ident, body, "--act=no-such-act")
+''')
+        assert any("no-such-act" in p for p in guard.problems(_doc(), root))
+
+    def test_reverting_a_converted_card_site_would_fail_ci(self, tmp_path):
+        """The critic's reproduction, as a test rather than a hand-run.
+
+        `flag_stranded()` posts `card-stranded` through `cmd_comment`. Take the
+        wrapper off and the guard has to say so — the shipped tree stays clean
+        only because the wrapper is there."""
+        composed = f'''
+import linear_ops
+import pipeline_act
+
+WATCHDOG_TAG = "card-stranded"
+
+
+def flag_stranded(ident, reason):
+    linear_ops.cmd_comment(ident, pipeline_act.receipt(
+        "card-stranded", f"🚨 {{WATCHDOG_TAG}}: {{reason}}"))
+'''
+        reverted = composed.replace(
+            'pipeline_act.receipt(\n        "card-stranded", '
+            'f"🚨 {WATCHDOG_TAG}: {reason}"))',
+            'f"🚨 {WATCHDOG_TAG}: {reason}")',
+        )
+        assert reverted != composed, "the revert did not apply"
+        assert guard.problems(_doc(), _tree(tmp_path, script=composed)) == []
+        assert any("thing.py" in p for p in
+                   guard.problems(_doc(), _tree(tmp_path, script=reverted)))
+
+
 # --------------------------------------------------------------------------- #
 # 2. a composed site is NOT found                                              #
 # --------------------------------------------------------------------------- #
@@ -242,6 +365,37 @@ jobs:
           python3 scripts/linear_ops.py comment "$CARD" "$MSG" --act=no-such-act
 """)
         assert any("no-such-act" in p for p in guard.problems(_doc(), root))
+
+    def test_an_act_flag_BUILT_into_a_variable_is_read_too(self, tmp_path):
+        """A branch that chooses between an act and no act assembles the flag
+        a few lines above the call — `agent-fix.yml` does exactly this. Reading
+        only the call line leaves that name unchecked, and it dies at the write
+        in a live run just the same."""
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          ACT_FLAG=""
+          if [ "$MODE" = "conflict" ]; then
+            ACT_FLAG="--act=no-such-act"
+          fi
+          python3 scripts/linear_ops.py comment "$CARD" "$MSG" $ACT_FLAG
+""")
+        assert any("no-such-act" in p for p in guard.problems(_doc(), root))
+
+    def test_prose_about_the_flag_is_not_read_as_one(self, tmp_path):
+        """The other direction. Both files in the corpus talk about `--act=`;
+        the assignment form is anchored so a comment cannot match it."""
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          # pass --act=no-such-act here once the registry declares it
+          echo nothing
+""")
+        assert guard.problems(_doc(), root) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -357,6 +511,20 @@ class TestTheShippedTree:
             if "gh pr comment" in anchor_line:
                 assert name in composed, f"{name} is posted raw"
 
+    def test_every_declared_act_composes_somewhere_the_guard_can_see(self):
+        """The other half of the same loop, and the one the `gh`-only corpus
+        could not close. An act the registry declares has to be composed by
+        something this guard reads — a poster site, or the `--act=` seam the
+        two workflow-side acts reach the writer through. Without it a declared
+        act could be posted raw from a pathway nobody scans, which is exactly
+        how a hand-reverted `flag_stranded()` left every check green."""
+        composed = {s.composed_as for s in guard.sites() if s.composed_as}
+        flagged = {act for _, _, act in guard.shell_act_flags()}
+        for name in pipeline_act.acts():
+            assert name in composed or name in flagged, (
+                f"{name} is declared but nothing the guard can see composes it"
+            )
+
     def test_ci_runs_the_guard(self):
         """A guard nothing runs is a file. The card's whole claim is that this
         FAILS CI."""
@@ -385,7 +553,8 @@ class TestTheUnconvertedBlockIsHonest:
             hits = [s for s in found if guard._matches(declaration, s)]
             assert len(hits) == 1, declaration
             assert declaration["why"].strip()
-            assert declaration["kind"] in ("not-an-act", "undeclared-act")
+            assert declaration["kind"] in (
+                "not-an-act", "undeclared-act", "seam")
 
     def test_no_declaration_covers_a_declared_act(self):
         """An act with a registry row is converted by this card, full stop. A

@@ -9,14 +9,20 @@ somebody adds a recovery in a hurry — and a receipt with no trailer is exactly
 the failure this epic is named after: it looks like nothing happened. From
 `mx-8c2822`: *"A mechanism reaches a correct conclusion and nothing acts on it —
 the failure signature is SILENCE, so it is found by running the system, never by
-reading it."* A new unwrapped `gh pr comment` is found here, at the diff, or it
-is found by incident.
+reading it."* A new unwrapped receipt is found here, at the diff, or it is found
+by incident.
 
 ## What is checked
 
-Every `gh pr comment`, `gh issue comment` and `_post_pr_note` call in
-`scripts/*.py` and `.github/workflows/*.yml` — the corpus the card names. Each
-one is in exactly one of three states:
+Every `gh pr comment`, `gh issue comment`, `_post_pr_note` and
+`linear_ops.cmd_comment` call in `scripts/*.py` and `.github/workflows/*.yml`.
+The card named the first three; the fourth is the one that matters most and was
+missed, because a card comment never touches `gh` at all — `cmd_comment` posts
+straight to the Linear GraphQL API, and eight of the ten `reconcile.py` sites
+this epic converts go that way. A guard that reads only the `gh` forms is
+already false on the day it merges, for the majority of its own corpus.
+
+Each site is in exactly one of three states:
 
   * **composed** — its body comes from `pipeline_act.receipt()` (Python) or from
     `pipeline_act.py receipt <act> --out <file>` (shell). Nothing to say.
@@ -60,9 +66,9 @@ import pipeline_act  # noqa: E402
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
 
-# The corpus, and the three call forms — verbatim from the card. `scripts/` and
-# `.github/workflows/` are where the pipeline writes from; a receipt posted from
-# anywhere else does not exist.
+# The corpus, and the four call forms — the three the card names plus the card
+# comment they all forgot. `scripts/` and `.github/workflows/` are where the
+# pipeline writes from; a receipt posted from anywhere else does not exist.
 SCRIPT_GLOB = "scripts/*.py"
 WORKFLOW_GLOB = ".github/workflows/*.yml"
 
@@ -71,9 +77,14 @@ WORKFLOW_GLOB = ".github/workflows/*.yml"
 _SHELL_POSTERS = ("gh pr comment", "gh issue comment")
 
 # The Python posters. `_post_pr_note` is reconcile's own seam over the first of
-# them; its CALLERS are the sites, so its body is not scanned again (it takes a
-# body it cannot know the meaning of — that is what makes it a seam).
-_PY_POSTER_FUNCTIONS = ("_post_pr_note",)
+# them; `cmd_comment` is `linear_ops`' card-side write, and it is the pathway
+# MOST receipts actually take — eight of the ten `reconcile.py` sites this epic
+# converts post through it and never touch `gh` at all, because it goes straight
+# to the Linear GraphQL API. A guard that reads only the `gh` forms would be
+# blind exactly where the traffic is (DRE-2826 review). Both take a body they
+# cannot know the meaning of — that is what makes them seams — so their CALLERS
+# are the sites and their own bodies are not scanned again.
+_PY_POSTER_FUNCTIONS = ("_post_pr_note", "cmd_comment")
 _PY_POSTER_ARGV = (("gh", "pr", "comment"), ("gh", "issue", "comment"))
 
 # `python3 …/pipeline_act.py receipt <act> … --out <path>` — the shell seam.
@@ -87,6 +98,12 @@ _BODY_FILE = re.compile(r"--body-file[=\s]+(?P<path>\S+)")
 # poster in this corpus, but a typo'd act name here kills a live run, and it
 # costs ten lines to read it at the diff instead.
 _SHELL_ACT_FLAG = re.compile(r"--act[=\s]+(?P<act>[a-z0-9-]+)")
+
+# …and the same flag built one line earlier into a shell variable, which is how
+# a branch chooses whether to pass one at all (`ACT_FLAG="--act=…"` in
+# agent-fix.yml). Anchored at an assignment so prose about the flag is not read
+# as one — a line beginning `#` cannot match.
+_SHELL_ACT_ASSIGNMENT = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=[\"']?--act[=\s]")
 
 
 # How far back a declaration's anchor may reach. A shell receipt is routinely
@@ -233,13 +250,21 @@ def shell_sites(root: str | None = None) -> list:
 
 
 def shell_act_flags(root: str | None = None) -> list:
-    """Every `--act=<name>` in the workflows, as (file, line, name)."""
+    """Every `--act=<name>` in the workflows, as (file, line, name).
+
+    Both where it is passed and where it is BUILT: a branch that chooses
+    between an act and no act assembles the flag into a variable a few lines
+    above the call, and a typo there dies at the write in a live run exactly as
+    a typo on the call itself would.
+    """
     root = root or ROOT
     out: list = []
     for path in _paths(WORKFLOW_GLOB, root):
         relative = os.path.relpath(path, root)
         for number, line in enumerate(_read(path).splitlines(), start=1):
-            if "linear_ops.py" not in line and "pipeline_act.py" not in line:
+            if ("linear_ops.py" not in line
+                    and "pipeline_act.py" not in line
+                    and not _SHELL_ACT_ASSIGNMENT.match(line)):
                 continue
             for match in _SHELL_ACT_FLAG.finditer(line):
                 if _commented(line, match.start()):
@@ -266,6 +291,34 @@ def _receipt_act(node) -> str | None:
         return None
     first = node.args[0]
     return first.value if isinstance(first, ast.Constant) else "<computed>"
+
+
+def _poster_call(func) -> bool:
+    """Is `func` one of the Python posters, plain or attributed?
+
+    `linear_ops.cmd_comment(...)`, `lops.cmd_comment(...)` and the bare
+    `cmd_comment(...)` inside `linear_ops` itself are the same write, so the
+    attribute's name is what decides — not the module alias in front of it,
+    which every caller spells differently.
+    """
+    if isinstance(func, ast.Name):
+        return func.id in _PY_POSTER_FUNCTIONS
+    return isinstance(func, ast.Attribute) and func.attr in _PY_POSTER_FUNCTIONS
+
+
+def _flag_act(node) -> str | None:
+    """The act named by an `--act=<name>` flag among a poster call's extra args.
+
+    `cmd_comment(identifier, body, *flags)` takes the same flags the CLI seam
+    does, so a caller can compose through `--act=` instead of wrapping the body
+    — the Python mirror of `_SHELL_ACT_FLAG`.
+    """
+    for argument in node.args[2:]:
+        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            match = _SHELL_ACT_FLAG.search(argument.value)
+            if match:
+                return match.group("act")
+    return None
 
 
 def _argv_body(node) -> tuple:
@@ -323,9 +376,11 @@ def python_sites(root: str | None = None) -> list:
                     continue
                 body = None
                 found = False
-                if isinstance(node.func, ast.Name) and node.func.id in _PY_POSTER_FUNCTIONS:
+                flagged = None
+                if _poster_call(node.func):
                     found = True
                     body = node.args[1] if len(node.args) > 1 else None
+                    flagged = _flag_act(node)
                 else:
                     found, body = _argv_body(node)
                 if not found:
@@ -333,7 +388,7 @@ def python_sites(root: str | None = None) -> list:
                 out.append(Site(
                     relative, node.lineno,
                     ast.get_source_segment(source, node) or "",
-                    _composing_act(body, bound),
+                    flagged or _composing_act(body, bound),
                 ))
     return out
 

@@ -76,8 +76,10 @@ jobs:
       # The first binds the registry to the code — every declared act is
       # emitted, every emitted tag is declared. The second binds the code to
       # the registry: every `gh pr comment` / `gh issue comment` /
-      # `_post_pr_note` either composes its body through pipeline_act.receipt()
-      # or is named in the `unconverted` block with the reason. Without the
+      # `_post_pr_note` / `linear_ops.cmd_comment` either composes its body
+      # through pipeline_act.receipt() or is named in the `unconverted` block
+      # with the reason — the last of those four being how a CARD comment is
+      # posted, which is most of them. Without the
       # second, this stays true for exactly as long as nobody adds a recovery
       # in a hurry — and a receipt with no trailer looks like nothing happened,
       # which is the failure signature the whole wave is named after.
