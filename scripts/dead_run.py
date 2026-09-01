@@ -412,23 +412,33 @@ def park(
     return False
 
 
-def park_unlanded_comment(run_url: str = "") -> str:
+def park_unlanded_comment(run_url: str = "", tag: str = DEAD_TAG) -> str:
     """The receipt posted INSTEAD of the hold receipt when the park did not land.
 
-    It still carries DEAD_TAG, because the death it reports was real and
+    It still carries a budget tag, because the attempt it reports was real and
     un-counting it would hand the card a budget it has already spent. What it
     does not do is claim a park that did not happen — that claim is what left
     DRE-2911 sitting In Progress for seven and a half hours with nothing
     retrying it.
+
+    `tag` is WHICH budget, and it is not decoration: decide() reaches "hold"
+    from two independent caps (DEAD_TAG and TURN_TAG), this body REPLACES
+    whichever one decide() wrote, and the two tags are deliberately
+    non-overlapping substrings. A tag hardcoded here would silently drop the
+    strike the card actually spent and bill the other budget for an attempt
+    that never happened — the same accounting corruption the atomic park
+    exists to remove, one corner over. The caller passes the cap that was in
+    play; DEAD_TAG is the default because it is the cap three of the four
+    death classes share.
     """
     run_suffix = f" Run: {run_url}" if run_url else ""
     return (
-        f"🚨 {DEAD_TAG} cap reached — but the park did NOT land: Linear refused "
+        f"🚨 {tag} cap reached — but the park did NOT land: Linear refused "
         f"the write, so this card is NOT in Backlog and does NOT carry the "
         f"'{HOLD_LABEL}' label. Neither was written rather than half of each, "
-        f"so nothing here is claiming a hold that does not exist. This death is "
-        f"still counted, and the reconcile sweep re-attempts the park on its "
-        f"next pass.{run_suffix}"
+        f"so nothing here is claiming a hold that does not exist. This run is "
+        f"still counted against the '{tag}' budget, and the reconcile sweep "
+        f"re-attempts the park on its next pass.{run_suffix}"
     )
 
 
@@ -507,7 +517,7 @@ def main(argv: list[str]) -> int:
              [--turn-exhaustion [--execution-file PATH]] [--run-url U]
              [--pre-agent [--failed-step NAME] [--rate-limited]]
       park <CARD>
-      park-unlanded [--run-url U]
+      park-unlanded [--run-url U] [--turn-exhaustion]
 
     With --turn-exhaustion, <prior_dead> is the card's `turn-exhaustion-requeue`
     count (its own budget) and --execution-file names the run's result JSON —
@@ -518,13 +528,14 @@ def main(argv: list[str]) -> int:
     line, then the comment body. The workflow reads line 1 for the branch and
     posts the body. `park` performs the hold's two Linear writes atomically
     (DRE-2931) and exits nonzero when it wrote NEITHER; `park-unlanded` prints
-    the receipt to post in that case.
+    the receipt to post in that case, tagged with the budget the hold came
+    from (`--turn-exhaustion` for the turn cap, the dead-run cap otherwise).
     """
     usage = ("usage: dead_run.py decide <prior_dead> [--is-error] "
              "[--error-model M] [--cancelled] [--turn-exhaustion] "
              "[--execution-file PATH] [--pre-agent] [--failed-step NAME] "
              "[--rate-limited] [--run-url U] | park <CARD> | "
-             "park-unlanded [--run-url U]")
+             "park-unlanded [--run-url U] [--turn-exhaustion]")
     if not argv:
         print(usage)
         return 2
@@ -532,7 +543,16 @@ def main(argv: list[str]) -> int:
     if cmd == "park":
         return _cmd_park(rest[0] if rest else "")
     if cmd == "park-unlanded":
-        print(park_unlanded_comment(_flag_value(rest, "--run-url")))
+        # --turn-exhaustion mirrors `decide`'s own flag: the caller names the
+        # cap that produced the hold, and the tag string stays in this module
+        # rather than being retyped into the shell. The workflow passes the
+        # slot QUOTED — one argument, empty when the hold came from the
+        # dead-run cap — so an empty element here means "no flag", not a
+        # malformed call.
+        print(park_unlanded_comment(
+            _flag_value(rest, "--run-url"),
+            TURN_TAG if "--turn-exhaustion" in rest else DEAD_TAG,
+        ))
         return 0
     if cmd != "decide":
         print(f"unknown command {cmd!r}")

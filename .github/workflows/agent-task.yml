@@ -702,6 +702,11 @@ jobs:
             # that says the card needs splitting — and passes NO --error-model,
             # so no 'model-error:' marker is written and the DRE-1354 fallback
             # cannot switch models on a budget ceiling.
+            # WHICH cap a hold came from, carried to the park receipt below.
+            # `decide` reaches "hold" from two independent budgets and the park
+            # step is uniform for either, so the branch that picked the budget
+            # is the only place that still knows which one it was.
+            PARK_TAG_FLAGS=""
             if [ "$AGENT_STARTED" = "no" ]; then
               # A PLATFORM FAULT, not a strike (DRE-2931). The run died before
               # the agent: no turn, no model, nothing spent. Checked FIRST of
@@ -720,6 +725,7 @@ jobs:
               PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
                 "$CARD" "turn-exhaustion-requeue" --since "dead-run-budget-reset" || echo 0)
               ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE"
+              PARK_TAG_FLAGS="--turn-exhaustion"
             else
               PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
                 "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
@@ -737,7 +743,7 @@ jobs:
             ACTION=$(printf '%s\n' "$DECISION" | head -1)
             BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
             if [ "$ACTION" = "hold" ] && ! python3 .bureau-pipeline/scripts/dead_run.py park "$CARD"; then ACTION="hold-unlanded"; fi
-            if [ "$ACTION" = "hold-unlanded" ]; then BODY=$(python3 .bureau-pipeline/scripts/dead_run.py park-unlanded --run-url "$RUN_URL"); fi
+            if [ "$ACTION" = "hold-unlanded" ]; then BODY=$(python3 .bureau-pipeline/scripts/dead_run.py park-unlanded --run-url "$RUN_URL" "$PARK_TAG_FLAGS"); fi
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$BODY"
             # THE PARK IS ATOMIC OR IT IS NOTHING (DRE-2931). This used to be
             # two independent `|| true` writes — add the label, then move the
@@ -750,8 +756,18 @@ jobs:
             # alone; when it writes neither it exits nonzero and the receipt
             # above says so instead of claiming a hold that never happened.
             # The sweep re-attempts on its next pass.
+            #
+            # $PARK_TAG_FLAGS is why that receipt knows WHICH budget it is
+            # spending. `decide` reaches "hold" from two independent caps and
+            # the unlanded receipt REPLACES the body it wrote, so a tag
+            # hardcoded in park-unlanded would lose the turn strike a turn-cap
+            # hold actually spent and bill the dead-run budget for a death
+            # that never happened — the same accounting corruption the atomic
+            # park removes, one corner over. It is empty on every path but the
+            # turn-exhaustion one, and quoted, so the call is always exactly
+            # one extra argument the CLI ignores when there is nothing to say.
             if [ "$ACTION" = "hold-unlanded" ]; then
-              echo "::error title=Park did not land::$CARD reached the dead-run cap but Linear refused the writes — the card is NOT parked and carries no label. The reconcile sweep re-attempts it."
+              echo "::error title=Park did not land::$CARD reached a hold cap but Linear refused the writes — the card is NOT parked and carries no label. The reconcile sweep re-attempts it."
             elif [ "$ACTION" = "requeue" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
             elif [ "$ACTION" = "infra" ]; then
