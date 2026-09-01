@@ -29,7 +29,13 @@ of it is ever a runtime lookup.
   counters, so rewording one makes every in-flight PR's receipts invisible.
   `python3 scripts/pipeline_act.py check` binds the file to the code both
   ways: a declared tag no code emits fails, and an emitted tag nothing
-  declares fails.
+  declares fails. Since DRE-2826 every declared act EMITS its trailer, and the
+  file carries a second block, **`unconverted`** — the receipt sites that do
+  not, one row each with the reason. `python3 scripts/check_act_receipts.py`
+  is the other direction of the binding: every `gh pr comment`, `gh issue
+  comment` and `_post_pr_note` in `scripts/` and `.github/workflows/` either
+  composes through the writer or has a row there, and a row must match exactly
+  one real site — so the block is a countable debt, not a mute button.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.

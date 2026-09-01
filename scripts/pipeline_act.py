@@ -46,12 +46,24 @@ additive trailer would stop being additive, by the same mechanism the warning
 above describes. `problems()` refuses it, and refuses a tag that is a substring
 of another tag for the same reason.
 
+## Who emits (DRE-2826)
+
+Every declared act now composes its receipt here. `reconcile.py` calls
+`receipt()` directly; `agent-fix.yml` and `medic.yml` reach the same writer
+through the two CLI seams below (`pipeline_act.py receipt … --out` for a PR
+comment, `linear_ops.py comment … --act=` for a card comment). Which of them
+still does not is not a matter of memory:
+`scripts/check_act_receipts.py` reads every `gh pr comment`, `gh issue comment`
+and `_post_pr_note` in `scripts/` and `.github/workflows/` and fails CI on any
+whose body is not composed here — unless the registry's `unconverted` block
+names it, with the reason. That block is the countable record of the receipts
+this repo posts with no trailer, and a row in it must match exactly one real
+site or the check fails on the row itself.
+
 ## What this module does NOT do
 
-Emission at the call sites, the refusal signal, the discharge sweep and the
-console read are each their own card. This one lands the vocabulary and the
-writer, and **nothing changes behaviour** — which is what makes it safe to go
-first.
+The refusal signal, the discharge sweep and the console read are each their own
+card. This one lands the vocabulary and the writer.
 
 `subscriber` is DECLARED here and RESOLVED elsewhere: asserting that it names a
 workflow which exists and accepts that trigger is DRE-2827, and it has to be an
@@ -64,6 +76,13 @@ CLI:
 
     python3 scripts/pipeline_act.py check          # validate the file
     python3 scripts/pipeline_act.py list           # print the acts as JSON
+    python3 scripts/pipeline_act.py receipt <act> --body <body> --out <file>
+
+The third is the SHELL seam (DRE-2826). A workflow step composes its body here
+and posts the file, rather than assembling a trailer in bash — one writer for
+Python and shell alike, because two writers is how the grammar drifts. It
+writes nothing on an unknown act: a half-written file would be posted as if it
+had been composed.
 """
 
 from __future__ import annotations
@@ -524,9 +543,26 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("check")
     sub.add_parser("list")
+    compose = sub.add_parser("receipt")
+    compose.add_argument("act")
+    compose.add_argument("--body", required=True)
+    compose.add_argument("--out", required=True)
 
     args = parser.parse_args(argv)
     command = args.command or "check"
+
+    if command == "receipt":
+        # Composed BEFORE the file is touched. receipt() raises on an unknown
+        # act and on an empty body, and a caller that posts --body-file must
+        # never find a partial file where a composed one should be.
+        try:
+            composed = receipt(args.act, args.body)
+        except (UnknownAct, ActError) as e:
+            print(f"pipeline_act: {e}", file=sys.stderr)
+            return 2
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(composed)
+        return 0
 
     if command == "check":
         found = problems()

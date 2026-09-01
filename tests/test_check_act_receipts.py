@@ -109,6 +109,34 @@ def announce(pr):
             "body it cannot know the meaning of, and its callers are the sites"
         )
 
+    def test_a_comment_about_a_poster_is_not_a_receipt_site(self, tmp_path):
+        """Both files in the corpus talk ABOUT these calls — this guard's own
+        CI step does. Reading the documentation as a site makes the guard
+        unrunnable, and the first fix anyone reaches for is deleting the
+        sentence rather than the finding."""
+        root = _tree(tmp_path, workflow="""
+# Every `gh pr comment` in this repo composes through the one writer.
+jobs:
+  x:
+    steps:
+      - run: |
+          # a gh pr comment would go here, but does not
+          echo nothing
+""")
+        assert guard.sites(root) == []
+
+    def test_a_hash_inside_quotes_does_not_hide_a_site(self, tmp_path):
+        """The other direction, and the one that would be exploitable: `#` only
+        opens a comment when it starts a word outside quotes."""
+        root = _tree(tmp_path, workflow="""
+jobs:
+  x:
+    steps:
+      - run: |
+          echo "PR #$PR" && gh pr comment "$PR" --body "🚑 a new recovery"
+""")
+        assert len(guard.sites(root)) == 1
+
     def test_a_gh_pr_listing_is_not_a_receipt_site(self, tmp_path):
         root = _tree(tmp_path, workflow="""
 jobs:
