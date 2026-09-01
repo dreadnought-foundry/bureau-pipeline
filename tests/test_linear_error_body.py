@@ -216,7 +216,13 @@ def test_ratelimited_in_a_200_errors_payload_is_also_named(monkeypatch):
     )
     with pytest.raises(linear_ops.LinearRateLimited) as exc_info:
         linear_ops.gql("query { issues { nodes { id } } }")
-    assert "rate limited: 2500 requests/hour exhausted" in str(exc_info.value)
+    message = str(exc_info.value)
+    assert "rate limited: 2500 requests/hour exhausted" in message
+    # The endpoint too, on the same line as the condition — the medic's
+    # classifier requires both together, and without it this branch's message
+    # classified as `normal` (see tests/test_medic_linear_rate_limit.py::
+    # test_the_200_errors_payload_message_is_classifiable_too).
+    assert linear_ops.API in message, "the error must name the endpoint"
 
 
 # ── sibling audit: no other urlopen drops its body ──────────────────────────

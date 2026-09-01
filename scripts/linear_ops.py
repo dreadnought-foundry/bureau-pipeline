@@ -231,10 +231,18 @@ def gql(query: str, variables: dict | None = None) -> dict:
             # A quota exhaustion can also arrive as a 200 with an errors
             # payload. Same condition, same type: the classification lives with
             # the body, not with the status.
+            #
+            # The ENDPOINT belongs on this line too, not just on `_api_error`'s.
+            # medic_classify.is_linear_rate_limited() requires the host and the
+            # fingerprint on the SAME line — deliberately, so prose that merely
+            # quotes a RATELIMITED payload does not classify. A message that
+            # names the condition but not the host reads as `normal` to the
+            # medic, which then retries and diagnoses into the exhausted quota:
+            # the DRE-1921 loop this card exists to stop.
             raise LinearRateLimited(
-                f"linear error: {condition} — {errors[:BODY_CHARS]}"
+                f"linear error from {API}: {condition} — {errors[:BODY_CHARS]}"
             )
-        raise LinearError(f"linear error: {out['errors']}")
+        raise LinearError(f"linear error from {API}: {out['errors']}")
     return out["data"]
 
 

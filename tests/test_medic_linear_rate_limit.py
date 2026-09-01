@@ -156,6 +156,47 @@ class LinearRateLimitClassifierTest(unittest.TestCase):
         guarded = f"ERROR: escalate_aged_intake: {caught.exception}\n"
         self.assertTrue(medic_classify.is_linear_rate_limited(guarded))
 
+    def test_the_200_errors_payload_message_is_classifiable_too(self):
+        """The OTHER way Linear signals a quota exhaustion — 200 with an errors
+        payload — composes its own message, and it must clear the same bar.
+
+        It did not: that branch named the condition but not the endpoint, and
+        the classifier requires both on one line, so the message it composed
+        read as `normal` and the medic retried and diagnosed into the exhausted
+        quota. Same discipline as the test above — the line under test is
+        produced by the REAL client, never restated here, because restating it
+        is precisely how the two halves drifted apart.
+        """
+        payload = (
+            b'{"errors":[{"message":"Rate limit exceeded. Only 2500 requests are '
+            b'allowed per 1 hour and you have made 2500 requests in the last '
+            b'hour.","extensions":{"type":"ratelimited","code":"RATELIMITED",'
+            b'"statusCode":429,"userError":true}}]}'
+        )
+
+        class _Resp:
+            def read(self):
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(
+            linear_ops.urllib.request, "urlopen", lambda *a, **k: _Resp()
+        ):
+            with self.assertRaises(linear_ops.LinearRateLimited) as caught:
+                linear_ops.gql("query { issues { nodes { id } } }")
+        # As a reconcile per-card guard would log it: one line, one `str(e)`.
+        guarded = f"ERROR: escalate_aged_intake: {caught.exception}\n"
+        self.assertTrue(medic_classify.is_linear_rate_limited(guarded))
+        self.assertEqual(
+            medic_classify.classify("Reconcile (reusable)", guarded),
+            "linear_ratelimited",
+        )
+
     def test_a_body_truncated_past_the_extension_code_still_classifies(self):
         """The condition is composed in FRONT of the body for this reason: a
         long `message` pushes `code":"RATELIMITED"` past the 500-char cut, and
