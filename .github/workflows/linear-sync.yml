@@ -37,9 +37,10 @@ on:
         type: string
         required: true
       max_wip:
-        # The repo's ONE work-in-progress cap (DRE-2529). The merge handler
-        # below runs the same `reconcile.py --promote-only` the reconcile
-        # sweep runs, so it must promote at the same cap the caller gives
+        # The repo's ONE work-in-progress cap (DRE-2529). When the merge
+        # handler below promotes (gated since DRE-2930) it runs the same
+        # `reconcile.py --promote-only` the reconcile sweep runs, so it
+        # must promote at the same cap the caller gives
         # reconcile.yml — it used to hardcode 8, which meant a repo capped at
         # 12 had this fast path refuse between 8 and 11 in flight while the
         # cron promoted the very same card an hour later, at 12.
@@ -103,24 +104,38 @@ jobs:
           # skipped card still gets the merge commented so the state never
           # lies in either direction.
           python3 .bureau-pipeline/scripts/linear_ops.py card-done "$CARD" "$PR_URL"
-          # Event-driven promotion: this Done may have just unblocked
-          # dependent Backlog children — promote them NOW instead of making
-          # them wait for the drifting cron sweep ("*/15" delivers 78-100 min
-          # apart in practice). Promotion is pure Linear; the Backlog→Todo
-          # transition rides the relay webhook for the actual agent dispatch.
+          # Event-driven sweeps, but only the ones THIS merge can have changed
+          # (DRE-2930). Two board-wide passes used to run here unconditionally:
+          #   --promote-only  a Done may have unblocked dependent Backlog
+          #                   children — promote them NOW rather than waiting
+          #                   on the drifting cron ("*/15" delivers 78-100 min
+          #                   apart in practice). Pure Linear; the Backlog→Todo
+          #                   transition rides the relay webhook for the actual
+          #                   agent dispatch.
+          #   --close-epics   a Done may have been an epic's LAST child — close
+          #                   the parent NOW rather than letting it read "still
+          #                   working" until the next full sweep, which is the
+          #                   only other place epic-close runs. (DRE-1496 sat In
+          #                   Progress with 9/9 children Done; DRE-1552.)
+          # They do different work on different cards, which is why both are
+          # still here — but neither was conditional on the merge having made
+          # its work true. 47 merges on 2026-09-01 therefore bought ~94 extra
+          # full-board passes and helped exhaust Linear's 2,500/hour quota: a
+          # cost unbounded in merge rate, worst on our best days.
+          # merge_sweep_gate reads the merged card ONCE and prints the flags
+          # this merge justifies — usually none. It falls back to both on an
+          # unreadable card, and to none on an exhausted quota (a sweep cannot
+          # succeed against a spent limit and would deepen it — DRE-1921).
           # MAX_WIP comes from the step env above — the caller's cap, so this
           # fast path and the cron sweep never disagree (DRE-2529).
-          REPO="$GITHUB_REPOSITORY" \
-            REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
-            python3 .bureau-pipeline/scripts/reconcile.py --promote-only
-          # Event-driven epic close: this Done may have been an epic's LAST
-          # child — close the parent NOW instead of letting it read "still
-          # working" until the drifting cron's next full sweep (epic-close
-          # runs only there otherwise). Pure Linear, like promotion above.
-          # (Origin: DRE-1496 sat In Progress with 9/9 children Done; DRE-1552.)
-          REPO="$GITHUB_REPOSITORY" \
-            REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
-            python3 .bureau-pipeline/scripts/reconcile.py --close-epics
+          # >>> DRE-2930 merge-sweep gate — executed verbatim by tests/test_merge_sweep_gate.py
+          SWEEPS=$(python3 .bureau-pipeline/scripts/merge_sweep_gate.py "$CARD")
+          for SWEEP in $SWEEPS; do
+            REPO="$GITHUB_REPOSITORY" \
+              REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
+              python3 .bureau-pipeline/scripts/reconcile.py "$SWEEP"
+          done
+          # <<< DRE-2930 merge-sweep gate
 
   # Event-driven conflict sweep: a merge to the default branch is the exact
   # moment sibling PRs touching the same files go DIRTY — and DIRTY PRs emit
