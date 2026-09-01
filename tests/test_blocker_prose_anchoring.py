@@ -45,6 +45,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
+import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402
 
 
@@ -84,24 +85,24 @@ def _card(description, identifier="DRE-2492", parent=None):
 # ---------------------------------------------------------------------------
 def test_the_live_epic_prose_yields_zero_blockers():
     """The regression fixture: DRE-2492's real body, unedited, is not blocked."""
-    assert reconcile.blockers_of(_card(DRE_2492_PROSE)) == set()
+    assert prose_blockers.prose_claims(_card(DRE_2492_PROSE)) == set()
 
 
 def test_neither_depends_on_the_other_yields_zero_blockers():
     """A sentence that literally DENIES a dependency must not declare one."""
     card = _card("Both depend on DRE-2494 only - neither depends on the other.")
-    assert reconcile.blockers_of(card) == set()
+    assert prose_blockers.prose_claims(card) == set()
 
 
 def test_mid_sentence_blocked_by_yields_zero_blockers():
     """"B3 is formally blocked by it" - a mention mid-line, not a declaration."""
     card = _card("DRE-2496 lands first. B3 is formally blocked by it, per the plan.")
-    assert reconcile.blockers_of(card) == set()
+    assert prose_blockers.prose_claims(card) == set()
 
 
 def test_mid_sentence_serialize_after_yields_zero_blockers():
     card = _card("We should probably serialize after DRE-2494 ships, but not yet.")
-    assert reconcile.blockers_of(card) == set()
+    assert prose_blockers.prose_claims(card) == set()
 
 
 def test_numbered_prose_that_only_mentions_yields_zero_blockers():
@@ -109,7 +110,7 @@ def test_numbered_prose_that_only_mentions_yields_zero_blockers():
     numbered step whose text merely TALKS about a dependency still declares
     nothing."""
     card = _card("1. Ship the rail. B3 is formally blocked by DRE-2496, per the plan.")
-    assert reconcile.blockers_of(card) == set()
+    assert prose_blockers.prose_claims(card) == set()
 
 
 @pytest.mark.parametrize(
@@ -139,13 +140,13 @@ def test_numbered_prose_that_only_mentions_yields_zero_blockers():
 def test_declaring_forms_still_parse(line):
     """Anchoring must not cost us any real declaration form."""
     card = _card(f"Do the work.\n\n{line}\n\n## Acceptance criteria\n- [ ] x")
-    assert reconcile.blockers_of(card) == {"DRE-9"}
+    assert prose_blockers.prose_claims(card) == {"DRE-9"}
 
 
 def test_prose_tail_after_a_declaration_still_parses():
     """The DRE-1233 form: a declaring line whose ids sit in prose after it."""
     card = _card("Serialize after: all other DRE-1200 work", identifier="DRE-1233")
-    assert reconcile.blockers_of(card) == {"DRE-1200"}
+    assert prose_blockers.prose_claims(card) == {"DRE-1200"}
 
 
 def test_declaration_and_denial_in_one_body():
@@ -156,16 +157,20 @@ def test_declaration_and_denial_in_one_body():
         "\n"
         "Note that DRE-11 depends on nothing here, and neither depends on the other.\n"
     )
-    assert reconcile.blockers_of(card) == {"DRE-9"}
+    assert prose_blockers.prose_claims(card) == {"DRE-9"}
 
 
 def test_relation_blockers_are_untouched_by_anchoring():
-    """Formal relations are the source of truth and never went through the regex."""
+    """Formal relations are the source of truth and never went through the
+    regex. Since DRE-2676 they are the ONLY source: `relation_blockers` is the
+    gate and `prose_claims` is evidence, so this card is held by the relation
+    and its prose declares nothing."""
     card = _card("Prose that mentions DRE-11 depends on nobody.")
     card["inverseRelations"]["nodes"] = [
         {"type": "blocks", "issue": {"identifier": "DRE-9", "state": {"name": "In Progress"}}}
     ]
-    assert reconcile.blockers_of(card) == {"DRE-9"}
+    assert prose_blockers.relation_blockers(card) == {"DRE-9"}
+    assert prose_blockers.prose_claims(card) == set()
 
 
 # ---------------------------------------------------------------------------
@@ -214,17 +219,20 @@ def test_children_of_the_prose_jammed_epic_promote():
     assert advance.call_count == 5
 
 
-def test_epic_declaring_a_real_blocker_in_prose_still_holds():
-    """Control: anchoring must not disarm the gate. An epic whose body DECLARES
-    a blocker that is not Done still holds its children."""
+def test_epic_declaring_a_blocker_no_relation_holds_it_as_a_defect():
+    """Control: anchoring must not disarm the detector. An epic whose body
+    DECLARES a blocker still refuses to release its children — but since
+    DRE-2676 it refuses because the sentence is a DEFECT the board does not
+    corroborate, not because prose is a dependency."""
     epic = {
         "identifier": "DRE-800",
         "description": "**Repo:** agent-bureau\n**Blocked by:** DRE-700\nepic B",
         "inverseRelations": {"nodes": []},
     }
-    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic), patch.object(
-        reconcile, "card_state", return_value="In Progress"
-    ):
+    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic), \
+        patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+        patch.object(reconcile.linear_ops, "first_comment_at", return_value=None), \
+        patch.object(reconcile.linear_ops, "cmd_comment"):
         assert reconcile.epic_blockers_unmet("DRE-800") is True
 
 
@@ -238,9 +246,10 @@ def test_prose_only_hold_is_logged_as_prose_only(capsys):
         "description": "**Repo:** agent-bureau\n**Blocked by:** DRE-700\nepic B",
         "inverseRelations": {"nodes": []},
     }
-    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic), patch.object(
-        reconcile, "card_state", return_value="In Progress"
-    ):
+    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic), \
+        patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+        patch.object(reconcile.linear_ops, "first_comment_at", return_value=None), \
+        patch.object(reconcile.linear_ops, "cmd_comment"):
         assert reconcile.epic_blockers_unmet("DRE-800") is True
     out = capsys.readouterr().out
     assert "DRE-800" in out and "DRE-700" in out

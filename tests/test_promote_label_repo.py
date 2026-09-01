@@ -87,8 +87,14 @@ def _label_only_dependent():
         "parent": {"identifier": "DRE-1781", "state": {"name": "In Progress"}},
         "labels": {"nodes": [{"name": "agent:frontend"}, {"name": "repo:deltasolv"}]},
         "comments": {"nodes": []},
-        # DRE-1803 is Done, so it is NOT a live blocker (blockers_of filters Done).
-        "inverseRelations": {"nodes": []},
+        # The formal relation the `**Blocked by:**` line documents. DRE-1803 is
+        # Done, so it is not a live blocker — and since DRE-2676 the relation is
+        # what the gate reads, with the prose line corroborated by it and
+        # therefore inert (a claim with NO relation is a card defect).
+        "inverseRelations": {"nodes": [
+            {"type": "blocks",
+             "issue": {"identifier": "DRE-1803", "state": {"name": "Done"}}},
+        ]},
     }
 
 
