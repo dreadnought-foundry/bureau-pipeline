@@ -132,8 +132,14 @@ def _fetch_real():
     that decides what a failure means (an empty catalog), so the error is not
     swallowed twice.
 
+    An HTTP failure carries the ENDPOINT and the response BODY (DRE-2923).
+    urllib's own message is `HTTP Error 401: Unauthorized` and nothing else,
+    and `fetch_catalog` turns any failure into an empty catalog — so this
+    exception's own message is the only place the server's reason can survive.
+
     stdlib only (urllib); matches model_fallback.py's no-dependency style.
     """
+    import urllib.error
     import urllib.request
 
     headers = auth_headers()
@@ -141,8 +147,17 @@ def _fetch_real():
         return {}
 
     req = urllib.request.Request(CATALOG_URL, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - fixed https URL
-        return json.loads(resp.read().decode("utf-8", "replace"))
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - fixed https URL
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:  # pragma: no cover - defensive
+            body = "<body unreadable>"
+        raise RuntimeError(
+            f"model catalog returned {exc.code} from {CATALOG_URL}: {body[:500]!r}"
+        ) from exc
 
 
 # In-process catalog cache: (catalog, expires_at). Mirrors the availability

@@ -106,6 +106,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -129,6 +130,81 @@ class LinearError(RuntimeError):
     exit explicitly at top level, so command-line behavior is unchanged."""
 
 
+class LinearRateLimited(LinearError):
+    """The workspace request quota is exhausted (DRE-2923).
+
+    Its own type because the operator response is the OPPOSITE of every other
+    Linear failure: wait, not debug. A malformed query, a bad token and a
+    schema error all need a code change; a quota exhaustion needs nobody to do
+    anything — it refills on its own. A LinearError still, so every existing
+    `except LinearError` keeps isolating it exactly as before."""
+
+
+# How much of the response body a raised error carries. Truncated because a
+# Linear error body can be a whole schema dump and the log line has to stay
+# readable; 500 rather than 300 because the quota sentence sits behind the
+# `errors[0].message` preamble. Matches agent-bureau's linear_workspace.py,
+# which has always done this and is the client this one was measured against.
+BODY_CHARS = 500
+
+# Linear answers a rate limit with HTTP 400 ON THE WIRE and 429 only inside the
+# body, under `extensions`. So the status alone cannot tell "over quota" from
+# "malformed query" — the classification has to read the body, and that is the
+# whole bug this constant exists for (2026-09-01: four red reconcile runs whose
+# only log line was `HTTP Error 400: Bad Request`).
+_RATELIMITED_MARKERS = ("RATELIMITED", "ratelimited")
+
+# "Only 2500 requests are allowed per 1 hour" — the sentence the server already
+# sent, which nobody could read. The count and the window are what an operator
+# needs; when the wording moves we still name the condition (below) rather than
+# falling back to `Bad Request` because a regex missed.
+_QUOTA_RE = re.compile(
+    r"only\s+([\d,]+)\s+requests?\s+are\s+allowed\s+per\s+(?:1\s+)?(hour|minute|day)",
+    re.I,
+)
+
+
+def rate_limit_condition(body: str) -> str | None:
+    """`rate limited: N requests/hour exhausted` when `body` is Linear's
+    RATELIMITED payload, else None.
+
+    Read over the FULL body, never the truncated copy: `code":"RATELIMITED"`
+    sits behind the message and a long message would push it past the cut.
+    """
+    text = body or ""
+    if not any(marker in text for marker in _RATELIMITED_MARKERS):
+        return None
+    quota = _QUOTA_RE.search(text)
+    if quota:
+        return (
+            f"rate limited: {quota.group(1)} requests/"
+            f"{quota.group(2).lower()} exhausted"
+        )
+    return "rate limited: workspace request quota exhausted"
+
+
+def _api_error(code: int | str, body: str) -> LinearError:
+    """The ONE shape a Linear API failure is reported in: the status, the
+    ENDPOINT, and the response BODY (truncated) — plus, for a quota
+    exhaustion, the named condition in front of it so the log says what to do
+    instead of `Bad Request`, which reads as a code defect and is not one."""
+    detail = f"Linear API returned {code} from {API}"
+    condition = rate_limit_condition(body)
+    if condition:
+        return LinearRateLimited(f"{detail}: {condition} — body: {body[:BODY_CHARS]!r}")
+    return LinearError(f"{detail}: {body[:BODY_CHARS]!r}")
+
+
+def _error_body(exc: urllib.error.HTTPError) -> str:
+    """The response body off a raised HTTPError. Reading it can itself fail
+    (a truncated response, an already-consumed stream) — an unreadable body
+    must not replace the status we DO have with a traceback."""
+    try:
+        return exc.read().decode("utf-8", "replace")
+    except Exception:  # pragma: no cover - defensive
+        return "<body unreadable>"
+
+
 def gql(query: str, variables: dict | None = None) -> dict:
     req = urllib.request.Request(
         API,
@@ -139,10 +215,34 @@ def gql(query: str, variables: dict | None = None) -> dict:
         },
     )
     # B310: URL is the constant https://api.linear.app endpoint, no user input.
-    with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
-        out = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
+            out = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        # CAPTURE THE BODY, NOT THE STATUS (DRE-2923). urllib's own message is
+        # `HTTP Error 400: Bad Request` — no endpoint, no reason, and a
+        # traceback that ends inside urllib without naming the call. The reason
+        # is in the body and it was being thrown away.
+        raise _api_error(exc.code, _error_body(exc)) from exc
     if out.get("errors"):
-        raise LinearError(f"linear error: {out['errors']}")
+        errors = json.dumps(out["errors"])
+        condition = rate_limit_condition(errors)
+        if condition:
+            # A quota exhaustion can also arrive as a 200 with an errors
+            # payload. Same condition, same type: the classification lives with
+            # the body, not with the status.
+            #
+            # The ENDPOINT belongs on this line too, not just on `_api_error`'s.
+            # medic_classify.is_linear_rate_limited() requires the host and the
+            # fingerprint on the SAME line — deliberately, so prose that merely
+            # quotes a RATELIMITED payload does not classify. A message that
+            # names the condition but not the host reads as `normal` to the
+            # medic, which then retries and diagnoses into the exhausted quota:
+            # the DRE-1921 loop this card exists to stop.
+            raise LinearRateLimited(
+                f"linear error from {API}: {condition} — {errors[:BODY_CHARS]}"
+            )
+        raise LinearError(f"linear error from {API}: {out['errors']}")
     return out["data"]
 
 

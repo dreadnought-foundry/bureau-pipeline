@@ -4725,9 +4725,42 @@ def main(
         )
 
 
+# A rate-limited sweep exits with its OWN code (DRE-2923). Non-zero, because a
+# board that has stopped being reconciled must never go quiet — but distinct
+# from the generic 1 every real failure exits, so the condition is readable
+# from the exit status alone. 75 is EX_TEMPFAIL: "the failure is temporary,
+# try again later", which is exactly what a quota exhaustion is.
+RATE_LIMITED_EXIT = 75
+
+
+def run(argv: list[str]) -> None:
+    """The CLI edge. Its whole job is the ONE failure that is not a defect
+    (DRE-2923): a Linear quota exhaustion, which used to escape as
+    `urllib.error.HTTPError: HTTP Error 400: Bad Request` with a traceback
+    ending inside urllib — no endpoint, no reason, and not even the name of the
+    call that failed. Four consecutive sweeps failed that way on 2026-09-01 and
+    none of them could say the estate was fine and we were merely over quota.
+
+    Everything else keeps its ordinary loud path: a real Linear failure, a
+    write failure, a read failure all still surface exactly as before.
+    """
+    try:
+        main(
+            promote_only="--promote-only" in argv,
+            conflicts_only="--conflicts-only" in argv,
+            close_only="--close-epics" in argv,
+        )
+    except linear_ops.LinearRateLimited as e:
+        print(f"reconcile: {e}", file=sys.stderr)
+        print(
+            "reconcile: the workspace API quota is exhausted — this is a "
+            "transient, self-healing condition, NOT a defect in the estate. "
+            "Nothing to retry: the quota refills on its own and the next "
+            "scheduled sweep reconciles the board.",
+            file=sys.stderr,
+        )
+        raise SystemExit(RATE_LIMITED_EXIT) from e
+
+
 if __name__ == "__main__":
-    main(
-        promote_only="--promote-only" in sys.argv,
-        conflicts_only="--conflicts-only" in sys.argv,
-        close_only="--close-epics" in sys.argv,
-    )
+    run(sys.argv[1:])

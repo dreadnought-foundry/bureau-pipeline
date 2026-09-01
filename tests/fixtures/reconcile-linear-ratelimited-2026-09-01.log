@@ -1,0 +1,4 @@
+sweep	Sweep	2026-09-01T04:27:28.1234567Z Run python3 .bureau-pipeline/scripts/reconcile.py
+sweep	Sweep	2026-09-01T04:27:29.7654321Z reconcile: Linear API returned 400 from https://api.linear.app/graphql: rate limited: 2500 requests/hour exhausted — body: '{"errors":[{"message":"Rate limit exceeded. Only 2500 requests are allowed per 1 hour and you have made 2500 requests in the last hour.","extensions":{"type":"ratelimited","code":"RATELIMITED","statusCode":429,"userError":true}}]}'
+sweep	Sweep	2026-09-01T04:27:29.8654321Z reconcile: the workspace API quota is exhausted — this is a transient, self-healing condition, NOT a defect in the estate. Nothing to retry: the quota refills on its own and the next scheduled sweep reconciles the board.
+sweep	Sweep	2026-09-01T04:27:29.9654321Z ##[error]Process completed with exit code 75.
