@@ -300,7 +300,14 @@ def test_planning_watchdog_still_sees_a_card_with_no_repo_label():
 # 4: the age gate runs before any comment read
 # --------------------------------------------------------------------------
 def test_stranded_watchdog_gates_on_age_before_reading_comments():
-    """A card too young to flag must never have its comments examined."""
+    """A card too young to flag must reach NO check that reads what it says.
+
+    flag_stranded's age gate is "elapsed time OR a prior redispatch receipt"
+    (DRE-2736 — a redispatch resets updatedAt every cycle and would otherwise
+    hide the strand forever), so the receipt is an INPUT to the gate rather
+    than something read past it. What must not happen before the gate is any
+    other reading of the card's comments, and — since DRE-2929 — any request at
+    all: the receipt is read off the board snapshot the card arrived in."""
     young = _card("DRE-1003", state="Todo",
                   minutes_stale=reconcile.WATCHDOG_MINUTES - 5)
     fake = FakeLinear(active=[young])
@@ -309,21 +316,40 @@ def test_stranded_watchdog_gates_on_age_before_reading_comments():
     ) as parked:
         reconcile.flag_stranded()
     assert parked.call_count == 0, (
-        "the age gate must run before anything reads the card's comments"
+        "the age gate must run before anything past it reads the card's comments"
     )
+    assert fake.per_card_reads == 0
 
 
 def test_planning_watchdog_gates_on_age_before_reading_comments():
+    """Planning's gate needs `updatedAt` and nothing else, so a young card's
+    comments must not be touched AT ALL — not even to look at them."""
     young = _card("DRE-1004", state="Planning",
                   minutes_stale=reconcile.PLANNING_MINUTES - 5)
     fake = FakeLinear(active=[young])
+    real_bodies = reconcile.card_comment_bodies
     with _linear(fake), patch.object(
-        reconcile.routing_verdict, "is_parked", side_effect=lambda b: False
-    ) as parked:
+        reconcile, "card_comment_bodies", side_effect=real_bodies
+    ) as bodies:
         reconcile.flag_stalled_planning()
-    assert parked.call_count == 0, (
-        "the age gate must run before anything reads the card's comments"
+    assert bodies.call_count == 0, (
+        "the age gate must run before ANY read of the card's comments"
     )
+    assert fake.per_card_reads == 0
+
+
+def test_planning_watchdog_reads_the_comments_once_it_is_past_the_gate():
+    """Guard the guard: the assertion above must be about ORDER, not about a
+    watchdog that stopped reading comments altogether — a stale card's PARKED
+    verdict and prior WATCHDOG_TAG both still have to be read."""
+    stale = _card("DRE-1006", state="Planning", minutes_stale=6000.0)
+    fake = FakeLinear(active=[stale])
+    real_bodies = reconcile.card_comment_bodies
+    with _linear(fake), patch.object(
+        reconcile, "card_comment_bodies", side_effect=real_bodies
+    ) as bodies:
+        reconcile.flag_stalled_planning()
+    assert bodies.call_count == 1
 
 
 # --------------------------------------------------------------------------
