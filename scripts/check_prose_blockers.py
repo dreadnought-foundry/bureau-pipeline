@@ -95,6 +95,7 @@ def survey(cards) -> Survey:
     grammar would report a defect the sweep does not see, or miss one it does,
     and either way the number would stop being about the pipeline.
     """
+    cards = list(cards)  # counted twice below; a generator would count zero
     declaring: list = []
     claims: list = []
     truncated: list = []
@@ -109,7 +110,7 @@ def survey(cards) -> Survey:
         if len(((card.get("inverseRelations") or {}).get("nodes") or [])) >= RELATION_PAGE:
             truncated.append(card["identifier"])
     return Survey(
-        live=len(list(cards)),
+        live=len(cards),
         declaring=tuple(declaring),
         claims=tuple(claims),
         truncated=tuple(truncated),
