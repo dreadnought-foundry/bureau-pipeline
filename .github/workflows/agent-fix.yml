@@ -46,6 +46,20 @@ on:
 
 jobs:
   fix:
+    # The job name is the run's ONLY per-PR attribution in the Actions API
+    # (DRE-2908). A `workflow_dispatch` run lists as display_title "Agent Fix"
+    # with an empty `pull_requests`, so before this the reconcile sweep could
+    # only ask "is ANY fix run in flight?" — and a run on PR A blocked the
+    # conflict sweep from ever reaching conflicted PR B (agent-bureau #2206
+    # sat 1h40m with an APPROVING verdict). Naming the job after the PR makes
+    # the question answerable per PR. Same expression as the calling stub's
+    # concurrency group and the Resolve step below, and read back by
+    # scripts/fix_concurrency.py's JOB_PR_PREFIX — do not reword one without
+    # the other.
+    # QUOTED on purpose: unquoted, YAML reads ` #` as a comment and the name
+    # becomes "fix PR" with the number silently gone — attribution dead, and
+    # nothing red. Pinned by the parser test.
+    name: "fix PR #${{ github.event.issue.number || github.event.inputs.pr_number }}"
     # DRE-1988: only a comment authored by the qa-bot identity may trigger the
     # fix agent — anyone can comment "VERDICT: REQUEST_CHANGES" on a PR, and
     # without the author check that comment spawns a code-writing agent on the
