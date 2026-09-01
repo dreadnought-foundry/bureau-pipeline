@@ -1,0 +1,44 @@
+{
+  "_readme": [
+    "THE BYTE-IDENTICAL CAPTURE (DRE-2826). Not written by hand.",
+    "",
+    "`python`: each body rendered by RUNNING the real emitting function in",
+    "scripts/reconcile.py as it stood before this card, with nothing stubbed but",
+    "its I/O. `workflow`: the exact shell literal each YAML site posted, as it",
+    "stood before this card.",
+    "",
+    "tests/test_act_emission.py drives the same functions and asserts the posted",
+    "comment is exactly <this body> + a blank line + the act's trailer. Every one",
+    "of these bodies is a live idempotency key or a per-sha budget counter",
+    "(_worker_receipt_count, `tag in body`): reword one and every in-flight",
+    "receipt carrying it becomes invisible — budgets re-arm from zero and",
+    "suppressed comments re-post.",
+    "",
+    "So this file is not documentation and it is not a snapshot to be refreshed",
+    "when a test goes red. Changing an entry here changes what the pipeline says",
+    "to a human, and it is a deliberate act with a diff on it."
+  ],
+  "python": {
+    "blocker-reference-broken": "🚨 unresolvable-blocker-reference: a blocker reference on this card doesn't resolve in Linear (likely a typo'd card id on a blocker line) — fix the reference. The reconcile sweep skips this card until then; the rest of the fleet is unaffected.",
+    "card-stranded/no-run": "🚨 stranded-watchdog: no agent run has started. Observed: this card has sat in Todo for 30+ minutes with no run receipt on it — every agent posts one the moment it starts, so as far as this sweep can see, nothing has begun. Why it has not started is not known from here. If a run is merely queued, remove the 'needs-human' label and it will carry on; otherwise this card needs a human to look.",
+    "card-stranded/planning": "🚨 stranded-watchdog: planning has produced nothing. Observed: this card has sat in Planning for 120+ minutes with nothing posted or changed on it — a card in Planning owes a decision about what it is and where it goes, and no decision has been recorded. Why is not known from here. If planning is genuinely still going, remove the 'needs-human' label and it will carry on; otherwise this card needs a human to look.",
+    "dependabot-review-forced": "🔁 dependabot-review-dispatch @d34db33fcafe1234: dependabot-triggered pull_request runs get GitHub's empty Dependabot secrets store, so the reconcile sweep dispatched the critic via workflow_dispatch instead (DRE-2047). At most 2 dispatches per head sha — a crashed review run earns one retry (DRE-2071); a rebase re-arms a fresh budget.",
+    "fix-loop-restarted/conflicted": "🔓 fix-restart-on-operator-decision: your decision was picked up. This PR is conflicted with the default branch, so the conflict sweep resolves it first and the fix loop follows (DRE-2409).",
+    "fix-loop-restarted/dispatched": "🔓 fix-restart-on-operator-decision: an operator decision landed after the last blocker, so the reconcile sweep re-dispatched the fix agent (DRE-2409) — no hand dispatch needed. One restart per answer; a further decision comment re-arms it.",
+    "intake-overdue": "🚨 intake-aged: DRE-1 has sat in Intake for 3.0 days — past the 48-hour window the lane contract gives it — with nothing happening to it. Moved to **Green Light**, the queue you already open.\n\n**Why you are seeing it:** Intake's exit is a classification, and no classification arrived. This is a move rather than a report on purpose — about 480 consecutive green sweeps once printed, in plain English, the exact reason five cards were frozen, and nobody read one. A report is a record; a move is a gate.\n\n**What is already on the card:**\n\nNo reason has ever been stated on this card — nothing has classified it, and nothing has said why not. That is the finding.\n\n**What happens next:** move it back to Intake once it is worth classifying and the groomer will sequence it, or answer it here.",
+    "pr-without-checks": "🚨 no-checks-watchdog PR #7: open PR #7 (branch agent/DRE-1-slug, mergeStateStatus DIRTY) has had ZERO completed check runs on its head commit for 999 minutes — the pipeline cannot see it: no CI, no critic verdict, no merge gate will ever fire on this commit. The card is human-parked (waiting on a person in Triage or Green Light, or stamped needs-human), so every automatic repair is standing down on purpose (DRE-2024) — the PR stays frozen until a human acts on the card.",
+    "review-retried-after-crash": "🔁 crashed-review-redispatch @d34db33fcafe1234: the review run for this head crashed (an infra failure — it never produced a verdict, so this is NOT a code rejection), and the reconcile sweep re-dispatched qa-review.yml (DRE-2282). At most 1 automatic re-dispatch per head sha — a new commit re-arms a fresh budget; past the cap the stall is reported on the Linear card instead of retried.",
+    "reviewer-unavailable": "🚨 reviewer-down PR #7 @d34db33fcafe1234: the adversarial reviewer is DOWN for open PR #7 (branch agent/DRE-1-slug). Its review run crashed on this commit and the sweep's 1 automatic re-dispatch(es) crashed too — an infrastructure outage, NOT a code rejection of the PR. CI is green but no verdict can post, so the merge gate will never fire on this commit. A human must fix the reviewer (check the critic's auth/token and its run logs), then push a new commit to the PR or dispatch qa-review.yml by hand — either re-arms the review.",
+    "verdict-left-behind/known-sha": "🚨 stale-verdict-watchdog PR #7 @d34db33fcafe1234: open PR #7 (branch agent/DRE-1-slug) has its newest review verdict bound to an older commit (0badc0de), not to the current head (d34db33f), and no review is running or queued. The merge gate rightly ignores stale verdicts, so nothing will re-review or merge this PR on its own — a fresh review of the current commit is needed. This is NOT a code rejection.",
+    "verdict-left-behind/unknown-sha": "🚨 stale-verdict-watchdog PR #7 @d34db33fcafe1234: open PR #7 (branch agent/DRE-1-slug) has its newest review verdict bound to an older commit, not to the current head (d34db33f), and no review is running or queued. The merge gate rightly ignores stale verdicts, so nothing will re-review or merge this PR on its own — a fresh review of the current commit is needed. This is NOT a code rejection.",
+    "work-never-landed/branch": "🚨 unlanded-work-watchdog branch agent/DRE-1-slug: the branch `agent/DRE-1-slug` carries 3 commit(s) that are not on `main`, and no pull request has ever been opened for it — so nothing in the pipeline can see this work. CI, the critic, the merge gate and the Linear sync all key off a pull request; a branch on its own passes through no gate at all and closes no card. Last commit 240 minutes ago.\n\nWhere it goes from here: open a pull request from `agent/DRE-1-slug` into `main`. Hand-built work lands exactly the way dispatched work does — the branch, then the pull request, then the same checks and the same critic verdict. What changes is who writes the code, never how it lands.\n\n_Posted once per branch. Opening the pull request ends it._",
+    "work-never-landed/no-branch": "🚨 unlanded-work-watchdog no branch: this card has sat in Todo for 240 minutes with nothing to point at: no branch, no pull request. It is labelled 'hand-built', so no dispatched run is coming by design — which also means the stranded-card watchdog stays silent on it (DRE-2524). This notice is what stands in its place.\n\nWhat is missing, in order: a branch named `agent/DRE-1-<slug>`, then a pull request from it. Hand-built work meets the same checks and the same critic verdict as dispatched work — the only difference is who writes the code. If the work is deliberately paused, say so on the card, so the pause is a decision rather than a silence.\n\n_Posted once per card._"
+  },
+  "workflow": {
+    "conflict-agent-dispatched": "🔀 Conflict-resolution agent dispatched (round ${{ steps.pr.outputs.attempt }}/5) — merging main into PR #${{ steps.pr.outputs.number }}.",
+    "fix-attempt-landed/fix": "🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running.",
+    "fix-attempt-landed/conflict": "🔀 Conflict resolution round ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running.",
+    "fix-attempt-disputed": "🛑 Fix attempt ${{ steps.pr.outputs.attempt }} blocked: $(cat /tmp/fix-blocker.txt)\n\n          $FORMAT",
+    "run-failure-diagnosed": "\"<report>\""
+  }
+}
