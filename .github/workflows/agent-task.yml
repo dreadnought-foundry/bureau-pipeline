@@ -297,23 +297,35 @@ jobs:
             line RAW_TITLE title \
             body RAW_DESCRIPTION description
 
+      # DRE-2931: this is the step DRE-2911's attempts 2 and 3 died in — the
+      # Linear key was at its 2,500/hour ceiling and every call answered HTTP
+      # 400. Two things changed here. It carries an `id` so the Report step can
+      # read GitHub's own outcome for it rather than infer one, and its output
+      # is tee'd to PRE_AGENT_LOG so that step can tell a quota exhaustion (a
+      # WAIT — DRE-2923) from a step that genuinely broke. Neither changes what
+      # the step DOES: a failure here still fails the job, exactly as before.
       - name: Card → In Progress
+        id: inprogress
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          PRE_AGENT_LOG: ${{ runner.temp }}/preagent.log
         run: |
-          python3 .bureau-pipeline/scripts/linear_ops.py state \
-            "${{ github.event.client_payload.identifier }}" "In Progress"
-          # Heartbeat: record which model this attempt uses so the board/console
-          # can surface per-attempt model (DRE-1354 AC). The run URL maps the
-          # card to THIS Actions run so the reconcile sweep can check the run
-          # is actually still alive before declaring the card dead (DRE-2032 —
-          # the sweep once requeued a live 45-minute build and the redispatch
-          # cancelled it via the concurrency group, run 29125285930).
-          ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
-          python3 .bureau-pipeline/scripts/linear_ops.py comment \
-            "${{ github.event.client_payload.identifier }}" \
-            "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting. ${{ steps.model.outputs.why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          set -o pipefail
+          {
+            python3 .bureau-pipeline/scripts/linear_ops.py state \
+              "${{ github.event.client_payload.identifier }}" "In Progress"
+            # Heartbeat: record which model this attempt uses so the board/console
+            # can surface per-attempt model (DRE-1354 AC). The run URL maps the
+            # card to THIS Actions run so the reconcile sweep can check the run
+            # is actually still alive before declaring the card dead (DRE-2032 —
+            # the sweep once requeued a live 45-minute build and the redispatch
+            # cancelled it via the concurrency group, run 29125285930).
+            ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
+            python3 .bureau-pipeline/scripts/linear_ops.py comment \
+              "${{ github.event.client_payload.identifier }}" \
+              "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting. ${{ steps.model.outputs.why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } 2>&1 | tee "$PRE_AGENT_LOG"
 
       - name: Implement card
         id: claude
@@ -475,6 +487,19 @@ jobs:
           # is a KILLED run, not a dead agent — the no-PR branch below must
           # defer instead of counting the shared dead-run cap.
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          # DRE-2931: GitHub's own outcome for every step that runs BEFORE the
+          # agent, so a run that died in one of them can name which — derived
+          # from the platform's record, never inferred from elapsed time or
+          # from the absence of a PR (standards/console-honesty.md rule 1).
+          DEDUPE_OUTCOME: ${{ steps.dedupe.outcome }}
+          MODEL_OUTCOME: ${{ steps.model.outcome }}
+          CTX_OUTCOME: ${{ steps.ctx.outcome }}
+          SANITIZE_OUTCOME: ${{ steps.card.outcome }}
+          INPROGRESS_OUTCOME: ${{ steps.inprogress.outcome }}
+          # What those steps printed, for the ONE question their outcome cannot
+          # answer: was this Linear refusing a quota (a wait) or something that
+          # actually broke?
+          PRE_AGENT_LOG: ${{ runner.temp }}/preagent.log
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # Resolve the card's branch FIRST: an empty --head filter makes
@@ -516,6 +541,37 @@ jobs:
           EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
           DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" || echo none)
+
+          # DID THE AGENT START AT ALL? (DRE-2931.) Every class above presumes
+          # a run: a run that failed BEFORE claude-code-action took no turn,
+          # called no model and spent nothing, so it cannot have failed at this
+          # card's work. Same discipline as the classifier — one shared
+          # predicate, never a shell test of its own. Fail-open to "yes": if
+          # the predicate itself cannot answer, count the death exactly as
+          # today rather than quietly stop counting real ones.
+          AGENT_STARTED=$(python3 .bureau-pipeline/scripts/check_agent_result.py started \
+            "$EXEC_FILE" --claude-outcome "$CLAUDE_OUTCOME" --branch "$BRANCH" || echo yes)
+          # WHICH step failed, from GitHub's own outcomes rather than a guess.
+          FAILED_STEP=""
+          for STEP_OUTCOME in "Duplicate-dispatch guard=$DEDUPE_OUTCOME" \
+                              "Select model=$MODEL_OUTCOME" \
+                              "Assemble agent context=$CTX_OUTCOME" \
+                              "Sanitize untrusted card text=$SANITIZE_OUTCOME" \
+                              "Card → In Progress=$INPROGRESS_OUTCOME"; do
+            if [ "${STEP_OUTCOME##*=}" = "failure" ]; then
+              FAILED_STEP="${STEP_OUTCOME%=*}"
+              break
+            fi
+          done
+          # And was that failure Linear refusing a quota? DRE-2923 owns that
+          # fingerprint (host AND code on one line, so prose quoting a
+          # RATELIMITED payload cannot classify) — read it, never re-derive it.
+          RATE_FLAGS=""
+          if python3 .bureau-pipeline/scripts/medic_classify.py \
+               "Agent Task" "$PRE_AGENT_LOG" 2>/dev/null \
+               | grep -qx "class=linear_ratelimited"; then
+            RATE_FLAGS="--rate-limited"
+          fi
 
           if [ "$PR_STATE" = "MERGED" ]; then
             # The work SHIPPED while this run was finishing (DRE-2316: PR #137
@@ -646,7 +702,21 @@ jobs:
             # that says the card needs splitting — and passes NO --error-model,
             # so no 'model-error:' marker is written and the DRE-1354 fallback
             # cannot switch models on a budget ceiling.
-            if [ "$DEATH_CLASS" = "turn_exhaustion" ]; then
+            if [ "$AGENT_STARTED" = "no" ]; then
+              # A PLATFORM FAULT, not a strike (DRE-2931). The run died before
+              # the agent: no turn, no model, nothing spent. Checked FIRST of
+              # the classes because none of them can be true of a run that
+              # never started — DRE-2911 was told it had died of an API/model
+              # error, twice, for 20-second runs that cost $0, and the third
+              # one parked it as "a human must split/fix the card".
+              #
+              # No count is read at all: the cap is the CARD's budget and this
+              # is not the card's fault, so the answer cannot change the
+              # decision — and under the exhausted quota that caused this, the
+              # count-comments call would fail too.
+              PRIOR=0
+              ERR_FLAGS="--pre-agent $RATE_FLAGS"
+            elif [ "$DEATH_CLASS" = "turn_exhaustion" ]; then
               PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
                 "$CARD" "turn-exhaustion-requeue" --since "dead-run-budget-reset" || echo 0)
               ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE"
@@ -663,18 +733,32 @@ jobs:
             fi
             # shellcheck disable=SC2086  # ERR_FLAGS is deliberately word-split
             DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide \
-              "${PRIOR:-0}" $ERR_FLAGS --run-url "$RUN_URL")
+              "${PRIOR:-0}" $ERR_FLAGS --failed-step "$FAILED_STEP" --run-url "$RUN_URL")
             ACTION=$(printf '%s\n' "$DECISION" | head -1)
             BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
+            if [ "$ACTION" = "hold" ] && ! python3 .bureau-pipeline/scripts/dead_run.py park "$CARD"; then ACTION="hold-unlanded"; fi
+            if [ "$ACTION" = "hold-unlanded" ]; then BODY=$(python3 .bureau-pipeline/scripts/dead_run.py park-unlanded --run-url "$RUN_URL"); fi
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$BODY"
-            if [ "$ACTION" = "hold" ]; then
-              python3 .bureau-pipeline/scripts/linear_ops.py add-label "$CARD" needs-human || true
-              # --park: a deliberate HOLD-cap park (DRE-1403) — the agent kept
-              # dying with no PR. Without it the DRE-1885 building-card guard
-              # would re-route this In Progress → Backlog move to Todo and loop.
-              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
+            # THE PARK IS ATOMIC OR IT IS NOTHING (DRE-2931). This used to be
+            # two independent `|| true` writes — add the label, then move the
+            # card — and DRE-2911's park landed the first and lost the second:
+            # the card sat In Progress for seven and a half hours while its own
+            # comment said it was in Backlog, and nothing retried it, because
+            # the label is what tells every sweep a held card is already
+            # handled. `dead_run.py park` writes the STATE first and the label
+            # second, retries each, and rolls back rather than leave half a
+            # park behind; when it writes neither it exits nonzero and the
+            # receipt above says so instead of claiming a hold that never
+            # happened. The sweep re-attempts on its next pass.
+            if [ "$ACTION" = "hold-unlanded" ]; then
+              echo "::error title=Park did not land::$CARD reached the dead-run cap but Linear refused the writes — the card is NOT parked and carries no label. The reconcile sweep re-attempts it."
             elif [ "$ACTION" = "requeue" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
+            elif [ "$ACTION" = "infra" ]; then
+              # The fault is against the RUN, not the card, so it is reported
+              # where run faults belong — on the run — and the card is left
+              # exactly where it was for the reconcile sweep to pick up.
+              echo "::warning title=Infrastructure fault before the agent started::${FAILED_STEP:-a step before the agent} failed; no agent ran and no model was called, so this is NOT charged to $CARD."
             fi
             # ACTION=defer (cancelled run): receipt only — the card stays
             # In Progress and reconcile owns the requeue after the run

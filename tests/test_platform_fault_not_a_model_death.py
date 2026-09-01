@@ -466,56 +466,55 @@ class Dre2911TrioTest(unittest.TestCase):
 class AtomicParkTest(unittest.TestCase):
     """AC 5: a park writes both the label and the state, or neither."""
 
-    def _recorder(self, fail_state=False, fail_label=False, fail_read=False):
+    def park(self, fail_state=False, fail_label=False, fail_read=False,
+             already_labelled=False):
         calls = []
 
-        def read_state():
-            calls.append(("read", None))
+        def has_label(name):
+            calls.append(("read", name))
             if fail_read:
                 raise linear_ops.LinearError("read failed")
-            return "In Progress"
+            return already_labelled
 
-        def write_state(name):
-            calls.append(("state", name))
+        def write_state():
+            calls.append(("state", dead_run.PARK_STATE))
             if fail_state:
                 raise linear_ops.LinearError("state write failed")
 
         def add_label(name):
-            calls.append(("label", name))
+            calls.append(("+label", name))
             if fail_label:
                 raise linear_ops.LinearError("label write failed")
 
-        return calls, read_state, write_state, add_label
+        def remove_label(name):
+            calls.append(("-label", name))
 
-    def park(self, **kw):
-        calls, read_state, write_state, add_label = self._recorder(**kw)
         ok = dead_run.park(
             "DRE-2911",
-            read_state=read_state,
-            write_state=write_state,
+            has_label=has_label,
             add_label=add_label,
+            remove_label=remove_label,
+            write_state=write_state,
             log=lambda *a, **k: None,
         )
         return ok, calls
 
-    def test_a_clean_park_writes_the_state_then_the_label(self):
+    def test_a_clean_park_writes_both_the_label_and_the_state(self):
         ok, calls = self.park()
         self.assertTrue(ok)
+        self.assertIn(("+label", dead_run.HOLD_LABEL), calls)
         self.assertIn(("state", dead_run.PARK_STATE), calls)
-        self.assertIn(("label", dead_run.HOLD_LABEL), calls)
-        # State FIRST: the label is the marker that stops the sweep, and a
-        # label with no state is exactly DRE-2911's seven-and-a-half hours.
-        self.assertLess(
-            calls.index(("state", dead_run.PARK_STATE)),
-            calls.index(("label", dead_run.HOLD_LABEL)),
-        )
+        self.assertEqual([c for c in calls if c[0] == "-label"], [])
 
-    def test_a_failing_state_write_writes_no_label_at_all(self):
-        # The acceptance criterion, in one test: DRE-2911's park half-applied
-        # the other way round and the card sat In Progress claiming Backlog.
+    def test_a_failing_state_write_takes_the_label_back_off(self):
+        # THE acceptance criterion: DRE-2911's park landed the label, lost the
+        # state, and the card sat In Progress claiming Backlog for seven and a
+        # half hours with nothing retrying it. Neither write survives now.
         ok, calls = self.park(fail_state=True)
         self.assertFalse(ok)
-        self.assertEqual([c for c in calls if c[0] == "label"], [])
+        self.assertIn(("+label", dead_run.HOLD_LABEL), calls)
+        self.assertIn(("-label", dead_run.HOLD_LABEL), calls)
+        self.assertEqual(calls[-1], ("-label", dead_run.HOLD_LABEL))
 
     def test_a_failing_state_write_is_retried(self):
         ok, calls = self.park(fail_state=True)
@@ -524,17 +523,38 @@ class AtomicParkTest(unittest.TestCase):
             len([c for c in calls if c[0] == "state"]), dead_run.PARK_ATTEMPTS
         )
 
-    def test_a_failing_label_write_rolls_the_state_back(self):
-        # The other half of "both or neither": the card must not be left in
-        # Backlog without the label, where the promotion gate can pick it up.
+    def test_a_failing_label_write_never_touches_the_state(self):
+        # The other direction of "both or neither".
         ok, calls = self.park(fail_label=True)
         self.assertFalse(ok)
-        self.assertEqual(calls[-1], ("state", "In Progress"))
+        self.assertEqual([c for c in calls if c[0] == "state"], [])
+        self.assertEqual(
+            len([c for c in calls if c[0] == "+label"]), dead_run.PARK_ATTEMPTS
+        )
 
-    def test_an_unreadable_current_state_writes_nothing(self):
+    def test_an_unreadable_card_writes_nothing(self):
         ok, calls = self.park(fail_read=True)
         self.assertFalse(ok)
-        self.assertEqual([c for c in calls if c[0] in ("state", "label")], [])
+        self.assertEqual(
+            [c for c in calls if c[0] in ("state", "+label", "-label")], []
+        )
+
+    def test_a_label_this_call_did_not_write_is_never_removed(self):
+        # AC 7, at the finest grain: the undo is this call's own write coming
+        # back off. A card that ALREADY carried the hold label — parked earlier,
+        # on whatever count — keeps it, even when this park fails.
+        ok, calls = self.park(fail_state=True, already_labelled=True)
+        self.assertFalse(ok)
+        self.assertEqual([c for c in calls if c[0] == "-label"], [])
+        self.assertEqual([c for c in calls if c[0] == "+label"], [])
+
+    def test_the_only_lane_this_module_writes_is_the_hold_lane(self):
+        # ready_lane_writers.py (DRE-2859) must be able to read the
+        # destination statically: the undo is a LABEL write, never a lane one.
+        source = open(os.path.join(SCRIPTS, "dead_run.py")).read()
+        self.assertIn("PARK_STATE", source)
+        self.assertEqual(dead_run.PARK_STATE, "Backlog")
+        self.assertNotIn("cmd_state(identifier, name", source)
 
     def test_the_unlanded_note_says_the_park_did_not_happen(self):
         note = dead_run.park_unlanded_comment(run_url="https://runs/9")
@@ -561,21 +581,41 @@ class AtomicParkTest(unittest.TestCase):
 class NothingIsSilentlyUnparkedTest(unittest.TestCase):
     """AC 7: a card already parked on an inflated count stays parked."""
 
-    def test_dead_run_has_no_path_that_clears_the_hold_label(self):
+    def test_dead_run_clears_the_hold_label_only_as_its_own_undo(self):
+        # The single `remove_label` in the module is park()'s injected undo,
+        # and it is reached only when this same call added the label seconds
+        # earlier (pinned by AtomicParkTest). There is no other door — nothing
+        # here reads a card's existing hold and lifts it.
         source = open(os.path.join(SCRIPTS, "dead_run.py")).read()
-        self.assertNotIn("remove_label", source)
         self.assertNotIn("remove-label", source)
+        self.assertIn("if not already_labelled:", source)
 
     def test_the_report_step_never_clears_the_hold_label_or_unparks(self):
-        step = report_step("agent-task.yml")
+        # Read what the step RUNS, not what it explains: the comment block
+        # above the dead-run branch names `linear_ops.py unpark` as the
+        # operator's own door, and matching prose would make this vacuous.
+        step = emitted(report_step("agent-task.yml"))
         self.assertNotIn("remove-label", step)
-        self.assertNotIn("unpark", step)
+        self.assertNotIn("unpark ", step)
 
     def test_the_reset_marker_is_still_the_only_way_to_refill_the_budget(self):
         # `linear_ops.py unpark` remains a HUMAN act, and this change adds no
         # second door to it.
         self.assertEqual(dead_run.RESET_TAG, "dead-run-budget-reset")
         self.assertIn(dead_run.RESET_TAG, report_step("agent-task.yml"))
+
+
+def emitted(shell: str) -> str:
+    """`shell` minus its `#` comment lines — what the step actually RUNS.
+
+    These assertions are about what the pipeline does, and the comments
+    explaining why a mechanism moved are not things it does; matching them
+    would make the pin vacuous in both directions (the same helper
+    tests/test_turn_exhaustion_not_outage.py keeps, for the same reason).
+    """
+    return "\n".join(
+        line for line in shell.splitlines() if not line.strip().startswith("#")
+    )
 
 
 def report_step(name: str) -> str:
@@ -638,7 +678,7 @@ class WorkflowWiringTest(unittest.TestCase):
         m = re.search(r'if \[ "\$AGENT_STARTED" = "no" \]; then(.*?)\n            elif',
                       step, re.S)
         self.assertIsNotNone(m, "pre-agent branch not found")
-        self.assertNotIn("count-comments", m.group(1))
+        self.assertNotIn("count-comments", emitted(m.group(1)))
 
     def test_the_hold_branch_parks_atomically(self):
         step = report_step("agent-task.yml")
