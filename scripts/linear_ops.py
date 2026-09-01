@@ -731,10 +731,18 @@ def parse_blocked_by(body: str) -> list[str]:
     (rule 3).
 
     THE GRAMMAR IS THE SWEEP'S (DRE-2922). This parser was `blocked by` only
-    while `reconcile.blockers_of` honoured all three phrases, and that gap is
+    while the sweep's gate honoured all three phrases, and that gap is
     precisely how a prose-only blocker got created: a card written `Depends on
     DRE-N` was minted with no relation, and the sweep then held it on the
     sentence anyway. One grammar, in `blocker_prose`, read by every consumer.
+
+    Since DRE-2676 the sweep holds nothing on a sentence — it reads the same
+    grammar as a DEFECT DETECTOR (`prose_blockers.prose_claims`) and routes a
+    card whose claim no relation backs to Triage. That makes this door the way
+    the relation gets created rather than one of two ways a dependency is
+    expressed, and makes agreement between the two parsers more load-bearing,
+    not less: a declaration this door does not mint a relation for is one the
+    detector will refuse the card over.
     """
     return blocker_prose.blocker_ids(body)
 
@@ -1563,8 +1571,10 @@ def child_detail_records(nodes: list) -> list:
         `orderBy`, so the answer does not depend on which direction Linear
         happens to paginate a connection in.
       * **reads `blocked_by` off the FORMAL `blocks` relations only** — the
-        same source `reconcile.blockers_of` honours. A `**Blocked by:**` body
-        line is prose, and prose leaves the gates blind (DRE-2670).
+        same source the sweep's gate honours (`prose_blockers.relation_blockers`),
+        and since DRE-2676 the ONLY source anything honours. A `**Blocked by:**`
+        body line documents the relation; it cannot create one, and one the
+        board does not back is a defect in the card (DRE-2670, DRE-2676).
     """
     out = []
     for node in nodes or []:

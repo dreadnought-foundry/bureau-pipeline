@@ -10,6 +10,11 @@ until this module existed each of them read it differently:
     grammar was `blocked by` only, so a card written `Depends on DRE-N` got no
     relation at all.
   * `reconcile.blockers_of` — the promotion gate, on the full grammar below.
+    (Since DRE-2676 that consumer is `prose_blockers.prose_claims`, and it no
+    longer gates anything: prose is read as EVIDENCE and checked against the
+    `blocks` relations the board holds, so a claim nothing backs refuses the
+    card as a defect. The grammar below is unchanged and matters more in that
+    role — a false positive routes a well-written card to Triage.)
   * `groomer.blockers_of` — a third consumer, importing the narrow producer.
 
 That disagreement is not a tidiness problem, it is the machine that manufactures
