@@ -110,22 +110,39 @@ def _card(
     }
 
 
+def _no_per_card_fetch(identifier):
+    """DRE-2929: the watchdogs read comments off the card the board read
+    returned. A per-card fetch from either of them is the cost bug that
+    exhausted the workspace quota, so it fails the test rather than passing
+    quietly."""
+    raise AssertionError(
+        f"the watchdog fetched {identifier}'s comments per card — the bodies "
+        "come inline with active_cards() since DRE-2929"
+    )
+
+
 def _run_watchdog(cards, bodies=()):
-    """Run flag_stranded over `cards` with the card's comments mocked to
-    `bodies`; returns (result, cmd_comment mock, add_label mock).
+    """Run flag_stranded over `cards` carrying `bodies` as their comments;
+    returns (result, cmd_comment mock, add_label mock).
 
     The active_cards stub honours the lane filter it is handed, the way
     Linear does — since DRE-2736 the watchdog reads two lane sets (its own
     WATCHDOG_LANES, and Planning under its own rule) and a card must be
-    judged by the pass whose lane it actually sits in.
+    judged by the pass whose lane it actually sits in. Since DRE-2929 it also
+    carries each card's comments, the way the real query now does.
     """
+    cards = [
+        dict(card, comments={"nodes": [{"body": b} for b in bodies]})
+        for card in cards
+    ]
+
     def by_lane(states=reconcile.SWEEP_STATES):
         return [c for c in cards if c["state"]["name"] in states]
 
     with patch.object(
         reconcile, "active_cards", side_effect=by_lane
     ) as active, patch.object(
-        reconcile.linear_ops, "comment_bodies", return_value=list(bodies)
+        reconcile.linear_ops, "comment_bodies", side_effect=_no_per_card_fetch
     ), patch.object(
         reconcile.linear_ops, "cmd_comment"
     ) as comment, patch.object(
@@ -442,29 +459,47 @@ def test_watchdog_comment_is_machine_marked_not_proof_of_life():
 # the nudge loop is unchanged
 # --------------------------------------------------------------------------
 def test_active_cards_takes_a_states_filter():
-    """Each lane set is its own query: the watchdog lanes (DRE-2736: Planning
-    is NOT one of them), Planning under its own rule, and the nudge loop's
-    default — byte-identical to the pre-DRE-1993 sweep (no Planning in the
-    nudge loop, no Planning cards counted against the WIP cap)."""
+    """Each lane set gets its own ANSWER: the watchdog lanes (DRE-2736:
+    Planning is NOT one of them), Planning under its own rule, and the nudge
+    loop's default — byte-identical to the pre-DRE-1993 sweep (no Planning in
+    the nudge loop, no Planning cards counted against the WIP cap).
+
+    Since DRE-2929 those three answers come out of ONE read of the union
+    (SWEPT_LANES) rather than three queries, so what this pins is what it
+    always meant to pin: the lane a caller asked for is the lane it gets. The
+    request count is the budget suite's business
+    (tests/test_sweep_request_budget.py)."""
+    board = [
+        _card("DRE-1", state="Todo"),
+        _card("DRE-2", state="In Progress"),
+        _card("DRE-3", state="In Review"),
+        _card("DRE-4", state="Planning"),
+        _card("DRE-5", state="Intake"),
+    ]
     seen = []
 
     def spy_gql(query, variables=None):
         seen.append(variables)
+        wanted = set((variables or {}).get("states") or ())
+        nodes = [c for c in board if c["state"]["name"] in wanted]
         # The paginated query (DRE-2681) reads pageInfo; one page, no cursor.
-        return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
+        return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
 
+    reconcile.reset_sweep_cards()
     with patch.object(reconcile.linear_ops, "gql", side_effect=spy_gql):
-        reconcile.active_cards(reconcile.WATCHDOG_LANES)
-        reconcile.active_cards(reconcile.PLANNING_LANE)
-        reconcile.active_cards()
-    # `after: None` is the first page's cursor — the lane filter is what this
-    # test pins, and it survives pagination unchanged. `In QA` is retired
-    # (DRE-2726) and folded into `In Review`, so it no longer appears here.
-    assert seen[0] == {"states": ["Todo", "In Progress"], "after": None}
-    assert seen[1] == {"states": ["Planning"], "after": None}
-    assert seen[2] == {
-        "states": ["Todo", "In Progress", "In Review"], "after": None
-    }
+        watchdog = reconcile.active_cards(reconcile.WATCHDOG_LANES)
+        planning = reconcile.active_cards(reconcile.PLANNING_LANE)
+        nudge = reconcile.active_cards()
+    assert [c["identifier"] for c in watchdog] == ["DRE-1", "DRE-2"]
+    assert [c["identifier"] for c in planning] == ["DRE-4"]
+    # `In QA` is retired (DRE-2726) and folded into `In Review`, so the nudge
+    # loop's three lanes are Todo / In Progress / In Review — and Planning and
+    # Intake are in neither of the other two answers.
+    assert [c["identifier"] for c in nudge] == ["DRE-1", "DRE-2", "DRE-3"]
+    # `after: None` is the first page's cursor — it survives pagination
+    # unchanged. The one read covers the union of every lane set the sweep asks
+    # for, which is what makes serving all three from it correct.
+    assert seen == [{"states": list(reconcile.SWEPT_LANES), "after": None}]
 
 
 # --------------------------------------------------------------------------

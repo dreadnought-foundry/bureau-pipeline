@@ -352,6 +352,11 @@ def _run_sweep(fake) -> FakeLinear:
     with contextlib.ExitStack() as stack:
         for m in _sweep_mocks():
             stack.enter_context(m)
+        # The WIP cap is a different mechanism with its own tests, and it short-
+        # circuits the promotion gate's read — which would let a board that
+        # tripled its way over the cap look CHEAPER. Pinned high so what is
+        # measured here is request count and nothing else.
+        stack.enter_context(mock.patch.object(reconcile, "MAX_WIP", 1000))
         stack.enter_context(_linear(fake))
         reconcile.main()
     return fake

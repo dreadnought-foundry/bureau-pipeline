@@ -879,13 +879,44 @@ def drain_retiring_lanes() -> None:
         print(f"drain: moved {len(stranded)} card(s) out of retiring lane(s)")
 
 
-def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
-    """EVERY card in `states`, not the first page of them (DRE-2681).
+# ONE board read per sweep (DRE-2929). Four callers ask active_cards() for
+# four lane sets, SWEPT_LANES is already their union, and every one of them was
+# its own paged query — so a fleet of four repos paid four board reads per
+# sweep for the same rows. None of them mutates the list it gets back, and the
+# writes that DO happen mid-sweep are already read from the pre-write snapshot
+# on purpose (flag_stranded's hold labels are the documented example: main()
+# skips a card flagged this very sweep off the returned `flagged` set, never
+# off a re-read). Reset at the top of every main() so a second sweep in one
+# process — which is what a test run is — never inherits the first one's board.
+_swept_cards: list[dict] | None = None
 
-    This list is the sweep's whole world: the nudge loop, the WIP count that
-    budgets promotion, and the stranded-card watchdog all read it. A single
-    unpaginated page silently truncated every one of them at 100 rows.
+
+def reset_sweep_cards() -> None:
+    """Drop the sweep's board snapshot. Called once at the top of main()."""
+    global _swept_cards
+    _swept_cards = None
+
+
+def card_comment_bodies(card: dict) -> list[str]:
+    """The card's comment bodies, oldest→newest, off the query that fetched it.
+
+    The same list `linear_ops.comment_bodies` returns — same `comments(last:
+    50)` window — for zero requests, because `active_cards` and
+    `backlog_children` both select it inline. A card fetched by a query that
+    did NOT select comments reads as having none, which is why nothing here
+    falls back to a per-card fetch: a silent fallback would put back exactly
+    the request this exists to remove (DRE-2929).
     """
+    return [
+        node.get("body") or ""
+        for node in (card.get("comments") or {}).get("nodes", [])
+    ]
+
+
+def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
+    """The paged board read itself. `comments(last: 50)` is inline — the shape
+    backlog_children already uses — so every reader downstream gets the bodies
+    with the card instead of buying them one request at a time (DRE-2929)."""
     return linear_ops.gql_paged(
         """query($states: [String!]!, $after: String) {
            issues(first: 100, after: $after, filter: {
@@ -894,9 +925,33 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
            }) { nodes {
              id identifier title description updatedAt
              state { name } labels { nodes { name } }
+             comments(last: 50) { nodes { body } }
            } pageInfo { hasNextPage endCursor } } }""",
         {"states": list(states)},
     )
+
+
+def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
+    """EVERY card in `states`, not the first page of them (DRE-2681).
+
+    This list is the sweep's whole world: the nudge loop, the WIP count that
+    budgets promotion, and the stranded-card watchdog all read it. A single
+    unpaginated page silently truncated every one of them at 100 rows.
+
+    Served from ONE read of SWEPT_LANES per sweep (DRE-2929), filtered here to
+    the lanes the caller asked for — so the answer is byte-identical to its own
+    query's, and the sweep's Linear cost is a function of the lanes rather than
+    of the cards in them. A caller asking for a lane OUTSIDE that union gets a
+    real query: the union is what was read, and answering from it would be a
+    confident empty (drain_retiring_lanes is that caller by construction).
+    """
+    global _swept_cards
+    wanted = set(states)
+    if not wanted <= set(SWEPT_LANES):
+        return _fetch_active_cards(states)
+    if _swept_cards is None:
+        _swept_cards = _fetch_active_cards(SWEPT_LANES)
+    return [card for card in _swept_cards if card["state"]["name"] in wanted]
 
 
 # Live-snapshot re-check for NO-ROUTE claims (DRE-2260). Fleet repos pin the
@@ -1015,7 +1070,23 @@ def flag_stranded() -> set[str]:
         labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
         if routable and "agent:planner" in labels:
             continue  # an epic in these lanes carries no run — normal, not stranded
-        bodies = linear_ops.comment_bodies(ident)
+        # The bodies come with the card (DRE-2929) — `active_cards` selects
+        # `comments(last: 50)` inline, so this whole loop costs zero requests
+        # however many cards the board holds. It used to be one Linear request
+        # per card, per sweep, per repo, and on 2026-09-01 that plus its
+        # siblings exhausted the workspace quota for seven hours.
+        bodies = card_comment_bodies(card)
+        # ONE age gate, both classes (DRE-2736), and it runs FIRST (DRE-2929).
+        # It used to sit inside the routable branch, so NO ROUTE fired on the
+        # first sweep that saw a card and raced the Todo gate's repair pass. A
+        # prior redispatch receipt substitutes for the elapsed time on either
+        # class: it resets updatedAt every cycle, so "dispatch fired, nothing
+        # ran" is already the evidence the clock was there to gather — which is
+        # why the gate reads the receipt and the receipt alone before any of
+        # the checks below look at what the card says.
+        redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
+        if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
+            continue  # young — give the dispatch (and the gate's repair) time
         if routing_verdict.is_parked(bodies):
             # DRE-2724: a PARKED card is well-formed and sitting still ON
             # PURPOSE. Reporting the intended state as a defect costs the card
@@ -1031,15 +1102,6 @@ def flag_stranded() -> set[str]:
             continue  # flagged once already — idempotent forever
         if any(b.lstrip().startswith(_LIFE_PREFIXES) for b in bodies):
             continue  # a run DID start (either class) — the dead-run machinery owns it now
-        # ONE age gate, both classes (DRE-2736). It used to sit inside the
-        # routable branch, so NO ROUTE fired on the first sweep that saw a
-        # card and raced the Todo gate's repair pass. A prior redispatch
-        # receipt substitutes for the elapsed time on either class: it resets
-        # updatedAt every cycle, so "dispatch fired, nothing ran" is already
-        # the evidence the clock was there to gather.
-        redispatched = any(_TODO_REDISPATCH_NOTE in b for b in bodies)
-        if not redispatched and age_minutes(card["updatedAt"]) < WATCHDOG_MINUTES:
-            continue  # young — give the dispatch (and the gate's repair) time
         if routable:
             # Says what was OBSERVED and nothing more (DRE-2524). The old text
             # offered three suspects — the Actions budget, the LLM quota, the
@@ -1109,9 +1171,24 @@ def flag_stalled_planning() -> set[str]:
     seven days back.
 
     Same manners as flag_stranded: held and hand-built cards are skipped, the
+    repo filter leaves another repo's card to that repo's own sweep, the
     WATCHDOG_TAG comment is the once-ever idempotency marker, and flagging is
     one plain-English comment plus HOLD_LABEL — no state move, no cancel.
     Returns the identifiers flagged this sweep.
+
+    THE REPO FILTER IS flag_stranded's, EXACTLY (DRE-2929), and the reason it
+    reads oddly here is the reason it was missing: a card in Planning usually
+    has no `repo:` label — assigning one is what Planning does — so filtering
+    on "is this mine" would fire on nothing. It filters on the OTHER answer:
+    a card whose slug is on the routing rail and is NOT this repo's belongs to
+    that repo's sweep, which reads the same board and applies the same rule. An
+    unlabelled card is nobody's in particular and stays everybody's, so the
+    front path is untouched and the once-ever tag makes whichever sweep gets
+    there first the only one that speaks. Without it, every repo's sweep paid a
+    request for every Planning card on the whole board — including repos with
+    no candidates at all — and the cutover (DRE-2728) put every new card
+    through this lane, inflating the single most expensive term in the sweep's
+    budget on the day it landed.
     """
     flagged: set[str] = set()
     for card in active_cards(PLANNING_LANE):
@@ -1127,7 +1204,18 @@ def flag_stalled_planning() -> set[str]:
                 "Planning is not a strand"
             )
             continue
-        bodies = linear_ops.comment_bodies(ident)
+        slug = card_repo(card)
+        if slug is not None and slug in validate_card.VALID_SLUGS and slug != REPO_SLUG:
+            continue  # that repo's own sweep applies this same rule to its cards
+        # The age gate runs BEFORE anything reads what the card says (DRE-2929).
+        # It needs `updatedAt` and nothing else, and a young card is the common
+        # case — so every check below it is work the lane's own question has
+        # already made unnecessary.
+        if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
+            continue  # planning is young — let it produce its classification
+        # Off the card the board read already returned (DRE-2929): no per-card
+        # request, however many cards Planning holds.
+        bodies = card_comment_bodies(card)
         if routing_verdict.is_parked(bodies):
             # DRE-2724, same rule as flag_stranded: PARKED is a decision, not a
             # stall. A parked card in Planning owes nobody a classification —
@@ -1139,8 +1227,6 @@ def flag_stalled_planning() -> set[str]:
             continue
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
-        if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
-            continue  # planning is young — let it produce its classification
         reason = (
             "planning has produced nothing. Observed: this card has sat in "
             f"Planning for {PLANNING_MINUTES}+ minutes with nothing posted or "
@@ -1252,8 +1338,14 @@ def escalate_aged_intake() -> set[str]:
 
     NO REPO FILTER, deliberately, and it has two consequences worth stating.
     An Intake card has no `repo:` label yet — assigning one is what Planning
-    does — so filtering by repo would make this fire on nothing at all
-    (flag_stalled_planning is unfiltered for the same reason). But every
+    does — so filtering by repo would make this fire on nothing at all.
+    (flag_stalled_planning used to say the same and be unfiltered; since
+    DRE-2929 it filters on the OTHER answer — a card whose slug IS on the rail
+    and is not this repo's belongs to that repo's sweep — which leaves the
+    unlabelled front path untouched. The same filter would be correct here and
+    is deliberately not added: Intake's cards are unlabelled by definition, so
+    it would be a filter that never fires, and this gate is capped per sweep
+    rather than paying per card.) But every
     product repo's sweep reads the same board, so the effective rate across the
     fleet is a multiple of the per-sweep cap, and two sweeps landing together
     can both post the note before either move lands. The move itself never
@@ -4522,6 +4614,10 @@ def main(
     every merge. Needs a dispatch-capable GH token, unlike promote_only.
     (Origin: PR #1348 / DRE-1277 sat conflicted ~1h waiting on the cron.)
     """
+    # One board read serves this whole sweep (DRE-2929), and the next sweep
+    # must not inherit it — every invocation starts from a fresh snapshot,
+    # including the two event-driven ones above.
+    reset_sweep_cards()
     if conflicts_only:
         try:
             unstick_conflicts()
