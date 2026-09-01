@@ -136,19 +136,30 @@ def test_active_cards_reads_past_the_first_page():
 
 
 def test_active_cards_still_filters_by_the_states_it_was_asked_for():
-    """Pagination must not drop the caller's variables on the follow-up pages —
-    the watchdog passes WATCHDOG_LANES and gets a different lane set."""
+    """Pagination must not drop the query's variables on the follow-up pages,
+    and the caller must still get its own lane set back.
+
+    Since DRE-2929 the read is of SWEPT_LANES — the union of every lane set the
+    sweep asks for, read once and filtered per caller — so the states on the
+    wire are the union's and the states in the ANSWER are the caller's. Both
+    halves matter: drop the variables on page 2 and the second hundred rows
+    come back from the wrong lanes."""
     sent: list[dict] = []
-    fake = FakeLinear([_active_card(n) for n in range(1, 151)])
+    board = [_active_card(n) for n in range(1, 151)]
+    board[0] = dict(board[0], state={"name": "In Review"})  # asked for: excluded
+    fake = FakeLinear(board)
 
     def spy(query, variables=None):
         sent.append(dict(variables or {}))
         return fake.gql(query, variables)
 
     with patch.object(linear_ops, "gql", spy):
-        reconcile.active_cards(("Todo", "Planning"))
+        cards = reconcile.active_cards(("Todo", "Planning"))
     assert len(sent) == 2
-    assert all(v["states"] == ["Todo", "Planning"] for v in sent)
+    assert all(v["states"] == list(reconcile.SWEPT_LANES) for v in sent)
+    assert {c["state"]["name"] for c in cards} == {"Todo"}
+    assert len(cards) == 149
+    assert cards[-1]["identifier"] == THE_150TH
 
 
 # --------------------------------------------------------------------------

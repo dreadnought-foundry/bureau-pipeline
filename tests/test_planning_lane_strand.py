@@ -93,17 +93,33 @@ def _card(
     }
 
 
+def _no_per_card_fetch(identifier):
+    """DRE-2929: neither watchdog may fetch a card's comments one card at a
+    time — the bodies arrive inline with the board read."""
+    raise AssertionError(
+        f"the watchdog fetched {identifier}'s comments per card — the bodies "
+        "come inline with active_cards() since DRE-2929"
+    )
+
+
 def _run_watchdog(cards, bodies=()):
     """Run the WHOLE watchdog (flag_stranded, which owns both passes) over
     `cards`, with the active_cards stub honouring the lane filter it is handed
-    the way Linear does. Returns (flagged, cmd_comment mock, add_label mock)."""
+    the way Linear does and carrying each card's comments the way the real
+    query does since DRE-2929. Returns (flagged, cmd_comment mock, add_label
+    mock)."""
+    cards = [
+        dict(card, comments={"nodes": [{"body": b} for b in bodies]})
+        for card in cards
+    ]
+
     def by_lane(states=reconcile.SWEEP_STATES):
         return [c for c in cards if c["state"]["name"] in states]
 
     with patch.object(
         reconcile, "active_cards", side_effect=by_lane
     ), patch.object(
-        reconcile.linear_ops, "comment_bodies", return_value=list(bodies)
+        reconcile.linear_ops, "comment_bodies", side_effect=_no_per_card_fetch
     ), patch.object(
         reconcile.linear_ops, "cmd_comment"
     ) as comment, patch.object(
