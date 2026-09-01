@@ -232,17 +232,18 @@ def test_unmet_formal_blocker_names_the_blocker_its_state_and_the_relation(capsy
     assert "a formal blockedBy relation" in held[0]
 
 
-def test_unmet_prose_blocker_names_the_description_line_as_the_source(capsys):
+def test_a_prose_only_blocker_speaks_as_a_DEFECT_not_as_a_hold(capsys):
     """A blocker declared only by a description line is a different fact with a
-    different fix, and the line says which one it was."""
+    different fix, and the line says which one it was. Since DRE-2676 that fact
+    is "this card says something the board does not hold" — a defect — so the
+    line names the claim and the refusal rather than a state nothing has."""
     card = _card("DRE-2900", description="Blocked by: DRE-2899\nwork")
     promoted = _sweep([card], card_state="In Progress")
     assert promoted == 0
     held = _lines_naming(capsys.readouterr(), "DRE-2900")
     assert len(held) == 1, f"expected exactly one line, got {held}"
     assert "DRE-2899" in held[0]
-    assert "In Progress" in held[0]
-    assert "a description line" in held[0]
+    assert reconcile.prose_blockers.CARD_TAG in held[0]
 
 
 def test_wip_budget_break_reports_once_naming_the_shortfall(capsys):

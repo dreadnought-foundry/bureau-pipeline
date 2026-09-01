@@ -72,27 +72,32 @@ class StalenessBackstopTest(unittest.TestCase):
 
 
 class BlockerImmunityRegression(unittest.TestCase):
-    """Pin the parent-epic blocker immunity shipped earlier (DRE-1233 class)."""
+    """Pin the parent-epic blocker immunity shipped earlier (DRE-1233 class).
+
+    Read through `prose_claims` since DRE-2676: prose is no longer a blocker at
+    all, so the immunity now protects the DEFECT DETECTOR — a card naming its
+    own epic on a blocker line must not be routed to Triage for a relation
+    nobody would ever set."""
 
     def test_parent_epic_ref_is_not_a_blocker(self):
-        import reconcile
+        import prose_blockers
         card = {
             "identifier": "DRE-10",
             "parent": {"identifier": "DRE-1"},
             "description": "**Blocked by:** DRE-1, DRE-9\nSerialize after: all other DRE-1 work",
             "inverseRelations": {"nodes": []},
         }
-        self.assertEqual(reconcile.blockers_of(card), {"DRE-9"})
+        self.assertEqual(prose_blockers.prose_claims(card), {"DRE-9"})
 
     def test_self_ref_is_not_a_blocker(self):
-        import reconcile
+        import prose_blockers
         card = {
             "identifier": "DRE-10",
             "parent": None,
             "description": "Blocked by: DRE-10, DRE-7",
             "inverseRelations": {"nodes": []},
         }
-        self.assertEqual(reconcile.blockers_of(card), {"DRE-7"})
+        self.assertEqual(prose_blockers.prose_claims(card), {"DRE-7"})
 
 
 if __name__ == "__main__":

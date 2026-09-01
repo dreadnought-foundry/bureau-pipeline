@@ -8,6 +8,12 @@ Three functions parsed "blocked by" out of card text and they did not agree:
     only. A card written `Depends on DRE-N` got no relation at all.
   * `reconcile.blockers_of` — the promotion gate. Full anchored grammar:
     `blocked by` / `depends on` / `serialize after`, list markers included.
+    (Since DRE-2676 that consumer is `prose_blockers.prose_claims`, and it is
+    the sweep's DEFECT DETECTOR rather than its gate: prose no longer adds a
+    blocker, it is checked against the relations the board actually holds. The
+    grammar it reads is unchanged, which is why it is still driven through this
+    corpus — a detector that disagreed with the producer would refuse cards the
+    door had just minted relations for.)
   * `groomer.blockers_of` — imported the NARROW producer, so a third answer.
 
 The disagreement is the machine that manufactures a prose-only blocker: the
@@ -54,7 +60,7 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 import blocker_prose  # noqa: E402
 import groomer  # noqa: E402
 import linear_ops  # noqa: E402
-import reconcile  # noqa: E402
+import prose_blockers  # noqa: E402
 
 from test_subissue_valid_children import FakeLinear  # noqa: E402
 
@@ -79,8 +85,8 @@ def _through_producer(text: str) -> set[str]:
     return set(linear_ops.parse_blocked_by(text))
 
 
-def _through_reconcile(text: str) -> set[str]:
-    return reconcile.blockers_of(_card(text))
+def _through_the_sweep(text: str) -> set[str]:
+    return prose_blockers.prose_claims(_card(text))
 
 
 def _through_groomer(text: str) -> set[str]:
@@ -89,7 +95,7 @@ def _through_groomer(text: str) -> set[str]:
 
 CONSUMERS = {
     "linear_ops.parse_blocked_by": _through_producer,
-    "reconcile.blockers_of": _through_reconcile,
+    "prose_blockers.prose_claims": _through_the_sweep,
     "groomer.blockers_of": _through_groomer,
 }
 
@@ -209,7 +215,7 @@ def test_no_module_keeps_a_private_blocked_by_pattern():
         assert "_BLOCKER_LINE = re.compile" not in src, p.name
 
 
-@pytest.mark.parametrize("module", [linear_ops, reconcile, groomer])
+@pytest.mark.parametrize("module", [linear_ops, prose_blockers, groomer])
 def test_all_three_read_the_shared_module(module):
     src = Path(module.__file__).read_text()
     assert "import blocker_prose" in src

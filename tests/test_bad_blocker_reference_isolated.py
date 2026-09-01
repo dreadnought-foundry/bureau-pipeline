@@ -14,13 +14,21 @@ FIX UNDER TEST:
   1. linear_ops raises LinearError (a RuntimeError) — never SystemExit — for
      API/reference errors; the CLI __main__ converts it to a nonzero exit
      explicitly at top level, so command-line behavior is unchanged.
-  2. promote_ready isolates per-card failures: a card whose blocker reference
-     can't resolve is SKIPPED with a loud ERROR line + ONE explanatory
-     comment (keyed on reconcile.BAD_REF_TAG, like DEAD_TAG), and the rest
-     of the sweep proceeds.
-  3. epic_blockers_unmet fails SAFE (returns blocked) on a LinearError from
-     a blocker-state read, instead of dying.
+  2. promote_ready isolates per-card failures: a card the gate cannot evaluate
+     is SKIPPED with a loud ERROR line + ONE explanatory comment (keyed on
+     reconcile.BAD_REF_TAG, like DEAD_TAG), and the rest of the sweep proceeds.
+  3. epic_blockers_unmet fails SAFE (returns blocked) rather than dying.
   4. A sweep-level summary line counts skipped-card errors.
+
+WHAT DRE-2676 CHANGED, AND WHAT IT DID NOT. The typo'd id itself is no longer
+a reference the gate resolves at all: a dependency is a `blockedBy` relation,
+so `Blocked by: DRE-99999` with no relation behind it is a CARD DEFECT, named
+and routed to Triage rather than skipped as unevaluable. Every guarantee this
+card bought is still asserted below — the sweep survives it, the offending card
+is never promoted, its siblings are unaffected, it is told once and only once,
+and a write failure is never diagnosed as a reference failure. What changed is
+the diagnosis, and it changed to a more accurate one: a nonexistent card cannot
+be the blocker the gate is waiting for, so nothing waits.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/ -v
 """
@@ -40,6 +48,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
 import linear_ops  # noqa: E402
+import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402
 
 # The nonexistent card id, and the blocker line built HERE — never written
@@ -126,7 +135,11 @@ def test_module_never_raises_system_exit():
 
 
 # ---------------------------------------------------------------------------
-# promote_ready: one bad reference skips ONE card, not the sweep
+# promote_ready: one bad card is one bad card, never the sweep
+#
+# The typo'd id is now read as a prose claim the board does not corroborate
+# (DRE-2676), so the card is refused, told, and routed to Triage instead of
+# being skipped. Every isolation guarantee below is the one DRE-2035 bought.
 # ---------------------------------------------------------------------------
 def test_bad_reference_does_not_stop_other_cards_from_promoting():
     """The headline acceptance: DRE-100 carries a blocker line naming a
@@ -136,13 +149,12 @@ def test_bad_reference_does_not_stop_other_cards_from_promoting():
     good = _candidate("DRE-200")
     with patch.object(reconcile, "backlog_children", return_value=[bad, good]), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
-        patch.object(reconcile, "card_state", side_effect=_entity_not_found), \
         patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-200", "Todo", "Backlog")
+    assert ("DRE-200", "Todo", "Backlog") in [c.args for c in advance.mock_calls]
 
 
 def test_bad_card_gets_exactly_one_comment_across_sweeps():
@@ -153,7 +165,6 @@ def test_bad_card_gets_exactly_one_comment_across_sweeps():
     def _sweep(prior_comments: int) -> list[str]:
         with patch.object(reconcile, "backlog_children", return_value=[bad]), \
             patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
-            patch.object(reconcile, "card_state", side_effect=_entity_not_found), \
             patch.object(
                 reconcile.linear_ops, "count_comments", return_value=prior_comments
             ), \
@@ -163,66 +174,79 @@ def test_bad_card_gets_exactly_one_comment_across_sweeps():
         return [
             call.args[1]
             for call in comment.call_args_list
-            if reconcile.BAD_REF_TAG in call.args[1]
+            if prose_blockers.CARD_TAG in call.args[1]
         ]
 
     first = _sweep(prior_comments=0)
     assert len(first) == 1
-    assert "doesn't resolve" in first[0]  # plain-English "fix the reference"
+    assert BAD_ID in first[0]  # plain-English, and it names the claim
     second = _sweep(prior_comments=1)
     assert second == []
 
 
 def test_skipped_card_is_never_promoted():
-    """The bad card itself must be SKIPPED — never advanced on a reference
-    the gate could not evaluate."""
+    """The bad card itself is never advanced to Todo on a dependency claim the
+    board does not hold."""
     bad = _candidate("DRE-100", BAD_BLOCKER_LINE)
     with patch.object(reconcile, "backlog_children", return_value=[bad]), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
-        patch.object(reconcile, "card_state", side_effect=_entity_not_found), \
         patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 0
-    advance.assert_not_called()
+    assert ("DRE-100", "Todo", "Backlog") not in [c.args for c in advance.mock_calls]
 
 
-def test_sweep_summary_counts_skipped_cards(capsys):
-    """A red pattern must be visible in the run log: an ERROR line per skip
-    and a summary line counting them."""
-    bad = _candidate("DRE-100", BAD_BLOCKER_LINE)
-    with patch.object(reconcile, "backlog_children", return_value=[bad]), \
-        patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
-        patch.object(reconcile, "card_state", side_effect=_entity_not_found), \
+def test_the_unevaluable_card_path_still_isolates_one_card(capsys):
+    """The read-guard itself, pinned. Every read the gate makes to EVALUATE a
+    card sits inside it, and a LinearError from any of them must skip that one
+    card — loudly, with a summary line — and leave the rest of the fleet's
+    sweep alone. This is the contract DRE-2035 bought; the reads behind it have
+    changed and the isolation must not."""
+    bad = _candidate("DRE-100")
+    bad["parent"] = {"identifier": "DRE-801", "state": {"name": "In Progress"}}
+    good = _candidate("DRE-200")
+
+    def _gate(epic_identifier):
+        # The gate is consulted once per EPIC per sweep, so the two candidates
+        # sit under different epics — otherwise the second card would inherit
+        # the first's cached answer and the isolation would go untested.
+        if epic_identifier == "DRE-801":
+            _entity_not_found(epic_identifier)
+        return False
+
+    with patch.object(reconcile, "backlog_children", return_value=[bad, good]), \
+        patch.object(reconcile, "epic_blockers_unmet", side_effect=_gate), \
         patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
-        patch.object(reconcile.linear_ops, "cmd_advance"), \
+        patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment"):
-        reconcile.promote_ready(active_count=0)
+        promoted = reconcile.promote_ready(active_count=0)
+    assert promoted == 1
+    assert ("DRE-200", "Todo", "Backlog") in [c.args for c in advance.mock_calls]
     captured = capsys.readouterr()
     assert "ERROR" in captured.err and "DRE-100" in captured.err
     assert "1 card(s) SKIPPED" in captured.out + captured.err
 
 
 def test_comment_failure_does_not_kill_the_sweep():
-    """Reporting must never block the sweep: even when posting the skip
+    """Reporting must never block the sweep: even when posting the refusal
     comment ITSELF fails, the clean sibling still promotes."""
     bad = _candidate("DRE-100", BAD_BLOCKER_LINE)
     good = _candidate("DRE-200")
 
-    def _comment(identifier, body):
-        if reconcile.BAD_REF_TAG in body:
+    def _comment(identifier, body, *flags):
+        if prose_blockers.CARD_TAG in body:
             _entity_not_found(identifier)
 
     with patch.object(reconcile, "backlog_children", return_value=[bad, good]), \
         patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
-        patch.object(reconcile, "card_state", side_effect=_entity_not_found), \
         patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
         patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
         patch.object(reconcile.linear_ops, "cmd_comment", side_effect=_comment):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-200", "Todo", "Backlog")
+    assert ("DRE-200", "Todo", "Backlog") in [c.args for c in advance.mock_calls]
 
 
 # ---------------------------------------------------------------------------
@@ -284,12 +308,16 @@ def test_comment_write_failure_after_advance_is_not_a_bad_reference():
 # ---------------------------------------------------------------------------
 def test_epic_bad_blocker_reference_fails_safe_blocked():
     """An epic whose description-line blocker doesn't resolve reads as
-    BLOCKED (children held, sweep alive) — never an escaping exception."""
+    BLOCKED (children held, sweep alive) — never an escaping exception. Since
+    DRE-2676 the reason is that the line claims a relation the board does not
+    hold, which for a nonexistent card it never could."""
     epic = {
         "identifier": "DRE-800",
         "description": "**Repo:** agent-bureau\n" + BAD_BLOCKER_LINE + "\nepic",
         "inverseRelations": {"nodes": []},
     }
     with patch.object(reconcile, "_fetch_epic_relations", return_value=epic), \
-        patch.object(reconcile, "card_state", side_effect=_entity_not_found):
+        patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+        patch.object(reconcile.linear_ops, "first_comment_at", return_value=None), \
+        patch.object(reconcile.linear_ops, "cmd_comment"):
         assert reconcile.epic_blockers_unmet("DRE-800") is True

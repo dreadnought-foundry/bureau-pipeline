@@ -831,10 +831,18 @@ def parse_blocked_by(body: str) -> list[str]:
     (rule 3).
 
     THE GRAMMAR IS THE SWEEP'S (DRE-2922). This parser was `blocked by` only
-    while `reconcile.blockers_of` honoured all three phrases, and that gap is
+    while the sweep's gate honoured all three phrases, and that gap is
     precisely how a prose-only blocker got created: a card written `Depends on
     DRE-N` was minted with no relation, and the sweep then held it on the
     sentence anyway. One grammar, in `blocker_prose`, read by every consumer.
+
+    Since DRE-2676 the sweep holds nothing on a sentence — it reads the same
+    grammar as a DEFECT DETECTOR (`prose_blockers.prose_claims`) and routes a
+    card whose claim no relation backs to Triage. That makes this door the way
+    the relation gets created rather than one of two ways a dependency is
+    expressed, and makes agreement between the two parsers more load-bearing,
+    not less: a declaration this door does not mint a relation for is one the
+    detector will refuse the card over.
     """
     return blocker_prose.blocker_ids(body)
 
@@ -1338,6 +1346,35 @@ def cmd_count_comments(identifier: str, needle: str, *flags: str) -> None:
     print(count_comments(identifier, needle, since=since))
 
 
+def first_comment_at(identifier: str, needle: str) -> str | None:
+    """When the OLDEST comment containing `needle` was posted, ISO — or None.
+
+    "How long has this stood?" is a question only the record can answer, and
+    the record is the receipt the first sweep that noticed posted. The sweep's
+    prose-defect escalation (DRE-2676) reads its own comment's age rather than
+    inferring one from an adjacent signal — the console-honesty rule, applied
+    to a clock: elapsed time since the card was updated, or since the sweep
+    started, would each answer a question nobody asked.
+
+    OLDEST, not newest: `_surface_once` posts exactly one of these, so the two
+    agree today — but if a reset ever re-arms the notice, "since it was first
+    said" is the age that means what the caller thinks it means.
+
+    Same `comments(last: 50)` window every other reader here uses. None when no
+    comment carries the marker, which callers must treat as UNKNOWN rather than
+    as zero: nothing has been ignored if nothing was ever said.
+    """
+    data = gql(
+        """query($id: String!) { issue(id: $id) {
+             comments(last: 50) { nodes { body createdAt } } } }""",
+        {"id": identifier},
+    )
+    for node in data["issue"]["comments"]["nodes"]:  # oldest -> newest
+        if needle in (node.get("body") or ""):
+            return node.get("createdAt") or None
+    return None
+
+
 def comment_bodies(identifier: str) -> list[str]:
     """All comment bodies on the card, oldest→newest. Used by the model-fallback
     selector (DRE-1354) to read which model each prior attempt used / died on."""
@@ -1634,8 +1671,10 @@ def child_detail_records(nodes: list) -> list:
         `orderBy`, so the answer does not depend on which direction Linear
         happens to paginate a connection in.
       * **reads `blocked_by` off the FORMAL `blocks` relations only** — the
-        same source `reconcile.blockers_of` honours. A `**Blocked by:**` body
-        line is prose, and prose leaves the gates blind (DRE-2670).
+        same source the sweep's gate honours (`prose_blockers.relation_blockers`),
+        and since DRE-2676 the ONLY source anything honours. A `**Blocked by:**`
+        body line documents the relation; it cannot create one, and one the
+        board does not back is a defect in the card (DRE-2670, DRE-2676).
     """
     out = []
     for node in nodes or []:

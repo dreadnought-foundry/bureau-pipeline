@@ -56,12 +56,21 @@ def _card(
     parent_state: str | None = "In Progress",
     comments=(),
     blocked_by: str = "",
+    blocker_state: str = "Done",
     labels=("repo:bureau-pipeline", "agent:engineer"),
 ):
-    """A Backlog card. `parent_state=None` makes it a PARENTLESS one-off."""
+    """A Backlog card. `parent_state=None` makes it a PARENTLESS one-off.
+
+    `blocked_by` gives the card a real `blockedBy` relation — the thing the gate
+    reads (DRE-2676) — and the `**Blocked by:**` line that documents it."""
     description = "Trim the trailing slash from the health endpoint."
+    relations = []
     if blocked_by:
         description += f"\n\n**Blocked by:** {blocked_by}"
+        relations.append({
+            "type": "blocks",
+            "issue": {"identifier": blocked_by, "state": {"name": blocker_state}},
+        })
     return {
         "id": f"uuid-{identifier}",
         "identifier": identifier,
@@ -75,7 +84,7 @@ def _card(
         ),
         "labels": {"nodes": [{"name": name} for name in labels]},
         "comments": {"nodes": [{"body": b} for b in comments]},
-        "inverseRelations": {"nodes": []},
+        "inverseRelations": {"nodes": relations},
     }
 
 
@@ -254,16 +263,16 @@ class TestAOneOffPassesEveryOtherGate:
 
     def test_an_unmet_blocker_still_holds_it(self):
         board = _Board(
-            _card(parent_state=None, comments=[FLEET], blocked_by="DRE-9"),
-            blocker_state="In Progress",
+            _card(parent_state=None, comments=[FLEET], blocked_by="DRE-9",
+                  blocker_state="In Progress"),
         )
         assert board.promote() == 0
         assert board.lane_of("DRE-2735") == "Backlog"
 
     def test_a_met_blocker_lets_it_through(self):
         board = _Board(
-            _card(parent_state=None, comments=[FLEET], blocked_by="DRE-9"),
-            blocker_state="Done",
+            _card(parent_state=None, comments=[FLEET], blocked_by="DRE-9",
+                  blocker_state="Done"),
         )
         assert board.promote() == 1
 

@@ -106,16 +106,20 @@ def test_epic_with_no_blockers_reports_clear():
         assert reconcile.epic_blockers_unmet("DRE-800") is False
 
 
-def test_epic_blocked_by_description_line_reports_unmet():
-    """A 'Blocked by: DRE-700' line on the EPIC counts (A not Done)."""
+def test_epic_blocked_by_description_line_alone_reports_unmet():
+    """A 'Blocked by: DRE-700' line on the EPIC that NO relation corroborates
+    still holds the epic's children — but since DRE-2676 it holds them because
+    the sentence is a defect the board contradicts, not because prose is a
+    dependency (tests/test_prose_blocker_defect.py owns that behaviour)."""
     epic_b = {
         "identifier": "DRE-800",
         "description": "**Repo:** agent-bureau\nBlocked by: DRE-700\nepic B",
         "inverseRelations": {"nodes": []},
     }
-    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic_b), patch.object(
-        reconcile, "card_state", return_value="In Progress"
-    ):
+    with patch.object(reconcile, "_fetch_epic_relations", return_value=epic_b), \
+        patch.object(reconcile.linear_ops, "count_comments", return_value=0), \
+        patch.object(reconcile.linear_ops, "first_comment_at", return_value=None), \
+        patch.object(reconcile.linear_ops, "cmd_comment"):
         assert reconcile.epic_blockers_unmet("DRE-800") is True
 
 

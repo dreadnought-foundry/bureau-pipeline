@@ -41,22 +41,29 @@ governs how you consume it.
   touching disjoint files wherever possible. Never name the parent epic on a
   "Blocked by" line — epics stay In Progress for their whole life and would
   deadlock the dependency gate.
-- **Dependencies are relations, not prose**: every "depends on / do not start
-  until X lands" statement MUST be backed by a real Linear `blockedBy`
-  relation to the exact blocking card id(s) — not just English in the
-  description. The `subissue` command does this FOR you: any `**Blocked by:**
-  DRE-N, DRE-M` line in the body it creates becomes a real Linear `blockedBy`
-  relation automatically (and it refuses to block a child on the parent epic).
-  So write the `**Blocked by:**` line and trust it — do NOT also try to hand-set
-  relations. This matters MOST for cross-epic dependencies: a prose-only
-  "do not begin until <other work> lands" leaves the gate blind, so the
-  blocked card's epic reports as "almost done" while it is actually stalled,
-  and the reconcile/auto-close logic can be fooled into closing it. Prose may
-  explain the WHY, but the `blockedBy` relation is the source of truth the
-  reconcile and auto-close gates honor; optionally also `relatedTo` the other
-  epic. (Bureau origin: DRE-1537 — its description said "do NOT begin until
-  the tenant Members & Roles work lands" as prose with no relation, so epic
-  DRE-1530 showed almost-done while truly gated on DRE-1545/1546, 2026-06-14.)
+- **A dependency IS the `blockedBy` relation — the sentence is documentation**
+  (DRE-2676): every "depends on / do not start until X lands" statement is a
+  real Linear `blockedBy` relation to the exact blocking card id(s), or it does
+  not exist. The gate reads relations and nothing else. The `subissue` command
+  does this FOR you: any `**Blocked by:** DRE-N, DRE-M` line in the body it
+  creates becomes a real relation automatically (and it refuses to block a
+  child on the parent epic), so write the `**Blocked by:**` line and trust it —
+  do NOT also try to hand-set relations.
+  **What you must not do is leave a line the board does not back.** A prose
+  claim with no matching relation is a DEFECT in the card: the sweep refuses to
+  promote it, comments once (`prose-blocker-no-relation`) and moves the card to
+  `Triage`; on an epic it refuses, comments, moves nothing and turns the sweep
+  run red after two hours. So if you write the WHY of a dependency in prose,
+  keep it away from the declaring forms (`Blocked by:` / `Depends on:` /
+  `Serialize after:` opening a line) unless the relation is really there.
+  This matters MOST for cross-epic dependencies: a prose-only "do not begin
+  until <other work> lands" leaves the gate blind, so the blocked card's epic
+  reports as "almost done" while it is actually stalled, and the
+  reconcile/auto-close logic can be fooled into closing it. Optionally also
+  `relatedTo` the other epic. (Bureau origin: DRE-1537 — its description said
+  "do NOT begin until the tenant Members & Roles work lands" as prose with no
+  relation, so epic DRE-1530 showed almost-done while truly gated on
+  DRE-1545/1546, 2026-06-14.)
 - **No shared hot files**: if every card in the epic would append a line to
   the same file (an export barrel, a component registry, a route table, a
   gallery index), the decomposition is wrong — each merge conflicts every
