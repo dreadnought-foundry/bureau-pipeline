@@ -29,6 +29,28 @@ TURN EXHAUSTION IS ITS OWN CLASS (DRE-2312), on its own tag and its own cap:
                at the same milestone — the cap is a race the retry can win),
                and the SECOND one holds saying the card needs splitting.
 
+A PLATFORM FAULT IS NOT A DEATH CLASS EITHER (DRE-2931). Everything above
+presumes the agent RAN. A run that dies before claude-code-action is reached —
+a Linear write refused at `Card → In Progress`, a context assembly that blew
+up — took no turn, called no model and spent nothing, so it cannot have failed
+at the card's work:
+
+  - pre_agent : the discriminator is check_agent_result.agent_started() (no
+              execution result, `num_turns: 0`, or GitHub reporting the agent
+              step `skipped`). decide(pre_agent=True) returns the "infra"
+              action: ONE receipt carrying NEITHER tag, no `model-error:`
+              marker, no state move and no hold label — at ANY prior count.
+              On 2026-09-01 DRE-2911 spent two of its three strikes on two
+              such runs (~20 seconds, $0 each), was told a model had failed,
+              and was parked as "a human must split/fix the card" on a count
+              that was two thirds platform noise.
+  - rate_limited : a Linear RATELIMITED failure, the specific pre-agent fault
+              that caused DRE-2911's. Per DRE-2923's operator decision a quota
+              wait is UNKNOWN, not FAILED: it is self-healing, nobody has
+              anything to fix, and retrying into it deepens it. Same "infra"
+              action, different sentence — "wait, it refills" and "a step
+              broke" are different facts with different next actions.
+
 A CANCELLED run is NOT a death class (DRE-2074): when the agent step's outcome
 is `cancelled` (the job timeout, or an external/concurrency cancel), the agent
 was killed while still working — it did not die. The old code read the
@@ -101,13 +123,24 @@ RESET_TAG = "dead-run-budget-reset"
 # model_fallback writes the same prefix; kept in sync via the shared constant.
 ERROR_MARKER_PREFIX = "model-error:"
 
+# The hold's two writes (DRE-2931). The lane the card is parked in, and how
+# many times each write is attempted before park() gives up having written
+# NOTHING. Three because a Linear write fails for two reasons — a transient
+# blip, which a second attempt clears, and an exhausted quota, which no number
+# of attempts inside one run will clear; three separates them cheaply without
+# pretending the second case is winnable here.
+PARK_STATE = "Backlog"
+PARK_ATTEMPTS = 3
+
 
 class Decision:
     """What to do about a dead run.
 
-    action   — "requeue" (→ Todo), "hold" (→ Backlog + needs-human label), or
+    action   — "requeue" (→ Todo), "hold" (→ Backlog + needs-human label),
                "defer" (cancelled run: post the receipt, change NOTHING —
-               the reconcile sweep requeues off the run's real conclusion)
+               the reconcile sweep requeues off the run's real conclusion), or
+               "infra" (DRE-2931: the run died before the agent started —
+               post the receipt against the RUN, count nothing, move nothing)
     comments — comment bodies to post, in order (each one that contains DEAD_TAG
                also increments the shared cap for the NEXT death)
     """
@@ -135,6 +168,9 @@ def decide(
     turn_exhaustion: bool = False,
     turn_facts: str = "",
     cancelled: bool = False,
+    pre_agent: bool = False,
+    failed_step: str = "",
+    rate_limited: bool = False,
     run_url: str = "",
     cap: int = REQUEUE_CAP,
     turn_cap: int = TURN_REQUEUE_CAP,
@@ -161,6 +197,15 @@ def decide(
     always "defer" with a no-DEAD_TAG receipt, and the reconcile sweep
     requeues (with the existing cap) only after the run has actually
     concluded without a PR.
+
+    `pre_agent`/`failed_step`/`rate_limited` (DRE-2931): the run never reached
+    the agent, so it consumed no attempt at the card's work. Wins over every
+    death class below it (a run that never started cannot have exhausted turns
+    or killed a model, whatever else the caller passes) and is unaffected by
+    the prior count, because the count is a budget for the CARD and this fault
+    was not the card's. `failed_step` names the step GitHub reported as failed;
+    `rate_limited` says the failure was Linear answering RATELIMITED, which is
+    a wait rather than a fault at all.
     """
     run_suffix = f" Run: {run_url}" if run_url else ""
     if cancelled:
@@ -175,6 +220,45 @@ def decide(
                 "does NOT count as a dead run (DRE-2074). If the run concluded "
                 "without a PR, the reconcile sweep requeues it from GitHub's "
                 f"own conclusion — never over a live run.{run_suffix}"
+            ],
+        )
+    if pre_agent:
+        # A platform fault against the RUN (DRE-2931). Checked before every
+        # death class because a run that never started cannot have died of
+        # one, and deliberately BLIND to `prior_dead`: the cap is the card's
+        # budget and this is not the card's fault, so there is no count at
+        # which it becomes one.
+        where = (
+            f'at "{failed_step}"' if failed_step
+            else "before the agent step could run"
+        )
+        if rate_limited:
+            return Decision(
+                "infra",
+                [
+                    f"⏳ infrastructure wait — Linear's request quota was "
+                    f"exhausted: this run failed {where}, so it could not even "
+                    f"record that it had started. The agent never ran, no "
+                    f"model was called and nothing was spent. A quota "
+                    f"exhaustion is a WAIT, not a fault in this card and not a "
+                    f"fault in any model: it refills on its own, it spends no "
+                    f"strike against this card's budget, and the card is "
+                    f"neither parked nor labelled for a human. The reconcile "
+                    f"sweep picks the card up once the quota is back."
+                    f"{run_suffix}"
+                ],
+            )
+        return Decision(
+            "infra",
+            [
+                f"🧯 infrastructure fault before the agent started: this run "
+                f"failed {where}, so the agent never ran — no turn was taken, "
+                f"no model was called and nothing was spent. That is a fault "
+                f"of the RUN, not a failed attempt at this card: it spends no "
+                f"strike against this card's budget, and no model is recorded "
+                f"as having failed, because none was reached. The card is left "
+                f"exactly where it was; the reconcile sweep picks it up from "
+                f"the run's own conclusion.{run_suffix}"
             ],
         )
     if turn_exhaustion:
@@ -243,6 +327,121 @@ def decide(
     )
 
 
+def count_of(comment_bodies, tag: str) -> int:
+    """How many of `comment_bodies` spend `tag`'s budget.
+
+    The same substring test linear_ops.count_comments applies to the live
+    thread, in a form a test can drive without Linear. It exists so the
+    DRE-2911 trio fixture counts the way the pipeline counts — a fixture that
+    asserted its own arithmetic would prove nothing about the budget.
+    """
+    return sum(1 for body in comment_bodies if tag in (body or ""))
+
+
+def park(
+    identifier: str,
+    *,
+    has_label,
+    add_label,
+    remove_label,
+    write_state,
+    label: str = HOLD_LABEL,
+    attempts: int = PARK_ATTEMPTS,
+    log=print,
+) -> bool:
+    """Park a card for a human — BOTH writes, or neither. True iff both landed.
+
+    DRE-2911's park half-applied: the `needs-human` label write landed, the
+    state write to Backlog did not, and the card sat In Progress for seven and
+    a half hours while its own comment said it was in Backlog. Nothing retried,
+    because from the pipeline's side the park was done — the label is what
+    every sweep reads to leave a held card alone.
+
+    The order and the undo are the whole mechanism:
+
+      1. read whether the card ALREADY carries the label. An unreadable answer
+         aborts having written nothing, and the answer is what decides step 4:
+         a label this call did not write is not this call's to remove;
+      2. write the LABEL, retried. If it never lands, stop — the state is
+         untouched, so nothing is half-applied;
+      3. write the hold STATE, retried. Both landed: the park is real;
+      4. if the state never lands, take the label back off (only if step 2 put
+         it there). That is the DRE-2911 failure, undone: the card is left
+         exactly as it was found, and the sweep can re-attempt the whole park
+         because nothing is telling it the card is already held.
+
+    The undo is a LABEL write, never a lane write: restoring a state would mean
+    this module could put a card in a lane a caller computed, which is the one
+    thing `ready_lane_writers.py` (DRE-2859) exists to refuse. Step 4 removes
+    only the label it wrote seconds earlier, in the same call — it is not, and
+    must never become, a path that un-parks a card somebody else parked.
+
+    The writes are injected rather than imported so the caller owns the Linear
+    seam and the decision stays testable — the same shape decide() has.
+    """
+
+    def _attempt(what: str, action) -> bool:
+        for n in range(1, attempts + 1):
+            try:
+                action()
+                return True
+            except Exception as exc:  # any Linear failure: blip or quota
+                log(f"park {identifier}: {what} attempt {n}/{attempts} failed: {exc}")
+        return False
+
+    try:
+        already_labelled = has_label(label)
+    except Exception as exc:
+        log(f"park {identifier}: could not read the card's labels ({exc}) — "
+            f"wrote nothing, so the park is not half-applied.")
+        return False
+    if not already_labelled and not _attempt(
+        f"label {label}", lambda: add_label(label)
+    ):
+        log(f"park {identifier}: the '{label}' label never landed — the state "
+            f"was NOT written either, so nothing is half-applied and the sweep "
+            f"can re-attempt the whole park.")
+        return False
+    if _attempt(f"state → {PARK_STATE}", lambda: write_state()):
+        return True
+    log(f"park {identifier}: the state write to {PARK_STATE} never landed. "
+        f"Undoing this call's own label write so the card is not left claiming "
+        f"a hold it is not in — the DRE-2911 shape, refused.")
+    if not already_labelled:
+        _attempt(f"undo label {label}", lambda: remove_label(label))
+    return False
+
+
+def park_unlanded_comment(run_url: str = "", tag: str = DEAD_TAG) -> str:
+    """The receipt posted INSTEAD of the hold receipt when the park did not land.
+
+    It still carries a budget tag, because the attempt it reports was real and
+    un-counting it would hand the card a budget it has already spent. What it
+    does not do is claim a park that did not happen — that claim is what left
+    DRE-2911 sitting In Progress for seven and a half hours with nothing
+    retrying it.
+
+    `tag` is WHICH budget, and it is not decoration: decide() reaches "hold"
+    from two independent caps (DEAD_TAG and TURN_TAG), this body REPLACES
+    whichever one decide() wrote, and the two tags are deliberately
+    non-overlapping substrings. A tag hardcoded here would silently drop the
+    strike the card actually spent and bill the other budget for an attempt
+    that never happened — the same accounting corruption the atomic park
+    exists to remove, one corner over. The caller passes the cap that was in
+    play; DEAD_TAG is the default because it is the cap three of the four
+    death classes share.
+    """
+    run_suffix = f" Run: {run_url}" if run_url else ""
+    return (
+        f"🚨 {tag} cap reached — but the park did NOT land: Linear refused "
+        f"the write, so this card is NOT in Backlog and does NOT carry the "
+        f"'{HOLD_LABEL}' label. Neither was written rather than half of each, "
+        f"so nothing here is claiming a hold that does not exist. This run is "
+        f"still counted against the '{tag}' budget, and the reconcile sweep "
+        f"re-attempts the park on its next pass.{run_suffix}"
+    )
+
+
 def reset_comment(note: str = "") -> str:
     """The un-park receipt: it starts this card's death budget over.
 
@@ -259,26 +458,102 @@ def reset_comment(note: str = "") -> str:
     )
 
 
+def _flag_value(rest: list[str], flag: str) -> str:
+    """`--flag VALUE`'s value, or "" when the flag is absent or trailing.
+
+    One reader for every flag, so a value carrying spaces (`--failed-step
+    "Card → In Progress"`) is taken whole from its own argv element rather
+    than re-split by a per-flag branch.
+    """
+    if flag in rest:
+        i = rest.index(flag)
+        if i + 1 < len(rest):
+            return rest[i + 1]
+    return ""
+
+
+def _cmd_park(identifier: str) -> int:
+    """`park <CARD>` — the hold's two writes, atomically, against Linear.
+
+    Exit 0 iff BOTH landed. Exit 1 means the park did not happen and NOTHING
+    was left half-applied: the caller posts park_unlanded_comment() instead of
+    a hold receipt that would claim a Backlog the card is not in.
+    """
+    if not identifier:
+        print("usage: dead_run.py park <CARD>")
+        return 2
+    import linear_ops  # local: only this command needs the Linear seam
+
+    def has_label(name: str) -> bool:
+        return any(
+            existing.lower() == name.lower()
+            for existing in linear_ops._label_names(
+                linear_ops.get_issue(identifier)
+            )
+        )
+
+    def write_state() -> None:
+        # --park: a deliberate HOLD-cap park (DRE-1403). Without it the
+        # DRE-1885 building-card guard re-routes this In Progress → Backlog
+        # move back to Todo and the loop returns. The destination is the
+        # module constant, readable statically, so this stays the ONE lane
+        # this module can write (ready_lane_writers.py, DRE-2859).
+        linear_ops.cmd_state(identifier, PARK_STATE, "--park")
+
+    ok = park(
+        identifier,
+        has_label=has_label,
+        add_label=lambda name: linear_ops.add_label(identifier, name),
+        remove_label=lambda name: linear_ops.remove_label(identifier, name),
+        write_state=write_state,
+    )
+    return 0 if ok else 1
+
+
 def main(argv: list[str]) -> int:
     """CLI for the workflow:
 
       decide <prior_dead> [--is-error] [--error-model M] [--cancelled]
              [--turn-exhaustion [--execution-file PATH]] [--run-url U]
+             [--pre-agent [--failed-step NAME] [--rate-limited]]
+      park <CARD>
+      park-unlanded [--run-url U] [--turn-exhaustion]
 
     With --turn-exhaustion, <prior_dead> is the card's `turn-exhaustion-requeue`
     count (its own budget) and --execution-file names the run's result JSON —
     read here, so decide() stays the no-I/O core, for the cap and spend the
     message quotes.
 
-    Prints (to stdout) the action on the first line, then a blank line, then the
-    comment body. The workflow reads line 1 for the branch and posts the body.
+    `decide` prints (to stdout) the action on the first line, then a blank
+    line, then the comment body. The workflow reads line 1 for the branch and
+    posts the body. `park` performs the hold's two Linear writes atomically
+    (DRE-2931) and exits nonzero when it wrote NEITHER; `park-unlanded` prints
+    the receipt to post in that case, tagged with the budget the hold came
+    from (`--turn-exhaustion` for the turn cap, the dead-run cap otherwise).
     """
+    usage = ("usage: dead_run.py decide <prior_dead> [--is-error] "
+             "[--error-model M] [--cancelled] [--turn-exhaustion] "
+             "[--execution-file PATH] [--pre-agent] [--failed-step NAME] "
+             "[--rate-limited] [--run-url U] | park <CARD> | "
+             "park-unlanded [--run-url U] [--turn-exhaustion]")
     if not argv:
-        print("usage: dead_run.py decide <prior_dead> [--is-error] "
-              "[--error-model M] [--cancelled] [--turn-exhaustion] "
-              "[--execution-file PATH] [--run-url U]")
+        print(usage)
         return 2
     cmd, *rest = argv
+    if cmd == "park":
+        return _cmd_park(rest[0] if rest else "")
+    if cmd == "park-unlanded":
+        # --turn-exhaustion mirrors `decide`'s own flag: the caller names the
+        # cap that produced the hold, and the tag string stays in this module
+        # rather than being retyped into the shell. The workflow passes the
+        # slot QUOTED — one argument, empty when the hold came from the
+        # dead-run cap — so an empty element here means "no flag", not a
+        # malformed call.
+        print(park_unlanded_comment(
+            _flag_value(rest, "--run-url"),
+            TURN_TAG if "--turn-exhaustion" in rest else DEAD_TAG,
+        ))
+        return 0
     if cmd != "decide":
         print(f"unknown command {cmd!r}")
         return 2
@@ -286,20 +561,12 @@ def main(argv: list[str]) -> int:
     is_error = "--is-error" in rest
     cancelled = "--cancelled" in rest
     turn_exhaustion = "--turn-exhaustion" in rest
-    error_model = None
-    run_url = ""
-    exec_path = ""
-    for flag, target in (("--error-model", "model"), ("--run-url", "url"),
-                         ("--execution-file", "exec")):
-        if flag in rest:
-            i = rest.index(flag)
-            if i + 1 < len(rest):
-                if target == "model":
-                    error_model = rest[i + 1]
-                elif target == "url":
-                    run_url = rest[i + 1]
-                else:
-                    exec_path = rest[i + 1]
+    pre_agent = "--pre-agent" in rest
+    rate_limited = "--rate-limited" in rest
+    error_model = _flag_value(rest, "--error-model") or None
+    run_url = _flag_value(rest, "--run-url")
+    exec_path = _flag_value(rest, "--execution-file")
+    failed_step = _flag_value(rest, "--failed-step")
     turn_facts = ""
     if turn_exhaustion and exec_path:
         import check_agent_result  # local: only this branch needs the loader
@@ -314,6 +581,9 @@ def main(argv: list[str]) -> int:
         turn_exhaustion=turn_exhaustion,
         turn_facts=turn_facts,
         cancelled=cancelled,
+        pre_agent=pre_agent,
+        failed_step=failed_step,
+        rate_limited=rate_limited,
         run_url=run_url,
     )
     print(d.action)

@@ -49,6 +49,30 @@ turn-exhausted BUILD run was reported as an API/model death with a
 
 prints exactly one of `turn_exhaustion` / `api_death` / `none` — the form the
 workflows call, so a shell branch never needs its own is_error test.
+
+DRE-2931 — DID THE AGENT START AT ALL. classify_death() answers "which kind of
+death", and every answer it can give presumes there WAS a run. A run that dies
+before claude-code-action is reached — a Linear write refused at `Card → In
+Progress`, a context assembly that blew up — has no death class, because
+nothing died: no turn was taken, no model was called, nothing was spent. On
+2026-09-01 DRE-2911 spent two of its three dead-run strikes on exactly that,
+20 seconds and $0 each, and the third one parked the card as "a human must
+split/fix this".
+
+agent_started() is the discriminator, and it reads only facts:
+
+  * GitHub's own outcome for the agent step — `skipped` means the platform is
+    telling us the step never ran, which is the strongest evidence available;
+  * the execution record's `num_turns` — 0 turns is no attempt at the work;
+  * the absence of an execution record entirely, which is what a pre-agent
+    failure leaves behind;
+  * a pushed branch, which proves the agent ran whatever the record says (some
+    action versions move the result file — see failure_reason below).
+
+    python3 check_agent_result.py started <execution-json-path> \
+        [--claude-outcome <outcome>] [--branch <ref>]
+
+prints `yes` / `no`. The Report step branches on it BEFORE it counts anything.
 """
 
 from __future__ import annotations
@@ -152,6 +176,45 @@ def classify_death(execution: dict | None) -> str:
     return DEATH_API
 
 
+def agent_started(
+    execution: dict | None,
+    *,
+    claude_outcome: str = "",
+    branch_exists: bool = False,
+) -> bool:
+    """True when this run actually consumed an attempt at the card's work.
+
+    False means the run died BEFORE the agent — a platform fault against the
+    RUN, never a strike against the card (DRE-2931). Read in this order, most
+    authoritative first:
+
+      1. `claude_outcome == "skipped"` — GitHub itself saying the agent step
+         never ran, because a step before it failed. Nothing else can override
+         that, so it is checked first.
+      2. `branch_exists` — the agent pushed. It ran, whatever the record says.
+         This guard is why the absence of a result file cannot silently stop a
+         genuine silent death from counting.
+      3. `num_turns` — 0 turns is no attempt; 1 or more is one. A record with
+         no turn count at all (the DRE-1346 legacy shape) still proves the
+         action produced a result, so it counts as started.
+      4. No record at all — the shape a pre-agent failure leaves behind.
+
+    Note the boundary against DRE-2365's outage signature: a transport/auth
+    death returns in 400ms on ONE turn having spent nothing. One turn means the
+    model WAS called and refused, so that run started and still counts.
+    """
+    if (claude_outcome or "").strip().lower() == "skipped":
+        return False
+    if branch_exists:
+        return True
+    if not isinstance(execution, dict):
+        return False
+    turns = _number(execution, "num_turns")
+    if turns is None:
+        return True
+    return turns >= 1
+
+
 def is_error_death(execution: dict | None) -> bool:
     """True when the execution result records a mid-run DEATH ({"is_error":
     true}) — either class. The single source of truth for is_error detection.
@@ -231,13 +294,18 @@ def failure_reason(
     means the agent was KILLED (job timeout / external cancel) while still
     working — no evidence is expected, so it is not a silent death and must
     not fail the gate (a red gate summons the medic to re-run a healthy-but-
-    slow card). It waives ONLY the silent-death reason: an is_error record is
-    affirmative evidence of a model death and still fails without the ignore
+    slow card). "skipped" (DRE-2931) is the same shape from the other end: a
+    step BEFORE the agent failed, so the agent never ran and no branch, PR or
+    note was ever possible. Failing the gate there sends the medic to re-run a
+    job whose only fault was the platform's — and on 2026-09-01 that platform
+    fault was an exhausted Linear quota, which a rerun can only deepen (the
+    DRE-1921 loop). Both waive ONLY the silent-death reason: an is_error record
+    is affirmative evidence of a model death and still fails without the ignore
     flag. The reconcile sweep owns the requeue off the run's real conclusion.
     """
     if not ignore_is_error and is_error_death(execution):
         return "execution result has is_error=true"
-    if claude_outcome == "cancelled":
+    if claude_outcome in ("cancelled", "skipped"):
         return None
     if (
         not branch_exists
@@ -256,6 +324,28 @@ def main(argv: list[str]) -> int:
     # parsing below; "classify" is not a plausible execution-file path.
     if argv and argv[0] == "classify":
         print(classify_death(_load_execution(argv[1] if len(argv) > 1 else "")))
+        return 0
+    # `started <execution-json-path> [--claude-outcome X] [--branch REF]`
+    # (DRE-2931): did this run consume an attempt at the work? Same shape and
+    # same reason as `classify` — the Report step must not re-derive it from a
+    # shell test, which is how DRE-2695's turn exhaustion got the wrong story.
+    if argv and argv[0] == "started":
+        rest = argv[1:]
+        outcome, branch = "", ""
+        for flag in ("--claude-outcome", "--branch"):
+            if flag in rest:
+                i = rest.index(flag)
+                value = rest[i + 1] if i + 1 < len(rest) else ""
+                if flag == "--claude-outcome":
+                    outcome = value
+                else:
+                    branch = value
+                del rest[i : i + 2]
+        print("yes" if agent_started(
+            _load_execution(rest[0] if rest else ""),
+            claude_outcome=outcome,
+            branch_exists=bool(branch.strip()),
+        ) else "no")
         return 0
     # Optional trailing --ignore-is-error flag (DRE-1354): the Report step owns
     # the is_error→model-fallback requeue, so the gate should not hard-fail on it
