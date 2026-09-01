@@ -106,6 +106,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_marker  # noqa: E402 — ONE definition of the "which agent acted" marker
+import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
 import dead_run  # noqa: E402 — the dead-run tags/cap live in ONE module
 import lane_scope  # noqa: E402 — the lane contract, incl. the pending rename
 import mid_epic  # noqa: E402 — ONE source for "a card has no children" (DRE-2739)
@@ -692,24 +693,25 @@ def body_problem(body: str) -> str | None:
     return None
 
 
-# "**Blocked by:** DRE-1, DRE-2" / "Blocked by: DRE-3" anywhere in the body.
-_BLOCKED_BY_RE = re.compile(
-    r"^\s*\**\s*blocked\s*by\s*:?\**\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE
-)
-_DRE_RE = re.compile(r"\bDRE-\d+\b", re.IGNORECASE)
+# The card-id pattern, shared so the flag path and the body path read an id the
+# same way (`--blocked-by dre-9` has always worked).
+_DRE_RE = blocker_prose.CARD_REF
 
 
 def parse_blocked_by(body: str) -> list[str]:
-    """Card ids on a `**Blocked by:** DRE-N, DRE-M` body line → uppercased,
-    de-duplicated, order-preserving. Empty when there is no such line. This is
-    how prose ordering becomes real blockedBy relations (rule 3)."""
-    found: list[str] = []
-    for m in _BLOCKED_BY_RE.finditer(body or ""):
-        for dre in _DRE_RE.findall(m.group(1)):
-            up = dre.upper()
-            if up not in found:
-                found.append(up)
-    return found
+    """Card ids DECLARED as blockers in the body — `**Blocked by:** DRE-N`,
+    `Depends on: DRE-M`, `Serialize after: DRE-K`, list markers included →
+    uppercased, de-duplicated, order-preserving. Empty when the body declares
+    nothing. This is how prose ordering becomes real blockedBy relations
+    (rule 3).
+
+    THE GRAMMAR IS THE SWEEP'S (DRE-2922). This parser was `blocked by` only
+    while `reconcile.blockers_of` honoured all three phrases, and that gap is
+    precisely how a prose-only blocker got created: a card written `Depends on
+    DRE-N` was minted with no relation, and the sweep then held it on the
+    sentence anyway. One grammar, in `blocker_prose`, read by every consumer.
+    """
+    return blocker_prose.blocker_ids(body)
 
 
 def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
@@ -773,16 +775,35 @@ def _team_label_ids(team_id: str, names: list[str]) -> list[str]:
     return ids
 
 
+def _unresolvable_blockers(blocker_identifiers: list[str]) -> list[str]:
+    """The blocker ids Linear does not know about, in the order declared.
+
+    Read BEFORE the create (`_reject_unless_creatable`) so an id that cannot
+    resolve refuses the card instead of half-making it (DRE-2922).
+    """
+    return [ident for ident in blocker_identifiers if not get_issue(ident)]
+
+
 def _add_blocked_by(issue_id: str, blocker_identifiers: list[str]) -> list[str]:
     """Create real Linear `blocks` relations so each blocker BLOCKS the new
-    child (rule 3). Returns the ids that resolved; silently skips an unknown id
-    rather than failing the whole create."""
+    child (rule 3). Returns the ids that resolved.
+
+    RAISES on an id that does not resolve (DRE-2922). It used to print to
+    stderr and CONTINUE: the card was created, its description said "Blocked by
+    DRE-N", no relation existed, and the create reported success — a prose-only
+    card minted at the door, silently, which is the exact defect the anchored
+    grammar above exists to stop manufacturing. The guard refuses the create
+    first, so reaching this raise means an id resolved at guard time and not at
+    write time; it is the backstop, not the message the planner normally sees.
+    """
     resolved: list[str] = []
     for ident in blocker_identifiers:
         blocker = get_issue(ident)
         if not blocker:
-            print(f"  ! blocked-by {ident} not found — skipping relation", file=sys.stderr)
-            continue
+            raise LinearError(
+                f"blocked-by {ident} does not resolve — refusing to leave the "
+                "declaration as prose with no relation behind it"
+            )
         gql(
             """mutation($input: IssueRelationCreateInput!) {
                  issueRelationCreate(input: $input) { success } }""",
@@ -805,13 +826,21 @@ def _card_body(description_file: str) -> str:
 
 
 def _reject_unless_creatable(kind: str, title: str, description: str,
-                             labels: list[str], hint: str) -> None:
+                             labels: list[str], hint: str,
+                             blockers: list[str] | None = None) -> None:
     """GUARD before creating: reject a broken card, do NOT create it.
 
     Shared by every planner create seam (`subissue`, `oneoff`) so a one-off is
     held to exactly the checks a planned child is — the path-guard on the body,
     then the EXISTING validate_card gate's pure core (single source of truth —
-    no parallel checker). `hint` says how to fix it for that seam."""
+    no parallel checker), then every declared blocker id resolving. `hint` says
+    how to fix it for that seam.
+
+    THE BLOCKER CHECK IS PART OF THE CONTRACT (DRE-2922). A blocker id that
+    Linear does not know about used to be skipped after the card existed, so
+    the create reported success and the card carried a dependency nothing
+    enforced. Checked here, the answer is the same one every other broken card
+    gets: no card, and the reason named."""
     problem = body_problem(description)
     if problem is not None:
         raise LinearError(
@@ -828,6 +857,16 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
             + ", ".join(gaps)
             + ". "
             + hint
+        )
+
+    unresolvable = _unresolvable_blockers(blockers or [])
+    if unresolvable:
+        raise LinearError(
+            f"{kind} REJECTED ({title!r}): blocked-by "
+            + ", ".join(unresolvable)
+            + " does not resolve. Fix the id (or drop the declaration) and "
+            "retry — a card whose blocker exists only in its description is "
+            "held by prose no gate can honour."
         )
 
 
@@ -913,6 +952,7 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
         "The parent epic must carry a repo:<slug> label AND an "
         "initiative:<x> label so children inherit them (DRE-1699: the repo "
         "LABEL is the source of truth — no **Repo:** stamp needed).",
+        blockers,
     )
 
     # 5 — CREATE, under the epic, in Backlog. The children sit there while the
@@ -968,6 +1008,7 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> None:
         "oneoff", title, description, labels,
         "A one-off inherits nothing, so the PLAN must supply every label: "
         "--label repo:<slug> --label initiative:<x> --label agent:<role>.",
+        blockers,
     )
 
     teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')

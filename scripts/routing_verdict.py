@@ -35,7 +35,9 @@ already says:
 deadlocked a live epic for five days by reading a dependency out of the
 sentence "neither depends on the other" — five frozen cards and ~480
 consecutive green sweeps (DRE-2670, anchored 2026-08-23, a day before this card
-was written). Do not build a second one. Three things here descend from that:
+was written). That grammar now lives in `scripts/blocker_prose.py`, read by
+every consumer instead of copied into each (DRE-2922). Do not build a second
+one. Three things here descend from that:
 
   * every title pattern must be ANCHORED, and `config_problems()` refuses one
     that is not;
