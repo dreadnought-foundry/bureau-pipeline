@@ -1,0 +1,11 @@
+build	Build	2026-09-01T05:10:11.1234567Z Reading the card body...
+build	Build	2026-09-01T05:10:11.2234567Z Card: DRE-2923 — The sweep's Linear client throws away the response body
+build	Build	2026-09-01T05:10:11.3234567Z The same request, made from a workstation against the same workspace minutes later, returned:
+build	Build	2026-09-01T05:10:11.4234567Z Linear API returned 400: {"errors":[{"message":"Rate limit exceeded. Only 2500 requests
+build	Build	2026-09-01T05:10:11.5234567Z are allowed per 1 hour ...","extensions":{"type":"ratelimited","code":"RATELIMITED",
+build	Build	2026-09-01T05:10:11.6234567Z "statusCode":429,"userError":true, ...
+build	Build	2026-09-01T05:10:11.7234567Z Card URL: https://linear.app/dreadnoughtfoundry/issue/DRE-2923/the-sweeps-linear-client
+build	Build	2026-09-01T05:10:12.0234567Z +    raise LinearRateLimited(
+build	Build	2026-09-01T05:10:12.1234567Z +        f"Linear API returned {code} from {endpoint}: {condition}"
+build	Build	2026-09-01T05:10:20.0234567Z FAILED tests/test_linear_error_body.py::test_body_is_truncated - AssertionError
+build	Build	2026-09-01T05:10:20.1234567Z ##[error]Process completed with exit code 1.
