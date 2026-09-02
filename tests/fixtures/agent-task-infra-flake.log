@@ -1,0 +1,4 @@
+build	Checkout product repo	2026-09-01T22:03:10.9900000Z ##[group]Run actions/checkout@v7
+build	Checkout product repo	2026-09-01T22:03:11.0000000Z error: RPC failed; curl 92 HTTP/2 stream 0 was not closed cleanly
+build	Checkout product repo	2026-09-01T22:03:11.0100000Z fatal: expected flush after ref listing
+build	Checkout product repo	2026-09-01T22:03:11.0200000Z ##[error]The process '/usr/bin/git' failed with exit code 128.
