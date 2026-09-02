@@ -1,0 +1,7 @@
+build	Gate on agent result	2026-09-01T23:12:41.3612345Z ##[group]Run python3 .bureau-pipeline/scripts/check_agent_result.py
+build	Gate on agent result	2026-09-01T23:12:41.3612346Z Reading the execution result the action wrote.
+build	Gate on agent result	2026-09-01T23:12:42.1122334Z agent result gate: what the agent itself reported (from the execution file):
+build	Gate on agent result	2026-09-01T23:12:42.1122335Z   subtype: error_max_turns
+build	Gate on agent result	2026-09-01T23:12:42.1122336Z   result: Reached maximum number of turns (151)
+build	Gate on agent result	2026-09-01T23:12:42.1122337Z agent result gate: FAIL — no agent branch, no PR, no blocker note, and no escalation note
+build	Gate on agent result	2026-09-01T23:12:42.2233445Z ##[error]Process completed with exit code 1.

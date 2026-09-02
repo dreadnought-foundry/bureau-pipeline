@@ -73,6 +73,13 @@ _COMPLETION_FIELDS = (
     "duration_ms",
 )
 
+# The header `print_failure_detail` writes above those fields. A CONSTANT
+# because a second reader has to find the block in a log: the medic holds no
+# execution file — it holds the failed run's log — and this line is where the
+# run's own result record starts in it (DRE-2954). Two spellings of the same
+# sentence is how that reader would silently stop finding anything.
+FAILURE_HEADER = "what the agent itself reported (from the execution file):"
+
 # Per-value ceiling. A provider death can hand back a page of HTML or a
 # multi-kilobyte JSON body; the first few hundred characters always carry the
 # error class, and the rest just buries the rest of the log.
@@ -188,7 +195,7 @@ def print_failure_detail(execution: dict | None, prefix: str) -> None:
     lines = failure_detail(execution)
     if not lines:
         return
-    print(f"{prefix}: what the agent itself reported (from the execution file):")
+    print(f"{prefix}: {FAILURE_HEADER}")
     for line in lines:
         print(line)
 

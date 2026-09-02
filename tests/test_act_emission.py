@@ -301,6 +301,49 @@ def _drive_stale_verdict_unknown(mp):
     _stale_verdict_driver(mp, [])
 
 
+def _retry_declined_driver(mp, decision):
+    """The medic's refusal to retry (DRE-2954), driven through the real
+    composer. The Linear write is the recorder's; everything before it — the
+    rule, the wording, the trailer — is `medic_retry.py`'s own."""
+    import medic_retry
+
+    _card_recorder(mp)
+    medic_retry.post_declined(
+        "DRE-2937",
+        decision,
+        run_url="https://github.com/dreadnought-foundry/agent-bureau/actions/runs/33568177277",
+    )
+
+
+@site("retry-declined/card-parked", "retry-declined")
+def _drive_retry_declined_parked(mp):
+    import medic_retry
+
+    _retry_declined_driver(mp, medic_retry.decide(
+        parked_because=(
+            "it was moved to Backlog at 2026-09-01T23:36:00.000Z by the "
+            "pipeline's own hold, after this run started"
+        )
+    ))
+
+
+@site("retry-declined/turn-exhaustion", "retry-declined")
+def _drive_retry_declined_turns(mp):
+    """The second rule's wording. Both are captured because the refusal names
+    WHICH rule it applied, and a capture of only one leaves the other free to
+    drift into saying nothing."""
+    import medic_retry
+
+    _retry_declined_driver(mp, medic_retry.decide(execution={
+        "is_error": True,
+        "subtype": "error_max_turns",
+        "num_turns": 151,
+        "total_cost_usd": 16.79,
+        "duration_ms": 1_320_000,
+        "result": "Reached maximum number of turns (150)",
+    }))
+
+
 # --------------------------------------------------------------------------- #
 # 1. the body survives byte-identical, and the trailer is appended             #
 # --------------------------------------------------------------------------- #
