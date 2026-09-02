@@ -111,7 +111,9 @@ class TestTheThreeShapes:
         assert re.search(r"refus\w+", body, re.I), (
             "planner.md never says an unclassified card is refused"
         )
-        assert re.search(r"never defaulted|not defaulted|never default\b", body, re.I), (
+        # Whitespace-insensitive: the brief hard-wraps, and "never defaulted"
+        # falling across a line break is not a brief that stopped saying it.
+        assert re.search(r"never\s+default(ed)?\b|not\s+defaulted", body, re.I), (
             "planner.md must say a card carrying no shape is REFUSED rather "
             "than defaulted to one — a defaulted shape is a classification "
             "nobody made"
