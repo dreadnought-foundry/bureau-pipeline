@@ -305,6 +305,19 @@ class TransientFailureIsStillRetriedTest(unittest.TestCase):
             medic_retry.RETRY, medic_retry.decide(execution=api_death).action
         )
 
+    def test_the_workflow_still_reruns_at_most_once(self):
+        """ONCE, still keyed off GitHub's own `run_attempt` — the vendor's
+        counter, not a marker we could double-post. This card narrows WHEN the
+        one retry fires; it must not change how many there are."""
+        jobs = _medic()["jobs"]
+        rerunners = [
+            name for name, job in jobs.items()
+            if "gh run rerun" in yaml.safe_dump(job)
+        ]
+        self.assertEqual(["retry"], rerunners)
+        self.assertIn("run_attempt == 1", jobs["retry"]["if"])
+        self.assertIn("run_attempt >= 2", jobs["diagnose"]["if"])
+
     def test_no_card_at_all_still_retries(self):
         """Most watched workflows carry no card — the scheduled sweep, the test
         suite, the release gate. Their flakes must keep their one retry."""
@@ -440,10 +453,25 @@ class TheDecisionIsAnActTest(unittest.TestCase):
     def test_every_receipt_still_composes_through_the_one_writer(self):
         self.assertEqual([], check_act_receipts.problems())
 
-    def test_the_workflow_posts_it_through_pipeline_act(self):
+    def test_the_act_name_is_spelled_once(self):
+        """The composer passes the act as a literal so the emission guard can
+        read WHICH act it wraps; this pins that literal to the constant every
+        other reader uses, so the two cannot drift apart."""
+        with open(
+            os.path.join(os.path.dirname(__file__), "..", "scripts", "medic_retry.py"),
+            encoding="utf-8",
+        ) as f:
+            source = f.read()
+        self.assertIn(f'receipt("{medic_retry.DECLINED_ACT}"', source)
+
+    def test_the_guard_sees_this_act_composed(self):
+        composed = {s.composed_as for s in check_act_receipts.sites()}
+        self.assertIn(medic_retry.DECLINED_ACT, composed)
+
+    def test_the_workflow_reaches_the_composer(self):
         with open(WORKFLOW, encoding="utf-8") as f:
             src = f.read()
-        self.assertIn(f"--act={medic_retry.DECLINED_ACT}", src)
+        self.assertIn("medic_retry.py post", src)
 
 
 # ── 6. medic.yml: the gate, and the job that says why ────────────────────────
@@ -464,6 +492,15 @@ class MedicWiringTest(unittest.TestCase):
         self.assertIn("medic_retry.py", body)
         self.assertIn("LINEAR_API_KEY", body)
 
+    def test_the_gate_cannot_take_the_whole_medic_down(self):
+        """Every medic job `needs: classify`, so a gate step that exits
+        non-zero would skip the three back-offs and the diagnosis agent as
+        well — one new single point of failure in front of four working ones.
+        No answer must degrade to the pre-DRE-2954 behaviour, not to silence."""
+        step = next(s for s in self.jobs["classify"]["steps"] if s.get("id") == "r")
+        self.assertIn('|| OUT=""', step["run"])
+        self.assertIn("::warning::", step["run"])
+
     def test_no_job_reruns_without_honouring_the_decision(self):
         for name, job in self.jobs.items():
             if "gh run rerun" in yaml.safe_dump(job):
@@ -478,8 +515,7 @@ class MedicWiringTest(unittest.TestCase):
         self.assertEqual("classify", job.get("needs"))
         self.assertIn("needs.classify.outputs.retry == 'false'", job["if"])
         body = yaml.safe_dump(job)
-        self.assertIn("linear_ops.py comment", body)
-        self.assertIn(f"--act={medic_retry.DECLINED_ACT}", body)
+        self.assertIn("medic_retry.py post", body)
         # It refuses the retry — it must not take one, nor summon a diagnosis
         # agent, nor go red (a red medic run is an operator email for a
         # decision the pipeline made on purpose).

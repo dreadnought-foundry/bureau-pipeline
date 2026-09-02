@@ -351,9 +351,17 @@ There is **no third attempt**, and nothing starts one for you. On turn
 exhaustion the pipeline requeues the card once (counted by the
 `turn-exhaustion-requeue` tag; the cap is in `scripts/dead_run.py`), and the
 second death parks it in `Backlog` with the `needs-human` label. The reconcile
-sweep skips a held card entirely — no requeue, no nudge, no dispatch — so
-nothing retries it until a human acts. **That park is the signal to split**, not
-a queue position.
+sweep skips a held card entirely — no requeue, no nudge, no dispatch — and
+since DRE-2954 the medic asks the same question before its one automatic
+retry, so nothing retries it until a human acts. **That park is the signal to
+split**, not a queue position.
+
+"Nothing retries it" was an aspiration for one day: on 2026-09-01 the medic
+re-ran DRE-2937's first dead run sixty seconds after the turn cap parked the
+card, and a third ~$16 build was running on a card the pipeline had just
+called unbuildable until an operator killed it by hand. The medic now reads
+the card before retrying, and refuses a turn-cap death outright — that is a
+budget ceiling, not a flake, and the same run re-run hits the same wall.
 
 ### How to split
 - **Cut on independence, not size.** Each piece must be shippable and reviewable

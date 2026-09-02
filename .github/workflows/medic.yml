@@ -89,6 +89,13 @@ jobs:
       # lines; infra_crash stays as-is so the DRE-1921 gates below are
       # untouched.
       class: ${{ steps.c.outputs.class }}
+      # DRE-2954: the retry gate — is this failure one the medic's single
+      # automatic retry can help with at all? `retry` is the branch, `rule` /
+      # `card` / `detail` are what the refusal receipt is written from.
+      retry: ${{ steps.r.outputs.retry }}
+      rule: ${{ steps.r.outputs.rule }}
+      card: ${{ steps.r.outputs.card }}
+      detail: ${{ steps.r.outputs.detail }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -114,11 +121,49 @@ jobs:
           echo "$OUT" >> "$GITHUB_OUTPUT"
           echo "$OUT"
 
+      # Is a retry the right answer for THIS failure? (DRE-2954.) Two rules,
+      # asked of two different sources of truth: the CARD says whether a human
+      # already owns this work (the `needs-human` label, or Backlog plus the
+      # hold receipt that put it there after this run started), and the failed
+      # RUN'S OWN LOG says whether it died of turn exhaustion — a death that is
+      # deterministic on the card's size, so a rerun walks into the same wall.
+      # Fail-open on an unreadable card, loudly: see medic_retry.py's docstring.
+      - name: Should this run be retried at all?
+        id: r
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # env, not inline ${{ }} (DRE-1996): the head branch is agent-chosen
+          # and git refnames may carry $ and backticks.
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+        run: |
+          # `|| OUT=""`: this gate must never be able to take the whole medic
+          # down with it. Every job here `needs: classify`, so a step that
+          # exits non-zero skips the back-offs and the diagnosis agent too —
+          # a new single point of failure in front of four working ones. With
+          # no answer the retry job's `!= 'false'` reads "never asked" and the
+          # medic behaves exactly as it did before this card, out loud.
+          OUT=$(python3 .bureau-pipeline/scripts/medic_retry.py decide \
+            --branch "$HEAD_BRANCH" --log /tmp/medic-log.txt \
+            --run-started-at "$RUN_STARTED_AT") || OUT=""
+          if [ -z "$OUT" ]; then
+            echo "::warning::The medic's retry gate gave no answer, so this run is handled the way it was before DRE-2954. If the card is parked, the retry it is about to take is the one that card exists to prevent."
+          fi
+          echo "$OUT" >> "$GITHUB_OUTPUT"
+          echo "$OUT"
+
   # Re-run transient flakes once — UNLESS the classifier flagged a critic
   # infra-crash (DRE-1921), in which case re-running cannot help and only
   # deepens the rate-limit. A real REQUEST_CHANGES verdict never reaches here:
   # the critic RAN, the qa-review job ended green, and the fix routes through
   # agent-fix.yml — not the medic.
+  #
+  # …and UNLESS the retry gate said no (DRE-2954): the card the run belongs to
+  # is already parked for a human, or the run died of turn exhaustion, which is
+  # deterministic on the card's size and cannot be re-run into success.
+  # `!= 'false'` rather than `== 'true'` on purpose — the gate answers every
+  # decision, so an ABSENT output means the step never ran at all, and that must
+  # leave the long-standing behaviour of every watched workflow untouched.
   retry:
     needs: classify
     if: >
@@ -126,7 +171,8 @@ jobs:
       github.event.workflow_run.run_attempt == 1 &&
       needs.classify.outputs.infra_crash != 'true' &&
       needs.classify.outputs.class != 'upstream_5xx' &&
-      needs.classify.outputs.class != 'linear_ratelimited'
+      needs.classify.outputs.class != 'linear_ratelimited' &&
+      needs.classify.outputs.retry != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -136,6 +182,45 @@ jobs:
         run: |
           echo "retrying ${{ github.event.workflow_run.name }} run ${{ github.event.workflow_run.id }} (attempt 1 failed)"
           gh run rerun ${{ github.event.workflow_run.id }} --failed --repo ${{ github.repository }}
+
+  # The refusal, said out loud (DRE-2954). A retry that silently does not
+  # happen is indistinguishable from a gate that was never asked — and the
+  # whole complaint about DRE-2937 was that the card read In Progress while its
+  # own last receipt said it was parked. So the decision goes on the CARD, as
+  # an act, through the one receipt writer: which rule was applied, and the
+  # evidence it was applied to.
+  #
+  # It neither reruns nor diagnoses, and it ends GREEN: this is a decision the
+  # pipeline made on purpose, not a failure, and a red medic run is an operator
+  # email about it. `run_attempt == 1` so it says it once per failed run.
+  retry_declined:
+    needs: classify
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1 &&
+      needs.classify.outputs.retry == 'false' &&
+      needs.classify.outputs.card != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+      - name: Say on the card why no retry was issued
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # env, not inline ${{ }} (DRE-1996): `detail` quotes the card's own
+          # receipts, which are agent-influenced text.
+          CARD: ${{ needs.classify.outputs.card }}
+          RULE: ${{ needs.classify.outputs.rule }}
+          DETAIL: ${{ needs.classify.outputs.detail }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          python3 .bureau-pipeline/scripts/medic_retry.py post \
+            --card "$CARD" --rule "$RULE" --detail "$DETAIL" \
+            --run-url "$RUN_URL"
 
   # Critic infra-crash back-off (DRE-1921). No rerun, no diagnosis agent —
   # just one plain-English note so the stall is visible without burning quota.

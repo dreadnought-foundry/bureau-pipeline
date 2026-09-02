@@ -345,9 +345,13 @@ failed run was dependabot-actor'd (the documented GitHub behavior); the only
 failing dependabot-triggered workflow here is Pipeline Tests, whose rerun
 needs no secrets anyway (hardcoded test env).
 
-**Q3 — vendor behavior.** Exactly one automatic rerun, keyed off GitHub's own
+**Q3 — vendor behavior.** At most one automatic rerun, keyed off GitHub's own
 `run_attempt` (retry only at attempt 1, diagnose only at attempt ≥ 2) — the
-vendor's counter, not a marker we could double-post.
+vendor's counter, not a marker we could double-post. Since DRE-2954 that one
+rerun is also gated on whether a retry can help at all
+(`medic_retry.py`): a card already parked for a human, or a run that died of
+turn exhaustion, gets no rerun and one receipt saying which rule applied.
+`run_attempt` counts attempts; it cannot know the work has been called off.
 
 **Q4 — command limitations.** The diagnosis agent uses `github.token`, NOT the
 minted App token, because the App deliberately lacks `actions:read` and would
@@ -357,7 +361,12 @@ diagnose blind (DRE-1346); the stub grants the access.
 infra crash (rate-limit, auth-startup death) gets NO rerun and NO diagnosis —
 a single 🔌 "reviewer down, not a code rejection" note — because re-running
 against an exhausted limit deepens it. Log-fetch failure degrades to normal
-handling, never a blind loop.
+handling, never a blind loop. DRE-2954 adds the same shape for a run whose
+work has been called off: the retry gate reads the CARD (parked for a human?)
+and the failed run's OWN log (did it run out of turns?) before the rerun step
+is reachable. It fails OPEN on an unreadable card — a rerun into a dead Linear
+dies pre-agent and is charged to nobody (DRE-2931), whereas a Linear blip that
+disabled every retry in the fleet would be a new stall.
 
 **Verdict:** covered.
 

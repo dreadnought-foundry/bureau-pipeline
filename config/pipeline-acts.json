@@ -326,6 +326,22 @@
         "anchor": "linear_ops.py comment DRE-N \"<report>\"",
         "note": "The medic's report is agent-authored prose, so there is no fixed wording to pin. The anchor is the write call in the medic's own prompt — the point at which the receipt is emitted."
       }
+    },
+    {
+      "name": "retry-declined",
+      "tag": "medic-retry-declined",
+      "adopted": true,
+      "kind": "refusal",
+      "means": "The medic declined its one automatic retry of a failed run — the card is parked for a human, or the run died of turn exhaustion, which a rerun cannot fix.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "DRE-2954. On 2026-09-01 the turn cap parked DRE-2937 in Backlog with needs-human at 16:36 and the medic re-ran its first dead run at 16:37 — a third ~$16 build on a card the pipeline itself had just called unbuildable, killed by hand twelve minutes later. Two mechanisms, each right alone, with nothing joining them. A refusal rather than a hold: the medic changes nothing about the card, it only declines to start a run at it, and whoever parked the card is still the next actor. The receipt exists so the next operator reading the run sees a DECISION rather than a miss — silence here reads identically to the gate never having been asked.",
+      "emits": {
+        "file": "scripts/medic_retry.py",
+        "anchor": "not retried — {decision.detail}"
+      }
     }
   ],
   "unconverted": [

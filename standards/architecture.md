@@ -13,7 +13,8 @@ Linear card → relay Lambda → repository_dispatch on the product repo
       merge-gate   CI green + verdict APPROVE → qa-bot merges
       linear-sync  merge event → card Done (GitHub's truth, not an agent claim)
       plan         epic → collision-free sub-issues + plan comment
-      medic        failed run → retry once → diagnosis agent → Linear
+      medic        failed run → classify → retry once (never into a park or a
+                   turn cap) → diagnosis agent → Linear
       reconcile    ~15-min sweep: dependency gate + WIP cap + unstick
       agent-fix    critic REQUEST_CHANGES / merge conflict → fixing agent
 ```
