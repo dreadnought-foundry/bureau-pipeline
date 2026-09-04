@@ -109,6 +109,18 @@ the critic being asked to do more.**
 - The activate route no longer promotes inside the route step. Promotion is its
   own step, gated on the second critic's decision — which is the only moment
   stopping the children is still free.
+- **That gate reached only one of the two promoters, and the other one won
+  (DRE-3059).** The reconcile sweep runs every fifteen minutes and released a
+  child on the epic's LANE alone, so on 2026-09-03 it promoted DRE-3026 and
+  DRE-3027 eighty-two seconds after the CEO approved their epic, with no
+  post-critic round on it at all — DRE-3058 is why none had run. There is now
+  ONE promoter: `reconcile.promote_ready()`, which reads the same
+  `stage=post` marker this ADR describes and refuses a child whose epic has no
+  released plan for the current planning attempt. The activate route triggers
+  that promoter rather than promoting itself, so the fast path and the cron
+  sweep cannot disagree about the same epic. Epics green-lit before
+  `plan_critic.GATED_FROM` are not re-gated: they have no marker and never
+  will, and freezing them was not the point.
 - A crashed critic never holds a plan (`standards/console-honesty.md` rule 1).
   The result reads `NO_RESULT`, the plan proceeds, and the round is not counted
   against the bound.

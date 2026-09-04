@@ -1242,6 +1242,15 @@ jobs:
           # after a sweep checked and faced an ~80-minute wait, 2026-06-12).
           # MAX_WIP comes from the step env above — the caller's cap, so
           # this fast path and the cron sweep never disagree (DRE-2529).
+          #
+          # NOT A SECOND PROMOTER (DRE-3059). This step runs the sweep's own
+          # `promote_ready()`; it does not promote anything itself. That is
+          # why the gate could be put in one place: the round record was
+          # posted by the decision step above, so the sweep reads a released
+          # plan here, and a cron sweep that lands before this step reads an
+          # unreleased one and holds the children instead of racing us to
+          # them. Two promoters for one event is how the children went to
+          # build with no post-critic verdict at all on 2026-09-03.
           REPO="$GITHUB_REPOSITORY" \
             REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
             python3 .bureau-pipeline/scripts/reconcile.py --promote-only

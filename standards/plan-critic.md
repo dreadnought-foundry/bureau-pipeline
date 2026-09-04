@@ -126,6 +126,14 @@ A send-back after approval returns the epic to `Green Light` with the findings
 and **stops the children promoting** — which is the only moment stopping them
 is still free.
 
+And the marker is what stops them, on both paths (DRE-3059). The reconcile
+sweep is the ONE promoter of an epic's children, and it releases a child only
+when the epic carries a `stage=post` round for the current planning attempt
+that let the plan through — a PASS, a crash, or the bound. Until then the child
+stays in `Backlog` and the sweep says so, naming the epic. Nothing else
+promotes: the activate route runs that same promoter the moment the critic
+passes, rather than promoting on its own.
+
 ## The send-back rate is the measurement
 
 **How often the second critic sends a plan back is the honest measure of how

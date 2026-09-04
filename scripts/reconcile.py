@@ -137,6 +137,10 @@ import merge_gate  # noqa: E402
 # DRE-2739: ONE source for the mid-epic discovery route — what counts as a card
 # added after the green light, and the verdict it must carry before it promotes.
 import mid_epic  # noqa: E402
+# DRE-3059: ONE source for the second critic's round markers and for what they
+# say about releasing an epic's children. The sweep reads them; it never
+# re-derives the grammar.
+import plan_critic  # noqa: E402
 # DRE-2846: ONE source for "ask for this epic's planner run" — shared with the
 # wave's own turn, because nothing dispatches off the lane either path uses.
 import plan_run  # noqa: E402
@@ -2244,6 +2248,69 @@ def _route_to_defect_lane(identifier: str) -> None:
         )
 
 
+#: How long an approved epic may carry no post-critic round before the sweep
+#: says so ON THE CARDS as well as in its own log (DRE-3059).
+#:
+#: The hold itself is immediate and needs no window — a plan nobody has read is
+#: a plan nobody has read. What the window buys is silence while the reading is
+#: still HAPPENING: the activate route posts the round record minutes after the
+#: CEO's approval, and a sweep landing in that gap would stamp "the second
+#: critic has not passed it" on every child of a perfectly healthy epic, then
+#: promote them on the next sweep with the refusal left standing. Thirty
+#: minutes is comfortably longer than the route's own run (a 40-turn model
+#: call) and short enough that a genuinely stuck epic — the DRE-3058 case,
+#: where the route never ran at all — is named on its cards within two sweeps.
+#:
+#: This is a decision about when to SPEAK, never about what is true: the log
+#: line prints on every sweep from the first one (console-honesty rule 1).
+POST_CRITIC_GRACE_MINUTES = int(os.environ.get("POST_CRITIC_GRACE_MINUTES", "30"))
+
+
+def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None) -> bool:
+    """Should this second-critic refusal be posted to the card, or only logged?
+
+    Only the "no round at all" refusal waits (DRE-3059). A SEND_BACK is a
+    decision the critic already made, so it speaks at once; and an unreadable
+    green light speaks too — unknown must not silence a refusal.
+    """
+    if tag != plan_critic.POST_UNREAD_TAG:
+        return True
+    if not green_lit_at:
+        return True
+    try:
+        return age_minutes(green_lit_at) >= POST_CRITIC_GRACE_MINUTES
+    except ValueError:
+        return True
+
+
+def epic_thread(epic: str) -> list | None:
+    """The epic's comment thread WITH authorship, or None when Linear cannot
+    say (DRE-3059).
+
+    `--with-authors`, always: the second critic's round markers are this gate's
+    credential, and a comment anyone with access to the epic could have left
+    must not read as one (DRE-2721 review). `comment_records` is the one place
+    that authorship question is answered.
+
+    Never raises. The promotion gate calls this once per epic per sweep, and a
+    read that failed is not a critic that refused — refusing every child of
+    every epic on an unreadable thread would freeze the board, which is the
+    same abstention `mid_epic.last_green_light` makes for the same reason
+    (standards/console-honesty.md rule 1). `None` is that unknown, and
+    `plan_critic.promotion_refusal` reads it as one; an epic with no comments
+    at all is a DIFFERENT fact and returns `[]`.
+    """
+    try:
+        return linear_ops.comment_records(epic)
+    except Exception as exc:  # noqa: BLE001 — an unreadable thread is unknown
+        print(
+            f"plan-critic: could not read {epic}'s review thread ({exc}) — "
+            "the second-critic gate abstains on this epic this sweep",
+            file=sys.stderr,
+        )
+        return None
+
+
 def promote_ready(active_count: int) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -2267,6 +2334,10 @@ def promote_ready(active_count: int) -> int:
     # Same shape, same reason, for the epic's green light (DRE-2739) — one
     # history read per epic per sweep, shared by all its children.
     green_light: dict[str, str | None] = {}
+    # And for the second critic's round markers (DRE-3059) — one comment read
+    # per epic per sweep. `None` means the read FAILED, which is not the same
+    # fact as an epic with no comments and must not be cached as one.
+    post_critic: dict[str, list | None] = {}
     candidates = sorted(backlog_children(), key=lambda c: int(c["identifier"].split("-")[1]))
     for index, card in enumerate(candidates):
         if promoted >= budget:
@@ -2380,6 +2451,11 @@ def promote_ready(active_count: int) -> int:
         # so one does not silence the other's notice (DRE-2739, DRE-2724).
         refusal: str | None = None
         refusal_tag = mid_epic.NO_VERDICT_TAG
+        # Whether the refusal is also POSTED, or only logged this sweep. Every
+        # refusal here speaks on the card by default; the one exception is the
+        # second critic's review still being IN FLIGHT (DRE-3059) — see
+        # POST_CRITIC_GRACE_MINUTES.
+        surface_refusal = True
         try:
             # Epic-level gate (DRE-1772): even an active (plan-approved) epic
             # must not start its children while the epic itself is blocked-by a
@@ -2446,12 +2522,34 @@ def promote_ready(active_count: int) -> int:
             if epic_id is not None:
                 if epic_id not in green_light:
                     green_light[epic_id] = mid_epic.last_green_light(linear_ops, epic_id)
-                refusal = mid_epic.promotion_refusal(
+                # The second critic's release (DRE-3059), asked FIRST because
+                # it is the epic-level fact: a plan nobody has read since the
+                # CEO approved it releases no child, whatever that child
+                # carries. DRE-2721's design is two critics — one before you
+                # read it, one after you approve it — and *only then are the
+                # children promotable*; the second half of that sentence had
+                # no reader until this call, so the sweep promoted DRE-3026
+                # and DRE-3027 eighty-two seconds after their epic was
+                # approved, with no post-critic verdict on it at all.
+                if epic_id not in post_critic:
+                    post_critic[epic_id] = epic_thread(epic_id)
+                refusal = plan_critic.promotion_refusal(
                     card["identifier"],
-                    card.get("createdAt"),
+                    epic_id,
                     green_light[epic_id],
-                    bodies,
+                    post_critic[epic_id],
                 )
+                if refusal is not None:
+                    refusal_tag = plan_critic.refusal_tag(refusal)
+                    surface_refusal = post_critic_hold_is_overdue(
+                        refusal_tag, green_light[epic_id])
+                else:
+                    refusal = mid_epic.promotion_refusal(
+                        card["identifier"],
+                        card.get("createdAt"),
+                        green_light[epic_id],
+                        bodies,
+                    )
             # Routing verdict (DRE-2724): the verdict answers WHO builds this
             # card, and only FLEET means "an unattended agent, in one pull
             # request". WORKBENCH needs an interactive flow, OPERATOR is not
@@ -2487,7 +2585,8 @@ def promote_ready(active_count: int) -> int:
             # and an invisible refusal is the silent-accretion problem wearing a
             # different hat. A WRITE, so deliberately outside the read-guard —
             # and guarded itself, because reporting never blocks the sweep.
-            _surface_once(card["identifier"], refusal_tag, refusal)
+            if surface_refusal:
+                _surface_once(card["identifier"], refusal_tag, refusal)
             continue
         # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
         # bad reference: record it on the existing _write_failures path (fails
