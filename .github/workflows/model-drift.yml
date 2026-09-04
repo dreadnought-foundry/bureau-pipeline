@@ -139,10 +139,13 @@ jobs:
       # Discovery (DRE-2317): a model id the catalog offers that
       # config/models.yaml has never named. The policy for one of those is
       # `discovery.on_new_model: advisory` — it may be proposed for the
-      # ADVISORY ladder and nothing else, and `on_new_model: workhorse` is
-      # rejected by schema validation because a new model joining the BUILD
-      # path unattended is the 2026-08-09 outage. This step reports; a human
-      # decides. Exit 3 = something we have never configured.
+      # ADVISORY ladder and nothing else. `on_new_model: workhorse` is rejected
+      # by schema validation because a new model joining the BUILD path
+      # unattended is the 2026-08-09 outage, and `judgement` is rejected with
+      # it: the planning ladder is the strongest one we run (DRE-3015), so it
+      # is the most attractive place for an unattended promotion to land. This
+      # step reports; a human decides. Exit 3 = something we have never
+      # configured.
       - name: Check the catalog for models we have never configured
         id: discovery
         run: |

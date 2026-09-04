@@ -438,20 +438,22 @@ def new_model_body(entries) -> str:
             "(critic, verifier, medic), which is where the strongest model "
             "belongs because the critic gates every unattended merge.",
             "",
-            "It may **never** join the workhorse ladder — the build path. A "
-            "newly available model promoting itself onto high-volume build "
-            "work is precisely the 2026-08-09 outage: the probe stopped "
-            "returning 404, a best-first ladder moved the entire fleet in one "
-            "TTL window, the rolling session usage drained, and agents began "
-            "dying mid-run. Availability is not permission.",
+            "It may **never** join the workhorse ladder — the build path — or "
+            "the judgement ladder the planner walks. A newly available model "
+            "promoting itself onto high-volume build work is precisely the "
+            "2026-08-09 outage: the probe stopped returning 404, a best-first "
+            "ladder moved the entire fleet in one TTL window, the rolling "
+            "session usage drained, and agents began dying mid-run. "
+            "Availability is not permission.",
         ]
     else:
         lines += [
             "Nothing automatic. The discovery policy in `config/models.yaml` "
             "is `none`: this card exists so a human knows the model exists.",
             "",
-            "It may **never** join the workhorse ladder — the build path — "
-            "without a deliberate, reviewed edit to `config/models.yaml`.",
+            "It may **never** join the workhorse ladder — the build path — or "
+            "the judgement ladder the planner walks, without a deliberate, "
+            "reviewed edit to `config/models.yaml`.",
         ]
     lines += [
         "",
@@ -624,9 +626,9 @@ def drift_body(findings) -> str:
         "thinking ON by default (so `max_tokens` caps thinking + response "
         "together and tight requests truncate mid-answer) and returns 400 when "
         "thinking is disabled above `high` effort.",
-        "- Cost is a decision, not a default. Fable 5 is $10/$50 per MTok "
-        "against Opus at $5/$25 — the reason it rides the bounded advisory "
-        "ladder and never the build path.",
+        "- Cost is a decision, not a default. Fable is $10/$50 per MTok "
+        "against Opus at $5/$25 — the reason it rides the bounded judgement "
+        "ladder (the planner, once per epic) and never the build path.",
         "- Ranking here is by the API's `created_at`. Model ids do not sort: "
         "`claude-opus-10` sorts before `claude-opus-5` as a string.",
         "",

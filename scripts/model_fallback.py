@@ -18,39 +18,51 @@ when the YAML is missing/unreadable — a truncated checkout must not strand a
 dispatch. Do not hand-edit it: run `python3 scripts/sync_model_config.py`
 (`--check` fails CI on drift).
 
-TWO ROLE KINDS (DRE-2317)
--------------------------
-Every role is classified in that config as one of exactly two KINDS, and a role
-is assigned a kind — never a raw ladder name:
+THE ROLE KINDS (DRE-2317, DRE-3015)
+-----------------------------------
+Every role is classified in that config as one of three KINDS, and a role is
+assigned a kind — never a raw ladder name:
 
   * `workhorse` — high-volume build work (engineer, frontend, devops,
-    database-architect, planner, fixer, repairer). Hundreds of turns per card:
-    this is the HOT PATH, and it gets the cost-appropriate model. Today
+    database-architect, fixer, repairer). Hundreds of turns per card: this is
+    the HOT PATH, and it gets the cost-appropriate model. Today
     `claude-opus-5`, falling back to `claude-sonnet-4-6`.
-  * `advisory` — bounded consults at decision points (critic, verifier, medic).
-    The critic gates EVERY unattended merge, so it is the correctness backstop
-    for a pipeline where no human reads a diff. It gets the STRONGEST model.
+  * `advisory` — bounded consults at decision points (critic, verifier, medic,
+    the two plan critics). The critic gates EVERY unattended merge, so it is
+    the correctness backstop for a pipeline where no human reads a diff.
+    Sonnet 5 since 2026-08-12, on measured cost.
+  * `judgement` — the planner, alone. One run per epic, at a decision point,
+    and the plan it writes is the specification every child card is built
+    from — so a bad output costs a fix loop per child rather than a retry. Low
+    volume, highest leverage: it gets the STRONGEST model
+    (`claude-fable-5-1`), falling LOUDLY to the workhorse rungs beneath it.
 
-Before this the allocation was exactly inverted: the critic ran on the cheapest
-model we had while build agents walked a ladder topped by the most expensive
-one. A build failure is loud; a shallow review is silent.
+Before DRE-2317 the allocation was exactly inverted: the critic ran on the
+cheapest model we had while build agents walked a ladder topped by the most
+expensive one. A build failure is loud; a shallow review is silent.
 
-`claude-fable-5` is the advisory model and is absent from every workhorse
-ladder by POLICY, not availability (2026-08-09). Fable costs ~2x Opus per
-token; when Anthropic enabled it on our subscription the probe stopped
-returning 404, the best-first ladder promoted the whole fleet onto it in a
-single TTL window, the subscription's rolling usage drained, and agents started
-dying `is_error` mid-run. AVAILABILITY IS NOT PERMISSION: a stronger model
-becoming available must never promote itself onto the build path — that is a
-spend decision belonging to a human editing config/models.yaml, not to a probe.
-Availability detection only decides how far DOWN a ladder we walk, never how
-far up.
+Fable is absent from every workhorse ladder by POLICY, not availability
+(2026-08-09). Fable costs ~2x Opus per token; when Anthropic enabled it on our
+subscription the probe stopped returning 404, the best-first ladder promoted
+the whole fleet onto it in a single TTL window, the subscription's rolling
+usage drained, and agents started dying `is_error` mid-run. AVAILABILITY IS NOT
+PERMISSION: a stronger model becoming available must never promote itself onto
+the build path — that is a spend decision belonging to a human editing
+config/models.yaml, not to a probe. Availability detection only decides how far
+DOWN a ladder we walk, never how far up.
 
-`policy_errors()` below turns that from a convention into a validated
-invariant: a config that puts the advisory model on a build ladder, demotes the
-critic to a build kind, or declares `on_new_model: workhorse` is REJECTED — the
-selector degrades to the last-known-good mirror rather than honour it, and
-`sync_model_config.py --check` fails CI red.
+That is why the planner's promotion is not a counter-example: it is a HUMAN
+edit to config/models.yaml in a reviewed PR, which is the sanctioned way up and
+the only one. The volume that caused the incident is absent by construction —
+the planner runs once per epic, not per card — and no build role's ladder
+gained a rung.
+
+`policy_errors()` below turns all of that from a convention into a validated
+invariant: a config that puts the top of a non-build ladder onto a build
+ladder, demotes the critic to a build kind, or declares `on_new_model:
+workhorse` (or `judgement`) is REJECTED — the selector degrades to the
+last-known-good mirror rather than honour it, and `sync_model_config.py
+--check` fails CI red.
 
 Why this replaced DRE-1354's per-role pair
 -------------------------------------------
@@ -107,12 +119,13 @@ FABLE = "claude-fable-5"
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
 
-# The two role kinds (DRE-2317). A role is assigned one of THESE, never a
+# The role kinds (DRE-2317, DRE-3015). A role is assigned one of THESE, never a
 # ladder name — the indirection is what stops a future edit from inventing a
-# third ladder and quietly putting build work on the strongest model.
+# ladder of its own and quietly putting build work on the strongest model.
 WORKHORSE_KIND = "workhorse"
 ADVISORY_KIND = "advisory"
-ROLE_KINDS = (WORKHORSE_KIND, ADVISORY_KIND)
+JUDGEMENT_KIND = "judgement"
+ROLE_KINDS = (WORKHORSE_KIND, ADVISORY_KIND, JUDGEMENT_KIND)
 
 # The roles that MUST stay advisory: they are the correctness backstop for a
 # pipeline where no human reads a diff. Demoting either is a config error.
@@ -121,6 +134,11 @@ BACKSTOP_ROLES = ("critic", "verifier")
 # What `discovery.on_new_model` may say. `workhorse` is deliberately absent —
 # auto-promoting a newly seen model onto the build path IS the 2026-08-09
 # incident, so the schema rejects it rather than trusting a reviewer to notice.
+# `judgement` is absent for the same reason and it matters MORE, not less: the
+# planning ladder is the strongest one we run, so it is the most attractive
+# place for an unattended promotion to land. A newly-discovered model may never
+# reach a build OR a planning ladder by itself; a human editing
+# config/models.yaml is the only way up.
 DISCOVERY_TARGETS = (ADVISORY_KIND, "none")
 
 # The canonical model config, bundled in this checkout (never a runtime lookup —
@@ -143,10 +161,12 @@ _FALLBACK_MODEL_CONFIG = {
     "kinds": {
         "workhorse": "workhorse",
         "advisory": "advisory",
+        "judgement": "judgement",
     },
     "ladders": {
         "workhorse": ["claude-opus-5", "claude-sonnet-4-6"],
         "advisory": ["claude-sonnet-5", "claude-opus-5"],
+        "judgement": ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-4-6"],
     },
     "agents": {
         "engineer": "workhorse",
@@ -154,8 +174,8 @@ _FALLBACK_MODEL_CONFIG = {
         "database-architect": "workhorse",
         "devops": "workhorse",
         "fixer": "workhorse",
-        "planner": "workhorse",
         "repairer": "workhorse",
+        "planner": "judgement",
         "critic": "advisory",
         "verifier": "advisory",
         "medic": "advisory",
@@ -241,25 +261,34 @@ def policy_errors(config) -> list[str]:
 
     The rules, each one an edit that would recreate the 2026-08-09 outage:
 
-      1. Exactly the two kinds exist, each naming a real ladder, and the two
-         ladders are different — build work and advisory work cannot share one.
+      1. Exactly the declared kinds exist, and each names a real ladder that
+         no other kind names — build work, advisory work and planning work
+         each walk their own.
       2. Every role is assigned a KIND (not a ladder name, not an invented
-         third thing).
+         fourth thing).
       3. The critic and the verifier are advisory. They gate unattended merges;
          a demotion is the inversion this policy removes.
-      4. No model on the advisory ladder ABOVE its workhorse fallback appears
-         on any workhorse ladder. This is the incident condition: the strongest
-         model must be unreachable from the build path at every availability.
+      4. The TOP RUNG of every non-workhorse ladder is absent from every
+         workhorse ladder, and once such a ladder descends onto a workhorse
+         model every rung below it is a workhorse model too. This is the
+         incident condition: the model a judging kind reaches for must be
+         unreachable from the build path at every availability, and it may not
+         hide below the fallback where the first half of the rule cannot see
+         it. The rungs BENEATH the top are deliberately shared — that is the
+         DEGRADED fall onto the build model, which is the designed shape of
+         both the advisory and the judgement ladder.
       5. `default_ladder` is the workhorse ladder, so an unrecognized role
          lands on the cheap side of the fence.
       6. `discovery.on_new_model` is `advisory` or `none`. `workhorse` — a
          newly seen model auto-joining the build path — is rejected outright,
+         `judgement` with it (the planning ladder is the strongest one we run),
          and `discovery.alert` must be true: discovery is never silent.
-      7. No `excluded` model appears on ANY ladder. Rule 4 only bars the
-         ADVISORY model from the build path; when the advisory ladder moved off
-         Fable (2026-08-12) that stopped covering Fable, and a config putting it
-         back on the workhorse ladder validated clean. Exclusion is the decision
-         "we do not run this at all" and has to be enforced on its own terms.
+      7. No `excluded` model appears on ANY ladder. Rule 4 only bars the top of
+         a non-build ladder from the build path; when the advisory ladder moved
+         off Fable (2026-08-12) that stopped covering Fable, and a config
+         putting it back on the workhorse ladder validated clean. Exclusion is
+         the decision "we do not run this at all" and has to be enforced on its
+         own terms.
     """
     cfg = _normalize_config(config)
     if cfg is None:
@@ -278,10 +307,10 @@ def policy_errors(config) -> list[str]:
             errors.append(f"kinds.{kind}: unknown ladder {ladder!r}")
     if errors:
         return errors
-    if kinds[WORKHORSE_KIND] == kinds[ADVISORY_KIND]:
+    if len(set(kinds.values())) != len(kinds):
         errors.append(
-            "kinds: the build path and the advisory path must be different "
-            "ladders — sharing one puts the strongest model on the hot path"
+            "kinds: every kind needs its OWN ladder — sharing one puts the "
+            f"strongest model on the hot path (got {kinds})"
         )
 
     for role, kind in cfg["agents"].items():
@@ -299,15 +328,33 @@ def policy_errors(config) -> list[str]:
             )
 
     workhorse_models = set(ladders.get(kinds[WORKHORSE_KIND], []))
-    advisory = ladders.get(kinds[ADVISORY_KIND], [])
-    # Everything on the advisory ladder above its LAST rung is advisory-only:
-    # the last rung is the deliberate fallback onto the workhorse model.
-    for model in advisory[:-1]:
-        if model in workhorse_models:
+    # Rule 4, for every kind that is not the build path. A non-workhorse ladder
+    # has one shape: the model that kind is FOR on top, then the workhorse
+    # rungs it degrades onto (loudly — see `selection_note`). So the top rung
+    # is what the build path must not be able to reach, and everything from the
+    # first workhorse rung down must stay workhorse: a premium model parked
+    # BELOW the fallback would be invisible to the top-rung check and one
+    # availability flip away from running.
+    for kind, ladder_name in kinds.items():
+        if kind == WORKHORSE_KIND:
+            continue
+        rungs = ladders.get(ladder_name, [])
+        if len(rungs) > 1 and rungs[0] in workhorse_models:
             errors.append(
-                f"ladders: {model} is the advisory model and must not appear on a "
-                "build ladder — availability is not permission (2026-08-09)"
+                f"ladders.{ladder_name}: {rungs[0]} tops the {kind} ladder and "
+                "must not appear on a build ladder — availability is not "
+                "permission (2026-08-09)"
             )
+        descended = False
+        for model in rungs:
+            if model in workhorse_models:
+                descended = True
+            elif descended:
+                errors.append(
+                    f"ladders.{ladder_name}: {model} sits BELOW the workhorse "
+                    f"fallback on the {kind} ladder — a stronger model may not "
+                    "hide beneath the rung the ladder degrades onto"
+                )
     # Rule 7 (2026-08-12): an EXCLUDED model is unreachable from every ladder.
     #
     # Rule 4 above bars the advisory model from the build path, which used to
@@ -337,7 +384,9 @@ def policy_errors(config) -> list[str]:
         errors.append(
             f"discovery.on_new_model: {target!r} is not allowed (choose one of "
             f"{list(DISCOVERY_TARGETS)}). A newly seen model joining the "
-            "workhorse ladder with no human deciding IS the 2026-08-09 incident."
+            "workhorse ladder with no human deciding IS the 2026-08-09 "
+            f"incident, and {JUDGEMENT_KIND!r} — the planning ladder, the "
+            "strongest one we run — is refused for the same reason."
         )
     if not cfg["discovery"]["alert"]:
         errors.append("discovery.alert: must be true — discovery is never silent")
@@ -389,9 +438,9 @@ CONFIG = _load_config()
 # returns the first available entry walking a ladder top→bottom.
 LADDERS: dict[str, list[str]] = CONFIG["ladders"]
 
-# Role kind → ladder name (DRE-2317): `workhorse` → the build ladder,
-# `advisory` → the strongest model. Exactly two entries, enforced by
-# policy_errors.
+# Role kind → ladder name (DRE-2317, DRE-3015): `workhorse` → the build ladder,
+# `advisory` → the reviewers', `judgement` → the planner's (the strongest
+# model). One ladder each, enforced by policy_errors.
 KINDS: dict[str, str] = CONFIG["kinds"]
 
 # agent/role name → role KIND. No role hardcodes a model, and no role names a
@@ -433,9 +482,9 @@ KNOWN_MODELS = (
 
 
 def kind_for(role: str) -> str:
-    """The role KIND — `workhorse` or `advisory` — an agent/role is classified
-    as. An unknown name is WORKHORSE: an unrecognized role must land on the
-    cheap side of the fence, never on the advisory model."""
+    """The role KIND — `workhorse`, `advisory` or `judgement` — an agent/role is
+    classified as. An unknown name is WORKHORSE: an unrecognized role must land
+    on the cheap side of the fence, never on a stronger model."""
     kind = AGENT_KINDS.get(role or "", "")
     return kind if kind in KINDS else WORKHORSE_KIND
 
@@ -755,8 +804,9 @@ def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> st
 
     `role` is an agent/role name from config/models.yaml (`engineer`, `planner`,
     `critic`, `verifier`, `medic`, …). Every build role is classified
-    `workhorse` and walks that ladder; the advisory roles walk theirs. An
-    unrecognized name gets the workhorse ladder rather than an error.
+    `workhorse` and walks that ladder; the advisory roles walk theirs and the
+    planner walks the `judgement` one. An unrecognized name gets the workhorse
+    ladder rather than an error.
 
     This is the answer only. `select_with_reasons()` returns the whole decision
     — including why each higher rung was skipped — and every workflow records

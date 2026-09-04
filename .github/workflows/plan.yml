@@ -152,18 +152,23 @@ jobs:
         if: steps.gate.outputs.bounced != 'true'
         run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      # Model selection: the SAME workhorse ladder as the engineer (DRE-1490).
-      # select() walks it best→worst — claude-opus-5, then claude-sonnet-4-6
-      # (see model_fallback.py / agents.yaml) — and returns the first AVAILABLE
+      # Model selection: the planner's OWN ladder (DRE-3015). It is the one
+      # `judgement` role — once per epic, at a decision point, and every build
+      # run downstream is shaped by its output — so it walks
+      # claude-fable-5-1 → claude-opus-5 → claude-sonnet-4-6 (see
+      # config/models.yaml) rather than the workhorse ladder the engineer
+      # walks. select() takes it best→worst and returns the first AVAILABLE
       # model. Availability is probed via a minimal /v1/messages call using the
       # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
       # skip; any other response, including 429, ⇒ choose it; an inconclusive
       # probe falls through to the next known-good model. The probe decides how
-      # far DOWN the ladder to walk, never how far up: the planner is a
-      # WORKHORSE role (DRE-2317), so the strongest model — reserved for the
-      # advisory roles that judge rather than build — is unreachable from this
-      # ladder at any availability, which is the 2026-08-09 incident. Mirrors the
-      # engineer Select-model step in agent-task.yml; reuses the same selector.
+      # far DOWN the ladder to walk, NEVER how far up — that is the 2026-08-09
+      # rule and it is untouched: this ladder's top rung is a human's decision
+      # in config/models.yaml, and no build role can reach it at any
+      # availability. Falling to Opus is LOUD (the note below starts DEGRADED
+      # and raises a ::warning::) — a plan that did not get the model it was
+      # promised is worth a look. Mirrors the engineer Select-model step in
+      # agent-task.yml; reuses the same selector.
       # The chosen id is recorded in a heartbeat comment so the board shows
       # which model each plan attempt used.
       - name: Select model
