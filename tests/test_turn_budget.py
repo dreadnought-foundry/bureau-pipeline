@@ -432,12 +432,23 @@ class TurnBudgetCliTest(unittest.TestCase):
 # 5 — the wiring: agent-task.yml actually uses it                              #
 # --------------------------------------------------------------------------- #
 
-def _step(workflow: str, job: str, step_id: str) -> dict:
+def _step(workflow: str, job: str, ref: str) -> dict:
+    """The step with `id: <ref>`, or failing that the one named `<ref>`. Steps
+    the workflow itself reads outputs from carry ids; the Report step does
+    not, and giving it one purely to be findable from a test is a change to
+    the workflow for the test's convenience."""
     doc = yaml.safe_load((WORKFLOWS / workflow).read_text())
-    for step in doc["jobs"][job]["steps"]:
-        if step.get("id") == step_id:
+    steps = doc["jobs"][job]["steps"]
+    for step in steps:
+        if step.get("id") == ref:
             return step
-    raise AssertionError(f"no step id={step_id!r} in {workflow} job {job!r}")
+    for step in steps:
+        if step.get("name") == ref:
+            return step
+    raise AssertionError(
+        f"no step id/name {ref!r} in {workflow} job {job!r} — if the step was "
+        f"renamed, update this test rather than deleting it"
+    )
 
 
 class WiringTest(unittest.TestCase):
@@ -482,7 +493,7 @@ class WiringTest(unittest.TestCase):
     def test_the_report_step_hands_the_thread_to_the_dead_run_decision(self):
         """Without the thread there is no diagnosis — the receipt would fall
         back to "split" on every card, including the ones it is wrong for."""
-        run = _step("agent-task.yml", "execute", "report")["run"]
+        run = _step("agent-task.yml", "execute", "Report result to Linear")["run"]
         self.assertIn("dump-comments", run)
         self.assertIn("--comments-file", run)
 

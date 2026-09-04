@@ -378,6 +378,26 @@ called unbuildable until an operator killed it by hand. The medic now reads
 the card before retrying, and refuses a turn-cap death outright — that is a
 budget ceiling, not a flake, and the same run re-run hits the same wall.
 
+### …unless the park says BUDGET, not size (DRE-3097)
+The park is still the signal, but it now names **which of two remedies** it is,
+and the second one has a handle. The turn budget is no longer a literal 150:
+a card can carry a `turns:<n>` label — a rung from the reviewed set in
+`config/turn-budgets.json` — or let its `size:` label pick one, and the budget
+it ran with is printed in the `🧠 model-attempt` receipt as `turns=250`.
+
+So read the park receipt before splitting. When every dead run reached the same
+progress marker or a later one and the last got as far as `⏳ 3/5 implementation
+green`, the receipt says **budget, not size: the work finishes but the run does
+not** and names the label to apply. Splitting that card again is the move that
+already failed — DRE-3088's third death, at $17.53, came *after* it had been cut
+down to XS (two edits inside two existing steps of `plan.yml` plus tests),
+because the cost was the ~1,850-line file the agent had to keep re-reading, not
+the size of the change. Label it, return it to `Todo`, and let it run.
+
+When the receipt says split, split: the runs did not get far enough, or
+consistently enough, for a ceiling to be the reading, and more turns buys more
+of the same.
+
 ### How to split
 - **Cut on independence, not size.** Each piece must be shippable and reviewable
   alone, and each new card names the sibling it does NOT depend on.
