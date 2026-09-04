@@ -375,5 +375,202 @@ def test_occupancy_counts_the_lanes_the_cutover_touches():
     assert counts["Backlog"] == 2 and counts["Intake"] == 1
 
 
+# --------------------------------------------------------------------------
+# 5: --only — the cutover rehearsed on named cards, through the real path
+# --------------------------------------------------------------------------
+# DRE-3034: `--limit 1` takes whichever real card the plan puts first, so a
+# throwaway probe placed in Backlog could not be moved alone and the front
+# door's move-in path could not be observed before the real run. `--only`
+# restricts the population to the cards named on the command line. Everything
+# else is unchanged — the in-flight test, the reason posted BEFORE the move,
+# the from-lane guard — and the occupancy record says plainly that it was a
+# rehearsal, so it can never be read as the cutover's.
+
+
+def _five() -> list[dict]:
+    """Five ordinary Backlog cards, DRE-2700 the oldest, DRE-2704 the newest."""
+    return [
+        _card(f"DRE-27{i:02d}", created_minutes_ago=5000 - i * 100) for i in range(5)
+    ]
+
+
+def test_only_restricts_the_population_to_the_named_cards():
+    """The card's test: a population of five, two named, exactly those two
+    planned — in the run's own order, not the order they were typed."""
+    cards = _five()
+    result = cutover.plan(cards, only=["DRE-2701", "DRE-2703"])
+    assert [c["identifier"] for c in result["move"]] == ["DRE-2703", "DRE-2701"]
+    assert result["population"] == 2
+    assert result["only"] == ["DRE-2701", "DRE-2703"]
+    assert result["not_in_backlog"] == []
+
+
+def test_without_only_the_whole_population_is_planned_as_before():
+    """Guard the guard: the filter must be the reason the other three are
+    absent above, not something else."""
+    result = cutover.plan(_five())
+    assert len(result["move"]) == 5
+    assert result["only"] is None
+
+
+def test_an_only_run_moves_exactly_the_named_cards_and_touches_nothing_else():
+    cards = _five()
+    lops = _Lops(cards)
+    plan = cutover.plan(cards, only=["DRE-2700", "DRE-2704"])
+    result = cutover.run(lops, plan, apply=True)
+    assert [i for i, _t, _f in lops.advanced] == ["DRE-2704", "DRE-2700"]
+    assert {i for i, _b in lops.comments} == {"DRE-2700", "DRE-2704"}
+    assert [c["identifier"] for c in result["moved"]] == ["DRE-2704", "DRE-2700"]
+    for identifier, to_state, from_states in lops.advanced:
+        assert (to_state, from_states) == ("Intake", "Backlog"), (
+            f"{identifier}: the from-lane guard holds on an --only run too"
+        )
+    for card in cards:
+        expected = (
+            "Intake" if card["identifier"] in {"DRE-2700", "DRE-2704"} else "Backlog"
+        )
+        assert card["state"]["name"] == expected
+
+
+def test_the_reason_is_posted_before_the_move_on_an_only_run():
+    """Unchanged by --only: the 🚚 reason is on the card whatever the move
+    does next."""
+    cards = _five()
+    lops = _Lops(cards)
+    cutover.run(lops, cutover.plan(cards, only=["DRE-2702"]), apply=True)
+    identifier, body = lops.comments[0]
+    assert (identifier, lops.advanced[0][0]) == ("DRE-2702", "DRE-2702")
+    assert body.startswith(cutover.MARK)
+    assert cutover.CUTOVER_TAG in body
+
+
+def test_a_named_card_that_is_not_in_backlog_is_reported_and_never_moved():
+    """It is reported as not being in Backlog and skipped — never moved from
+    wherever it actually is."""
+    elsewhere = _card("DRE-2801", state="Todo")
+    lops = _Lops([*_five(), elsewhere])
+    plan = cutover.plan(
+        cutover.read_population(lops), only=["DRE-2701", "DRE-2801"]
+    )
+    assert plan["not_in_backlog"] == ["DRE-2801"]
+    assert [c["identifier"] for c in plan["move"]] == ["DRE-2701"]
+    cutover.run(lops, plan, apply=True)
+    assert [i for i, _t, _f in lops.advanced] == ["DRE-2701"]
+    assert elsewhere["state"]["name"] == "Todo"
+
+
+def test_an_only_run_still_holds_an_in_flight_named_card_back_and_says_why():
+    cards = _five()
+    cards[1]["comments"]["nodes"].append(
+        {"body": "⏳ 2/5 failing tests written", "createdAt": _iso(5)}
+    )
+    plan = cutover.plan(cards, only=["DRE-2701", "DRE-2703"])
+    assert [c["identifier"] for c in plan["move"]] == ["DRE-2703"]
+    assert plan["in_flight"][0]["identifier"] == "DRE-2701"
+    assert "receipt" in plan["in_flight"][0]["why"]
+
+
+def test_only_ids_are_normalised_and_deduped():
+    """The operator types this at 2am; case and stray spaces are theirs to get
+    wrong, and a card named twice is one card."""
+    assert cutover.only_ids([" dre-2704 ", "DRE-2700", "DRE-2704"]) == [
+        "DRE-2704", "DRE-2700",
+    ]
+
+
+def test_a_value_that_is_not_a_card_id_is_refused():
+    """A typo must not be reported as 'not in Backlog', which would read as a
+    fact about the board."""
+    with pytest.raises(ValueError):
+        cutover.only_ids(["not-a-card"])
+
+
+# --- the record: a rehearsal is never mistaken for the cutover -------------
+def _record(**overrides) -> str:
+    result = {
+        "moved": [{"identifier": "DRE-2700"}, {"identifier": "DRE-2704"}],
+        "batch_one": [],
+        "in_flight": [],
+    }
+    result.update(overrides)
+    return cutover.record_note(
+        {"Backlog": 220, "Intake": 0}, {"Backlog": 218, "Intake": 2}, result
+    )
+
+
+def test_the_record_for_an_only_run_says_rehearsal_and_names_the_cards():
+    note = _record(only=["DRE-2700", "DRE-2704"], not_in_backlog=[])
+    assert "rehearsal" in note.lower()
+    assert "DRE-2700" in note and "DRE-2704" in note
+    assert "220" in note and "218" in note
+
+
+def test_the_rehearsal_record_cannot_be_mistaken_for_the_cutovers():
+    """The acceptance criterion: an --only record must not read as the
+    cutover's, and anything asking whether the cutover has run keeps getting
+    the same answer."""
+    rehearsal = _record(only=["DRE-2700"], not_in_backlog=[])
+    assert cutover.CUTOVER_HEADLINE not in rehearsal
+    assert "the cutover ran" not in rehearsal.lower()
+    assert "the cutover has not run" in rehearsal.lower()
+
+
+def test_the_full_cutover_record_is_unchanged():
+    """The other half of the same guard: without --only this is still the
+    cutover's own record, and it says nothing about a rehearsal."""
+    note = _record(batch_one=["DRE-2101"])
+    assert cutover.CUTOVER_HEADLINE in note
+    assert "rehearsal" not in note.lower()
+
+
+def test_the_rehearsal_record_names_a_card_that_was_not_in_backlog():
+    note = _record(
+        moved=[], only=["DRE-2801"], not_in_backlog=["DRE-2801"]
+    )
+    assert "DRE-2801" in note
+    assert cutover.CUTOVER_FROM in note
+
+
+# --- the CLI: the command the operator actually types ----------------------
+def _cli(monkeypatch, lops):
+    monkeypatch.setattr(cutover, "linear_ops", lops)
+    monkeypatch.setattr(cutover, "open_pr_refs", lambda *a, **k: set())
+
+
+def test_the_cli_rehearses_on_one_named_card_and_records_it(monkeypatch):
+    """`run --apply --only DRE-<probe> --record DRE-N`: one card moves with the
+    🚚 reason on it, nothing else is touched, and the record is a rehearsal."""
+    cards = _five()
+    lops = _Lops(cards)
+    _cli(monkeypatch, lops)
+    assert cutover.main(
+        ["run", "--apply", "--only", "dre-2702", "--record", "DRE-3013"]
+    ) == 0
+    assert [i for i, _t, _f in lops.advanced] == ["DRE-2702"]
+    reason = [b for i, b in lops.comments if i == "DRE-2702"]
+    assert reason and reason[0].startswith(cutover.MARK)
+    recorded = [b for i, b in lops.comments if i == "DRE-3013"]
+    assert len(recorded) == 1
+    assert "rehearsal" in recorded[0].lower() and "DRE-2702" in recorded[0]
+
+
+def test_the_cli_plan_takes_only_and_writes_nothing(monkeypatch, capsys):
+    lops = _Lops(_five())
+    _cli(monkeypatch, lops)
+    assert cutover.main(["plan", "--only", "DRE-2701", "DRE-2703"]) == 0
+    out = capsys.readouterr().out
+    assert "DRE-2703" in out and "DRE-2701" in out
+    assert "DRE-2700" not in out
+    assert lops.advanced == [] and lops.comments == []
+
+
+def test_the_cli_refuses_a_value_that_is_not_a_card_id(monkeypatch):
+    """And refuses it before it reads or writes anything."""
+    lops = _Lops(_five())
+    _cli(monkeypatch, lops)
+    assert cutover.main(["run", "--apply", "--only", "nonsense"]) == 2
+    assert lops.advanced == [] and lops.comments == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

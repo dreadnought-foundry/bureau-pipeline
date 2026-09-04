@@ -1,0 +1,110 @@
+{
+  "_readme": [
+    "THE PLANNER'S AUDIT DIMENSIONS (DRE-3016). One file, read by",
+    "scripts/planner_score.py, declaring what the planner is scored on and what",
+    "history answers each question with.",
+    "",
+    "NO JUDGEMENT ROWS LIVE HERE, and that is the difference from",
+    "config/critic-audit-dre2649.json. The critic's held-back answer is a human",
+    "review that had to be transcribed once, with a quote per row. The planner's",
+    "held-back answer is HISTORY — the merged PR's file list, the turn-cap",
+    "receipts, the readiness guard's returns, the escalations, the plan critic's",
+    "send-backs — which is read out of GitHub and Linear on every run and cannot",
+    "be transcribed wrong. What this file carries is the vocabulary: the",
+    "questions, the values each answer may take, and the ONE dimension that must",
+    "never be scored.",
+    "",
+    "`proof-and-demo` IS EXCLUDED AS CONTAMINATED. plan.yml runs",
+    "scripts/proof_and_demo.py and bounces the epic back to Planning until a",
+    "PROOF: card and a DEMO: card exist, blocked by every other child, neither",
+    "FLEET. The planner cannot leave the workflow without the answer, so scoring",
+    "it reports a row the gate produced. This is DRE-2685's `hand-built`",
+    "exclusion, one role over. The rows are kept and printed, never deleted — a",
+    "number with rows silently removed is worse than no number.",
+    "",
+    "The exclusion CHECKS ITSELF: `enforced_by` names the gate, and",
+    "reference_problems() reads .github/workflows/plan.yml for it. Take the gate",
+    "out and this file is refused until the dimension is scored again.",
+    "",
+    "Check this file against the plan workflow and the routing rail:",
+    "  python3 scripts/planner_score.py check"
+  ],
+  "version": 1,
+  "source": {
+    "epics": [
+      "DRE-2514",
+      "DRE-2668",
+      "DRE-2628"
+    ],
+    "audited_on": "2026-09-04",
+    "record": "docs/planner-audit.md — the first audit, run live and read-only",
+    "why_it_is_blind": "Every answer is what the children DID after the plan was written: the files their merged PRs touched, whether a run died at the turn cap, whether the readiness guard returned a card, whether an agent escalated, whether the plan critic sent the plan back. None of it existed when the planner wrote the plan, and none of it is in the planner's brief, its context or the epic it reads.",
+    "how_the_epics_were_chosen": "The three epics with the most children in Done, counted over all 164 epics on the board on 2026-09-04: DRE-2514 (47 of 47), DRE-2668 (33 of 50), DRE-2628 (32 of 50). Named on DRE-3016."
+  },
+  "dimensions": {
+    "file-footprint": {
+      "question": "Did each card touch the files the plan said it would?",
+      "scored": true,
+      "values": [
+        "within-footprint",
+        "outside-footprint"
+      ],
+      "why": "The `**Files:**` line is the INPUT to the ordering (briefs/planner.md), and `gh pr view --json files` says what the merged PR really touched. A card with no line made no claim and is reported as `unclaimed` rather than as agreement."
+    },
+    "collision": {
+      "question": "Did the pairs the plan called independent collide?",
+      "scored": true,
+      "values": [
+        "collides",
+        "independent"
+      ],
+      "why": "The plan's claim is its `blockedBy` edges; history's answer is whether the two merged PRs shared a file. DRE-2837/2838: PRs #2206, #2207 and #2213 each passed full review and each went DIRTY within an hour of the others, purely on merge order, with no defect in any of them. Only pairs one side or the other named are reported — booking every uninteresting pair as an agreement would grow the score with the size of the epic and say nothing."
+    },
+    "size": {
+      "question": "Was the card one PR's worth?",
+      "scored": true,
+      "values": [
+        "one-pr",
+        "too-big"
+      ],
+      "why": "Every card the planner creates is one-PR-scoped by standards/card-quality.md, so the claim is fixed and history is the variable: a `turn-exhaustion-requeue` receipt on the card says the run died at the turn cap. This dimension can only ever disagree — read the agreements as 'nothing went wrong', not as 'the planner got it right'."
+    },
+    "readiness": {
+      "question": "Was the card build-ready when it was created?",
+      "scored": true,
+      "values": [
+        "build-ready",
+        "bounced"
+      ],
+      "why": "The readiness guard's own return receipt on the card (scripts/validate_card.py). A card it returned was not build-ready at creation, whatever the plan assumed."
+    },
+    "routing": {
+      "question": "Did the card turn out to need what its routing verdict said?",
+      "scored": true,
+      "values": [
+        "dispatchable",
+        "needs-a-person"
+      ],
+      "why": "The stamped `🧭 routing-verdict:` comment is the claim; an escalation or a hand-back receipt from a FLEET card is history saying it needed a person. Read off the vocabulary's `hand-built` mark rather than a list, so a new verdict cannot quietly read as dispatchable."
+    },
+    "approval": {
+      "question": "Was the plan approved as written?",
+      "scored": true,
+      "values": [
+        "as-written",
+        "revised"
+      ],
+      "why": "A plan-critic round whose result is SEND_BACK, or a `mid-epic-amendment` marker on the epic, is the record that the plan did not survive as written. Read through plan_critic.parse_markers, so a marker quoted in prose does not count."
+    },
+    "proof-and-demo": {
+      "question": "Did the epic end with a proof card and a demo card?",
+      "scored": false,
+      "values": [
+        "both-present",
+        "missing"
+      ],
+      "enforced_by": "scripts/proof_and_demo.py",
+      "contaminated": "plan.yml runs the gate and bounces the epic back to Planning until the pair exists, blocked by every other child and neither one FLEET. The planner cannot leave the workflow without the answer, so a score here measures the gate, not the planner. It is the difference between a real blind comparison and one that flatters itself (DRE-2685)."
+    }
+  }
+}

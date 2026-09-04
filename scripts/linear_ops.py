@@ -1057,16 +1057,21 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # plain card sub-issues silently reclassifies it as an epic (validate_card
     # reads children as epic-ness) and reconcile then never promotes it. The
     # refusal names that consequence and the sibling route that works.
-    # The two free epic tests come first: a parent already classified as an epic
-    # cannot be reclassified by one more child, so the children read is only
-    # bought when the title and the labels both say no — the planner's own path
-    # (every parent is agent:planner) buys nothing at all.
-    if not mid_epic.is_epic(parent.get("title"), parent_labels, has_children=False):
-        refusal = mid_epic.subissue_refusal(
-            parent.get("title"), parent_labels, _issue_has_children(parent["id"])
-        )
-        if refusal is not None:
-            raise LinearError(f"subissue REJECTED ({title!r}): {refusal}")
+    # The free test comes first — a title that already says [EPIC] cannot be
+    # reclassified by one more child. Only then is the parent's SHAPE STAMP
+    # read (DRE-2843), and only if that does not settle it is the children read
+    # bought. The stamp is what carries the planner's own path now: `agent:planner`
+    # used to short-circuit this and it is not an answer to "is this an epic" —
+    # it says who owns the card, and reading it as epic-ness stamped every
+    # one-off FLEET by default (DRE-3038).
+    if not mid_epic.is_epic(parent.get("title"), has_children=False):
+        shape = _stamped_shape(parent_identifier)
+        if not mid_epic.is_epic(parent.get("title"), False, shape):
+            refusal = mid_epic.subissue_refusal(
+                parent.get("title"), _issue_has_children(parent["id"]), shape
+            )
+            if refusal is not None:
+                raise LinearError(f"subissue REJECTED ({title!r}): {refusal}")
 
     # 3 — ORDERING → relations: union of the body's **Blocked by:** line and any
     # --blocked-by flag. Never block on the parent epic (it deadlocks the gate).
@@ -1173,6 +1178,25 @@ def _issue_has_children(issue_id: str) -> bool:
     )
     issue = data.get("issue") or {}
     return bool((issue.get("children") or {}).get("nodes"))
+
+
+def _stamped_shape(identifier: str) -> str | None:
+    """The planning shape stamped on a card (DRE-2843), or None.
+
+    The second leg of the epic test, and the one that replaced `agent:planner`
+    (DRE-3038): the stamp says what the card IS. The tolerant read itself is
+    `routing_verdict.shape_of` — ONE definition, because every caller that
+    decides epic-ness owes the same answer — and this only buys the comments.
+    Never raises: an unreadable read is "nothing has classified this", which is
+    the case the title and the children answer.
+    """
+    import routing_verdict
+
+    try:
+        return routing_verdict.shape_of(comment_bodies(identifier))
+    except Exception as exc:  # noqa: BLE001 — an unreadable stamp is no stamp
+        print(f"{identifier}: could not read a planning shape ({exc})", file=sys.stderr)
+        return None
 
 
 def _issue_label_names(issue_id: str) -> list[str]:
@@ -1636,27 +1660,62 @@ def cmd_child_descriptions(identifier: str) -> None:
             sys.stdout.write(body.rstrip("\n") + "\n")
 
 
+def child_json_records(nodes: list) -> list:
+    """The `children-json` records for `nodes`.
+
+    Pure (no I/O) so the shape the plan critics read is pinned by test rather
+    than by a live board. Same degrade-quietly contract as every other reader
+    here: a node with no body, no labels or no parent produces a record with
+    empty ones, never an exception in the middle of a planning run.
+    """
+    out = []
+    for node in nodes or []:
+        node = node or {}
+        out.append({
+            "identifier": node.get("identifier"),
+            "body": node.get("description") or "",
+            "labels": [
+                (l or {}).get("name") or ""
+                for l in ((node.get("labels") or {}).get("nodes")) or []
+            ],
+            "parent": ((node.get("parent") or {}).get("identifier")) or "",
+        })
+    return out
+
+
 def cmd_children_json(identifier: str) -> None:
-    """Every child card as `{"identifier", "body"}` records, as a JSON array.
+    """Every child card as `{"identifier", "body", "labels", "parent"}`
+    records, as a JSON array.
 
     `child-descriptions` concatenates the bodies, which is right for the
     "is this UI work?" question and useless for anything that has to say WHICH
     card is wrong. The plan critics (DRE-2721) report per card — "DRE-9001
     carries no acceptance criteria" — so they need the identity beside the
     body, and `plan_critic.py mechanical` reads exactly this shape on stdin.
+
+    The LABELS are here because the repo a card builds in is carried by its
+    `repo:<slug>` label and by nothing else (standards/card-quality.md rule 1);
+    the body stamp that label replaced is deprecated and the planner brief
+    forbids writing it. Handed `{identifier, body}` only, the critic's repo
+    check had nothing but a body regex for the forbidden line — so it flagged
+    all five of DRE-3019's correctly-built children as "names no repo"
+    (DRE-3040). The PARENT rides along because a card the critic is told to
+    report on belongs to an epic, and a record that cannot say which one leaves
+    the critic inferring it.
     """
     data = gql(
         """query($id: String!) {
-             issue(id: $id) { children { nodes { identifier description } } }
+             issue(id: $id) { children { nodes {
+               identifier description
+               parent { identifier }
+               labels { nodes { name } }
+             } } }
            }""",
         {"id": identifier},
     )
     issue = data.get("issue") or {}
     nodes = ((issue.get("children") or {}).get("nodes")) or []
-    print(json.dumps([
-        {"identifier": (n or {}).get("identifier"), "body": (n or {}).get("description") or ""}
-        for n in nodes
-    ]))
+    print(json.dumps(child_json_records(nodes)))
 
 
 def child_detail_records(nodes: list) -> list:

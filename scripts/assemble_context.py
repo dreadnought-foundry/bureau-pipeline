@@ -86,8 +86,11 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # PRs, the console-honesty rules on console cards, and the design-parity
     # lens for **Design:**-bearing PRs; its verdict voice is comms. It also
     # judges plan artifacts, so it reads the same definition of a complete
-    # one the planner writes to (DRE-2720).
-    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md"],
+    # one the planner writes to (DRE-2720). verdict-evidence.md (DRE-3005)
+    # goes to the critic ALONE, because it is the only role that writes a
+    # verdict: a finding that asserts what a command or a job did carries
+    # the run, or it is not made.
+    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md", "verdict-evidence.md"],
     # The two PLAN critics (DRE-2721). Their standards sets differ on purpose,
     # because their questions do:
     #   pre  — "is this fit to take the CEO's time?" It judges the SHAPE of a

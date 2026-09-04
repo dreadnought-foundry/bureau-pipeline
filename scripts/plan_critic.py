@@ -46,7 +46,10 @@ Three rules baked in, each one bought:
 
 CLI:
   charter <stage> [--sight-file F]   the stage's prompt block
-  mechanical [--plan-comment-file F] [--surfaces-dir D]   cards on stdin
+  mechanical [--plan-comment-file F] [--surfaces-dir D] [--note-file F]
+                                     cards on stdin (`children-json`); the note
+                                     is the list posted to the epic BEFORE the
+                                     critic reads it
   decide --stage S --result-file F [--epic E] [--github-output F]
          [--note-file F] [--record-file F]
                                      comment thread (JSON array) on stdin,
@@ -73,6 +76,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import design_parity
+import plan_footprint
 
 # `scripts/design_parity.py already implements part of this ... Reuse it; do
 # not reinvent it.` Re-exported by NAME, not re-implemented: a surface is
@@ -627,14 +631,9 @@ _ACCEPTANCE_HEADING = re.compile(r"^#{1,6}\s*acceptance\s+criteria\s*$",
                                  re.IGNORECASE | re.MULTILINE)
 _CHECK_ITEM = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*\S", re.MULTILINE)
 
-# A repo, either way the contract allows it: the `repo:<slug>` label mirrored
-# into the body, or the legacy `**Repo:** <slug>` frontmatter line
-# (standards/card-quality.md).
-_REPO_LINE = re.compile(r"^\s*(?:\*\*Repo:\*\*|repo:)\s*\S", re.IGNORECASE | re.MULTILINE)
-
-# A path a card names. Deliberately narrow — a real repo-relative path with a
-# real extension — so prose about "the board" is never read as a file.
-_PATH = re.compile(r"(?<![\w/.])((?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]{1,5})(?![\w/])")
+# The `repo:<slug>` LABEL, with a non-empty slug — the canonical and only
+# source of truth for a card's repo (standards/card-quality.md, DRE-1699).
+_REPO_LABEL = "repo:"
 
 
 def cards_without_acceptance(cards: list[dict]) -> list[str]:
@@ -650,22 +649,39 @@ def cards_without_acceptance(cards: list[dict]) -> list[str]:
 
 
 def cards_without_repo(cards: list[dict]) -> list[str]:
-    return [c.get("identifier") for c in cards or []
-            if not _REPO_LINE.search(c.get("body") or "")]
+    """Cards carrying no `repo:<slug>` LABEL.
+
+    The label is the contract (standards/card-quality.md rule 1) and the body
+    stamp it replaced is explicitly deprecated — `briefs/planner.md` tells the
+    planner "do NOT write a `**Repo:** <slug>` line". This used to be a body
+    regex for exactly that forbidden line, so it flagged all five of DRE-3019's
+    correctly-built children as "names no repo" and the critic passed anyway
+    (DRE-3040). Five false findings is how a critic learns to skip the list, and
+    the finding it skips next is a real one.
+    """
+    out = []
+    for card in cards or []:
+        labels = [str(l or "").strip().lower() for l in (card.get("labels") or [])]
+        if not any(l.startswith(_REPO_LABEL) and l[len(_REPO_LABEL):].strip()
+                   for l in labels):
+            out.append(card.get("identifier"))
+    return out
 
 
 def shared_files(cards: list[dict]) -> dict[str, list[str]]:
-    """Paths named by more than one card, path → the cards naming it.
+    """Files DECLARED by more than one card, path → the cards declaring it.
 
     `Each card/agent owns DISJOINT files` (standards/engineering.md): a shared
     file edited by two open PRs conflicts every sibling.
+
+    The declared footprint is the input, parsed once in `plan_footprint` — the
+    same parser the ordering check consumes, because two regexes for one line
+    are two answers waiting to disagree. Before DRE-3040 this scanned whole
+    bodies with a path regex that required a `/`, which read every path
+    mentioned in an acceptance criterion as a footprint and could not see
+    `README.md` at all.
     """
-    owners: dict[str, list[str]] = {}
-    for card in cards or []:
-        ident = card.get("identifier")
-        for path in sorted(set(_PATH.findall(card.get("body") or ""))):
-            owners.setdefault(path, []).append(ident)
-    return {p: ids for p, ids in owners.items() if len(ids) > 1}
+    return plan_footprint.collisions(cards)
 
 
 def mechanical_findings(cards: list[dict], plan_comment: str = "",
@@ -680,6 +696,14 @@ def mechanical_findings(cards: list[dict], plan_comment: str = "",
         findings.append(f"{ident}: no observable acceptance criteria")
     for ident in cards_without_repo(cards):
         findings.append(f"{ident}: names no repo")
+    # A card that declares no footprint is a REFUSAL, never a silent empty set:
+    # the ordering was supposed to be derived from that line, and a card with
+    # no line cannot be checked for a collision at all.
+    for ident in plan_footprint.cards_without_footprint(cards):
+        findings.append(
+            f"{ident}: declares no file footprint — the `**Files:**` line is the "
+            "input to the ordering, so this card cannot be checked for collisions"
+        )
     for path, ids in sorted(shared_files(cards).items()):
         findings.append(f"{path}: touched by {', '.join(ids)} — siblings must own disjoint files")
     for surface in unaccounted_surfaces(
@@ -689,6 +713,48 @@ def mechanical_findings(cards: list[dict], plan_comment: str = "",
             f"{surface}: designed but no card carries it and the plan does not defer it"
         )
     return findings
+
+
+def findings_note(cards: list[dict], findings: list[str]) -> str:
+    """The mechanical half's own comment, posted to the epic BEFORE the critic
+    reads it (DRE-3040).
+
+    This check used to run inside the critic's turn, where the action's log
+    reads "full output hidden for security" — so whether the critic weighed
+    five findings or never saw them could not be read off the run at all, and
+    DRE-3019's plan passed with `collisions=0` on a check that could not have
+    found one. The record now outlives the run, on the epic, where a pass with
+    unread findings is visible.
+
+    It leads with the FOOTPRINT it checked, because "the check ran and found
+    nothing" and "the check had nothing to read" are different facts and only
+    the footprint tells them apart (standards/console-honesty.md rule 2).
+    """
+    declared = plan_footprint.footprints(cards)
+    missing = set(plan_footprint.cards_without_footprint(cards))
+    lines = [
+        f"🔎 **Mechanical plan checks** — {len(cards or [])} card(s), run before "
+        "the critic reads the plan. These are the INPUT to its judgement, not a "
+        "verdict of their own.",
+        "",
+        "The declared footprint (`**Files:**`), which is what the collision "
+        "check reads:",
+    ]
+    for card in cards or []:
+        ident = card.get("identifier")
+        if ident in missing:
+            lines.append(f"- {ident}: **no `Files:` section** — nothing to check")
+        else:
+            files = sorted(declared.get(ident) or [])
+            lines.append(f"- {ident}: " + (", ".join(files) if files
+                                           else "declares no files"))
+    lines.append("")
+    if findings:
+        lines.append(f"Findings ({len(findings)}):")
+        lines += [f"- {f}" for f in findings]
+    else:
+        lines.append("No structural findings.")
+    return "\n".join(lines)
 
 
 # --- CLI --------------------------------------------------------------------
@@ -739,6 +805,10 @@ def _cmd_mechanical(args) -> int:
             surfaces += [os.path.join(root, f) for f in files
                          if f.lower().endswith(".png")]
     findings = mechanical_findings(cards, _read(args.plan_comment_file), sorted(surfaces))
+    if args.note_file:
+        # The comment the rail posts to the epic before the critic reads it.
+        with open(args.note_file, "w", encoding="utf-8") as f:
+            f.write(findings_note(cards, findings) + "\n")
     if not findings:
         print("no structural findings — "
               f"{len(cards)} card(s), {len(surfaces)} designed surface(s) in scope")
@@ -844,6 +914,9 @@ def main(argv: list[str]) -> int:
     m = sub.add_parser("mechanical", help="structural findings; cards on stdin")
     m.add_argument("--plan-comment-file", default=None)
     m.add_argument("--surfaces-dir", default=None)
+    # The findings as a comment for the epic, so the list exists somewhere the
+    # critic's own hidden turn output cannot be the only record of it.
+    m.add_argument("--note-file", default=None)
     m.set_defaults(fn=_cmd_mechanical)
 
     d = sub.add_parser("decide", help="apply the bound; comment thread on stdin")

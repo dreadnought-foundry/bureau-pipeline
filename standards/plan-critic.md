@@ -20,15 +20,36 @@ settled yet.** It does not redesign the plan, rank the work, or judge whether
 the epic is worth doing — that is the CEO's call, and the plan exists to let
 them make it.
 
-Its cheap half is mechanical and runs before the critic thinks:
+Its cheap half is mechanical and runs before the critic thinks — **in a step of
+its own, and the findings are posted to the epic before the model reads them**:
 
     python3 scripts/linear_ops.py children-json <EPIC> \
-      | python3 scripts/plan_critic.py mechanical --surfaces-dir <design dir>
+      | python3 scripts/plan_critic.py mechanical --surfaces-dir <design dir> \
+          --note-file <note>
 
 Surfaces accounting reuses `scripts/design_parity.py` — a designed surface is
 accounted for only by a card's `**Design:**` ref or an explicit
 `deferred: <surface> — <reason>` line (`standards/design-parity.md`). It is not
 re-derived here.
+
+**The collision check reads the DECLARED footprint** — the `**Files:**` line
+`briefs/planner.md` calls "the INPUT to the ordering" — parsed once in
+`scripts/plan_footprint.py` and consumed by nothing else. Root-level files are
+files; a card that declares no footprint is a finding, never a silent empty
+set. **The repo check reads the `repo:<slug>` LABEL**, which is what the
+contract requires (`standards/card-quality.md`); the body stamp it replaced is
+deprecated and the planner brief forbids writing it.
+
+Each of those three was bought on DRE-3019 (F3, 2026-09-03): the first critic
+passed that plan with `collisions=0` and could not have found a collision if
+there had been one. Nothing read `Files:`, so four of five children wrote it as
+`**Files: **` and nothing noticed. The path regex required a `/`, so
+`README.md` and `CHANGELOG.md` were invisible. And the body regex flagged all
+five correctly-built children as "names no repo" — five false findings a critic
+learns to skip, and the finding it skips next is a real one. **The findings are
+posted first because the critic's own turn output is hidden** ("full output
+hidden for security"), so a list that exists only inside the turn cannot be
+checked against the verdict that followed.
 
 **Cross-epic scope: this epic only.**
 
