@@ -26,4 +26,16 @@ jobs:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@main
     with:
       pipeline_ref: main
+      # The pen's switch (DRE-3035). Empty = open: the age-out runs and an
+      # Intake card past the lane contract's 48-hour window is moved to Green
+      # Light. To hold this repo's intake — before a cutover run, or any week
+      # the answer is "not this week" — put the DATE here, commit, and every
+      # sweep prints one line saying the pen is closed and how much is behind
+      # it. Clear it to resume. Set it on self-groomer.yml too: the drain is
+      # the other thing that moves a card out of Intake.
+      intake_hold: ""
+      # intake_max_age_minutes / intake_escalation_cap are left empty on
+      # purpose — empty means the lane contract's own window and the script's
+      # own cap, which are correct on their own. Widening the window is an
+      # operator act with an end date, made here rather than in a release.
     secrets: inherit

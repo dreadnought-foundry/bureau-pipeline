@@ -166,7 +166,7 @@ Division of labor:
 | `on:` triggers (incl. product-specific `workflow_run` lists) | job-level `if:` event filters |
 | workflow-level `concurrency:` | job-level `concurrency:` (merge-gate, reconcile) |
 | `permissions:` (constrains `GITHUB_TOKEN`) | — (jobs inherit the caller's token scope) |
-| `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on all three promotion paths) | `secrets:`/`inputs:` declarations |
+| `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on all three promotion paths; `intake_hold` / `intake_max_age_minutes` / `intake_escalation_cap` on the reconcile and groomer stubs) | `secrets:`/`inputs:` declarations |
 
 ### The agent-fix stub's concurrency group (DRE-2810)
 

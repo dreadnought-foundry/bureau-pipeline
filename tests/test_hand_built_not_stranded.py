@@ -307,7 +307,10 @@ _WATCHDOG_OWNERS = {
 #: sitting where nobody looks, so the escalation MOVES it into the queue people
 #: actually open rather than leaving it labelled and invisible. Skipping a held
 #: card there would rebuild the hole the gate exists to close, one label wide.
-_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {"escalate_aged_intake"}
+#: The gate's walk is `_intake_candidates` since DRE-3035 — a HELD sweep reports
+#: how much is behind the pen, which needs the same walk without the moves, so
+#: the two exemptions (hand-built, and now PARKED) live in the walk itself.
+_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {"_intake_candidates"}
 
 
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
@@ -316,9 +319,10 @@ def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
 
     Four readers in the "would the pipeline start or restart an agent on this
     card" family: flag_stranded (the alarm), flag_stalled_planning (the same
-    alarm for the Planning lane, DRE-2736), escalate_aged_intake (the same
-    question for Intake, DRE-2687) and main (the no-PR dispatch the alarm was
-    reporting on). Every PR-level backstop stays label-blind.
+    alarm for the Planning lane, DRE-2736), _intake_candidates (the same
+    question for Intake — escalate_aged_intake's own walk, DRE-2687/DRE-3035)
+    and main (the no-PR dispatch the alarm was reporting on). Every PR-level
+    backstop stays label-blind.
 
     The fifth reader is the other direction, and it is why the guard exists
     rather than a bare count: _flag_hand_built_idle (DRE-2682) fires ONLY on

@@ -57,6 +57,16 @@ on:
         type: string
         required: false
         default: ""
+      intake_hold:
+        description: >-
+          THE PEN'S SWITCH (DRE-3035), the same one `reconcile.yml` takes.
+          Set, `drain` refuses before any write and says so — `propose` is
+          untouched, because a held pen still wants a batch prepared for the
+          day it opens. The drain and the sweep's age-out are the two things
+          that move a card out of Intake; one switch closes both.
+        type: string
+        required: false
+        default: ""
     secrets:
       LINEAR_API_KEY:
         required: true
@@ -87,6 +97,7 @@ jobs:
           BATCH_CYCLES: ${{ inputs.batch_cycles }}
           PRIORITY: ${{ inputs.priority }}
           CARD: ${{ inputs.card }}
+          INTAKE_HOLD: ${{ inputs.intake_hold }}
         run: |
           set -euo pipefail
           # Every input through env, never interpolated into the shell line.

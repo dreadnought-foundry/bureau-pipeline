@@ -52,4 +52,9 @@ jobs:
       batch_cycles: ${{ inputs.batch_cycles }}
       priority: ${{ inputs.priority }}
       card: ${{ inputs.card }}
+      # The pen's switch (DRE-3035), and NOT a dispatch input on purpose: a
+      # hold the person dispatching the drain can waive is not a hold. It is
+      # data in this file, the same value self-reconcile.yml carries — put the
+      # date here to close the pen, clear it to open it.
+      intake_hold: ""
     secrets: inherit

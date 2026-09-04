@@ -124,11 +124,55 @@ cannot empty itself into the CEO's queue in one go. The cap holds the remainder
 — they stay in Intake, still the oldest, and the next sweep takes the next
 three. It may hold a card; it may not forget one.
 
+Two cards never age out at all: one labelled `hand-built` (no classification is
+coming from the pipeline for work a person is doing by hand) and one carrying
+the **PARKED** routing verdict — the vocabulary's own "deliberately not
+dispatchable, never reported as stalled". A clock that moved a PARKED card into
+Green Light would un-park a decision somebody made on purpose, in the loudest
+place available.
+
+## Controlling the inflow — the pen the operator holds
+
+Three things control how fast work enters the pipeline after the cutover, and
+between them the inflow is exactly the batches the CEO approves, at the capacity
+he sets, and nothing else:
+
+1. **The groomer batch** — the valve. Nothing leaves Intake without the CEO
+   approving that exact batch (`docs/groomer.md`).
+2. **PARKED** — the per-card "stay still", described above.
+3. **The sweep's three inputs**, below. They are **`workflow_call` inputs on the
+   repo's `reconcile.yml` stub** — set them there, in the file, where the repo's
+   other per-repo values live and where `make check-channel-fleet` reads them.
+   There is no env var to edit and no pipeline release to cut.
+
+| Input | What it does | Empty means |
+| -- | -- | -- |
+| `intake_hold` | **The switch.** Set it — ideally to the date you set it — and the age-out moves nothing and the groomer's `drain` refuses. Each prints one line per pass: *"Intake held by the operator since &lt;date&gt;; N cards waiting, M past the window"*. The pen is visibly closed, not silently stuck. | open |
+| `intake_max_age_minutes` | How long a card may sit in Intake before the sweep escalates it. | the lane contract's own 48-hour window |
+| `intake_escalation_cap` | How many aged cards **one sweep** may move. | three |
+
+`intake_hold` belongs on **both** stubs — `reconcile.yml` and `groomer.yml` —
+because the age-out and the drain are the two things that move a card out of
+Intake. It is stub data rather than a dispatch input on purpose: a hold the
+person running the drain can waive is not a hold.
+
 **Plan the cutover and the first groomer batch together.** Every card moved on
 cutover day gets 48 hours of grace and then starts trickling into Green Light —
 which is the pressure working as designed, and it is still pressure the CEO
-feels. If the drain will genuinely take longer than that, raise the window for
-the cutover window rather than letting the queue fill: `INTAKE_MAX_AGE_MINUTES`
-overrides the contract's value on the sweep, and `INTAKE_ESCALATION_CAP`
-overrides the per-sweep cap. Both are env overrides on `reconcile.py`, so they
-are a deliberate operator act with an end date, not an edit to the rule.
+feels. **Set `intake_hold` to the cutover date before the run and clear it when
+the front door is proven**; if the drain will genuinely take longer than the
+window, widen `intake_max_age_minutes` for the cutover instead of letting the
+queue fill. Either is a deliberate operator act with an end date, not an edit to
+the rule.
+
+```yaml
+# .github/workflows/reconcile.yml in the product repo — the pen, held
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@stable
+    with:
+      pipeline_ref: stable
+      intake_hold: "2026-09-08"       # clear this when the front door is proven
+      intake_max_age_minutes: "20160" # 14 days, for the cutover window only
+    secrets: inherit
+```
