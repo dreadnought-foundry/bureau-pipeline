@@ -50,6 +50,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import dead_run  # noqa: E402
 import push_rescue  # noqa: E402
 
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-task.yml"
@@ -373,7 +374,7 @@ class ARefusedRescueSaysWhatGithubSaid(unittest.TestCase):
         fake = FakeGit(push_results=[(128, REFUSED_400)])
         _rescue(fake, logged=logged)
         text = "\n".join(logged)
-        self.assertEqual(text.count("400"), 2, text)
+        self.assertEqual(text.count("HTTP 400"), 2, text)
         self.assertIn(SOURCE_1, text)
         self.assertIn(SOURCE_2, text)
 
@@ -500,6 +501,50 @@ class TheWorkIsWrittenOutBeforeTheRunnerDies(unittest.TestCase):
             self.assertIn("feature.py", text)
             self.assertIn("value = 1", text)
             self.assertIn(f"feat({CARD})", text)
+
+
+class TheCardSaysWhatHappenedAndWhereTheWorkIs(unittest.TestCase):
+    """The receipt a refused rescue leaves on the card. "The work is still on
+    the runner" told three runs' readers nothing they could act on: not what
+    GitHub said, and not that the work still exists."""
+
+    def test_the_receipt_names_the_http_status(self):
+        d = dead_run.decide(0, credential_expiry=True, push_status="400")
+        self.assertIn("400", d.comments[0])
+
+    def test_the_receipt_names_the_artifact_the_work_is_in(self):
+        d = dead_run.decide(0, credential_expiry=True, push_status="400",
+                            artifact=f"rescue-{CARD}.patch")
+        self.assertIn(f"rescue-{CARD}.patch", d.comments[0])
+
+    def test_a_hold_at_the_cap_says_both_too(self):
+        d = dead_run.decide(dead_run.REQUEUE_CAP, credential_expiry=True,
+                            push_status="400", artifact=f"rescue-{CARD}.patch")
+        self.assertEqual(d.action, "hold")
+        self.assertIn("400", d.comments[0])
+        self.assertIn(f"rescue-{CARD}.patch", d.comments[0])
+
+    def test_it_still_says_credential_and_never_says_died(self):
+        d = dead_run.decide(0, credential_expiry=True, push_status="400",
+                            artifact=f"rescue-{CARD}.patch")
+        self.assertIn("credential", d.comments[0].lower())
+        self.assertNotIn("died", d.comments[0].lower())
+
+    def test_an_unknown_status_claims_none(self):
+        d = dead_run.decide(0, credential_expiry=True)
+        self.assertNotIn("HTTP", d.comments[0])
+
+    def test_the_cli_takes_both_flags(self):
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "dead_run.py"), "decide",
+             "0", "--credential-expiry", "--push-status", "400",
+             "--artifact", f"rescue-{CARD}.patch"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.splitlines()[0], "requeue")
+        self.assertIn("400", done.stdout)
+        self.assertIn(f"rescue-{CARD}.patch", done.stdout)
 
 
 if __name__ == "__main__":
