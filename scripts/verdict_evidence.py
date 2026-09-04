@@ -34,7 +34,9 @@ claim a command can settle:
      output — enough of it to be re-run and compared, which means the
      command AND its result in one fenced block, not a quoted fragment.
   2. A finding that a CI job did not run something must cite the job: a run
-     id, a job id, and the line proving what it ran.
+     id, a job id, and the line proving what it ran — a line that carries
+     one of those ids or the run's own result, not any fence that happens
+     to sit beside the claim.
   3. The verdict states the PR-body snapshot it read (body_snapshot_footer,
      stamped by the workflow — the critic cannot be trusted to timestamp
      itself, and the workflow already knows both times).
@@ -201,6 +203,22 @@ _COVERAGE_DENIALS = re.compile(
 #: Six digits minimum so a sentence saying "run 2" cannot satisfy it.
 _RUN_ID = re.compile(r"\b(?:runs?|actions/runs)[\s/#:]+(\d{6,})", re.I)
 _JOB_ID = re.compile(r"\bjobs?[\s/#:]+(\d{6,})", re.I)
+
+#: What makes a fenced block THE LINE PROVING WHAT THE JOB RAN, rather than
+#: any block of text that happens to sit beside the claim. Same laundering
+#: rule 1 refuses in _has_output_for, one rule down: the evidence has to
+#: carry something of the thing it evidences, or "```python\ndef
+#: unrelated(): ...\n```" pasted beside #407's sentence satisfies the gate
+#: written to catch #407. Either the block names an id the section cites —
+#: the API read itself — or it reads like a run's own result line.
+_RAN_LINE = re.compile(
+    r"(?i:\b\d+\s+(?:passed|failed|skipped|errors?|tests?|examples?|specs?|"
+    r"assertions?|checks?)\b)"
+    r"|(?i:\bran\s+\d+\s+\w+)"
+    r"|(?i:\bno\s+tests?\s+(?:ran|were\s+run|to\s+run)\b)"
+    r"|(?i:\bexit(?:s|ed)?\s+(?:code\s+)?\d+\b)"
+    r"|\b(?:PASS|PASSED|FAIL|FAILED|OK|SUCCESS|SKIPPED)\b"
+)
 
 #: Sentence splitting. Crude on purpose — a claim and its evidence are
 #: judged over the whole verdict, so a mis-split costs nothing but a
@@ -383,6 +401,27 @@ def _has_output_for(command: str, blocks: list[str]) -> bool:
     return False
 
 
+def _proves_the_job_ran(blocks: list[str], section: str) -> bool:
+    """Does a fenced block carry evidence tied to the job being claimed?
+
+    "The line proving what the job ran" is a line FROM the job, not a fence
+    somewhere in the same section. Two shapes count, and both tie the paste
+    to the claim: the block names one of the ids the section cites (the API
+    read pasted whole), or it reads like a run's own result line (`194
+    passed (5.1m)`). An unrelated snippet does neither — which is the point,
+    because pasting one is otherwise a one-line defeat of the rule.
+    """
+    ids = set(_RUN_ID.findall(section)) | set(_JOB_ID.findall(section))
+    for block in blocks:
+        if not block.strip():
+            continue
+        if any(i in block for i in ids):
+            return True
+        if _RAN_LINE.search(block):
+            return True
+    return False
+
+
 def defects(text: str) -> list[Defect]:
     """Every unevidenced factual claim in a blocking verdict.
 
@@ -414,14 +453,16 @@ def defects(text: str) -> list[Defect]:
             gaps.append("a run id")
         if not _JOB_ID.search(whole):
             gaps.append("a job id")
-        if not any(b.strip() for b in blocks):
+        if not _proves_the_job_ran(blocks, whole):
             gaps.append("the line proving what the job ran")
         if gaps:
             for claim in job_claims(section):
                 found.append(Defect(
                     "job-coverage", claim,
+                    # Reads for one gap and for three: the common case is
+                    # now a single missing half, not a citation-free claim.
                     "the verdict says a CI job did not run something and "
-                    "cites " + " and ".join(gaps) + " for none of it",
+                    "does not cite " + " and ".join(gaps),
                 ))
     return found
 
