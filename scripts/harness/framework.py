@@ -449,6 +449,14 @@ def sweep_leftovers(gh, repo: str, namespace: str, log=print, now=None) -> dict:
         path = entry["path"]
         # A LEGACY dir is never written any more, so whatever is in one
         # predates namespacing and belongs to no live run.
+        #
+        # The agent scenarios' seed files are named for what they contain
+        # rather than for the run (unverified_claim imports one BY NAME to
+        # run a shipped test against it), so they read as foreign here and
+        # a crashed run's seed waits for the staleness path. Harmless: the
+        # next run of that scenario overwrites the file in place, and those
+        # scenarios are opt-in by name, which only ever happens under
+        # `main`.
         legacy = not path.startswith(f"{PROBE_DIR}/")
         if (
             not legacy
