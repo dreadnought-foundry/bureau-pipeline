@@ -1281,6 +1281,22 @@
       "kind": "not-an-act",
       "means": "The 50-minute credential floor (DRE-3043): the run is ten minutes from losing the only credential it has and nothing of this card's work has reached GitHub yet.",
       "why": "A WARNING ADDRESSED TO THE AGENT, not something the pipeline did. It creates no obligation on the pipeline, hands the work to nobody and has nothing to discharge — the three questions a trailer answers — and the run continues either way. It is the same shape as the ⏳ n/5 progress heartbeats briefs/engineer.md already asks for, and deliberately the SAME grammar, so the console reads one kind of line rather than two. Nothing downstream keys on it: push_rescue.py is what recovers an expiry, and check_agent_result.py classifies one from the runner's own disk — neither of them from this comment."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$NOTE\")\"",
+      "step": "Mechanical findings — the revised plan (after approval)",
+      "kind": "not-an-act",
+      "means": "The same structural checks, re-run against the plan the post-approval re-plan just revised (DRE-3088), so the next round's critic and the CEO read checks against the plan as it now stands.",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held — the mechanical half is the INPUT to the critic's judgement and decides nothing itself, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. Its body belongs to scripts/plan_critic.py, and it is posted BEFORE the critic reads it so a pass with unread findings is visible (DRE-3040)."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🛑 Held twice since approval",
+      "step": "Second critic sent the plan back",
+      "kind": "undeclared-act",
+      "means": "The second critic sent an approved plan back twice — the bound — so the epic is parked in Green Light with needs-human and both findings, and nothing builds it as it stands (DRE-3088).",
+      "why": "Act-shaped, and the registry has no row for it: it is the post-approval bound's new outcome (a park, where the DRE-2721 rail activated the epic). Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the park ships first as an undeclared act and the row follows with its console half. It carries its own idempotency in the needs-human label the sweep already honours."
     }
   ]
 }

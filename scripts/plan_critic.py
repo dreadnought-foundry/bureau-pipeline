@@ -672,8 +672,18 @@ def collision_counts(bodies: list) -> dict:
 POST_RELEASED = "released"
 #: No post-critic round on this planning attempt at all. The incident.
 POST_NOT_RUN = "not-run"
-#: The critic ran and declined to release the plan, with the bound unspent.
+#: The critic ran and declined to release the plan — one send-back with the
+#: bound unspent, or two with it spent and the epic parked (DRE-3088).
 POST_HELD = "held"
+
+#: The lane a CEO moves an epic to in order to APPROVE its plan. Approval is
+#: the In Progress entry (the relay dispatches the activation on it; an epic
+#: in Todo dispatches nothing — DRE-2725), and the contract's Green Light exit
+#: clause is written in the same terms. Every receipt that asks the CEO to
+#: approve again names THIS, so the instruction can never point at the one
+#: lane where an epic sits forever. `tests/test_plan_critic_wiring.py` pins it
+#: to a live lane in config/lane-contract.json.
+APPROVAL_LANE = "In Progress"
 
 #: Idempotency tags for the two refusals, in the `dead_run.DEAD_TAG` shape the
 #: sweep already surfaces refusals under. TWO of them, deliberately: the sweep
@@ -699,7 +709,7 @@ def post_release(bodies: list, epic: str | None = None) -> tuple[str, str]:
     `state` is one of POST_RELEASED / POST_NOT_RUN / POST_HELD, and `detail` is
     the critic's own words when it has any.
 
-    The three ways a plan is released, and each of them is one the route
+    The two ways a plan is released, and each of them is one the route
     already takes — the gate and `decide` must agree about the same marker or
     the sweep and the activate route disagree about the same epic:
 
@@ -707,9 +717,13 @@ def post_release(bodies: list, epic: str | None = None) -> tuple[str, str]:
       * `result=NO_RESULT` — a crash is not a rejection (console-honesty rule
         1). The critic did not decide anything, so it does not get to stop
         anything, and the route proceeds on one too.
-      * MAX_ROUNDS failed rounds — the bound. Two failed rounds at this critic
-        and the work proceeds regardless with the reason attached; an
-        unbounded hold is the 27-day failure the bound exists to stop.
+
+    MAX_ROUNDS failed rounds — the bound — does NOT release the children
+    (DRE-3088). Two failed rounds at the second critic and the plan parks for
+    the CEO with `needs-human` and both findings; building a plan the critic
+    held twice is the wrong thing to do with it, and Green Light with the
+    hold label is a watched queue, not the unread lane where the 27-day
+    failure lived. `decide` holds on the same round, so the two agree.
 
     Anything else holds. The vocabulary this module writes is SEND_BACK, but an
     unrecognised verdict is still the critic declining to release the plan, and
@@ -727,12 +741,14 @@ def post_release(bodies: list, epic: str | None = None) -> tuple[str, str]:
         return POST_RELEASED, (
             "the second critic produced no result — a crash is not a rejection"
         )
-    failed = sum(1 for r in rows if r["result"] not in (PASS, NO_RESULT))
-    if failed >= MAX_ROUNDS:
-        return POST_RELEASED, (
-            f"{_count_word(failed)} failed rounds at the second critic — the "
-            "bound, so the work proceeds rather than circling. The critic's "
-            "stated reason, unresolved: " + (last["reason"] or "none given")
+    failed = [r for r in rows if r["result"] not in (PASS, NO_RESULT)]
+    if len(failed) >= MAX_ROUNDS:
+        reasons = "; ".join(r["reason"] or "none given" for r in failed)
+        return POST_HELD, (
+            f"{_count_word(len(failed))} failed rounds at the second critic — "
+            "the bound, so the plan is parked for the CEO with needs-human "
+            "rather than built as it stands. The critic's stated reasons, "
+            "unresolved: " + reasons
         )
     return POST_HELD, last["reason"]
 
@@ -768,18 +784,20 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
             "Nothing has reviewed this plan since it was approved, so nobody "
             "has asked what an agent will get wrong with it as the "
             "specification.\n\n"
-            "**To let it through:** move the epic to Todo again. That re-runs "
-            "the post-approval review, and the children promote on the next "
-            "sweep once it passes."
+            f"**To let it through:** approve the epic again by moving it to "
+            f"{APPROVAL_LANE}. That re-runs the post-approval review, and the "
+            "children promote on the next sweep once it passes."
         )
     quoted = one_line(detail) or "no reason recorded"
     return (
         f"🚨 {POST_SENT_BACK_TAG}: {identifier}'s epic {epic} was approved at "
         f"{when} but the second critic sent the plan back — holding. The "
         f"critic's reason: {quoted}\n\n"
-        "The children stay in Backlog until the gap is settled and the epic is "
-        "moved to Todo again — that re-runs the review, and two failed rounds "
-        "release the work regardless with the reason attached."
+        "The children stay in Backlog until the gap is settled. The plan was "
+        "revised with the critic's finding; read it and approve the epic again "
+        f"by moving it to {APPROVAL_LANE} — that re-runs the review. A plan "
+        "sent back twice parks with needs-human rather than being built as it "
+        "stands."
     )
 
 
@@ -813,12 +831,25 @@ def _count_word(n: int) -> str:
     return {1: "one", 2: "two", 3: "three"}.get(n, str(n))
 
 
-def decide(result: str, prior_send_backs: int, reason: str = "") -> tuple[str, str]:
+def decide(result: str, prior_send_backs: int, reason: str = "",
+           stage: str = STAGE_PRE) -> tuple[str, str]:
     """`(action, note)` — `hold` stops the plan here, `proceed` moves it on.
 
-    The bound: the FIRST send-back holds; the second means two failed rounds,
-    and the plan reaches the CEO regardless with the critic's stated reason
-    attached. Nothing circles a third time.
+    The bound: the FIRST send-back holds; the second means two failed rounds.
+    What the bound DOES depends on which side of the CEO the critic sits
+    (DRE-3088):
+
+      * PRE stage — the plan reaches the CEO regardless, with the critic's
+        stated reason attached. "Proceed" here means "a person reads it", so
+        proceeding on a held plan costs the CEO a read, nothing more.
+      * POST stage — the plan PARKS. "Proceed" here means "agents build it",
+        and a plan the critic held twice is exactly the specification that
+        would make them build the wrong thing. So the second send-back holds
+        as well, and the workflow parks the epic in Green Light with
+        `needs-human` and both findings (the watched queue — not the unread
+        lane the 27-day failure lived in).
+
+    Nothing circles a third time on either side.
     """
     if result == PASS:
         return "proceed", "the critic passed this plan"
@@ -832,12 +863,28 @@ def decide(result: str, prior_send_backs: int, reason: str = "") -> tuple[str, s
     failed = prior_send_backs + 1
     if failed < MAX_ROUNDS:
         return "hold", f"sent back — round {failed} of {MAX_ROUNDS}"
+    if stage == STAGE_POST:
+        note = (
+            f"{_count_word(failed)} failed rounds at this critic — the bound. "
+            "This plan has been sent back twice since it was approved, so it "
+            "parks for you with `needs-human` instead of being built as it "
+            "stands. The critic's stated reason, unresolved: "
+        ) + one_line(reason)
+        return "hold", note
     note = (
         f"{_count_word(failed)} failed rounds at this critic — the bound, so the "
         "plan proceeds to the CEO regardless rather than circling. "
         "The critic's stated reason, unresolved: "
     ) + one_line(reason)
     return "proceed", note
+
+
+def at_bound(action: str, prior_send_backs: int, result: str) -> bool:
+    """Did THIS decision spend the last round of the budget? True only for a
+    real send-back that holds at MAX_ROUNDS — the post stage's park signal.
+    A crash or a pass never reaches the bound, whatever the count says."""
+    return (action == "hold" and result == SEND_BACK
+            and prior_send_backs + 1 >= MAX_ROUNDS)
 
 
 # --- The one-off exit (DRE-3041) --------------------------------------------
@@ -1187,12 +1234,16 @@ def _cmd_decide(args) -> int:
         # numbers its round honestly.
         action, note = one_off_decide(result, reason)
     else:
-        action, note = decide(result, prior, reason)
+        action, note = decide(result, prior, reason, stage=args.stage)
     stats = rate(cycle, args.stage)
     # The round NUMBER counts every round this stage has run, including ones it
     # passed or crashed on; the BOUND counts only the failed ones. Two different
     # questions, and conflating them would spend the budget on a crash.
     round_n = stats["rounds"] + 1
+    # `bound` is the workflow's park signal (DRE-3088): a post-stage hold at
+    # the last round parks the epic with `needs-human` instead of asking the
+    # CEO to approve the same plan a third time.
+    bound = at_bound(action, prior, result)
 
     _write_outputs(args.github_output, [
         ("action", action),
@@ -1201,6 +1252,7 @@ def _cmd_decide(args) -> int:
         ("round", str(round_n)),
         ("note", note),
         ("collisions", str(collisions)),
+        ("bound", "true" if bound else "false"),
     ])
 
     title = STAGES[args.stage]["title"]

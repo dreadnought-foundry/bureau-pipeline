@@ -32,7 +32,7 @@ EXPECTED_PROMPT_FILES = {
     "agent-task.yml": 1,
     "medic.yml": 1,
     # 6 → 7 with DRE-3041: the pre-approval critic reads the one-off exit.
-    "plan.yml": 7,
+    "plan.yml": 8,
     "qa-review.yml": 2,
     "red-main-repair.yml": 1,
     "verify.yml": 2,
