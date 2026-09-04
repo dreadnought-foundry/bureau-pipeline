@@ -78,5 +78,62 @@ agent-bureau repo; the third clause added by DRE-2103).
   decided by DRE-2551** and is not in its scope. Until that decision is
   made and written here, `vN` is the only fleet-facing channel.
 
+## Queue behind, never cancel (DRE-3070)
+
+`stable` advances only for a commit the harness PROVED, so the channel moves
+at the speed the harness finishes — and one sandbox repo means one harness run
+at a time. On a busy evening that is a queue, and how the queue behaves is the
+difference between a channel that lags and a channel that stops.
+
+**The rule: `harness.yml` holds `cancel-in-progress: false`, and it is
+load-bearing for the channel, not just for the sandbox.** The run proving
+commit N is allowed to finish and promote; the newest head queues behind it.
+
+**Why `cancel-in-progress: true` would be exactly wrong here.** It reads like
+the efficient choice — why prove a commit nobody is on any more? — and it
+freezes the channel outright. Every merge would kill the run proving the merge
+before it, so on the nights with the most changes waiting, no run would ever
+finish and `stable` would never advance. The mechanism built to keep the fleet
+off an unproven commit would instead hold it on a stale one, indefinitely.
+
+**What the rule costs, and why that cost is accepted.** GitHub keeps at most
+ONE pending run per concurrency group, so a head still waiting when the next
+push arrives is cancelled *before it starts*. Intermediate heads are therefore
+skipped: the channel advances to N, then to the latest, rather than to every
+commit in between. That is the trade — a skipped head, never a skipped
+channel. In the run list those skips look alarming and are not: a displaced run
+has `run_started_at == created_at`, because it never ran.
+
+**The residual gap, written down rather than papered over.** The group is one
+constant shared by the `push` and `pull_request` triggers, because it guards a
+single sandbox repo whose leftover-sweep would delete a concurrent run's
+branches. So a PR harness run and the trunk's proving run compete for the same
+pending slot, and the trunk's can lose (2026-09-03, run `33832750432`,
+`main@46ca2476`, displaced by the DRE-3059 PR run). Closing that needs a real
+lock on the sandbox, not a second concurrency group; until then the condition
+is reported rather than prevented.
+
+### Reading a channel that did not move
+
+Every completed harness run on `main` now leaves a promote-channel receipt
+naming one outcome, so "the channel is quiet" and "the channel is starved" are
+different strings instead of the same silence:
+
+| receipt | what happened | what to do |
+| --- | --- | --- |
+| `harness-passed-promoting` | green run, strictly ahead — `stable` moved | nothing |
+| `harness-cancelled-by-newer-push` | displaced by a merge train; never started | nothing — it advances when the trunk quietens |
+| `harness-failed` | the harness went red on this commit | a red trunk; the medic and `red-main-repair.yml` own it |
+| `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
+| `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
+| `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
+
+`channel-watch.yml` counts the `cancelled` harness runs on `main` since the
+channel head and, at two or more, names a **merge train** in the staleness
+alarm instead of reporting the cause as unknown. One skipped head is the rule
+above working; two is merges arriving faster than the harness can prove them.
+The lever is the harness's duration or the merge rate — never cancelling the
+run in progress.
+
 Mechanics of pinning, the canary channel, and the promotion/rollback moves
 live in the README under "Release channel: pinning, canary, promotion".

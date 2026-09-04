@@ -12,6 +12,14 @@
 # channel — so a held channel is reported as held, with who and when, and it
 # keeps being reported for as long as it lasts.
 #
+# DRE-3070 added the third record it reads: how many harness runs on main were
+# cancelled since the channel head last moved. The alarm already fired on "not
+# moving", which is what a merge train produces — it just could not say so, and
+# pointed at a promote-channel run log that in that case held nothing, because
+# a displaced harness run triggered no promotion attempt at all. Two or more
+# cancelled runs and the alarm names a MERGE TRAIN rather than an unknown
+# cause. The TITLE does not move with the diagnosis, so the card still dedups.
+#
 # This file only gathers GitHub's records and acts on the verdict; the decision
 # (and the threshold, and where the threshold came from) lives in
 # scripts/channel_watch.py, unit-tested in tests/test_channel_watch.py. The
@@ -113,6 +121,42 @@ jobs:
           echo "committed=${COMMITTED}" >> "$GITHUB_OUTPUT"
           echo "ahead=${AHEAD}" >> "$GITHUB_OUTPUT"
 
+      # The merge-train signal (DRE-3070): how many harness runs on main were
+      # cancelled since the channel head last moved. Read from the harness's
+      # own run records rather than scraped out of promote-channel step
+      # summaries — a run record cannot go missing, and on the incident evening
+      # the promote-channel runs were the thing that did not exist.
+      #
+      # The window is the channel head's own commit date, so the count is
+      # "since the channel last moved" and never a lifetime total. The bound is
+      # applied in jq off `$ENV`, never interpolated into the filter or into
+      # the URL: a `>` in a query string is the sort of thing that works until
+      # it doesn't, and a date from an API response is still input.
+      #
+      # A failed read leaves this EMPTY, never 0 — unknown must not render as
+      # "no merge train" (channel_watch.py's rule for every other input). Hence
+      # the assignment-as-condition: a pipeline's exit status is its LAST
+      # command, so `gh … | awk` would report success and a fabricated zero on
+      # a 500.
+      - name: Count the harness runs a merge train cancelled
+        id: train
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMITTED: ${{ steps.records.outputs.committed }}
+        run: |
+          CANCELLED=""
+          if [ -n "$COMMITTED" ]; then
+            if OUT="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/harness.yml/runs?branch=main&per_page=100" \
+              --jq '[.workflow_runs[]
+                     | select(.conclusion == "cancelled")
+                     | select(.created_at > $ENV.COMMITTED)] | length' \
+              2>/dev/null)"; then
+              CANCELLED="$OUT"
+            fi
+          fi
+          echo "cancelled=${CANCELLED}" >> "$GITHUB_OUTPUT"
+
       # The watcher's own pulse: the last run it completed before this one. An
       # empty answer is "we have never run" — which is not a gap, and must not
       # be alarmed on as one (reconcile.py's never-alarm-on-a-fabricated-empty
@@ -153,6 +197,7 @@ jobs:
           AHEAD: ${{ steps.records.outputs.ahead }}
           LAST_RUN: ${{ steps.pulse.outputs.last }}
           HOLD_UPDATED: ${{ steps.holdset.outputs.updated }}
+          CANCELLED_RUNS: ${{ steps.train.outputs.cancelled }}
         run: |
           python3 scripts/channel_watch.py \
             --commits-ahead "$AHEAD" \
@@ -160,6 +205,7 @@ jobs:
             --hold "$HOLD" \
             --hold-updated "$HOLD_UPDATED" \
             --last-run "$LAST_RUN" \
+            --cancelled-harness-runs "$CANCELLED_RUNS" \
             --title-file "$RUNNER_TEMP/alarm-title.txt" \
             --body-file "$RUNNER_TEMP/alarm-body.md" \
             >> "$GITHUB_STEP_SUMMARY"

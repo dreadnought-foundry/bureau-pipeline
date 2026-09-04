@@ -60,6 +60,21 @@ Both stale thresholds must be met together, and either way the channel must
 have something to promote — `commits_ahead == 0` is silent by construction. A
 noisy alarm gets muted, and a muted alarm on the thing protecting the fleet is
 how we get back to July.
+
+NAMING THE MERGE TRAIN (DRE-3070)
+---------------------------------
+The alarm above fires on *not moving*, which is what a merge train produces —
+but it fired saying the cause was somewhere else: *"the Promote Channel run log
+says which"*. On 2026-09-03 the run log said nothing, because a harness run
+displaced from the concurrency group's single pending slot triggered no
+promote-channel run at all, so there was no receipt to read.
+
+Both halves of that are fixed together. `promote_channel.py` now names its own
+refusal, and this module reads one more record — how many harness runs on main
+concluded `cancelled` since the channel head — and reports **MERGE TRAIN**
+rather than unknown when there are enough of them to mean it. One cancelled run
+is the queue-behind rule working as designed; `MERGE_TRAIN_CANCELLATIONS` is
+where it stops being that.
 """
 
 from __future__ import annotations
@@ -92,6 +107,17 @@ INTERVAL_HOURS = 24.0
 
 #: A gap larger than two scheduled ticks means the watcher itself skipped.
 MISSED_TICK_HOURS = 2 * INTERVAL_HOURS
+
+#: Cancelled harness runs on `main`, since the channel head, at or above which
+#: a stale channel is diagnosed as a MERGE TRAIN rather than left as unknown
+#: (DRE-3070). Not a threshold to tune — the smallest number that means
+#: anything. ONE cancellation is the queue-behind rule WORKING: GitHub keeps a
+#: single pending run per concurrency group, so one intermediate head being
+#: dropped is the designed trade (`docs/self-hosting.md`). TWO is the first
+#: count that cannot be that, and by then the channel is being outrun rather
+#: than lagging. Measured against the incident: 2026-09-03 18:30–20:53 PT
+#: produced 13 cancelled runs on main against 2 completed.
+MERGE_TRAIN_CANCELLATIONS = 2
 
 MOVING = "moving"
 STALE = "stale"
@@ -237,6 +263,63 @@ def _hold_lines(hold: str, hold_age_hours: float | None, hold_since: str | None)
     return lines
 
 
+def _is_merge_train(cancelled_harness_runs: int | None) -> bool:
+    """Enough cancelled proving runs to name the cause. Never on a blip.
+
+    `None` is "we could not read the run records" and stays unknown — the
+    console-honesty rule that governs the rest of this module. A guess dressed
+    as a diagnosis is worse than the unknown it replaces.
+    """
+    return (
+        cancelled_harness_runs is not None
+        and cancelled_harness_runs >= MERGE_TRAIN_CANCELLATIONS
+    )
+
+
+def _merge_train_headline(cancelled_harness_runs: int | None) -> str:
+    if not _is_merge_train(cancelled_harness_runs):
+        return ""
+    return (
+        f" A merge train is starving it: {cancelled_harness_runs} harness runs "
+        f"on main were cancelled before they could prove anything."
+    )
+
+
+def _cause_line(cancelled_harness_runs: int | None) -> str:
+    """Why the channel stopped — named when the records say, unknown when not.
+
+    DRE-3070: this used to be one sentence pointing at a run log that, in the
+    merge-train case, held nothing to find. Every promote-channel run now
+    leaves a receipt naming its own reason (`promote_channel.OUTCOME_*`), and
+    the harness's cancelled runs on main are countable, so the commonest cause
+    of a quiet channel is reported instead of deferred.
+    """
+    if _is_merge_train(cancelled_harness_runs):
+        return (
+            f"Cause: a MERGE TRAIN. {cancelled_harness_runs} harness runs on "
+            f"main concluded `cancelled` since the channel head — each one "
+            f"displaced from the harness's single pending slot by the merge "
+            f"that followed it, so it never started and never proved its "
+            f"commit. One skipped head is the queue-behind rule working; this "
+            f"many means merges are arriving faster than the harness can "
+            f"prove them. The channel is not broken and nothing needs "
+            f"reverting — it advances again as soon as the trunk goes quiet "
+            f"enough for one run to finish. If that is not acceptable, the "
+            f"lever is the harness's duration or the merge rate, never "
+            f"cancelling the run in progress (docs/self-hosting.md, 'Queue "
+            f"behind, never cancel')."
+        )
+    return (
+        "That means promotion has stopped happening, or every run since "
+        "has refused. The Promote Channel run log says which — every run "
+        "leaves a receipt naming one of `harness-passed-promoting`, "
+        "`harness-cancelled-by-newer-push`, `harness-failed`, "
+        "`channel-held`, `no-harness-stamp` or `not-ahead-of-channel` — and "
+        "the distinction is the whole point of this alarm: the July failure "
+        "was a mechanism that stopped being invoked, not one that failed."
+    )
+
+
 def evaluate(
     *,
     commits_ahead: int | None,
@@ -245,6 +328,7 @@ def evaluate(
     hold_age_hours: float | None = None,
     hold_since: str | None = None,
     watcher_gap_hours: float | None = None,
+    cancelled_harness_runs: int | None = None,
 ) -> Verdict:
     """Decide what the channel is doing. Pure — no clock, no network.
 
@@ -320,9 +404,13 @@ def evaluate(
             f"The release channel has not moved in {_days(channel_age_hours)} "
             f"while the engine moved {commits_ahead} commits."
         )
+        head += _merge_train_headline(cancelled_harness_runs)
         return Verdict(
             state=STALE,
             alarm=True,
+            # The TITLE is the dedup key and stays constant whatever the cause
+            # turns out to be — a diagnosis in the title mints a second card
+            # the first busy night.
             title=STALE_TITLE,
             headline=head,
             detail=_detail(
@@ -330,11 +418,7 @@ def evaluate(
                 f"The {CHANNEL} tag advances by itself on every harness-proven "
                 "commit on main, so it should never be more than one green run "
                 "behind. It is not a hold: the CHANNEL_HOLD switch is unset.",
-                "That means promotion has stopped happening, or every run since "
-                "has refused. The Promote Channel run log says which, and the "
-                "distinction is the whole point of this alarm — the July "
-                "failure was a mechanism that stopped being invoked, not one "
-                "that failed.",
+                _cause_line(cancelled_harness_runs),
             ),
         )
 
@@ -395,6 +479,11 @@ def main(argv: list[str] | None = None) -> int:
                              "when the token is allowed to read it")
     parser.add_argument("--last-run", default=None,
                         help="ISO date this watcher last completed a run")
+    parser.add_argument("--cancelled-harness-runs", default=None,
+                        help="how many harness runs on main concluded "
+                             "`cancelled` since the channel head — the "
+                             "merge-train signal (DRE-3070). Absent or "
+                             "unreadable stays unknown, never zero.")
     parser.add_argument("--now", default=None)
     parser.add_argument("--title-file", default=None)
     parser.add_argument("--body-file", default=None)
@@ -412,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
         hold_age_hours=hours_since(hold_since, now=args.now),
         hold_since=hold_since,
         watcher_gap_hours=hours_since(args.last_run, now=args.now),
+        cancelled_harness_runs=_int_or_none(args.cancelled_harness_runs),
     )
 
     print(verdict.detail)

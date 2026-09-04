@@ -48,12 +48,15 @@ permissions:
 
 jobs:
   promote:
-    # Only a green harness run on main is a promotion candidate. A PR-head run
-    # proved a commit that is not on the trunk, and a red one proved the
-    # opposite of what we want.
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+    # Every completed harness run on MAIN reaches the decision — not only the
+    # green ones (DRE-3070). A PR-head run proved a commit that is not on the
+    # trunk and is still none of our business; a run that was cancelled or that
+    # failed is very much our business, because it is the reason the channel
+    # did not move and it used to leave no record at all. The condition used to
+    # read `conclusion == 'success' && …`, so on the evening of 2026-09-03 the
+    # thirteen displaced runs produced thirteen absences. Only a green run
+    # promotes — that is `steps.decide.outputs.promote`, below, unchanged.
+    if: github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -64,6 +67,7 @@ jobs:
       # release-gate.yml.
       - name: Mint bot token
         id: app
+        if: github.event.workflow_run.conclusion == 'success'
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
@@ -71,7 +75,13 @@ jobs:
 
       # `{}` on a fetch blip: promote_channel.py fails closed on it — never
       # promote on unverifiable data.
+      #
+      # Skipped when the harness run was not green: the conclusion already
+      # settles it, and a cancelled run is now the ORDINARY case on a busy
+      # night — two API calls per displaced merge would be pure noise. The
+      # decision step reads `{}` (the file is absent) and never gets that far.
       - name: Fetch the candidate's combined commit status
+        if: github.event.workflow_run.conclusion == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ github.event.workflow_run.head_sha }}
@@ -84,6 +94,7 @@ jobs:
       # anything unreadable stays unknown and fails closed downstream.
       - name: Compare the candidate against the current channel head
         id: ancestry
+        if: github.event.workflow_run.conclusion == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ github.event.workflow_run.head_sha }}
@@ -107,12 +118,17 @@ jobs:
           # hold recreates the very condition this wave removes.
           HOLD: ${{ vars.CHANNEL_HOLD }}
           ANCESTRY: ${{ steps.ancestry.outputs.status }}
+          # What THIS harness run did, as GitHub concluded it. Distinct from
+          # the commit status, which says whether the sha was ever proved by
+          # any run — a cancelled run must not ride an older run's stamp.
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           python3 scripts/promote_channel.py \
             --sha "$CANDIDATE" \
             --statuses-file combined_status.json \
             --ancestry "$ANCESTRY" \
-            --hold "$HOLD"
+            --hold "$HOLD" \
+            --conclusion "$CONCLUSION"
 
       # Force, because the channel is a MOVING ref by design — that is what
       # makes it a staged deploy rather than a frozen pin.
@@ -131,6 +147,20 @@ jobs:
 
       # A no-op is the ordinary outcome and must not read as a failure. The
       # reason is printed either way so "why did the channel not move?" is
-      # answerable from the run alone.
+      # answerable from the run alone — and since DRE-3070 the receipt leads
+      # with the machine-readable outcome, so "the channel is quiet" and "the
+      # channel is starved by a merge train" are different strings rather than
+      # the same silence.
       - name: Say what happened
-        run: echo "${{ steps.decide.outputs.reason }}" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          OUTCOME: ${{ steps.decide.outputs.outcome }}
+          REASON: ${{ steps.decide.outputs.reason }}
+          HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+        run: |
+          {
+            echo "🏁 promote-channel: ${OUTCOME}"
+            echo ""
+            echo "${REASON}"
+            echo ""
+            echo "Harness run: ${HARNESS_RUN}"
+          } >> "$GITHUB_STEP_SUMMARY"

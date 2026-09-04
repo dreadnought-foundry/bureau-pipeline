@@ -77,6 +77,30 @@ on:
 # branches and PRs. A second dispatch QUEUES; never cancel-in-progress
 # (killing a run mid-scenario is exactly the crashed-run mess the driver's
 # sweep exists to mop up).
+#
+# QUEUE BEHIND, NEVER CANCEL — and the release channel depends on it
+# (DRE-3070). `promote-channel.yml` moves `stable` only for a commit a harness
+# run PROVED, so a harness run that never finishes is a channel that never
+# advances. With `cancel-in-progress: false` the run proving commit N is
+# allowed to finish and promote, and the newest head queues behind it: on a
+# night of fourteen merges the channel advances to N and then to the latest,
+# rather than to nothing.
+#
+# What that costs, stated because it looks like a bug in the run list: GitHub
+# keeps at most ONE pending run per group, so a head still waiting when the
+# next push arrives is cancelled BEFORE IT STARTS. Those are the `cancelled`
+# conclusions on the incident evening of 2026-09-03 — every one has
+# `run_started_at == created_at` and was cancelled one to two seconds after
+# the next run in the group was created. Nothing in progress was ever killed.
+# Skipping an intermediate head is the intended trade; the skip is now
+# RECORDED rather than silent (promote_channel.OUTCOME_CANCELLED), and the
+# staleness alarm counts those records to say "merge train" instead of
+# "unknown". See docs/self-hosting.md, "Queue behind, never cancel".
+#
+# The group is deliberately ONE constant shared by the push and pull_request
+# triggers alike: it guards a single sandbox, not a ref. Splitting it per ref
+# would let two runs sweep each other's branches — a worse failure than a
+# skipped head, and the residual cost is written down in the same doc.
 concurrency:
   group: integration-harness-sandbox
   cancel-in-progress: false
