@@ -251,7 +251,12 @@ def test_a_successor_citing_the_card_is_a_split():
     assert split_ledger.cites(
         "**One of three cards splitting DRE-2871, which SIX runs could not "
         "finish.**", "DRE-2871")
+    # And the two-way split — DRE-2952 and DRE-2953 both open this way.
+    assert split_ledger.cites(
+        "**Backend half of** [DRE-2937](https://linear.app/x)", "DRE-2937")
     assert not split_ledger.cites("see DRE-3022 for background", "DRE-3022")
+    assert not split_ledger.cites(
+        "[DRE-2937](https://linear.app/x) died at the turn cap twice", "DRE-2937")
     assert not split_ledger.cites("piece 1 of 3 of DRE-3022", "DRE-2719")
 
 
