@@ -56,8 +56,10 @@ build.
 ```
 python3 scripts/backlog_cutover.py census                 # what the lanes hold
 python3 scripts/backlog_cutover.py plan                   # the ordered list
+python3 scripts/backlog_cutover.py plan --only DRE-N      # just these cards
 python3 scripts/backlog_cutover.py run                    # dry run, writes nothing
 python3 scripts/backlog_cutover.py run --apply --record DRE-N
+python3 scripts/backlog_cutover.py run --apply --only DRE-N --record DRE-M
 ```
 
 `run` writes nothing without `--apply`. `--limit N` bounds a single run, in
@@ -65,6 +67,31 @@ order, so the first pass can be a handful of cards read by eye before the rest
 follow. `--record` posts the occupancy record — every lane's count immediately
 before and immediately after, which cards were batch one, and which were left
 alone with the evidence that justified it — to the card named.
+
+## Rehearsing it on one card
+
+`--limit N` bounds a run but cannot **name** a card: it takes whichever real
+cards the plan puts first, so a throwaway probe dropped into Backlog could not
+be moved alone and nobody could watch a card take this path before the real run
+(DRE-3013's finding 4).
+
+`--only DRE-N [DRE-M …]` restricts the population to the cards it names, on
+`plan` and on `run`. Everything else is unchanged and deliberately so — the
+in-flight test still holds a named card back and still says why, the reason is
+still posted *before* the move, and the move is still guarded on the lane it was
+read in. A named card that is **not in Backlog** is reported as such and
+skipped; the run never reaches into whatever lane it is actually in. A value
+that is not a card identifier stops the run before it reads anything, because
+"not in Backlog" is a claim about the board and a typo must not make one.
+
+The occupancy record for an `--only` run **is not the cutover's record and
+cannot be read as one**: it opens by saying a rehearsal ran, names the cards it
+ran on, and states that the cutover has not run. Ask whether the cutover has
+happened after a rehearsal and the answer is still no.
+
+```
+python3 scripts/backlog_cutover.py run --apply --only DRE-<probe> --record DRE-3013
+```
 
 Each moved card carries a comment saying, in the CEO's language, why it moved
 and what happens next. The comment is posted *before* the move, so a move that
