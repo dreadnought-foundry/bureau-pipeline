@@ -1,14 +1,15 @@
 {
   "_readme": [
-    "The four DRE-3013 front-door probes, as they were filed on 2026-09-03,",
-    "and the classification each one is owed (DRE-3029).",
+    "The DRE-3013 front-door probes, as they were filed on 2026-09-03, and",
+    "the classification each one is owed (DRE-3029, DRE-3074).",
     "",
-    "They are the fixtures because they are the only four card bodies whose",
+    "They are the fixtures because they are the only card bodies whose",
     "expected outcome is written down somewhere other than the test that",
-    "asserts it: DRE-3013 recorded what each probe should do, and every one of",
-    "them stopped at a hand stamp instead. A body invented for a test proves",
-    "the parser reads what the test wrote; these four prove the classifier",
-    "decides what the operator proof said it must.",
+    "asserts it: DRE-3013 recorded what each probe should do. Every one of",
+    "them stopped at a hand stamp — and then, once the classifier shipped,",
+    "at a transport that answered 429 to every call (DRE-3074). A body",
+    "invented for a test proves the parser reads what the test wrote; these",
+    "prove the classifier decides what the operator proof said it must.",
     "",
     "`expect` is one of the shape names in config/planning-shapes.json, or",
     "`escalate` — the DRE-2848 exit. `why` is the sentence from DRE-3013.",
@@ -17,6 +18,14 @@
     "flattened to their titles; nothing else is edited."
   ],
   "probes": [
+    {
+      "card": "DRE-3017",
+      "expect": "one-off",
+      "why": "one file, one pull request, nothing to decide",
+      "title": "PROOF-FD-4a — a one-off card in Planning with no agent:planner label: does anything plan it? (throwaway, safe to cancel)",
+      "labels": ["repo:agent-bureau-demo"],
+      "body": "**A deliberate probe, not real work.** Created 2026-09-03 17:55 PT for DRE-3013's test FD-4a.\n\nThis is the card the groomer would deliver: placed in **Planning** carrying `repo:agent-bureau-demo` and **no** `agent:planner` **label**, with a body shaped like a one-off.\n\n**The one-off it pretends to be:** add a line to the demo repo's README saying which day of the week the demo was last exercised. One file, one pull request, nothing to decide.\n\n**Contract:** Planning classifies it and it leaves by its shape — a one-off goes straight to the build queue carrying a routing verdict, no green light.\n**Prediction (from reading the relay):** the relay dispatches the planner only for `agent:planner` in Planning or Triage, so nothing runs; after 120 minutes the Planning watchdog comments and adds `needs-human`, and the card does not move.\n\n**Expected observation, either way, recorded on** DRE-3013 **with the time.** Cancel once recorded."
+    },
     {
       "card": "DRE-3018",
       "expect": "one-off",
@@ -48,6 +57,14 @@
       "title": "PROOF FD-7: a card that claims two shapes at once — expect Planning to refuse it",
       "labels": ["repo:agent-bureau-demo", "agent:planner"],
       "body": "**A deliberate probe, not real work.** Created 2026-09-03 18:00 PT for DRE-3013's test FD-7.\n\nThis card is deliberately shapeless. It asks for a one-line change to the demo repo's README **and** describes itself as a programme spanning every product repo in the fleet with a decomposition into epics, and it says both are the whole of the work. It names no outcome a person could observe, no file, and no acceptance criterion.\n\n## Contract\n\nExactly one shape is stamped per card, and a card the stamp cannot classify — two shapes, or none — is **refused, never defaulted**.\n\n**If this card is routed anywhere, or a child is created, FD-7 FAILS.**"
+    },
+    {
+      "card": "DRE-3073",
+      "expect": "escalate",
+      "why": "a business decision with nothing to build until somebody chooses",
+      "title": "PROOF-FD-6b — a business decision with no stamp, on the channel that carries the classifier: expect an escalation to Green Light, not a build (throwaway, safe to cancel)",
+      "labels": ["repo:agent-bureau-demo"],
+      "body": "**A deliberate probe, not real work.** Created 2026-09-03 21:14 PT for DRE-3013's test FD-6, second attempt — the first (DRE-3020) was stamped `one-off` by hand and routed straight to a build with no model reading it. This one carries **no stamp and no planner label**; `stable` now carries DRE-3029 (the classifier), DRE-3030/3058 (the relay dispatches on Planning entry) and DRE-3038 (the verdict is read from the card).\n\n## The decision, and there is nothing to build\n\nShould the demo repository be **public**, so a prospect can read a real pipeline run before signing, or stay **private**, because its run logs expose the model names, the token cadence and the internal card vocabulary?\n\nBoth are defensible. Public sells; private protects. The trade is commercial, not technical, and no acceptance criterion an agent could satisfy decides it.\n\n## Contract (DRE-3029 + DRE-2848)\n\nThe planner run classifies the card itself. A body that is a decision rather than work is not stamped `one-off`; the run posts the question in business terms and parks the card in **Green Light**. **If a shape is stamped and the card is routed to Backlog, or a child is created, FD-6 FAILS again.** Record on DRE-3013 the run id, the stamp or escalation text, the lane and the time. Cancel once recorded."
     }
   ]
 }

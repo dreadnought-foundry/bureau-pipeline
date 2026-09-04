@@ -108,7 +108,7 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
         self.assertGreaterEqual(
             len(worker_sites), 6,
             "expected worker-bot allowlists in qa-review.yml (x2), "
-            f"verify.yml (x2), agent-task.yml, plan.yml (x6); found {worker_sites}",
+            f"verify.yml (x2), agent-task.yml, plan.yml (x7); found {worker_sites}",
         )
 
     def test_every_worker_allowlist_includes_the_full_pool(self):
@@ -128,15 +128,17 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
 
     def test_expected_files_each_carry_a_pooled_worker_allowlist(self):
         # The known sites, pinned per-file so a file-level regression is
-        # named directly in the failure. plan.yml carries SIX: the planner,
+        # named directly in the failure. plan.yml carries SEVEN: the planner,
         # its one re-plan pass after a send-back, the first critic's two
-        # rounds and the post-approval critic (DRE-2721), plus the wave
-        # planner on the wave route (DRE-2845).
+        # rounds and the post-approval critic (DRE-2721), the wave planner on
+        # the wave route (DRE-2845), and the card classifier's one bounded
+        # call (DRE-3074 — it moved off the raw Messages API onto the same
+        # Claude Code transport every other model call here uses).
         expected = {
             "qa-review.yml": 2,
             "verify.yml": 2,
             "agent-task.yml": 1,
-            "plan.yml": 6,
+            "plan.yml": 7,
         }
         for filename, count in expected.items():
             sites = [

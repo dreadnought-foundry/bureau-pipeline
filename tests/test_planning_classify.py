@@ -43,10 +43,30 @@ WHAT THIS PINS, one section per acceptance criterion:
   H. The lane contract's Planning clause no longer waits on the cancelled
      DRE-2719 for the classification this card makes.
 
+DRE-3074 adds the TRANSPORT, and sections I–L are its:
+
+  I. The classification never goes over the raw Messages API on a subscription
+     token. That token answers HTTP 429 `rate_limit_error` to every request
+     whatever the load, so the first three planner runs that reached this step
+     (33836071343, 33836087399, 33836089993) escalated every card they read to
+     the CEO in under twenty seconds. Where there IS an API key the raw call
+     stays as the fast path, behind the same interface.
+  J. The answer comes back out of the Claude Code run's own execution record —
+     the transport `plan.yml` already runs the planner and both critics on —
+     and what is recorded is the model that ACTUALLY answered, so DRE-3015's
+     ladder can finally be read off the card.
+  K. Two reasons, not one. A call that never reached a model is our plumbing
+     failing: it says so, and the card is requeued for the next sweep once
+     rather than parked in the CEO's queue. Only a real "cannot tell" from a
+     model that DID read the card is a decision for the CEO.
+  L. `plan.yml` runs the call as a bounded Claude Code step — one turn, no
+     tools — and its requeue branch is not its escalation branch.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_classify.py -v
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -161,6 +181,82 @@ def _caller(answer: str):
 
 def _never_called(model, prompt):  # pragma: no cover - the assertion is the point
     raise AssertionError("the model was called when the card was already classified")
+
+
+# --------------------------------------------------------------------------- #
+# the two transports (DRE-3074)                                                #
+# --------------------------------------------------------------------------- #
+
+class _Response:
+    """What `urlopen` hands back on the raw Messages API path."""
+
+    def __init__(self, payload: dict):
+        self._body = json.dumps(payload).encode()
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _messages_reply(text: str) -> _Response:
+    return _Response({"content": [{"type": "text", "text": text}]})
+
+
+def _http_error(status: int, body: dict | None = None):
+    """The HTTPError urllib raises for a non-2xx — 429's body is the one the
+    three DRE-3074 planner runs actually got."""
+    import urllib.error
+
+    payload = body if body is not None else {
+        "type": "error",
+        "error": {"type": "rate_limit_error", "message": "Error"},
+    }
+    return urllib.error.HTTPError(
+        planning_classify._API_URL, status, "err", {},
+        io.BytesIO(json.dumps(payload).encode()),
+    )
+
+
+def _execution_record(text: str, *, model=MODEL, is_error=False, **extra) -> list:
+    """A claude-code-action execution file: the message list, ending with the
+    result record. Same shape `scripts/execution_result.py` reads."""
+    record = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": is_error,
+        "result": text,
+        "num_turns": 1,
+        "modelUsage": {model: {"inputTokens": 900, "outputTokens": 60}},
+    }
+    record.update(extra)
+    return [
+        {"type": "assistant",
+         "message": {"model": model, "content": [{"type": "text", "text": text}]}},
+        record,
+    ]
+
+
+def _execution_file(tmp_path, payload) -> str:
+    path = tmp_path / "claude-execution-output.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return str(path)
+
+
+def _subscription_env(monkeypatch):
+    """The env every repo in the fleet runs plan.yml with: no API key, a
+    subscription OAuth token (`CLAUDE_AUTH_MODE == 'subscription'`)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-not-a-real-token")
+
+
+def _api_key_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 
 
 # ===========================================================================
@@ -381,18 +477,22 @@ class TestRefusalNeverADefault:
 
 
 # ===========================================================================
-# D. the model unavailable degrades to the escalation exit
+# D. the model unavailable degrades to a stated reason, never to a stamp
 # ===========================================================================
 class TestTheModelUnavailable:
-    def test_a_failed_call_escalates_with_the_reason(self):
+    def test_a_failed_call_never_stamps_and_states_the_reason(self):
+        """DRE-3074 splits WHERE it lands — a model that was never reached is
+        our plumbing, so it requeues rather than parking (section K). What
+        DRE-3029 pinned and this must not weaken is the other half: no stamp,
+        and a stated reason."""
         def boom(model, prompt):
             raise OSError("connection reset by peer")
 
         probe = _probe("DRE-3018")
         lops = _Lops(probe)
         decision = planning_classify.run(lops, probe["card"], call=boom, model=MODEL)
-        assert decision.escalates
         assert decision.refusal
+        assert decision.requeues and not decision.escalates
         assert lops.comments == [], "an unreachable model must never produce a stamp"
 
     def test_a_model_that_cannot_be_selected_still_escalates(self, monkeypatch):
@@ -645,3 +745,335 @@ class TestTheLaneContract:
         rendered = lane_contract.render_markdown()
         assert "DRE-2719" not in rendered
         assert (ROOT / "docs" / "lane-contract.md").read_text(encoding="utf-8") == rendered
+
+
+# ===========================================================================
+# I. the transport — a subscription token never calls the raw Messages API
+# ===========================================================================
+class TestTheTransport:
+    def test_the_subscription_token_never_issues_a_raw_messages_call(self, monkeypatch):
+        """THE DRE-3074 defect, as the card asks it be pinned: with
+        `ANTHROPIC_API_KEY` empty the classifier must not reach
+        api.anthropic.com at all. That token answers 429 `rate_limit_error` to
+        every request whatever the load, so a raw call here escalates EVERY
+        card entering Planning to the CEO."""
+        import urllib.request
+
+        _subscription_env(monkeypatch)
+        issued: list = []
+
+        def spy(request, *args, **kwargs):  # pragma: no cover - the list is the point
+            issued.append(getattr(request, "full_url", str(request)))
+            raise AssertionError("a raw /v1/messages call was issued")
+
+        monkeypatch.setattr(urllib.request, "urlopen", spy)
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(lops, probe["card"], model=MODEL)
+
+        assert issued == [], (
+            "the classifier called the raw Messages API with a subscription "
+            f"token: {issued}"
+        )
+        assert decision.requeues and not decision.escalates
+        assert lops.comments == []
+
+    def test_the_transport_is_the_claude_code_path_without_an_api_key(self, monkeypatch):
+        _subscription_env(monkeypatch)
+        assert planning_classify.transport() == planning_classify.TRANSPORT_CLAUDE_CODE
+
+    def test_an_api_key_keeps_the_raw_call_as_the_fast_path(self, monkeypatch):
+        """The card allows the raw call to remain where `CLAUDE_AUTH_MODE !=
+        'subscription'` — behind the same interface."""
+        import urllib.request
+
+        _api_key_env(monkeypatch)
+        assert planning_classify.transport() == planning_classify.TRANSPORT_API
+        seen: list = []
+
+        def fake(request, timeout=None):
+            seen.append(request.full_url)
+            return _messages_reply(_answer(shape="one-off"))
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake)
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(lops, probe["card"], model=MODEL)
+
+        assert seen == [planning_classify._API_URL]
+        assert decision.shape == "one-off"
+        assert planning_shape.shape_on(lops.bodies) == "one-off"
+
+    @pytest.mark.parametrize("status", [429, 401, 500, 529])
+    def test_a_transport_status_is_never_a_question_for_the_ceo(self, monkeypatch, status):
+        """429 / 401 / 5xx all arrive BEFORE any model reads the card, so none
+        of them is a judgement anybody can answer."""
+        import urllib.request
+
+        _api_key_env(monkeypatch)
+
+        def boom(request, timeout=None):
+            raise _http_error(status)
+
+        monkeypatch.setattr(urllib.request, "urlopen", boom)
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(lops, probe["card"], model=MODEL)
+
+        assert decision.requeues, f"HTTP {status} was not read as a transport failure"
+        assert not decision.escalates
+        assert lops.comments == [], "a call that never happened must not stamp"
+
+    def test_the_transport_reason_names_the_status_and_the_transport(self, monkeypatch):
+        import urllib.request
+
+        _api_key_env(monkeypatch)
+        monkeypatch.setattr(
+            urllib.request, "urlopen",
+            lambda request, timeout=None: (_ for _ in ()).throw(_http_error(429)),
+        )
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(lops, probe["card"], model=MODEL)
+        reason = planning_classify.escalation_reason(probe["card"], decision)
+
+        assert "429" in reason and "transport" in reason.lower()
+        assert planning_escalation.refusal(reason) is None, (
+            planning_escalation.refusal(reason)
+        )
+
+    def test_a_run_with_no_credential_at_all_is_a_transport_failure(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(lops, probe["card"], model=MODEL)
+        assert decision.requeues and lops.comments == []
+
+    def test_a_model_that_answered_unusably_is_still_the_ceos(self, monkeypatch):
+        """The split has to cut BOTH ways: a model that read the card and could
+        not tell is a decision, and must not be swallowed as plumbing."""
+        _api_key_env(monkeypatch)
+        probe = _probe("DRE-3021")
+        lops = _Lops(probe)
+        decision = planning_classify.run(
+            lops, probe["card"],
+            call=_caller(_answer(shape=["one-off", "wave"])), model=MODEL,
+        )
+        assert decision.escalates and not decision.requeues
+
+
+# ===========================================================================
+# J. the answer comes out of the Claude Code run's own record
+# ===========================================================================
+class TestTheClaudeCodeAnswer:
+    def test_the_answer_is_read_out_of_the_execution_record(self, tmp_path):
+        text = _answer(shape="one-off")
+        path = _execution_file(tmp_path, _execution_record(text))
+        answer, model = planning_classify.answer_from_execution(path)
+        assert answer == text
+        assert model == MODEL
+
+    def test_the_model_recorded_is_the_one_that_actually_answered(self, tmp_path):
+        """DRE-3015's whole question. The selector ASKED for one model; the
+        record says which one replied, and the stamp must carry that one."""
+        answered = "claude-fable-5-1"
+        path = _execution_file(
+            tmp_path, _execution_record(_answer(shape="one-off"), model=answered)
+        )
+        _, model = planning_classify.answer_from_execution(path)
+        assert model == answered
+
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(
+            lops, probe["card"], answer=_answer(shape="one-off"), model=model
+        )
+        assert decision.model == answered
+        assert planning_shape.stamped_by(lops.bodies) == (
+            planning_shape.BY_PLANNER, answered
+        )
+
+    def test_a_crashed_classification_run_is_a_transport_failure(self, tmp_path):
+        path = _execution_file(tmp_path, _execution_record(
+            "", is_error=True, subtype="error_during_execution",
+            api_error_status=429,
+        ))
+        with pytest.raises(planning_classify.TransportError):
+            planning_classify.answer_from_execution(path)
+
+    def test_a_run_that_answered_nothing_is_a_transport_failure(self, tmp_path):
+        path = _execution_file(tmp_path, _execution_record(""))
+        with pytest.raises(planning_classify.TransportError):
+            planning_classify.answer_from_execution(path)
+
+    def test_an_absent_execution_file_is_a_transport_failure(self, tmp_path):
+        with pytest.raises(planning_classify.TransportError):
+            planning_classify.answer_from_execution(str(tmp_path / "nothing.json"))
+
+    def test_the_two_step_flow_stamps_the_shape(self):
+        """`prepare` composes, the workflow calls, `run(answer=…)` reads — and
+        the parsing and the stamping are the ones DRE-3029 already shipped."""
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision, prompt = planning_classify.prepare(lops, probe["card"], model=MODEL)
+        assert decision.refusal is None and not decision.already
+        assert probe["body"][:60] in prompt
+        assert decision.model == MODEL
+
+        done = planning_classify.run(
+            lops, probe["card"], answer=_answer(shape="one-off"), model=MODEL
+        )
+        assert done.shape == "one-off"
+        assert planning_shape.shape_on(lops.bodies) == "one-off"
+
+    def test_prepare_asks_for_no_call_on_a_card_already_classified(self):
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe, bodies=[planning_shape.shape_comment("epic", "hand call")])
+        decision, prompt = planning_classify.prepare(lops, probe["card"], model=MODEL)
+        assert decision.already and decision.shape == "epic"
+        assert prompt == "", "a classified card owes no model call"
+
+
+# ===========================================================================
+# K. two reasons — the plumbing requeues, the judgement parks
+# ===========================================================================
+class TestTheTwoReasons:
+    def test_a_transport_failure_requeues_and_never_moves_the_card(self):
+        lops = _Lops(_probe("DRE-3017"))
+        requeued = planning_escalation.requeue(
+            lops, "DRE-3017",
+            "The classifier could not reach its model (HTTP 429, transport).",
+        )
+        assert requeued is True
+        assert lops.states == [], (
+            "a transport failure must not park the card in the CEO's queue"
+        )
+        assert len(lops.comments) == 1
+        assert planning_escalation.TRANSPORT_TAG in lops.comments[0]
+
+    def test_the_requeue_note_says_it_is_our_plumbing(self):
+        note = planning_escalation.transport_comment(
+            "DRE-3017", "The classifier could not reach its model (HTTP 429, transport)."
+        )
+        assert planning_escalation.ESCALATION_TAG not in note, (
+            "a requeue must not read back as an escalation — the escalation tag "
+            "is what suppresses the real one"
+        )
+        assert "429" in note
+        assert planning_escalation.refusal(note) is None, planning_escalation.refusal(note)
+
+    def test_the_second_transport_failure_parks_the_card_for_a_human(self):
+        """Requeued ONCE. A transport that is still down on the next sweep is
+        no longer a blip, and a card nothing will ever classify must not sit in
+        Planning forever."""
+        reason = "The classifier could not reach its model (HTTP 429, transport)."
+        lops = _Lops(_probe("DRE-3017"))
+        assert planning_escalation.requeue(lops, "DRE-3017", reason) is True
+        assert planning_escalation.requeue(lops, "DRE-3017", reason) is False
+        assert lops.states == [planning_escalation.destination()]
+
+    def test_a_decision_card_parks_immediately_and_is_never_requeued(self):
+        """DRE-3073's body: the classifier's OWN reason, not a transport
+        error."""
+        probe = _probe("DRE-3073")
+        assert probe["expect"] == "escalate"
+        lops = _Lops(probe)
+        decision = planning_classify.run(
+            lops, probe["card"],
+            call=_caller(_answer(
+                shape=None, decision=True,
+                question="Should the demo repository be public or private?",
+            )),
+            model=MODEL,
+        )
+        assert decision.escalates and not decision.requeues
+        reason = planning_classify.escalation_reason(probe["card"], decision)
+        assert "decision" in reason.lower()
+        assert "transport" not in reason.lower()
+        assert lops.comments == []
+
+    def test_the_one_off_probe_dre3017_is_stamped_one_off(self):
+        """DRE-3013 FD-4a's body, classified rather than hand-stamped."""
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(
+            lops, probe["card"],
+            call=_caller(_answer(shape="one-off", tells=(1, 4))), model=MODEL,
+        )
+        assert decision.shape == "one-off"
+        assert planning_shape.shape_on(lops.bodies) == "one-off"
+
+
+# ===========================================================================
+# L. the wiring — the call is a bounded Claude Code step
+# ===========================================================================
+class TestTheClaudeCodeWiring:
+    @staticmethod
+    def _steps() -> list[dict]:
+        doc = yaml.safe_load(WF.read_text(encoding="utf-8"))
+        return doc["jobs"]["plan"]["steps"]
+
+    @classmethod
+    def _step(cls, needle: str) -> dict:
+        for step in cls._steps():
+            if needle in json.dumps(step):
+                return step
+        raise AssertionError(f"no step in plan.yml carries {needle!r}")
+
+    def _call_step(self) -> dict:
+        return self._step("the one bounded model call")
+
+    def test_the_classification_call_is_a_claude_code_invocation(self):
+        step = self._call_step()
+        assert step["uses"].startswith("anthropics/claude-code-action")
+
+    def test_the_call_is_bounded_and_carries_no_tools(self):
+        args = self._call_step()["with"]["claude_args"]
+        assert "--max-turns 1" in args
+        assert '--allowedTools ""' in args, (
+            "the classification is one bounded turn with no tools"
+        )
+
+    def test_the_call_runs_on_the_model_the_classifier_selected(self):
+        prompt_step = self._step("planning_classify.py prompt")
+        args = self._call_step()["with"]["claude_args"]
+        assert f"steps.{prompt_step['id']}.outputs.model" in args
+
+    def test_the_call_takes_both_auth_shapes_the_way_the_planner_does(self):
+        with_ = self._call_step()["with"]
+        assert "CLAUDE_AUTH_MODE" in with_["anthropic_api_key"]
+        assert "CLAUDE_AUTH_MODE" in with_["claude_code_oauth_token"]
+
+    def test_the_answer_step_reads_the_runs_own_execution_record(self):
+        step = self._step("planning_classify.py answer")
+        assert "--execution-file" in step["run"]
+        assert "execution_file" in step["run"], (
+            "the answer must come out of the action's own record"
+        )
+
+    def test_the_routing_step_is_skipped_on_a_requeue(self):
+        condition = self._step("planning_route.py decide")["if"]
+        assert "outputs.requeue != 'true'" in condition, (
+            "a card whose classifier never reached a model has no stamp — "
+            "routing it would be the `planning-no-shape` notice on a card that "
+            "is simply waiting for the next sweep"
+        )
+
+    def test_the_requeue_branch_is_not_the_escalation_branch(self):
+        requeue = self._step("planning_escalation.py requeue")
+        escalate = self._step("planning_escalation.py escalate")
+        assert "outputs.requeue == 'true'" in requeue["if"]
+        assert "outputs.requeue" not in escalate["if"]
+
+    def test_the_heartbeat_records_the_model_that_answered(self):
+        answer_step = self._step("planning_classify.py answer")
+        beat = self._step("Classifier heartbeat")
+        assert "model-attempt" in beat["run"]
+        assert f"steps.{answer_step['id']}.outputs.model" in beat["run"], (
+            "the heartbeat must carry the model the ANSWER came from, not the "
+            "one the selector asked for — DRE-3015 cannot be read off a guess"
+        )
+
+    def test_no_workflow_step_posts_to_the_raw_messages_api(self):
+        assert "api.anthropic.com" not in WF.read_text(encoding="utf-8")
