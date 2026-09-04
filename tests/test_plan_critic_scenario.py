@@ -137,7 +137,10 @@ class CriticWalk(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.pipeline = os.path.join(self.tmp, ".bureau-pipeline")
         os.makedirs(os.path.join(self.pipeline, "scripts"))
-        for name in ("plan_critic.py", "design_parity.py"):
+        # plan_footprint.py: the declared-footprint parser plan_critic imports
+        # (DRE-3040) — the walk runs the real module, so it needs the real
+        # dependency beside it.
+        for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)

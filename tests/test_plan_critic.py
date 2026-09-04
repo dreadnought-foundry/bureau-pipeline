@@ -26,6 +26,13 @@ One section per acceptance criterion:
       counted separately from collisions found later, so the tripwire is
       measurable rather than remembered.
 
+  F3 (DRE-3040). The mechanical half reads the footprint it claims to check.
+      `plan_footprint` parses the declared `**Files:**` line, root-level files
+      are files, the repo check reads the LABEL the standard requires, and the
+      findings are POSTED to the epic before the model reads them — so a pass
+      with unread findings is visible instead of hidden behind "full output
+      hidden for security".
+
 Plus the two rules the pipeline has paid for before: a crash is not a rejection
 (standards/console-honesty.md rule 1), and nothing here may emit a string that
 the merge gate reads as a QA verdict (standards/untrusted-content.md).
@@ -44,19 +51,43 @@ import unittest
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 SCRIPTS = os.path.join(ROOT, "scripts")
+FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 sys.path.insert(0, SCRIPTS)
 
 import design_parity  # noqa: E402
 import plan_critic as pc  # noqa: E402
+import plan_footprint  # noqa: E402
+
+# The labels `linear_ops.subissue` inherits onto every planner-created child.
+# Since DRE-3040 the repo check reads the LABEL the standard requires, so the
+# fixtures carry one — a body stamp is the deprecated legacy form and the
+# planner brief tells the planner not to write it.
+CHILD_LABELS = ["repo:bureau-pipeline", "initiative:bureau", "agent:engineer"]
 
 
-def _cards(*pairs):
-    return [{"identifier": i, "body": b} for i, b in pairs]
+def _cards(*pairs, labels=None):
+    return [
+        {
+            "identifier": i,
+            "body": b,
+            "labels": list(CHILD_LABELS if labels is None else labels),
+            "parent": "DRE-2721",
+        }
+        for i, b in pairs
+    ]
+
+
+def _dre_3019_children():
+    """The five children of DRE-3019, verbatim from the board — the plan the
+    pre critic passed with `collisions=0` while flagging all five as "names no
+    repo" (DRE-3040)."""
+    with open(os.path.join(FIXTURES, "dre-3019-children.json"), encoding="utf-8") as f:
+        return json.load(f)
 
 
 GOOD_CARD = (
-    "**Repo:** bureau-pipeline\n"
     "Add the send-back marker the next round reads.\n"
+    "**Files:** `scripts/plan_critic.py`\n"
     "## Acceptance criteria\n"
     "- [ ] the marker parses back out of a comment thread\n"
 )
@@ -691,41 +722,226 @@ class MechanicalChecksProtectTheCeosTime(unittest.TestCase):
     acceptance criteria and a repo, and do two cards touch the same file?"""
 
     def test_a_card_with_no_acceptance_criteria_is_a_finding(self):
-        cards = _cards(("DRE-9001", "**Repo:** bureau-pipeline\nDo the thing.\n"))
+        cards = _cards(("DRE-9001", "Do the thing.\n**Files:** `a/b.py`\n"))
         self.assertEqual(pc.cards_without_acceptance(cards), ["DRE-9001"])
         self.assertTrue(any("DRE-9001" in f for f in pc.mechanical_findings(cards)))
 
     def test_an_empty_acceptance_section_does_not_count(self):
-        cards = _cards(("DRE-9001", "**Repo:** x\n## Acceptance criteria\n\nsoon\n"))
+        cards = _cards(("DRE-9001", "**Files:** `a/b.py`\n## Acceptance criteria\n\nsoon\n"))
         self.assertEqual(pc.cards_without_acceptance(cards), ["DRE-9001"])
 
-    def test_a_card_with_no_repo_is_a_finding(self):
-        cards = _cards(("DRE-9002", "Do it.\n## Acceptance criteria\n- [ ] done\n"))
+    def test_a_card_with_no_repo_label_is_a_finding(self):
+        cards = _cards(("DRE-9002", GOOD_CARD), labels=["agent:engineer"])
         self.assertEqual(pc.cards_without_repo(cards), ["DRE-9002"])
 
-    def test_a_repo_label_line_counts_as_a_repo(self):
-        cards = _cards(("DRE-9003", "repo:bureau-pipeline\n## Acceptance criteria\n- [ ] x\n"))
+    def test_the_repo_label_is_what_counts(self):
+        cards = _cards(("DRE-9003", GOOD_CARD), labels=["repo:bureau-pipeline"])
         self.assertEqual(pc.cards_without_repo(cards), [])
+
+    def test_an_empty_repo_slug_is_not_a_repo(self):
+        cards = _cards(("DRE-9003", GOOD_CARD), labels=["repo:"])
+        self.assertEqual(pc.cards_without_repo(cards), ["DRE-9003"])
 
     def test_two_cards_touching_one_file_are_a_finding(self):
         cards = _cards(
-            ("DRE-9004", GOOD_CARD + "Edit scripts/reconcile.py.\n"),
-            ("DRE-9005", GOOD_CARD + "Also edit scripts/reconcile.py.\n"),
+            ("DRE-9004", "Edit it.\n**Files:** `scripts/reconcile.py`\n"
+                         "## Acceptance criteria\n- [ ] done\n"),
+            ("DRE-9005", "Edit it too.\n**Files:** `scripts/reconcile.py`\n"
+                         "## Acceptance criteria\n- [ ] done\n"),
         )
         self.assertEqual(pc.shared_files(cards), {"scripts/reconcile.py": ["DRE-9004", "DRE-9005"]})
         self.assertTrue(any("reconcile.py" in f for f in pc.mechanical_findings(cards)))
 
     def test_one_card_naming_a_file_twice_is_not_a_collision(self):
-        cards = _cards(("DRE-9006", GOOD_CARD + "scripts/reconcile.py twice: scripts/reconcile.py\n"))
+        cards = _cards(("DRE-9006", "**Files:** `scripts/reconcile.py`, `scripts/reconcile.py`\n"
+                                    "## Acceptance criteria\n- [ ] done\n"))
         self.assertEqual(pc.shared_files(cards), {})
 
     def test_a_clean_plan_produces_no_findings(self):
         cards = _cards(
-            ("DRE-9007", GOOD_CARD + "Edit scripts/plan_critic.py.\n"),
-            ("DRE-9008", "**Repo:** bureau-pipeline\nEdit standards/plan-critic.md.\n"
+            ("DRE-9007", GOOD_CARD),
+            ("DRE-9008", "Write the standard.\n**Files:** `standards/plan-critic.md`\n"
                          "## Acceptance criteria\n- [ ] the standard exists\n"),
         )
         self.assertEqual(pc.mechanical_findings(cards), [])
+
+
+class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
+    """DRE-3040. The pre critic passed DRE-3019's plan with `collisions=0` and
+    could not have found a collision if there had been one: nothing parsed
+    `Files:`, the path regex could not see a root-level file, and the children
+    JSON carried no labels so all five correctly-built children were flagged
+    "names no repo"."""
+
+    def setUp(self):
+        self.children = _dre_3019_children()
+
+    # -- The collision check consumes the declared footprint, once ------------
+
+    def test_shared_files_is_the_footprint_parser(self):
+        """`plan_footprint` is what `shared_files()` consumes — one parser, not
+        a second regex that can drift from it."""
+        cards = _cards(("DRE-1", "**Files:** `README.md`\nprose about `a/b.py`\n"))
+        self.assertEqual(
+            pc.shared_files(cards + _cards(("DRE-2", "**Files:** `README.md`\n"))),
+            plan_footprint.collisions(
+                cards + _cards(("DRE-2", "**Files:** `README.md`\n"))),
+        )
+
+    def test_a_card_with_no_files_section_is_a_finding(self):
+        """The third acceptance criterion: a missing section is a refusal, not
+        a silent empty set that reads like a checked, clean footprint."""
+        cards = _cards(("DRE-9010", "Do it.\n## Acceptance criteria\n- [ ] done\n"))
+        findings = pc.mechanical_findings(cards)
+        self.assertTrue(
+            any("DRE-9010" in f and "footprint" in f for f in findings), findings
+        )
+
+    # -- The five real children ----------------------------------------------
+
+    def test_no_child_is_flagged_as_naming_no_repo(self):
+        """First acceptance criterion. All five carry `repo:agent-bureau-demo`
+        as a LABEL, which is what the standard requires — and the standard
+        FORBIDS the body stamp the old regex looked for."""
+        self.assertEqual(pc.cards_without_repo(self.children), [])
+        findings = pc.mechanical_findings(self.children)
+        self.assertEqual([f for f in findings if "names no repo" in f], [])
+
+    def test_the_posted_note_lists_the_footprint_it_checked(self):
+        """First acceptance criterion, second half: the root-level files the
+        old regex could not see are named in the list the epic gets."""
+        note = pc.findings_note(self.children, pc.mechanical_findings(self.children))
+        self.assertIn("README.md", note)
+        self.assertIn("CHANGELOG.md", note)
+        self.assertIn("DRE-3026", note)
+
+    def test_two_children_declaring_one_root_file_are_reported_as_a_collision(self):
+        """Second acceptance criterion. DRE-3026 and DRE-3031 both declare
+        `README.md`; before this card neither was visible to the check."""
+        findings = pc.mechanical_findings(self.children)
+        self.assertTrue(
+            any(f.startswith("README.md:") and "DRE-3026" in f and "DRE-3031" in f
+                for f in findings),
+            findings,
+        )
+
+    def test_a_deliberate_overlap_between_two_children_is_reported(self):
+        """The same, engineered rather than incidental: give DRE-3027 the
+        README the DRE-3026 card owns and the collision must be named."""
+        children = _dre_3019_children()
+        by_id = {c["identifier"]: c for c in children}
+        by_id["DRE-3027"]["body"] = by_id["DRE-3027"]["body"].replace(
+            "**Files: **`CHANGELOG.md`", "**Files: **`CHANGELOG.md`, `README.md`"
+        )
+        self.assertIn("`README.md`", by_id["DRE-3027"]["body"],
+                      "the fixture's footprint line was not rewritten")
+        found = pc.shared_files(children)
+        self.assertEqual(found["README.md"], ["DRE-3026", "DRE-3027", "DRE-3031"])
+
+    def test_the_note_says_it_ran_even_when_it_finds_nothing(self):
+        """A pass with unread findings is what this whole card is about, so the
+        posted note distinguishes "no findings" from "never ran"
+        (standards/console-honesty.md rule 2)."""
+        clean = _cards(("DRE-9011", GOOD_CARD))
+        note = pc.findings_note(clean, pc.mechanical_findings(clean))
+        self.assertIn("DRE-9011", note)
+        self.assertIn("no structural findings", note.lower())
+
+
+def _plan_yml_steps():
+    """The steps of the plan.yml job that runs the first critic, in order."""
+    import yaml
+
+    with open(os.path.join(ROOT, ".github", "workflows", "plan.yml"),
+              encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    for job in (doc.get("jobs") or {}).values():
+        steps = (job or {}).get("steps") or []
+        if any((s.get("name") or "").startswith("First critic — round 1")
+               for s in steps):
+            return steps
+    raise AssertionError("plan.yml has no job running the first critic")
+
+
+class TheFindingsArePostedBeforeTheModelReadsThem(unittest.TestCase):
+    """DRE-3040's third gap. The mechanical half ran INSIDE the critic's own
+    turn, where its output is hidden ("full output hidden for security") — so
+    whether the critic ignored five findings or never saw them cannot be read
+    off the run at all. It now runs in a step of its own and the list lands on
+    the epic first, where the record outlives the run."""
+
+    def setUp(self):
+        self.steps = _plan_yml_steps()
+        self.names = [(s.get("name") or "") for s in self.steps]
+
+    def _index(self, prefix):
+        for i, name in enumerate(self.names):
+            if name.startswith(prefix):
+                return i
+        raise AssertionError(f"no step named {prefix!r} in plan.yml")
+
+    def test_a_step_of_its_own_runs_the_mechanical_half(self):
+        step = self.steps[self._index("Mechanical findings")]
+        run = step.get("run") or ""
+        self.assertIn("plan_critic.py mechanical", run)
+        self.assertIn("--note-file", run)
+        self.assertIn("linear_ops.py comment", run,
+                      "the findings must reach the epic, not just the log")
+
+    def test_it_runs_before_each_round_of_the_first_critic(self):
+        posted = self._index("Mechanical findings")
+        self.assertLess(posted, self._index("First critic — round 1"))
+        self.assertLess(posted, self._index("First critic — round 2"))
+
+    def test_the_critic_reads_the_file_rather_than_running_the_check_itself(self):
+        """A check the model runs itself is a check whose output only the model
+        saw."""
+        for prefix in ("First critic — round 1", "First critic — round 2"):
+            prompt = (self.steps[self._index(prefix)].get("with") or {}).get("prompt") or ""
+            self.assertNotIn("plan_critic.py mechanical", prompt,
+                             f"{prefix} still runs the mechanical half in-turn")
+            self.assertIn("plan-mechanical.md", prompt,
+                          f"{prefix} is never handed the findings")
+
+
+class TheChildrenJsonCarriesTheLabels(unittest.TestCase):
+    """`children-json` handed the critics `{identifier, body}` only, so a body
+    regex for `repo:` was the only check available — and it flagged all five of
+    DRE-3019's correctly-built children, because the standard FORBIDS the body
+    stamp it was looking for."""
+
+    NODES = [{
+        "identifier": "DRE-3026",
+        "description": "**Files: **`README.md`\n",
+        "parent": {"identifier": "DRE-3019"},
+        "labels": {"nodes": [{"name": "repo:agent-bureau-demo"},
+                             {"name": "agent:engineer"}]},
+    }]
+
+    def test_the_record_carries_the_labels_and_the_parent(self):
+        import linear_ops
+
+        self.assertEqual(linear_ops.child_json_records(self.NODES), [{
+            "identifier": "DRE-3026",
+            "body": "**Files: **`README.md`\n",
+            "labels": ["repo:agent-bureau-demo", "agent:engineer"],
+            "parent": "DRE-3019",
+        }])
+
+    def test_the_record_degrades_quietly(self):
+        """Same contract as every other reader here: a body-less or label-less
+        node produces a record, never an exception mid-plan."""
+        import linear_ops
+
+        self.assertEqual(linear_ops.child_json_records([{"identifier": "DRE-1"}]), [{
+            "identifier": "DRE-1", "body": "", "labels": [], "parent": "",
+        }])
+
+    def test_the_repo_check_reads_that_record(self):
+        import linear_ops
+
+        self.assertEqual(pc.cards_without_repo(
+            linear_ops.child_json_records(self.NODES)), [])
 
 
 class TheCli(unittest.TestCase):

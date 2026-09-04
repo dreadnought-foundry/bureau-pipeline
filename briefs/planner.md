@@ -105,12 +105,29 @@ it.
    card that OWNS the file and block the others on it. Serializing is the
    fallback, not the answer — a chain of three cards is three merge waits.
 
+**The line is PARSED, and the plan critic checks it** (DRE-3040).
+`scripts/plan_footprint.py` reads it, `plan_critic.py mechanical` reports the
+collisions, and the findings are posted to the epic before the critic reads
+them. Three things follow for you:
+
+- **A card with no `**Files:**` section is a finding**, not a card that happens
+  to own nothing. Write the line on every card, including the proof and demo
+  pair. `**Files:** none — nothing is committed by this card.` is a valid
+  answer where it is true; silence is not.
+- **Root-level files are files.** `README.md`, `CHANGELOG.md`, `package.json`,
+  `tsconfig.json` are the hottest files in any repo and the check now sees
+  them — two cards declaring one of them will be reported.
+- **Only the declared section counts.** A path you mention in an acceptance
+  criterion is not a footprint; the ordering is derived from the line, so the
+  line has to be complete.
+
 **What skipping it costs.** DRE-2837 and DRE-2838 were both split cleanly on the
 problem, and every resulting piece edited the same console files: PRs #2206,
 #2207 and #2213 each passed full review and each went `DIRTY` within an hour of
 the others, purely on merge order, with **no defect in any of them**. The rule
 was already in the standard and the pre-flight was already in this brief. What
-was missing was the declared footprint that makes either of them checkable.
+was missing was the declared footprint that makes either of them checkable —
+and for a year after it was written, anything that read it.
 
 ## What good decomposition looks like
 - **Fewest possible sub-issues**, each independently shippable as one PR with

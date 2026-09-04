@@ -1107,6 +1107,22 @@
       "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist."
     },
     {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$NOTE\")\"",
+      "step": "Mechanical findings — posted before the critic reads them",
+      "kind": "not-an-act",
+      "means": "The structural checks the first critic is handed — the declared footprint of every card, and every finding read off it.",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held — the mechanical half is the INPUT to the critic's judgement and decides nothing itself, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. Its body belongs to scripts/plan_critic.py, and it is posted BEFORE the critic reads it so a pass with unread findings is visible (DRE-3040)."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$NOTE\")\"",
+      "step": "Mechanical findings — the revised plan",
+      "kind": "not-an-act",
+      "means": "The same structural checks, re-run against the revised plan the second round reads.",
+      "why": "A record written for the human who asked for it, not a receipt for a downstream actor. Nothing was refused, recovered or held — the mechanical half is the INPUT to the critic's judgement and decides nothing itself, so a trailer would declare an autonomous act that never happened and hand the work to an actor that does not exist. Its body belongs to scripts/plan_critic.py, and it is posted BEFORE the critic reads it so a pass with unread findings is visible (DRE-3040)."
+    },
+    {
       "file": ".github/workflows/qa-review.yml",
       "anchor": "/tmp/qa-linear.md",
       "step": "Post verdict or neutral status",
