@@ -43,6 +43,25 @@ WHAT THIS PINS, one section per acceptance criterion:
   H. The lane contract's Planning clause no longer waits on the cancelled
      DRE-2719 for the classification this card makes.
 
+DRE-3074 adds the TRANSPORT, because the judgement above never ran once: the
+call went straight to `https://api.anthropic.com/v1/messages` with the
+subscription OAuth token `plan.yml` hands it, and a subscription token answers
+429 to every raw Messages request whatever the load. All three planner runs on
+2026-09-03 21:14 escalated to the CEO inside twenty seconds — DRE-3029's
+fail-closed exit working exactly as specified, on a model that was never
+reachable.
+
+  I. The classification goes through the CLAUDE CODE path — the transport every
+     other model step in this pipeline uses — and issues NO raw `/v1/messages`
+     call when `ANTHROPIC_API_KEY` is empty. The raw call survives only as the
+     API-key fast path, behind the same interface.
+  J. The two reasons are different facts. A 429/401/5xx before the model reads
+     the card is OUR plumbing failing: it says so, and it buys one more run
+     rather than a place in the CEO's queue. Only a model that read the card and
+     could not tell is a decision for a human.
+  K. The heartbeat records the model that ACTUALLY answered, so DRE-3015's
+     ladder can finally be read off a card.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_classify.py -v
 """
 from __future__ import annotations
@@ -63,6 +82,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
+import model_fallback  # noqa: E402
 import planning_classify  # noqa: E402
 import planning_escalation  # noqa: E402
 import planning_shape  # noqa: E402
@@ -161,6 +181,106 @@ def _caller(answer: str):
 
 def _never_called(model, prompt):  # pragma: no cover - the assertion is the point
     raise AssertionError("the model was called when the card was already classified")
+
+
+# --------------------------------------------------------------------------- #
+# DRE-3074: the transport, and the two ways it can fail                        #
+# --------------------------------------------------------------------------- #
+
+def _subscription_env(monkeypatch):
+    """The env EVERY repo in the fleet runs with: `CLAUDE_AUTH_MODE` is
+    `subscription`, so plan.yml hands the step an OAuth token and an EMPTY
+    `ANTHROPIC_API_KEY`."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
+
+
+def _api_key_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+
+
+def _ban_raw_api(monkeypatch):
+    """Any raw `/v1/messages` POST fails the test loudly. THE point of the card:
+    a subscription token cannot make that call and answers 429 to every one."""
+    import urllib.request
+
+    def forbidden(req, *args, **kwargs):  # pragma: no cover - the ban is the test
+        url = getattr(req, "full_url", req)
+        raise AssertionError(f"the classifier made a raw API call to {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden)
+
+
+def _envelope(text: str, model: str | None = None, **extra) -> str:
+    """One `claude -p --output-format json` result envelope."""
+    doc = {"type": "result", "subtype": "success", "is_error": False, "result": text}
+    if model:
+        doc["modelUsage"] = {model: {"inputTokens": 10, "outputTokens": 5}}
+    doc.update(extra)
+    return json.dumps(doc)
+
+
+class _Done:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _fake_cli(monkeypatch, stdout="", returncode=0):
+    """Stand in for the Claude Code CLI and record the argv it was invoked with."""
+    seen: list[list] = []
+
+    def run(argv, **kwargs):
+        seen.append(list(argv))
+        return _Done(returncode=returncode, stdout=stdout)
+
+    monkeypatch.setattr(planning_classify.subprocess, "run", run)
+    return seen
+
+
+def _fake_api(monkeypatch, body: dict):
+    """Stand in for a successful raw `/v1/messages` POST."""
+    import urllib.request
+
+    seen: list[str] = []
+
+    class _Resp:
+        status = 200
+
+        def read(self):
+            return json.dumps(body).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def urlopen(req, *args, **kwargs):
+        seen.append(getattr(req, "full_url", str(req)))
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    return seen
+
+
+def _http_error(status: int, body: str):
+    """The exception urllib raises for a non-2xx — a real one, so the code under
+    test reads the status and the body the way it does in production."""
+    import io
+    import urllib.error
+
+    return urllib.error.HTTPError(
+        planning_classify._API_URL, status, "Too Many Requests", {},
+        io.BytesIO(body.encode()),
+    )
+
+
+def _raises(exc):
+    def call(model, prompt):
+        raise exc
+
+    return call
 
 
 # ===========================================================================
@@ -395,13 +515,17 @@ class TestTheModelUnavailable:
         assert decision.refusal
         assert lops.comments == [], "an unreachable model must never produce a stamp"
 
-    def test_a_model_that_cannot_be_selected_still_escalates(self, monkeypatch):
-        import model_fallback
-
+    @pytest.mark.parametrize("mode", ["api-key", "subscription"])
+    def test_a_model_that_cannot_be_selected_still_escalates(self, monkeypatch, mode):
+        """Both credentials, because DRE-3074 gave them different selectors: an
+        API key still walks the probing ladder, a subscription token reads the
+        top rung directly (the probe is the banned call)."""
         def no_model(*args, **kwargs):
             raise RuntimeError("no ladder")
 
+        (_api_key_env if mode == "api-key" else _subscription_env)(monkeypatch)
         monkeypatch.setattr(model_fallback, "select", no_model)
+        monkeypatch.setattr(model_fallback, "ladder_for", no_model)
         probe = _probe("DRE-3018")
         lops = _Lops(probe)
         decision = planning_classify.run(
@@ -623,6 +747,45 @@ class TestThePlanWorkflow:
     def test_the_planner_workflow_still_declares_no_way_past_planning(self):
         assert planning_escalation.bypass_problems() == []
 
+    # --- DRE-3074 ---------------------------------------------------------- #
+
+    def test_the_transport_failure_branch_is_not_the_ceo_queue(self):
+        """A 429 before the model read the card buys one more run. It must NOT
+        share the escalation step, which parks the card for the CEO."""
+        step = self._step("planning_escalation.py requeue")
+        classify_id = self._step("planning_classify.py")["id"]
+        assert f"steps.{classify_id}.outputs.requeue == 'true'" in step["if"]
+        assert "escalate" not in json.dumps(step["run"])
+
+    def test_the_requeue_step_fails_the_run_so_it_is_retried_once(self):
+        """`Agent Plan` is on the medic's watch list, so a red run IS the
+        requeue — the medic re-runs a transient infrastructure failure once."""
+        step = self._step("planning_escalation.py requeue")
+        assert re.search(r"^\s*exit 1\s*$", step["run"], re.M), (
+            "the transport-failure step ends green, so nothing re-runs the card"
+        )
+
+    def test_the_routing_step_is_skipped_on_a_transport_failure(self):
+        condition = self._step("planning_route.py decide")["if"]
+        classify_id = self._step("planning_classify.py")["id"]
+        assert f"steps.{classify_id}.outputs.requeue != 'true'" in condition
+
+    def test_the_heartbeat_records_the_model_that_answered(self):
+        """DRE-3015's ladder is only readable off a card if something writes the
+        model down. The stamp does; a card that escalated has no stamp."""
+        classify_id = self._step("planning_classify.py")["id"]
+        step = next(
+            s for s in self._steps()
+            if f"steps.{classify_id}.outputs.model" in json.dumps(s.get("run") or "")
+        )
+        assert model_fallback.MARKER_PREFIX in step["run"], (
+            "the classifier's heartbeat must be the same marker every other "
+            "model attempt writes, or nothing reads it back"
+        )
+        assert f"steps.{classify_id}.outputs.answered == 'true'" in step["if"], (
+            "the heartbeat would claim a model answered when none did"
+        )
+
 
 # ===========================================================================
 # H. the lane contract
@@ -645,3 +808,342 @@ class TestTheLaneContract:
         rendered = lane_contract.render_markdown()
         assert "DRE-2719" not in rendered
         assert (ROOT / "docs" / "lane-contract.md").read_text(encoding="utf-8") == rendered
+
+
+# ===========================================================================
+# I. the transport — the Claude Code path, not the raw Messages API (DRE-3074)
+# ===========================================================================
+class TestTheTransport:
+    def test_the_subscription_run_never_calls_the_raw_messages_api(
+        self, monkeypatch
+    ):
+        """The card, in one test. `CLAUDE_AUTH_MODE == 'subscription'` is every
+        repo in the fleet, and a subscription OAuth token cannot call
+        `/v1/messages` — it answers 429 to every request, at any load."""
+        _subscription_env(monkeypatch)
+        _ban_raw_api(monkeypatch)
+        _fake_cli(monkeypatch, stdout=_envelope(_answer(shape="one-off")))
+
+        decision = planning_classify.classify(_card(_probe("DRE-3017")), model=MODEL)
+        assert decision.shape == "one-off"
+        assert not decision.escalates
+
+    def test_the_model_is_picked_without_probing_the_raw_api_either(
+        self, monkeypatch
+    ):
+        """`select()` probes each rung with a raw `/v1/messages` POST. On a
+        subscription token every probe 429s, which `classify_available` already
+        reads as AVAILABLE — so the probe returns the ladder's top rung and
+        nothing else, at the cost of one banned call per rung."""
+        import model_fallback
+
+        _subscription_env(monkeypatch)
+        _ban_raw_api(monkeypatch)
+        _fake_cli(monkeypatch, stdout=_envelope(_answer(shape="one-off")))
+
+        decision = planning_classify.classify(_card(_probe("DRE-3017")))
+        assert decision.model == model_fallback.ladder_for(planning_classify.ROLE)[0]
+        assert decision.shape == "one-off"
+
+    def test_the_claude_code_call_is_bounded_and_carries_no_tools(self, monkeypatch):
+        _subscription_env(monkeypatch)
+        seen = _fake_cli(monkeypatch, stdout=_envelope(_answer(shape="one-off")))
+        planning_classify._call_real(MODEL, "the prompt")
+
+        assert len(seen) == 1, "the classification is ONE call"
+        argv = seen[0]
+        assert "@anthropic-ai/claude-code" in " ".join(argv)
+        assert argv[argv.index("-p") + 1] == "the prompt"
+        assert argv[argv.index("--max-turns") + 1] == planning_classify.MAX_TURNS
+        assert argv[argv.index("--model") + 1] == MODEL
+        assert argv[argv.index("--allowedTools") + 1] == "", (
+            "a classification reads one card and answers — it needs no tools"
+        )
+        assert "--output-format" in argv and "json" in argv
+
+    def test_the_api_key_mode_keeps_the_raw_call_as_the_fast_path(self, monkeypatch):
+        """Where the run holds a real API key the raw call still works and is
+        cheaper — the card allows it, behind the same interface."""
+        _api_key_env(monkeypatch)
+        seen = _fake_api(monkeypatch, {
+            "model": MODEL,
+            "content": [{"type": "text", "text": _answer(shape="one-off")}],
+        })
+        cli = _fake_cli(monkeypatch, stdout="")
+
+        answer = planning_classify._call_real(MODEL, "the prompt")
+        assert seen == [planning_classify._API_URL]
+        assert cli == [], "the API-key path must not pay for the CLI"
+        assert "one-off" in answer.text
+
+    def test_the_model_that_actually_answered_is_what_is_recorded(self, monkeypatch):
+        """Not the model we asked for — DRE-3015 is unreadable if the card
+        records the request rather than the answer."""
+        _subscription_env(monkeypatch)
+        _fake_cli(monkeypatch, stdout=_envelope(
+            _answer(shape="one-off"), model="claude-fable-5-1"))
+
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(lops, probe["card"], model=MODEL)
+        assert decision.answered is True
+        assert decision.model == "claude-fable-5-1"
+        assert planning_shape.stamped_by(lops.bodies)[1] == "claude-fable-5-1"
+
+    def test_the_cli_credential_failure_is_read_off_the_envelope(self, monkeypatch):
+        """The shape the CLI actually returns when it cannot authenticate,
+        recorded from a live invocation on 2026-09-04: exit 1, `is_error` true
+        UNDER `subtype: "success"`, and the reason in `result`. Reading the exit
+        code alone would report "exit 1" for a credential problem — the
+        unattributable-400 failure in a new place."""
+        _subscription_env(monkeypatch)
+        _fake_cli(monkeypatch, returncode=1, stdout=json.dumps({
+            "type": "result", "subtype": "success", "is_error": True,
+            "num_turns": 1, "modelUsage": {},
+            "result": "Not logged in · Please run /login",
+        }))
+        with pytest.raises(planning_classify.TransportError) as caught:
+            planning_classify._call_real(MODEL, "the prompt")
+        assert "Not logged in" in str(caught.value)
+
+    def test_a_cli_that_did_not_answer_is_a_transport_failure(self, monkeypatch):
+        _subscription_env(monkeypatch)
+        _fake_cli(monkeypatch, returncode=1, stdout="")
+        with pytest.raises(planning_classify.TransportError):
+            planning_classify._call_real(MODEL, "the prompt")
+
+    def test_a_credential_less_run_is_a_transport_failure(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+        with pytest.raises(planning_classify.TransportError):
+            planning_classify._call_real(MODEL, "the prompt")
+
+
+# ===========================================================================
+# J. the two reasons — the model could not tell vs the transport failed
+# ===========================================================================
+class TestTheTwoReasons:
+    @staticmethod
+    def _transport_decision(monkeypatch, bodies=()):
+        _api_key_env(monkeypatch)
+        import urllib.request
+
+        def urlopen(req, *args, **kwargs):
+            raise _http_error(429, json.dumps({
+                "type": "error",
+                "error": {"type": "rate_limit_error", "message": "Error"},
+            }))
+
+        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe, bodies=bodies)
+        return lops, planning_classify.run(lops, probe["card"], model=MODEL)
+
+    def test_a_forced_429_requeues_and_never_reaches_the_ceo(self, monkeypatch):
+        """The observed failure, as a fixture: three planner runs, three CEO
+        escalations, HTTP 429 every time, no model ever reached."""
+        lops, decision = self._transport_decision(monkeypatch)
+        assert decision.transport is True
+        assert decision.requeue is True
+        assert decision.escalates is False, (
+            "a 429 before the model read the card is our plumbing, not a "
+            "decision the CEO can make"
+        )
+        assert decision.answered is False
+        assert lops.comments == [], "a transport failure must never stamp a shape"
+
+    def test_the_transport_reason_says_transport_and_names_the_status(
+        self, monkeypatch
+    ):
+        _, decision = self._transport_decision(monkeypatch)
+        reason = planning_classify.escalation_reason("DRE-3017", decision)
+        assert "429" in reason and "transport" in reason.lower()
+        assert planning_escalation.refusal(reason) is None, (
+            planning_escalation.refusal(reason)
+        )
+
+    def test_the_transport_requeue_is_spent_once_then_the_ceo_is_asked(
+        self, monkeypatch
+    ):
+        """One more run, not an endless one. The count is on the card, so it
+        survives the run that wrote it."""
+        prior = [planning_escalation.transport_comment("DRE-3017", "HTTP 429")]
+        _, decision = self._transport_decision(monkeypatch, bodies=prior)
+        assert decision.transport is True
+        assert decision.requeue is False
+        assert decision.escalates is True
+
+    def test_the_failed_run_is_one_the_medic_actually_reruns(self, monkeypatch,
+                                                             capsys):
+        """The requeue IS the red run, so it only exists if the medic retries
+        it. `Agent Plan` is on the medic's watch list and its three back-off
+        classes are the critic's, GitHub's own 5xx and Linear's quota — a
+        classification 429 is none of them. Pinned rather than assumed: the
+        wording this module prints is what the medic reads, so a rewrite of the
+        log line that drifted into a back-off signature would silently turn one
+        retry into none.
+        """
+        import medic_classify
+
+        self._transport_decision(monkeypatch)
+        log = capsys.readouterr().err
+        assert "429" in log, "the run log does not say what happened"
+        assert medic_classify.classify("Agent Plan", log) == "normal"
+
+    def test_a_model_that_cannot_tell_is_not_a_transport_failure(self):
+        """The other reason, and the one the CEO owns. It must not borrow the
+        transport wording — an infrastructure failure and a card nobody can
+        classify are different facts with different next actions."""
+        probe = _probe("DRE-3073")
+        lops = _Lops(probe)
+        decision = planning_classify.run(
+            lops, probe["card"],
+            call=_caller(_answer(shape=None, question="Which is it?")),
+            model=MODEL,
+        )
+        assert decision.escalates is True
+        assert decision.transport is False and decision.requeue is False
+        assert decision.answered is True
+        reason = planning_classify.escalation_reason(probe["card"], decision)
+        assert "transport" not in reason.lower()
+
+    def test_the_decision_probe_escalates_with_the_classifiers_own_reason(self):
+        """DRE-3073 on the fleet's channel: escalated because it IS a decision,
+        not because the classifier could not be reached."""
+        probe = _probe("DRE-3073")
+        assert probe["expect"] == "escalate"
+        lops = _Lops(probe)
+        decision = planning_classify.run(
+            lops, probe["card"],
+            call=_caller(_answer(
+                shape="one-off", decision=True,
+                question="Should the demo repository be public or private?",
+            )),
+            model=MODEL,
+        )
+        assert decision.escalates and not decision.transport
+        assert lops.comments == []
+        reason = planning_classify.escalation_reason(probe["card"], decision)
+        assert "decision rather than for work" in reason
+        assert "transport" not in reason.lower()
+
+    def test_the_one_off_probe_that_started_this_is_stamped_one_off(self):
+        """DRE-3017 (FD-4a) — a plain one-line README change. It sat in the
+        CEO's queue asking for a decision it does not carry."""
+        probe = _probe("DRE-3017")
+        assert probe["expect"] == "one-off"
+        lops = _Lops(probe)
+        decision = planning_classify.run(
+            lops, probe["card"],
+            call=_caller(_answer(shape="one-off", tells=(1, 4))),
+            model=MODEL,
+        )
+        assert decision.shape == "one-off"
+        assert planning_shape.shape_on(lops.bodies) == "one-off"
+        assert planning_shape.stamped_by(lops.bodies) == (
+            planning_shape.BY_PLANNER, MODEL
+        )
+
+    def test_the_spent_budget_parks_the_card_without_claiming_a_judgement(self):
+        """The park after the retry is the same door, and the note must not say
+        the same thing: "the reasoning itself is the deliverable" is true of
+        hand-planning and plainly false of a classifier that could not reach a
+        model twice. A confident wrong answer is worse than none."""
+        reason = planning_escalation.transport_reason("HTTP 429")
+        note = planning_escalation.escalation_comment("DRE-3017", reason,
+                                                     transport=True)
+        assert "the reasoning itself is the deliverable" not in note
+        assert "no judgement is being asked of you" in note
+        assert "429" in note
+        assert planning_escalation.jargon(note) == ()
+
+    def test_the_hand_planning_note_is_unchanged_by_that(self):
+        """The guard above is worth nothing if it moved DRE-2848's own words."""
+        note = planning_escalation.escalation_comment(
+            "DRE-3020", "This is a commercial trade, not a technical one.")
+        assert "the reasoning itself is the deliverable" in note
+        assert "waiting on judgement" in note
+
+    def test_the_workflow_passes_the_transport_flag_to_that_note(self):
+        doc = yaml.safe_load(WF.read_text(encoding="utf-8"))
+        step = next(
+            s for s in doc["jobs"]["plan"]["steps"]
+            if "planning_escalation.py escalate" in json.dumps(s.get("run") or "")
+        )
+        assert "steps.classify.outputs.transport == 'true'" in step["run"]
+        assert "--transport" in step["run"]
+
+    def test_the_stamp_the_classifier_writes_is_the_one_the_router_reads(self):
+        """FD-4a end to end, as far as a suite can carry it: the classifier
+        stamps DRE-3017's body `one-off` and the routing step reads THAT stamp
+        to pick the route. Two systems, so neither one green on its own is the
+        evidence — and this seam is what a run that 429'd never reached."""
+        import planning_route
+
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        planning_classify.run(
+            lops, probe["card"],
+            call=_caller(_answer(shape="one-off", tells=(1, 4))),
+            model=MODEL,
+        )
+        plan = planning_route.exit_plan(_card(probe), lops.bodies)
+        assert plan.route.shape == "one-off"
+
+    def test_the_probe_bodies_state_no_exit_condition_to_route_on(self):
+        """The finding this card cannot fix, pinned so it is not rediscovered.
+
+        DRE-3074 asks for DRE-3017 to leave Planning with a FLEET verdict, and
+        it will not: DRE-3038's rule reads the verdict OFF THE CARD, and every
+        one of DRE-3013's probe bodies states its contract in prose rather than
+        as `- [ ]` acceptance criteria — so the router refuses them all with
+        NEEDS WORK and sends them back for the missing exit condition. That is
+        the shipped rule working, on cards written before it, and it is
+        independent of the transport this card fixes: the classification is
+        reached, the stamp is written, and the ROUTING then asks a question the
+        probe never answered. Fixing it is a change to DRE-3038's rule or to the
+        probes, and neither belongs in a transport card.
+        """
+        import routing_verdict
+
+        for probe in _probes():
+            if probe["expect"] not in planning_shape.shapes():
+                continue
+            decision = routing_verdict.route(
+                probe["title"], probe["body"], probe["labels"], False, None,
+                shape=probe["expect"],
+            )
+            if probe["expect"] == "one-off":
+                assert decision.verdict == "NEEDS WORK", (
+                    f"{probe['card']} now routes {decision.verdict} — if the "
+                    "probe grew acceptance criteria, DRE-3074's first criterion "
+                    "is finally satisfiable and this test should say so"
+                )
+                assert "acceptance criteria" in decision.reason
+
+    def test_the_decision_probe_goes_to_the_ceos_queue_and_not_the_build_one(self):
+        """FD-6's other half: the lane an escalation lands in is derived, so the
+        test asserts the derivation rather than a name typed twice."""
+        assert planning_escalation.destination() == "Green Light"
+
+    def test_the_requeue_receipt_is_plain_english_and_tagged(self):
+        note = planning_escalation.transport_comment("DRE-3017", "HTTP 429")
+        assert planning_escalation.TRANSPORT_TAG in note
+        assert planning_escalation.jargon(note) == ()
+
+    def test_the_requeue_writer_posts_the_receipt_and_moves_nothing(self):
+        """A requeue is NOT a park: the card stays where it is, or the CEO's
+        queue fills up with our own plumbing again."""
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        assert planning_escalation.requeue(lops, probe["card"], "HTTP 429") is True
+        assert lops.states == [], "a transport failure must not move the card"
+        assert len(lops.comments) == 1
+        assert planning_escalation.TRANSPORT_TAG in lops.comments[0]
+
+    def test_the_requeue_receipt_is_posted_once_per_run_not_per_read(self):
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe, bodies=[
+            planning_escalation.transport_comment(probe["card"], "HTTP 429")])
+        assert planning_escalation.requeue(lops, probe["card"], "HTTP 429") is False
+        assert lops.comments == []

@@ -48,36 +48,71 @@ the size tests from the `too big for one run` section of
 standard renames it in the prompt and in the stamp's reason. A prompt that
 restated any of the three would be a second copy, and the copy is what drifts.
 
+## The transport is the Claude Code path (DRE-3074)
+
+None of the above ever ran. The call was a raw POST to
+`https://api.anthropic.com/v1/messages`, and `plan.yml` hands this step
+`CLAUDE_CODE_OAUTH_TOKEN` whenever `CLAUDE_AUTH_MODE == 'subscription'` — which
+is every repo in the fleet. **A subscription OAuth token cannot call the raw
+Messages API: it answers 429 to every request, at any load.** So on
+2026-09-03 21:14 all three planner runs reached this module, all three got the
+same 429, and all three escalated to the CEO inside twenty seconds. The
+fail-closed exit worked exactly as DRE-3029 specified; the model was simply
+never reachable, so a plain one-line README change (DRE-3017) sat in the
+decision queue asking for a judgement it does not carry.
+
+Every other agent step in this pipeline runs its model through
+`claude-code-action` for exactly this reason. This one now runs the same CLI
+that action wraps — one turn, no tools — and the raw POST survives only as the
+API-key fast path, behind the same interface (`_call_real`). The prompt and the
+parsing above are untouched; only the wire changed.
+
+**And the two failures are no longer one sentence.** A 429/401/5xx before the
+model reads the card is OUR plumbing: it says so, and it buys one more run
+rather than a place in a human's queue (`planning_escalation.requeue`, capped at
+`TRANSPORT_CAP`). Only a model that read the card and could not tell is a
+decision for the CEO.
+
 ## The vendor boundary (standards/vendor-boundaries.md)
 
 Q1 actor — the call is made by the plan job itself, with the same CLAUDE
-credential the planner agent and the availability probe already use
-(`model_fallback.auth_headers`). No new secret, no new identity, no dispatch.
+credential the planner agent already uses. No new secret, no new identity, no
+dispatch: the CLI reads the same two environment variables `claude-code-action`
+is handed.
 Q2 secrets — the step reads the same `CLAUDE_AUTH_MODE` switch as the
-model-selection step beside it, so it gets the same store that step gets.
-Q3 retry — ONE call, never retried. A rerun of the same card finds the stamp and
-makes no call at all; a rerun after an escalation posts nothing twice, because
-`planning_escalation.escalate` is keyed on its own tag.
-Q4 limitations — the answer is bounded (`MAX_TOKENS`) and time-boxed
-(`TIMEOUT_SECONDS`); a truncated, empty or non-JSON answer is a refusal, and a
-429 is a failed call, which is a refusal too. Never a stamp.
+model-selection step beside it, so it gets the same store that step gets. Which
+of the two variables is set is also what picks the transport (`api_key_mode`) —
+one reading, not two.
+Q3 retry — ONE call, never retried inside a run. A rerun of the same card finds
+the stamp and makes no call at all; a rerun after an escalation posts nothing
+twice, because `planning_escalation.escalate` is keyed on its own tag, and the
+transport requeue is keyed on its own and BUDGETED off it.
+Q4 limitations — the answer is bounded (`MAX_TOKENS` / `MAX_TURNS`) and
+time-boxed (`TIMEOUT_SECONDS`, `CLI_TIMEOUT_SECONDS`); a truncated, empty or
+non-JSON answer is a refusal. A 429 is a transport failure, which is neither a
+refusal the CEO reads nor a stamp.
 Q5 our own crash — nothing is written before the stamp, so a crash anywhere in
 here leaves the card exactly as it arrived, in Planning with no stamp, and the
-next run classifies it. No receipt blocks the recovery.
+next run classifies it. The one receipt this module's branch writes is the
+transport one, and it is the budget rather than a block: at worst it costs the
+card its one free retry.
 
 CLI:
 
     python3 scripts/planning_classify.py check
     python3 scripts/planning_classify.py classify DRE-N \\
-        [--github-output F] [--escalation-file F]
+        [--github-output F] [--escalation-file F] [--transport-file F]
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
+import shlex
+import subprocess  # nosec B404 — the Claude Code CLI, an argv list, never a shell
 import sys
 from dataclasses import dataclass
 
@@ -123,12 +158,66 @@ TIMEOUT_SECONDS = 60
 
 _API_URL = "https://api.anthropic.com/v1/messages"
 
+# The Claude Code path (DRE-3074). Every other model step in this pipeline runs
+# through `claude-code-action`, which wraps exactly this CLI; the classifier was
+# the one step that did not, and it is the reason none of it ever ran. A
+# subscription OAuth token CANNOT call the raw Messages API — it answers 429 to
+# every request regardless of load — and `CLAUDE_AUTH_MODE == 'subscription'` is
+# every repo in the fleet. Overridable so a runner with the CLI already
+# installed skips the npx fetch, the same seam `scripts/harness/agent_run.py`
+# uses to drive the shipped prompt.
+DEFAULT_AGENT_CLI = "npx --yes @anthropic-ai/claude-code@latest"
+AGENT_CLI_ENV = "CLASSIFY_AGENT_CLI"
+
+# The bound on that call, and it is the whole of it: ONE turn, NO tools. The
+# classifier reads a card that is already in its prompt and answers with a JSON
+# object — it has nothing to look up, so a tool surface would only be a way for
+# the one turn to be spent on something else.
+MAX_TURNS = "1"
+ALLOWED_TOOLS = ""
+
+# Wall clock for the CLI path. Longer than TIMEOUT_SECONDS because the first
+# invocation on a fresh runner fetches the package before it makes a call, and
+# a fetch that outran the budget would read as a transport failure on every
+# card. Still far inside the ~8 minutes of non-turn work plan.yml's timeout
+# already carries for this job.
+CLI_TIMEOUT_SECONDS = 300
+
 
 class ClassifyError(RuntimeError):
     """The prompt cannot be composed — the brief, the standard or the
     vocabulary is unreadable. Raised rather than defaulted: a classifier that
     quietly ran without its own instructions is worse than one that did not
     run."""
+
+
+class TransportError(RuntimeError):
+    """The call never reached a model (DRE-3074).
+
+    A 429, a 401, a 5xx, a CLI that did not run: none of them is the model
+    saying anything about the card, so none of them is a question a human can
+    answer. Separated from every other failure here because the run does
+    something DIFFERENT with it — it records the failure and buys one more run,
+    where a model that read the card and could not tell parks it for the CEO.
+
+    `detail` is the short, showable half — a status and a word. The exception's
+    own message carries the response body and stays in the run log.
+    """
+
+    def __init__(self, message: str, detail: str):
+        super().__init__(message)
+        self.detail = detail
+
+
+@dataclass(frozen=True)
+class Answer:
+    """What a transport got back: the text, and the model that ACTUALLY
+    produced it. The second is not the model we asked for — the heartbeat and
+    the stamp both record it, and DRE-3015's ladder is unreadable off a card
+    that recorded the request instead of the answer."""
+
+    text: str = ""
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,10 +236,23 @@ class Decision:
     model: str | None = None
     refusal: str | None = None
     already: bool = False
+    # DRE-3074. `transport` says the call never reached a model, and `requeue`
+    # says this run is buying one more rather than asking a human — the two are
+    # separate because a transport failure that has spent its budget IS a
+    # question for the CEO, and it is still not a judgement about the card.
+    transport: bool = False
+    requeue: bool = False
+    # Whether a model produced an answer at all. Read from what happened rather
+    # than inferred from the outcome (`standards/console-honesty.md` rule 1):
+    # the heartbeat naming a model is gated on it, and a heartbeat for a call
+    # that 429'd would be the console lying about the ladder.
+    answered: bool = False
 
     @property
     def escalates(self) -> bool:
-        return self.refusal is not None
+        """Park this card in the CEO's queue. A requeue is a refusal too — it
+        just is not one a human is asked about."""
+        return self.refusal is not None and not self.requeue
 
 
 # --------------------------------------------------------------------------- #
@@ -517,11 +619,24 @@ def escalation_reason(identifier: str, decision: Decision) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _call_real(model: str, prompt: str) -> str:
-    """One `/v1/messages` POST. Raises on anything that is not an answer.
+def api_key_mode() -> bool:
+    """True when this run holds a real API key.
 
-    stdlib only (urllib), and the same auth block the availability probe uses —
-    this file adds no dependency and no secret.
+    That is the ONE thing that decides the transport, and it is read off the
+    credential rather than off `CLAUDE_AUTH_MODE` — plan.yml already resolves
+    the switch into which of the two variables it sets, so reading the mode name
+    again here would be a second copy of the same decision, free to disagree
+    with the env it was made from.
+    """
+    return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+
+
+def _call_api(model: str, prompt: str) -> Answer:
+    """One `/v1/messages` POST — the API-key FAST PATH, and only that.
+
+    stdlib only (urllib), and the same auth block the availability probe uses.
+    Never reached on a subscription token: that token cannot make this call at
+    all (DRE-3074), which is what `_call_real` is for.
 
     An HTTP error is re-raised WITH its body: a bare 400 is unattributable, and
     the difference between "this model is gone", "we are rate-limited" and "the
@@ -533,9 +648,9 @@ def _call_real(model: str, prompt: str) -> str:
 
     headers = model_fallback.auth_headers()
     if headers is None:
-        raise ClassifyError(
-            "this run carries no Anthropic credential, so the card cannot be "
-            "classified"
+        raise TransportError(
+            "this run carries no Anthropic credential, so no call was made",
+            "no credential",
         )
     payload = json.dumps({
         "model": model,
@@ -557,14 +672,150 @@ def _call_real(model: str, prompt: str) -> str:
             detail = e.read().decode("utf-8", "replace")[:400]
         except Exception:  # pragma: no cover - defensive
             detail = ""
-        raise ClassifyError(
-            f"the classification call returned HTTP {e.code}: {detail}"
+        raise TransportError(
+            f"the classification call returned HTTP {e.code}: {detail}",
+            f"HTTP {e.code}",
         ) from e
-    return "".join(
-        block.get("text") or ""
-        for block in body.get("content") or ()
-        if isinstance(block, dict)
+    except Exception as e:  # noqa: BLE001 — a socket that never answered
+        raise TransportError(
+            f"the classification call did not complete: {e}", "no answer"
+        ) from e
+    return Answer(
+        text="".join(
+            block.get("text") or ""
+            for block in body.get("content") or ()
+            if isinstance(block, dict)
+        ),
+        # The response says which model answered. On a ladder that falls, that
+        # is not always the one we asked for.
+        model=body.get("model") or None,
     )
+
+
+def _cli_argv(model: str, prompt: str) -> list:
+    """The Claude Code invocation, as an argv list — never a shell string."""
+    argv = list(shlex.split(os.environ.get(AGENT_CLI_ENV) or DEFAULT_AGENT_CLI))
+    argv += ["-p", prompt, "--max-turns", MAX_TURNS]
+    if model:
+        argv += ["--model", model]
+    argv += ["--allowedTools", ALLOWED_TOOLS, "--output-format", "json"]
+    return argv
+
+
+def _envelope(stdout: str) -> dict | None:
+    """The result envelope out of `claude -p --output-format json`.
+
+    Scanned rather than parsed straight, because a package fetch prints to
+    stdout on a cold runner and the envelope is the LAST thing there.
+    """
+    text = (stdout or "").strip()
+    for candidate in (text, *reversed(text.splitlines())):
+        candidate = candidate.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            found = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(found, dict) and ("result" in found or "is_error" in found):
+            return found
+    return None
+
+
+def _call_claude_code(model: str, prompt: str) -> Answer:
+    """One bounded Claude Code run — the transport the rest of this pipeline
+    uses, and the one a subscription token can actually authenticate.
+
+    The CLI reads `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) out of the
+    environment exactly as `claude-code-action` hands it to them, so this adds
+    no secret and no identity — the step's env is unchanged.
+    """
+    if model_fallback.auth_headers() is None:
+        raise TransportError(
+            "this run carries no Anthropic credential, so no call was made",
+            "no credential",
+        )
+    try:
+        done = subprocess.run(  # nosec B603 — argv list, shell=False
+            _cli_argv(model, prompt),
+            capture_output=True, text=True, check=False,
+            timeout=CLI_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise TransportError(
+            f"the classification call ran past {CLI_TIMEOUT_SECONDS}s", "timed out"
+        ) from e
+    except OSError as e:
+        raise TransportError(
+            f"the classification call could not be started: {e}", "no answer"
+        ) from e
+
+    stdout, stderr = done.stdout or "", (done.stderr or "")[:400]
+    envelope = _envelope(stdout)
+    # The envelope is read BEFORE the exit code, because it is the informative
+    # half: the CLI exits 1 on a credential failure and puts the reason in
+    # `result` ("Not logged in · Please run /login"), and `is_error` can be true
+    # under `subtype: "success"`. A run that says only "exit 1" is the
+    # unattributable-400 problem in a new place.
+    if envelope is None:
+        raise TransportError(
+            f"the classification call exited {done.returncode} with no readable "
+            f"answer: {stderr or stdout[:400]}",
+            f"exit {done.returncode}" if done.returncode else "no answer",
+        )
+    if envelope.get("is_error") or envelope.get("subtype") not in (None, "success"):
+        raise TransportError(
+            f"the classification call reported subtype "
+            f"{envelope.get('subtype')!r}, is_error "
+            f"{envelope.get('is_error')!r}: {str(envelope.get('result'))[:400]}",
+            str(envelope.get("subtype") or "no answer"),
+        )
+    if done.returncode != 0:
+        raise TransportError(
+            f"the classification call exited {done.returncode} after reporting "
+            f"success: {stderr or stdout[:400]}",
+            f"exit {done.returncode}",
+        )
+    used = list((envelope.get("modelUsage") or {}).keys())
+    return Answer(text=str(envelope.get("result") or ""),
+                  model=used[0] if used else None)
+
+
+def _call_real(model: str, prompt: str) -> Answer:
+    """The transport, chosen on the credential this run actually holds.
+
+    One interface, two implementations — the card's own rule: the Claude Code
+    path is the default because it is the only one a subscription token can
+    authenticate, and the raw POST survives only where an API key makes it both
+    legal and cheaper.
+    """
+    return (_call_api if api_key_mode() else _call_claude_code)(model, prompt)
+
+
+def _pick_model() -> str:
+    """The model this classification runs on.
+
+    `select()` walks the ladder probing each rung with a raw `/v1/messages`
+    POST — which is the very call a subscription token cannot make. Every probe
+    on such a token answers 429, and `classify_available` already reads 429 as
+    AVAILABLE, so the probe returns the ladder's TOP RUNG and nothing else, at
+    the cost of one banned call per rung. So on that credential the top rung is
+    read directly: same answer, no raw call, and the promise this card makes —
+    that the classifier issues none — stays true of the whole step rather than
+    of one function in it.
+    """
+    if api_key_mode():
+        return model_fallback.select(ROLE)
+    ladder = model_fallback.ladder_for(ROLE)
+    if not ladder:
+        raise ClassifyError(f"the {ROLE!r} ladder is empty, so no model can run")
+    return ladder[0]
+
+
+def _answer_of(result) -> Answer:
+    """A transport's return, whatever shape it came back in. The `call` seam is
+    a test/caller hook and has always returned a plain string."""
+    return result if isinstance(result, Answer) else Answer(text=str(result or ""))
 
 
 def classify(card: dict, *, call=None, model: str | None = None,
@@ -572,7 +823,7 @@ def classify(card: dict, *, call=None, model: str | None = None,
     """Classify one card. One call, no retry, and never a silent stamp."""
     if not model:
         try:
-            model = model_fallback.select(ROLE)
+            model = _pick_model()
         except Exception as e:  # noqa: BLE001 — an unpicked model is a refusal
             return Decision(refusal=_unreachable(e))
     try:
@@ -580,10 +831,15 @@ def classify(card: dict, *, call=None, model: str | None = None,
     except (ClassifyError, planning_shape.ShapeError) as e:
         return Decision(model=model, refusal=_unreachable(e))
     try:
-        answer = (call or _call_real)(model, prompt)
+        answer = _answer_of((call or _call_real)(model, prompt))
+    except TransportError as e:
+        # DRE-3074's split: nothing read the card, so there is nothing here for
+        # a human to decide. `run()` spends the budget; this only names the fact.
+        return Decision(model=model, transport=True, refusal=_transport(e))
     except Exception as e:  # noqa: BLE001 — any failed call is a refusal
         return Decision(model=model, refusal=_unreachable(e))
-    return parse(answer, doc=doc, model=model)
+    decision = parse(answer.text, doc=doc, model=answer.model or model)
+    return dataclasses.replace(decision, answered=True)
 
 
 def _unreachable(error: Exception) -> str:
@@ -598,6 +854,14 @@ def _unreachable(error: Exception) -> str:
         "nobody has decided yet whether this is one piece of work, a project, "
         "or a programme of projects."
     )
+
+
+def _transport(error: TransportError) -> str:
+    """The refusal for a call that never reached a model. Says so, in those
+    words — the sentence lives in `planning_escalation` beside the other one,
+    because the whole of this card is that they are two different facts."""
+    print(f"planning classify: the transport failed: {error}", file=sys.stderr)
+    return planning_escalation.transport_reason(error.detail)
 
 
 # --------------------------------------------------------------------------- #
@@ -631,6 +895,19 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
 
     card = critic_score.read_card(lops, identifier)
     decision = classify(card, call=call, model=model, doc=doc)
+    if decision.transport:
+        # DRE-3074. A call that never reached a model buys one more run, off the
+        # count already on the card — the receipt IS the budget, so it survives
+        # the run that wrote it. Past the cap the question does go to a human:
+        # an infrastructure failure that outlived a retry has stopped being
+        # transient, and the card still owes somebody an answer.
+        spent = sum(
+            1 for body in bodies
+            if planning_escalation.TRANSPORT_TAG in (body or "")
+        )
+        if spent < planning_escalation.TRANSPORT_CAP:
+            return dataclasses.replace(decision, requeue=True)
+        return decision
     if decision.escalates:
         return decision
 
@@ -698,23 +975,43 @@ def _write_reason(path: str | None, reason: str) -> None:
 
 
 def _cmd_classify(identifier: str, github_output: str | None,
-                  escalation_file: str | None) -> int:
+                  escalation_file: str | None,
+                  transport_file: str | None = None) -> int:
     import linear_ops
 
     decision = run(linear_ops, identifier)
+    answered = "true" if decision.answered else "false"
+    if decision.requeue:
+        # Not the CEO's queue and not a shape: the workflow records this and
+        # fails the run, which is what buys the retry (DRE-3074).
+        reason = decision.refusal or ""
+        _write_reason(transport_file, reason)
+        _write_outputs(github_output, [
+            ("escalate", "false"), ("requeue", "true"), ("shape", ""),
+            ("model", decision.model or ""), ("answered", answered),
+        ])
+        print(f"{identifier} was not classified this run: {reason}")
+        return 0
+
     if decision.escalates:
         reason = escalation_reason(identifier, decision)
         _write_reason(escalation_file, reason)
         _write_outputs(github_output, [
-            ("escalate", "true"), ("shape", ""), ("model", decision.model or ""),
+            ("escalate", "true"), ("requeue", "false"), ("shape", ""),
+            ("model", decision.model or ""), ("answered", answered),
+            # The park is the same; what the note may CLAIM is not. A transport
+            # failure that outlived its retry is not the CEO's judgement to make.
+            ("transport", "true" if decision.transport else "false"),
         ])
         print(f"{identifier} cannot be classified: {reason}")
         return 0
 
     _write_outputs(github_output, [
         ("escalate", "false"),
+        ("requeue", "false"),
         ("shape", decision.shape or ""),
         ("model", decision.model or ""),
+        ("answered", answered),
         ("already", "true" if decision.already else "false"),
     ])
     if decision.already:
@@ -733,6 +1030,7 @@ def main(argv=None) -> int:
     run_cmd.add_argument("identifier")
     run_cmd.add_argument("--github-output", default=None)
     run_cmd.add_argument("--escalation-file", dest="escalation_file", default=None)
+    run_cmd.add_argument("--transport-file", dest="transport_file", default=None)
 
     args = parser.parse_args(argv)
     command = args.command or "check"
@@ -749,7 +1047,8 @@ def main(argv=None) -> int:
         return 1 if found else 0
 
     if command == "classify":
-        return _cmd_classify(args.identifier, args.github_output, args.escalation_file)
+        return _cmd_classify(args.identifier, args.github_output,
+                             args.escalation_file, args.transport_file)
 
     parser.print_usage(sys.stderr)
     return 2
