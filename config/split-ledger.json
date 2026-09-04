@@ -1,0 +1,499 @@
+{
+  "generated_at": "2026-09-04T05:08:16Z",
+  "generated_by": "scripts/split_ledger.py derive",
+  "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces",
+  "seed_cards": [
+    "DRE-3029",
+    "DRE-3016",
+    "DRE-3022",
+    "DRE-2719",
+    "DRE-2838",
+    "DRE-2847",
+    "DRE-2871",
+    "DRE-2937",
+    "DRE-2891",
+    "DRE-2676"
+  ],
+  "rows": [
+    {
+      "card": "DRE-2676",
+      "title": "Stop reading dependencies out of prose entirely \u2014 a blocker is a Linear relation or it does not exist",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2676/stop-reading-dependencies-out-of-prose-entirely-a-blocker-is-a-linear",
+      "state": "Done",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 3,
+      "dollars": 64.38,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2719",
+      "title": "Everything goes to Planning \u2014 which decides one-off, epic, or wave",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2719/everything-goes-to-planning-which-decides-one-off-epic-or-wave",
+      "state": "Canceled",
+      "reasons": [
+        "turn-cap-death",
+        "split",
+        "handed-back"
+      ],
+      "size": "L",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": [
+        ".github/workflows/plan.yml",
+        "briefs/planner.md",
+        "config/lane-contract.json",
+        "docs/lane-contract.md",
+        "scripts/planning_escalation.py",
+        "standards/card-quality.md",
+        "tests/test_planning_escalation.py",
+        "scripts/plan_run.py",
+        "scripts/reconcile.py",
+        "scripts/wave_commitment.py",
+        "standards/wave-plan.md",
+        "tests/test_epic_dependency_gate.py",
+        "tests/test_wave_commitment.py",
+        "tests/test_wave_commitment_wiring.py",
+        "scripts/assemble_context.py",
+        "scripts/plan_artifact.py",
+        "scripts/wave_plan.py",
+        "standards/README.md",
+        "tests/test_assemble_context.py",
+        "tests/test_planning_route.py",
+        "tests/test_wave_plan.py",
+        "tests/test_wave_plan_scenario.py",
+        "tests/test_wave_plan_wiring.py",
+        "tests/test_worker_pool_allowed_bots.py",
+        "tests/test_workflow_prompt_lanes.py",
+        "config/README.md",
+        "scripts/planning_route.py",
+        "config/planning-shapes.json",
+        "scripts/planning_shape.py",
+        "tests/test_planning_shape.py"
+      ],
+      "pieces": 6,
+      "pieces_named": [
+        "DRE-2848",
+        "DRE-2847",
+        "DRE-2846",
+        "DRE-2845",
+        "DRE-2844",
+        "DRE-2843"
+      ],
+      "deaths": 2,
+      "dollars": 42.03,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2847: no merged pull request this run could read"
+      ]
+    },
+    {
+      "card": "DRE-2838",
+      "title": "Every rendered claim carries its age, and the stored/live split dies",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2838/every-rendered-claim-carries-its-age-and-the-storedlive-split-dies",
+      "state": "Canceled",
+      "reasons": [
+        "turn-cap-death",
+        "split"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-2892",
+        "DRE-2891",
+        "DRE-2890"
+      ],
+      "deaths": 4,
+      "dollars": 81.18,
+      "tells": [
+        "two-languages-or-tiers",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans workflow, python, web",
+        "unbounded-quantifier": "'each other' with no count of others anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2892: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2891: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2890: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
+    {
+      "card": "DRE-2847",
+      "title": "Close the back doors into Backlog and Todo \u2014 and prove the absence by test",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2847/close-the-back-doors-into-backlog-and-todo-and-prove-the-absence-by",
+      "state": "Canceled",
+      "reasons": [
+        "turn-cap-death",
+        "split"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": [
+        "config/lane-contract.json",
+        "docs/lane-contract.md",
+        "scripts/planning_escalation.py",
+        "scripts/planning_route.py",
+        "scripts/ready_lane_writers.py",
+        "standards/card-quality.md",
+        "tests/test_lane_contract.py",
+        "tests/test_no_unplanned_ready_lane_writer.py",
+        ".github/workflows/agent-task.yml",
+        ".github/workflows/medic.yml",
+        ".github/workflows/plan.yml",
+        ".github/workflows/red-main-repair.yml",
+        "scripts/linear_ops.py",
+        "scripts/validate_card.py",
+        "tests/test_break_glass.py",
+        "tests/test_oneoff_card_creation.py",
+        "tests/test_repo_label_validated.py",
+        "tests/test_validate_card_autofix.py",
+        "tests/test_validate_card_gate.py",
+        "tests/test_writers_point_at_planning.py"
+      ],
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-2860",
+        "DRE-2859",
+        "DRE-2858"
+      ],
+      "deaths": 2,
+      "dollars": 47.23,
+      "tells": [
+        "unenumerated-count",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unenumerated-count": "'six cards' \u2014 the body names 5",
+        "unbounded-quantifier": "'each writer' with no count of writers anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2860: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
+    {
+      "card": "DRE-2871",
+      "title": "Eight surfaces stop asserting what they never read, and UNKNOWN resolves one way",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2871/eight-surfaces-stop-asserting-what-they-never-read-and-unknown",
+      "state": "Canceled",
+      "reasons": [
+        "turn-cap-death",
+        "split"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-2912",
+        "DRE-2911",
+        "DRE-2910"
+      ],
+      "deaths": 6,
+      "dollars": 105.94,
+      "tells": [
+        "contracts-between-pieces",
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "contracts-between-pieces": "'reads what' (standards/card-quality.md \u2014 \"B reads what A writes\")",
+        "two-languages-or-tiers": "the footprint spans web, python"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2912: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2911: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2910: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
+    {
+      "card": "DRE-2891",
+      "title": "Four cutover surfaces carry their read age, or say UNKNOWN",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2891/four-cutover-surfaces-carry-their-read-age-or-say-unknown",
+      "state": "Done",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 3,
+      "dollars": 46.02,
+      "tells": [
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans web, python"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2937",
+      "title": "A cold cache renders \"nothing needs you\" into the bell \u2014 and fixing it crosses the whole stack, not just the backend",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2937/a-cold-cache-renders-nothing-needs-you-into-the-bell-and-fixing-it",
+      "state": "Canceled",
+      "reasons": [
+        "turn-cap-death",
+        "split"
+      ],
+      "size": "L",
+      "role": "engineer",
+      "declared_files": [
+        "alerts.py"
+      ],
+      "declared_file_count": 1,
+      "piece_files": "UNKNOWN",
+      "pieces": 2,
+      "pieces_named": [
+        "DRE-2953",
+        "DRE-2952"
+      ],
+      "deaths": 4,
+      "dollars": 66.87,
+      "tells": [
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans python, web"
+      },
+      "unreadable": [
+        "DRE-2953: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2952: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
+    {
+      "card": "DRE-3016",
+      "title": "Score the planner against plans it has never seen \u2014 replay past epics into the demo repo and measure what each plan got right",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3016/score-the-planner-against-plans-it-has-never-seen-replay-past-epics",
+      "state": "Done",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "L",
+      "role": "engineer",
+      "declared_files": [
+        "scripts/planner_score.py",
+        "config/planner-audit.json",
+        "tests/test_planner_score.py",
+        "docs/planner-audit.md",
+        "plan.yml",
+        "planner-replay.yml"
+      ],
+      "declared_file_count": 6,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 22.57,
+      "tells": [
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans python, workflow"
+      },
+      "unreadable": []
+    },
+    {
+      "card": "DRE-3022",
+      "title": "The planner sizes against the ledger \u2014 every turn-cap death, split and hand-back as data it reads before it cuts a card",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3022/the-planner-sizes-against-the-ledger-every-turn-cap-death-split-and",
+      "state": "Backlog",
+      "reasons": [
+        "turn-cap-death",
+        "split"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": [
+        "scripts/split_ledger.py",
+        "config/split-ledger.json",
+        "briefs/planner.md",
+        ".github/workflows/plan.yml",
+        "reconcile.yml",
+        "tests/test_split_ledger.py"
+      ],
+      "declared_file_count": 6,
+      "piece_files": "UNKNOWN",
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-3079",
+        "DRE-3078",
+        "DRE-3077"
+      ],
+      "deaths": 2,
+      "dollars": 39.22,
+      "tells": [
+        "contracts-between-pieces",
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "contracts-between-pieces": "'contracts between' (DRE-2719's hand-back \u2014 \"contracts between them\")",
+        "two-languages-or-tiers": "the footprint spans python, workflow"
+      },
+      "unreadable": [
+        "DRE-3079: no merged pull request this run could read",
+        "DRE-3078: no merged pull request this run could read",
+        "DRE-3077: no merged pull request this run could read"
+      ]
+    },
+    {
+      "card": "DRE-3029",
+      "title": "Planning classifies the card itself \u2014 the planner run stamps one-off, epic or wave, escalates what it cannot classify, and no card waits on a hand-run script",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3029/planning-classifies-the-card-itself-the-planner-run-stamps-one-off",
+      "state": "Done",
+      "reasons": [
+        "named-as-a-seed"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": [
+        ".github/workflows/plan.yml",
+        "scripts/planning_shape.py",
+        "scripts/planning_classify.py",
+        "briefs/planner.md",
+        "tests/test_planning_classify.py",
+        "docs/lane-contract.md",
+        "lane_contract.py"
+      ],
+      "declared_file_count": 7,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "two-languages-or-tiers",
+        "unenumerated-count"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans python, workflow",
+        "unenumerated-count": "'201 cards' \u2014 the body names 12"
+      },
+      "unreadable": []
+    }
+  ],
+  "rates": {
+    "cards": 10,
+    "died": 9,
+    "by_declared_files": [
+      {
+        "more_than": 1,
+        "of": 3,
+        "died": 2,
+        "cards": [
+          "DRE-3016",
+          "DRE-3022"
+        ],
+        "sentence": "cards declaring more than 1 file died 2 of 3 times"
+      },
+      {
+        "more_than": 2,
+        "of": 3,
+        "died": 2,
+        "cards": [
+          "DRE-3016",
+          "DRE-3022"
+        ],
+        "sentence": "cards declaring more than 2 files died 2 of 3 times"
+      },
+      {
+        "more_than": 3,
+        "of": 3,
+        "died": 2,
+        "cards": [
+          "DRE-3016",
+          "DRE-3022"
+        ],
+        "sentence": "cards declaring more than 3 files died 2 of 3 times"
+      },
+      {
+        "more_than": 4,
+        "of": 3,
+        "died": 2,
+        "cards": [
+          "DRE-3016",
+          "DRE-3022"
+        ],
+        "sentence": "cards declaring more than 4 files died 2 of 3 times"
+      },
+      {
+        "more_than": 5,
+        "of": 3,
+        "died": 2,
+        "cards": [
+          "DRE-3016",
+          "DRE-3022"
+        ],
+        "sentence": "cards declaring more than 5 files died 2 of 3 times"
+      },
+      {
+        "more_than": 6,
+        "of": 1,
+        "died": 0,
+        "cards": [],
+        "sentence": "cards declaring more than 6 files died 0 of 1 times"
+      }
+    ],
+    "by_tell": [
+      {
+        "tell": "contracts-between-pieces",
+        "of": 2,
+        "died": 2,
+        "sentence": "cards carrying the contracts-between-pieces tell died 2 of 2 times"
+      },
+      {
+        "tell": "two-languages-or-tiers",
+        "of": 7,
+        "died": 6,
+        "sentence": "cards carrying the two-languages-or-tiers tell died 6 of 7 times"
+      },
+      {
+        "tell": "unenumerated-count",
+        "of": 2,
+        "died": 1,
+        "sentence": "cards carrying the unenumerated-count tell died 1 of 2 times"
+      },
+      {
+        "tell": "unbounded-quantifier",
+        "of": 2,
+        "died": 2,
+        "sentence": "cards carrying the unbounded-quantifier tell died 2 of 2 times"
+      }
+    ],
+    "unreadable_footprint": 6,
+    "dead_dollars": 515.44,
+    "dead_dollars_unreadable": 0
+  }
+}
