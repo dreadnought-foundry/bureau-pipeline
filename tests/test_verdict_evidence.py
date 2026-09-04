@@ -441,6 +441,35 @@ class JobCoverageClaimTest(unittest.TestCase):
         ))
         self.assertEqual(rc, 0, out)
 
+    def test_an_unrelated_fence_does_not_prove_the_job_ran(self):
+        # Rule 1's laundering shape, one rule down: valid ids and a fenced
+        # block that says nothing about the run. #407's claim with a code
+        # snippet pasted beside it is still #407, and "any fence anywhere in
+        # the section" would let the incident this rule exists for through.
+        rc, out = check_cli(verdict(
+            PORTICO_407_CLAIM, "",
+            "See run 33724409256, job 100550113617.", "",
+            "```python",
+            "def unrelated():",
+            "    return 1",
+            "```",
+        ))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("proving what the job ran", out)
+
+    def test_the_jobs_own_id_in_the_fence_proves_it(self):
+        # The other honest shape: the pasted evidence is the API read
+        # itself, which carries the job id rather than a result line.
+        rc, out = check_cli(verdict(
+            PORTICO_407_CLAIM.replace("never ran", "did not run"), "",
+            "The jobs API for run 33724409256 answers it:", "",
+            "```",
+            "job 100550113617  e2e  success",
+            "  e2e/new-spec.spec.ts",
+            "```",
+        ))
+        self.assertEqual(rc, 0, out)
+
     def test_a_positive_coverage_claim_is_not_gated(self):
         # "The job ran it" needs no defending: the finding it supports is
         # that something ELSE is wrong. The gate is for the negative claim,
