@@ -294,6 +294,38 @@ A clear, **one-PR-scoped** description with its own `## Acceptance criteria`
 route, type, env var) is written **identically** in both — that string is a
 contract; the planner greps `main` first to confirm the name is free.
 
+## An acceptance criterion the card cannot satisfy before merge (DRE-3075)
+
+Some criteria can only be met by watching the change work in production, and
+production is downstream of the merge. DRE-3075 asked for two observations of
+concurrent Actions runs against real `push`/`pull_request` events — which cannot
+happen until the workflow config under review is the one live on `main`. **The
+card asked to watch the fix working before it was in a position to work.**
+
+Everyone downstream then behaved correctly and it still deadlocked. The build
+agent met the one provable criterion and said so plainly in the PR body ("not
+provable before merge"). The critic blocked on unmet criteria, which is its job.
+The fix agent could do nothing — there was no code to change — and burned four
+dispatches establishing that. PR #252 sat `CONFLICTING` for eleven hours until an
+operator decision moved it. **Nobody was wrong; the card was**, and the cost
+landed on the human, which is the opposite of what planning is for.
+
+**The tell, readable before the card is filed.** A criterion whose verb is
+*observed*, *watched*, *seen in production* — or that names a run id, a deploy,
+a live account, a tag move that does not exist yet. If satisfying it requires the
+change to already be merged, **it cannot gate the merge**.
+
+**Write it as two cards from the start.** The build card keeps the criteria a
+reviewer can check against the diff. The observation goes to a follow-up card
+carrying `needs-human` and `no-code`, blocked by the build card and named from
+it, under `deferred: <surface> — <reason>` — the shape `standards/design-parity.md`
+already sanctions for a gap that is deliberate rather than forgotten.
+
+**Why a note in the PR is not enough.** `linear-sync` closes the build card on
+the merge event, so a criterion deferred in prose is owed by nobody the moment
+the PR lands. That is the propose-gate shape (DRE-1980), which ran dead for six
+weeks because it was everyone's assumption and nobody's card.
+
 ## When a card is too big for one run (DRE-2893, DRE-2913)
 "One-PR-scoped" above is the rule; these are its tells, and every one of them is
 readable **before the card is filed**. Any ONE of them means split.
