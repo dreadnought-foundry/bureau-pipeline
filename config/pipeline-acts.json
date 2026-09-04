@@ -279,6 +279,22 @@
       }
     },
     {
+      "name": "conflict-sweep-unavailable",
+      "tag": "conflict-sweep-crashed",
+      "adopted": true,
+      "kind": "hold",
+      "means": "The conflict sweep could not run, so no fix agent was dispatched for this conflicted pull request.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "DRE-3042. The act above is what SHOULD happen to a DIRTY pull request; this one is what the pipeline says when it cannot. The dispatcher used to fail into silence: linear-sync's conflict sweep exited 1 on 2026-09-03 and PR #244 sat DIRTY with no critic, no fix loop and no notice for twelve minutes, because a conflicted pull request emits no workflow events for anything else to hang a signal on. The 15-minute cron sweep is the automatic backstop, so the state the PR is left in is unchanged rather than held — but nobody is told by the backstop, and the operator is who acts if it does not arrive.",
+      "emits": {
+        "file": ".github/workflows/linear-sync.yml",
+        "anchor": "🚨 conflict-sweep-crashed:"
+      }
+    },
+    {
       "name": "fix-attempt-landed",
       "tag": "fix-attempt-pushed",
       "adopted": false,

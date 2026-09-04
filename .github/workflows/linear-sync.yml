@@ -168,11 +168,82 @@ jobs:
           GH_DISPATCH_TOKEN: ${{ github.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           REPO: ${{ github.repository }}
+          # Named in the notice below, so the person recovering by hand starts
+          # at the run that failed instead of hunting for it.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # >>> DRE-3042 conflict sweep — executed verbatim by tests/test_linear_sync_workflow.py
+          # REPO_SLUG, derived exactly as reconcile.yml's Sweep step derives it,
+          # and the whole of DRE-3042. reconcile.py binds it at import and
+          # `fix_workflow()` reads it; unset it does not raise, it DEFAULTS to
+          # `atlas` — so on this repo the sweep computed `agent-fix.yml` (a
+          # workflow_call reusable with no dispatch trigger) instead of
+          # `self-agent-fix.yml`, `gh workflow run` exited non-zero and the step
+          # died having dispatched nothing. PR #244 then sat DIRTY with no
+          # critic and no fix loop until a person dispatched it by hand. Every
+          # other reconcile.py step set this; only this one did not, and CI now
+          # checks all of them against reconcile.REQUIRED_ENV.
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          export REPO_SLUG
+          NOTE="${RUNNER_TEMP:-/tmp}/conflict-sweep-note.md"
+          OPEN_PRS="${RUNNER_TEMP:-/tmp}/conflict-sweep-open.json"
+          CONFLICTED="${RUNNER_TEMP:-/tmp}/conflict-sweep-dirty.txt"
+
           # GitHub recomputes sibling mergeability lazily after a merge;
           # give it a beat, then sweep twice so a slow recompute still
           # lands inside this run rather than waiting for the cron.
+          FIRST_PASS=0
+          SECOND_PASS=0
           sleep 45
-          python3 .bureau-pipeline/scripts/reconcile.py --conflicts-only
+          python3 .bureau-pipeline/scripts/reconcile.py --conflicts-only || FIRST_PASS=1
           sleep 60
-          python3 .bureau-pipeline/scripts/reconcile.py --conflicts-only
+          python3 .bureau-pipeline/scripts/reconcile.py --conflicts-only || SECOND_PASS=1
+
+          # A step that dispatches fix agents must never fail quietly into "no
+          # dispatch". A DIRTY pull request emits no workflow events at all —
+          # no CI, no review, no merge gate — so when this sweep dies there is
+          # nothing else left to say anything: #244's only signal was an exit
+          # code inside a job nobody was watching. The second pass sweeps
+          # everything the first one did, so ITS failure is what means "no PR
+          # was dispatched by this run" — say so on the conflicted pull
+          # requests, with the recovery the person doing it by hand would need.
+          if [ "$SECOND_PASS" = 1 ]; then
+            gh pr list --repo "$REPO" --state open --limit 30 \
+              --json number,headRefName,mergeStateStatus > "$OPEN_PRS"
+            # The same two questions `unstick_conflicts` asks of each PR, asked
+            # here because the helper that asks them is what just failed.
+            python3 -c 'import json,sys; print("\n".join(str(p["number"]) for p in json.load(open(sys.argv[1])) if p.get("mergeStateStatus") == "DIRTY" and (p.get("headRefName") or "").lower().startswith("agent/")))' "$OPEN_PRS" > "$CONFLICTED"
+            while read -r PR; do
+              [ -n "$PR" ] || continue
+              # The tag is the idempotency key, as it is for every other receipt
+              # this pipeline posts: merge after merge must not stack notices.
+              if gh pr view "$PR" --repo "$REPO" --json comments | grep -q conflict-sweep-crashed; then
+                echo "conflict sweep: PR #$PR already carries the notice — not repeating it"
+                continue
+              fi
+              BODY=$(printf '%s\n' \
+                "🚨 conflict-sweep-crashed: this pull request is CONFLICTED and the sweep that dispatches the fix agent could not run, so no fix agent was dispatched for it." \
+                "" \
+                "A conflicted pull request emits no workflow events at all, so without this note nothing here would say anything." \
+                "" \
+                "What happens next: the 15-minute reconcile sweep is the automatic backstop and normally picks this up on its next pass. If it does not, a person dispatches the fix workflow for this pull request by hand." \
+                "" \
+                "The run that failed: $RUN_URL")
+              # DRE-2826: composed through the one receipt writer, which returns
+              # this body byte-identically and appends the act trailer. The
+              # `|| printf` fallback is the fail-soft rule this repo keeps
+              # wherever the notice IS the escalation — a lost trailer is a
+              # missing machine-readable line, a lost comment is an invisible
+              # conflicted pull request, which is the incident itself.
+              python3 .bureau-pipeline/scripts/pipeline_act.py receipt conflict-sweep-unavailable \
+                --body "$BODY" --out "$NOTE" \
+                || printf '%s' "$BODY" > "$NOTE"
+              gh pr comment "$PR" --repo "$REPO" --body-file "$NOTE"
+            done < "$CONFLICTED"
+          fi
+
+          if [ "$FIRST_PASS" = 1 ] || [ "$SECOND_PASS" = 1 ]; then
+            echo "conflict sweep: a sweep pass failed (first=$FIRST_PASS second=$SECOND_PASS) — see the output above" >&2
+            exit 1
+          fi
+          # <<< DRE-3042 conflict sweep

@@ -168,6 +168,22 @@ import wave_commitment  # noqa: E402
 REPO = os.environ["REPO"]
 REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
 
+#: What a caller MUST put in the environment before running this sweep — this
+#: module's argument list, in the only form a workflow step can pass one.
+#:
+#: Declared because absence is not uniformly loud: `REPO` raises at import,
+#: while `REPO_SLUG` **defaults**, and a wrong default is silent. linear-sync's
+#: conflict sweep never set it, so on bureau-pipeline `fix_workflow()` computed
+#: `agent-fix.yml` — a `workflow_call` reusable with no dispatch trigger — the
+#: dispatch exited non-zero and the step died having dispatched nothing. PR #244
+#: then sat DIRTY with no critic and no fix loop, because a conflicted pull
+#: request emits no workflow events for anything else to notice (DRE-3042).
+#:
+#: A missing variable on a call site is a missing argument, so every workflow
+#: step that runs this file is checked against this tuple in CI
+#: (`scripts/check_reconcile_env.py`) rather than at 19:19 on a Thursday.
+REQUIRED_ENV = ("REPO", "REPO_SLUG", "LINEAR_API_KEY")
+
 # The stall windows come from the lane contract (DRE-2726), not from a second
 # copy here: a lane's stall budget is part of what the lane IS, and the file the
 # harness asserts the board against is where it belongs. In Progress dropped
