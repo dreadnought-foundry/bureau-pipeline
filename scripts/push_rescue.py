@@ -14,6 +14,18 @@ green 5,001-test suite it could not push a byte of. The requeue rebuilt the
 whole card — another ~27 minutes and ~$21 for work that already existed on a
 disk nobody could read.
 
+AND THE CREDENTIAL IS THE RESCUE'S OWN (DRE-3098). This step used to fall back
+to the token the AGENT step held when its own re-mint failed. On 2026-09-04 run
+33896126776 (DRE-3088, its third turn-cap death) did exactly that TWENTY-SIX
+minutes in — nowhere near the hour — and GitHub answered
+`The requested URL returned error: 400`, which on `git push` over HTTPS is a
+rejected credential. Three runs lost their partial work that way, and no branch
+ever appeared for the card. The rescue push is the one push whose whole purpose
+is to run after something has already gone wrong, so it must not spend a
+credential that the failure may have invalidated: the workflow mints TWO tokens
+of its own for it, and a refused push is retried once on the second — naming
+GitHub's status and which mint it used — before anything is given up on.
+
 So the step that pushes mints a FRESH token first (the workflow's own
 `create-github-app-token` path, the same App) and this module spends it:
 
@@ -37,12 +49,16 @@ IT NEVER FAILS THE JOB. A rescue that cannot rescue prints why and exits 0: a
 red step here summons the medic to re-run a run that already did the work.
 What it does instead is REPORT — `local_work=true` says the work is on the
 runner and GitHub does not have it, which is what `check_agent_result.py`
-reads to classify the run as a credential expiry rather than a dead agent.
+reads to classify the run as a credential expiry rather than a dead agent —
+and PRESERVE: the branch's commits are written to `rescue-<card>.patch`, which
+the workflow uploads as a run artifact. A run whose disk is about to be
+destroyed must not be the last copy of the work (DRE-3098).
 
 CLI (the form agent-task.yml calls; outputs on stdout, logs on stderr, so the
 whole thing can be appended to `$GITHUB_OUTPUT`):
 
-    PUSH_TOKEN=<fresh> python3 push_rescue.py rescue \\
+    PUSH_TOKEN=<fresh> PUSH_TOKEN_RETRY=<another fresh> \\
+    python3 push_rescue.py rescue \\
         --card DRE-3043 --repo owner/name --base main \\
         --card-url <url> --card-title <title>
 """
@@ -56,6 +72,7 @@ import os
 import re
 import subprocess  # nosec B404 — git and gh; argv lists, never a shell
 import sys
+import tempfile
 
 # The credential `actions/checkout` configures, and the one `git push` reads.
 # Spelled exactly as checkout writes it: the key is per-origin, so a different
@@ -63,9 +80,16 @@ import sys
 # corpse.
 GITHUB_EXTRAHEADER = "http.https://github.com/.extraheader"
 
-# The token is read from the environment, never from argv: an argv element is
-# visible to every process on the runner via /proc.
+# The tokens are read from the environment, never from argv: an argv element is
+# visible to every process on the runner via /proc. Two of them (DRE-3098): the
+# rescue's own mint and its own re-mint, so a refused push has a genuinely
+# different credential to retry with. The *_SOURCE variables are labels, not
+# secrets — they are what the failure line names, so a reader can tell which
+# mint GitHub refused.
 TOKEN_ENV = "PUSH_TOKEN"
+RETRY_TOKEN_ENV = "PUSH_TOKEN_RETRY"
+TOKEN_SOURCE_ENV = "PUSH_TOKEN_SOURCE"
+RETRY_TOKEN_SOURCE_ENV = "PUSH_TOKEN_RETRY_SOURCE"
 
 # The card identifier becomes a git ref GLOB (`agent/<CARD>-*`). It arrives
 # from the relay's client_payload, which is outside the trust boundary, so it
@@ -85,9 +109,25 @@ STOP_NOTES = (
     "/tmp/agent-handback.txt",  # nosec B108
 )
 
+# What GitHub says when it refuses a credential, in the two shapes git and gh
+# print it: `The requested URL returned error: 400` (the DRE-3098 incident) and
+# `(HTTP 401)`. Anchored on the words, never on a bare three-digit run of
+# characters — `git 2.43` is not a status.
+_STATUS_RE = re.compile(r"(?:error|HTTP)[:\s]+(\d{3})\b", re.IGNORECASE)
+
 
 def _log(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+def _preserved(outcome) -> str:
+    """The line that says where the work went when it could not be pushed."""
+    if outcome.patch:
+        return (f"push rescue: the branch's commits are written to "
+                f"{outcome.patch} and uploaded as a run artifact — the runner "
+                f"is not the last copy")
+    return ("push rescue: the branch's commits could NOT be written out — "
+            "this run's disk is the only copy of the work")
 
 
 def _subprocess_run(argv, *, cwd=None, env=None):
@@ -106,6 +146,10 @@ class Outcome:
     that GitHub does not have. It stays true when the push is REFUSED — that
     is exactly the case the Report step must describe as a credential expiry
     rather than a dead agent.
+
+    `push_status` and `patch` are the other two the workflow spends
+    (DRE-3098): the HTTP status GitHub refused with, and the file holding the
+    work that never reached it.
     """
 
     def __init__(self):
@@ -117,6 +161,9 @@ class Outcome:
         self.pr_opened = False
         self.pr_url = ""
         self.error = ""
+        self.push_status = ""
+        self.attempts = 0
+        self.patch = ""
 
     @property
     def rescued(self) -> bool:
@@ -142,7 +189,58 @@ def output_lines(outcome: Outcome) -> list[str]:
         f"pr_opened={_flag(outcome.pr_opened)}",
         f"rescued={_flag(outcome.rescued)}",
         f"pr_url={outcome.pr_url}",
+        f"push_status={outcome.push_status}",
+        f"attempts={outcome.attempts}",
+        f"patch={outcome.patch}",
     ]
+
+
+def http_status(text: str) -> str:
+    """The HTTP status GitHub refused with, or "".
+
+    Worth reading rather than guessing: 400 and 401 on a push are both a
+    rejected credential and neither is an expiry, which is the whole reason
+    DRE-3098 exists. An unrecognised message answers "" — a refusal we cannot
+    name is not one we invent a number for.
+    """
+    match = _STATUS_RE.search(text or "")
+    return match.group(1) if match else ""
+
+
+def default_patch_path(card: str) -> str:
+    """Where the branch's commits are written when nothing can be pushed.
+
+    `RUNNER_TEMP` on a runner, the system temp dir anywhere else; the name is
+    the artifact's name so the run page and the file agree.
+    """
+    directory = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
+    return os.path.join(directory, f"rescue-{card}.patch")
+
+
+def write_patch(branch: str, base: str, path: str, *, run, workdir: str = ".") -> str:
+    """Write `branch`'s own commits to `path`. Returns the path, or "".
+
+    `format-patch` first: it carries the commit messages and authorship, so
+    `git am` replays the agent's history rather than one squashed blob. A
+    plain diff is the fallback for the cases format-patch refuses (a root
+    commit with no merge base, a shallow clone). The base is tried as
+    `origin/<base>` and then `<base>`, exactly as `_commits_ahead` does — a
+    runner's checkout may carry either.
+    """
+    if not path:
+        return ""
+    for ref in (f"origin/{base}", base):
+        for sub in (["format-patch", "--stdout", f"{ref}..{branch}"],
+                    ["diff", f"{ref}...{branch}"]):
+            code, out, _ = run(["git", "-C", workdir, *sub])
+            if code == 0 and out.strip():
+                try:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(out)
+                except OSError:
+                    return ""
+                return path
+    return ""
 
 
 def basic_auth_header(token: str) -> str:
@@ -273,11 +371,31 @@ def _pr_body(card: str, card_url: str) -> str:
     )
 
 
+def _credentials(token, retry_token, token_source, retry_token_source):
+    """The credentials to try, in order, de-duplicated.
+
+    A re-mint that quietly handed back the SAME token is not a second
+    credential, and pushing with it again only doubles the failure — so the
+    retry is dropped rather than performed (DRE-3098).
+    """
+    creds: list[tuple[str, str]] = []
+    for value, source in ((token, token_source),
+                          (retry_token, retry_token_source)):
+        value = (value or "").strip()
+        if value and value not in [c[0] for c in creds]:
+            creds.append((value, (source or "").strip() or "an unnamed mint"))
+    return creds
+
+
 def rescue(
     card: str,
     repo: str,
     token: str,
     *,
+    retry_token: str = "",
+    token_source: str = "",
+    retry_token_source: str = "",
+    patch_path: str = "",
     base: str = "main",
     card_url: str = "",
     card_title: str = "",
@@ -311,24 +429,60 @@ def rescue(
             f"to deliver")
         return out
 
+    patch_path = patch_path or default_patch_path(card)
+    credentials = _credentials(token, retry_token, token_source,
+                               retry_token_source)
+    if not credentials:
+        # Both mints are continue-on-error, so "no credential at all" is a
+        # state this step can reach — and it is precisely the state where the
+        # runner must not be the last copy of the work.
+        out.local_work = True
+        out.patch = write_patch(out.branch, base, patch_path, run=run,
+                                workdir=workdir)
+        log(f"push rescue: no push credential was minted — {out.branch} cannot "
+            f"be delivered")
+        log(_preserved(out))
+        return out
+
     # BEFORE any credentialed call: `git ls-remote` below authenticates too.
-    repoint_git_credential(token, run=run, workdir=workdir)
+    active_token = credentials[0][0]
+    repoint_git_credential(active_token, run=run, workdir=workdir)
 
     out.remote_sha = _remote_sha(out.branch, run=run, workdir=workdir)
     out.local_work = out.local_sha != out.remote_sha
 
     if out.local_work:
-        code, _, err = run([
-            "git", "-C", workdir, "push", "origin",
-            f"{out.branch}:refs/heads/{out.branch}",
-        ])
-        if code != 0:
+        for attempt, (candidate, source) in enumerate(credentials, start=1):
+            if attempt > 1:
+                # A DIFFERENT credential, minted by the rescue's own second
+                # mint — not the one GitHub just refused, and not the one the
+                # agent step held (DRE-3098).
+                log(f"push rescue: retrying the push with {source}")
+                repoint_git_credential(candidate, run=run, workdir=workdir)
+                active_token = candidate
+            out.attempts = attempt
+            code, _, err = run([
+                "git", "-C", workdir, "push", "origin",
+                f"{out.branch}:refs/heads/{out.branch}",
+            ])
+            if code == 0:
+                out.pushed = True
+                out.error = ""
+                out.push_status = ""
+                break
             out.error = (err.strip().splitlines() or ["push refused"])[-1]
-            log(f"push rescue: pushing {out.branch} failed — {out.error}")
+            out.push_status = http_status(err)
+            named = f"HTTP {out.push_status}" if out.push_status else "no HTTP status"
+            log(f"push rescue: pushing {out.branch} failed — {named}, "
+                f"credential: {source} (attempt {attempt} of "
+                f"{len(credentials)}) — {out.error}")
+        if not out.pushed:
+            out.patch = write_patch(out.branch, base, patch_path, run=run,
+                                    workdir=workdir)
             log("push rescue: the work is still on the runner; the Report step "
                 "records this as a credential expiry, not a dead agent")
+            log(_preserved(out))
             return out
-        out.pushed = True
         # `git branch -r` is how the Gate and Report steps find this card's
         # branch, so the remote-tracking ref has to exist or a delivered
         # branch reads as no branch at all. Spelled as an explicit refspec:
@@ -339,7 +493,11 @@ def rescue(
              f"+refs/heads/{out.branch}:refs/remotes/origin/{out.branch}"])
         log(f"push rescue: delivered {out.branch} with a freshly minted token")
 
-    existing = _existing_pr(out.branch, repo, token, run=run, workdir=workdir)
+    # `active_token`, not the one the step started with: after a retry that is
+    # the credential GitHub actually accepted, and handing `gh` the one that
+    # was just refused re-runs the incident one call further on.
+    existing = _existing_pr(out.branch, repo, active_token, run=run,
+                            workdir=workdir)
     if existing:
         out.pr_url = "" if existing == "unreadable" else existing
         if existing == "unreadable":
@@ -358,7 +516,7 @@ def rescue(
         ["gh", "pr", "create", "--repo", repo, "--base", base,
          "--head", out.branch, "--title", title,
          "--body", _pr_body(card, card_url)],
-        cwd=workdir, env=_gh_env(token),
+        cwd=workdir, env=_gh_env(active_token),
     )
     if code != 0:
         out.error = (err.strip().splitlines() or ["pr create refused"])[-1]
@@ -380,21 +538,33 @@ def main(argv: list[str]) -> int:
     r.add_argument("--card-url", default="")
     r.add_argument("--card-title", default="")
     r.add_argument("--workdir", default=".")
+    r.add_argument("--patch", default="",
+                   help="where to write the branch's commits when nothing can "
+                        "be pushed (default: $RUNNER_TEMP/rescue-<card>.patch)")
     args = parser.parse_args(argv)
 
     token = os.environ.get(TOKEN_ENV, "").strip()
+    retry_token = os.environ.get(RETRY_TOKEN_ENV, "").strip()
     outcome = Outcome()
-    if not token:
-        _log(f"push rescue: no {TOKEN_ENV} in the environment — skipped")
-    else:
-        try:
-            outcome = rescue(
-                args.card, args.repo, token,
-                base=args.base, card_url=args.card_url,
-                card_title=args.card_title, workdir=args.workdir,
-            )
-        except Exception as exc:  # never fail the job over a rescue
-            _log(f"push rescue: skipped — {exc}")
+    if not token and not retry_token:
+        # Not "skipped" any more (DRE-3098): with no credential the push is
+        # impossible, which is exactly when the work must still be written out
+        # rather than destroyed with the runner. rescue() handles it.
+        _log(f"push rescue: neither {TOKEN_ENV} nor {RETRY_TOKEN_ENV} is in "
+             f"the environment — nothing can be pushed")
+    try:
+        outcome = rescue(
+            args.card, args.repo, token,
+            retry_token=retry_token,
+            token_source=os.environ.get(TOKEN_SOURCE_ENV, "").strip(),
+            retry_token_source=os.environ.get(
+                RETRY_TOKEN_SOURCE_ENV, "").strip(),
+            patch_path=args.patch,
+            base=args.base, card_url=args.card_url,
+            card_title=args.card_title, workdir=args.workdir,
+        )
+    except Exception as exc:  # never fail the job over a rescue
+        _log(f"push rescue: skipped — {exc}")
     for line in output_lines(outcome):
         print(line)
     # ALWAYS 0. A red step here calls the medic to re-run a run that already

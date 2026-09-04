@@ -147,6 +147,12 @@ class FakeGit:
             return 0, "", ""
         if "fetch" in rest:
             return 0, "", ""
+        if "format-patch" in rest or "diff" in rest:
+            # The DRE-3098 patch write-out. Empty on purpose: this suite is
+            # about the re-mint, and a fake that produced a patch would drop a
+            # file on the real runner. tests/test_rescue_push_token.py owns
+            # what the patch is and where it goes.
+            return 0, "", ""
         raise AssertionError(f"FakeGit has no answer for: {joined}")
 
     def argv_containing(self, *needles) -> list[list[str]]:

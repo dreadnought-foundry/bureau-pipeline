@@ -248,6 +248,10 @@ class Fixture:
             os.environ,
             PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
             GITHUB_OUTPUT=str(self.output),
+            # Where the step writes the branch out when it cannot push it
+            # (DRE-3098) — inside the sandbox, so a refused run leaves its
+            # patch here and not in the real runner's temp.
+            RUNNER_TEMP=str(self.root),
             PUSH_TOKEN=self.token,
             CARD=CARD,
             CARD_URL=CARD_URL,
@@ -367,6 +371,17 @@ class TheNegativeControl(unittest.TestCase):
         # A red step here summons the medic to re-run a run that already did
         # the work — the DRE-1921 shape.
         self.assertEqual(self.proc.returncode, 0, self.proc.stderr)
+
+    def test_the_work_is_written_out_for_the_artifact(self):
+        # DRE-3098's other half, through the REAL step and a real git: a push
+        # GitHub refuses must not leave the runner holding the only copy. The
+        # step names the file, the workflow's upload step takes it from here.
+        patch = self.fx.outputs().get("patch") or ""
+        self.assertTrue(patch.endswith(f"rescue-{CARD}.patch"), patch)
+        self.assertTrue(os.path.exists(patch), self.proc.stderr)
+        text = Path(patch).read_text(encoding="utf-8")
+        self.assertIn("feature.py", text)
+        self.assertIn("value = 1", text)
 
 
 class TwoStaleHeadersAreStillReplaced(unittest.TestCase):

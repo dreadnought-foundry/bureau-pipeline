@@ -145,7 +145,13 @@ def _header(token: str) -> str:
         f"x-access-token:{token}".encode()).decode()
 
 
+# Every rescue below that is not asserting on the file writes its patch here,
+# so a suite run leaves nothing in the runner's temp.
+_SCRATCH = tempfile.TemporaryDirectory()
+
+
 def _rescue(fake, logged=None, **kw):
+    kw.setdefault("patch_path", os.path.join(_SCRATCH.name, f"rescue-{CARD}.patch"))
     kw.setdefault("base", "main")
     kw.setdefault("card_url", f"https://linear.app/x/issue/{CARD}")
     kw.setdefault("card_title", "the rescue push after a dead agent")

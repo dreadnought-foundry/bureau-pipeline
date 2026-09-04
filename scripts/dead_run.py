@@ -43,6 +43,12 @@ A CREDENTIAL EXPIRY IS NOT A DEATH EITHER (DRE-3043):
               (a rebuild is a rebuild) and writes NO model-error marker,
               because no model failed. `push_rescue.py` is what makes it rare;
               this is what it is called when the re-mint did not save it.
+              THE HOUR IS THE USUAL CAUSE, NOT THE ONLY ONE (DRE-3098): run
+              33896126776 was refused with `error: 400` twenty-six minutes in,
+              so the receipt quotes the status the push reported
+              (`--push-status`) instead of asserting an expiry, and names the
+              run artifact the work was written to (`--artifact`) so the
+              reader knows a rebuild is a convenience, not the only way back.
 
 A PLATFORM FAULT IS NOT A DEATH CLASS EITHER (DRE-2931). Everything above
 presumes the agent RAN. A run that dies before claude-code-action is reached —
@@ -187,6 +193,8 @@ def decide(
     failed_step: str = "",
     rate_limited: bool = False,
     credential_expiry: bool = False,
+    push_status: str = "",
+    artifact: str = "",
     run_url: str = "",
     cap: int = REQUEUE_CAP,
     turn_cap: int = TURN_REQUEUE_CAP,
@@ -230,6 +238,12 @@ def decide(
     run — and above the silent/is_error classes, which would call it a death.
     It spends the shared dead-run budget (a rebuild is a rebuild) and records
     no `model-error:` marker, because no model failed.
+
+    `push_status`/`artifact` (DRE-3098): what GitHub answered the rescue push
+    with, and the run artifact the work was written to. The expiry is not the
+    only way this happens — run 33896126776 was refused with a 400 twenty-six
+    minutes in — so the receipt names the status rather than asserting a
+    cause, and names the artifact so the reader knows the work still exists.
     """
     run_suffix = f" Run: {run_url}" if run_url else ""
     if cancelled:
@@ -326,12 +340,31 @@ def decide(
         # It spends the SHARED dead-run budget: a rebuild is a rebuild whatever
         # the cause, and the cap is what stops a card looping. It records no
         # `model-error:` marker, because no model failed.
+        # DRE-3098: SAY WHAT GITHUB SAID. This used to assert the cause — "the
+        # credential expired… installation tokens live one hour" — and run
+        # 33896126776 was refused with a 400 twenty-six minutes in, so the
+        # sentence was wrong about the only run whose reader needed it. The
+        # status is quoted when the push reported one; the hour is offered as
+        # the usual cause, not as the finding.
+        refused = (
+            f" — GitHub answered HTTP {push_status} to the push" if push_status
+            else ""
+        )
         note = (
-            f"the run's GitHub credential expired before the branch could "
-            f"reach GitHub — the agent finished the work and could not deliver "
-            f"it. Installation tokens live one hour and every git credential "
-            f"on the runner is that token. This is a CREDENTIAL expiry: not a "
-            f"fault in the model, the service or the card"
+            f"the run's GitHub credential was refused before the branch could "
+            f"reach GitHub{refused} — the agent finished the work and could "
+            f"not deliver it. Every git credential on the runner is one App "
+            f"installation token, which lives an hour and can also be rejected "
+            f"outright. This is a CREDENTIAL failure: not a fault in the "
+            f"model, the service or the card"
+        )
+        # WHERE THE WORK IS. The rescue writes the branch out and the run
+        # uploads it, so a rebuild is a convenience rather than the only path
+        # back to the work — and the person reading the card is the one who
+        # needs to know that.
+        kept = (
+            f" The work itself is not lost: this run's `{artifact}` artifact "
+            f"holds the branch's commits." if artifact else ""
         )
         if prior_dead >= cap:
             return Decision(
@@ -342,14 +375,14 @@ def decide(
                     f"Backlog with the '{HOLD_LABEL}' label — the re-mint at "
                     f"the push is not recovering this card, so a human needs "
                     f"to look at the App credentials before it is retried."
-                    f"{run_suffix}"
+                    f"{kept}{run_suffix}"
                 ],
             )
         return Decision(
             "requeue",
             [
                 f"🪦 {DEAD_TAG}: {note}. Requeued to Todo for a fresh attempt "
-                f"(attempt {prior_dead + 1}/{cap + 1}).{run_suffix}"
+                f"(attempt {prior_dead + 1}/{cap + 1}).{kept}{run_suffix}"
             ],
         )
     cause = (
@@ -576,7 +609,7 @@ def main(argv: list[str]) -> int:
       decide <prior_dead> [--is-error] [--error-model M] [--cancelled]
              [--turn-exhaustion [--execution-file PATH]] [--run-url U]
              [--pre-agent [--failed-step NAME] [--rate-limited]]
-             [--credential-expiry]
+             [--credential-expiry [--push-status N] [--artifact NAME]]
       park <CARD>
       park-unlanded [--run-url U] [--turn-exhaustion]
 
@@ -595,7 +628,8 @@ def main(argv: list[str]) -> int:
     usage = ("usage: dead_run.py decide <prior_dead> [--is-error] "
              "[--error-model M] [--cancelled] [--turn-exhaustion] "
              "[--execution-file PATH] [--pre-agent] [--failed-step NAME] "
-             "[--rate-limited] [--credential-expiry] [--run-url U] | "
+             "[--rate-limited] [--credential-expiry] [--push-status N] "
+             "[--artifact NAME] [--run-url U] | "
              "park <CARD> | park-unlanded [--run-url U] [--turn-exhaustion]")
     if not argv:
         print(usage)
@@ -625,6 +659,8 @@ def main(argv: list[str]) -> int:
     pre_agent = "--pre-agent" in rest
     rate_limited = "--rate-limited" in rest
     credential_expiry = "--credential-expiry" in rest
+    push_status = _flag_value(rest, "--push-status")
+    artifact = _flag_value(rest, "--artifact")
     error_model = _flag_value(rest, "--error-model") or None
     run_url = _flag_value(rest, "--run-url")
     exec_path = _flag_value(rest, "--execution-file")
@@ -647,6 +683,8 @@ def main(argv: list[str]) -> int:
         failed_step=failed_step,
         rate_limited=rate_limited,
         credential_expiry=credential_expiry,
+        push_status=push_status,
+        artifact=artifact,
         run_url=run_url,
     )
     print(d.action)
