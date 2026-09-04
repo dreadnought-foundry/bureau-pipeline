@@ -60,14 +60,16 @@ class MappingTest(unittest.TestCase):
         # the artifact the CEO green-lights (DRE-2721) — and to nobody else.
         # wave-plan.md (DRE-2845) goes to the planner alone: it is the only
         # role that WRITES a wave plan, and the checker that refuses one reads
-        # the same file.
+        # the same file. verdict-evidence.md (DRE-3005) goes to the critic
+        # alone, for the mirror reason: it is the only role that writes a
+        # verdict, and a verdict asserting what a command did carries the run.
         expected = {
             "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
             "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "vendor-boundaries.md", "console-honesty.md"],
             "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
             "database-architect": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
             "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md", "plan-artifact.md", "wave-plan.md"],
-            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md"],
+            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md", "verdict-evidence.md"],
             "verifier": ["comms.md", "untrusted-content.md", "design.md", "design-parity.md"],
             # The two plan critics (DRE-2721). Different questions, so
             # different context: the pre stage judges the SHAPE of a plan that

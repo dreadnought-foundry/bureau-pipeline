@@ -233,6 +233,19 @@ jobs:
           # critic never saw.
           SHA=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          # DRE-3005 rule 3: the moment this review's read of the pull
+          # request BODY begins. The critic reads the description through
+          # `gh pr view` during the run, and a description can be corrected
+          # while the review is in flight — portico #407's review
+          # snapshotted the body at 06:41, the author corrected it at
+          # 06:43, and the verdict posted at 06:48 demanding a change that
+          # had been in the body for five minutes. The race is not fixable
+          # (a review takes minutes) but a race with a signal costs a
+          # sentence instead of ten hours, so the verdict says which
+          # snapshot it read and the post step flags an edit that landed
+          # after it. Stamped by the WORKFLOW, never by the agent: the
+          # honesty of the agent's own read is the thing under audit.
+          echo "body_read_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           # DRE-2340: the CONTENT this review is about to read — the
           # three-dot diff of the SAME sha captured above, hashed by
           # scripts/verdict_content.py. Fetched here rather than reused
@@ -691,6 +704,41 @@ jobs:
             Default skeptical: your job is to find reasons NOT to merge. If
             you cannot find any, approve.
 
+            EVIDENCE FOR A CLAIM ABOUT A RUN (DRE-3005 — mechanically
+            checked; a blocking verdict that fails it is HELD instead of
+            posted, which costs this pull request a whole review). The
+            estate's standing law — capture the error body, not the status —
+            applies to you: a finding asserting what a command or a CI job
+            actually DID must carry the run.
+
+            * CITE A COMMAND, PASTE ITS OUTPUT. If a finding says you ran
+              something, or says what it exits with, prints or fails with,
+              put the command AND its actual result together in ONE fenced
+              block. A quoted fragment is not the output:
+              `check_tdd_commits.py` prints a per-commit classification line
+              for every commit beside its reason, unconditionally, and a
+              verdict that reproduced only the reason blocked a correct pull
+              request for 22 hours. Whatever a real run always prints,
+              paste it.
+            * A CI-COVERAGE FINDING NAMES THE JOB. Saying a job did not run
+              something requires the run id, the job id, and the line
+              proving what it ran (`gh run view`, `gh api` — GH_TOKEN is in
+              your env). A `pull_request` run executes from the MERGE REF,
+              so the base branch's jobs apply even when the branch's own
+              workflow file predates them; reading the branch's config is
+              not evidence about what ran.
+            * BODY SNAPSHOT. Run `gh pr view` again immediately before you
+              write the final verdict. A description can be corrected while
+              you review, and a verdict demanding a change the author had
+              already made cost ten hours.
+            * A CLAIM YOU CANNOT EVIDENCE IS A CLAIM YOU DO NOT MAKE. "I
+              could not verify X; <command> would settle it" is a
+              legitimate finding. An unevidenced assertion is not.
+
+            This is narrowly about facts a command can settle. Your
+            judgement findings — scope, design, risk, test quality — need no
+            citation and are untouched: there you are meant to be believed.
+
             CONVERGENCE (mandatory): if earlier QA Critic verdicts exist on
             this PR, you are RE-reviewing: verify the prior findings are
             resolved, review what changed since, and raise a NEW finding
@@ -777,7 +825,17 @@ jobs:
           # hostile execution record cannot forge a second step output. The
           # neutral comment is composed from these instead of assuming a crash.
           # Kept identical in the attempt-2 gate below.
-          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT"; then
+          # DRE-3005, the second half of "is this a real verdict": a
+          # BLOCKING verdict that asserts what a command or a CI job did
+          # without carrying the run is not one. Two correct PRs were
+          # blocked overnight on claims of exactly that shape that did not
+          # reproduce. It runs SECOND and only on a verdict the gate above
+          # already accepted — an unreadable or unfinished file is that
+          # gate's finding, not this one — and it can only ever hold a
+          # merge: `evidence=defective` lands on the same neutral path a
+          # crash does, and an APPROVE is never gated.
+          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" \
+             && python3 .bureau-pipeline/scripts/verdict_evidence.py check /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" --hold-file /tmp/qa-evidence-hold.md; then
             echo "real=true" >> "$GITHUB_OUTPUT"
           else
             echo "real=false" >> "$GITHUB_OUTPUT"
@@ -789,7 +847,10 @@ jobs:
       # crash). Clear any stale verdict so the gate re-evaluates honestly.
       - name: Clear stale verdict before retry
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
-        run: rm -f /tmp/qa-verdict.md
+        # qa-evidence-hold.md too (DRE-3005): attempt 1's list of
+        # unevidenced claims describes attempt 1's verdict, and a retry that
+        # writes a clean one must not post the dead list beside it.
+        run: rm -f /tmp/qa-verdict.md /tmp/qa-evidence-hold.md
 
       # Back off before the retry (DRE-2429), same defect as verify.yml: the
       # retry ran as the immediately following step, so a deterministic
@@ -916,6 +977,41 @@ jobs:
             Default skeptical: your job is to find reasons NOT to merge. If
             you cannot find any, approve.
 
+            EVIDENCE FOR A CLAIM ABOUT A RUN (DRE-3005 — mechanically
+            checked; a blocking verdict that fails it is HELD instead of
+            posted, which costs this pull request a whole review). The
+            estate's standing law — capture the error body, not the status —
+            applies to you: a finding asserting what a command or a CI job
+            actually DID must carry the run.
+
+            * CITE A COMMAND, PASTE ITS OUTPUT. If a finding says you ran
+              something, or says what it exits with, prints or fails with,
+              put the command AND its actual result together in ONE fenced
+              block. A quoted fragment is not the output:
+              `check_tdd_commits.py` prints a per-commit classification line
+              for every commit beside its reason, unconditionally, and a
+              verdict that reproduced only the reason blocked a correct pull
+              request for 22 hours. Whatever a real run always prints,
+              paste it.
+            * A CI-COVERAGE FINDING NAMES THE JOB. Saying a job did not run
+              something requires the run id, the job id, and the line
+              proving what it ran (`gh run view`, `gh api` — GH_TOKEN is in
+              your env). A `pull_request` run executes from the MERGE REF,
+              so the base branch's jobs apply even when the branch's own
+              workflow file predates them; reading the branch's config is
+              not evidence about what ran.
+            * BODY SNAPSHOT. Run `gh pr view` again immediately before you
+              write the final verdict. A description can be corrected while
+              you review, and a verdict demanding a change the author had
+              already made cost ten hours.
+            * A CLAIM YOU CANNOT EVIDENCE IS A CLAIM YOU DO NOT MAKE. "I
+              could not verify X; <command> would settle it" is a
+              legitimate finding. An unevidenced assertion is not.
+
+            This is narrowly about facts a command can settle. Your
+            judgement findings — scope, design, risk, test quality — need no
+            citation and are untouched: there you are meant to be believed.
+
             CONVERGENCE (mandatory): if earlier QA Critic verdicts exist on
             this PR, you are RE-reviewing: verify the prior findings are
             resolved, review what changed since, and raise a NEW finding
@@ -996,7 +1092,12 @@ jobs:
           # --github-output (DRE-2465): identical to the attempt-1 gate above.
           # Both attempts must report, or a retry that ran to completion after
           # a first attempt that crashed silently keeps the crash wording.
-          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT"; then
+          # DRE-3005: identical to the attempt-1 gate above, for the same
+          # reason the --github-output flag is — a retry that quietly held a
+          # verdict to a weaker standard than attempt 1 is the drift these
+          # duplicated blocks exist to warn about.
+          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" \
+             && python3 .bureau-pipeline/scripts/verdict_evidence.py check /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" --hold-file /tmp/qa-evidence-hold.md; then
             echo "real=true" >> "$GITHUB_OUTPUT"
           else
             echo "real=false" >> "$GITHUB_OUTPUT"
@@ -1037,6 +1138,21 @@ jobs:
           A2_OUTCOME: ${{ steps.gate2.outputs.outcome }}
           A2_TURNS: ${{ steps.gate2.outputs.turns }}
           A2_COST: ${{ steps.gate2.outputs.cost }}
+          # DRE-3005: `ok` or `defective` — did the finished verdict carry
+          # the evidence for the runs it asserts? One word each, written by
+          # verdict_evidence.py's own --github-output, so a hostile
+          # execution record cannot forge it. The MESSAGE deliberately does
+          # NOT ride here: it quotes the critic's own findings and the
+          # critic read an attacker-authored diff, so it reaches the
+          # comment as a FILE (/tmp/qa-evidence-hold.md), never as a
+          # double-quoted shell string. That is the MODEL_WHY rule, and the
+          # reason it is a rule is that Actions substitutes `${{ }}` as
+          # literal text before bash parses the line.
+          A1_EVIDENCE: ${{ steps.gate1.outputs.evidence }}
+          A2_EVIDENCE: ${{ steps.gate2.outputs.evidence }}
+          # DRE-3005 rule 3: when this review read the description, so the
+          # posted verdict can say so and flag an edit that landed after.
+          BODY_READ_AT: ${{ steps.pr.outputs.body_read_at }}
           # The selected model + its one-line reason, carried on the LINEAR copy
           # of the verdict below. Passed as ENV, never interpolated into the
           # script body: Actions substitutes `${{ }}` as literal text before
@@ -1118,6 +1234,39 @@ jobs:
             # content id breaks the carry; every parser is pinned against
             # both formats in tests/test_verdict_cause_tag.py.
             { echo "🔎 QA Critic — $(head -1 /tmp/qa-verdict.md) @${REVIEWED_SHA}${CONTENT_ID:+ content:$CONTENT_ID}"; echo; tail -n +2 /tmp/qa-verdict.md; } > /tmp/qa-comment.md
+            # DRE-3005 rule 3, the body-snapshot footer. Appended AFTER the
+            # verdict body, never near the header: `head -1` is the line
+            # every consumer parses (merge_gate's `VERDICT:` match,
+            # verdict_content's end-anchored `content:` read), and the
+            # footer carries neither token. `lastEditedAt` is null until
+            # the body or title is actually edited — `updatedAt` moves on
+            # any activity at all and would cry wolf on every commented
+            # pull request. A blip leaves it empty, and an empty edit time
+            # is rendered as no claim rather than as freshness.
+            BODY_EDITED=$(gh api graphql -f query='query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){lastEditedAt}}}' \
+              -F owner="${GITHUB_REPOSITORY%%/*}" -F name="${GITHUB_REPOSITORY#*/}" -F pr="$PR" \
+              --jq '.data.repository.pullRequest.lastEditedAt // ""' 2>/dev/null || true)
+            FOOTER=$(python3 .bureau-pipeline/scripts/verdict_evidence.py snapshot \
+              --reviewed-at "${BODY_READ_AT:-}" --edited-at "${BODY_EDITED:-}" || true)
+            if [ -n "$FOOTER" ]; then
+              printf '\n%s\n' "$FOOTER" >> /tmp/qa-comment.md
+            fi
+          elif [ "${A2_EVIDENCE:-${A1_EVIDENCE:-}}" = "defective" ] && [ -s /tmp/qa-evidence-hold.md ]; then
+            # DRE-3005: the reviewer ran, finished, and blocked this pull
+            # request on a claim about what a command or a CI job actually
+            # did — without carrying the run. Two correct PRs were blocked
+            # overnight on exactly that shape and neither claim reproduced,
+            # so it does NOT post as REQUEST_CHANGES: that would spend a
+            # fix-loop attempt and an operator decision on a finding nobody
+            # proved (the #1441/#1442 false-reject class). Same neutral
+            # contract as the branches below — carries "QA Critic" so
+            # merge-gate treats it as the latest word and it supersedes a
+            # stale APPROVE, carries no "VERDICT:" line so merge is held
+            # and the fix agent is not dispatched. The message is
+            # verdict_evidence.py's one wording, written to a file by the
+            # gate step; it names the unevidenced claims and claims nothing
+            # about credentials, because nothing here was a credential.
+            cp /tmp/qa-evidence-hold.md /tmp/qa-comment.md
           elif [ -n "$RAN" ]; then
             # DRE-2465, the third branch: the reviewer RAN TO COMPLETION and
             # left no verdict this gate could read. Same neutral contract as
