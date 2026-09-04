@@ -409,6 +409,55 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(self._outputs()["action"], "proceed")
         self.assertIn("two failed rounds", self._note().lower())
 
+    # --- 7b: only the approval move activates (DRE-3100) --------------------
+
+    def test_a_planning_entry_with_children_is_a_re_plan_not_an_activation(self):
+        """DRE-3060, 2026-09-04: the CEO moved an epic with nine children
+        through Planning to say "plan this again"; the route read "not Triage,
+        and children exist" as approval, the post-approval critic held the plan
+        twice more, and the rail activated it anyway. A Planning entry is a
+        planner's verb whatever the child count."""
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "planning"},
+            STUB_KIDS="9",
+        )
+        out = self._outputs()
+        self.assertEqual(out["mode"], "plan")
+        self.assertEqual(out["kids"], "9")
+        log = self._log()
+        self.assertIn("state Planning", log, "a re-plan opens a fresh planning attempt")
+        self.assertNotIn("state In Progress", log)
+        self.assertNotIn("promote", log)
+
+    def test_a_todo_entry_with_children_does_not_activate_either(self):
+        """An epic in Todo dispatches nothing at the relay (DRE-2725); if one
+        ever reached this step it must still not be read as approved."""
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "todo"},
+            STUB_KIDS="3",
+        )
+        self.assertEqual(self._outputs()["mode"], "plan")
+
+    def test_only_the_in_progress_entry_activates(self):
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "in progress"},
+            STUB_KIDS="9",
+        )
+        self.assertEqual(self._outputs()["mode"], "activate")
+        self.assertNotIn("state Planning", self._log())
+
+    def test_an_approved_epic_that_was_never_planned_is_planned_first(self):
+        """The forgiving fallback, unchanged: In Progress with no children."""
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "in progress"},
+            STUB_KIDS="0",
+        )
+        self.assertEqual(self._outputs()["mode"], "plan")
+
     # --- 8: the round history is the pipeline's own ------------------------
 
     def test_a_stray_comment_cannot_forge_the_round_history(self):
