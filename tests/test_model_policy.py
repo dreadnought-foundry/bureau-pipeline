@@ -106,6 +106,23 @@ SELECTORS = {
 }
 
 
+# Every file that states the role-kind rule in prose a human acts on — config,
+# the selector and its generator, the roster, and the workflows that select.
+# The staleness sweeps below read all of them, so a new kind cannot leave a
+# sentence behind in one of them.
+KIND_DOCUMENTS = (
+    CONFIG,
+    ROOT / "config" / "README.md",
+    MODEL_FALLBACK,
+    MODEL_CATALOG,
+    ROOT / "scripts" / "sync_model_config.py",
+    AGENTS,
+    WORKFLOWS / "plan.yml",
+    WORKFLOWS / "agent-task.yml",
+    WORKFLOWS / "model-drift.yml",
+)
+
+
 def _canonical(path: Path = CONFIG) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
@@ -845,21 +862,67 @@ class DocumentedPolicyTest(unittest.TestCase):
         # SAME PR. "Two role kinds" was true until 2026-09-03 and is now the
         # kind of sentence a reader trusts and acts on.
         stale = []
-        for path in (
-            CONFIG,
-            ROOT / "config" / "README.md",
-            MODEL_FALLBACK,
-            ROOT / "scripts" / "model_catalog.py",
-            ROOT / "scripts" / "sync_model_config.py",
-            AGENTS,
-            WORKFLOWS / "plan.yml",
-            WORKFLOWS / "agent-task.yml",
-            WORKFLOWS / "model-drift.yml",
-        ):
+        for path in KIND_DOCUMENTS:
             for n, line in enumerate(path.read_text().splitlines(), 1):
                 if re.search(r"(two|2)\s+(role\s+)?kinds?\b", line, re.I):
                     stale.append(f"{path.name}:{n}: {line.strip()}")
         self.assertEqual(stale, [], "a document still says there are two kinds")
+
+    def test_no_document_closes_the_list_of_kinds_on_a_short_one(self):
+        # The other half of the same drift, and the half that slipped through
+        # the sweep above: a sentence that ENUMERATES the kinds and then shuts
+        # the list ("… and nothing else") without saying "two". The rule-1
+        # error string in model_fallback.py read "every role is workhorse or
+        # advisory, and nothing else" for the whole of the PR that ADDED the
+        # third kind. A numeral is optional; naming every kind is not.
+        #
+        # Two judgement calls keep this from crying wolf, because a guard that
+        # flags correct prose gets deleted rather than obeyed:
+        #   * naming TWO kinds is what makes a line an enumeration of the set
+        #     rather than a sentence about one of them — "the JUDGEMENT
+        #     ladder: the planner, and nothing else" is about who walks a
+        #     ladder, and is right;
+        #   * prose WRAPS, so the surrounding lines count as the same
+        #     sentence. model-drift.yml names `judgement` two lines below its
+        #     "and nothing else", which leaves no reader misled.
+        stale = []
+        for path in KIND_DOCUMENTS:
+            lines = path.read_text().splitlines()
+            for n, line in enumerate(lines, 1):
+                if not re.search(r"\bnothing else\b", line, re.I):
+                    continue
+                named = [k for k in mf.ROLE_KINDS if k in line.lower()]
+                if len(named) < 2:
+                    continue
+                window = " ".join(lines[max(0, n - 3):n + 2]).lower()
+                missing = [k for k in mf.ROLE_KINDS if k not in window]
+                if missing:
+                    stale.append(f"{path.name}:{n}: omits {missing}: {line.strip()}")
+        self.assertEqual(
+            stale, [], "a closed list of the role kinds is missing one of them"
+        )
+
+    def test_the_rejected_kinds_error_names_every_kind(self):
+        # The string a human reads when `config/models.yaml` is rejected for a
+        # typo'd kind name. Assert the PROSE half (after the em-dash), not the
+        # whole message: the first half interpolates `ROLE_KINDS` and so names
+        # every kind however stale the sentence that follows it is. The
+        # sentence is the part a reader believes — "every role is workhorse or
+        # advisory" tells them `judgement` was removed, not that they
+        # misspelled it.
+        cfg = _canonical()
+        cfg["kinds"]["judgment"] = cfg["kinds"].pop(JUDGEMENT)  # the typo itself
+        errors = mf.policy_errors(cfg)
+        self.assertTrue(errors, "a misspelled kind must be rejected")
+        rule = next((e for e in errors if e.startswith("kinds: must declare")), None)
+        self.assertIsNotNone(rule, f"no rule-1 rejection: {errors}")
+        _, _, prose = rule.partition("—")
+        self.assertTrue(prose.strip(), f"the rejection carries no explanation: {rule}")
+        for kind in mf.ROLE_KINDS:
+            with self.subTest(kind=kind):
+                self.assertIn(
+                    kind, prose, f"the explanation never names {kind!r}: {prose!r}"
+                )
 
 
 if __name__ == "__main__":

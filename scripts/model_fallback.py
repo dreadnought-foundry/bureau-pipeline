@@ -298,9 +298,15 @@ def policy_errors(config) -> list[str]:
     kinds, ladders = cfg["kinds"], cfg["ladders"]
 
     if sorted(kinds) != sorted(ROLE_KINDS):
+        # Spelled FROM `ROLE_KINDS`, never hand-written. This is the line a
+        # maintainer reads when they typo a kind name, and a hand-written
+        # enumeration of it went stale the day `judgement` arrived — telling
+        # the reader the kind they meant had been removed rather than
+        # mistyped (DRE-3015).
+        every_kind = f"{', '.join(ROLE_KINDS[:-1])} or {ROLE_KINDS[-1]}"
         return [
             f"kinds: must declare exactly {list(ROLE_KINDS)}, got {sorted(kinds)} — "
-            "every role is workhorse or advisory, and nothing else"
+            f"every role is {every_kind}, and nothing else"
         ]
     for kind, ladder in kinds.items():
         if ladder not in ladders:
