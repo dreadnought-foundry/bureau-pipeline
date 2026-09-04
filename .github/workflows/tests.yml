@@ -97,6 +97,68 @@ jobs:
       - name: Every receipt composes through the one writer
         run: python3 scripts/check_act_receipts.py
 
+  # The act registry's CONSUMER (DRE-3091). Its own job, because it is the one
+  # check here that leaves the repository: it reads the console's `ACTS` out of
+  # agent-bureau and fails when this repo declares an act the console cannot
+  # read. The console has always checked this, and only the console did — so it
+  # fired in the wrong repo, after the fact, and held every open agent-bureau
+  # PR hostage twice in twelve hours (DRE-3081 22:26 PT 2026-09-03, DRE-3090
+  # 09:13 PT 2026-09-04) until someone filed a one-line console card.
+  #
+  # WHY IT IS NOT A STEP IN `unit`: `unit` runs with no secrets and must stay
+  # that way, and this needs a token for another repository. Splitting it also
+  # keeps the no-skip assertion honest — the guard SKIPS offline (loudly, with
+  # the reason) so every other run of the suite stays green without a token,
+  # and it is this job, and only this job, where a skip is red.
+  acts-consumers:
+    name: act registry consumers
+    # Premortem Q1/Q2 (DRE-2047/2067): a dependabot-triggered pull_request runs
+    # AS dependabot[bot] and gets GitHub's SEPARATE Dependabot secrets store —
+    # for us EMPTY — so the mint below would yield nothing, the guard would
+    # skip, and the no-skip assertion would turn every dependency bump red on
+    # a question no bump can answer. The guard sits on the JOB so no step
+    # executes and the run concludes `skipped`, which the merge gate's
+    # GREEN_CONCLUSIONS admits (the harness.yml pattern).
+    if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install test tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+      # Scoped to the console's repository and nothing else. NOT the job's own
+      # GITHUB_TOKEN: that one is scoped to this repository, 404s on
+      # agent-bureau, and would report "unread" for a reason nobody could act
+      # on.
+      - name: Mint console token (reads agent-bureau's ACTS)
+        id: console
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: agent-bureau
+      - name: Every declared act is known to the console
+        env:
+          LINEAR_API_KEY: test-key
+          REPO: test/test
+          GH_TOKEN: test
+          BUREAU_CONSOLE_TOKEN: ${{ steps.console.outputs.token }}
+        run: |
+          python3 -m pytest tests/test_pipeline_acts_consumers.py -v -rs \
+            --junit-xml=/tmp/acts-consumers.xml
+      # The other half of "skips loudly, never passes silently": in THIS job
+      # the console must be readable, so a skipped or empty report is a build
+      # that proved nothing and is failed here rather than reported green.
+      # `always()` on purpose — a red suite must not hide a skip behind it.
+      - name: The guard did not skip
+        if: always()
+        run: python3 scripts/check_act_consumers.py assert-ran /tmp/acts-consumers.xml
+
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching
   # tests/ must precede the first commit changing non-test code (docs-only

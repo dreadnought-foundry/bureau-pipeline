@@ -365,6 +365,9 @@ class TestTheCriticSeesTheGuardResult(unittest.TestCase):
                     "--acts-consumer-file", acts,
                 ],
                 capture_output=True, text=True,
+                # Without GITHUB_OUTPUT the builder prints to stdout, which is
+                # the documented local/test path. The runner sets it.
+                env={k: v for k, v in os.environ.items() if k != "GITHUB_OUTPUT"},
             )
             self.assertEqual(0, out.returncode, out.stderr)
             self.assertIn("unknown to the console", out.stdout)

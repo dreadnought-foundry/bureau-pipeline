@@ -376,6 +376,33 @@
       }
     }
   ],
+  "console": {
+    "_readme": [
+      "THE CONSUMER (DRE-3091). The console reads these acts, and its own guard",
+      "— test_every_act_the_pipeline_declares_is_known_to_the_console — fails",
+      "every open PR in agent-bureau the moment this file declares an act its",
+      "ACTS does not carry. That guard is right and it fires in the wrong repo,",
+      "after the fact: DRE-3042's `conflict-sweep-crashed` (2026-09-03) and",
+      "DRE-3084's `refuted-finding` (2026-09-04) each merged green here and",
+      "held unrelated console PRs hostage until someone filed the one-line",
+      "console card.",
+      "",
+      "So the producer carries the same question. `scripts/check_act_consumers.py`",
+      "reads the file below out of the console's default branch and fails when an",
+      "act declared here is not in it. The sequencing rule that follows from it is",
+      "in `docs/pipeline-acts.md`: console first, pipeline second.",
+      "",
+      "`path` is the fast path and `module` is the fallback — the file is located",
+      "by name in the console's tree when the path 404s, so moving it costs a",
+      "slower check rather than a wrong answer (the lane contract's console block",
+      "makes the same argument)."
+    ],
+    "repo": "dreadnought-foundry/agent-bureau",
+    "path": "console/backend/receipts.py",
+    "module": "receipts",
+    "symbol": "ACTS",
+    "fix": "add {tag!r} (kind {kind!r}) to {symbol} in {repo}:{path}, merge that PR, then this one"
+  },
   "unconverted": [
     {
       "file": ".github/workflows/agent-fix.yml",

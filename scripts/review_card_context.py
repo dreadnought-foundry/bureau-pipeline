@@ -45,6 +45,17 @@ and the SAME size cap the PR body gets: it is written by an agent reading an
 attacker-authored diff, so it is DATA the critic weighs, never an instruction
 it follows.
 
+DRE-3091 appends a SECOND optional block, and unlike the refutation it is not
+untrusted at all: the act-registry consumer check's own result, computed by
+`check_act_consumers.py` from this repo's registry and the console's `ACTS`.
+It appears only on a PR that changes `config/pipeline-acts.json`, and it says
+plainly whether the console already knows every act the PR declares. Twice in
+twelve hours a PR that did not was approved and merged, and broke every open
+PR in the consumer (DRE-3081, DRE-3090) — the critic had no way to see it.
+This block is machine output, so it enters WITHOUT the untrusted fence: fencing
+our own guard's verdict as attacker text would tell the critic to discount the
+one thing on the page it can rely on.
+
 Like repair_context.py: the script NEVER exits non-zero (a context-builder
 failure must not wedge the gate — the prompt carries a static empty-block
 fallback), and the context is written to $GITHUB_OUTPUT as a heredoc under
@@ -54,6 +65,7 @@ Without GITHUB_OUTPUT it prints to stdout (tests, local runs).
 CLI:
     review_card_context.py --card <DRE-n or empty> --branch <head-branch>
                            --pr-body-file <path> [--refutation-file <path>]
+                           [--acts-consumer-file <path>]
 """
 
 from __future__ import annotations
@@ -143,16 +155,29 @@ def _refutation_block(refutation) -> list[str]:
     return ["", _REFUTATION_LEAD, *_fenced(text)]
 
 
-def build_context(card, branch, pr_body, refutation="") -> str:
+def _acts_consumer_block(result) -> list[str]:
+    """The act-registry consumer check's verdict, or nothing (DRE-3091).
+
+    Not fenced and not sanitized: this is our own guard's output, not text
+    anybody outside the pipeline wrote. See the module docstring.
+    """
+    text = (result or "").strip()
+    if not text:
+        return []
+    return ["", text]
+
+
+def build_context(card, branch, pr_body, refutation="", acts_consumer="") -> str:
     """The critic's CARD CONTEXT block for one PR shape.
 
     `refutation` is appended to every shape, never substituted for one: check
     1 is still judged against the card (or the cardless policy), and the
-    refutation is one contested finding within that judgment.
+    refutation is one contested finding within that judgment. `acts_consumer`
+    is appended the same way, for the same reason.
     """
     card = (card or "").strip()
     branch = branch or ""
-    tail = _refutation_block(refutation)
+    tail = _refutation_block(refutation) + _acts_consumer_block(acts_consumer)
 
     if card:
         return "\n".join(
@@ -229,6 +254,11 @@ def main(argv: list[str]) -> int:
     # fetch that produces it is fail-soft, and a blip there must cost the
     # refutation block, never the whole review.
     parser.add_argument("--refutation-file", default="")
+    # DRE-3091, same fail-soft contract: the guard writes an empty file for
+    # every PR that does not touch the act registry, and a missing path reads
+    # as empty. A consumer check that could not run must cost the paragraph,
+    # never the review.
+    parser.add_argument("--acts-consumer-file", default="")
     args = parser.parse_args(argv)
 
     try:
@@ -238,6 +268,9 @@ def main(argv: list[str]) -> int:
             _read_text(args.pr_body_file),
             refutation=_read_text(args.refutation_file)
             if args.refutation_file
+            else "",
+            acts_consumer=_read_text(args.acts_consumer_file)
+            if args.acts_consumer_file
             else "",
         )
     except Exception as exc:  # degrade to the prompt's static fallback
