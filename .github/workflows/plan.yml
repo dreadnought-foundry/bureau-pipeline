@@ -343,12 +343,21 @@ jobs:
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
       # The EPIC route, unchanged (DRE-2844 gates it, it does not rewrite it).
-      # The CEO's two verbs: Triage = "planner, deal with this" (plan, or
-      # RE-plan if children exist); Todo = "approved — build" (activate; or
-      # plan first if the epic was never planned, as a forgiving fallback).
-      # The shape says WHICH route a card takes; it never says whether an
-      # approved epic activates — that is still the CEO's move and this step's
-      # question.
+      # The CEO's two verbs: Planning or Triage = "planner, deal with this"
+      # (plan, or RE-plan if children exist); In Progress = "approved — build"
+      # (activate; or plan first if the epic was never planned, as a forgiving
+      # fallback). The shape says WHICH route a card takes; it never says
+      # whether an approved epic activates — that is still the CEO's move and
+      # this step's question.
+      #
+      # ONLY the In Progress entry activates (DRE-3100). Until 2026-09-04 the
+      # test was "not Triage, and children exist", so an epic the CEO moved
+      # through Planning to say "plan this again" was read as approved: the
+      # post-approval critic ran, sent DRE-3060's plan back for the second and
+      # third time, and the rail activated it anyway (twice, 09:48 and 09:54
+      # PT). The relay sends the lane the card ENTERED, lower-cased, and the
+      # approval move is In Progress (DRE-2725) — so that is the one word this
+      # step reads as approval.
       - name: Route — plan or activate
         id: route
         if: steps.gate.outputs.bounced != 'true' && steps.shape.outputs.route == 'epic'
@@ -362,7 +371,7 @@ jobs:
           FROM="${{ github.event.client_payload.trigger_state }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
           echo "kids=$KIDS" >> "$GITHUB_OUTPUT"
-          if [ "$FROM" != "triage" ] && [ "$KIDS" -gt 0 ]; then
+          if [ "$FROM" = "in progress" ] && [ "$KIDS" -gt 0 ]; then
             # DRE-2721: the activate route now only ROUTES. The state change,
             # the announcement and the promotion moved to "Activate the
             # approved epic" below, because the second critic runs between the
