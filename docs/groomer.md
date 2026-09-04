@@ -25,19 +25,56 @@ only then does anything leave Intake.
    card, is the atom of cycle assignment.
 3. **Finds the collisions.** Two cards citing the same file become an explicit
    order between those two cards, reported with the file that caused it.
-4. **Sequences.** Portico first — the business priority — subject to those
-   constraints, deterministically.
+4. **Sequences.** Urgent, then High, then the last 14 days newest first —
+   subject to those constraints, deterministically. The rules are below.
 5. **Assigns cycles**, using Linear's own primitive.
 6. **Proposes**, in plain English: the batch and its order, what is deferred
    and to when, what is recommended dead and what replaced it, and which repos
    are waiting and roughly how long.
+
+## The order, applied top to bottom
+
+CEO decision, 2026-09-04: **14 days, creation date** (DRE-3096). The batch is
+this week's work, not the oldest work.
+
+1. **Urgent first, every repo.** Linear priority `Urgent` opens the batch,
+   newest created first among them. This is the production-issue lane: a card
+   raised while debugging goes ahead of everything.
+2. **High next**, newest first. Otherwise High means nothing.
+3. **Then the window**: created in the last 14 days, newest first.
+   `WINDOW_DAYS` is a constant and `--window-days` is a flag, so the drain of
+   the old Backlog runs at 14 and the steady state widens to 30 without a code
+   change.
+4. **Repo order is a tie-break inside a band, never the master key.** Portico
+   first only among cards of equal priority created on the same day. It used to
+   be the first element of the key, which put months-old Portico work at the
+   head of a 200-card Intake and made a card raised Urgent this morning wait its
+   turn.
+5. **Older than the window is "not now" by default.** Those cards stay in
+   Intake, ungroomed, and the proposal reports them as one line: *"N cards older
+   than 14 days, not batched — raise a card's priority to High or Urgent to pull
+   it in."* They are not aged out, not cancelled and not moved, and the
+   operator's Intake hold (DRE-3035) is untouched by any of this.
+6. **Two things still pull an old card forward**, whatever its age: a file
+   collision with a batched card — the old card is ordered *before* it — and
+   being a Linear blocker of a batched card. Both are constraints the sequence
+   already carries, and the pull is transitive.
+7. **The date is the creation date**, never the last update. A stray agent
+   comment must not bump a card up the batch; the population query does not even
+   read `updatedAt`. The way to resurrect an old card is to raise its
+   priority — rules 1 and 2 — which is a deliberate human act.
+
+The epic is still the unit, so an epic's band is the highest priority and the
+newest creation among the epic and its children: one Urgent child pulls the
+whole unit into the batch. Inside a unit the order is unchanged — oldest child
+first, with collisions and blocks relations on top.
 
 ## The three outcomes
 
 | Outcome | Means |
 | -- | -- |
 | `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. |
-| `not-now` | **Wanted, and deliberately not this batch**. It names the cycle it is reconsidered in. This is "later", and it is not "no". |
+| `not-now` | **Wanted, and deliberately not this batch**. Either it names the cycle it is reconsidered in, or it is older than the window and stays in Intake ungroomed. This is "later", and it is not "no". |
 | `dead` | **Recommended for cancellation, and never cancelled here**. It names the card or merged PR that superseded it; the operator decides and the operator executes. |
 
 `not-now` is first-class on purpose. A card can be well-formed, wanted, and
@@ -122,6 +159,10 @@ Assigning cards to cycles is not a return to sprint planning. The cycle is the O
 
 `--capacity` is how much is proposed at a time, not a velocity estimate. A unit
 larger than the capacity gets a cycle to itself rather than being cut in half.
+
+A card older than the window is given no cycle at all. "Not now" for those means
+ungroomed and still in Intake — inventing a cycle for one would say the groomer
+had made a plan for a card it deliberately did not look at.
 
 ## What it cannot see
 
