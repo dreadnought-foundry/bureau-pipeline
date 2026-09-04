@@ -130,6 +130,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read  # DRE-3101: which files THIS pull request changes
   statuses: write  # the tested-sha stamp release-gate.yml reads
 
 jobs:
@@ -187,6 +188,49 @@ jobs:
       - name: Resolve tested sha
         id: tested
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # A pull request's run drives the SHARED sandbox with whatever
+      # scripts/harness/ its branch carries (DRE-3101). On 2026-09-04 that
+      # meant three PR branches cut before DRE-3075 merged still ran the old,
+      # un-namespaced sweep: each one deleted every harness branch and closed
+      # every probe PR in the sandbox — main's included — and no main proving
+      # run finished for three hours while stable sat ten merges behind. The
+      # sweep's namespace rule is only as good as the OLDEST branch that runs
+      # it, so a PR run takes the harness code from main unless the PR itself
+      # changes it (then the PR is testing the harness, and says so). The
+      # workflow file is still the PR's own — GitHub decides that — which is
+      # why this step lives at the top of the job rather than in the sweep.
+      - name: Harness code from main (DRE-3101)
+        id: harnesscode
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Two statements on purpose: the API call must fail LOUDLY (a PR
+          # that changes the harness must never be quietly handed main's copy
+          # because GitHub blinked), and only the zero-match grep may be
+          # forgiven. One pipeline with `|| true` on the end forgave both.
+          FILES=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
+              --paginate --jq '.[].filename')
+          CHANGED=$(printf '%s\n' "$FILES" | grep -c '^scripts/harness/' || true)
+          if [ "${CHANGED:-0}" -gt 0 ]; then
+            echo "source=pr" >> "$GITHUB_OUTPUT"
+            echo "harness code: this pull request changes scripts/harness ($CHANGED file(s)) — running the PR's copy"
+          else
+            # Explicit refspec: actions/checkout clones one ref, so a bare
+            # `fetch origin main` fills FETCH_HEAD and never origin/main.
+            git fetch --depth 1 origin main:refs/remotes/origin/main
+            # Remove first, then restore: `git checkout <ref> -- <dir>` only
+            # writes files that exist in <ref> and never deletes one the old
+            # branch still carries. scripts/harness/scenarios/ discovers every
+            # module it finds, so a scenario main deleted would still run.
+            rm -rf scripts/harness
+            git checkout origin/main -- scripts/harness
+            MAIN_SHA=$(git rev-parse --short origin/main)
+            echo "source=main" >> "$GITHUB_OUTPUT"
+            echo "harness code: main ($MAIN_SHA) — this pull request does not change scripts/harness, so its run drives the sandbox with the sweep every other run uses"
+          fi
 
       # Only the named-scenario path needs test tooling: the DRE-2490
       # unverified_claim scenario proves a shipped test is non-vacuous by
