@@ -263,6 +263,16 @@ def _junit(tests, skipped, body="") -> str:
 
 
 class TestTheCIJobFailsOnASkip(unittest.TestCase):
+    def _consumer_job(self):
+        with open(TESTS_YML, encoding="utf-8") as fh:
+            wf = yaml.safe_load(fh)
+        job = next(
+            (j for j in wf["jobs"].values() if "consumer" in (j.get("name") or "").lower()),
+            None,
+        )
+        self.assertIsNotNone(job, "tests.yml declares no act-consumer job")
+        return job
+
     def _assert_ran(self, xml):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "report.xml")
@@ -332,6 +342,48 @@ class TestTheCIJobFailsOnASkip(unittest.TestCase):
             for s in job["steps"]
         )
         self.assertIn("BUREAU_CONSOLE_TOKEN", env)
+
+    def test_the_console_is_only_read_when_the_run_changes_the_registry(self):
+        """The job runs on every PR, so an UNGATED cross-repo mint would hold
+        the merge gate on pull requests that never touched the registry — one
+        transient mint failure freezing every open PR is the exact pattern
+        this card exists to stop, relocated rather than removed. The changed
+        files decide, the way this PR's own qa-review.yml receipt already
+        does (`steps.actsreg`)."""
+        job = self._consumer_job()
+        steps = job["steps"]
+        gate = next((s for s in steps if REGISTRY_PATH in (s.get("run") or "")), None)
+        self.assertIsNotNone(gate, "no step decides whether this run changed the registry")
+        self.assertTrue(gate.get("id"), "the deciding step has no id for later steps to gate on")
+        guard_expr = "steps.%s.outputs" % gate["id"]
+        for step in steps:
+            uses, run = step.get("uses") or "", step.get("run") or ""
+            load_bearing = (
+                "create-github-app-token" in uses
+                or "pytest" in run
+                or "assert-ran" in run
+            )
+            if load_bearing:
+                self.assertIn(
+                    guard_expr,
+                    step.get("if", ""),
+                    "step %r reaches the console on every run" % (step.get("name"),),
+                )
+
+    def test_the_console_mint_is_best_effort_here_too(self):
+        """harness.yml:224 and this PR's qa-review.yml mint are both
+        `continue-on-error` for the same reason: agent-bureau is another
+        installation. Here the failure still ends red — the guard skips and
+        `assert-ran` says so, naming the reason — but only on a run where the
+        check is load-bearing, and never as an opaque action failure."""
+        job = self._consumer_job()
+        mint = next(
+            s for s in job["steps"] if "create-github-app-token" in (s.get("uses") or "")
+        )
+        self.assertTrue(
+            mint.get("continue-on-error"),
+            "an unmintable console token fails the job before the guard can name why",
+        )
 
 
 # ── 4. the critic sees the guard's result on the PR ─────────────────────────

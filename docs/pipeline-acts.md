@@ -28,6 +28,15 @@ reads the console's `ACTS` out of agent-bureau's default branch and fails when
 this repo declares an act it does not carry. The failure names the act and the
 one line that fixes it.
 
+That job asks the console **only on a run whose changed files include
+`config/pipeline-acts.json`**, and skips its steps otherwise. The scoping is
+load-bearing, not an optimisation: this job has no path filter, the merge gate
+treats any `failure` on the head sha as "wait", and a cross-repo token mint can
+fail transiently. Ungated, one blip would hold every open pull request in
+bureau-pipeline hostage — the same shape as the two agent-bureau incidents
+below, moved one repository upstream. If the changed-file list itself cannot be
+read the job asks the console anyway: the gate fails closed, never open.
+
 The order cannot be the other way round, and the asymmetry is the point. The
 console learning a tag the pipeline has not declared yet costs nothing — no
 receipt carries it, so nothing reads it. The pipeline declaring a tag the
@@ -58,7 +67,7 @@ the consumer's question and asks it before the merge instead of after.
 | Where | What it does | On failure |
 | -- | -- | -- |
 | `tests/test_pipeline_acts_consumers.py` | `test_every_act_the_pipeline_declares_is_known_to_the_console` — the producer-side twin | red test naming the act |
-| `.github/workflows/tests.yml`, job `act registry consumers` | runs that test with a token scoped to agent-bureau, then asserts it did not skip | red build |
+| `.github/workflows/tests.yml`, job `act registry consumers` | on a run that CHANGES the registry, runs that test with a token scoped to agent-bureau, then asserts it did not skip | red build |
 | `.github/workflows/qa-review.yml` | puts the guard's result in the critic's context for any PR touching the registry | the critic sees "unknown to the console" before it approves |
 
 ## Unread is never a pass
