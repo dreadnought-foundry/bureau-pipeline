@@ -132,6 +132,37 @@ FOREIGN namespace's leftover is still collected once it is older than
 one state in which it cannot belong to a run that is still going. A
 leftover whose age cannot be read is left alone, always.
 
+#### The isolation is only as old as the oldest driver in flight
+
+All of the above lives in `framework.py`, and `harness.yml` checks that file
+out at `github.event.pull_request.head.sha` — a pull request's own head, at
+whatever vintage the branch was cut. A branch that forked before DRE-3075
+therefore still runs the UNSCOPED sweep, which closes every open harness PR
+it finds, whoever it belongs to.
+
+That is red main on 2026-09-04. Run `33910802510` started at 19:22 for PR
+#260 (head forked from `a7bfa52`, pre-DRE-3075) and closed main's live
+`gate_paths` probe PR #957, opened 50 minutes earlier. Main's run
+`33903196184` spent 70 of its 76 minutes polling a closed PR and failed
+naming the sandbox's critic — which had reviewed another lane's PR in
+minutes while it waited. `framework.probe_pr` above ends that wait quickly
+and honestly; it does not stop the closure.
+
+So the driver declares `SANDBOX_ISOLATION_CONTRACT`, and `harness.yml`
+refuses a checkout below its own `REQUIRED_CONTRACT` floor **before it mints
+a sandbox token** — the offending branch goes red and is told to rebase,
+instead of the run beside it. The guard is written in the workflow rather
+than in a script here because the whole checkout is the stale thing: on a
+`pull_request` event GitHub runs the workflow file from the merge ref, which
+makes it the one part of the run a stale branch cannot make stale. It reads
+the declaration with `ast` rather than importing, because a driver old
+enough to matter may not import at all, and a crash must not read as a pass.
+
+**Bump both together.** Raise `SANDBOX_ISOLATION_CONTRACT` when a change to
+the sweep is one an older driver would violate, and raise the workflow's
+floor in the same PR; `tests/test_harness_driver_contract.py` pins them to
+each other in both directions.
+
 ## The Linear side (decided per the card)
 
 Harness branches carry **no `DRE-n` card reference**. `should_review_pr.py`

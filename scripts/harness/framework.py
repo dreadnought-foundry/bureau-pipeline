@@ -90,6 +90,29 @@ _NAMESPACE_RE = re.compile(r"^[a-z0-9]{1,24}$")
 # The namespace of a run nobody told: a CLI run against the sandbox.
 DEFAULT_NAMESPACE = "local"
 
+# Which shared-sandbox isolation this driver implements. 1 = DRE-3075: every
+# sweep collects only its OWN namespace, so two live runs can share the
+# sandbox without tearing down each other's branches.
+#
+# It exists because that isolation is implemented HERE and harness.yml checks
+# this file out at `github.event.pull_request.head.sha` — a pull request's own
+# head, whatever vintage it is. So the sandbox is only as safe as the OLDEST
+# driver in flight. On 2026-09-04 run 33910802510 started for PR #260, whose
+# head forked from a7bfa52 and predated DRE-3075: its unscoped sweep closed
+# every open harness PR it found, including main's live `gate_paths` probe
+# #957, and main's run (33903196184) then polled a closed PR for 70 of its 76
+# minutes and failed naming the sandbox's critic, which was healthy throughout.
+#
+# harness.yml refuses a checkout declaring less than its own floor, before it
+# mints a sandbox credential. The guard lives in the workflow rather than here
+# because on a `pull_request` event GitHub runs the workflow file from the
+# merge ref — it is the one part of the run a stale branch cannot make stale.
+#
+# BUMP THIS when a change to the sweep's isolation is one an older driver
+# would violate. tests/test_harness_driver_contract.py pins it to the
+# workflow's floor in both directions.
+SANDBOX_ISOLATION_CONTRACT = 1
+
 # When a leftover from ANOTHER namespace may be collected. A run cannot
 # outlive its own job timeout (harness.yml `timeout-minutes: 180`), so
 # anything older than twice that ceiling belongs to no live run — and
