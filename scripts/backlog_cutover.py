@@ -55,11 +55,23 @@ board looks wrong" a week later needs a number to compare against.
 Bounded and on demand, like the groomer: it writes nothing without `--apply`,
 and `--limit` bounds a single run.
 
+## Rehearsing it on one card
+
+`--limit N` bounds a run but cannot NAME one: it takes whichever real cards the
+plan puts first, so a throwaway probe dropped into Backlog could not be moved
+alone and the move-in path could not be watched before the real run.
+`--only DRE-N [DRE-M …]` restricts the population to the cards it names, through
+this same path — the same in-flight test, the same reason posted before the
+move, the same from-lane guard. A named card that is not in Backlog is reported
+as such and skipped; the run never reaches into whatever lane it is actually in.
+The occupancy record for such a run says plainly that it was a rehearsal on
+named cards, so nothing can read it as the cutover's.
+
 CLI:
 
     python3 scripts/backlog_cutover.py census
-    python3 scripts/backlog_cutover.py plan   [--limit N] [--out plan.json]
-    python3 scripts/backlog_cutover.py run    [--apply] [--limit N] [--record CARD]
+    python3 scripts/backlog_cutover.py plan   [--limit N] [--only DRE-N …] [--out plan.json]
+    python3 scripts/backlog_cutover.py run    [--apply] [--limit N] [--only DRE-N …] [--record CARD]
 """
 
 from __future__ import annotations
@@ -87,6 +99,13 @@ CUTOVER_TO = "Intake"
 
 MARK = "🚚"
 CUTOVER_TAG = "backlog-cutover"
+
+#: The two headlines an occupancy record can open with, and they are mutually
+#: exclusive on purpose (DRE-3034). Anything asking whether the cutover has run
+#: reads the record, so a rehearsal on a named handful must not open with the
+#: cutover's sentence — and must say, in the same words, that it has not.
+CUTOVER_HEADLINE = f"{MARK} {CUTOVER_TAG}: the cutover ran."
+REHEARSAL_HEADLINE = f"{MARK} {CUTOVER_TAG}: a REHEARSAL ran — NOT the cutover."
 
 #: Parent-epic states that count as ACTIVATED, i.e. states in which the promoter
 #: would look at a child at all. This is `reconcile.EPIC_ACTIVE_STATES`, and
@@ -361,12 +380,46 @@ def open_pr_refs(slugs=None, run=None) -> set:
 # --------------------------------------------------------------------------- #
 
 
-def plan(cards: list, *, open_pr_refs=(), now: str | None = None) -> dict:
+def only_ids(values) -> list:
+    """The `--only` card ids, normalised, in the order they were named.
+
+    Case and stray whitespace are the operator's to get wrong at 2am, and a
+    card named twice is one card. A value that is not a card identifier at all
+    is refused loudly rather than reported as "not in Backlog" — that phrasing
+    is a claim about the board, and a typo must never make one.
+    """
+    out: list = []
+    for value in values or ():
+        wanted = (value or "").strip().upper()
+        if not _CARD_ID.fullmatch(wanted):
+            raise ValueError(f"{value!r} is not a card identifier")
+        if wanted not in out:
+            out.append(wanted)
+    return out
+
+
+def plan(
+    cards: list, *, open_pr_refs=(), now: str | None = None, only=None
+) -> dict:
     """The whole population, ordered, with one outcome per card.
 
     Completeness is asserted rather than assumed: every card comes out either in
     `move` or in `in_flight`, and `population` is what went in.
+
+    `only` restricts the population to the cards it names — the whole run on a
+    named handful, down this same path, so the cutover can be rehearsed on a
+    probe before it is run on the board (DRE-3034). Nothing else changes: a
+    named card is still tested for being in flight, still moved with its reason
+    posted first, still guarded on the lane it was read in. A named card that is
+    not in the population is reported in `not_in_backlog` and never touched.
     """
+    named = only_ids(only) if only is not None else None
+    not_in_backlog: list = []
+    if named is not None:
+        by_id = {c["identifier"]: c for c in cards}
+        cards = [by_id[i] for i in named if i in by_id]
+        not_in_backlog = [i for i in named if i not in by_id]
+
     movable, held = [], []
     for card in cards:
         why = in_flight_reason(card, open_pr_refs=open_pr_refs, now=now)
@@ -382,6 +435,8 @@ def plan(cards: list, *, open_pr_refs=(), now: str | None = None) -> dict:
         "move": ordered,
         "batch_one": [c["identifier"] for c in _newest_first(reach)],
         "in_flight": held,
+        "only": named,
+        "not_in_backlog": not_in_backlog,
     }
 
 
@@ -433,27 +488,20 @@ def run(lops, plan_: dict, *, apply: bool = False, limit: int | None = None) -> 
         "planned": [c["identifier"] for c in targets],
         "batch_one": plan_["batch_one"],
         "in_flight": plan_["in_flight"],
+        "only": plan_.get("only"),
+        "not_in_backlog": plan_.get("not_in_backlog") or [],
     }
 
 
-def record_note(before: dict, after: dict, result: dict) -> str:
-    """The occupancy record: what the board held immediately before and
-    immediately after. A week of an alarming-looking board needs a number to
-    compare against, written down before anyone asks."""
-    lines = [
-        f"{MARK} {CUTOVER_TAG}: the cutover ran.",
-        "",
-        "| Lane | Before | After |",
-        "| -- | -- | -- |",
-    ]
+def _lane_table(before: dict, after: dict) -> list:
+    lines = ["| Lane | Before | After |", "| -- | -- | -- |"]
     for lane in sorted(set(before) | set(after)):
         lines.append(f"| {lane} | {before.get(lane, '—')} | {after.get(lane, '—')} |")
-    lines += [
-        "",
-        f"**Moved:** {len(result['moved'])} card(s).",
-        f"**Batch one (inside the promoter's reach, classified first):** "
-        f"{', '.join(result['batch_one']) or 'none'}.",
-        "",
+    return lines
+
+
+def _left_alone(result: dict) -> str:
+    return (
         "**Left alone, on evidence:** "
         + (
             "; ".join(
@@ -461,11 +509,69 @@ def record_note(before: dict, after: dict, result: dict) -> str:
             )
             or "none"
         )
-        + ".",
+        + "."
+    )
+
+
+def record_note(before: dict, after: dict, result: dict) -> str:
+    """The occupancy record: what the board held immediately before and
+    immediately after. A week of an alarming-looking board needs a number to
+    compare against, written down before anyone asks.
+
+    An `--only` run gets a DIFFERENT record (DRE-3034), because the numbers
+    either side of a rehearsal on two named cards look nothing like the
+    cutover's and must never be read as them.
+    """
+    if result.get("only"):
+        return _rehearsal_note(before, after, result)
+    lines = [CUTOVER_HEADLINE, ""]
+    lines += _lane_table(before, after)
+    lines += [
+        "",
+        f"**Moved:** {len(result['moved'])} card(s).",
+        f"**Batch one (inside the promoter's reach, classified first):** "
+        f"{', '.join(result['batch_one']) or 'none'}.",
+        "",
+        _left_alone(result),
         "",
         "Backlog is empty rather than nearly empty, and it refills only with "
         "verdict-carrying cards at the rate Planning produces them. Expect the "
         "board to look alarming for about a week.",
+    ]
+    return "\n".join(lines)
+
+
+def _rehearsal_note(before: dict, after: dict, result: dict) -> str:
+    """The record for an `--only` run, which cannot be mistaken for the
+    cutover's: it names the cards it was rehearsed on and says in so many words
+    that the cutover has not run."""
+    only = result["only"]
+    skipped = result.get("not_in_backlog") or []
+    lines = [
+        REHEARSAL_HEADLINE,
+        "",
+        f"**Rehearsed on {len(only)} named card(s):** {', '.join(only)}.",
+        "",
+    ]
+    lines += _lane_table(before, after)
+    lines += [
+        "",
+        f"**Moved:** {len(result['moved'])} card(s)"
+        + (
+            ": " + ", ".join(row["identifier"] for row in result["moved"])
+            if result["moved"]
+            else ""
+        )
+        + ".",
+        f"**Named but not in {CUTOVER_FROM}, so not touched:** "
+        f"{', '.join(skipped) or 'none'}.",
+        "",
+        _left_alone(result),
+        "",
+        f"This was a rehearsal on cards named by hand, to watch one card take "
+        f"the {CUTOVER_FROM} → {CUTOVER_TO} path before the real run. **The "
+        f"cutover has not run**, {CUTOVER_FROM} above is still the whole legacy "
+        f"population, and these counts are not the cutover's occupancy record.",
     ]
     return "\n".join(lines)
 
@@ -476,12 +582,17 @@ def record_note(before: dict, after: dict, result: dict) -> str:
 
 
 def _render(plan_: dict) -> str:
-    lines = [
+    lines = []
+    if plan_.get("only"):
+        lines.append(f"only:       {', '.join(plan_['only'])} (a rehearsal)")
+    lines += [
         f"population: {plan_['population']} card(s) in {CUTOVER_FROM}",
         f"moving:     {len(plan_['move'])}",
         f"batch one:  {', '.join(plan_['batch_one']) or 'none'}",
         f"in flight:  {len(plan_['in_flight'])}",
     ]
+    for identifier in plan_.get("not_in_backlog") or ():
+        lines.append(f"  - {identifier}: not in {CUTOVER_FROM} — skipped")
     for row in plan_["in_flight"]:
         lines.append(f"  - {row['identifier']}: {row['why']}")
     lines.append("")
@@ -499,16 +610,28 @@ def main(argv=None) -> int:
 
     sub.add_parser("census", help="what the lanes hold right now")
 
+    only_help = "restrict the population to these cards — a rehearsal, not the cutover"
+
     p_plan = sub.add_parser("plan", help="the ordered move list; writes nothing")
     p_plan.add_argument("--limit", type=int)
+    p_plan.add_argument("--only", nargs="+", metavar="CARD", help=only_help)
     p_plan.add_argument("--out", help="write the plan as JSON")
 
     p_run = sub.add_parser("run", help="move the cards (needs --apply to write)")
     p_run.add_argument("--apply", action="store_true")
     p_run.add_argument("--limit", type=int)
+    p_run.add_argument("--only", nargs="+", metavar="CARD", help=only_help)
     p_run.add_argument("--record", help="post the occupancy record to this card")
 
     args = parser.parse_args(argv)
+
+    # Validated before anything is read or written: a typo must stop the run,
+    # not become a card the record says was not in Backlog.
+    try:
+        only = only_ids(getattr(args, "only", None) or ())
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
 
     if args.command == "census":
         for lane, count in occupancy(linear_ops).items():
@@ -522,7 +645,7 @@ def main(argv=None) -> int:
     except CutoverUnreadable as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
-    plan_ = plan(cards, open_pr_refs=refs)
+    plan_ = plan(cards, open_pr_refs=refs, only=only or None)
 
     if args.command == "plan":
         if args.limit:
