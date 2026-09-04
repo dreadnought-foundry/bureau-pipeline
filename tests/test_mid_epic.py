@@ -92,10 +92,17 @@ class TestTheLabelIsNotTheClassification:
         assert mid_epic.is_epic("a plain title", False, shape="epic") is True
 
     def test_the_epic_shape_it_reads_is_a_shape_the_vocabulary_carries(self):
-        """`mid_epic` cannot import `planning_shape` — that would close a cycle
-        through `routing_verdict` — so the word is named there and bound here.
-        Rename the shape in `config/planning-shapes.json` and this fails rather
-        than the stamp quietly ceasing to mean anything."""
+        """`mid_epic` names the word rather than importing `planning_shape` —
+        the vocabulary carries no "which of these is the epic" marker to derive
+        it from, and parsing that config on every subissue create is a cost this
+        module does not owe. So the binding is here instead. Rename the shape in
+        `config/planning-shapes.json` and this fails rather than the stamp
+        quietly ceasing to mean anything.
+
+        Not a cycle, and the comment in `mid_epic.py` no longer says it is: the
+        import would run fine. `test_no_cycle_stands_in_the_way` below pins that
+        so the reason on the comment stays the real one.
+        """
         import planning_route
 
         assert mid_epic.EPIC_SHAPE in planning_shape.shapes()
@@ -103,6 +110,25 @@ class TestTheLabelIsNotTheClassification:
         assert stops == [mid_epic.EPIC_SHAPE], (
             "the shape that stops for a human is the shape that is an epic"
         )
+
+    def test_no_cycle_stands_in_the_way(self):
+        """The claim the `EPIC_SHAPE` comment used to make, tested rather than
+        asserted in prose: importing `planning_shape` back into `mid_epic` would
+        close no cycle. `planning_shape` reads only `lane_contract`, and neither
+        reaches back here. A reason that is not true is the one the next reader
+        stops at, so the comment now names the real one — the cost — and this
+        keeps that honest."""
+        for module in ("planning_shape", "lane_contract"):
+            imported = {
+                alias.name
+                for node in ast.walk(ast.parse(
+                    (SCRIPTS / f"{module}.py").read_text(encoding="utf-8")
+                ))
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            }
+            assert "mid_epic" not in imported, module
+            assert "routing_verdict" not in imported, module
 
     def test_the_title_and_children_still_answer_an_unstamped_card(self):
         assert mid_epic.is_epic("[EPIC] the front door", False) is True
