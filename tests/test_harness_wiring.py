@@ -242,6 +242,10 @@ class PrGateTest(unittest.TestCase):
     BOUNDARY_PATHS = {
         ".github/workflows/**",
         "scripts/harness/**",
+        # Which scripts/harness/ a PR run drives the sandbox with
+        # (DRE-3101) — a boundary script like the rest of this list, and
+        # the one file in it that is never swapped for main's copy.
+        "scripts/harness_driver.py",
         "scripts/reconcile.py",
         "scripts/merge_gate.py",
         "scripts/gate_note.py",
