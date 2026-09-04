@@ -147,12 +147,18 @@ class _Board:
     seams, so the two read the same way.
     """
 
-    def __init__(self, *cards, green_light=GREEN_LIGHT, epic_thread=()):
+    def __init__(self, *cards, green_light=GREEN_LIGHT, epic_thread=(),
+                 thread_error=None, held_minutes=None):
         self.cards = list(cards)
         self.green_light = green_light
+        # How long the epic has carried its approval, when a test needs the
+        # sweep's own clock to be a fixture rather than the wall clock.
+        self.held_minutes = held_minutes
         # The epic's own comment thread, as `comment_records` reports it. The
         # second critic's release is read out of here (DRE-3059).
         self.epic_thread = list(epic_thread)
+        self.thread_error = thread_error
+        self.thread_reads: list[str] = []
         self.advanced: list[tuple[str, str, str]] = []
         self.posted: list[tuple[str, str]] = []
         self.lanes = {c["identifier"]: ["Backlog"] for c in self.cards}
@@ -162,14 +168,25 @@ class _Board:
             self.advanced.append((ident, to_state, from_states))
             self.lanes.setdefault(ident, []).append(to_state)
 
-        with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), patch.object(
+        def read_thread(epic):
+            self.thread_reads.append(epic)
+            if self.thread_error is not None:
+                raise self.thread_error
+            return self.epic_thread
+
+        aged = (patch.object(reconcile, "age_minutes",
+                             return_value=self.held_minutes)
+                if self.held_minutes is not None
+                else patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"))
+
+        with aged, patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), patch.object(
             reconcile, "backlog_children", return_value=self.cards
         ), patch.object(
             reconcile, "epic_blockers_unmet", return_value=False
         ), patch.object(
             reconcile.mid_epic, "last_green_light", return_value=self.green_light
         ), patch.object(
-            reconcile.linear_ops, "comment_records", return_value=self.epic_thread
+            reconcile.linear_ops, "comment_records", side_effect=read_thread
         ), patch.object(
             reconcile, "card_state", return_value="Done"
         ), patch.object(
@@ -329,14 +346,30 @@ class TestAnUnreadPlanReleasesNothing:
         assert "second critic has not passed it" in out
         assert "holding" in out
 
-    def test_the_refusal_is_surfaced_on_the_card_once(self):
-        board = _Board(*_work_in_backlog(),
-                       green_light=APPROVED, epic_thread=_epic_thread())
+    def test_a_review_still_in_flight_is_logged_and_not_stamped_on_the_children(self):
+        """The activate route posts its round record minutes after the CEO's
+        approval. A sweep landing in that gap holds the children — that part is
+        immediate — but must not stamp "the second critic has not passed it" on
+        every child of a perfectly healthy epic and then promote them on the
+        next sweep with the refusal left standing."""
+        board = _Board(*_work_in_backlog(), green_light=APPROVED,
+                       epic_thread=_epic_thread(), held_minutes=2)
+        assert board.promote() == 0
+        assert board.comments_on(WORK[0]) == []
+
+    def test_a_hold_past_the_grace_window_is_surfaced_on_the_card_once(self):
+        """DRE-3058's case: the route never ran at all, so nothing is coming.
+        A refusal only the sweep log carries is a refusal nobody reads."""
+        board = _Board(
+            *_work_in_backlog(), green_light=APPROVED, epic_thread=_epic_thread(),
+            held_minutes=reconcile.POST_CRITIC_GRACE_MINUTES + 1,
+        )
         board.promote()
         board.promote()
         posted = board.comments_on(WORK[0])
         assert len(posted) == 1, posted
         assert plan_critic.POST_UNREAD_TAG in posted[0]
+        assert EPIC in posted[0]
 
     def test_a_pre_stage_pass_is_not_the_release(self):
         """The critic that ran before the CEO read the plan is not the one
@@ -428,23 +461,20 @@ class TestTheFleetDoesNotFreezeOnTheDayThisMerges:
         """A Linear read that failed is not a critic that refused. Refusing
         every child of every epic on an unreadable thread would freeze the
         board (standards/console-honesty.md rule 1)."""
-        board = _Board(*_work_in_backlog(), green_light=APPROVED)
-        with patch.object(reconcile.linear_ops, "comment_records",
-                          side_effect=reconcile.linear_ops.LinearError("boom")):
-            assert board.promote() == 2
+        board = _Board(*_work_in_backlog(), green_light=APPROVED,
+                       thread_error=reconcile.linear_ops.LinearError("boom"))
+        assert board.promote() == 2
 
     def test_the_epic_thread_is_read_once_per_epic_per_sweep(self):
-        """Six children of one epic must not buy six reads of the same thread
+        """Two children of one epic must not buy two reads of the same thread
         — the shape `green_light` and `epic_gate` already use (DRE-1772)."""
         board = _Board(
             *_work_in_backlog(), green_light=APPROVED,
             epic_thread=_epic_thread(
                 plan_critic.marker(plan_critic.STAGE_POST, 1, plan_critic.PASS)),
         )
-        with patch.object(reconcile.linear_ops, "comment_records",
-                          return_value=board.epic_thread) as reader:
-            board.promote()
-        assert reader.call_count == 1, reader.call_args_list
+        assert board.promote() == 2
+        assert board.thread_reads == [EPIC], board.thread_reads
 
 
 class TestThereIsExactlyOnePromoter:
@@ -481,3 +511,37 @@ class TestThereIsExactlyOnePromoter:
         assert promoting, "nothing promotes at all — the grep has gone stale"
         for name, line in promoting:
             assert "reconcile.py" in line, f"{name}: {line}"
+
+
+class TestTheRefusalSpeaksAtTheRightMoment:
+    """When the sweep POSTS the refusal, as opposed to when it holds.
+
+    The hold is immediate and needs no window — a plan nobody has read is a
+    plan nobody has read, and it prints on every sweep from the first one. The
+    window is only about noise: an epic whose second critic is still running
+    is not an epic anyone needs told about (DRE-3059).
+    """
+
+    def test_a_send_back_speaks_at_once(self):
+        """The critic already decided. Nothing is in flight to wait for."""
+        assert reconcile.post_critic_hold_is_overdue(
+            plan_critic.POST_SENT_BACK_TAG, "2026-09-10T12:04:00.000Z") is True
+
+    def test_an_unread_plan_waits_out_the_grace_window(self):
+        board = _Board(*_work_in_backlog(), green_light=APPROVED,
+                       epic_thread=_epic_thread(),
+                       held_minutes=reconcile.POST_CRITIC_GRACE_MINUTES - 1)
+        assert board.promote() == 0
+        assert board.comments_on(WORK[0]) == []
+
+    def test_an_unreadable_green_light_does_not_silence_the_refusal(self):
+        """Unknown must never be read as `still in flight` — that is the one
+        direction that turns a quiet window into a permanent silence."""
+        assert reconcile.post_critic_hold_is_overdue(
+            plan_critic.POST_UNREAD_TAG, None) is True
+
+    def test_the_hold_itself_is_printed_from_the_very_first_sweep(self, capsys):
+        board = _Board(*_work_in_backlog(), green_light=APPROVED,
+                       epic_thread=_epic_thread(), held_minutes=1)
+        board.promote()
+        assert "second critic has not passed it" in capsys.readouterr().out
