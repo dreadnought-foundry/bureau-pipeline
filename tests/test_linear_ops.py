@@ -207,8 +207,14 @@ def test_get_issue_selects_the_children_card_done_reads():
     feeds it fetches the fact. A card read by a query that never selected
     `children` reads as having none — which is exactly how an epic gets past
     a predicate that is otherwise correct (reconcile.card_is_epic carries the
-    same warning, DRE-3044)."""
-    assert "children" in inspect.getsource(linear_ops.get_issue), (
+    same warning, DRE-3044).
+
+    The docstring is stripped before the read: a function that only TALKS about
+    children in prose passes a bare substring check while fetching none.
+    """
+    source = inspect.getsource(linear_ops.get_issue)
+    query = source.replace(linear_ops.get_issue.__doc__ or "\0", "")
+    assert "children" in query, (
         "get_issue no longer selects children — cmd_card_done's epic guard is "
         "reading a field the query never fetched"
     )

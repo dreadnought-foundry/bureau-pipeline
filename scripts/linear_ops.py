@@ -814,9 +814,9 @@ def epic_branch_refusal(
     ):
         return (
             "the branch that merged is named for an EPIC, not for a card — and "
-            "an epic reaches Done when its children do, which one merged pull "
-            "request cannot attest. Closing it here would end a plan that is "
-            "still running (epic_autoclose and prove_phase read an epic's Done). "
+            "merging one pull request does not finish an epic's plan. Closing "
+            "it here would end a plan that is still running (epic_autoclose and "
+            "prove_phase read an epic's Done). "
             "A work branch is named for the CARD it delivers — "
             "agent/DRE-<card>-<slug> — so rebuild the pull request on the card "
             "this work belongs to"
