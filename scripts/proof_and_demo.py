@@ -29,6 +29,27 @@ An epic that produces neither has no way of being wrong in public.
   3. Neither may be fleet-buildable. A proof the fleet can close by merging its
      own code is not a proof — the whole value is that something other than the
      builder confirms it.
+  4. Neither may wear a BUILD role (DRE-3039). `agent:engineer` on a proof card
+     is a card the relay dispatches to a build agent the moment anything
+     promotes it, and the thing that agent would build is the proof of its own
+     siblings' work.
+
+## And the check WRITES the verdict it computed (DRE-3039)
+
+Rule 3 read a verdict off each card, printed a one-line summary and stamped
+NOTHING — so `routing_verdict.promotion_refusal()` found no verdict on the
+card, returned None ("a CHILD with NO verdict promotes exactly as it did
+before"), and the sweep promoted the pair the moment their siblings reached
+Done. A rule enforced at plan time and discarded before build time is not
+enforced.
+
+So `check` writes what it computed, as the same `🧭 routing-verdict` comment
+every other verdict uses, through `routing_verdict.stamp_card` — one writer,
+the one that already knows the answer, and no second grammar for the promotion
+gate to learn. It writes only for a pair that PASSED: an epic on its way back
+to Planning is not an epic whose cards get a routing decision written on them.
+`--no-stamp` gives the pure read back, for a planner checking its own work
+before it finishes.
 
 ## Rule 3 is READ from the vocabulary, not restated here
 
@@ -41,16 +62,25 @@ confirmation, which is what "the builder does not confirm its own work" has to
 mean mechanically. `vocabulary_problems()` refuses a file where nobody human is
 left, or where a verdict the sweep promotes would count as a confirmation.
 
-Pure functions over card records with one thin CLI seam — no Linear client, no
-GitHub calls — so plan.yml, the scenario walk and the tests all run the same
-code. The records come in on stdin from `linear_ops.py children-detail`, the
-same shape-on-stdin contract `plan_critic.py mechanical` uses.
+Rule 4 is read the same way, from both ends: the roles a BUILD run is
+dispatched for come off `agents.yaml` (the roster entries that run on
+`agent-task.yml`), and the role label the pair MAY wear comes off the routing
+vocabulary (the `agent:*` labels mapped to a verdict a human acts on — today
+`agent:ops`). Neither list is written down here, so a fifth build role or a
+second operator label moves the rule with it.
+
+Pure functions over card records, plus ONE write: the stamp above, which is a
+Linear comment and the labels the verdict declares. Everything the plan gate
+decides is decided by the pure half, so plan.yml, the scenario walk and the
+tests all run the same code. The records come in on stdin from `linear_ops.py
+children-detail`, the same shape-on-stdin contract `plan_critic.py mechanical`
+uses.
 
 CLI:
 
     python3 scripts/linear_ops.py children-detail DRE-N \\
       | python3 scripts/proof_and_demo.py check --epic DRE-N \\
-          [--comment-file F]
+          [--comment-file F] [--no-stamp]
 """
 
 from __future__ import annotations
@@ -61,9 +91,18 @@ import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(_HERE)
+sys.path.insert(0, _HERE)
 import planning_route  # noqa: E402
 import routing_verdict  # noqa: E402
+
+# The roster, and the field that says which agents a BUILD run is dispatched
+# for. `agents.yaml` is the declared source of truth for "what agents exist and
+# how they run" — reading it is what keeps rule 4 from being a list of four
+# names that goes stale the day a fifth build role is registered.
+ROSTER_PATH = os.path.join(ROOT, "agents.yaml")
+BUILD_WORKFLOW = ".github/workflows/agent-task.yml"
 
 # The two title conventions. Anchored at the START of the title, never a
 # substring: `Record the demo: phase 3` is an ordinary code card, and reading
@@ -112,10 +151,71 @@ def confirming_verdicts(doc: dict | None = None) -> tuple:
     )
 
 
+def confirming_role_labels(doc: dict | None = None) -> tuple:
+    """The role labels a proof or demo card MAY wear: the `agent:*` labels the
+    routing vocabulary maps to a verdict a human acts on.
+
+    Derived, for the same reason rule 3's verdicts are. Today that is exactly
+    `agent:ops` — the label the vocabulary already reads as "a person handles
+    this", read first, before any judgement. `no-code` maps to OPERATOR too and
+    is deliberately not here: it says no code is produced, not who the card
+    belongs to, and a card still owes a role label (`validate_card.missing`).
+    """
+    confirming = set(confirming_verdicts(doc))
+    return tuple(
+        label for label, verdict in routing_verdict.label_map(doc).items()
+        if label.startswith("agent:") and verdict in confirming
+    )
+
+
+_ROSTER_CACHE: dict = {}
+
+
+def build_roles(path: str | None = None) -> tuple:
+    """The roles a BUILD run is dispatched for, read off the roster.
+
+    `agents.yaml` already declares, per agent, the workflow that implements it;
+    the ones running on `agent-task.yml` are the ones a card's role label sends
+    a build agent at. Today: engineer, frontend, devops, database-architect.
+
+    Raises rather than degrading. A roster this cannot read is a rule 4 that
+    cannot be evaluated, and a guard that quietly disappears when its source is
+    unreadable is worse than no guard: the plan run fails loudly instead, which
+    is the only outcome that gets looked at (standards/console-honesty.md
+    rule 1 — a crashed read decided nothing).
+    """
+    path = path or ROSTER_PATH
+    if path not in _ROSTER_CACHE:
+        import yaml  # lazy: PyYAML ships in the runner image, the rest is stdlib
+
+        with open(path, encoding="utf-8") as fh:
+            roster = yaml.safe_load(fh) or {}
+        names = tuple(
+            (entry.get("name") or "").strip().lower()
+            for entry in (roster.get("agents") or ())
+            if (entry.get("workflow") or "").strip() == BUILD_WORKFLOW
+        )
+        if not names:
+            raise RuntimeError(
+                f"{path} names no agent running on {BUILD_WORKFLOW} — rule 4 has "
+                "no build roles to refuse, so a proof card wearing one would "
+                "pass unread"
+            )
+        _ROSTER_CACHE[path] = names
+    return _ROSTER_CACHE[path]
+
+
 def vocabulary_problems(doc: dict | None = None) -> list:
-    """Everything wrong with the vocabulary as a source for rule 3, or []."""
+    """Everything wrong with the vocabulary as a source for rules 3 and 4, or
+    an empty list."""
     problems: list[str] = []
     confirming = confirming_verdicts(doc)
+    if not confirming_role_labels(doc):
+        problems.append(
+            "no `agent:*` label maps to a verdict a human acts on, so the check "
+            "can refuse a proof or demo card's build role without being able to "
+            "name the label it should carry instead — a refusal with no remedy"
+        )
     if not confirming:
         problems.append(
             "no routing verdict names a human as its accountable actor, so "
@@ -172,6 +272,44 @@ def _verdict_finding(card: dict, kind: str, doc: dict | None = None) -> str | No
         f"{_ident(card)}: the {kind} card routes {verdict} — {reason} It must "
         f"carry {named}, because the whole value is that something other than "
         "the builder confirms it."
+    )
+
+
+def _role_of(label: str) -> str | None:
+    """The role an `agent:<role>` label names, or None. An EXACT prefix split,
+    never a substring: `agent:engineering-manager` is not `agent:engineer`."""
+    text = (label or "").strip().lower()
+    if not text.startswith("agent:"):
+        return None
+    return text.split(":", 1)[1].strip()
+
+
+def _role_label_finding(card: dict, kind: str, doc: dict | None = None) -> str | None:
+    """Why this card's ROLE LABEL disqualifies it from confirming the epic.
+
+    The verdict is what the promotion gate reads, and the role label is what
+    the relay reads. DRE-3031 carried `agent:engineer` and a `Files:` line
+    naming the document it was to write: had anything promoted it, an engineer
+    agent would have written the proof of its own siblings' work.
+    """
+    build = build_roles()
+    worn = [
+        label for label in (card.get("labels") or ())
+        if _role_of(label) in build
+    ]
+    if not worn:
+        return None
+    allowed = confirming_role_labels(doc)
+    named = " or ".join(f"`{l}`" for l in allowed) if allowed else \
+        "a role label the vocabulary routes to a human"
+    return (
+        f"{_ident(card)}: the {kind} card carries "
+        + ", ".join(f"`{l}`" for l in worn)
+        + " — a role a build run is dispatched for, so the fleet is what picks "
+        "it up. The pair is confirmed by a person: create it with "
+        f"--label {allowed[0] if allowed else 'agent:ops'} and drop the "
+        "inherited role (`linear_ops.py remove-label <CARD> "
+        f"{worn[0]}`), so the card wears {named}."
     )
 
 
@@ -244,7 +382,66 @@ def findings(children: list, doc: dict | None = None) -> list:
         if problem:
             found.append(problem)
 
+    # 4 — neither wears a build role.
+    for kind, card in (("proof", proof), ("demo", demo)):
+        problem = _role_label_finding(card, kind, doc)
+        if problem:
+            found.append(problem)
+
     return found
+
+
+# --------------------------------------------------------------------------- #
+# the stamp — what the check computed, written where the sweep reads it        #
+# --------------------------------------------------------------------------- #
+
+
+def stamps(children: list, doc: dict | None = None) -> tuple:
+    """`(identifier, verdict, why)` for the epic's proof and demo cards.
+
+    Empty for a pair with any finding against it: an epic on its way back to
+    Planning is not an epic whose cards get a routing decision written on them,
+    and the cards may not survive the re-plan at all.
+    """
+    cards = list(children or [])
+    if findings(cards, doc):
+        return ()
+    out: list[tuple[str, str, str]] = []
+    for kind, matches in (("proof", is_proof), ("demo", is_demo)):
+        card = next((c for c in cards if matches(c.get("title"))), None)
+        if card is None:  # pragma: no cover — findings() already refused this
+            return ()
+        verdict, reason = _verdict(card, doc)
+        out.append((
+            _ident(card),
+            verdict,
+            f"the epic's {kind} card, routed by the proof-and-demo check off "
+            f"the card itself: {reason} An epic is confirmed by something other "
+            "than its builder, so the fleet is never sent at this card.",
+        ))
+    return tuple(out)
+
+
+def write_stamps(children: list, doc: dict | None = None) -> int:
+    """Write each computed verdict onto its card. Returns how many were written.
+
+    `routing_verdict.stamp_card` is the whole write — the comment and the marks
+    the verdict declares, one implementation for both callers. It refuses a
+    card that already carries a verdict (a re-planned epic runs this check
+    again) and says so on stderr rather than raising: the pair is well-formed
+    either way, and the gate that actually holds the cards is
+    `promotion_refusal`, which refuses a card carrying two verdicts as loudly
+    as it refuses one that is not FLEET.
+
+    A failed WRITE is different and does propagate: the plan step's `if !`
+    branch then finds no bounce note and fails the run without moving the epic,
+    which is the honest outcome — a Linear write that did not land decided
+    nothing about this plan (standards/console-honesty.md rule 1).
+    """
+    return sum(
+        1 for identifier, verdict, why in stamps(children, doc)
+        if routing_verdict.stamp_card(identifier, verdict, why) == 0
+    )
 
 
 def bounce_comment(epic: str, found: list) -> str:
@@ -309,6 +506,10 @@ def _cmd_check(args) -> int:
             f"{args.epic}: {len(children)} card(s) — proof {', '.join(proofs)}, "
             f"demo {', '.join(demos)}, both last and blocked by every sibling"
         )
+        # ...and the verdict it computed goes ON the cards, because the sweep
+        # reads the card, not this run's log (DRE-3039).
+        if args.stamp:
+            print(f"{args.epic}: {write_stamps(children)} verdict(s) stamped")
         return 0
     for finding in found:
         print(finding)
@@ -338,6 +539,9 @@ def main(argv=None) -> int:
     check.add_argument("--epic", required=True)
     check.add_argument("--comment-file", default=None,
                        help="where to write the bounce note, when there is one")
+    check.add_argument("--no-stamp", dest="stamp", action="store_false",
+                       default=True,
+                       help="read only — do not write the verdict onto the pair")
     check.set_defaults(fn=_cmd_check)
 
     vocab = sub.add_parser("vocabulary", help="validate the derived rule")
