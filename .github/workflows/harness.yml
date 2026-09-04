@@ -207,8 +207,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          CHANGED=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
-              --paginate --jq '.[].filename' | grep -c '^scripts/harness/' || true)
+          # Two statements on purpose: the API call must fail LOUDLY (a PR
+          # that changes the harness must never be quietly handed main's copy
+          # because GitHub blinked), and only the zero-match grep may be
+          # forgiven. One pipeline with `|| true` on the end forgave both.
+          FILES=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
+              --paginate --jq '.[].filename')
+          CHANGED=$(printf '%s\n' "$FILES" | grep -c '^scripts/harness/' || true)
           if [ "${CHANGED:-0}" -gt 0 ]; then
             echo "source=pr" >> "$GITHUB_OUTPUT"
             echo "harness code: this pull request changes scripts/harness ($CHANGED file(s)) — running the PR's copy"
