@@ -148,6 +148,20 @@ jobs:
       #
       # The hand CLI is unchanged and is the OVERRIDE: a card that already
       # carries a stamp is left alone, no call is made, and the hand stamp wins.
+      #
+      # THE TRANSPORT IS THE CLAUDE CODE PATH (DRE-3074), and until it was, none
+      # of the above ran. The step made ONE raw POST to /v1/messages with the
+      # credential below — which on `CLAUDE_AUTH_MODE == 'subscription'` (every
+      # repo in the fleet) is an OAuth token, and a subscription token CANNOT
+      # call the raw Messages API: it answers 429 to every request whatever the
+      # load. All three planner runs on 2026-09-03 21:14 escalated to the CEO
+      # inside twenty seconds, DRE-3029's fail-closed exit working exactly as
+      # specified on a model that was never reachable. Every other agent step in
+      # this file already runs its model through claude-code-action for exactly
+      # this reason; planning_classify.py now runs the CLI that action wraps —
+      # one turn, no tools — and keeps the raw POST only as the API-key fast
+      # path. The env below is unchanged, because the CLI reads the same two
+      # variables claude-code-action is handed.
       - name: Classify the card — one-off, epic or wave
         id: classify
         if: steps.gate.outputs.bounced != 'true'
@@ -155,14 +169,41 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The same credential the model-selection step below reads, through
           # the same switch — one auth block, no new secret (Q1/Q2 of the
-          # vendor premortem).
+          # vendor premortem). Which of the two is set also picks the transport.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
           python3 .bureau-pipeline/scripts/planning_classify.py classify \
             "${{ github.event.client_payload.identifier }}" \
             --github-output "$GITHUB_OUTPUT" \
-            --escalation-file "${{ runner.temp }}/classifier-escalation.txt"
+            --escalation-file "${{ runner.temp }}/classifier-escalation.txt" \
+            --transport-file "${{ runner.temp }}/classifier-transport.txt"
+
+      # The TRANSPORT branch (DRE-3074), and it is deliberately NOT the branch
+      # below it. A 429, a 401 or a 5xx arrives before the model reads the card:
+      # nothing has been judged, so there is nothing here a human can decide,
+      # and parking it in the CEO's queue is how one broken wire turned every
+      # card entering Planning into a question for the CEO.
+      #
+      # So this records the failure on the card and FAILS THE RUN on purpose.
+      # `Agent Plan` is on the medic's watch list, and a transport failure
+      # classifies as `normal` (medic_classify's back-off classes are the
+      # critic's, GitHub's own 5xx and Linear's rate limit — none of them this),
+      # so the medic re-runs it once. That re-run is the requeue; the card has
+      # not moved and nothing has been decided about it. The SECOND failure is
+      # budgeted in planning_classify.py off the receipt this step writes, and
+      # takes the escalation branch below instead — an infrastructure failure
+      # that outlived a retry has stopped being transient.
+      - name: Classification transport failed — requeue, do not ask the CEO
+        if: steps.classify.outputs.requeue == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_escalation.py requeue \
+            "${{ github.event.client_payload.identifier }}" \
+            --reason-file "${{ runner.temp }}/classifier-transport.txt"
+          echo "::error::the classifier could not reach its model — failing this run so it is retried once"
+          exit 1
 
       # The refusal branch, and it is DRE-2848's exit rather than a second one:
       # the same `escalate` seam the planner's own hand-planning escalation
@@ -197,9 +238,25 @@ jobs:
       # is the belt-and-braces one; it is SKIPPED after an escalation, because
       # a card that just parked in the CEO's queue must not then be told a
       # stamp is missing.
+      # The heartbeat, and it names the model that ACTUALLY answered rather than
+      # the one we asked for (DRE-3074): the transport reports it, and DRE-3015's
+      # judgement ladder is unreadable off a card that recorded the request. Same
+      # `model-attempt:` marker every other attempt writes — a second grammar
+      # would be a second answer to the same question. Gated on `answered`, not
+      # on the outcome: a card that escalated because the model could not tell
+      # still had a model read it, and a card whose call 429'd did not.
+      - name: Classifier heartbeat — the model that answered
+        if: steps.classify.outputs.answered == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py comment \
+            "${{ github.event.client_payload.identifier }}" \
+            "🧠 model-attempt: ${{ steps.classify.outputs.model }} — planning classifier read the card."
+
       - name: Planning shape — which route this card takes
         id: shape
-        if: steps.gate.outputs.bounced != 'true' && steps.classify.outputs.escalate != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |

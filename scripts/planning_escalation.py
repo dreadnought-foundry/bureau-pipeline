@@ -91,6 +91,10 @@ CLI:
     python3 scripts/planning_escalation.py check
     python3 scripts/planning_escalation.py escalate DRE-N --why "…"
     python3 scripts/planning_escalation.py escalate DRE-N --reason-file <path>
+    python3 scripts/planning_escalation.py requeue  DRE-N --reason-file <path>
+
+The last one is DRE-3074's: a classification that never reached a model records
+that and stays where it is, instead of asking a human to decide our plumbing.
 """
 
 from __future__ import annotations
@@ -136,6 +140,43 @@ NOT_PLAIN_ENGLISH = (
     "The planner's reason was written in technical terms, so it is not repeated "
     "here — it is in the run's own log."
 )
+
+# --------------------------------------------------------------------------- #
+# the OTHER reason a classification produced nothing (DRE-3074)                #
+# --------------------------------------------------------------------------- #
+#
+# Until this card there was one reason, and it was said for two different facts.
+# On 2026-09-03 21:14 three planner runs escalated to the CEO inside twenty
+# seconds with "We could not get an answer from the system that reads new
+# cards" — and the truth was that the classifier's call was a raw POST to
+# `/v1/messages` made with a subscription token, which answers 429 to every
+# request whatever the load. Nothing had read a card, nothing could, and the
+# CEO was being asked to decide something no human decision would fix.
+#
+# So the two are separated at the source:
+#
+#   * the MODEL read the card and could not tell — a judgement, and the CEO's.
+#     `escalation_comment` above, unchanged, parking the card in their queue.
+#   * the TRANSPORT never reached a model — 429, 401, a 5xx, a CLI that did not
+#     run. That is our plumbing, it names itself as such, and it buys ONE more
+#     run rather than a place in a human's queue.
+#
+# The requeue is the run's own failure: `Agent Plan` is on the medic's watch
+# list, so a red run IS the retry, and `planning_classify` spends the second
+# failure on the escalation above rather than looping.
+TRANSPORT_TAG = "planning-classify-transport"
+TRANSPORT_MARK = "🔌"
+
+#: How many transport failures a card absorbs before the question does go to a
+#: human. One: an infrastructure failure that survives a retry has stopped being
+#: transient, and a card nobody can classify still owes somebody an answer.
+TRANSPORT_CAP = 1
+
+#: What may appear in the parenthesis the CEO reads — a status and a word, never
+#: a response body. The raw error stays in the run log (`standards/comms.md`:
+#: the CEO reads outcomes, never code), and a body echoed into this sentence is
+#: also how a reason becomes unshowable by `refusal()` below.
+_DETAIL = re.compile(r"[^A-Za-z0-9 -]")
 
 # The code-shaped things a CEO must never be handed, in the order they are
 # reported. The same rule `tests/test_unfixable_check_escalation.py` asserts on
@@ -284,6 +325,78 @@ def escalation_comment(identifier: str, reason: str | None) -> str:
         "we should not do this at all.",
     ]
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# the transport failure — a requeue, not a park (DRE-3074)                     #
+# --------------------------------------------------------------------------- #
+
+
+def transport_detail(detail: str | None) -> str:
+    """The status, made safe to put inside the CEO's sentence.
+
+    A 429 body is JSON and a 401 body sometimes carries a URL; either one echoed
+    into the reason would trip `refusal()` and the CEO would be shown nothing at
+    all. So only a status and a word survive here — the rest is in the run log,
+    which is where an operator reads it.
+    """
+    cleaned = " ".join(_DETAIL.sub(" ", str(detail or "")).split())[:60]
+    return cleaned or "no answer"
+
+
+def transport_reason(detail: str | None) -> str:
+    """What a transport failure says. Plain English, and it names ITSELF as
+    plumbing — the whole point of the split is that the reader can tell an
+    infrastructure failure from a question about the work."""
+    return (
+        f"The classifier could not reach its model ({transport_detail(detail)}, "
+        "transport), so nothing has read this card yet. That is our own plumbing "
+        "failing, not a question about the work."
+    )
+
+
+def transport_comment(identifier: str, reason: str | None) -> str:
+    """The receipt a requeued card carries. It is also the COUNTER: the cap on
+    how many times this may happen is read back off these comments, so the note
+    and the budget are one thing rather than two that can disagree."""
+    lines = [
+        f"{TRANSPORT_MARK} {TRANSPORT_TAG}: {identifier} was not classified this "
+        "run — the step that reads new cards could not reach its model.",
+        "",
+    ]
+    why = refusal(reason)
+    lines += [
+        f"**What happened:** {(reason or '').strip()}" if why is None
+        else f"**What happened:** {NOT_PLAIN_ENGLISH}",
+        "",
+        "**What happens next:** this run is failed on purpose so it runs again. "
+        "The card has not moved and nothing has been decided about it. If the "
+        "next run cannot reach a model either, this comes to you as a question.",
+        "",
+        "Nothing is needed from you yet.",
+    ]
+    return "\n".join(lines)
+
+
+def requeue(linear_ops, identifier: str, reason: str | None) -> bool:
+    """Record the transport failure on the card. True when the note was written.
+
+    Deliberately writes NO state: a requeue is not a park, and a card moved into
+    the CEO's queue by our own plumbing is the failure DRE-3074 removes. Posted
+    at most once per card, keyed on the tag, exactly as `escalate` is — the count
+    is the budget, so a note posted twice would spend it twice.
+    """
+    already = 0
+    try:
+        already = linear_ops.count_comments(identifier, TRANSPORT_TAG)
+    except Exception as exc:  # noqa: BLE001 — a read failure must not strand the card
+        print(f"{identifier}: could not read prior transport failures ({exc})",
+              file=sys.stderr)
+    if already:
+        print(f"{identifier}: already recorded, under {TRANSPORT_TAG}")
+        return False
+    linear_ops.cmd_comment(identifier, transport_comment(identifier, reason))
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -551,6 +664,19 @@ def _read_reason(args) -> str | None:
         return None
 
 
+def _cmd_requeue(args) -> int:
+    import linear_ops
+
+    reason = _read_reason(args)
+    why = refusal(reason)
+    if why is not None:
+        print(f"the stated reason is not fit for the card: {why}", file=sys.stderr)
+        print(f"--- the classifier wrote ---\n{reason}", file=sys.stderr)
+    requeue(linear_ops, args.identifier, reason)
+    print(f"{args.identifier} stays in {ORIGIN} — recorded under {TRANSPORT_TAG}")
+    return 0
+
+
 def _cmd_escalate(args) -> int:
     import linear_ops
 
@@ -575,6 +701,11 @@ def main(argv=None) -> int:
     esc.add_argument("--why", default=None)
     esc.add_argument("--reason-file", dest="reason_file", default=None)
 
+    req = sub.add_parser("requeue")
+    req.add_argument("identifier")
+    req.add_argument("--why", default=None)
+    req.add_argument("--reason-file", dest="reason_file", default=None)
+
     args = parser.parse_args(argv)
     command = args.command or "check"
 
@@ -590,6 +721,9 @@ def main(argv=None) -> int:
 
     if command == "escalate":
         return _cmd_escalate(args)
+
+    if command == "requeue":
+        return _cmd_requeue(args)
 
     parser.print_usage(sys.stderr)
     return 2
