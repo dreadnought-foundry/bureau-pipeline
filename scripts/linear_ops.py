@@ -356,10 +356,19 @@ def gql_paged(
 
 
 def get_issue(identifier: str) -> dict:
+    """One card, with the facts every caller of it decides on.
+
+    `children(first: 1)` is selected for the reason `reconcile._fetch_active_cards`
+    selects it (DRE-3044): `cmd_card_done` reads epic-ness off this card, and a
+    card fetched by a query that never selected children reads as having none —
+    an epic that walks straight past the guard written to stop it (DRE-3119).
+    One child answers the question; the count is not needed.
+    """
     data = gql(
         """query($id: String!) { issue(id: $id) {
              id identifier title team { id } state { name type }
              labels { nodes { name } }
+             children(first: 1) { nodes { id } }
            } }""",
         {"id": identifier},
     )
@@ -708,7 +717,7 @@ def cmd_actor(identifier: str, role: str) -> None:
     cmd_comment(identifier, agent_marker.actor_line(role))
 
 
-# --- Auto-Done guard: operator cards and demo cards ---------------------------
+# --- Auto-Done guard: operator cards, demo cards and epics ---------------------
 #
 # Six false card-closes in portico, one mechanism (2026-07/08): the merge→Done
 # path closes the card whose own agent/DRE-<n>- branch merged, but for two card
@@ -724,6 +733,14 @@ def cmd_actor(identifier: str, role: str) -> None:
 #     when every end-state claim in docs/demos/phase-N.md is a PASS. No merge
 #     event can read a verdict inside a markdown file: DRE-2253 and DRE-2252
 #     closed while their reports said "NOT demonstrated" in those words.
+#   * EPICS (DRE-3119) — a third class, and the one whose Done is a fleet event.
+#     The head-ref anchor that closed the DRE-99 incident assumes a branch is
+#     named for a CARD; a branch named for the EPIC the work serves passes it.
+#     agent-bureau PR #2273 merged on `agent/DRE-3060-one-river-phase-chain`,
+#     and DRE-3060 was an epic in Planning with 21 children and a planner run in
+#     flight. An epic's Done releases nothing, but it ENDS THE PLAN, and
+#     `epic_autoclose` and `prove_phase` read it. The PR was rebuilt on a card
+#     branch (DRE-3106, #2280) by hand; nothing in the pipeline would have.
 #
 # The false closes cascade: epic DRE-2169 closed via --close-epics because all
 # its children (falsely) read Done. Guarding the CHILD transitions fixes the
@@ -738,6 +755,14 @@ def cmd_actor(identifier: str, role: str) -> None:
 
 NO_CODE_LABEL = "no-code"  # standards/card-quality.md: operator-work cards
 
+# The label that says the PLANNER owns this card. It is deliberately not read as
+# epic-ness anywhere a card is being classified (DRE-3038/DRE-3044 — every card
+# the relay sends to plan.yml wears it, one-offs included). Here the question is
+# a different one: `plan_run.py` routes on this label, so a card carrying it is
+# dispatched to the planner and NEVER to a build agent — which makes any merge
+# on a branch named for it a branch named for the wrong card.
+PLANNER_LABEL = "agent:planner"
+
 # Title must START with `DEMO:` (case-insensitive, leading whitespace allowed).
 # Anchored on purpose: a card that merely MENTIONS demos — in its body or
 # mid-title ("Update demo docs", "Record the demo: phase 3") — is an ordinary
@@ -750,14 +775,75 @@ _DEMO_TITLE_RE = re.compile(r"^\s*demo:", re.IGNORECASE)
 # while the operator finishes the live work.
 MERGED_NOT_CLOSED_MARKER = "Merged — card deliberately left open"
 
+# The closing sentence of that comment: who closes this card, and when. The
+# operator one is WRONG on an epic — telling a person to hand-close a card whose
+# plan is still running is the DRE-3119 outcome wearing a different hat — so the
+# epic arm carries its own.
+CLOSED_BY_OPERATOR = (
+    "This card is operator-closed / closes-on-evidence and was deliberately "
+    "NOT auto-closed — close it by hand when the real work is done."
+)
+CLOSED_BY_ITS_CHILDREN = (
+    "This epic was deliberately NOT auto-closed, and it should not be closed "
+    "by hand either — an epic reaches Done when its children do, and its Done "
+    "ends the plan."
+)
 
-def auto_done_skip_reason(title: str, labels: list[str]) -> str | None:
+
+def epic_branch_refusal(
+    title: str, labels: list[str], has_children: bool = False
+) -> str | None:
+    """Why a merge must not close this card BECAUSE it is an epic, or None.
+
+    Epic-ness is `mid_epic.is_epic()` — the one helper `reconcile.card_is_epic`
+    and `routing_verdict.route()` ask (DRE-3038) — over the two facts
+    `validate_card.infer_agent_label` derives `agent:planner` from: `[EPIC]` in
+    the title, or any children at all. No shape stamp is passed: `cmd_card_done`
+    reads the card with one query and the stamp lives in its comments, and the
+    two facts here are the ones the epic in question actually had.
+
+    `agent:planner` is the second leg, and only here. `mid_epic.is_epic` refuses
+    that label on purpose (every card the relay dispatches to plan.yml wears it,
+    so reading it as epic-ness froze one-offs in Backlog — DRE-3044), but the
+    question this function asks is not "should the sweep promote this": a card
+    the planner owns is dispatched to the planner and never to a build agent, so
+    a merged branch named for it is a branch named for the wrong card either way.
+    """
+    if PLANNER_LABEL in [(l or "").strip().lower() for l in labels] or (
+        mid_epic.is_epic(title, has_children)
+    ):
+        return (
+            "the branch that merged is named for an EPIC, not for a card — and "
+            "an epic reaches Done when its children do, which one merged pull "
+            "request cannot attest. Closing it here would end a plan that is "
+            "still running (epic_autoclose and prove_phase read an epic's Done). "
+            "A work branch is named for the CARD it delivers — "
+            "agent/DRE-<card>-<slug> — so rebuild the pull request on the card "
+            "this work belongs to"
+        )
+    return None
+
+
+def auto_done_skip_reason(
+    title: str, labels: list[str], has_children: bool = False
+) -> str | None:
     """Why a merged PR must NOT auto-Done this card, or None to proceed.
 
-    Pure (no I/O) so tests pin it directly. Takes the card's TITLE and label
-    names only — never the PR title/body (prose is not provenance, DRE-2027)
-    and never the card body (a body that mentions demos is not a demo card).
+    Pure (no I/O) so tests pin it directly. Takes the card's TITLE, its label
+    names and whether it has children — never the PR title/body (prose is not
+    provenance, DRE-2027) and never the card body (a body that mentions demos is
+    not a demo card).
+
+    `has_children` defaults to False for the caller that cannot be given one:
+    reconcile's merged-PR backstop, whose loop has already dropped every epic
+    (`main()` filters `repo_epics(mine)`) before a merged branch reaches it.
+
+    The epic arm is FIRST so the reason and the comment's closing sentence
+    (`skip_closing_sentence`) always describe the same class.
     """
+    epic = epic_branch_refusal(title, labels, has_children)
+    if epic is not None:
+        return epic
     if NO_CODE_LABEL in [l.lower() for l in labels]:
         return (
             f"this card carries the '{NO_CODE_LABEL}' label — its deliverable "
@@ -773,14 +859,29 @@ def auto_done_skip_reason(title: str, labels: list[str]) -> str | None:
     return None
 
 
-def merged_not_closed_comment(pr_url: str, reason: str) -> str:
+def skip_closing_sentence(
+    title: str, labels: list[str], has_children: bool = False
+) -> str:
+    """Which closing sentence `merged_not_closed_comment` ends with — the same
+    read `auto_done_skip_reason` made, so the two never disagree about the
+    class."""
+    if epic_branch_refusal(title, labels, has_children) is not None:
+        return CLOSED_BY_ITS_CHILDREN
+    return CLOSED_BY_OPERATOR
+
+
+def merged_not_closed_comment(
+    pr_url: str, reason: str, closing: str = CLOSED_BY_OPERATOR
+) -> str:
     """The card comment for a merge that deliberately does NOT close the card:
-    the merge stays visible on the card without the state lying."""
+    the merge stays visible on the card without the state lying.
+
+    `closing` defaults to the operator sentence — the only class reconcile's
+    backstop reaches — so a two-argument call is byte-identical to before.
+    """
     return (
         f"🔒 {MERGED_NOT_CLOSED_MARKER}: {pr_url}\n\n"
-        f"This PR merged, but {reason}. This card is operator-closed / "
-        "closes-on-evidence and was deliberately NOT auto-closed — close it "
-        "by hand when the real work is done."
+        f"This PR merged, but {reason}. {closing}"
     )
 
 
@@ -788,10 +889,11 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
     """linear-sync's merge→Done seam, guard included (see block comment above).
 
     Ordinary code cards: → Done + "✅ Merged" comment, byte-identical to the
-    old inline `state`/`comment` pair. `no-code` / `DEMO:` cards: comment the
-    merge, leave the state alone, and say so LOUDLY in the job log.
+    old inline `state`/`comment` pair. `no-code` / `DEMO:` cards and EPICS
+    (DRE-3119): comment the merge, leave the state alone, and say so LOUDLY in
+    the job log.
 
-    Break-glass cards (DRE-2737) are the third class: the fix has shipped, so
+    Break-glass cards (DRE-2737) are a class of their own: the fix has shipped, so
     the debt comes due — the card returns to Planning for the classification
     it skipped instead of going Done. The decision reads the `break-glass:used`
     RECEIPT, never the live marker, so an operator who tidies the marker off
@@ -801,10 +903,13 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
 
     issue = get_issue(identifier)
     labels = _label_names(issue)
-    reason = auto_done_skip_reason(issue.get("title") or "", labels)
+    title = issue.get("title") or ""
+    # The fact the epic arm needs, off the query above — no second request.
+    has_children = bool(((issue.get("children") or {}).get("nodes")) or [])
+    reason = auto_done_skip_reason(title, labels, has_children)
     if reason is not None:
-        # The operator/demo guard wins on the STATE (it is never moved here),
-        # but a break-glass debt on the same card is still recorded, not
+        # The operator/demo/epic guard wins on the STATE (it is never moved
+        # here), but a break-glass debt on the same card is still recorded, not
         # silently dropped — the card stays open, so the note is where the
         # operator will see it.
         if break_glass.owes_review(labels):
@@ -815,10 +920,15 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
         print(
             "The merge was commented on the card; its state is untouched. "
             "(Six false closes in portico: DRE-2242 x2, DRE-2241, DRE-2218, "
-            "DRE-2253, DRE-2252.)"
+            "DRE-2253, DRE-2252; the epic that nearly followed them, DRE-3060.)"
         )
         print(banner)
-        cmd_comment(identifier, merged_not_closed_comment(pr_url, reason))
+        cmd_comment(
+            identifier,
+            merged_not_closed_comment(
+                pr_url, reason, skip_closing_sentence(title, labels, has_children)
+            ),
+        )
         return
     if break_glass.owes_review(labels):
         # The comment lands BEFORE the move: the Planning transition is what

@@ -21,6 +21,17 @@
 # now checks the card's labels/title and refuses those two classes: the merge
 # is commented on the card, the state is left for the operator/evidence.
 #
+# Epic guard (DRE-3119): the head-ref anchor above closes "part of DRE-99 in a
+# PR title" — it assumes the branch is named for a CARD. A branch named for the
+# EPIC the work serves passes it. agent-bureau PR #2273 merged on
+# `agent/DRE-3060-one-river-phase-chain`, and DRE-3060 was an epic in Planning
+# with 21 children and a planner run in flight; an epic's Done ends its plan,
+# and epic_autoclose and prove_phase read it. `card-done` refuses an epic as a
+# third class — read off the same shape the rest of the pipeline uses
+# (`[EPIC]`/children, plus `agent:planner`, whose cards are dispatched to the
+# planner and never to a build agent) — comments the merge on the epic and
+# leaves the state alone. Name the branch for the card the work delivers.
+#
 # Reusable workflow: permissions live in the calling stub.
 name: Linear Sync (reusable)
 

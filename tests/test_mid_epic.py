@@ -174,6 +174,7 @@ WALKED = {
     ("routing_verdict", "route"),
     ("linear_ops", "cmd_subissue"),
     ("reconcile", "card_is_epic"),
+    ("linear_ops", "epic_branch_refusal"),
 }
 
 
@@ -242,6 +243,32 @@ class TestEveryCallerIsWalked:
         card = self._sweep_card("one-off", children=2)
         card["comments"]["nodes"] = []
         assert reconcile.card_is_epic(card) is True
+
+    def test_epic_branch_refusal_reads_the_planner_label_on_purpose(self):
+        """`linear_ops.epic_branch_refusal` — the merge→Done seam (DRE-3119),
+        and the ONE caller that adds `agent:planner` back as a second leg.
+
+        It asks a different question from every other caller here. Theirs is
+        "should this card be classified/promoted/given children", where reading
+        the planner-ownership label as epic-ness froze every one-off in Backlog
+        (DRE-3044). This one asks "may a merged branch named for this card close
+        it", and `plan_run.py` dispatches a card carrying that label to the
+        PLANNER — never to a build agent — so a build branch named for it is a
+        branch named for the wrong card whichever way the card is classified.
+        Refusing costs a comment; closing ends a running plan.
+        """
+        refusal = linear_ops.epic_branch_refusal(PROBE_TITLE, PROBE_LABELS, False)
+        assert refusal is not None
+        assert "epic" in refusal.lower()
+
+    def test_epic_branch_refusal_still_lets_an_ordinary_card_close(self):
+        """The everyday card the whole pipeline rides: no planner label, no
+        children, no `[EPIC]` stamp — the merge closes it."""
+        assert linear_ops.epic_branch_refusal(
+            "One River: the design contract reaches main",
+            ["repo:agent-bureau", "agent:engineer"],
+            False,
+        ) is None
 
     def test_cmd_subissue_refuses_a_child_of_a_planner_owned_one_off(self):
         """`linear_ops.cmd_subissue` — the create seam, where the refusal is an
