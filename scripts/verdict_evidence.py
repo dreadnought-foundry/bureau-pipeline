@@ -70,6 +70,16 @@ APPROVE) and NO `VERDICT:` line (so merge-gate holds and the fix agent is
 not dispatched to fix findings nobody proved). The job then fails loudly,
 medic-visible. It can only ever hold a merge, never grant one.
 
+WHAT THE MEDIC THEN DOES, named rather than left to be discovered
+(vendor-boundaries Q5). That loud fail is a `workflow_run` failure the medic
+watches. This hold carries neither medic_classify's CRITIC_NEUTRAL_MARKER
+nor a rate-limit signature, so the medic reads it as an ordinary failure and
+re-runs the review once — which is the RIGHT answer here, and not the
+DRE-1921 loop. That rule exists for a retry against a resource the retry
+itself depletes; nothing is exhausted here, and a fresh review over the same
+diff, under a prompt that now states these rules, can genuinely reach an
+evidenced verdict where the last one did not.
+
 CLI:
 
     verdict_evidence.py check <verdict-file> [--github-output <path>]
