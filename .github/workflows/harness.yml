@@ -85,10 +85,24 @@ on:
       - "scripts/dedupe_dispatch.py"
       - "scripts/should_review_pr.py"
 
-# One shared sandbox repo — two concurrent runs would trample each other's
-# branches and PRs. A second dispatch QUEUES; never cancel-in-progress
-# (killing a run mid-scenario is exactly the crashed-run mess the driver's
-# sweep exists to mop up).
+# One slot per KIND of run (DRE-3075). Main's proving run is what `stable`
+# advances on, so it must never wait behind a pull request's:
+# on 2026-09-03 a PR run held the single `integration-harness-sandbox`
+# group for 18 minutes while five pushes to main queued behind it, each
+# replacing the last (GitHub keeps one pending run per group). Main's
+# first turn started at 20:07 PT, the fleet ran the afternoon's code until
+# 21:12 PT with eight front-door fixes already merged, and `stable` fell 50
+# commits behind.
+#
+# `main` for a push to main AND for a hand dispatch — a dispatch drives the
+# sandbox under the same namespace, so it must share main's lane rather
+# than run beside it. `pr-<number>` per pull request: two pushes to one PR
+# still serialize, two different PRs do not.
+#
+# Running beside each other is only safe because the driver's sweep is
+# scoped to the run's own sandbox namespace (HARNESS_NAMESPACE below); an
+# unscoped sweep would delete the branches the other live run is
+# mid-scenario on, which is why separate groups alone were not the fix.
 #
 # QUEUE BEHIND, NEVER CANCEL — and the release channel depends on it
 # (DRE-3070). `promote-channel.yml` moves `stable` only for a commit a harness
@@ -108,13 +122,10 @@ on:
 # RECORDED rather than silent (promote_channel.OUTCOME_CANCELLED), and the
 # staleness alarm counts those records to say "merge train" instead of
 # "unknown". See docs/self-hosting.md, "Queue behind, never cancel".
-#
-# The group is deliberately ONE constant shared by the push and pull_request
-# triggers alike: it guards a single sandbox, not a ref. Splitting it per ref
-# would let two runs sweep each other's branches — a worse failure than a
-# skipped head, and the residual cost is written down in the same doc.
 concurrency:
-  group: integration-harness-sandbox
+  group: >-
+    integration-harness-${{ github.event_name == 'pull_request'
+    && format('pr-{0}', github.event.pull_request.number) || 'main' }}
   cancel-in-progress: false
 
 permissions:
@@ -262,6 +273,19 @@ jobs:
           HARNESS_QA_APP_ID: ${{ secrets.BUREAU_QA_APP_ID }}
           HARNESS_QA_APP_PRIVATE_KEY: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          # The slice of the sandbox this run owns (DRE-3075). It opens the
+          # run id, so every branch and probe file lands inside it, and the
+          # driver's sweep collects nothing outside it — which is what lets
+          # this run share the sandbox with the other lane's.
+          #
+          # The same condition the concurrency group keys on, minus the dash:
+          # the group is GitHub's key and the card's spelling; the namespace
+          # is a branch-name prefix and a dash there would let namespace `pr`
+          # match `pr-251`'s branches. Both are pinned, for every event, by
+          # tests/test_harness_main_slot.py.
+          HARNESS_NAMESPACE: >-
+            ${{ github.event_name == 'pull_request'
+            && format('pr{0}', github.event.pull_request.number) || 'main' }}
           SCENARIOS: ${{ inputs.scenarios }}
           # DRE-3076. On push/pull_request the `inputs` context does not
           # resolve and this is empty — the driver then uses its own default

@@ -223,38 +223,75 @@ class MergeTrainStillAdvancesTest(unittest.TestCase):
 
 
 class TheSandboxIsStillSerialisedTest(unittest.TestCase):
-    """The constraint the fix must not break, and the gap it leaves.
+    """The constraint the fix must not break, and the gap DRE-3075 closed.
 
     One sandbox repo (`bureau-harness`) serves every harness run, and each run
     SWEEPS every leftover branch matching the harness namespace — any run id.
-    Two concurrent runs would delete each other's branches mid-scenario, so the
-    group is deliberately a single constant shared by the push and pull_request
-    triggers alike (scripts/harness/README.md).
+    Two runs in the SAME namespace would still delete each other's branches
+    mid-scenario, so runs that share a namespace still queue behind one
+    pending slot.
 
-    The cost of that sharing is written down rather than papered over: a PR
-    harness run and a push-to-main harness run compete for the one pending
-    slot, so main's proving run can be displaced by a PR's. That is what the
-    incident record shows (run 33832750432, main@46ca2476, cancelled by the
-    DRE-3059 PR run) and it is why the receipt below has to name the cause —
-    fixing it means giving the sandbox a real lock, not a second group.
+    DRE-3075 closed the cross-kind gap this class used to document: a PR
+    harness run no longer competes with a push-to-main run for that slot —
+    main and each PR resolve to their OWN concurrency group, one per kind of
+    run (scripts/harness/README.md, "One namespace per kind of run"), each
+    swept only within its own namespace. That is what closes the incident
+    this class pinned (run 33832750432, main@46ca2476, cancelled by the
+    DRE-3059 PR run); tests/test_harness_main_slot.py pins the group split
+    itself. What remains here is the narrower, by-design residual: two runs
+    that DO share a namespace (two pushes to main) still share a slot,
+    because a second live run there is exactly what the sweep would tear
+    down mid-scenario.
     """
 
-    def test_the_group_is_one_constant_shared_by_every_trigger(self):
+    def test_the_group_now_varies_by_kind_of_run(self):
         group = _harness_concurrency().get("group")
         self.assertIsInstance(group, str)
-        self.assertNotIn("${{", group,
-                         "a per-ref group would let two runs share the sandbox")
+        self.assertIn(
+            "${{", group,
+            "DRE-3075: the group must vary by event kind so main and a PR "
+            "run never share a pending slot",
+        )
 
-    def test_a_pull_request_run_can_displace_mains_pending_run(self):
+    def test_a_pull_request_run_no_longer_displaces_mains_pending_run(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+        import fix_concurrency  # noqa: E402
+
+        doc = yaml.safe_load(HARNESS.read_text())
+        main_event = {
+            "github": {
+                "event_name": "push",
+                "ref": "refs/heads/main",
+                "sha": SHA,
+                "event": {"ref": "refs/heads/main"},
+            },
+            "inputs": {},
+        }
+        pr_event = {
+            "github": {
+                "event_name": "pull_request",
+                "ref": "refs/pull/251/merge",
+                "event": {"pull_request": {"number": 251, "head": {"sha": SHA}}},
+            },
+            "inputs": {},
+        }
+        self.assertFalse(
+            fix_concurrency.evicts(doc, pending=main_event, arriving=pr_event),
+            "DRE-3075 regression: a PR run must not evict main's pending run "
+            "again — that was the 2026-09-03 incident this class pins",
+        )
+
+    def test_two_pushes_to_main_still_share_mains_one_pending_slot(self):
         outcomes = simulate(
-            [(0.0, "pr"), (120.0, "main-head"), (240.0, "pr-again")],
+            [(0.0, "main-N"), (120.0, "main-N+1"), (240.0, "main-N+2")],
             cancel_in_progress=_harness_concurrency()["cancel-in-progress"],
             until=HARNESS_SECONDS,
         )
         self.assertEqual(
-            outcomes["main-head"], CANCELLED,
-            "known residual gap: the trunk's proving run shares the pending "
-            "slot with PR runs. The receipt must therefore name the cause.",
+            outcomes["main-N+1"], CANCELLED,
+            "two runs in one namespace still share the one pending slot — by "
+            "design, a second live run there is what the sweep would tear "
+            "down mid-scenario",
         )
 
 

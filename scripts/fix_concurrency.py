@@ -244,6 +244,33 @@ def _call(name: str, args: list):
         if isinstance(haystack, (list, tuple)):
             return any(_loose_eq(item, needle) for item in haystack)
         return str(needle).lower() in str(haystack or "").lower()
+    if name == "format":
+        # GitHub's format('{0}-{1}', a, b), with {{ and }} as the literal
+        # braces. Added for harness.yml's per-run-kind concurrency group
+        # (DRE-3075) — the alternative was spelling that group as two
+        # adjacent interpolations, which is the same string written less
+        # readably.
+        template, values = str(args[0]), args[1:]
+        out, i = [], 0
+        while i < len(template):
+            ch = template[i]
+            if ch in "{}" and template[i:i + 2] == ch * 2:
+                out.append(ch)
+                i += 2
+                continue
+            if ch == "{":
+                end = template.find("}", i)
+                if end == -1:
+                    raise ValueError(f"unterminated placeholder in format({template!r})")
+                index = template[i + 1:end]
+                if not index.isdigit() or int(index) >= len(values):
+                    raise ValueError(f"format({template!r}) has no argument {index}")
+                out.append(_to_str(values[int(index)]))
+                i = end + 1
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
     raise ValueError(f"unsupported function in expression: {name}()")
 
 
