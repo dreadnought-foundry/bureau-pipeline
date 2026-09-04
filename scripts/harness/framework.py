@@ -723,11 +723,18 @@ def wiped_probe_cause(number, namespace: str, foreign_refs) -> str:
             f"{head}a concurrent harness run — could not name which: no other "
             f"namespace's branch was left in the sandbox to read it from"
         )
-    # Newest first, so a sandbox holding several foreign runs names the one
-    # most likely to still be in it. Ties are broken by the ref itself, so
-    # the receipt is the same string on a re-run.
-    run_id, ref = sorted(named, reverse=True)[0]
-    return f"{head}run {run_id} (branch {ref})"
+    # Sorted, not ranked: run ids from different namespaces do not compare
+    # as times (`pr91-…` sorts above `pr264-…`), so this buys determinism —
+    # the same sandbox state yields the same receipt on a re-run — and
+    # nothing more. Two lanes is the shape this happens in, so there is
+    # normally exactly one to name; when there is not, the count says so
+    # rather than the receipt implying the other runs were ruled out.
+    named = sorted(set(named), reverse=True)
+    run_id, ref = named[0]
+    line = f"{head}run {run_id} (branch {ref})"
+    if len(named) > 1:
+        line += f" — {len(named) - 1} more foreign run(s) were in the sandbox"
+    return line
 
 
 def probe_pr(gh, repo: str, number, namespace: str = DEFAULT_NAMESPACE,

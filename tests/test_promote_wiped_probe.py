@@ -148,6 +148,36 @@ class WipedProbeIsBlockedNotFailedTest(unittest.TestCase):
             self.assertTrue(cause.startswith(promote_channel.WIPED_MARKER))
             self.assertIn("could not", cause.lower())
 
+    def test_several_foreign_runs_are_counted_not_silently_dropped(self):
+        # Naming one of three as though the other two had been ruled out is
+        # the console-honesty failure in miniature. The receipt names one
+        # (the deterministic pick) and says how many more it could not.
+        gh = _GH(_pr(), refs=[
+            FOREIGN_BRANCH,
+            "agent/harness-pr91-gha-33900000000-1-bot_pr_flow",
+            "dependabot/harness-pr91-gha-33900000000-1-gate_paths",
+        ])
+        with self.assertRaises(framework.SandboxBlocked) as caught:
+            framework.probe_pr(gh, "o/r", MAIN_PROBE, namespace="main")
+        self.assertIn("2 more foreign run(s)", caught.exception.cause)
+
+    def test_one_foreign_run_is_named_without_a_count(self):
+        gh = _GH(_pr(), refs=[FOREIGN_BRANCH])
+        with self.assertRaises(framework.SandboxBlocked) as caught:
+            framework.probe_pr(gh, "o/r", MAIN_PROBE, namespace="main")
+        self.assertNotIn("more foreign run", caught.exception.cause)
+
+    def test_the_same_sandbox_state_yields_the_same_receipt(self):
+        refs = [FOREIGN_BRANCH, "agent/harness-pr91-gha-33900000000-1-bot_pr_flow"]
+        seen = set()
+        for order in (refs, list(reversed(refs))):
+            with self.assertRaises(framework.SandboxBlocked) as caught:
+                framework.probe_pr(
+                    _GH(_pr(), refs=order), "o/r", MAIN_PROBE, namespace="main"
+                )
+            seen.add(caught.exception.cause)
+        self.assertEqual(len(seen), 1, "the receipt depends on listing order")
+
     def test_an_open_probe_and_a_merged_probe_are_untouched(self):
         for pr in (_pr(state="open", merged=False), _pr(merged=True)):
             gh = _GH(pr, refs=[FOREIGN_BRANCH])
