@@ -108,6 +108,10 @@ class TheShell(unittest.TestCase):
         harness = Path(self.origin, "scripts", "harness")
         harness.mkdir(parents=True)
         (harness / "framework.py").write_text("OLD = True  # un-namespaced sweep\n")
+        # A scenario the old branch carries and main has since DELETED —
+        # scenarios/ discovers every module it finds, so a leftover would run.
+        (harness / "scenarios").mkdir()
+        (harness / "scenarios" / "stale_scenario.py").write_text("SCENARIO = 'stale'\n")
         Path(self.origin, "other.py").write_text("x = 1\n")
         self._git("-C", self.origin, "add", "-A")
         self._git("-C", self.origin, "commit", "-q", "-m", "old harness")
@@ -116,7 +120,8 @@ class TheShell(unittest.TestCase):
         self._git("-C", self.origin, "commit", "-q", "-am", "the PR's change")
         self._git("-C", self.origin, "checkout", "-q", "main")
         (harness / "framework.py").write_text("NEW = True  # namespaced sweep (DRE-3075)\n")
-        self._git("-C", self.origin, "commit", "-q", "-am", "new harness on main")
+        self._git("-C", self.origin, "rm", "-q", "scripts/harness/scenarios/stale_scenario.py")
+        self._git("-C", self.origin, "commit", "-q", "-am", "new harness on main; stale scenario deleted")
         # the runner's checkout: the PR head, shallow, exactly like actions/checkout
         self._git("clone", "-q", "--depth", "1", "--branch", "agent/DRE-9999-old-branch",
                   self.origin, self.work)
@@ -173,6 +178,17 @@ class TheShell(unittest.TestCase):
         self.assertIn("harness code: main", stdout)
         # the PR's own change is untouched — only scripts/harness/ is swapped
         self.assertEqual(Path(self.work, "other.py").read_text(), "x = 2\n")
+        # ...and swapped means REPLACED: a scenario main deleted is gone too
+        # (critic finding on #269 — `git checkout <ref> -- <dir>` never
+        # deletes, and scenarios/ imports every module it finds).
+        self.assertFalse(Path(self.work, "scripts", "harness", "scenarios", "stale_scenario.py").exists(),
+                         "a scenario main deleted survived on the old branch and would still run")
+
+    def test_a_pr_that_changes_the_harness_keeps_even_its_stale_files(self):
+        """The PR's copy is the PR's copy, whole — it is testing the harness."""
+        self._fake_gh(["scripts/harness/framework.py"])
+        self._run_step()
+        self.assertTrue(Path(self.work, "scripts", "harness", "scenarios", "stale_scenario.py").exists())
 
     def test_a_pr_that_changes_the_harness_keeps_its_own(self):
         self._fake_gh(["scripts/harness/framework.py", "other.py"])
