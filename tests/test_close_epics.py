@@ -63,23 +63,35 @@ def test_close_only_runs_epic_close_and_nothing_else():
 
 
 def test_close_only_passes_just_this_repos_active_epics():
-    """Only THIS repo's agent:planner cards are handed to the closer."""
+    """Only THIS repo's epics are handed to the closer.
+
+    Epic-ness is the SHAPE, not `agent:planner` (DRE-3044) — the containers
+    below carry children, the way a real epic does, and the one-off wears the
+    planner label the relay puts on every card out of Planning without that
+    making it an epic.
+    """
     mocks = _phase_mocks()
     mocks["active_cards"] = MagicMock(
         return_value=[
             {  # this repo, epic — included
                 "identifier": "DRE-1496",
+                "title": "[EPIC] the front door",
                 "description": "**Repo:** agent-bureau\nepic",
+                "children": {"nodes": [{"id": "kid-1"}]},
                 "labels": {"nodes": [{"name": "agent:planner"}]},
             },
             {  # this repo, NOT an epic — excluded
                 "identifier": "DRE-1508",
+                "title": "trim the trailing slash",
                 "description": "**Repo:** agent-bureau\nwork",
-                "labels": {"nodes": [{"name": "agent:engineer"}]},
+                "children": {"nodes": []},
+                "labels": {"nodes": [{"name": "agent:planner"}]},
             },
             {  # other repo epic — excluded
                 "identifier": "DRE-200",
+                "title": "[EPIC] someone else's decomposition",
                 "description": "**Repo:** atlas\nepic",
+                "children": {"nodes": [{"id": "kid-2"}]},
                 "labels": {"nodes": [{"name": "agent:planner"}]},
             },
         ]

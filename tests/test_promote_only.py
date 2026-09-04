@@ -76,28 +76,48 @@ def test_full_sweep_still_runs_everything():
 
 
 def test_promote_only_counts_active_cards_for_wip():
-    """The WIP cap must respect cards already in flight for THIS repo."""
+    """The WIP cap must respect cards already in flight for THIS repo.
+
+    Only the CONTAINER is exempt, and epic-ness is the shape (DRE-3044): the
+    promoted one-off below wears `agent:planner` — every card out of Planning
+    does — and it is real work, so it counts.
+    """
     mocks = _phase_mocks()
     mocks["active_cards"] = MagicMock(
         return_value=[
             {  # this repo — counts toward WIP
                 "identifier": "DRE-1",
+                "title": "work",
                 "description": "**Repo:** agent-bureau\nwork",
                 "state": {"name": "In Progress"},
+                "children": {"nodes": []},
                 "labels": {"nodes": []},
                 "updatedAt": "2026-06-12T00:00:00Z",
             },
             {  # other repo — excluded
                 "identifier": "DRE-2",
+                "title": "work",
                 "description": "**Repo:** atlas\nwork",
                 "state": {"name": "In Progress"},
+                "children": {"nodes": []},
                 "labels": {"nodes": []},
                 "updatedAt": "2026-06-12T00:00:00Z",
             },
-            {  # this repo but an epic (agent:planner) — excluded from WIP
+            {  # this repo, a real epic (it has children) — excluded from WIP
                 "identifier": "DRE-3",
+                "title": "the front door",
                 "description": "**Repo:** agent-bureau\nepic",
                 "state": {"name": "In Progress"},
+                "children": {"nodes": [{"id": "kid-1"}]},
+                "labels": {"nodes": [{"name": "agent:planner"}]},
+                "updatedAt": "2026-06-12T00:00:00Z",
+            },
+            {  # this repo, a promoted one-off wearing the planner label — counts
+                "identifier": "DRE-4",
+                "title": "trim the trailing slash",
+                "description": "**Repo:** agent-bureau\nwork",
+                "state": {"name": "In Progress"},
+                "children": {"nodes": []},
                 "labels": {"nodes": [{"name": "agent:planner"}]},
                 "updatedAt": "2026-06-12T00:00:00Z",
             },
@@ -105,7 +125,7 @@ def test_promote_only_counts_active_cards_for_wip():
     )
     with patch.multiple(reconcile, **mocks):
         reconcile.main(promote_only=True)
-    mocks["promote_ready"].assert_called_once_with(active_count=1)
+    mocks["promote_ready"].assert_called_once_with(active_count=2)
 
 
 def test_promote_only_write_failures_exit_nonzero():

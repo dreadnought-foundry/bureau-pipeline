@@ -25,7 +25,15 @@ WHAT THIS PINS:
     back to the two facts `validate_card.infer_agent_label` derives
     `agent:planner` FROM — `[EPIC]` in the title, or any children at all;
   * `promote_ready` does not read the label at all. Asserted over its source, so
-    a second spelling cannot come back quietly.
+    a second spelling cannot come back quietly;
+  * and the OTHER two readers of the same rule in the sweep — `repo_epics()`,
+    which exempts epics from the WIP cap, and `flag_stranded()`, which exempts
+    them from the stranded-run watchdog — read the shape too. They kept their
+    own `agent:planner` spellings, and they were only ever RIGHT by accident:
+    nothing wearing that label could reach an active lane while `promote_ready`
+    held the same (wrong) test. Promote those one-offs and both exemptions
+    swallow them — the WIP cap undercounts real in-flight work, and a promoted
+    one-off whose dispatch silently fails is never flagged.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_promotion_reads_the_shape.py -v
 """
@@ -318,3 +326,88 @@ class TestTheQueryCarriesWhatTheGateReads:
         bare = _card(identifier="DRE-3024", title="a plain title")
         bare.pop("children")
         assert reconcile.card_is_epic(bare) is False
+
+    def test_the_active_board_read_selects_children(self):
+        """The same rule for the OTHER query: `repo_epics()` reads epic-ness off
+        `active_cards()`, so the board read has to carry the children too — or
+        every real epic on the board reads as "no children" and the WIP cap
+        stops exempting the containers it is supposed to exempt."""
+        source = inspect.getsource(reconcile._fetch_active_cards)
+        assert re.search(r"\bchildren\s*\(", source), (
+            "_fetch_active_cards does not SELECT children — repo_epics() reads "
+            "card_is_epic() off these cards, and a gate reading a field the "
+            "query never fetched answers 'no children' for every epic"
+        )
+
+
+# ===========================================================================
+# 6: the WIP cap's epic exemption reads the shape too
+# ===========================================================================
+class TestTheWipCapExemptionReadsTheShape:
+    """`repo_epics()` is subtracted from the WIP count fed to
+    `promote_ready(active_count=...)`. It kept its own `agent:planner` test,
+    which was only ever right because nothing wearing that label could get
+    promoted into an active lane in the first place."""
+
+    def test_a_promoted_one_off_wearing_the_label_is_not_counted_as_an_epic(self):
+        """DRE-3018's shape again, now sitting in Todo. Read as an epic here, it
+        is subtracted from the WIP count — so `MAX_WIP` silently permits more
+        concurrent work than the cap it exists to enforce."""
+        card = _card(identifier="DRE-3018", title="a plain one-off title",
+                     comments=[ONE_OFF_STAMP, FLEET])
+        with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"):
+            assert reconcile.repo_epics([card]) == set()
+
+    def test_a_card_stamped_epic_is_still_counted_as_an_epic(self):
+        """The exemption itself is untouched — a real epic is still a container
+        that never counts against the cap."""
+        card = _card(identifier="DRE-3000", title="the front door",
+                     comments=[EPIC_STAMP])
+        with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"):
+            assert reconcile.repo_epics([card]) == {"DRE-3000"}
+
+    def test_an_unstamped_card_with_children_is_still_counted_as_an_epic(self):
+        """The fallback fact, with no label anywhere on the fixture."""
+        card = _card(identifier="DRE-3001", title="a plain title", children=2,
+                     labels=("repo:bureau-pipeline",))
+        with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"):
+            assert reconcile.repo_epics([card]) == {"DRE-3001"}
+
+    def test_another_repos_epic_is_not_this_repos_epic(self):
+        """The repo filter is unchanged."""
+        card = _card(identifier="DRE-3002", title="[EPIC] someone else's",
+                     labels=("repo:atlas",))
+        with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"):
+            assert reconcile.repo_epics([card]) == set()
+
+    def test_repo_epics_never_reads_agent_planner(self):
+        """Over the source, for the same reason as `promote_ready`: a second
+        spelling of the rule must not come back quietly."""
+        source = inspect.getsource(reconcile.repo_epics)
+        assert PLANNER not in source, (
+            "repo_epics reads the agent:planner label again — that label says "
+            "the planner OWNS the card, and every card the relay dispatches to "
+            "plan.yml from Planning carries it (DRE-3044)"
+        )
+        assert "card_is_epic" in source
+
+
+# ===========================================================================
+# 7: the stranded-run watchdog's epic exemption reads the shape too
+# ===========================================================================
+class TestTheWatchdogExemptionReadsTheShape:
+    def test_flag_stranded_never_reads_agent_planner(self):
+        """`flag_stranded()` skipped `agent:planner` cards on the reasoning "an
+        epic in these lanes carries no run". Applied to a promoted one-off that
+        is the exact opposite conclusion: its missing run receipt is the strand
+        DRE-1993 exists to catch. Behaviour is pinned in
+        tests/test_stranded_watchdog.py; this is the anti-regression assertion
+        over the source."""
+        source = inspect.getsource(reconcile.flag_stranded)
+        assert PLANNER not in source, (
+            "flag_stranded reads the agent:planner label again — a promoted "
+            "one-off wearing it would be exempted from the stranded-run "
+            "watchdog, which is the one check that catches a dispatch that "
+            "silently never started (DRE-3044)"
+        )
+        assert "card_is_epic" in source

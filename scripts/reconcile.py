@@ -947,7 +947,13 @@ def card_is_epic(card: dict, bodies: list[str] | None = None) -> bool:
 def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
     """The paged board read itself. `comments(last: 50)` is inline — the shape
     backlog_children already uses — so every reader downstream gets the bodies
-    with the card instead of buying them one request at a time (DRE-2929)."""
+    with the card instead of buying them one request at a time (DRE-2929).
+
+    `children(first: 1)` is selected for the same reason `backlog_children`
+    selects it (DRE-3044): `repo_epics()` and `flag_stranded()` read epic-ness
+    off these cards through `card_is_epic`, the gate asks whether a card has ANY
+    children, and reading a field the query never fetched would report "no
+    children" for every epic on the board."""
     return linear_ops.gql_paged(
         """query($states: [String!]!, $after: String) {
            issues(first: 100, after: $after, filter: {
@@ -956,6 +962,7 @@ def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
            }) { nodes {
              id identifier title description updatedAt
              state { name } labels { nodes { name } }
+             children(first: 1) { nodes { id } }
              comments(last: 50) { nodes { body } }
            } pageInfo { hasNextPage endCursor } } }""",
         {"states": list(states)},
@@ -1052,7 +1059,11 @@ def flag_stranded() -> set[str]:
           or after a prior Todo-redispatch receipt, which resets updatedAt
           every cycle and would otherwise hide the strand forever.
           Epics in these lanes are containers — no run ever targets them,
-          so their receipt-less state is normal, not a strand.
+          so their receipt-less state is normal, not a strand. Epic-ness
+          is the SHAPE (card_is_epic), never the planner-ownership label
+          this used to test — that label is on every card out of
+          Planning, one-offs included, and exempting those went blind on
+          the work this watchdog is for (DRE-3044).
 
     Neither class applies to HAND-BUILT work (DRE-2524): a card labelled
     HAND_BUILT_LABEL is skipped outright, because no dispatched run is coming
@@ -1098,15 +1109,22 @@ def flag_stranded() -> set[str]:
         routable = slug is not None and slug in validate_card.VALID_SLUGS
         if routable and slug != REPO_SLUG:
             continue  # that repo's own sweep runs the no-run check for its cards
-        labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
-        if routable and "agent:planner" in labels:
-            continue  # an epic in these lanes carries no run — normal, not stranded
         # The bodies come with the card (DRE-2929) — `active_cards` selects
         # `comments(last: 50)` inline, so this whole loop costs zero requests
         # however many cards the board holds. It used to be one Linear request
         # per card, per sweep, per repo, and on 2026-09-01 that plus its
         # siblings exhausted the workspace quota for seven hours.
         bodies = card_comment_bodies(card)
+        if routable and card_is_epic(card, bodies):
+            # An epic in these lanes carries no run — normal, not stranded.
+            # Read off the SHAPE, never the planner-ownership label this used to
+            # test (DRE-3044; `card_is_epic` documents why): the relay requires
+            # that label before it will dispatch the planner, so every card out
+            # of Planning wears it — one-offs included. Keying the exemption on
+            # it went blind on exactly the cards promote_ready now promotes: a
+            # one-off IS work with a run to wait for, so its missing receipt is
+            # the DRE-1993 strand this watchdog exists to catch.
+            continue
         # ONE age gate, both classes (DRE-2736), and it runs FIRST (DRE-2929).
         # It used to sit inside the routable branch, so NO ROUTE fired on the
         # first sweep that saw a card and raced the Todo gate's repair pass. A
@@ -1188,10 +1206,11 @@ def flag_stalled_planning() -> set[str]:
     Planning's occupants owe a CLASSIFICATION — the decision about what the
     card is and where it goes — and nothing else. Not a `repo:` label
     (assigning one is what Planning does, so the whole front path arrives
-    without one), and not a run receipt (a planner-created child inherits
-    `repo:` and a role label but never `agent:planner`, so the no-run class's
-    epic exemption never covered it). Judging Planning by those two rules is
-    what made the watchdog flag every card on the new front path.
+    without one), and not a run receipt (a planner-created child is a piece of
+    work, not a container, so the no-run class's epic exemption never covered
+    it — that was true when the exemption read a label and stays true now it
+    reads the shape, DRE-3044). Judging Planning by those two rules is what
+    made the watchdog flag every card on the new front path.
 
     So the only question asked here is the lane's own: has anything happened
     to this card in PLANNING_MINUTES? Every planner receipt, comment and state
@@ -4605,18 +4624,24 @@ def report_epic_growth(epics: set[str]) -> None:
 
 
 def repo_epics(active: list[dict]) -> set[str]:
-    """Identifiers of THIS repo's active epics (agent:planner cards).
+    """Identifiers of THIS repo's active epics — read off the SHAPE.
 
-    Epics (agent:planner) are containers, not work: they carry no PR and sit
-    In Progress for the life of their children — never nudged, never counted
-    against the WIP cap. They DO close themselves when finished.
+    Epics are containers, not work: they carry no PR and sit In Progress for
+    the life of their children — never nudged, never counted against the WIP
+    cap. They DO close themselves when finished.
+
+    Epic-ness is `card_is_epic()`, the one helper (DRE-3044). This kept a second
+    spelling — a label test over the planner-ownership label `card_is_epic`
+    documents — and that label answers a different question: every card the
+    relay dispatches to `plan.yml` from Planning wears it, one-offs included. It
+    only ever LOOKED right because `promote_ready` held the same wrong test, so
+    nothing wearing the label could reach an active lane to be miscounted here.
+    Fix promotion alone and this set swallows every promoted one-off — each one
+    subtracted from the WIP count fed to `promote_ready(active_count=...)` in
+    `main`, so MAX_WIP silently admits more concurrent work than it caps.
     """
     mine = [c for c in active if card_repo(c) == REPO_SLUG]
-    return {
-        c["identifier"]
-        for c in mine
-        if any(lbl["name"].lower() == "agent:planner" for lbl in c["labels"]["nodes"])
-    }
+    return {c["identifier"] for c in mine if card_is_epic(c)}
 
 
 def main(
