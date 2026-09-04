@@ -242,6 +242,15 @@ def _ident(card: dict) -> str:
 
 
 def _verdict(card: dict, doc: dict | None = None):
+    """This card's routing verdict and the reason for it.
+
+    No shape is passed and none is available: these records come from
+    `linear_ops.py children-detail`, which carries no comments, so there is no
+    stamp to read. It does not need one — these are an epic's CHILDREN, and a
+    child is never an epic. What matters is that the `agent:planner` label a
+    child may carry is no longer read as epic-ness (DRE-3038), so a proof card
+    gets the real verdict its criteria earn instead of none at all.
+    """
     decision = routing_verdict.route(
         card.get("title") or "", card.get("body") or "",
         card.get("labels") or (), doc=doc,

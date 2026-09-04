@@ -1057,16 +1057,21 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # plain card sub-issues silently reclassifies it as an epic (validate_card
     # reads children as epic-ness) and reconcile then never promotes it. The
     # refusal names that consequence and the sibling route that works.
-    # The two free epic tests come first: a parent already classified as an epic
-    # cannot be reclassified by one more child, so the children read is only
-    # bought when the title and the labels both say no — the planner's own path
-    # (every parent is agent:planner) buys nothing at all.
-    if not mid_epic.is_epic(parent.get("title"), parent_labels, has_children=False):
-        refusal = mid_epic.subissue_refusal(
-            parent.get("title"), parent_labels, _issue_has_children(parent["id"])
-        )
-        if refusal is not None:
-            raise LinearError(f"subissue REJECTED ({title!r}): {refusal}")
+    # The free test comes first — a title that already says [EPIC] cannot be
+    # reclassified by one more child. Only then is the parent's SHAPE STAMP
+    # read (DRE-2843), and only if that does not settle it is the children read
+    # bought. The stamp is what carries the planner's own path now: `agent:planner`
+    # used to short-circuit this and it is not an answer to "is this an epic" —
+    # it says who owns the card, and reading it as epic-ness stamped every
+    # one-off FLEET by default (DRE-3038).
+    if not mid_epic.is_epic(parent.get("title"), has_children=False):
+        shape = _stamped_shape(parent_identifier)
+        if not mid_epic.is_epic(parent.get("title"), False, shape):
+            refusal = mid_epic.subissue_refusal(
+                parent.get("title"), _issue_has_children(parent["id"]), shape
+            )
+            if refusal is not None:
+                raise LinearError(f"subissue REJECTED ({title!r}): {refusal}")
 
     # 3 — ORDERING → relations: union of the body's **Blocked by:** line and any
     # --blocked-by flag. Never block on the parent epic (it deadlocks the gate).
@@ -1173,6 +1178,25 @@ def _issue_has_children(issue_id: str) -> bool:
     )
     issue = data.get("issue") or {}
     return bool((issue.get("children") or {}).get("nodes"))
+
+
+def _stamped_shape(identifier: str) -> str | None:
+    """The planning shape stamped on a card (DRE-2843), or None.
+
+    The second leg of the epic test, and the one that replaced `agent:planner`
+    (DRE-3038): the stamp says what the card IS. The tolerant read itself is
+    `routing_verdict.shape_of` — ONE definition, because every caller that
+    decides epic-ness owes the same answer — and this only buys the comments.
+    Never raises: an unreadable read is "nothing has classified this", which is
+    the case the title and the children answer.
+    """
+    import routing_verdict
+
+    try:
+        return routing_verdict.shape_of(comment_bodies(identifier))
+    except Exception as exc:  # noqa: BLE001 — an unreadable stamp is no stamp
+        print(f"{identifier}: could not read a planning shape ({exc})", file=sys.stderr)
+        return None
 
 
 def _issue_label_names(issue_id: str) -> list[str]:

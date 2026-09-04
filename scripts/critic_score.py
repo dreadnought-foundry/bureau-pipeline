@@ -391,6 +391,11 @@ def observe(card: dict, comment_bodies=()) -> dict:
     decision = routing_verdict.route(
         card["title"], card["description"], card.get("labels") or (),
         has_children=bool(card.get("has_children")),
+        # The card's own planning stamp, from the comments already in hand
+        # (DRE-3038). Without it an epic whose title says nothing and whose
+        # children do not exist yet is graded as a buildable card — quietly,
+        # in the one number this module exists to get right.
+        shape=routing_verdict.shape_of(comment_bodies or ()),
     )
     return {
         "verdict": decision.verdict,
@@ -401,12 +406,17 @@ def observe(card: dict, comment_bodies=()) -> dict:
 
 def judgement_from_body(description: str, *, title: str = "", labels=(),
                         has_children: bool = False,
-                        dimension: str = DEFAULT_DIMENSION) -> str | None:
+                        dimension: str = DEFAULT_DIMENSION,
+                        shape: str | None = None) -> str | None:
     """The scored value a body alone produces. The truncation tests read this
     twice — once on the whole card, once on what the list API would have
-    returned — and the two answers differ."""
+    returned — and the two answers differ.
+
+    `shape` is the card's planning stamp when the caller has one; without it,
+    epic-ness falls back to the title and the children (DRE-3038).
+    """
     decision = routing_verdict.route(title, description, labels,
-                                     has_children=has_children)
+                                     has_children=has_children, shape=shape)
     return judgement_of(decision.verdict, dimension, source=decision.source)
 
 

@@ -233,14 +233,21 @@ jobs:
               "$(python3 .bureau-pipeline/scripts/plan_critic.py cycle-start --epic "$EPIC" --record)"
           fi
 
-      # The ONE-OFF route. It is checked on the way out and goes straight to
-      # the build queue: no plan artifact, no green light, and it never reaches
-      # the CEO. The verdict it leaves carrying is what lets the sweep promote
-      # a card that has no parent epic to inherit an approval from — the
-      # DRE-2735 hole, which `tests/test_planning_route.py` exercises rather
-      # than assumes. The lane it moves to is the vocabulary's, so it is not
-      # written here.
-      - name: One-off route — straight to the build queue
+      # The ONE-OFF route. It is checked on the way out and, when the check can
+      # route it, goes straight to the build queue: no plan artifact, no green
+      # light, and it never reaches the CEO. The verdict it leaves carrying is
+      # what lets the sweep promote a card that has no parent epic to inherit
+      # an approval from — the DRE-2735 hole, which
+      # `tests/test_planning_route.py` exercises rather than assumes.
+      #
+      # That verdict is READ OFF THE CARD, never defaulted (DRE-3038): role
+      # label, then the anchored title convention, then the acceptance
+      # criteria. A card that states no exit condition to route on cannot be
+      # handed to anyone, so it takes the escalation exit instead of leaving
+      # Planning silently — the same route hand-planning takes (DRE-2848). The
+      # lane it moves to either way is the vocabulary's, so it is not written
+      # here.
+      - name: One-off route — checked on the way out
         if: steps.shape.outputs.route == 'one-off'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}

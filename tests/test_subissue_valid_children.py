@@ -23,6 +23,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import linear_ops  # noqa: E402
+import planning_shape  # noqa: E402
 
 
 # --- (a) path-like / empty / no-markdown bodies are rejected -----------------
@@ -163,8 +164,17 @@ class FakeLinear:
     create input and any relation creates so tests can assert on labels +
     blockedBy without touching the network."""
 
-    def __init__(self, parent_labels=("repo:atlas", "initiative:bureau", "agent:planner")):
+    def __init__(self, parent_labels=("repo:atlas", "initiative:bureau", "agent:planner"),
+                 parent_comments=None):
         self.parent_labels = list(parent_labels)
+        # What makes DRE-EPIC an epic: its planning shape stamp (DRE-2843).
+        # Not `agent:planner` — that says who owns the card (DRE-3038) — and
+        # not its title, which names no convention, so the create seam reads
+        # the stamp exactly as `plan.yml` leaves it.
+        self.parent_comments = (
+            list(parent_comments) if parent_comments is not None
+            else [planning_shape.shape_comment("epic", "the plan says so")]
+        )
         self.created = None          # the issueCreate input
         self.relations = []          # (blocker_id, child_id) blocks-relations
         self.label_create_names = []  # team labels we had to create
@@ -182,6 +192,13 @@ class FakeLinear:
         # _issue_label_names (parent labels)
         if "issue(id: $id) { labels { nodes { name } } }" in q:
             return {"issue": {"labels": {"nodes": [{"name": n} for n in self.parent_labels]}}}
+        # comment_bodies — the parent's planning shape stamp (DRE-3038)
+        if "comments(last: 50)" in q:
+            return {"issue": {"comments": {
+                "nodes": [{"body": b} for b in self.parent_comments]}}}
+        # _issue_has_children — the fallback when nothing has stamped a shape
+        if "children { nodes { id } }" in q:
+            return {"issue": {"children": {"nodes": []}}}
         # state_id
         if "workflowStates" in q:
             return {
