@@ -131,12 +131,18 @@ class MappingTest(unittest.TestCase):
             ac.standards_for("nope")
 
     def test_context_paths_brief_last_and_only_when_present(self):
-        # engineer has a brief → it is the LAST path; critic has none → no brief.
+        # engineer has a brief → it is the LAST path; the fixer has none → no
+        # brief. (The critic gained one in DRE-3084; the brief-less roles are
+        # read off the map rather than remembered, so this stays true for
+        # whichever they are.)
         eng = ac.context_paths("engineer", root="R")
         self.assertTrue(eng[-1].endswith(os.path.join("briefs", "engineer.md")))
         self.assertTrue(all(os.sep + "standards" + os.sep in p for p in eng[:-1]))
-        critic = ac.context_paths("critic", root="R")
-        self.assertFalse(any("briefs" in p for p in critic))
+        briefless = [r for r, b in ac.ROLE_BRIEF.items() if b is None]
+        self.assertTrue(briefless, "no brief-less role left to prove the branch")
+        for role in briefless:
+            paths = ac.context_paths(role, root="R")
+            self.assertFalse(any("briefs" in p for p in paths), role)
 
 
 class AssembleTest(unittest.TestCase):
