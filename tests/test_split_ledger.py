@@ -213,8 +213,8 @@ def test_an_ordinary_dead_run_receipt_is_not_a_turn_cap_death():
 def test_an_error_max_turns_run_record_counts_as_a_death():
     """The third turn-cap signal the card names: the run's own record."""
     deaths = split_ledger.turn_cap_deaths(
-        [], executions=[{"subtype": "error_max_turns", "num_turns": 151,
-                         "total_cost_usd": 18.40}]
+        [], executions=[{"is_error": True, "subtype": "error_max_turns",
+                         "num_turns": 151, "total_cost_usd": 18.40}]
     )
     assert len(deaths) == 1
     assert deaths[0]["dollars"] == 18.40
@@ -247,8 +247,21 @@ def test_a_successor_citing_the_card_is_a_split():
     assert split_ledger.cites(
         "**Split from** [DRE-3022](https://linear.app/x) by its author", "DRE-3022")
     assert split_ledger.cites("piece 1 of 3 of DRE-3022", "DRE-3022")
+    # The spelling the board actually uses — DRE-2910/2911/2912 all open this way.
+    assert split_ledger.cites(
+        "**One of three cards splitting DRE-2871, which SIX runs could not "
+        "finish.**", "DRE-2871")
     assert not split_ledger.cites("see DRE-3022 for background", "DRE-3022")
     assert not split_ledger.cites("piece 1 of 3 of DRE-3022", "DRE-2719")
+
+
+def test_a_citation_below_the_opening_paragraph_is_a_mention_not_a_piece():
+    """DRE-2719 is named in the body of 39 cards and was cut into six. The
+    anchor is the entire difference between those two numbers."""
+    body = (
+        "**A card about something else entirely.**\n\n"
+        "Background: this was split from DRE-2719's design work last month.\n")
+    assert not split_ledger.cites(body, "DRE-2719")
 
 
 def test_the_three_reasons_a_card_is_in_the_ledger():
