@@ -527,14 +527,48 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
+          # DRE-3084: the commit this review is about to judge, so a
+          # refutation is read back for THIS head and never for an older one.
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
         run: |
           BRANCH=$(gh pr view "$PR" --json headRefName --jq .headRefName || true)
           gh pr view "$PR" --json body --jq .body > /tmp/cardctx-pr-body.txt 2>/dev/null \
             || : > /tmp/cardctx-pr-body.txt
+          # DRE-3084 — the refutation, when there is one. The fix agent
+          # answered a blocking finding on this exact commit with evidence it
+          # could read and this reviewer could not (the live card — no Linear
+          # key here, on purpose — a test run, the merge base) and pushed
+          # nothing. It reaches the prompt through the SAME builder, fence,
+          # sanitizer and size cap the PR body does, because it is agent text
+          # written while reading an attacker-authored diff.
+          #
+          # Worker-bot authored ONLY (DRE-1995) and bound to this head: an
+          # unfiltered read would let any commenter write into the critic's
+          # context, and an unbound one would replay a settled dispute onto a
+          # commit nobody contested. Fail-soft in both directions — a comments
+          # blip leaves the file empty and the review runs exactly as it does
+          # today.
+          : > /tmp/cardctx-refutation.txt
+          SHA8=${HEAD_SHA:0:8}
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
+            > /tmp/cardctx-comments.json 2>/dev/null \
+            || echo '[]' > /tmp/cardctx-comments.json
+          # `// empty` and not `// ""`: a no-match must leave a ZERO-byte file,
+          # or the `-s` test below reads jq's trailing newline as a refutation
+          # and every ordinary review claims to be a re-review.
+          jq -r --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("refuted-finding @" + $sha8))] | last | .body // empty' \
+            < /tmp/cardctx-comments.json > /tmp/cardctx-refutation.txt 2>/dev/null \
+            || : > /tmp/cardctx-refutation.txt
+          if [ -s /tmp/cardctx-refutation.txt ]; then
+            echo "refuted=true" >> "$GITHUB_OUTPUT"
+            echo "re-review after refutation: found a contested finding on $SHA8"
+          fi
           python3 .bureau-pipeline/scripts/review_card_context.py \
             --card "$CARD" \
             --branch "$BRANCH" \
-            --pr-body-file /tmp/cardctx-pr-body.txt
+            --pr-body-file /tmp/cardctx-pr-body.txt \
+            --refutation-file /tmp/cardctx-refutation.txt
 
       # Model selection for the critic (DRE-2316 / DRE-2317). This step exists
       # because the critic used to carry a pinned Sonnet id twice in this file:
@@ -616,8 +650,10 @@ jobs:
       # and "Post verdict or neutral status" (the card bookkeeping). Linear
       # state stays ground truth written by the pipeline, never an agent
       # claim. And unlike the fix and repair agents, nothing tells this agent
-      # the key is in its env: assemble_context.py gives role `critic`
-      # standards only, with no brief.
+      # the key is in its env: `briefs/critic.md` (DRE-3084) carries only the
+      # standing facts about the critic's own position and names no
+      # credential — asserted by tests/test_refuted_verdict_rereview.py,
+      # never assumed.
       #
       # Pinned by tests/test_agent_linear_key.py, which fails if this step
       # is renamed or the exception loses its reason.
@@ -1175,6 +1211,10 @@ jobs:
           # rule MODEL_WHY above documents.
           STRATEGY: ${{ steps.size.outputs.strategy }}
           OVERSIZE_MESSAGE: ${{ steps.size.outputs.oversize_message }}
+          # DRE-3084: `true` when this review read a refutation of its own
+          # previous finding on this same commit. Two verdicts on one head
+          # otherwise look like a bug to whoever reads the thread next.
+          REFUTED: ${{ steps.cardctx.outputs.refuted }}
         run: |
           if [ "${STRATEGY:-}" = "oversized" ]; then
             # No review was attempted. This message names the actual size and
@@ -1299,6 +1339,16 @@ jobs:
               "The adversarial reviewer crashed twice (startup/auth failure, no inference). No findings were produced. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
               > /tmp/qa-comment.md
           fi
+          fi
+          # DRE-3084: say WHY this head carries two verdicts. A FOOTER, and
+          # deliberately so — `head -1` is the line merge_gate's `VERDICT:`
+          # match, verdict_content's end-anchored `content:` read and
+          # verdict_cause's tag all parse, and this note carries none of those
+          # tokens. Appended on every branch above, because a re-review that
+          # crashes or declines still has to explain the second comment.
+          if [ "${REFUTED:-}" = "true" ]; then
+            printf '\n%s\n' "♻️ re-review after refutation — the fixing agent contested this reviewer's previous finding on this same commit with evidence, so the pipeline ordered one more look. Nothing was pushed between the two verdicts; this one is the answer." \
+              >> /tmp/qa-comment.md
           fi
           # The verdict comment is load-bearing (merge-gate reads it) —
           # retry through transient GitHub API blips rather than losing it.

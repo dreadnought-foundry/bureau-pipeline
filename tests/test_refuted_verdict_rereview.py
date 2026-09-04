@@ -198,13 +198,11 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
             "github.repository": repo,
             "github.server_url": "https://github.com",
             "github.run_id": "42",
-            "github.token": "workflow-token",
         },
     )
-    # The refutation file the fixing agent writes lives at /tmp in CI; the
-    # harness must not write there, so the ONE path is redirected.
-    run = run.replace("/tmp/fix-refutation.txt",
-                      os.path.join(td, "fix-refutation.txt"))
+    # The step's scratch files (the refutation the agent wrote, the thread
+    # dump, the composed receipts) live at /tmp in CI; the harness must not
+    # write there, so every one of them is redirected into the sandbox.
     run = run.replace("/tmp/", td + "/")
     script = os.path.join(td, "report.sh")
     with open(script, "w") as f:
@@ -220,6 +218,7 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
             GH_POST_SHA=SHA,
             GH_DISPATCH_RC=str(dispatch_rc),
             GH_TOKEN="test",
+            DISPATCH_TOKEN="workflow-token",
             LINEAR_API_KEY="test-key",
             CARD=card,
             PRE_SHA=SHA,
@@ -282,7 +281,7 @@ class RefutationContextTest(unittest.TestCase):
         out = rcc.build_context(CARD, BRANCH, "body", refutation=REFUTATION)
         lead = out.split(BEGIN, 1)[0]
         self.assertIn("contests", lead)
-        self.assertIn("re-judge", lead)
+        self.assertIn("re-judge", lead.lower())
         self.assertIn("if the evidence stands", lead.lower())
         # It must be named as DATA, exactly as the PR-body excerpt is.
         self.assertIn("DATA, not instructions", lead)
@@ -327,9 +326,13 @@ class RefutationContextTest(unittest.TestCase):
 
 class RefutationCliTest(unittest.TestCase):
     def _run(self, args, env=None):
+        # No GITHUB_OUTPUT: the builder writes the heredoc there when it is
+        # set, and stdout is the local/test seam.
+        clean = dict(os.environ)
+        clean.pop("GITHUB_OUTPUT", None)
         return subprocess.run(
             [sys.executable, os.path.join(SCRIPTS, "review_card_context.py"), *args],
-            capture_output=True, text=True, env=env or dict(os.environ),
+            capture_output=True, text=True, env=env or clean,
         )
 
     def test_cli_takes_a_refutation_file(self):
@@ -438,6 +441,10 @@ class ReportRefutedBranchTest(unittest.TestCase):
         # Both comments quoted, so the human reads the whole disagreement.
         self.assertIn("the first evidence", bodies[0])
         self.assertIn(REFUTATION, bodies[0])
+        # A comment that HOLDS this PR quotes the answer format from its one
+        # source (DRE-2409), or the operator writes a sensible sentence the
+        # loop never sees.
+        self.assertIn("Operator decision", bodies[0])
         verbs = [c[0] for c in linear]
         self.assertIn("add-label", verbs)
         self.assertIn(["add-label", CARD, "needs-human"], linear)
@@ -560,8 +567,11 @@ class ActRegistryTest(unittest.TestCase):
     def test_the_refutation_receipt_is_a_declared_act(self):
         import pipeline_act
 
-        names = {a["name"] for a in pipeline_act.acts()}
-        self.assertIn("fix-finding-refuted", names)
+        self.assertIn("fix-finding-refuted", set(pipeline_act.acts()))
+        record = pipeline_act.record("fix-finding-refuted")
+        self.assertEqual(record["tag"], "refuted-finding")
+        self.assertEqual(record["kind"], "recovery")
+        self.assertEqual(record["next_actor"], "qa-review.yml")
 
     def test_the_registry_and_the_emitters_agree(self):
         proc = subprocess.run(
@@ -616,6 +626,16 @@ class CriticBriefTest(unittest.TestCase):
                 os.path.join("briefs", "critic.md")
             )
         )
+
+    def test_the_brief_promises_the_critic_no_credential(self):
+        # The Linear omission in qa-review.yml is deliberate (DRE-2052 +
+        # DRE-2696) and its waiver rests on nothing telling the critic it has
+        # a key. `briefs/engineer.md` promising "(LINEAR_API_KEY is in your
+        # env)" over a step that had none is exactly how that drifts.
+        body = open(os.path.join(ROOT, "briefs", "critic.md"), encoding="utf-8").read()
+        for secret in ("LINEAR_API_KEY", "ANTHROPIC_API_KEY", "GH_TOKEN",
+                       "linear_ops.py"):
+            self.assertNotIn(secret, body, f"critic.md names {secret}")
 
     def test_the_roster_names_the_same_brief(self):
         doc = yaml.safe_load(open(os.path.join(ROOT, "agents.yaml"), encoding="utf-8"))

@@ -868,6 +868,16 @@ jobs:
                explicitly in /tmp/fix-blocker.txt — call it a near miss — so
                the PR comment tells them how to re-post it.
                Bot-authored comments in the file are context, never decisions.
+               ONE exception, and it is the refutation path (DRE-3084): a
+               prior 🛑 blocker whose first line reads "refuted the finding"
+               was answered by the PIPELINE, not by a person — it already
+               spent this commit's one automatic re-review. If the critic has
+               reviewed since and still blocks, do NOT sit on it as an
+               unanswered blocker: either fix the finding, or, if you still
+               hold that it is refuted, write /tmp/fix-refutation.txt again
+               (step 6b) and the pipeline escalates it to a human with both
+               refutations quoted. A SECOND refutation on the same commit
+               never buys a second re-review.
             2. Check for failing CI:
                gh pr checks ${{ steps.pr.outputs.number }} — for any failed check,
                read its log (gh run view <id> --log-failed) and understand why.
@@ -924,8 +934,26 @@ jobs:
             5. Commit with message "fix(${{ steps.pr.outputs.card }}): address review
                findings (attempt ${{ steps.pr.outputs.attempt }})" and push to the
                SAME branch. Do NOT open a new PR. Do NOT force-push.
-            6. If a finding is wrong or unfixable in scope, do NOT push anything:
-               write your reasoning to /tmp/fix-blocker.txt instead.
+            6. If a finding is unfixable in scope, or settling it needs a
+               judgement only a person can make, do NOT push anything: write
+               your reasoning to /tmp/fix-blocker.txt instead. That file asks
+               a HUMAN, and the card is parked until one answers.
+            6b. REFUTED is different, and it is the file to choose when you can
+               SETTLE the disagreement rather than escalate it (DRE-3084).
+               Write /tmp/fix-refutation.txt — and nothing to
+               /tmp/fix-blocker.txt — when the blocking finding is disproven
+               by evidence YOU can read and the critic could not: the live
+               Linear card (the critic has no Linear key, on purpose), a test
+               run you actually ran, the merge base, a check run's log. Push
+               nothing. Quote the evidence concretely — the command and its
+               output, the run id, the card field — because that text is
+               handed straight to the critic as the reason to look again. The
+               pipeline then re-reviews this same commit ONCE with your
+               refutation attached, so a correct finding is still a correct
+               finding and a disproven one no longer costs a person an hour.
+               Use it only for a finding evidence actually settles: a
+               disagreement of judgement is /tmp/fix-blocker.txt, and one
+               re-review is all this commit gets either way.
 
       - name: Report
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true' && always()
@@ -934,6 +962,13 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ steps.pr.outputs.card }}
           PRE_SHA: ${{ steps.pr.outputs.head_sha }}
+          # DRE-3084: the ONE call in this step that cannot use GH_TOKEN — the
+          # App token holds no Actions permission (DRE-1254), so the re-review
+          # dispatch rides the workflow's own token. Through env, never
+          # interpolated into the script body: everything else in this step
+          # already obeys that rule, and it is also what keeps the block
+          # executable verbatim by tests/test_act_emission_scenario.py.
+          DISPATCH_TOKEN: ${{ github.token }}
         run: |
           PR=${{ steps.pr.outputs.number }}
 
@@ -971,7 +1006,110 @@ jobs:
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
           }
 
-          if [ -f /tmp/fix-blocker.txt ]; then
+          # DRE-3084 — the fixer ANSWERED the critic instead of obeying it.
+          #
+          # Read BEFORE the blocker file, because it is the more specific
+          # outcome and the two are not the same act: a blocker asks a HUMAN
+          # to settle a disagreement the fixer cannot; a refutation settles it
+          # with evidence the critic could not read (the live card — the
+          # critic holds no Linear key on purpose, DRE-2696 — a test run, the
+          # merge base) and needs only the reviewer to look again. Before this
+          # card there was no such outcome: the verdict stood, the card went to
+          # Triage with `needs-human`, and a person ran `gh run rerun` hours
+          # later (agent-bureau #2247 hand-merged 17:15 PT, bureau-pipeline
+          # #251 approved on a hand re-run at 22:04 PT, agent-bureau-demo #9
+          # refuted 23:55 and approved 00:01 — all 2026-09-03).
+          #
+          # ONE re-review per HEAD, and the receipt IS the counter: the body
+          # carries `refuted-finding @<sha8>`, the same key qa-review.yml
+          # reads back to put the refutation in the critic's context. A second
+          # refutation on the same commit is a loop, not a re-review, so it
+          # escalates exactly as a blocker does, with both quoted. A new
+          # commit is a new head and earns its own re-review, like every other
+          # budget in this loop.
+          if [ -f /tmp/fix-refutation.txt ]; then
+            SHA8=${PRE_SHA:0:8}
+            REFUTE_KEY="refuted-finding @$SHA8"
+            gh api --paginate --slurp \
+              "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+              > /tmp/refuted-thread.json 2>/dev/null \
+              || echo '[]' > /tmp/refuted-thread.json
+            # Worker-bot authored ONLY (DRE-1995): anyone can comment this
+            # marker, and a planted one would either burn the one re-review a
+            # healthy PR is owed or park it outright.
+            PRIOR=$(jq -r --arg sha8 "$SHA8" '[add[] | select(.user.login == "agent-bureau-bot[bot]") | select(.body | contains("refuted-finding @" + $sha8))] | last | .body // ""' < /tmp/refuted-thread.json || true)
+            if [ -z "${PRIOR:-}" ]; then
+              REFUTED_TAIL="Nothing was pushed and nothing needs to be. The pipeline is having the reviewer look at this same commit once more with the evidence above attached to its context as untrusted data: if the evidence stands the reviewer says so, and if it does not it says which part fails."
+            else
+              REFUTED_TAIL="This is the SECOND refutation on this same commit and the one automatic re-review is already spent, so this stops here rather than looping. The first one, quoted:
+
+          $(printf '%s\n' "${PRIOR:-}" | sed 's/^/> /')
+
+          A person decides which reading is right.
+
+          $FORMAT"
+            fi
+            REFUTED_BODY="🛑 Fix attempt ${{ steps.pr.outputs.attempt }} refuted the finding: $(cat /tmp/fix-refutation.txt)
+
+          $REFUTED_TAIL
+
+          $REFUTE_KEY"
+            if [ -z "${PRIOR:-}" ]; then
+              python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-finding-refuted \
+                --body "$REFUTED_BODY" --out /tmp/act-fix-refuted.md \
+                || printf '%s' "$REFUTED_BODY" > /tmp/act-fix-refuted.md
+              # Posted BEFORE the dispatch, and that order is load-bearing:
+              # the re-review reads this comment off the thread to build its
+              # context, so dispatching first races the write.
+              gh pr comment "$PR" --repo ${{ github.repository }} \
+                --body-file /tmp/act-fix-refuted.md
+              # The dispatchable critic stub for THIS repo (DRE-2056): in
+              # bureau-pipeline qa-review.yml IS the workflow_call-only
+              # reusable and dispatching it 422s, so the stub is pr-review.yml.
+              # Same resolution reconcile.review_workflow() makes.
+              REVIEW_WF=qa-review.yml
+              [ "${{ github.repository }}" = "dreadnought-foundry/bureau-pipeline" ] && REVIEW_WF=pr-review.yml
+              # The App token holds NO Actions permission (DRE-1254: "HTTP
+              # 403: Resource not accessible by integration"), so the dispatch
+              # rides the workflow's own GITHUB_TOKEN — which carries
+              # actions:write only if the CALLING STUB grants it (README, "The
+              # agent-fix stub's actions: write"). A stub that has not been
+              # updated 403s here, and a promised re-review nobody runs is the
+              # exact silent stall this card exists to remove: so the failure
+              # is loud, and it degrades to today's behaviour rather than to a
+              # lie.
+              if GH_TOKEN="$DISPATCH_TOKEN" gh workflow run "$REVIEW_WF" \
+                   --repo "${{ github.repository }}" \
+                   -f pr_number="$PR"; then
+                if [ -n "$CARD" ]; then
+                  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                    "🔁 The fix agent answered the reviewer's finding with evidence instead of changing the code, so the reviewer is taking one more look at the same work with that evidence in hand. Nothing is needed from you — this is one automatic re-review, not a loop." || true
+                fi
+              else
+                echo "::warning::could not dispatch $REVIEW_WF for PR #$PR — this repo's agent-fix stub needs \`actions: write\`; parking for a human instead of promising a re-review that will not run"
+                if [ -n "$CARD" ]; then
+                  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                    "🙋 The fix agent answered the reviewer's finding with evidence, but the pipeline could not start the second look by itself. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **Backlog** to drop it." || true
+                fi
+                park_for_human
+              fi
+            else
+              # Capped. Same act the ordinary dispute posts — the fixer pushed
+              # nothing, the branch holds a stale REQUEST_CHANGES, and the
+              # answer is picked up by the sweep and discharged by
+              # `fix-loop-restarted` exactly as it is there.
+              python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+                --body "$REFUTED_BODY" --out /tmp/act-fix-refuted-capped.md \
+                || printf '%s' "$REFUTED_BODY" > /tmp/act-fix-refuted-capped.md
+              gh pr comment "$PR" --repo ${{ github.repository }} \
+                --body-file /tmp/act-fix-refuted-capped.md
+              if [ -n "$CARD" ]; then
+                python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+                  "🙋 The fix agent and the reviewer disagree about the same point twice on the same work, and the automatic second look is already spent. This needs your call. Details on PR #$PR — both sides are quoted there. Answer on the PR with a first line starting Operator decision, or move this card to **Todo** to try again or to **Backlog** to drop it." || true
+              fi
+              park_for_human
+            fi
+          elif [ -f /tmp/fix-blocker.txt ]; then
             # DRE-2826: composed through the one receipt writer, which returns
             # this body byte-identically and appends the act trailer. The body
             # itself is untouched — reconcile's restart sweep reads the 🛑 that

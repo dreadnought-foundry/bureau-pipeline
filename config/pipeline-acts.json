@@ -327,6 +327,22 @@
       }
     },
     {
+      "name": "fix-finding-refuted",
+      "tag": "refuted-finding",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "The fix agent answered the reviewer's blocking finding with evidence the reviewer could not read and pushed nothing, so the pipeline re-dispatched ONE review of the same commit with that evidence attached.",
+      "state": "dispatched",
+      "next_actor": "qa-review.yml",
+      "discharges": null,
+      "subscriber": "qa-review.yml",
+      "why": "The sibling of `fix-attempt-disputed`, and the difference is who is being asked. A blocker asks a HUMAN because the fixer cannot settle the disagreement; a refutation settles it with evidence and needs only the reviewer to look again — the two agents are built to see different things (the critic holds no Linear key on purpose, DRE-2696), so a finding the fixer disproves is evidence the critic never had. The tag is ADOPTED because it is the per-head idempotency key in the same receipt: `refuted-finding @<sha8>` is what the fix loop counts to allow exactly ONE re-review per commit, and what qa-review.yml reads back to put the refutation in the critic's context. A second refutation on the same head is a loop, not a re-review, and escalates as `fix-attempt-disputed` does.",
+      "emits": {
+        "file": ".github/workflows/agent-fix.yml",
+        "anchor": "refuted the finding: $(cat /tmp/fix-refutation.txt)"
+      }
+    },
+    {
       "name": "run-failure-diagnosed",
       "tag": "medic-diagnosis",
       "adopted": false,
@@ -824,6 +840,30 @@
       "kind": "undeclared-act",
       "means": "The card-side half of the hold on a PR whose red checks the fix loop structurally cannot fix.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its PR-side half sits eight lines above it in the same step and is declared with it; its body is written by scripts/unfixable_checks.py, so converting it also moves a seam this card does not own."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🔁 The fix agent answered the reviewer's finding with evidence instead of changing the code",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The card-side half of `fix-finding-refuted`: the fixer settled the finding with evidence, pushed nothing, and one re-review of the same commit is on its way.",
+      "why": "The CARD-SIDE half of an act the registry already declares, and the registry pins ONE `emits` site per act — the same reason `fix-attempt-disputed`'s card half is named here. Admitting a second surface is a REGISTRY change, not an emission one. Its PR-side half composes `fix-finding-refuted` a dozen lines above it in this same step, and carries the `refuted-finding @<sha8>` key that both the cap and qa-review.yml read."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 The fix agent answered the reviewer's finding with evidence, but the pipeline could not start the second look",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The re-review dispatch was refused (the repo's agent-fix stub lacks `actions: write`), so the refutation parks for a human instead of promising a look nobody will take.",
+      "why": "The degrade path of `fix-finding-refuted`, and deliberately NOT that act: the act's state is `dispatched` and here nothing was. Giving the failure its own row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber — not an emission change. Named here so the debt is countable, and it is expected to be empty in practice: it fires only in a repo whose stub has not been updated, which the README's 'The agent-fix stub's actions: write' section exists to prevent."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 The fix agent and the reviewer disagree about the same point twice",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The cap: a second refutation on the same commit, with the one automatic re-review already spent, so the card goes to a person with both readings quoted.",
+      "why": "The CARD-SIDE half of `fix-attempt-disputed`, which this branch composes on the PR side — the registry pins ONE `emits` site per act and that act's card half is already named here for the ordinary dispute. Two card wordings for one act is a wording question, not a registry one; admitting either as a second `emits` surface is the registry change this row defers."
     },
     {
       "file": ".github/workflows/agent-fix.yml",

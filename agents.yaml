@@ -217,7 +217,14 @@ agents:
     # check requires this omission to appear there rather than be a blank.
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
-    briefPath: null
+    # DRE-3084. The brief carries ONLY what the per-PR prompt cannot: the
+    # standing facts about the critic's own position (a fixture carrying a
+    # real card id is a snapshot, never the card; a finding the fix agent
+    # disproves with evidence gets one honest re-read). The charter, the
+    # review strategy and the verdict format stay in qa-review.yml, where they
+    # are built per PR. It names no credential — the Linear omission above is
+    # still the deliberate one, and tests/test_agent_linear_key.py checks it.
+    briefPath: briefs/critic.md
     workflow: .github/workflows/qa-review.yml
 
   - name: verifier

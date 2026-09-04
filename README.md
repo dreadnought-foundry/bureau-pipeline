@@ -212,6 +212,33 @@ The reconcile sweep runs the same audit in every repo it sweeps and prints a
 job whose trigger was a qa-bot verdict — the case that otherwise reads as the
 harmless duplicate-dispatch cancel it shares a conclusion with.
 
+### The agent-fix stub's `actions: write` (DRE-3084)
+
+Permissions live in the stub too, so this one is likewise not fixable from
+here. Every `agent-fix` stub in the fleet needs:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+```
+
+`actions: write` is what lets the fix loop dispatch **one** re-review when the
+fix agent refutes a blocking finding with evidence and pushes nothing (the
+critic and the fixer are built to see different things — the critic holds no
+Linear key on purpose, so a finding the fixer disproves against the live card
+or a real test run is evidence the critic never had). The App token carries no
+Actions permission at all (DRE-1254: *"HTTP 403: Resource not accessible by
+integration"*), so the dispatch rides the workflow's own `GITHUB_TOKEN`, and
+only the stub can grant it — the same reason `self-merge-gate.yml` carries it
+for the conflict dispatch.
+
+A stub without it **degrades, it does not break**: the dispatch 403s, the run
+prints a `::warning::`, the PR says so and the card parks for a human — which
+is exactly what happened before this card existed. So the fleet loses the
+automatic second look until its stub is updated, and loses nothing else.
+
 What the product repo still carries:
 
 - `.github/workflows/ci.yml` (+ any other product CI) — product-specific.
