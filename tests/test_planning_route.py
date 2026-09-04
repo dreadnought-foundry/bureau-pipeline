@@ -31,6 +31,12 @@ WHAT THIS PINS, one section per acceptance criterion:
      closes it, and the pairing below proves the verdict is load-bearing.
   6. The three destinations are READ from `config/planning-shapes.json`:
      changing the file changes the routing.
+  7. (DRE-3038) The one-off's routing verdict is READ FROM THE CARD and never
+     defaulted: role label → title convention → acceptance criteria → NEEDS
+     WORK when there are none, exactly as `routing_verdict.route()` decides for
+     a child. A NEEDS WORK one-off takes the escalation exit rather than
+     leaving Planning silently, and the reason on the verdict comment is the
+     branch that actually decided.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_route.py -v
 """
@@ -272,17 +278,18 @@ class TestTheOneOffExit:
         """A one-off inherits no epic's approval, so its verdict IS the
         approval — and without one the sweep refuses to promote it (DRE-2735).
 
-        The shape is what decides it: "one card, one pull request" is a
-        statement that an unattended agent builds this, which is what the
-        fleet verdict means. The mechanical rule then OVERRIDES, below.
+        The CARD decides it, never the shape (DRE-3038): this body states two
+        criteria and neither of them names a person, so an unattended agent can
+        satisfy the stated exit condition. Section 7 walks the branches.
         """
         exit_plan = planning_route.exit_plan(_read_card(), [_stamp("one-off")])
         assert exit_plan.verdict == "FLEET"
         assert exit_plan.reason.strip()
 
-    def test_the_default_is_the_one_verdict_the_sweep_promotes(self):
+    def test_the_buildable_verdict_is_the_one_the_sweep_promotes(self):
         """Derived from the routing vocabulary, not named here: exactly one
-        verdict is promotable, and that is the one a one-off leaves with."""
+        verdict is promotable, and that is the one a buildable one-off leaves
+        with."""
         promotable = [v for v in routing_verdict.verdicts()
                       if routing_verdict.is_promotable(v)]
         assert planning_route.fleet_verdict() == promotable[0]
@@ -638,3 +645,182 @@ class TestPlanYmlBranchesThreeWays:
         route = _step("Route — plan or activate")["run"]
         assert "trigger_state" in route
         assert "mode=activate" in route and "mode=plan" in route
+
+
+# ===========================================================================
+# 7: the one-off's verdict is READ FROM THE CARD, never defaulted (DRE-3038)
+# ===========================================================================
+#
+# `is_epic()` used to answer "epic" for any card carrying `agent:planner`, and
+# every card the relay dispatches to `plan.yml` from Planning carries it. So
+# `routing_verdict.route()` answered "epic, no verdict" for every one-off, the
+# role-label → title → criteria precedence never ran, and `_one_off_check` fell
+# to a fixed FLEET sentence. DRE-3018 and DRE-3020 were both stamped that way
+# with zero `- [ ]` items between them.
+FD4B_TITLE = (
+    "PROOF-FD-4b — a one-off card in Planning WITH agent:planner: expect a "
+    "routing verdict and Backlog, never Green Light (throwaway, safe to cancel)"
+)
+FD4B_LABELS = ("repo:agent-bureau-demo", "agent:planner")
+FD4B_BODY = (ROOT / "tests" / "fixtures" / "dre-3018-fd-4b-one-off-probe.md").read_text(
+    encoding="utf-8"
+)
+
+# The sentence `_one_off_check` stamped on every one-off whatever the card said.
+# Quoted here so its removal is ASSERTED rather than remembered.
+DEFAULT_SENTENCE = (
+    "the card is shaped one-off — one card, one pull request — and nothing in "
+    "its acceptance criteria says a person has to drive it"
+)
+
+
+def _fd4b(criterion: str | None = None) -> dict:
+    """DRE-3018's real body, optionally given the one criterion under test."""
+    body = FD4B_BODY
+    if criterion:
+        body += f"\n\n## Acceptance criteria\n\n- [ ] {criterion}\n"
+    return _read_card(
+        "DRE-3018", title=FD4B_TITLE, description=body, labels=FD4B_LABELS
+    )
+
+
+class TestTheOneOffVerdictIsReadFromTheCard:
+    def test_the_probe_body_as_filed_routes_needs_work(self):
+        """DRE-3018 carries zero `- [ ]` items, and `criteria_verdict()` has
+        always documented that as NEEDS WORK — "no exit condition to route
+        on". It was stamped FLEET."""
+        plan = planning_route.exit_plan(_fd4b(), [_stamp("one-off")])
+        assert plan.verdict == "NEEDS WORK"
+        assert "no acceptance criteria" in plan.reason.lower()
+
+    def test_one_criterion_a_person_can_close_routes_to_the_fleet(self):
+        plan = planning_route.exit_plan(
+            _fd4b("the README names the date the demo pipeline was last exercised"),
+            [_stamp("one-off")],
+        )
+        assert plan.verdict == planning_route.fleet_verdict()
+        assert plan.escalation is None
+
+    def test_a_criterion_naming_live_state_routes_to_a_person(self):
+        """The card's own example: a one-off whose criteria say "observed in
+        production" or "by hand" was routed FLEET the same way. It routes to a
+        human now — and the vocabulary's answer for live state is WORKBENCH
+        ("needs an interactive flow or live system state"), not OPERATOR
+        ("not code — a deploy, a migration, a secret"). Both are a person; the
+        phrase lives on the `interactive` signal in
+        `config/routing-verdicts.json`, which this card does not touch."""
+        for criterion in ("the new README line is observed in production",
+                          "the date is checked by hand against the last run"):
+            plan = planning_route.exit_plan(_fd4b(criterion), [_stamp("one-off")])
+            assert not routing_verdict.is_promotable(plan.verdict), criterion
+            assert routing_verdict.actor(plan.verdict) in planning_route.HUMAN_ACTORS
+            assert plan.verdict == "WORKBENCH", criterion
+
+    def test_an_explicit_role_label_still_wins_over_the_criteria(self):
+        """Precedence 1, on a card wearing `agent:planner` — the leg that never
+        ran, because the label was read as epic-ness before anything else."""
+        card = _read_card(
+            "DRE-3018", title=FD4B_TITLE,
+            description=FD4B_BODY + "\n\n- [ ] the README names the date\n",
+            labels=(*FD4B_LABELS, "no-code"),
+        )
+        plan = planning_route.exit_plan(card, [_stamp("one-off")])
+        assert plan.verdict == "OPERATOR"
+
+    def test_the_reason_names_the_criterion_it_read(self):
+        """The verdict comment is what a reader gets. It names the branch that
+        actually decided — and where the criteria decided, the criterion."""
+        criterion = "the README names the date the demo pipeline was last exercised"
+        plan = planning_route.exit_plan(_fd4b(criterion), [_stamp("one-off")])
+        assert criterion in plan.reason
+        assert criterion in routing_verdict.verdict_comment(plan.verdict, plan.reason)
+
+    def test_two_one_offs_with_different_criteria_get_different_reasons(self):
+        """"Never a fixed sentence" is the property, so two cards that differ
+        only in their criteria must not read back identically."""
+        first = planning_route.exit_plan(
+            _fd4b("the README names the date"), [_stamp("one-off")])
+        second = planning_route.exit_plan(
+            _fd4b("the health endpoint answers 200"), [_stamp("one-off")])
+        assert first.verdict == second.verdict
+        assert first.reason != second.reason
+
+    def test_the_default_fleet_sentence_is_gone_from_the_module(self):
+        source = (ROOT / "scripts" / "planning_route.py").read_text(encoding="utf-8")
+        # Quotes and line breaks removed, so a sentence re-split across two
+        # string literals does not slip past this.
+        flat = " ".join(source.replace('"', " ").replace("'", " ").split())
+        needle = " ".join(DEFAULT_SENTENCE.replace('"', " ").split())
+        assert not (needle in flat), (
+            "planning_route.py still carries the fixed FLEET sentence — the "
+            "reason on a verdict is the branch that actually decided"
+        )
+
+
+class TestANeedsWorkOneOffDoesNotLeaveSilently:
+    """DRE-2848: hand-planning is an escalation, and a one-off nothing can
+    route is exactly that — the CEO (or the classifier, DRE-3029) gets it back
+    with the reason, instead of a card landing in Backlog carrying a verdict
+    that says it is not buildable."""
+
+    def test_it_takes_the_escalation_exit(self):
+        import planning_escalation
+
+        plan = planning_route.exit_plan(_fd4b(), [_stamp("one-off")])
+        assert plan.escalation is not None
+        assert plan.destination == planning_escalation.destination()
+        assert plan.destination != planning_shape.destination("one-off")
+
+    def test_the_reason_it_escalates_with_is_fit_for_the_ceo(self):
+        import planning_escalation
+
+        plan = planning_route.exit_plan(_fd4b(), [_stamp("one-off")])
+        assert planning_escalation.refusal(plan.escalation) is None, (
+            "the escalation reason is put in front of the CEO — no code, no "
+            "file paths, no commands"
+        )
+
+    def test_a_verdict_that_routes_to_a_person_still_leaves_normally(self):
+        """WORKBENCH and OPERATOR are answers, not absences: somebody picks the
+        card up in the build queue. Only "not buildable as written" comes back
+        to the planning segment."""
+        plan = planning_route.exit_plan(
+            _fd4b("the new README line is observed in production"),
+            [_stamp("one-off")],
+        )
+        assert plan.escalation is None
+        assert plan.destination == planning_shape.destination("one-off")
+
+
+class TestTheExitCommandEscalates:
+    def test_a_criteria_less_one_off_is_escalated_and_never_stamped(self):
+        import planning_escalation
+
+        card = _Card([_stamp("one-off")], description=FD4B_BODY, labels=FD4B_LABELS)
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+
+        assert routing_verdict.verdicts_on([b for _, b in card.posted]) == (), (
+            "a card that cannot be routed carries no verdict — it has not left "
+            "the planning segment"
+        )
+        assert planning_escalation.ESCALATION_TAG in card.bodies()
+        assert planning_route.ROUTE_TAG not in card.bodies(), (
+            "the route note says the card needs no green light, which is the "
+            "opposite of what just happened"
+        )
+        assert card.states == [(CARD, planning_escalation.destination())]
+        assert card.labelled == []
+
+    def test_re_running_the_escalation_writes_nothing_twice(self):
+        card = _Card([_stamp("one-off")], description=FD4B_BODY, labels=FD4B_LABELS)
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        first = list(card.posted)
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        assert card.posted == first
+
+    def test_a_buildable_one_off_is_still_stamped_and_moved(self):
+        """Guard the guard: the ordinary path is untouched."""
+        card = _Card([_stamp("one-off")])
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert routing_verdict.verdict_on([b for _, b in card.posted]) == "FLEET"
+        assert card.states == [(CARD, planning_shape.destination("one-off"))]
