@@ -179,9 +179,12 @@ class OnlyTheDeclaredSectionCounts(unittest.TestCase):
         self.assertEqual(pf.declared_files(body), {"README.md"})
 
     def test_two_cards_that_only_MENTION_one_file_do_not_collide(self):
+        """The mention is a paragraph of its own — a non-blank line directly
+        under the label is the declaration WRAPPING, which is what the brief's
+        template does, so the blank line is load-bearing here."""
         cards = [
-            {"identifier": "DRE-1", "body": "**Files:** `a.md`\nsee `shared/x.py`\n"},
-            {"identifier": "DRE-2", "body": "**Files:** `b.md`\nsee `shared/x.py`\n"},
+            {"identifier": "DRE-1", "body": "**Files:** `a.md`\n\nsee `shared/x.py`\n"},
+            {"identifier": "DRE-2", "body": "**Files:** `b.md`\n\nsee `shared/x.py`\n"},
         ]
         self.assertEqual(pf.collisions(cards), {})
 

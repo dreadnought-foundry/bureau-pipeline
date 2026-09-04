@@ -1636,27 +1636,62 @@ def cmd_child_descriptions(identifier: str) -> None:
             sys.stdout.write(body.rstrip("\n") + "\n")
 
 
+def child_json_records(nodes: list) -> list:
+    """The `children-json` records for `nodes`.
+
+    Pure (no I/O) so the shape the plan critics read is pinned by test rather
+    than by a live board. Same degrade-quietly contract as every other reader
+    here: a node with no body, no labels or no parent produces a record with
+    empty ones, never an exception in the middle of a planning run.
+    """
+    out = []
+    for node in nodes or []:
+        node = node or {}
+        out.append({
+            "identifier": node.get("identifier"),
+            "body": node.get("description") or "",
+            "labels": [
+                (l or {}).get("name") or ""
+                for l in ((node.get("labels") or {}).get("nodes")) or []
+            ],
+            "parent": ((node.get("parent") or {}).get("identifier")) or "",
+        })
+    return out
+
+
 def cmd_children_json(identifier: str) -> None:
-    """Every child card as `{"identifier", "body"}` records, as a JSON array.
+    """Every child card as `{"identifier", "body", "labels", "parent"}`
+    records, as a JSON array.
 
     `child-descriptions` concatenates the bodies, which is right for the
     "is this UI work?" question and useless for anything that has to say WHICH
     card is wrong. The plan critics (DRE-2721) report per card — "DRE-9001
     carries no acceptance criteria" — so they need the identity beside the
     body, and `plan_critic.py mechanical` reads exactly this shape on stdin.
+
+    The LABELS are here because the repo a card builds in is carried by its
+    `repo:<slug>` label and by nothing else (standards/card-quality.md rule 1);
+    the body stamp that label replaced is deprecated and the planner brief
+    forbids writing it. Handed `{identifier, body}` only, the critic's repo
+    check had nothing but a body regex for the forbidden line — so it flagged
+    all five of DRE-3019's correctly-built children as "names no repo"
+    (DRE-3040). The PARENT rides along because a card the critic is told to
+    report on belongs to an epic, and a record that cannot say which one leaves
+    the critic inferring it.
     """
     data = gql(
         """query($id: String!) {
-             issue(id: $id) { children { nodes { identifier description } } }
+             issue(id: $id) { children { nodes {
+               identifier description
+               parent { identifier }
+               labels { nodes { name } }
+             } } }
            }""",
         {"id": identifier},
     )
     issue = data.get("issue") or {}
     nodes = ((issue.get("children") or {}).get("nodes")) or []
-    print(json.dumps([
-        {"identifier": (n or {}).get("identifier"), "body": (n or {}).get("description") or ""}
-        for n in nodes
-    ]))
+    print(json.dumps(child_json_records(nodes)))
 
 
 def child_detail_records(nodes: list) -> list:
