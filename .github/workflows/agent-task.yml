@@ -253,6 +253,19 @@ jobs:
       # The selection alone was never enough: a run that quietly dropped a rung
       # looked identical to one that got its first choice. The note rides the
       # heartbeat comment below, and a DEGRADED note also raises a ::warning::.
+      #
+      # THE TURN BUDGET IS CHOSEN HERE TOO (DRE-3097). `--max-turns 150` was a
+      # literal below, with no per-card, per-size or per-repo knob — and the
+      # park receipt's own second remedy ("or raises the turn budget") had no
+      # handle. DRE-3088 died at that cap three times, $19.12/$19.12/$17.53,
+      # every run reaching `⏳ 3/5 implementation green` and dying in the two
+      # steps after it, the THIRD time after the card had already been split to
+      # XS: the cost was the ~1,850-line file the agent had to keep re-reading,
+      # not the size of the change. turn_budget.py reads a `turns:<n>` label
+      # (from a closed, reviewed set), else the `size:` label, else 150 — in
+      # THIS step, so a run cannot read the card one way for its model and
+      # another for its budget. It never exits non-zero: an unreadable card
+      # costs the raise, never the run.
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -260,6 +273,8 @@ jobs:
           # The probe authenticates with the same CLAUDE token the agent uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          # The budget is a property of the CARD, so this step reads Linear.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
@@ -272,6 +287,15 @@ jobs:
           echo "$WHY" >> "$GITHUB_STEP_SUMMARY"
           # Never silent: a run that did NOT get the top of its ladder says so.
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
+          TURNS_FILE="$RUNNER_TEMP/turn-budget.txt"
+          TURNS=$(python3 .bureau-pipeline/scripts/turn_budget.py select \
+            "${{ github.event.client_payload.identifier }}" \
+            --explain-file "$TURNS_FILE")
+          TURNS_WHY=$(cat "$TURNS_FILE")
+          echo "turns=$TURNS" >> "$GITHUB_OUTPUT"
+          echo "turns_why=$TURNS_WHY" >> "$GITHUB_OUTPUT"
+          echo "$TURNS_WHY"
+          echo "$TURNS_WHY" >> "$GITHUB_STEP_SUMMARY"
 
       # Assemble the agent's context = the role's shared standards + role brief
       # (DRE-1646). The build agents run headless and cannot load Skills, so
@@ -335,7 +359,7 @@ jobs:
             ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
             python3 .bureau-pipeline/scripts/linear_ops.py comment \
               "${{ github.event.client_payload.identifier }}" \
-              "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting. ${{ steps.model.outputs.why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting (turns=${{ steps.model.outputs.turns }}). ${{ steps.model.outputs.why }} ${{ steps.model.outputs.turns_why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } 2>&1 | tee "$PRE_AGENT_LOG"
 
       # A LOUD FLOOR, NOT A SILENT CEILING (DRE-3043). The re-mint below makes
@@ -379,7 +403,7 @@ jobs:
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 150
+            --max-turns ${{ steps.model.outputs.turns || 150 }}
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
@@ -830,7 +854,20 @@ jobs:
             elif [ "$DEATH_CLASS" = "turn_exhaustion" ]; then
               PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
                 "$CARD" "turn-exhaustion-requeue" --since "dead-run-budget-reset" || echo 0)
-              ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE"
+              # BUDGET OR SIZE? (DRE-3097.) The hold has two causes and used to
+              # name one. The card's own thread answers it — the `⏳ n/5` phase
+              # receipts of each run, grouped by the `🧠 model-attempt`
+              # heartbeat that starts one — so the receipt tells a human to
+              # raise `turns:` when every run reached implementation green and
+              # died after it, instead of telling them to split a card that
+              # splitting has already failed to fix (DRE-3088's third death was
+              # on the XS version). Fail-soft at every step: an unreadable
+              # thread writes an empty array and dead_run.py falls back to the
+              # split text it has always sent.
+              COMMENTS_FILE="${RUNNER_TEMP:-/tmp}/card-comments.json"
+              python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
+                > "$COMMENTS_FILE" || echo '[]' > "$COMMENTS_FILE" || true
+              ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE --comments-file $COMMENTS_FILE"
               PARK_TAG_FLAGS="--turn-exhaustion"
             elif [ "$DEATH_CLASS" = "credential_expiry" ]; then
               # DRE-3043. The re-mint above did not save this one — so say what
