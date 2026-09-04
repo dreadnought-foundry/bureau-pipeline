@@ -221,6 +221,11 @@ jobs:
             # Explicit refspec: actions/checkout clones one ref, so a bare
             # `fetch origin main` fills FETCH_HEAD and never origin/main.
             git fetch --depth 1 origin main:refs/remotes/origin/main
+            # Remove first, then restore: `git checkout <ref> -- <dir>` only
+            # writes files that exist in <ref> and never deletes one the old
+            # branch still carries. scripts/harness/scenarios/ discovers every
+            # module it finds, so a scenario main deleted would still run.
+            rm -rf scripts/harness
             git checkout origin/main -- scripts/harness
             MAIN_SHA=$(git rev-parse --short origin/main)
             echo "source=main" >> "$GITHUB_OUTPUT"
