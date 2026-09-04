@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — do not edit by hand. -->
 <!-- Regenerate with `python3 scripts/split_ledger.py derive`. -->
 
-Generated **2026-09-04T05:08:16Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces.
+Generated **2026-09-04T05:21:08Z** from Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces.
 
 Every card here did not fit one run: it died at the turn cap, it was split, or a build run handed it back as an epic. The point of writing it down is DRE-3022's: the planner has been sizing cards against nothing.
 

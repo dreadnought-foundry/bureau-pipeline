@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-04T05:08:16Z",
+  "generated_at": "2026-09-04T05:21:08Z",
   "generated_by": "scripts/split_ledger.py derive",
   "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces",
   "seed_cards": [

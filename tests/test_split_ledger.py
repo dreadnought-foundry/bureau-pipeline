@@ -286,6 +286,14 @@ def test_a_card_that_is_none_of_the_three_has_no_reason():
     assert split_ledger.reasons({"identifier": "DRE-9", "comments": []}) == []
 
 
+def test_a_seed_row_history_does_not_answer_says_so_rather_than_nothing():
+    """A row with no reason at all reads as a bug in the reader. The seeds are
+    in the ledger because the card named them, and the row says that."""
+    seed = split_ledger.row({"identifier": split_ledger.SEED_CARDS[0],
+                             "comments": [], "successors": []})
+    assert seed["reasons"] == [split_ledger.REASON_SEED]
+
+
 def test_successors_of_a_live_card_are_not_a_split():
     """The card names Canceled or Backlog: a card still in flight whose siblings
     cite it has not been split, it has been referenced."""
