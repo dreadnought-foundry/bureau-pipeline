@@ -402,6 +402,18 @@ duplicate "✅ Merged" comment — cosmetic.
 
 **Verdict:** covered.
 
+> **Amended 2026-09-04 (DRE-3042).** Q5's answer above held for the `card-done`
+> job and was incomplete for `conflict-sweep`. "Leave it to the next sweep" is
+> only benign where something is watching in the meantime, and a conflicted
+> pull request emits no workflow events at all — no CI, no review, no merge
+> gate — so a crash there is invisible until the cron lands. It crashed on
+> 2026-09-03 (run 33829082382) on a `REPO_SLUG` the step never set, and PR #244
+> sat DIRTY with no critic and no fix loop until a person dispatched the fix
+> workflow by hand. The step now posts the hand-recovery notice
+> (`conflict-sweep-unavailable`) on each conflicted PR before failing the run,
+> and `scripts/check_reconcile_env.py` fails the build on a call site that
+> omits an argument.
+
 ## reconcile.yml + scripts/reconcile.py — the sweep
 
 Stub self-reconcile.yml binds `schedule: */15`, `repository_dispatch:
