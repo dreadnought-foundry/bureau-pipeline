@@ -658,9 +658,13 @@ class TheWorkflowWiring(unittest.TestCase):
         step = _step("Push rescue")
         self.assertIn("push_rescue.py", step["run"])
         self.assertIn("steps.pushtoken.outputs.token", step["env"]["PUSH_TOKEN"])
-        # …and falls back to the job-start token if the re-mint itself failed,
-        # so the step is never worse than doing nothing.
-        self.assertIn("steps.worker.outputs.token", step["env"]["PUSH_TOKEN"])
+        # The job-start token was the fallback here until DRE-3098: that is the
+        # credential the agent step held, the failure being rescued from may
+        # have invalidated it, and on run 33896126776 pushing with it answered
+        # `error: 400` twenty-six minutes into the run. The retry credential is
+        # a SECOND mint of this step's own — see
+        # tests/test_rescue_push_token.py.
+        self.assertNotIn("steps.worker.outputs.token", step["env"]["PUSH_TOKEN"])
         self.assertTrue(str(step.get("if", "")).startswith("always()"))
 
     def test_the_rescue_never_runs_for_a_bounced_or_duplicate_dispatch(self):
