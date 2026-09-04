@@ -48,6 +48,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
+import planning_shape  # noqa: E402
 import reconcile  # noqa: E402
 
 _SOURCE = (_SCRIPTS / "reconcile.py").read_text()
@@ -269,7 +270,13 @@ def test_hold_label_skip_speaks(capsys):
 
 
 def test_epic_skip_speaks(capsys):
-    card = _card("DRE-2902", labels=("repo:agent-bureau", "agent:planner"))
+    """An epic, said the way the sweep now reads one: the planning shape stamp
+    (DRE-3044), not the `agent:planner` label the fixture also wears."""
+    card = _card(
+        "DRE-2902",
+        labels=("repo:agent-bureau", "agent:planner"),
+        comments=[planning_shape.shape_comment("epic", "a decomposition")],
+    )
     assert _sweep([card]) == 0
     held = _lines_naming(capsys.readouterr(), "DRE-2902")
     assert len(held) == 1, f"expected exactly one line, got {held}"
