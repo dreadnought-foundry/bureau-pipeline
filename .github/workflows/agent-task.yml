@@ -864,9 +864,9 @@ jobs:
               # on the XS version). Fail-soft at every step: an unreadable
               # thread writes an empty array and dead_run.py falls back to the
               # split text it has always sent.
-              COMMENTS_FILE="$RUNNER_TEMP/card-comments.json"
+              COMMENTS_FILE="${RUNNER_TEMP:-/tmp}/card-comments.json"
               python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
-                > "$COMMENTS_FILE" || echo '[]' > "$COMMENTS_FILE"
+                > "$COMMENTS_FILE" || echo '[]' > "$COMMENTS_FILE" || true
               ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE --comments-file $COMMENTS_FILE"
               PARK_TAG_FLAGS="--turn-exhaustion"
             elif [ "$DEATH_CLASS" = "credential_expiry" ]; then
