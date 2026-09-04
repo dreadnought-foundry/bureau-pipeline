@@ -107,13 +107,14 @@ class PlanWiringTest(unittest.TestCase):
 class PlanModelFallbackWiringTest(unittest.TestCase):
     """Planner-path model-fallback wiring (DRE-1354).
 
-    The planner walks the same workhorse ladder as the engineer (Opus, then
-    Sonnet — 2026-08-09), so a re-dispatched plan run must ride the next model
+    The planner walks the `judgement` ladder (claude-fable-5-1, then Opus, then
+    Sonnet — DRE-3015), so a re-dispatched plan run must ride the next model
     down instead of re-dying on the one that just failed. These pin the YAML so
     the planner agent is dispatched with the SELECTED model, not a hard-pinned
     one, and that a prior is_error death drives the switch. The specific
     hard-pin asserted gone below is `--model claude-fable-5`, the dead pin this
-    wiring replaced — and now also a model no build role may select at all.
+    wiring replaced — a DIFFERENT id from the one the ladder now names, still
+    excluded from every ladder, and still a model no role may select at all.
     """
 
     WF = "plan.yml"

@@ -55,29 +55,32 @@ of it is ever a runtime lookup.
 
 ---
 
-# `models.yaml` — the ONE model config (DRE-2316 / DRE-2317)
+# `models.yaml` — the ONE model config (DRE-2316 / DRE-2317 / DRE-3015)
 
 `models.yaml` is **the only file a human edits to change which model an agent
 uses**. It declares named, ordered fallback **ladders** (best → worst), classes
-every agent as one of two **role kinds**, and lists the ids that stay *readable
+every agent as one of three **role kinds**, and lists the ids that stay *readable
 but not selectable* (retired ids, and ids excluded by cost policy).
 
-## Two role kinds — workhorse and advisory
+## The role kinds — workhorse, advisory, judgement
 
 | kind | who | model | why |
 |---|---|---|---|
-| `workhorse` | engineer, frontend, devops, database-architect, planner, fixer, repairer | cost-appropriate (today Opus) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
-| `advisory` | critic, verifier, medic | the **strongest** model (today Fable) | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. |
+| `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (today Opus 5) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
+| `advisory` | critic, verifier, medic, both plan critics | today Sonnet 5 | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. Sonnet 5 since 2026-08-12, on measured cost — the critic fires on every PR push, which is not the bounded volume the ladder was designed around. |
+| `judgement` | the planner, alone | the **strongest** model (today `claude-fable-5-1`) | One run per epic, at a decision point, and the plan it writes is the specification every child card is built from — so a bad output costs a fix loop per child, not a retry. Low volume, highest leverage (CEO decision, 2026-09-03). |
 
 The allocation used to be exactly inverted — the cheapest model judging the most
 expensive one's work — and the priciest model sat on the hot path where it could
 drain the account. Both halves are fixed by the split, and the second half is
 also the structural cost fix: **the strongest model is never on the build path,
-so it cannot be consumed at build volume.**
+so it cannot be consumed at build volume.** That is what makes the planner's
+promotion affordable: it is a decision point, not a hot path.
 
 A role is assigned a **kind**, never a ladder name. That indirection is what
-stops a future edit from inventing a third ladder and quietly putting build work
-on the strongest model.
+stops a future edit from inventing a ladder of its own and quietly putting build
+work on the strongest model — and it is why adding `judgement` was a reviewed
+change to the schema and the policy, not a one-line ladder edit.
 
 ## Availability is not permission
 
@@ -89,14 +92,24 @@ started dying mid-run.
 So the rule, now enforced by schema validation in
 `model_fallback.policy_errors()` rather than by convention:
 
-- the advisory model must not appear on any build ladder — a config that puts it
-  there is **refused**: `sync_model_config.py --check` fails CI red, and the
-  selector keeps running the last-known-good ladders instead of honouring it;
+- the model at the **top of a non-build ladder** — the advisory one, the
+  judgement one — must not appear on any build ladder, and it may not hide
+  *below* the rung that ladder degrades onto either. A config that puts it there
+  is **refused**: `sync_model_config.py --check` fails CI red, and the selector
+  keeps running the last-known-good ladders instead of honouring it. The rungs
+  beneath the top are deliberately shared: that is the DEGRADED fall onto the
+  build model;
+- an `excluded` id must not appear on **any** ladder, enforced on its own terms
+  rather than as a side effect of the rule above;
 - the critic and verifier must stay `advisory`;
 - `default_ladder` must be the workhorse ladder, so an unrecognized role lands on
   the cheap side of the fence;
 - `discovery.on_new_model` may be `advisory` or `none`. **`workhorse` is
-  rejected** — a newly seen model auto-joining the build path *is* the incident.
+  rejected** — a newly seen model auto-joining the build path *is* the incident —
+  **and so is `judgement`**: the planning ladder is the strongest one we run,
+  which makes it the most attractive place for an unattended promotion to land.
+  A newly-discovered model may never reach a build *or* a planning ladder by
+  itself; a human editing this file is the only way up.
   `discovery.alert` must be true: the weekly `model-drift` workflow opens one
   Linear card for a human whenever the API offers a model this file does not
   name.
@@ -110,11 +123,16 @@ agent workflow records that note in its step summary and, on card-driven runs,
 in the `model-attempt:` heartbeat on the Linear card.
 
 A note that starts with `DEGRADED` becomes a `::warning::`. That is the alert
-half of the policy: if an advisory role ever falls off the strongest model —
-because it is unavailable, or because an advisory budget is introduced and
-exhausted — the fallback is the **workhorse** model (the advisory ladder's last
-rung, by construction) and the run says so. A silently weakened critic is the
-exact failure this policy exists to prevent.
+half of the policy: if an advisory or judgement role ever falls off the model it
+was promised — because it is unavailable, or because a budget is introduced and
+exhausted — the fallback is a **workhorse** model (both ladders end on one, by
+construction) and the run says so. A silently weakened critic is the exact
+failure this policy exists to prevent, and so is a planner that quietly ran on
+the build model: nothing about the plan would look different.
+
+Whether `claude-fable-5-1` is enabled on this fleet's subscription is decided by
+the probe at run time (404 → skip, loudly). The **first planner run** after a
+ladder change is a thing to read, not to assume.
 
 No budget accounting exists today, and none is introduced here. If one is ever
 added it must be **per-account**: accounts are per repo, not one fleet-wide

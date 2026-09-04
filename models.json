@@ -8,6 +8,12 @@
       "in_catalog": false
     },
     {
+      "id": "claude-fable-5-1",
+      "display_name": null,
+      "created_at": null,
+      "in_catalog": false
+    },
+    {
       "id": "claude-opus-4-8",
       "display_name": null,
       "created_at": null,

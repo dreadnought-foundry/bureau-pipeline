@@ -29,17 +29,34 @@
 # here, by a human, in a reviewed PR. The probe decides how far DOWN a ladder
 # we walk, never how far up.
 #
+# THE THIRD KIND (DRE-3015, CEO decision 2026-09-03)
+# --------------------------------------------------
+# The rule above is intact and this file still obeys it. What changed is WHICH
+# roles are on the hot path. The planner runs ONCE PER EPIC, at a decision
+# point, and every build run downstream is shaped by its output — a bad
+# decomposition costs a fix loop per child. That is an advisory-shaped cost
+# profile that wore a workhorse label, so the planner moved to its own kind,
+# `judgement`, and runs on the strongest model we have.
+#
+# It is a promotion a HUMAN made, in this file, in a reviewed PR. That is the
+# only way up and it stays the only way up: no probe, no discovery, no
+# availability flip can put a model on the workhorse or judgement ladder.
+#
 # Schema
 # ------
-#   kinds          the TWO role kinds, each naming the ladder its roles walk.
+#   kinds          the role kinds, each naming the ladder its roles walk.
 #                  A role is assigned a KIND, never a raw ladder name — that
-#                  is what stops a future edit from inventing a third ladder
-#                  and quietly putting build work on the strongest model.
+#                  is what stops a future edit from inventing a ladder of its
+#                  own and quietly putting build work on the strongest model.
 #                    workhorse — high-volume build work, hundreds of turns per
 #                                card. The HOT PATH. Cost-appropriate model.
 #                    advisory  — bounded consults at decision points (the
-#                                critic gates every unattended merge). The
-#                                STRONGEST model, and never on the hot path.
+#                                critic gates every unattended merge). Sonnet 5
+#                                since 2026-08-12, on measured cost.
+#                    judgement — judgement-heavy, LOW-VOLUME work whose output
+#                                every downstream run is shaped by: the planner,
+#                                once per epic. The STRONGEST model, and never
+#                                on the hot path.
 #   ladders        named, ordered preference ladders, best → worst. Selection
 #                  (scripts/model_fallback.py `select`) walks a ladder top→bottom
 #                  and returns the first AVAILABLE model. A model that is not on
@@ -49,15 +66,17 @@
 #                  workhorse ladder: an unrecognized role lands on the cheap
 #                  side of the fence, never on the advisory model.
 #   agents         agent/role name → KIND. The names match agents.yaml `name:`
-#                  entries; the four label-routed build roles
+#                  entries; the four label-routed roles
 #                  (engineer/frontend/devops/planner) are also the role strings
 #                  the workflows pass to `model_fallback.py select`.
 #   discovery      what happens to a model id the system SEES but this file
 #                  does not name. `on_new_model` may be `advisory` (it may join
 #                  the advisory ladder, after a human edits this file) or
 #                  `none`. `workhorse` is REJECTED by schema validation — that
-#                  value is precisely the incident. `alert` must be true: a
-#                  newly discovered model always raises a card for a human.
+#                  value is precisely the incident — and so is `judgement`:
+#                  a newly-discovered model may never land on a BUILD or a
+#                  PLANNING ladder by itself. `alert` must be true: a newly
+#                  discovered model always raises a card for a human.
 #   retired        ids that have rotated OUT of every ladder. READABLE, never
 #                  selectable — `model-attempt:` / `model-error:` markers on
 #                  in-flight cards must keep attributing, and dropping an id
@@ -69,13 +88,14 @@
 kinds:
   # THE HOT PATH. Hundreds of turns per card, every card, every repo — this is
   # what consumes the shared rolling session window, so it gets the
-  # cost-appropriate model, and the strongest model is structurally barred from
-  # it (schema validation rejects a config that puts the advisory model here).
+  # cost-appropriate model, and the stronger models are structurally barred
+  # from it: schema validation rejects a config that puts the top of the
+  # advisory or the judgement ladder here.
   workhorse:
     ladder: workhorse
     roles: >-
-      build agents — engineer, frontend, devops, database-architect, planner,
-      fixer, repairer
+      build agents — engineer, frontend, devops, database-architect, fixer,
+      repairer
 
   # THE BACKSTOP. Bounded consults at decision points: one review per PR, one
   # verification, one diagnosis per failed run. Low volume, high stakes — the
@@ -84,6 +104,16 @@ kinds:
   advisory:
     ladder: advisory
     roles: critic, verifier, medic, plan-critic-pre, plan-critic-post
+
+  # THE DECISION POINT. One run per epic, and the plan it writes is the
+  # specification every child card is built from — so the cost of a bad output
+  # is a fix loop per child, not a retry. Low volume, highest leverage: it gets
+  # the strongest model (CEO decision, 2026-09-03). ONE role, deliberately —
+  # a role that runs per CARD belongs on the workhorse ladder however carefully
+  # it thinks, because volume is what drains the subscription.
+  judgement:
+    ladder: judgement
+    roles: planner
 
 ladders:
   # The WORKHORSE ladder: what every build agent runs on. Opus-first since
@@ -120,6 +150,30 @@ ladders:
         intended model is a run worth looking at — but read it as "unexpected
         spend", not "weakened critic".
 
+  # The JUDGEMENT ladder: the planner, and nothing else. Fable-first since
+  # 2026-09-03. Whether `claude-fable-5-1` is enabled on this fleet's
+  # subscription is NOT verified from here — the probe decides that at run time
+  # (404 -> skip, loudly) — so the first planner run after this lands must be
+  # READ, not assumed.
+  judgement:
+    - model: claude-fable-5-1
+      reason: >-
+        the strongest model, for the one role whose output every downstream
+        build run is shaped by (CEO decision 2026-09-03). The planner runs once
+        per epic, so the volume that drained the subscription on 2026-08-09 is
+        absent by construction; a bad decomposition, by contrast, costs a fix
+        loop per child. NOTE the id — `claude-fable-5-1`, NOT the
+        `claude-fable-5` listed under `excluded` below. A different model, and
+        that exclusion still stands.
+    - model: claude-opus-5
+      reason: >-
+        the LOUD fallback — selection note prefixed DEGRADED, workflow raises a
+        ::warning::, exactly as the advisory ladder does it. Read it as "the
+        planner did not get the model it was promised", which is a plan worth
+        looking at, not a broken run.
+    - model: claude-sonnet-4-6
+      reason: "last resort — never block a plan on availability"
+
 default_ladder: workhorse
 
 agents:
@@ -131,9 +185,11 @@ agents:
   # same kind, new framing (re-derive from scratch). It used to hardcode a
   # pricier model — an attempt-gated escalation is still a build path.
   fixer: workhorse
-  planner: workhorse
   # The red-main repair agent is an engineer-tier fixer.
   repairer: workhorse
+  # The one judgement role (DRE-3015). Once per epic, at a decision point, and
+  # the plan it writes is what every child card is built from.
+  planner: judgement
   # The three that judge rather than build. The critic gates every unattended
   # merge; the verifier is the scenario gate for UI/multi-system PRs; the medic
   # diagnoses a failed run once. All bounded consults — all advisory.
@@ -152,7 +208,9 @@ discovery:
   # A model id we SEE but do not name here may, at most, be proposed for the
   # ADVISORY ladder — and only a human editing this file actually puts it
   # there. `workhorse` is rejected by schema validation: that value IS the
-  # 2026-08-09 incident, written down as config.
+  # 2026-08-09 incident, written down as config. `judgement` is rejected the
+  # same way — the planning ladder is now the strongest one we run, which makes
+  # it the most attractive place for an unattended promotion to land.
   on_new_model: advisory
   # Never silent. A newly discovered model always opens a card for a human.
   alert: true
@@ -165,6 +223,12 @@ retired:
 # MEASUREMENT, not a preference — see the advisory ladder's top rung for the
 # numbers. Kept readable, never selectable, so model-attempt:/model-error:
 # markers on in-flight cards still attribute instead of resolving to None.
+#
+# This is `claude-fable-5`, the PREDECESSOR of the `claude-fable-5-1` on the
+# judgement ladder above. Two different model ids: the exclusion below is the
+# one measured against critic volume and it is untouched by DRE-3015 — nothing
+# excluded may appear on ANY ladder, and validation enforces that on its own
+# terms rather than trusting the next edit.
 excluded:
   - model: claude-fable-5
     reason: "off every ladder on cost policy (2026-08-12)"

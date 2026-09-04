@@ -22,19 +22,21 @@ WHY IT DOES NOT AUTO-UPGRADE (do not "improve" this into auto-adoption)
     together and tightly-sized requests truncate mid-answer), and disabling
     thinking returns 400 above `high` effort. Auto-adoption means the fleet
     takes breaking changes unattended, overnight, across every repo.
-  * COST. Fable 5 is $10/$50 per MTok vs Opus $5/$25 — "newest and best" can
+  * COST. Fable is $10/$50 per MTok vs Opus $5/$25 — "newest and best" can
     double the bill with nobody deciding to. That is exactly the incident that
-    took Fable off the workhorse ladder on 2026-08-09; DRE-2317 gave it the one
-    home where the price buys something (the bounded ADVISORY roles) and made
-    its absence from the build path a validated invariant.
+    took Fable off the workhorse ladder on 2026-08-09, and its absence from the
+    build path is a validated invariant. Where the price DOES buy something is
+    bounded, low-volume work at a decision point: since DRE-3015 that is the
+    JUDGEMENT ladder, walked by the planner alone, once per epic.
 
 DISCOVERY (DRE-2317)
 --------------------
 `new_models()` reports ids the catalog offers that config/models.yaml has never
 named, and `check-new` opens ONE alert card for them. A discovery may be
-proposed for the ADVISORY ladder at most — never the build path — and only a
-human editing the config actually adopts it. `discovery.on_new_model:
-workhorse` is not an expressible policy: schema validation rejects it.
+proposed for the ADVISORY ladder at most — never the build path, and never the
+planning one — and only a human editing the config actually adopts it.
+`discovery.on_new_model: workhorse` is not an expressible policy, and neither
+is `judgement`: schema validation rejects both.
 
 Adoption is a deliberate human edit to config/models.yaml (the ONE model
 config), regenerating the mirrors with scripts/sync_model_config.py. Nothing in
@@ -438,20 +440,22 @@ def new_model_body(entries) -> str:
             "(critic, verifier, medic), which is where the strongest model "
             "belongs because the critic gates every unattended merge.",
             "",
-            "It may **never** join the workhorse ladder — the build path. A "
-            "newly available model promoting itself onto high-volume build "
-            "work is precisely the 2026-08-09 outage: the probe stopped "
-            "returning 404, a best-first ladder moved the entire fleet in one "
-            "TTL window, the rolling session usage drained, and agents began "
-            "dying mid-run. Availability is not permission.",
+            "It may **never** join the workhorse ladder — the build path — or "
+            "the judgement ladder the planner walks. A newly available model "
+            "promoting itself onto high-volume build work is precisely the "
+            "2026-08-09 outage: the probe stopped returning 404, a best-first "
+            "ladder moved the entire fleet in one TTL window, the rolling "
+            "session usage drained, and agents began dying mid-run. "
+            "Availability is not permission.",
         ]
     else:
         lines += [
             "Nothing automatic. The discovery policy in `config/models.yaml` "
             "is `none`: this card exists so a human knows the model exists.",
             "",
-            "It may **never** join the workhorse ladder — the build path — "
-            "without a deliberate, reviewed edit to `config/models.yaml`.",
+            "It may **never** join the workhorse ladder — the build path — or "
+            "the judgement ladder the planner walks, without a deliberate, "
+            "reviewed edit to `config/models.yaml`.",
         ]
     lines += [
         "",
@@ -624,9 +628,9 @@ def drift_body(findings) -> str:
         "thinking ON by default (so `max_tokens` caps thinking + response "
         "together and tight requests truncate mid-answer) and returns 400 when "
         "thinking is disabled above `high` effort.",
-        "- Cost is a decision, not a default. Fable 5 is $10/$50 per MTok "
-        "against Opus at $5/$25 — the reason it rides the bounded advisory "
-        "ladder and never the build path.",
+        "- Cost is a decision, not a default. Fable is $10/$50 per MTok "
+        "against Opus at $5/$25 — the reason it rides the bounded judgement "
+        "ladder (the planner, once per epic) and never the build path.",
         "- Ranking here is by the API's `created_at`. Model ids do not sort: "
         "`claude-opus-10` sorts before `claude-opus-5` as a string.",
         "",

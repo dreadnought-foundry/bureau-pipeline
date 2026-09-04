@@ -233,9 +233,10 @@ jobs:
       # CLAUDE token already in the env (no new secret): a 404 / not-found ⇒
       # skip; any other response, including 429, ⇒ choose it; an inconclusive
       # probe falls through to the next known-good model. The probe decides how
-      # far DOWN the ladder to walk, never how far up: the ADVISORY model (the
-      # strongest one, reserved for the critic/verifier/medic) is unreachable
-      # from this ladder at any availability — that is the 2026-08-09 incident,
+      # far DOWN the ladder to walk, never how far up: the models the roles
+      # that JUDGE run on — the advisory ladder's top (critic/verifier/medic)
+      # and the judgement ladder's (the planner, DRE-3015) — are unreachable
+      # from this ladder at any availability. That is the 2026-08-09 incident,
       # pinned by tests/test_model_policy.py.
       #
       # --explain-file records WHY anything above the chosen model was skipped.

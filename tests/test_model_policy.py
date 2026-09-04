@@ -1,5 +1,6 @@
-"""Workhorse vs advisory: the critic gets the strongest model, and a new model
-can only auto-promote to advisory (DRE-2317).
+"""Workhorse vs advisory vs judgement: the critic gets the advisory model, the
+planner gets the strongest one, and a new model can only auto-promote to
+advisory (DRE-2317, DRE-3015).
 
 The inversion this closes
 -------------------------
@@ -25,6 +26,22 @@ Fable off the build path as DATA. This card makes it STRUCTURAL:
     precisely the incident;
   * every run records the model it used AND why anything above it was skipped,
     so a weakened advisory model can never be silent.
+
+The third kind (DRE-3015)
+-------------------------
+`judgement` holds the planner alone. It runs ONCE PER EPIC, at a decision
+point, and every downstream build run is shaped by its output — an
+advisory-shaped cost profile that wore a workhorse label. It walks its own
+ladder, `claude-fable-5-1` → `claude-opus-5` → `claude-sonnet-4-6`, and falling
+to Opus is the LOUD (DEGRADED-prefixed) fallback the advisory ladder already
+does.
+
+What DID NOT change is the 08-09 guard, and it is pinned here from BOTH sides:
+the engineer's ladder cannot reach Fable at any availability, the planner's
+can, and a newly-discovered model may never land on either the build or the
+planning ladder by itself — `discovery.on_new_model: judgement` is refused
+exactly as `workhorse` is. A human editing config/models.yaml is the only way
+up.
 
 These tests are the pin. Every one of them fails if its behaviour is removed.
 """
@@ -58,9 +75,15 @@ OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
 SONNET5 = "claude-sonnet-5"
 FABLE = "claude-fable-5"
+# The CURRENT Fable id. `claude-fable-5` above is its predecessor, excluded from
+# every ladder on cost policy (2026-08-12) and kept readable for attribution;
+# `claude-fable-5-1` is a different model, and DRE-3015 puts it on the
+# judgement ladder — and nowhere else.
+FABLE51 = "claude-fable-5-1"
 
 WORKHORSE = "workhorse"
 ADVISORY = "advisory"
+JUDGEMENT = "judgement"
 
 # The files the generator + selector need to run against a throwaway tree, so
 # schema validation is exercised without ever mutating the working copy.
@@ -81,6 +104,23 @@ SELECTORS = {
     "agent-fix.yml": "fixer",
     "red-main-repair.yml": "repairer",
 }
+
+
+# Every file that states the role-kind rule in prose a human acts on — config,
+# the selector and its generator, the roster, and the workflows that select.
+# The staleness sweeps below read all of them, so a new kind cannot leave a
+# sentence behind in one of them.
+KIND_DOCUMENTS = (
+    CONFIG,
+    ROOT / "config" / "README.md",
+    MODEL_FALLBACK,
+    MODEL_CATALOG,
+    ROOT / "scripts" / "sync_model_config.py",
+    AGENTS,
+    WORKFLOWS / "plan.yml",
+    WORKFLOWS / "agent-task.yml",
+    WORKFLOWS / "model-drift.yml",
+)
 
 
 def _canonical(path: Path = CONFIG) -> dict:
@@ -142,21 +182,27 @@ def _workhorse_ladder(cfg=None) -> list:
     return _rung_ids(cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]])
 
 
-class RoleKindsTest(unittest.TestCase):
-    """Two role kinds, and every role is classified into one of them."""
+def _judgement_ladder(cfg=None) -> list:
+    cfg = cfg or _canonical()
+    return _rung_ids(cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]])
 
-    def test_config_declares_exactly_the_two_kinds(self):
+
+class RoleKindsTest(unittest.TestCase):
+    """Three role kinds, and every role is classified into one of them."""
+
+    def test_config_declares_exactly_the_three_kinds(self):
         cfg = _canonical()
         self.assertEqual(
-            sorted(cfg["kinds"]), [ADVISORY, WORKHORSE],
-            "config/models.yaml declares exactly two role kinds",
+            sorted(cfg["kinds"]), [ADVISORY, JUDGEMENT, WORKHORSE],
+            "config/models.yaml declares exactly three role kinds",
         )
         ladders = {kind: spec["ladder"] for kind, spec in cfg["kinds"].items()}
         for kind, ladder in ladders.items():
             self.assertIn(ladder, cfg["ladders"], f"kind {kind}: unknown ladder")
-        self.assertNotEqual(
-            ladders[WORKHORSE], ladders[ADVISORY],
-            "the build path and the advisory path must be different ladders",
+        self.assertEqual(
+            len(set(ladders.values())), len(ladders),
+            "each kind gets its OWN ladder — sharing one is how build work "
+            "ends up on a model nobody chose for it",
         )
 
     def test_every_agent_role_is_classified(self):
@@ -175,9 +221,12 @@ class RoleKindsTest(unittest.TestCase):
             self.assertEqual(cfg["agents"][role], ADVISORY, f"{role} must be advisory")
 
     def test_the_build_roles_are_workhorse(self):
+        # The planner left this list on 2026-09-03 (DRE-3015) and is the ONLY
+        # role that may: it runs once per epic, not hundreds of turns per card.
+        # Every role that writes code stays here.
         cfg = _canonical()
         for role in ("engineer", "frontend", "devops", "database-architect",
-                     "planner", "fixer", "repairer"):
+                     "fixer", "repairer"):
             self.assertEqual(cfg["agents"][role], WORKHORSE, f"{role} builds")
 
     def test_the_critic_runs_the_advisory_model(self):
@@ -254,13 +303,15 @@ class IncidentConditionTest(unittest.TestCase):
 
     def test_the_cli_path_holds_the_same_line(self):
         # The workflows call the CLI, not the function. Probe says EVERYTHING
-        # is available; the build path still resolves to the workhorse model
-        # and only the advisory roles reach the strongest one.
+        # is available; the build path still resolves to the workhorse model,
+        # and the two non-build kinds each reach their own top rung — the
+        # planner's being the one this file spends most of its words guarding.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
-            all_up = {OPUS: True, SONNET: True, SONNET5: True, FABLE: True}
+            all_up = {OPUS: True, SONNET: True, SONNET5: True,
+                      FABLE: True, FABLE51: True}
             self.assertEqual(_cli_select(tree, "engineer", all_up)[0], OPUS)
-            self.assertEqual(_cli_select(tree, "planner", all_up)[0], OPUS)
+            self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
             self.assertEqual(_cli_select(tree, "critic", all_up)[0], SONNET5)
 
     def test_availability_still_only_walks_down(self):
@@ -269,6 +320,193 @@ class IncidentConditionTest(unittest.TestCase):
         self.assertEqual(
             mf.select("engineer", probe=lambda m: m != OPUS), SONNET
         )
+
+
+class JudgementKindTest(unittest.TestCase):
+    """The third kind (DRE-3015): the planner runs on the strongest model, and
+    the 2026-08-09 guard is pinned from BOTH sides — the engineer's ladder still
+    cannot reach Fable at any availability, the planner's can."""
+
+    def setUp(self):
+        mf.clear_availability_cache()
+
+    def tearDown(self):
+        mf.clear_availability_cache()
+
+    def test_the_judgement_kind_holds_the_planner_alone(self):
+        cfg = _canonical()
+        holders = sorted(r for r, k in cfg["agents"].items() if k == JUDGEMENT)
+        self.assertEqual(
+            holders, ["planner"],
+            "judgement is for judgement-heavy, LOW-VOLUME roles; a role that "
+            "runs per card belongs on the workhorse ladder",
+        )
+
+    def test_the_judgement_ladder_is_fable_first_then_the_build_models(self):
+        # Data, so it is pinned as data: the strongest model, then the two
+        # workhorse rungs as the deliberate (loud) degrade path.
+        self.assertEqual(_judgement_ladder(), [FABLE51, OPUS, SONNET])
+        self.assertEqual(_judgement_ladder()[1], _workhorse_ladder()[0])
+
+    def test_the_planner_runs_on_fable_when_it_is_available(self):
+        self.assertEqual(mf.kind_for("planner"), JUDGEMENT)
+        self.assertEqual(mf.select("planner", probe=lambda m: True), FABLE51)
+
+    def test_the_planner_reaches_fable_at_every_availability_that_allows_it(self):
+        # The other side of the 08-09 pin. Whatever the rest of the ladder is
+        # doing, an available Fable is the planner's model — that is the whole
+        # decision, and a config edit that quietly stopped honouring it would
+        # look exactly like a healthy run.
+        for avail in (
+            {FABLE51: True, OPUS: True, SONNET: True},
+            {FABLE51: True, OPUS: False, SONNET: True},
+            {FABLE51: True, OPUS: False, SONNET: False},
+        ):
+            with self.subTest(avail=avail):
+                mf.clear_availability_cache()
+                self.assertEqual(
+                    mf.select("planner", probe=lambda m: avail.get(m, True)),
+                    FABLE51,
+                )
+
+    def test_falling_to_opus_is_the_loud_fallback(self):
+        # Exactly as the advisory ladder does it: DEGRADED-prefixed, naming
+        # what was skipped and why, on one line the workflow turns into a
+        # ::warning::. A planner that quietly ran on Opus would be
+        # indistinguishable from one that got what it was promised.
+        decision = mf.select_with_reasons("planner", probe=lambda m: m != FABLE51)
+        self.assertEqual(decision["model"], OPUS)
+        self.assertEqual(decision["kind"], JUDGEMENT)
+        self.assertEqual([s["model"] for s in decision["skipped"]], [FABLE51])
+        note = mf.selection_note(decision)
+        self.assertEqual(len(note.splitlines()), 1)
+        self.assertTrue(note.startswith("DEGRADED"), f"the fallback is silent: {note}")
+        self.assertIn(FABLE51, note)
+        self.assertIn(JUDGEMENT, note)
+
+    def test_no_workhorse_role_reaches_fable_at_any_availability(self):
+        # THE GUARD FROM 2026-08-09, unchanged. The probe reporting Fable up is
+        # precisely the incident condition, and it still buys nothing on the
+        # build path: every workhorse role's ladder does not contain it, so no
+        # combination of availabilities can select it.
+        build_roles = sorted(r for r, k in mf.AGENT_KINDS.items() if k == WORKHORSE)
+        self.assertIn("engineer", build_roles)
+        self.assertNotIn("planner", build_roles)
+        workhorse = _workhorse_ladder()
+        for role in build_roles:
+            for avail in (
+                {FABLE51: True, OPUS: True, SONNET: True},
+                {FABLE51: True, OPUS: False, SONNET: True},
+                {FABLE51: True, OPUS: True, SONNET: False},
+                {FABLE51: True, OPUS: False, SONNET: False},
+            ):
+                with self.subTest(role=role, avail=avail):
+                    mf.clear_availability_cache()
+                    self.assertNotIn(FABLE51, mf.ladder_for(role))
+                    got = mf.select(role, probe=lambda m: avail.get(m, True))
+                    self.assertNotEqual(
+                        got, FABLE51,
+                        f"{role} reached Fable — this is the 2026-08-09 incident",
+                    )
+                    self.assertIn(got, workhorse)
+        # An unrecognized role walks the default (workhorse) ladder: same line.
+        mf.clear_availability_cache()
+        self.assertNotEqual(mf.select("no-such-role", probe=lambda m: True), FABLE51)
+
+    def test_the_cli_holds_that_line_too(self):
+        # The workflows call the CLI, not select(). Everything up, including
+        # both Fable ids.
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            all_up = {OPUS: True, SONNET: True, SONNET5: True,
+                      FABLE: True, FABLE51: True}
+            for role in ("engineer", "frontend", "devops", "fixer", "repairer"):
+                with self.subTest(role=role):
+                    self.assertEqual(_cli_select(tree, role, all_up)[0], OPUS)
+            self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
+
+    def test_fable_on_a_build_ladder_is_still_rejected(self):
+        # The judgement ladder is permission for the PLANNER, not for the model.
+        cfg = _canonical()
+        cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
+            0, {"model": FABLE51, "reason": "someone's well-meaning edit"}
+        )
+        errors = mf.policy_errors(cfg)
+        self.assertTrue(errors, "Fable must not reach a build ladder")
+        self.assertTrue(any(FABLE51 in e for e in errors), f"unhelpful: {errors}")
+
+    def test_a_judgement_only_model_may_not_hide_below_the_fallback(self):
+        # Rule 4 reads the TOP rung of a non-build ladder, so a premium model
+        # parked BELOW the workhorse rungs would be invisible to it. Once a
+        # ladder descends onto the build path it stays there.
+        cfg = _canonical()
+        cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
+            {"model": OPUS, "reason": "the build model first"},
+            {"model": FABLE51, "reason": "…and the premium one hidden below it"},
+        ]
+        self.assertTrue(
+            mf.policy_errors(cfg),
+            "a premium model below the workhorse fallback must be rejected",
+        )
+
+    def test_the_selector_degrades_rather_than_honouring_fable_on_the_build_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            cfg = _canonical()
+            cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].insert(
+                0, {"model": FABLE51, "reason": "the incident, as a config edit"}
+            )
+            _write_config(tree, cfg)
+            model, _ = _cli_select(
+                tree, "engineer", {OPUS: True, SONNET: True, FABLE51: True}
+            )
+            self.assertEqual(
+                model, OPUS, "a policy-violating config must not reach the build path"
+            )
+
+    def test_discovery_may_not_target_the_judgement_ladder(self):
+        # A newly-discovered model may never land on a BUILD **or a PLANNING**
+        # ladder by itself. `judgement` is refused exactly as `workhorse` is —
+        # the planner's ladder is now the strongest one we run, which makes it
+        # the most attractive place for an unattended promotion to land.
+        cfg = _canonical()
+        cfg["discovery"]["on_new_model"] = JUDGEMENT
+        errors = mf.policy_errors(cfg)
+        self.assertTrue(errors, "on_new_model: judgement must be rejected")
+        self.assertTrue(
+            any("on_new_model" in e for e in errors), f"unhelpful errors: {errors}"
+        )
+        self.assertNotIn(JUDGEMENT, mf.DISCOVERY_TARGETS)
+
+    def test_ci_goes_red_on_a_discovery_targeting_judgement(self):
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            cfg = _canonical()
+            cfg["discovery"]["on_new_model"] = JUDGEMENT
+            _write_config(tree, cfg)
+            proc = _run_sync(tree, "--check")
+            self.assertNotEqual(proc.returncode, 0, "CI must fail on this config")
+            self.assertIn("on_new_model", proc.stdout + proc.stderr)
+
+    def test_the_registry_shows_the_planners_kind_and_model(self):
+        # The roster is the surface a human reads to ask "what is the planner
+        # running on, and why is it allowed to be the expensive one?"
+        planner = {a["name"]: a for a in yaml.safe_load(AGENTS.read_text())["agents"]}[
+            "planner"
+        ]
+        self.assertEqual(planner["kind"], JUDGEMENT)
+        self.assertEqual(planner["model"], FABLE51)
+
+    def test_fable_5_1_is_a_known_model_and_its_predecessor_still_is_too(self):
+        # Attribution: markers in flight carry either id.
+        self.assertIn(FABLE51, mf.KNOWN_MODELS)
+        self.assertIn(FABLE, mf.KNOWN_MODELS)
+        self.assertEqual(mf.last_error_model([mf.error_marker(FABLE51)]), FABLE51)
+        self.assertEqual(mf.last_error_model([mf.error_marker(FABLE)]), FABLE)
+        # And the predecessor is still on no ladder at all.
+        for name, models in mf.CONFIG["ladders"].items():
+            with self.subTest(ladder=name):
+                self.assertNotIn(FABLE, models)
 
 
 class SchemaRejectsAutoPromotionTest(unittest.TestCase):
@@ -606,16 +844,85 @@ class DiscoveryJoinsAdvisoryOnlyTest(unittest.TestCase):
 class DocumentedPolicyTest(unittest.TestCase):
     """The rule is written down where the next well-meaning edit will read it."""
 
-    def test_the_config_names_both_kinds_and_the_rule(self):
+    def test_the_config_names_every_kind_and_the_rule(self):
         text = CONFIG.read_text().lower()
-        for phrase in ("workhorse", "advisory", "availability is not permission"):
+        for phrase in ("workhorse", "advisory", "judgement",
+                       "availability is not permission"):
             self.assertIn(phrase, text, f"config/models.yaml must state: {phrase}")
 
-    def test_the_readme_documents_the_two_kinds(self):
+    def test_the_readme_documents_the_three_kinds(self):
         readme = (ROOT / "config" / "README.md").read_text().lower()
         self.assertIn("advisory", readme)
         self.assertIn("workhorse", readme)
+        self.assertIn("judgement", readme)
         self.assertIn("on_new_model", readme)
+
+    def test_no_document_still_calls_it_a_two_kind_rule(self):
+        # A change that contradicts a document updates that document in the
+        # SAME PR. "Two role kinds" was true until 2026-09-03 and is now the
+        # kind of sentence a reader trusts and acts on.
+        stale = []
+        for path in KIND_DOCUMENTS:
+            for n, line in enumerate(path.read_text().splitlines(), 1):
+                if re.search(r"(two|2)\s+(role\s+)?kinds?\b", line, re.I):
+                    stale.append(f"{path.name}:{n}: {line.strip()}")
+        self.assertEqual(stale, [], "a document still says there are two kinds")
+
+    def test_no_document_closes_the_list_of_kinds_on_a_short_one(self):
+        # The other half of the same drift, and the half that slipped through
+        # the sweep above: a sentence that ENUMERATES the kinds and then shuts
+        # the list ("… and nothing else") without saying "two". The rule-1
+        # error string in model_fallback.py read "every role is workhorse or
+        # advisory, and nothing else" for the whole of the PR that ADDED the
+        # third kind. A numeral is optional; naming every kind is not.
+        #
+        # Two judgement calls keep this from crying wolf, because a guard that
+        # flags correct prose gets deleted rather than obeyed:
+        #   * naming TWO kinds is what makes a line an enumeration of the set
+        #     rather than a sentence about one of them — "the JUDGEMENT
+        #     ladder: the planner, and nothing else" is about who walks a
+        #     ladder, and is right;
+        #   * prose WRAPS, so the surrounding lines count as the same
+        #     sentence. model-drift.yml names `judgement` two lines below its
+        #     "and nothing else", which leaves no reader misled.
+        stale = []
+        for path in KIND_DOCUMENTS:
+            lines = path.read_text().splitlines()
+            for n, line in enumerate(lines, 1):
+                if not re.search(r"\bnothing else\b", line, re.I):
+                    continue
+                named = [k for k in mf.ROLE_KINDS if k in line.lower()]
+                if len(named) < 2:
+                    continue
+                window = " ".join(lines[max(0, n - 3):n + 2]).lower()
+                missing = [k for k in mf.ROLE_KINDS if k not in window]
+                if missing:
+                    stale.append(f"{path.name}:{n}: omits {missing}: {line.strip()}")
+        self.assertEqual(
+            stale, [], "a closed list of the role kinds is missing one of them"
+        )
+
+    def test_the_rejected_kinds_error_names_every_kind(self):
+        # The string a human reads when `config/models.yaml` is rejected for a
+        # typo'd kind name. Assert the PROSE half (after the em-dash), not the
+        # whole message: the first half interpolates `ROLE_KINDS` and so names
+        # every kind however stale the sentence that follows it is. The
+        # sentence is the part a reader believes — "every role is workhorse or
+        # advisory" tells them `judgement` was removed, not that they
+        # misspelled it.
+        cfg = _canonical()
+        cfg["kinds"]["judgment"] = cfg["kinds"].pop(JUDGEMENT)  # the typo itself
+        errors = mf.policy_errors(cfg)
+        self.assertTrue(errors, "a misspelled kind must be rejected")
+        rule = next((e for e in errors if e.startswith("kinds: must declare")), None)
+        self.assertIsNotNone(rule, f"no rule-1 rejection: {errors}")
+        _, _, prose = rule.partition("—")
+        self.assertTrue(prose.strip(), f"the rejection carries no explanation: {rule}")
+        for kind in mf.ROLE_KINDS:
+            with self.subTest(kind=kind):
+                self.assertIn(
+                    kind, prose, f"the explanation never names {kind!r}: {prose!r}"
+                )
 
 
 if __name__ == "__main__":
