@@ -378,6 +378,26 @@ called unbuildable until an operator killed it by hand. The medic now reads
 the card before retrying, and refuses a turn-cap death outright — that is a
 budget ceiling, not a flake, and the same run re-run hits the same wall.
 
+### …unless the park says BUDGET, not size (DRE-3097)
+The park is still the signal, but it now names **which of two remedies** it is,
+and the second one has a handle. The turn budget is no longer a literal 150:
+a card can carry a `turns:<n>` label — a rung from the reviewed set in
+`config/turn-budgets.json` — or let its `size:` label pick one, and the budget
+it ran with is printed in the `🧠 model-attempt` receipt as `turns=250`.
+
+So read the park receipt before splitting. When every dead run reached the same
+progress marker or a later one and the last got as far as `⏳ 3/5 implementation
+green`, the receipt says **budget, not size: the work finishes but the run does
+not** and names the label to apply. Splitting that card again is the move that
+already failed — DRE-3088's third death, at $17.53, came *after* it had been cut
+down to XS (two edits inside two existing steps of `plan.yml` plus tests),
+because the cost was the ~1,850-line file the agent had to keep re-reading, not
+the size of the change. Label it, return it to `Todo`, and let it run.
+
+When the receipt says split, split: the runs did not get far enough, or
+consistently enough, for a ceiling to be the reading, and more turns buys more
+of the same.
+
 ### How to split
 - **Cut on independence, not size.** Each piece must be shippable and reviewable
   alone, and each new card names the sibling it does NOT depend on.
@@ -386,6 +406,38 @@ budget ceiling, not a flake, and the same run re-run hits the same wall.
   those had to be derived from the code — slower and less reliable.
 - **Cancel the original, never Done.** No code shipped, and `Canceled` clears
   the blocker without claiming delivery.
+
+## An acceptance criterion the card cannot satisfy before merge (DRE-3075)
+
+Some criteria can only be met by watching the change work in production, and
+production is downstream of the merge. DRE-3075 asked for two observations of
+concurrent Actions runs against real `push`/`pull_request` events — which cannot
+happen until the workflow config under review is the one live on `main`. **The
+card asked to watch the fix working before it was in a position to work.**
+
+Everyone downstream then behaved correctly and it still deadlocked. The build
+agent met the one provable criterion and said so plainly in the PR body ("not
+provable before merge"). The critic blocked on unmet criteria, which is its job.
+The fix agent could do nothing — there was no code to change — and burned four
+dispatches establishing that. PR #252 sat `CONFLICTING` for eleven hours until an
+operator decision moved it. **Nobody was wrong; the card was**, and the cost
+landed on the human, which is the opposite of what planning is for.
+
+**The tell, readable before the card is filed.** A criterion whose verb is
+*observed*, *watched*, *seen in production* — or that names a run id, a deploy,
+a live account, a tag move that does not exist yet. If satisfying it requires the
+change to already be merged, **it cannot gate the merge**.
+
+**Write it as two cards from the start.** The build card keeps the criteria a
+reviewer can check against the diff. The observation goes to a follow-up card
+carrying `needs-human` and `no-code`, blocked by the build card and named from
+it, under `deferred: <surface> — <reason>` — the shape `standards/design-parity.md`
+already sanctions for a gap that is deliberate rather than forgotten.
+
+**Why a note in the PR is not enough.** `linear-sync` closes the build card on
+the merge event, so a criterion deferred in prose is owed by nobody the moment
+the PR lands. That is the propose-gate shape (DRE-1980), which ran dead for six
+weeks because it was everyone's assumption and nobody's card.
 
 ## Dead — do not use
 The 8-section XML tags, `**Size:**`, and `scripts/orch/v4` references — v1

@@ -83,7 +83,7 @@ class BotPrFlow(framework.Scenario):
 
     # ── setup: a clean sandbox, whatever the previous run did ────────────
     def setup(self, ctx):
-        ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.log)
+        ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.namespace, ctx.log)
         base, base_sha = ctx.gh.default_branch(ctx.repo)
         ctx.state["base"], ctx.state["base_sha"] = base, base_sha
         ctx.log(f"[{self.name}] base {base}@{base_sha}")
@@ -117,6 +117,11 @@ class BotPrFlow(framework.Scenario):
         last = {"state": "none", "detail": ""}
 
         def poll_verdict():
+            # The verdict wait is the run's longest and its first, so it is
+            # the first place a probe PR closed out from under us costs a
+            # full budget and a failure that names the critic instead of
+            # the sweep that took the PR (run 33899093729).
+            framework.probe_pr(ctx.gh, ctx.repo, number)
             comments = ctx.gh.list_comments(ctx.repo, number)
             state, detail = verdict_state(comments, ctx.qa_login, head_sha)
             last.update(state=state, detail=detail)
@@ -198,11 +203,11 @@ class BotPrFlow(framework.Scenario):
         _, tip = gh.default_branch(repo)
         if not tip:
             raise ScenarioFailure("default branch has no readable tip sha")
-        leftovers = [
-            pr["number"]
-            for pr in gh.list_open_prs(repo)
-            if framework.is_harness_ref((pr.get("head") or {}).get("ref", ""))
-        ]
+        # This run's own namespace only: the other lane's harness PRs
+        # are open because that run is still using them (DRE-3075).
+        leftovers = framework.leftover_pr_numbers(
+            gh, repo, ctx.namespace
+        )
         if leftovers:
             raise ScenarioFailure(
                 f"open harness PRs left behind after cleanup: {leftovers}"

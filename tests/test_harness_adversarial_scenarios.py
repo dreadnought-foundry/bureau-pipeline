@@ -126,13 +126,17 @@ class HarnessFake(FakeGitHub):
         return [i for i in self.issues.values() if i["state"] == "open"]
 
 
-def _ctx(gh, run_id="gha-1-1"):
+def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE):
+    # Composed the way __main__ composes it: the namespace OPENS the run id,
+    # so the run's branches sit in the slice its own sweep owns (DRE-3075).
+    run_id = framework.namespaced_run_id(namespace, run_id)
     faketime = _FakeTime()
     return framework.HarnessContext(
         gh=gh,
         gh_qa=gh,
         repo="dreadnought-foundry/bureau-harness",
         run_id=run_id,
+        namespace=namespace,
         worker_login=WORKER,
         qa_login=QA,
         worker_token="x-access-token",

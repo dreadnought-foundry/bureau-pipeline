@@ -7,6 +7,17 @@ token for a private repo**, so anything they need must be a file in the public
 of it is ever a runtime lookup.
 
 - **`models.yaml`** — which model each agent runs on (see below).
+- **`turn-budgets.json`** — how many turns a build run gets (DRE-3097). A
+  `turns:<n>` label picks a rung from a closed, reviewed set; absent that the
+  `size:` label maps to one; absent both it is the unchanged 150.
+  `agent-task.yml` reads it through `scripts/turn_budget.py` in the same step
+  that selects the model, and prints the result in the `🧠 model-attempt`
+  receipt (`turns=250`). **The set is the guard**: a card picks a rung, it
+  never names a number, so a label cannot vote itself an unbounded run — the
+  same rule `models.yaml` states for membership of a ladder. The module also
+  reads the other direction: `diagnose()` tells a turn-cap park caused by the
+  BUDGET (every dead run reached implementation green and died after it) from
+  one caused by SIZE, which is what the park receipt now says.
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.

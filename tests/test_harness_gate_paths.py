@@ -46,13 +46,18 @@ MERGE_GATE_YML = (
 )
 
 
-def _ctx(gh, run_id="gha-1-1"):
-    faketime = _FakeTime()
+def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE,
+         faketime=None):
+    # Composed the way __main__ composes it: the namespace OPENS the run id,
+    # so the run's branches sit in the slice its own sweep owns (DRE-3075).
+    run_id = framework.namespaced_run_id(namespace, run_id)
+    faketime = faketime or _FakeTime()
     return framework.HarnessContext(
         gh=gh,
         gh_qa=gh,
         repo="dreadnought-foundry/bureau-harness",
         run_id=run_id,
+        namespace=namespace,
         worker_login=WORKER,
         qa_login=QA,
         verdict_timeout=100,
@@ -100,6 +105,15 @@ class LegDriver:
             self.state["named_wait"] = True
             return
         if not self.state.get("named_verdict"):
+            if mode == "swept":
+                # NOT the pipeline: a concurrent harness run whose driver
+                # predates the namespaced sweep (DRE-3075) closes this
+                # run's live probe PR and deletes its branch. No critic
+                # comment can ever arrive on it now.
+                gh.close_pr("x", n)
+                gh.branches.pop(pr["head"]["ref"], None)
+                self.state["named_verdict"] = True
+                return
             # The critic reviews dependabot/** branches too — its comment
             # is the second gate wake.
             gh.post_verdict(n, "REQUEST_CHANGES", pr["head"]["sha"])
@@ -174,10 +188,12 @@ class LegDriver:
         gh.merge_as(pr["number"], QA)
 
 
-def _run(driver=None, gh=None):
+def _run(driver=None, gh=None, faketime=None):
     gh = gh or FakeGitHub()
     gh.on_poll = driver or LegDriver()
-    result = framework.run_scenario(gate_paths.SCENARIO, _ctx(gh))
+    result = framework.run_scenario(
+        gate_paths.SCENARIO, _ctx(gh, faketime=faketime)
+    )
     return result, gh
 
 
@@ -288,7 +304,8 @@ class HappyPathTest(unittest.TestCase):
 
     def test_run_after_simulated_crash_sweeps_dependabot_named_leftovers(self):
         gh = FakeGitHub()
-        stale_branch = "dependabot/harness-crashed-gate_paths-named"
+        # A previous run of THIS lane — same namespace, hence swept.
+        stale_branch = "dependabot/harness-local-crashed-gate_paths-named"
         gh.branches[stale_branch] = gh._new_sha()
         gh.seed_pr(head=stale_branch)
         result, gh = _run(gh=gh)
@@ -354,6 +371,28 @@ class HumanPathTest(unittest.TestCase):
         result, _ = _run(LegDriver(named="merge"))
         self.assertFalse(result.ok)
         self.assertEqual(result.failed_phase, "verify")
+
+    def test_a_swept_named_pr_fails_at_once_naming_the_closure(self):
+        # Run 33899093729 (red main). At 17:36 a concurrent PR harness run
+        # — running the pre-DRE-3075 driver from its own head, so its sweep
+        # was still unscoped — closed main's live probe PR #929 and deleted
+        # its branch. Main's named leg then waited the full 4200s verdict
+        # budget for a critic comment that could never come, and reported
+        # `timed out … waiting for a critic comment`: the sandbox's critic
+        # blamed for a PR that no longer existed, 70 minutes of a 76-minute
+        # run spent, and no way to tell the cause from the log.
+        #
+        # The wait must END the moment its subject is gone, and say so.
+        faketime = _FakeTime()
+        result, _ = _run(LegDriver(named="swept"), faketime=faketime)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed_phase, "verify")
+        errors = "\n".join(result.errors).lower()
+        self.assertIn("closed", errors)
+        self.assertIn("sweep", errors)
+        # Not "slow": nothing can ever arrive, so sitting out the verdict
+        # budget only buys a timeout that names the wrong culprit.
+        self.assertLess(faketime.now, _ctx(FakeGitHub()).verdict_timeout)
 
 
 class RealPrPostureTest(unittest.TestCase):

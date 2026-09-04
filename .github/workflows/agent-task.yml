@@ -253,6 +253,19 @@ jobs:
       # The selection alone was never enough: a run that quietly dropped a rung
       # looked identical to one that got its first choice. The note rides the
       # heartbeat comment below, and a DEGRADED note also raises a ::warning::.
+      #
+      # THE TURN BUDGET IS CHOSEN HERE TOO (DRE-3097). `--max-turns 150` was a
+      # literal below, with no per-card, per-size or per-repo knob — and the
+      # park receipt's own second remedy ("or raises the turn budget") had no
+      # handle. DRE-3088 died at that cap three times, $19.12/$19.12/$17.53,
+      # every run reaching `⏳ 3/5 implementation green` and dying in the two
+      # steps after it, the THIRD time after the card had already been split to
+      # XS: the cost was the ~1,850-line file the agent had to keep re-reading,
+      # not the size of the change. turn_budget.py reads a `turns:<n>` label
+      # (from a closed, reviewed set), else the `size:` label, else 150 — in
+      # THIS step, so a run cannot read the card one way for its model and
+      # another for its budget. It never exits non-zero: an unreadable card
+      # costs the raise, never the run.
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -260,6 +273,8 @@ jobs:
           # The probe authenticates with the same CLAUDE token the agent uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          # The budget is a property of the CARD, so this step reads Linear.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
@@ -272,6 +287,15 @@ jobs:
           echo "$WHY" >> "$GITHUB_STEP_SUMMARY"
           # Never silent: a run that did NOT get the top of its ladder says so.
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
+          TURNS_FILE="$RUNNER_TEMP/turn-budget.txt"
+          TURNS=$(python3 .bureau-pipeline/scripts/turn_budget.py select \
+            "${{ github.event.client_payload.identifier }}" \
+            --explain-file "$TURNS_FILE")
+          TURNS_WHY=$(cat "$TURNS_FILE")
+          echo "turns=$TURNS" >> "$GITHUB_OUTPUT"
+          echo "turns_why=$TURNS_WHY" >> "$GITHUB_OUTPUT"
+          echo "$TURNS_WHY"
+          echo "$TURNS_WHY" >> "$GITHUB_STEP_SUMMARY"
 
       # Assemble the agent's context = the role's shared standards + role brief
       # (DRE-1646). The build agents run headless and cannot load Skills, so
@@ -335,7 +359,7 @@ jobs:
             ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
             python3 .bureau-pipeline/scripts/linear_ops.py comment \
               "${{ github.event.client_payload.identifier }}" \
-              "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting. ${{ steps.model.outputs.why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting (turns=${{ steps.model.outputs.turns }}). ${{ steps.model.outputs.why }} ${{ steps.model.outputs.turns_why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } 2>&1 | tee "$PRE_AGENT_LOG"
 
       # A LOUD FLOOR, NOT A SILENT CEILING (DRE-3043). The re-mint below makes
@@ -379,7 +403,7 @@ jobs:
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 150
+            --max-turns ${{ steps.model.outputs.turns || 150 }}
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
@@ -484,8 +508,39 @@ jobs:
       # Actions cannot index secrets dynamically) and hand it to the rescue
       # step below. continue-on-error + always(): a mint that fails must leave
       # the run exactly as it was, never fail a build that is otherwise fine.
+      #
+      # TWO of them (DRE-3098), and BOTH belong to the rescue. A `run:` step
+      # cannot mint an App token — `create-github-app-token` is an action — so
+      # the rescue's credentials are minted as its own steps, immediately
+      # before it, and the retry gets a SECOND, independently minted token
+      # rather than a second go with the one GitHub just refused. Minting both
+      # up front costs two API calls on every run and buys a retry that does
+      # not depend on anything the failure touched.
       - name: Mint fresh push token
         id: pushtoken
+        if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # The retry credential. Same App, separate mint: on 2026-09-04 run
+      # 33896126776 the rescue pushed with the token the AGENT step held and
+      # GitHub answered `The requested URL returned error: 400` — a rejected
+      # credential twenty-six minutes into the run, nowhere near the hour.
+      # A rescue that retries has to retry with something the failure cannot
+      # have poisoned.
+      - name: Mint rescue retry token
+        id: pushtoken2
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
         uses: actions/create-github-app-token@v3
@@ -519,20 +574,51 @@ jobs:
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           # Through the environment, never argv: an argv element is readable by
-          # every process on the runner. Falls back to the job-start token when
-          # the re-mint itself failed, so this step is never worse than the
-          # behaviour it replaces.
-          PUSH_TOKEN: ${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}
+          # every process on the runner.
+          #
+          # BOTH credentials are the rescue's OWN mints, and there is no
+          # fallback to `steps.worker.outputs.token` (DRE-3098). That fallback
+          # is what run 33896126776 pushed with: the token the agent step held,
+          # which the failure being rescued from may itself have invalidated —
+          # GitHub answered 400 and three runs' partial work died on the
+          # runner. The one push whose purpose is to run after something has
+          # gone wrong cannot spend a credential the failure touched.
+          PUSH_TOKEN: ${{ steps.pushtoken.outputs.token }}
+          PUSH_TOKEN_RETRY: ${{ steps.pushtoken2.outputs.token }}
+          # Labels, not secrets: what the failure line names, so the log says
+          # WHICH credential GitHub refused instead of leaving a reader to
+          # guess between three.
+          PUSH_TOKEN_SOURCE: the rescue's own mint (Mint fresh push token)
+          PUSH_TOKEN_RETRY_SOURCE: the rescue's own re-mint (Mint rescue retry token)
           CARD: ${{ github.event.client_payload.identifier }}
           CARD_URL: ${{ github.event.client_payload.url }}
           CARD_TITLE: ${{ steps.card.outputs.title }}
           REPO: ${{ github.repository }}
           BASE: ${{ github.event.repository.default_branch }}
         run: |
+          # --patch: where the branch's commits go when BOTH credentials are
+          # refused. The next step uploads it as `rescue-<card>.patch`, so the
+          # work outlives the runner instead of being destroyed with it.
           python3 .bureau-pipeline/scripts/push_rescue.py rescue \
             --card "$CARD" --repo "$REPO" --base "$BASE" \
             --card-url "$CARD_URL" --card-title "$CARD_TITLE" \
+            --patch "${RUNNER_TEMP:-/tmp}/rescue-$CARD.patch" \
             >> "$GITHUB_OUTPUT"
+
+      # THE RUNNER IS NEVER THE LAST COPY (DRE-3098). `patch` is set only when
+      # the rescue could not deliver the branch — every other run skips this
+      # step with nothing to upload. A dead run's partial work is then on a
+      # branch (the rescue pushed it) or in this artifact; it is never only on
+      # a disk that is about to be destroyed.
+      - name: Upload rescued work
+        if: always() && steps.rescue.outputs.patch != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: rescue-${{ github.event.client_payload.identifier }}.patch
+          path: ${{ steps.rescue.outputs.patch }}
+          if-no-files-found: warn
+          retention-days: 30
 
       # DRE-1346 Fix 1: the execution result can end {"subtype":"success",
       # "is_error":true} (usage-limit/API death mid-run) — previously the
@@ -599,6 +685,13 @@ jobs:
           # answer: was this Linear refusing a quota (a wait) or something that
           # actually broke?
           PRE_AGENT_LOG: ${{ runner.temp }}/preagent.log
+          # DRE-3098: what GitHub refused the rescue push with, and where the
+          # work went. "Work still on the runner" with no status sent three
+          # runs' readers to the model and the card; the receipt names the
+          # status and the artifact instead.
+          RESCUE_PUSH_STATUS: ${{ steps.rescue.outputs.push_status }}
+          RESCUE_PATCH: ${{ steps.rescue.outputs.patch }}
+          RESCUE_ARTIFACT: rescue-${{ github.event.client_payload.identifier }}.patch
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # Resolve the card's branch FIRST: an empty --head filter makes
@@ -830,7 +923,20 @@ jobs:
             elif [ "$DEATH_CLASS" = "turn_exhaustion" ]; then
               PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
                 "$CARD" "turn-exhaustion-requeue" --since "dead-run-budget-reset" || echo 0)
-              ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE"
+              # BUDGET OR SIZE? (DRE-3097.) The hold has two causes and used to
+              # name one. The card's own thread answers it — the `⏳ n/5` phase
+              # receipts of each run, grouped by the `🧠 model-attempt`
+              # heartbeat that starts one — so the receipt tells a human to
+              # raise `turns:` when every run reached implementation green and
+              # died after it, instead of telling them to split a card that
+              # splitting has already failed to fix (DRE-3088's third death was
+              # on the XS version). Fail-soft at every step: an unreadable
+              # thread writes an empty array and dead_run.py falls back to the
+              # split text it has always sent.
+              COMMENTS_FILE="${RUNNER_TEMP:-/tmp}/card-comments.json"
+              python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
+                > "$COMMENTS_FILE" || echo '[]' > "$COMMENTS_FILE" || true
+              ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE --comments-file $COMMENTS_FILE"
               PARK_TAG_FLAGS="--turn-exhaustion"
             elif [ "$DEATH_CLASS" = "credential_expiry" ]; then
               # DRE-3043. The re-mint above did not save this one — so say what
@@ -844,6 +950,22 @@ jobs:
               PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
                 "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
               ERR_FLAGS="--credential-expiry"
+              # DRE-3098: name what GitHub actually said, and where the work
+              # is. The status is admitted only if it IS a status — ERR_FLAGS
+              # is deliberately word-split, so nothing but three digits may
+              # reach it.
+              case "$RESCUE_PUSH_STATUS" in
+                ''|*[!0-9]*) ;;
+                *) ERR_FLAGS="$ERR_FLAGS --push-status $RESCUE_PUSH_STATUS" ;;
+              esac
+              # Same discipline for the artifact name: it carries the card
+              # identifier, which arrives from the relay's payload.
+              if [ -n "$RESCUE_PATCH" ] && [ -f "$RESCUE_PATCH" ]; then
+                case "$RESCUE_ARTIFACT" in
+                  *[!A-Za-z0-9._-]*) ;;
+                  *) ERR_FLAGS="$ERR_FLAGS --artifact $RESCUE_ARTIFACT" ;;
+                esac
+              fi
             else
               PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
                 "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)

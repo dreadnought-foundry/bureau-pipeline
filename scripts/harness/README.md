@@ -59,6 +59,18 @@ Two clocks, and they answer different questions:
   unreadable one changes nothing and the wait keeps its full budget.
   Unknown is never dead.
 
+Neither clock answers a third question, so `framework.probe_pr` does: **is
+the thing this wait is about still there?** Every wait that polls a probe
+PR reads it through that helper, and a PR found closed-and-unmerged ends
+the wait at once naming the closure. A wait polling only for a COMMENT
+cannot otherwise tell "the pipeline has not answered yet" from "the pull
+request no longer exists" — both are an empty list — so it spends its whole
+budget and then reports the pipeline it was waiting on. On run
+`33899093729` that cost 70 of a 76-minute run and read as `timed out after
+4200s waiting for a critic comment on PR #929`; the critic was healthy and
+the PR had been closed 20 minutes in by a concurrent harness run whose
+driver predated the namespaced sweep below.
+
 A blocked run stops there — the remaining scenarios would wait on the same
 corpse — exits `framework.BLOCKED_EXIT` (3), and writes the quote to its
 `blocked_reason` output. `harness.yml` makes that the `integration-harness`
@@ -82,14 +94,43 @@ Python identifier, so setuptools flat-layout auto-discovery in the
 sandbox can never claim it as a second top-level package (the old
 `harness_runs` name broke the sandbox's own `pip install -e .`, held its
 CI red on every probe PR, and the gate rightly never merged one — run
-29795108949; the legacy dir is still swept). Setup sweeps ALL
-leftovers matching those namespaces (any run id) — closing PRs, deleting
-branches, removing stray probe files — so a crashed previous run can
-never fail the next one. The sweep predicate can never match a real
-`agent/DRE-n-*` branch or a genuine `dependabot/<ecosystem>/…` branch
-(unit-pinned). Cleanup always runs, and a cleanup failure fails the
-scenario: leaving the sandbox unusable IS a failure. `harness.yml` holds
-a no-cancel concurrency group, so two runs never share the sandbox.
+29795108949; the legacy dir is still swept). Setup sweeps the leftovers
+matching those namespaces — closing PRs, deleting branches, removing
+stray probe files — so a crashed previous run can never fail the next
+one. The sweep predicate can never match a real `agent/DRE-n-*` branch or
+a genuine `dependabot/<ecosystem>/…` branch (unit-pinned). Cleanup always
+runs, and a cleanup failure fails the scenario: leaving the sandbox
+unusable IS a failure.
+
+### One namespace per kind of run (DRE-3075)
+
+Every run id OPENS with the run's namespace — `main-…` for a push to main
+and for a hand dispatch, `pr<number>-…` for a pull request's proving run,
+`local-…` off the CLI (`HARNESS_NAMESPACE` / `--namespace`). So the
+namespace is a prefix of every branch and every probe file the run
+creates, and **each sweep collects only its own**.
+
+That is what lets two runs share the sandbox, which is the point:
+`harness.yml` holds a no-cancel concurrency group **per kind of run**
+(`integration-harness-main`, `integration-harness-pr-<number>`), so main's
+proving run — the one `stable` advances on — never queues behind a pull
+request's. On 2026-09-03 it did, for 18 minutes, and `stable` fell 50
+commits behind. Two runs at once means an unscoped sweep would delete the
+branches the other one is mid-scenario on, so the namespace scoping and
+the split slots are one change, not two.
+
+A namespace carries no dash (`pr251`, not `pr-251`): the dash is what
+separates it from the run id, so allowing one inside would let namespace
+`pr`'s sweep prefix match `pr-251`'s branches. `harness.yml`'s concurrency
+group is a GitHub-side key rather than a branch prefix and keeps the
+readable `pr-251`.
+
+Scoping must not make a crashed run's mess immortal — a PR that crashed
+and then merged leaves a namespace nothing will ever sweep again — so a
+FOREIGN namespace's leftover is still collected once it is older than
+`STALE_LEFTOVER_SECONDS` (6h, twice the job's own 180-minute ceiling): the
+one state in which it cannot belong to a run that is still going. A
+leftover whose age cannot be read is left alone, always.
 
 ## The Linear side (decided per the card)
 

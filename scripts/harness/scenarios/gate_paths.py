@@ -189,7 +189,7 @@ class GatePaths(framework.Scenario):
 
     # ── setup ────────────────────────────────────────────────────────────
     def setup(self, ctx):
-        ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.log)
+        ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.namespace, ctx.log)
         base, base_sha = ctx.gh.default_branch(ctx.repo)
         ctx.state["base"], ctx.state["base_sha"] = base, base_sha
         ctx.log(f"[{self.name}] base {base}@{base_sha}")
@@ -471,7 +471,11 @@ class GatePaths(framework.Scenario):
         number, h1 = leg["pr"], leg["h1"]
 
         def _pr_untouched():
-            pr = ctx.gh.get_pr(ctx.repo, number)
+            # Through probe_pr, so a PR closed out from under this leg ends
+            # the wait naming the closure — the skew and stale legs have
+            # always failed fast on that state and this one never did
+            # (run 33899093729).
+            pr = framework.probe_pr(ctx.gh, ctx.repo, number)
             if pr.get("merged"):
                 raise ScenarioFailure(
                     f"named leg: the gate MERGED PR #{number} — a "
@@ -513,12 +517,10 @@ class GatePaths(framework.Scenario):
         )
         ctx.sleep(GATE_GRACE_SECONDS)
 
-        pr = _pr_untouched()
-        if pr.get("state") != "open":
-            raise ScenarioFailure(
-                f"named leg: PR #{number} is {pr.get('state')} — the honest "
-                "waiting state means the PR stays open for a human"
-            )
+        # Still open, still untouched: _pr_untouched now covers BOTH — a
+        # merge and any other closure each raise there, so the post-grace
+        # state check that used to live here can no longer be reached.
+        _pr_untouched()
         waits = _human_wait_comments(
             ctx.gh.list_comments(ctx.repo, number), ctx.qa_login
         )
@@ -670,11 +672,11 @@ class GatePaths(framework.Scenario):
         _, tip = gh.default_branch(repo)
         if not tip:
             raise ScenarioFailure("default branch has no readable tip sha")
-        leftovers = [
-            pr["number"]
-            for pr in gh.list_open_prs(repo)
-            if framework.is_harness_ref((pr.get("head") or {}).get("ref", ""))
-        ]
+        # This run's own namespace only: the other lane's harness PRs
+        # are open because that run is still using them (DRE-3075).
+        leftovers = framework.leftover_pr_numbers(
+            gh, repo, ctx.namespace
+        )
         if leftovers:
             raise ScenarioFailure(
                 f"open harness PRs left behind after cleanup: {leftovers}"

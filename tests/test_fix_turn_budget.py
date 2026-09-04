@@ -47,12 +47,16 @@ two attempts per head sha, so this cannot become an unbounded burn.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 WORKFLOWS = REPO / ".github" / "workflows"
+sys.path.insert(0, str(REPO / "scripts"))
+
+import turn_budget  # noqa: E402
 
 # The high-water mark for a fix run that actually FINISHED (portico,
 # 2026-08-18, 47 turns / $2.51). The ceiling must clear this with real room,
@@ -62,7 +66,14 @@ OBSERVED_SUCCESS = 47
 # What the agent that only WRITES the code gets (agent-task.yml). The repair
 # job is strictly harder — it does the same work plus comprehension of someone
 # else's diff — so this is a FLOOR for the fixer, never a target to sit under.
-ENGINEER_BUDGET = 150
+#
+# DRE-3097 UPDATE: agent-task's ceiling is no longer a literal — a card can
+# carry a `turns:<n>` label, or let its `size:` label pick a rung, and the
+# workflow interpolates the chosen budget. What this file compares against is
+# the DEFAULT, which is what a card carrying neither label still runs with, and
+# it is read from `scripts/turn_budget.py` rather than retyped here so the two
+# cannot drift apart the way agent-fix's 60 quietly did.
+ENGINEER_BUDGET = turn_budget.DEFAULT_TURNS
 
 # The engineer's WALL CLOCK (agent-task.yml, job `execute`). A turn ceiling is
 # only half a budget: the job dies at whichever cap it reaches first. 150 turns
@@ -73,6 +84,14 @@ ENGINEER_BUDGET = 150
 ENGINEER_WALL_CLOCK = 120
 
 _TURNS_RE = re.compile(r"--max-turns\s+(\d+)")
+
+# `--max-turns ${{ steps.model.outputs.turns || 150 }}` — the DRE-3097 form.
+# The literal inside it is the default the expression falls back to when the
+# selecting step wrote nothing, so it is still a number this file can hold to
+# a floor; what it is not is a number nobody can change per card.
+_TURNS_EXPR_RE = re.compile(
+    r"--max-turns\s+\$\{\{[^}]*?\|\|\s*(\d+)\s*\}\}"
+)
 
 
 def _claude_args(workflow: str, job: str, step_id: str) -> str:
@@ -88,8 +107,10 @@ def _claude_args(workflow: str, job: str, step_id: str) -> str:
 
 
 def _max_turns(workflow: str, job: str, step_id: str) -> int:
+    """The turn ceiling a step declares — a literal, or the default an
+    interpolated per-card budget falls back to (DRE-3097)."""
     args = _claude_args(workflow, job, step_id)
-    m = _TURNS_RE.search(args)
+    m = _TURNS_EXPR_RE.search(args) or _TURNS_RE.search(args)
     assert m, f"{workflow}:{step_id} declares no --max-turns: {args!r}"
     return int(m.group(1))
 
@@ -138,8 +159,10 @@ def test_the_engineer_budget_this_test_compares_against_is_still_real():
     floor must move with it rather than silently comparing to a stale number —
     the drift that let agent-fix's 60 stand unexamined for months."""
     assert _max_turns("agent-task.yml", "execute", "claude") == ENGINEER_BUDGET, (
-        "agent-task's turn budget changed; update ENGINEER_BUDGET here so the "
-        "fixer's floor keeps tracking the agent it repairs."
+        "agent-task's DEFAULT turn budget changed; the workflow's inline "
+        "fallback and turn_budget.DEFAULT_TURNS must agree, or a run whose "
+        "budget step wrote nothing silently gets a different ceiling than the "
+        "one this repo documents."
     )
 
 

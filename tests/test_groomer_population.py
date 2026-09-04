@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import random
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,13 +74,33 @@ class FakeLinear:
             linear_ops.gql = real
 
 
-def card(identifier, *, repo="portico", parent=None, created="2026-08-01T00:00:00.000Z",
-         description="", title=None, project=None):
+def days_ago(days: float, *, anchor: str | None = None) -> str:
+    """An ISO creation date `days` before now (or before `anchor`).
+
+    The groomer measures its 14-day window against the clock (DRE-3096), so a
+    fixture with a hardcoded creation date silently ages out of the batch the
+    week after it is written — and the test then asserts the window, not the
+    thing it was written for.
+    """
+    base = (datetime.fromisoformat(anchor.replace("Z", "+00:00")) if anchor
+            else datetime.now(timezone.utc))
+    return (base - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+
+
+# ONE timestamp for the whole fixture module: cards that share a creation
+# instant share a creation DAY, which is what makes repo order the tie-break
+# rather than the microsecond a fixture happened to be built in.
+RECENT = days_ago(1)
+
+
+def card(identifier, *, repo="portico", parent=None, created=RECENT,
+         description="", title=None, project=None, priority=0):
     return {
         "identifier": identifier,
         "title": title or f"{identifier} does a thing",
         "description": description,
         "createdAt": created,
+        "priority": priority,
         "state": {"name": "Intake"},
         "labels": {"nodes": [{"name": f"repo:{repo}"}, {"name": "agent:engineer"}]},
         "parent": {"identifier": parent, "title": f"[EPIC] {parent}"} if parent else None,
