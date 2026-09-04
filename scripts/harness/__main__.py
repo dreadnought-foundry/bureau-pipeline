@@ -55,6 +55,8 @@ import argparse
 import os
 import sys
 
+import promote_channel
+
 from harness import app_token, framework, sandbox_health
 from harness.github_api import GitHub
 from harness.scenarios import discover
@@ -108,6 +110,11 @@ def write_blocked_receipt(cause: str, log=print) -> str:
     instead of *harness failed*. The line is sanitised and clamped by
     `sandbox_health.receipt_line` — it is sandbox log text going into a
     `key=value` file.
+
+    Two markers ride this one channel (DRE-3101): a dead sandbox and a probe
+    another run wiped. Both mean the commit was never judged; they differ in
+    where a reader should look, so the summary heading follows the marker
+    rather than assuming the older of the two.
     """
     line = sandbox_health.receipt_line(cause)
     out = os.environ.get("GITHUB_OUTPUT")
@@ -117,8 +124,13 @@ def write_blocked_receipt(cause: str, log=print) -> str:
             fh.write(f"blocked_reason={line}\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
+        heading = (
+            "Harness probe wiped by a concurrent run"
+            if line.startswith(promote_channel.WIPED_MARKER)
+            else "Harness blocked by the sandbox"
+        )
         with open(summary, "a") as fh:
-            fh.write(f"### Harness blocked by the sandbox\n\n{cause}\n")
+            fh.write(f"### {heading}\n\n{cause}\n")
     log(f"::error::{line}")
     return line
 

@@ -131,6 +131,12 @@ concurrency:
 permissions:
   contents: read
   statuses: write  # the tested-sha stamp release-gate.yml reads
+  # DRE-3101: the driver-source decision reads the PR's own changed-file
+  # list. Premortem Q2 — a token without this scope does not error, it
+  # returns an empty list, which reads as "no harness change"; that
+  # direction is the safe one (main's driver runs) but it would be silent,
+  # so the scope is declared rather than relied on.
+  pull-requests: read
 
 jobs:
   harness:
@@ -187,6 +193,64 @@ jobs:
       - name: Resolve tested sha
         id: tested
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # DRE-3101. The checkout above is the ref under test, and for a
+      # pull_request that is somebody's branch — which is fine for the code
+      # being PROVED and wrong for the code that drives the SHARED sandbox.
+      # DRE-3075 scoped the sweep to a namespace in scripts/harness/, so a
+      # branch cut before that merge still runs the old, un-namespaced one:
+      # it closes every harness PR and deletes every harness branch in the
+      # sandbox, main's included. On 2026-09-04 no main proving run finished
+      # between 10:00 and 12:00 PT while PR runs kept passing — main has one
+      # slot and the pull requests have many, so main loses every time.
+      #
+      # So the driver comes from `main`, the way the reusable workflows
+      # re-checkout bureau-pipeline at `pipeline_ref` rather than trusting
+      # the caller's head. The exception is a PR that CHANGES
+      # scripts/harness/: there the harness is the thing under test, its own
+      # copy has to run, and the receipt says so (scripts/harness_driver.py).
+      - name: Which scripts/harness/ drives this run
+        id: driver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Through the API rather than a git diff: the checkout above is
+          # shallow and the merge base is not in it. `|| true` because an
+          # unreadable list must not fail the run — an empty list reads as
+          # "no harness change", which routes to main's driver, which is the
+          # conservative answer (scripts/harness_driver.py, `choose`).
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
+              --paginate --jq '.[].filename' > /tmp/pr-files.txt || true
+          else
+            : > /tmp/pr-files.txt
+          fi
+          python3 scripts/harness_driver.py --event-name "$EVENT_NAME" \
+            < /tmp/pr-files.txt
+
+      - name: Take scripts/harness/ from main (DRE-3101)
+        if: steps.driver.outputs.source == 'main'
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          path: .driver-from-main
+          # The driver directory alone. Everything else — merge_gate.py,
+          # the workflows, the tests — stays the PR's, because the PR is
+          # what this run is proving.
+          sparse-checkout: scripts/harness
+          sparse-checkout-cone-mode: false
+
+      - name: Install main's scripts/harness/ (DRE-3101)
+        if: steps.driver.outputs.source == 'main'
+        run: |
+          FROM=$(git -C .driver-from-main rev-parse HEAD)
+          rm -rf scripts/harness
+          mv .driver-from-main/scripts/harness scripts/harness
+          rm -rf .driver-from-main
+          echo "driving the sandbox with scripts/harness/ from main@${FROM}" \
+            >> "$GITHUB_STEP_SUMMARY"
 
       # Only the named-scenario path needs test tooling: the DRE-2490
       # unverified_claim scenario proves a shipped test is non-vacuous by
@@ -357,10 +421,19 @@ jobs:
           TESTED_SHA: ${{ steps.tested.outputs.sha }}
           STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
           BLOCKED_REASON: ${{ steps.scenarios.outputs.blocked_reason }}
+          # DRE-3101: which scripts/harness/ actually drove the sandbox.
+          # A reader of this stamp must never have to guess whether the run
+          # proved main's driver or the PR's own.
+          DRIVER_RECEIPT: ${{ steps.driver.outputs.receipt }}
         run: |
           DESCRIPTION="integration harness: ${STATE}"
           if [ -n "$BLOCKED_REASON" ]; then
+            # The more urgent fact, and both share GitHub's 140-character
+            # clamp — the blocked/wiped receipt is never displaced by a note
+            # about which driver ran.
             DESCRIPTION="$BLOCKED_REASON"
+          elif [ -n "$DRIVER_RECEIPT" ]; then
+            DESCRIPTION="${DESCRIPTION} — ${DRIVER_RECEIPT}"
           fi
           gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
             -f state="$STATE" \

@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import merge_gate
+import promote_channel
 
 # The sweepable namespace. agent/ = reviewed by should_review_pr.py;
 # harness- = ours to delete. A run id follows, then the scenario name.
@@ -653,7 +654,76 @@ def verdict_state(comments, qa_login: str, head_sha: str) -> tuple[str, str]:
     return token, line
 
 
-def probe_pr(gh, repo: str, number) -> dict:
+def run_id_of_harness_ref(ref: Optional[str]) -> Optional[str]:
+    """The run id embedded in a harness branch, or None if the ref is not
+    one of ours.
+
+    A harness branch is `<prefix><run-id>-<scenario>` and scenario names
+    carry underscores and never dashes (`bot_pr_flow`, `gate_paths`), so
+    the run id is everything before the LAST dash. That is what lets a wipe
+    receipt name the culprit: the run id opens with the namespace, so
+    `agent/harness-pr264-gha-33899093729-1-gate_paths` says which pull
+    request's run was in the sandbox.
+    """
+    if not is_harness_ref(ref):
+        return None
+    tail = ref.removeprefix("refs/heads/")
+    for prefix in HARNESS_BRANCH_PREFIXES:
+        if tail.startswith(prefix):
+            tail = tail.removeprefix(prefix)
+            break
+    if "-" not in tail:
+        return None
+    run_id = tail.rsplit("-", 1)[0]
+    return run_id if _RUN_ID_RE.match(run_id) else None
+
+
+def foreign_harness_refs(gh, repo: str, namespace: str, log=print) -> list:
+    """Harness branches in the sandbox belonging to ANOTHER namespace.
+
+    Read only to name a culprit, never to act, so every failure answers
+    with an empty list: an unnameable run is reported as unnameable, never
+    guessed at (`standards/console-honesty.md` rule 1 — unknown is shown as
+    unknown).
+    """
+    ns = validate_namespace(namespace)
+    refs = []
+    for prefix in HARNESS_BRANCH_PREFIXES:
+        try:
+            refs.extend(gh.matching_refs(repo, prefix) or [])
+        except Exception as e:
+            log(f"wipe report: could not list {prefix}* branches ({e})")
+    return [r for r in refs if is_harness_ref(r) and not is_own_harness_ref(r, ns)]
+
+
+def wiped_probe_cause(number, namespace: str, foreign_refs) -> str:
+    """The promote receipt for a probe another run closed (DRE-3101).
+
+    Marker first, because GitHub clamps a status description at 140
+    characters and `promote_channel.evaluate` has to recognise a clamped
+    receipt (`sandbox_health.receipt_line` elides the middle for exactly
+    this reason).
+    """
+    head = (
+        f"{promote_channel.WIPED_MARKER} {namespace}'s probe PR #{number} was "
+        f"wiped by "
+    )
+    named = [(run_id_of_harness_ref(ref), ref) for ref in foreign_refs or []]
+    named = [(run_id, ref) for run_id, ref in named if run_id]
+    if not named:
+        return (
+            f"{head}a concurrent harness run — could not name which: no other "
+            f"namespace's branch was left in the sandbox to read it from"
+        )
+    # Newest first, so a sandbox holding several foreign runs names the one
+    # most likely to still be in it. Ties are broken by the ref itself, so
+    # the receipt is the same string on a re-run.
+    run_id, ref = sorted(named, reverse=True)[0]
+    return f"{head}run {run_id} (branch {ref})"
+
+
+def probe_pr(gh, repo: str, number, namespace: str = DEFAULT_NAMESPACE,
+             log=print) -> dict:
     """The probe PR, with the ONE state a polling wait cannot recover from
     named where it happens: closed, unmerged, gone out from under the wait.
 
@@ -676,15 +746,26 @@ def probe_pr(gh, repo: str, number) -> dict:
     A MERGE is not this state. It is closure by the pipeline doing its job,
     and it is the success the skew and stale legs wait for, so it passes
     through untouched.
+
+    DRE-3101 gave the ending its RECEIPT. A wiped probe says nothing about
+    the commit under test — the run never got to judge it — so it is
+    `SandboxBlocked`, the shape DRE-3076 gave a dead sandbox, and its cause
+    names the run that did it (`wiped_probe_cause`). Before that, the only
+    record was a run log, and diagnosing 2026-09-04 meant reading two run
+    histories side by side to learn which pull request's sweep had closed
+    main's probe.
     """
     pr = gh.get_pr(repo, number)
     if pr.get("merged") or pr.get("state") == "open":
         return pr
-    raise ScenarioFailure(
+    raise SandboxBlocked(
         f"probe PR #{number} is {pr.get('state')!r} and not merged — it was "
         "closed out from under this wait (a concurrent harness run's sweep, "
         "or a human). Nothing more can happen on it, so waiting longer would "
-        "only time out against whatever the pipeline was asked for"
+        "only time out against whatever the pipeline was asked for",
+        cause=wiped_probe_cause(
+            number, namespace, foreign_harness_refs(gh, repo, namespace, log)
+        ),
     )
 
 

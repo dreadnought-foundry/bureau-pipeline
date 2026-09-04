@@ -85,6 +85,19 @@ NO_CHANNEL_YET = "no-channel-yet"
 #: still be recognisable here.
 BLOCKED_MARKER = "harness blocked:"
 
+#: What the driver writes at the FRONT of the stamp's description when the
+#: run ended because another harness run closed its probe PR out from under
+#: it (DRE-3101) — see `harness/framework.wiped_probe_cause`.
+#:
+#: Its own marker rather than a flavour of the one above, because the two
+#: send a reader to different places: a blocked run means the SANDBOX's own
+#: machinery failed and the fix is in the sandbox; a wiped probe means
+#: another run in the sandbox reached into this one's namespace, and the
+#: receipt names which run and which branch. On 2026-09-04 that distinction
+#: cost a day — every main proving run from 10:00 PT onward died on a probe
+#: a pull-request run had closed, and nothing said so.
+WIPED_MARKER = "harness wiped:"
+
 #: GitHub's compare API vocabulary (base=channel, head=candidate).
 AHEAD = "ahead"
 BEHIND = "behind"
@@ -111,6 +124,7 @@ OUTCOME_FAILED = "harness-failed"
 OUTCOME_NOT_MAIN = "harness-run-not-on-main"
 OUTCOME_HELD = "channel-held"
 OUTCOME_BLOCKED = "harness-blocked-by-sandbox"
+OUTCOME_PROBE_WIPED = "harness-probe-wiped"
 OUTCOME_UNPROVEN = "no-harness-stamp"
 OUTCOME_NOT_AHEAD = "not-ahead-of-channel"
 
@@ -168,6 +182,19 @@ def blocked_by_sandbox(combined: dict | None) -> str | None:
     return description if description.startswith(BLOCKED_MARKER) else None
 
 
+def wiped_probe(combined: dict | None) -> str | None:
+    """The receipt naming the run that closed this run's probe, else None.
+
+    Read the same way `blocked_by_sandbox` is and for the same reason: the
+    marker says the harness never judged the commit. It says one thing more
+    — WHO ended it — and that is the whole point of a separate name (the
+    2026-09-04 diagnosis took two run histories side by side).
+    """
+    stamp = _harness_stamp(combined) or {}
+    description = (stamp.get("description") or "").strip()
+    return description if description.startswith(WIPED_MARKER) else None
+
+
 def evaluate(
     combined: dict | None,
     sha: str,
@@ -218,7 +245,20 @@ def evaluate(
             f"{hold.strip()}. Clear the hold variable to resume."
         ), OUTCOME_HELD)
 
-    # 3. Blocked by the SANDBOX (DRE-3076) — read before the triggering run's
+    # 3. Wiped by a CONCURRENT RUN (DRE-3101) — the most specific reading of
+    #    all, and read first among the markers because it names a culprit
+    #    rather than a condition. Main's probe PR was closed out from under
+    #    its own run by another run's sweep, so nothing about this trunk was
+    #    ever judged: not a red trunk, and not a sick sandbox either — the
+    #    sandbox was healthy and somebody else was in it.
+    wiped = wiped_probe(combined)
+    if wiped:
+        return Decision(False, (
+            f"not promoting {sha}: the harness never judged it — {wiped}. "
+            f"Nothing is proven either way; the next run re-proves this trunk."
+        ), OUTCOME_PROBE_WIPED)
+
+    # 4. Blocked by the SANDBOX (DRE-3076) — read before the triggering run's
     #    own conclusion, because it is a different fact and the more specific
     #    one: the harness never judged this commit, its own proving ground was
     #    down (a Linear rate limit, on 2026-09-03). That is true whether or not
@@ -235,7 +275,7 @@ def evaluate(
             f"the next run re-proves this trunk."
         ), OUTCOME_BLOCKED)
 
-    # 4. What the triggering run did (DRE-3070). Cancelled is the merge-train
+    # 5. What the triggering run did (DRE-3070). Cancelled is the merge-train
     #    arm and it is NOT a failure: GitHub keeps one pending run per
     #    concurrency group, so a head still waiting when the next merge lands
     #    is dropped before it starts. The channel advances to the head that DID
@@ -254,7 +294,7 @@ def evaluate(
             f"{conclusion}). This is a red trunk, not a busy one."
         ), OUTCOME_FAILED)
 
-    # 5. The harness must have proved THIS sha. Never promote on unverifiable
+    # 6. The harness must have proved THIS sha. Never promote on unverifiable
     #    data — the merge gate's compare-blip rule, and the reason a fetch
     #    failure is indistinguishable from no stamp here.
     verdict = _harness_verdict(combined)
@@ -266,7 +306,7 @@ def evaluate(
             f"move {CHANNEL}."
         ), OUTCOME_UNPROVEN)
 
-    # 6. The channel may only ever advance. Two harness runs can finish out of
+    # 7. The channel may only ever advance. Two harness runs can finish out of
     #    order; without this, the later-finishing older commit wins and the
     #    channel silently regresses — which would look exactly like a working
     #    channel while shipping older code.

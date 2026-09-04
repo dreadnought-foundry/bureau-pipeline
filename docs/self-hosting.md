@@ -128,6 +128,7 @@ strings instead of the same silence:
 | `harness-failed` | the harness went red on this commit | a red trunk; the medic and `red-main-repair.yml` own it |
 | `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
 | `harness-blocked-by-sandbox` | the harness never judged this commit — its own sandbox (reconcile/merge-gate/linear-sync) failed first | nothing proven either way; the next run re-proves this trunk |
+| `harness-probe-wiped` | the harness never judged this commit — another harness run closed this one's probe PR out from under it; the receipt names the run and the branch | nothing proven either way; if the named run came from a branch cut before DRE-3101, that branch is the one to rebase |
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
 

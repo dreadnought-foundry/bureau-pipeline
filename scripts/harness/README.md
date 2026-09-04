@@ -71,6 +71,17 @@ budget and then reports the pipeline it was waiting on. On run
 the PR had been closed 20 minutes in by a concurrent harness run whose
 driver predated the namespaced sweep below.
 
+Since DRE-3101 a wiped probe ends the run with a receipt of its own rather
+than a bare failure. `framework.probe_pr` raises `SandboxBlocked` whose
+cause opens with `harness wiped:` and names the culprit —
+*`main's probe PR #939 was wiped by run pr264-gha-33899093729-1 (branch
+agent/harness-pr264-gha-33899093729-1-gate_paths)`* — read off the foreign
+harness branches still in the sandbox (`framework.wiped_probe_cause`). A
+run that cannot be named is reported as unnameable and never guessed at.
+`promote_channel` turns that marker into the `harness-probe-wiped` outcome:
+the trunk was neither proved nor disproved, and the receipt says which run
+to look at instead of which diff.
+
 A blocked run stops there — the remaining scenarios would wait on the same
 corpse — exits `framework.BLOCKED_EXIT` (3), and writes the quote to its
 `blocked_reason` output. `harness.yml` makes that the `integration-harness`

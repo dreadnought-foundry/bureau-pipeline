@@ -475,7 +475,9 @@ class GatePaths(framework.Scenario):
             # the wait naming the closure — the skew and stale legs have
             # always failed fast on that state and this one never did
             # (run 33899093729).
-            pr = framework.probe_pr(ctx.gh, ctx.repo, number)
+            pr = framework.probe_pr(
+                ctx.gh, ctx.repo, number, ctx.namespace, ctx.log
+            )
             if pr.get("merged"):
                 raise ScenarioFailure(
                     f"named leg: the gate MERGED PR #{number} — a "
