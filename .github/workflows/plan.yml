@@ -394,12 +394,21 @@ jobs:
                relations, not the ordering, hold them), and make sure neither
                is fleet-buildable — write acceptance criteria naming the live
                observation, or add `--label no-code` for work an operator runs.
-               The run checks the cards you created and sends the epic back to
-               Planning if they are missing, so check your own work first:
+               NEITHER WEARS A BUILD ROLE (DRE-3039): create each of the pair
+               with `--label agent:ops` and drop the role `subissue` inherits
+               (`linear_ops.py remove-label <CARD> agent:engineer`), because a
+               role a build run is dispatched for is a card the fleet picks up
+               — and the thing it would build is the proof of its own siblings.
+               You do NOT stamp these two: the check writes the routing verdict
+               it computed onto each of them. The run checks the cards you
+               created and sends the epic back to Planning if they are missing,
+               so check your own work first (`--no-stamp` reads without
+               writing):
                  python3 .bureau-pipeline/scripts/linear_ops.py children-detail \
                    "${{ github.event.client_payload.identifier }}" \
                    | python3 .bureau-pipeline/scripts/proof_and_demo.py check \
-                       --epic "${{ github.event.client_payload.identifier }}"
+                       --epic "${{ github.event.client_payload.identifier }}" \
+                       --no-stamp
             4. Write the PLAN ARTIFACT — the thing the CEO green-lights —
                with `Write`, to EXACTLY this path:
                  ${{ runner.temp }}/plan-artifact.md

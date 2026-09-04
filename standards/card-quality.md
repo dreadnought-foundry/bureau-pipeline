@@ -229,7 +229,7 @@ record merges; **demo** answers *can the CEO see it*, because a merged PR and a
 passing suite are invisible to the person who green-lit the epic. An epic that
 produces neither has no way of being wrong in public.
 
-Three conditions, and each is checked on the planner's OUTPUT rather than on
+Four conditions, and each is checked on the planner's OUTPUT rather than on
 any document that states the convention — a convention nothing checks is a
 convention that drifts:
 
@@ -241,6 +241,21 @@ convention that drifts:
    The whole value is that something other than the builder confirms it. The
    pair of acceptable verdicts is derived from `config/routing-verdicts.json`
    (the verdicts whose accountable actor is a human), never restated in code.
+4. **Neither may wear a build role** (DRE-3039) — `agent:engineer`,
+   `agent:frontend`, `agent:devops`, `agent:database-architect`. A role a build
+   run is dispatched for is a card the fleet picks up, and the thing it would
+   build is the proof of its own siblings' work. The pair carries `agent:ops`.
+   Both lists are derived, never restated: the build roles off `agents.yaml`
+   (the roster entries running on `agent-task.yml`), the role the pair may wear
+   off the routing vocabulary's own label map.
+
+**And the check writes the verdict it computes onto both cards** — the same
+`🧭 routing-verdict` comment every other verdict uses, so
+`routing_verdict.promotion_refusal` reads it and the sweep leaves the pair in
+`Backlog` for the person who confirms it. It used to compute the verdict, print
+it and stamp nothing, and a verdictless child promotes exactly as it always
+had: the pair was dispatched to a build agent the moment its siblings reached
+Done (DRE-3039). One writer, the one that already knows the answer.
 
 An epic missing either card is bounced back to `Planning` with the reason
 named, the same way an epic with invalid children is. The enforcer is

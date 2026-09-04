@@ -981,7 +981,16 @@ def render_markdown(doc: dict | None = None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _cmd_stamp(identifier: str, name: str, why: str) -> int:
+def stamp_card(identifier: str, name: str, why: str) -> int:
+    """Write `name` onto `identifier`: the verdict comment plus the labels the
+    verdict declares. Returns 0 when it wrote, 1 when it refused.
+
+    THE one write path, and it has two callers: this module's `stamp`
+    subcommand, and `proof_and_demo.py`, which stamps the two cards it already
+    computed a verdict for (DRE-3039). A second implementation of "post the
+    comment and apply the marks" would be two writers of one record, free to
+    disagree about the marks.
+    """
     import linear_ops
 
     refusal = stamp_refusal(name, linear_ops.comment_bodies(identifier))
@@ -1053,7 +1062,7 @@ def main(argv=None) -> int:
         return 0
 
     if command == "stamp":
-        return _cmd_stamp(args.identifier, args.verdict, args.why)
+        return stamp_card(args.identifier, args.verdict, args.why)
 
     parser.print_usage(sys.stderr)
     return 2

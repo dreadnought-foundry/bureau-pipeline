@@ -391,7 +391,7 @@ answer two different questions and neither substitutes for the other:
 
 An epic that produces neither has no way of being wrong in public.
 
-Three conditions, all checked on the cards you create:
+Four conditions, all checked on the cards you create:
 
 1. **Last.** They are the epic's last two children, in either order between
    themselves.
@@ -405,13 +405,36 @@ Three conditions, all checked on the cards you create:
    to WORKBENCH by title convention; for the proof card, write acceptance
    criteria that name the live observation ("observed in production", "against
    the live …", "by hand"), or label it `no-code` when a person runs it.
+4. **Neither wears a build role** (DRE-3039). `subissue` inherits
+   `agent:engineer` — or `agent:devops` on a pipeline epic — onto every child,
+   which is right for work and wrong for the two cards that CONFIRM the work: a
+   role a build run is dispatched for is a card the fleet picks up, and the
+   thing it would build is the proof of its own siblings. So create each of the
+   pair with `--label agent:ops` (the label the routing vocabulary already
+   reads as "a person handles this") and drop the inherited one:
+
+       python3 .bureau-pipeline/scripts/linear_ops.py remove-label <CARD> agent:engineer
+
+   The check refuses a proof or demo card carrying `agent:engineer`,
+   `agent:frontend`, `agent:devops` or `agent:database-architect`, and names the
+   label it should have instead.
+
+**You never stamp these two cards yourself.** The check writes the
+`🧭 routing-verdict` comment it computed onto each of them — the same comment
+every other verdict uses — so the promotion gate reads it and leaves the pair
+in Backlog until a person picks it up. One writer, the one that already knows
+the answer: before DRE-3039 the check computed the verdict, printed it and
+stamped nothing, and the sweep promoted both cards to an engineer agent the
+moment their siblings reached Done.
 
 The run checks your OUTPUT, not this text — an epic missing either card is
 bounced back to Planning with the reason named, the same way an epic with
-invalid children is. Check it yourself before you finish:
+invalid children is. Check it yourself before you finish (`--no-stamp` reads
+without writing, so your own check leaves the cards alone):
 
     python3 .bureau-pipeline/scripts/linear_ops.py children-detail <EPIC> \
-      | python3 .bureau-pipeline/scripts/proof_and_demo.py check --epic <EPIC>
+      | python3 .bureau-pipeline/scripts/proof_and_demo.py check --epic <EPIC> \
+          --no-stamp
 
 ## The plan artifact (what the CEO green-lights) — and the wave plan
 Every epic produces ONE artifact — business case, KPIs as structured data,
