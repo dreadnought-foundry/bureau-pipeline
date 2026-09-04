@@ -1,8 +1,13 @@
-# Plan-critic standard — two passes, two questions, one bound
+# Plan-critic standard — two critics, three moments, one bound
 
 A plan is read twice before agents build it, and the two readings ask
 **different questions**. If they asked the same one, the second would be waste.
 The difference is what the plan IS at each moment.
+
+There is a third moment and it is **the first critic reading a card that owes
+no plan** — a one-off, on its way to the build queue. Two critics, three
+moments: the one-off stage is a stage, not a role, and it shares the first
+critic's agent, ladder, brief and result grammar.
 
 The mechanical form of everything below is `scripts/plan_critic.py`; the rail
 that runs it is `.github/workflows/plan.yml`. This is the human form.
@@ -73,7 +78,39 @@ what it was shown cannot tell you what it missed. The cost of this decision is
 a vaguer critic, and it was taken deliberately (D3, 2026-08-25) because this is
 the cheapest home for collision detection.
 
-## Both loops are bounded
+## The same first critic reads a one-off before it is built
+
+**Question: is this one pull request of work an agent can build unattended,
+with nothing in it that is a decision?**
+
+A one-off owes no plan and no green light — its exit from Planning is
+mechanical — so before this it was read by **nobody**. The shape stamp was the
+only judgement on the fast path, and then an engineer was dispatched: the first
+adversarial eye a one-off met was the code critic on its pull request, after
+the build had been paid for. On 2026-09-03 a card that was purely a business
+decision was stamped `one-off`, routed FLEET, and would have been built.
+
+So the critic reads the card and the stamp's own reason, once, between the
+stamp and the move. One bounded call per one-off classification. It checks the
+thing nothing else on that route checks — **is any of this a decision** — plus
+whether the card is really one pull request and whether an agent can tell it is
+done from the card alone.
+
+**It fails CLOSED, and that is the one place this route inverts the epic
+route.** A pass moves the card to the build queue; a send-back, a crash, an
+unusable result and an unavailable model all take the escalation exit to
+`Green Light` with the reason in business terms. That does not contradict "a
+crash is not a rejection" — it is the same rule read in a different place.
+Before the CEO reads a plan, a critic that decided nothing must not stop a
+human from reading it, because something else reads the plan next. On the
+one-off route **nothing** reads the card next, so "the critic did not decide"
+cannot be spent as "the critic said yes". The cheap outcome is a person
+answering a question; the expensive one is a build nobody asked for.
+
+**The reason lands on the card either way** — pass or send-back — so the
+planner scorer can grade critic against classifier against outcome.
+
+## Both plan loops are bounded
 
 **Two failed rounds at either critic and the plan reaches the CEO regardless**,
 with the critic's stated reason attached. Nothing circles a third time. An

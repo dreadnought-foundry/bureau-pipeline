@@ -11,6 +11,20 @@ would be waste, and the difference is what the plan IS at each moment:
           specification, what is missing?" An adversarial pass is only worth
           much against a fixed target, and before approval there isn't one.
 
+...and a THIRD moment, which is the same first critic reading a different kind
+of card (DRE-3041):
+
+  one-off — reviews a card that owes no plan at all, between the shape stamp
+          and the move to the build queue. "Is this one pull request of work an
+          agent can build unattended, with nothing in it that is a decision?"
+
+That is a stage, not a third critic: same agent, same brief, same ladder, same
+result grammar and the same round record. An epic is read twice before its
+children are built; a one-off was read by NONE — its exit is mechanical
+(DRE-2844), so the only judgement on it was the shape stamp, and then an
+engineer was dispatched. The 2026-09-03 probes showed the cost: a business
+decision stamped `one-off` was routed FLEET and would have been built.
+
 This module is the mechanical half of both: the stage charters the prompts are
 built from, the result-file grammar, the round bound, the durable markers the
 send-back rate and the collision counters are read out of, and the cheap
@@ -58,10 +72,13 @@ CLI:
                                      is the list posted to the epic BEFORE the
                                      critic reads it
   decide --stage S --result-file F [--epic E] [--github-output F]
-         [--note-file F] [--record-file F]
+         [--note-file F] [--record-file F] [--escalation-file F]
                                      comment thread (JSON array) on stdin,
                                      from `dump-comments --with-authors`.
                                      The note and the record are TWO comments.
+                                     `--escalation-file` is the one-off stage's
+                                     CEO-facing reason, written only when the
+                                     card does not pass.
   sight --this <EPIC>                epics in flight (JSON array) on stdin
   cycle-start --epic <EPIC> [--record]
                                      the note that opens a planning attempt,
@@ -96,6 +113,10 @@ unaccounted_surfaces = design_parity.unaccounted_surfaces
 
 STAGE_PRE = "pre"
 STAGE_POST = "post"
+# The third MOMENT, on the route that owes no plan (DRE-3041). Not a third
+# critic: `STAGES[STAGE_ONE_OFF]["agent"]` is AGENT_PRE, so nothing new lands in
+# agents.yaml or config/models.yaml and the two routes share one reader.
+STAGE_ONE_OFF = "one-off"
 
 # The roster/ladder names for the two agents (agents.yaml, config/models.yaml).
 # Also the role strings plan.yml passes to `model_fallback.py select`, and the
@@ -213,6 +234,51 @@ from collisions found later, and the gap between the two is the tripwire for
 whether this check needs its own pass.
 {sight}"""
 
+_ONE_OFF_CHARTER = """\
+YOU ARE THE PRE-APPROVAL CRITIC, and the card in front of you is not a plan.
+It has been classified as ONE-OFF — one card, one pull request — so it owes no
+plan document and no green light, and NOBODY ELSE WILL READ IT. The moment you
+pass it, it goes to the build queue and is built unattended.
+
+YOUR QUESTION: {question}
+
+You are the LAST reader before the money is spent. There is no CEO reading this
+one, and the code critic on the pull request is downstream of a build that has
+already been paid for.
+
+WHAT YOU CHECK:
+  - IS ANY OF IT A DECISION? A card that asks whether we should do something —
+    a price, a policy, what to make public, which of two defensible options to
+    take — is not work, however small it looks. Nobody can build an answer to
+    it, and an agent asked to will invent one. This is the case this check
+    exists for, and it is a SEND_BACK.
+  - Is it really ONE pull request? Contracts between pieces, two languages or
+    tiers, a criterion counting something the card never enumerates, an
+    unbounded "every surface" — any one of those is an epic wearing a one-off's
+    stamp (standards/card-quality.md).
+  - Can an agent tell when it is DONE, from this card alone, with no author to
+    ask? An exit condition that needs a person to drive a flow or observe live
+    state is not something an unattended run can satisfy.
+  - Does the card need something that does not exist yet, with nothing to
+    create it first?
+
+READ THE SHAPE STAMP'S OWN REASON. The classifier wrote one sentence saying why
+it called this a one-off. You are checking that sentence as much as the card:
+where it and the card disagree, the card is what is true.
+
+WHAT YOU DO NOT DO: you do not rewrite the card, you do not size the work, and
+you do not judge whether it is worth doing. You answer one question, and you
+send back only what an unattended agent genuinely cannot build.
+
+A SEND_BACK IS NOT A REJECTION OF THE WORK. It routes the card to the person
+who can settle the thing you found, so state that thing in one plain-English
+line — no file paths, no code — because a non-technical reader is who answers
+it.
+
+SCOPE: THIS CARD ONLY. You are given the card, its shape stamp and the
+repository. You cannot see other work in flight and must not guess at it.
+"""
+
 STAGES: dict[str, dict] = {
     STAGE_PRE: {
         "agent": AGENT_PRE,
@@ -226,6 +292,16 @@ STAGES: dict[str, dict] = {
         "question": "Given this is now the specification, what is missing?",
         "template": _POST_CHARTER,
     },
+    STAGE_ONE_OFF: {
+        # The FIRST critic's agent, deliberately. One reader, two routes.
+        "agent": AGENT_PRE,
+        "title": "Pre-approval critic — before this is built",
+        "question": (
+            "Is this one pull request of work an agent can build unattended, "
+            "with nothing in it that is a decision?"
+        ),
+        "template": _ONE_OFF_CHARTER,
+    },
 }
 
 
@@ -235,15 +311,26 @@ def question(stage: str) -> str:
     return STAGES[stage]["question"]
 
 
+def agent(stage: str) -> str:
+    """The roster/ladder name this stage runs as.
+
+    Read rather than assumed, because two stages share one: the one-off stage
+    IS the first critic, so `model_fallback.py select` and
+    `assemble_context.py assemble` are handed the same role on both routes and
+    no third entry exists to drift.
+    """
+    return STAGES[stage]["agent"]
+
+
 def charter(stage: str, sight: str = "") -> str:
     """The stage's prompt block, as the workflow interpolates it.
 
     `sight` is the cross-epic scope block and reaches the POST stage only: the
-    pre stage's charter states it has no cross-epic sight, and handing it one
-    would be the same critic twice.
+    other two charters state they have no cross-epic sight, and handing one to
+    them would be the same critic twice.
     """
     spec = STAGES[stage]
-    if stage == STAGE_PRE:
+    if stage != STAGE_POST:
         return spec["template"].format(question=spec["question"])
     return spec["template"].format(
         question=spec["question"],
@@ -285,6 +372,13 @@ def read_result(text: str) -> tuple[str, str]:
 
     A SEND_BACK with no reason reads as NO_RESULT. The card requires the reason
     to be attached, and a reason-less send-back is a stall dressed up.
+
+    A PASS may carry a reason and keeps it (DRE-3041). On the one-off route the
+    critic's own sentence is what lands on the card — "the reason is posted on
+    the card so the scorer can grade critic against classifier against outcome"
+    — and a pass whose reason is discarded leaves the card saying only that
+    something passed. A pass with no reason is still a pass; nothing downstream
+    reads the field to decide anything.
     """
     for raw in (text or "").splitlines():
         m = _RESULT_LINE.match(raw.strip())
@@ -293,7 +387,7 @@ def read_result(text: str) -> tuple[str, str]:
         result = m.group("result")
         reason = one_line(m.group("reason") or "")
         if result == PASS:
-            return PASS, ""
+            return PASS, reason
         if result == SEND_BACK and reason:
             return SEND_BACK, reason
         return NO_RESULT, reason
@@ -319,7 +413,9 @@ def collisions_declared(text: str) -> int:
 # `model-attempt:` heartbeat: a durable, timestamped line in the thread, not a
 # number somebody remembers.
 _MARKER = re.compile(
-    rf"^{re.escape(MARKER_PREFIX)}\s+stage=(?P<stage>\w+)\s+round=(?P<round>\d+)\s+"
+    # `[\w-]`, not `\w`: the one-off stage's name carries a hyphen, and a marker
+    # the reader cannot parse is a round the record does not hold (DRE-3041).
+    rf"^{re.escape(MARKER_PREFIX)}\s+stage=(?P<stage>[\w-]+)\s+round=(?P<round>\d+)\s+"
     r"result=(?P<result>[A-Z_]+)\s+collisions=(?P<collisions>\d+)"
     r"(?:\s+—\s+(?P<reason>.*))?$",
     re.MULTILINE,
@@ -744,6 +840,96 @@ def decide(result: str, prior_send_backs: int, reason: str = "") -> tuple[str, s
     return "proceed", note
 
 
+# --- The one-off exit (DRE-3041) --------------------------------------------
+#
+# The same critic, one call, and a decision that fails in the OPPOSITE
+# direction to the one above. That inversion is the whole of the difference and
+# it is not a contradiction of console-honesty rule 1:
+#
+#   on the EPIC route a crash is not a rejection, because the plan is on its way
+#   to the CEO and a critic that decided nothing must not stop a human reading
+#   it. Something else reads the plan after the critic.
+#
+#   on the ONE-OFF route NOTHING reads the card after this. A pass moves it to
+#   the build queue and an agent builds it unattended, so "the critic did not
+#   decide" cannot be spent as "the critic said yes". The card goes to a person
+#   instead — the cheap outcome — and the run says which of the two happened.
+#
+# There is no bound here either, because there is no loop to bound: one call per
+# one-off classification, and the card either moves or parks.
+
+#: The two actions the one-off exit can take. `proceed` runs
+#: `planning_route.py exit`; `escalate` runs `planning_escalation.py escalate`.
+PROCEED = "proceed"
+ESCALATE = "escalate"
+
+#: What the run records when the critic produced nothing usable. Its own
+#: sentence rather than the epic route's, because here it is not a shrug.
+NO_CRITIC_NOTE = (
+    "the critic produced no result, and on this route that is not a pass — "
+    "nothing else reads this card before it is built, so it goes to a person"
+)
+
+
+def one_off_decide(result: str, reason: str = "") -> tuple[str, str]:
+    """`(action, note)` for a one-off exit — `proceed` moves it, `escalate` parks it.
+
+    Only a PASS moves the card. A SEND_BACK carries the critic's own line; a
+    crash, an empty file, an unparseable header or a verdict this module does
+    not write all land on the same answer, because reading any of them as a
+    pass is the one direction that must never happen.
+    """
+    if result == PASS:
+        return PROCEED, (
+            "the critic read this card and found one pull request of work an "
+            "agent can build unattended"
+        )
+    if result == SEND_BACK and one_line(reason):
+        return ESCALATE, one_line(reason)
+    return ESCALATE, NO_CRITIC_NOTE
+
+
+def one_off_escalation(result: str, reason: str = "") -> str:
+    """The plain-English question the CEO is handed when a one-off does not pass.
+
+    `standards/comms.md`: purpose first, the finding in its own block, and one
+    ask as the closing line. It is written for a non-technical reader because
+    it is the CEO's decision queue this lands in, and the reason half of it was
+    written by an AGENT — so the same seam that guards the planner's own
+    escalation text guards this one (`planning_escalation.jargon`). A reason
+    that leaks a path or a command costs the REASON, never the question: the
+    raw text stays in the run log, and the card still parks with something a
+    person can answer.
+    """
+    import planning_escalation  # late: it reads planning_route, which reads us
+
+    stated = one_line(reason)
+    if result == SEND_BACK and stated and not planning_escalation.jargon(stated):
+        finding = f"What it found: {stated}"
+    elif result == SEND_BACK and stated:
+        print("plan critic: the one-off reason is not fit for the card — "
+              f"{planning_escalation.NOT_PLAIN_ENGLISH}\n--- the critic wrote "
+              f"---\n{stated}", file=sys.stderr)
+        finding = (
+            "What it found was written in technical terms, so it is not "
+            "repeated here — it is in the run's own log."
+        )
+    else:
+        finding = (
+            "What happened: the reader did not answer at all, so nothing has "
+            "checked this card. We treat that as a stop rather than a yes, "
+            "because after this point the work is simply built."
+        )
+    return "\n\n".join([
+        "This card was about to go to the build queue, and the reader that "
+        "checks work of this size did not think an agent could finish it "
+        "unattended.",
+        finding,
+        "Which gets to my question: is this something you want to settle "
+        "yourself, or should we put it back in the queue as it stands?",
+    ])
+
+
 # --- Cross-epic sight (D3) --------------------------------------------------
 
 def sight_block(this_epic: str, epics: list[dict]) -> str:
@@ -995,7 +1181,13 @@ def _cmd_decide(args) -> int:
     # never used, and say "round 3 of 2" while doing it.
     cycle = current_cycle(thread, args.epic)
     prior = send_backs(cycle, args.stage)
-    action, note = decide(result, prior, reason)
+    if args.stage == STAGE_ONE_OFF:
+        # No bound and no loop on this route: one call, and the card either
+        # moves or parks. `prior` is still read so a re-run of the same card
+        # numbers its round honestly.
+        action, note = one_off_decide(result, reason)
+    else:
+        action, note = decide(result, prior, reason)
     stats = rate(cycle, args.stage)
     # The round NUMBER counts every round this stage has run, including ones it
     # passed or crashed on; the BOUND counts only the failed ones. Two different
@@ -1012,7 +1204,8 @@ def _cmd_decide(args) -> int:
     ])
 
     title = STAGES[args.stage]["title"]
-    icon = {"hold": "🛑", "proceed": "✅"}[action] if result != NO_RESULT else "⚠️"
+    icon = {"hold": "🛑", "proceed": "✅", ESCALATE: "🙋"}[action] \
+        if result != NO_RESULT else "⚠️"
     seen = stats["rounds"]
     rate_text = (
         f"send-back rate at this critic so far on this planning attempt: "
@@ -1025,10 +1218,27 @@ def _cmd_decide(args) -> int:
     # record is this gate's credential and says nothing else, because a record
     # sharing a comment with prose is a record that prose can forge
     # (`_sole_record`).
+    #
+    # The one-off route has no round bound, so its note does not claim one:
+    # "round 1 of 2" on a card that will never get a second call is a number
+    # that means nothing to the person reading it.
+    if args.stage == STAGE_ONE_OFF:
+        headline = f"{icon} **{title}** — {note}"
+        # ...and what happens next, in the words of the route it is on. The
+        # send-back RATE belongs to a planning attempt and this card has none.
+        closing = (
+            "This card goes to the build queue."
+            if action == PROCEED
+            else "This card is not going to the build queue — it is with a "
+                 "person, in the decision queue, with the reason above."
+        )
+    else:
+        headline = f"{icon} **{title}** — round {round_n} of {MAX_ROUNDS}: {note}"
+        closing = rate_text
     body = "\n\n".join([
-        f"{icon} **{title}** — round {round_n} of {MAX_ROUNDS}: {note}",
-        *( [f"Reason: {reason}"] if reason else [] ),
-        rate_text,
+        headline,
+        *( [f"Reason: {reason}"] if reason and reason != note else [] ),
+        closing,
     ])
     record = marker(args.stage, round_n, result, reason, collisions)
     if args.note_file:
@@ -1037,6 +1247,13 @@ def _cmd_decide(args) -> int:
     if args.record_file:
         with open(args.record_file, "w", encoding="utf-8") as f:
             f.write(record + "\n")
+    # Only when the card does NOT pass, and only on the route that has an
+    # escalation exit: a reason file left behind by a passing card is a
+    # question nobody owes an answer to, and the step that reads it is gated on
+    # the action rather than on the file existing.
+    if args.escalation_file and args.stage == STAGE_ONE_OFF and action == ESCALATE:
+        with open(args.escalation_file, "w", encoding="utf-8") as f:
+            f.write(one_off_escalation(result, reason) + "\n")
     print(body)
     print()
     print(record)
@@ -1098,6 +1315,9 @@ def main(argv: list[str]) -> int:
     # The round record, for its OWN comment. Keeping it out of the note is what
     # makes "the pipeline wrote a bare marker" mean something (`_sole_record`).
     d.add_argument("--record-file", default=None)
+    # The one-off route's CEO-facing reason, written only when the card does not
+    # pass — `planning_escalation.py escalate --reason-file` reads it.
+    d.add_argument("--escalation-file", default=None)
     d.set_defaults(fn=_cmd_decide)
 
     s = sub.add_parser("sight", help="cross-epic scope; epics on stdin")

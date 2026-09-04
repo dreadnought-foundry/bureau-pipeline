@@ -1355,7 +1355,7 @@ class TheTwoProbeBodiesRunTheRoute(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
 
     def _stamp(self, shape="one-off", why="one file, one pull request"):
-        return self.shape.stamp_comment(
+        return self.shape.shape_comment(
             shape, why, by=self.shape.BY_PLANNER, model="claude-fable-5-1")
 
     def _card(self, probe, extra=""):
