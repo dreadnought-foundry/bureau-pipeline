@@ -96,13 +96,21 @@ GOOD_CARD = (
 class StagesAreTwoDifferentQuestions(unittest.TestCase):
     """AC6 — a reviewer can tell which critic is which without being told."""
 
-    def test_both_stages_exist_and_are_the_only_two(self):
-        self.assertEqual(tuple(pc.STAGES), (pc.STAGE_PRE, pc.STAGE_POST))
+    def test_the_stages_are_the_three_moments_a_plan_is_read(self):
+        """Three stages, TWO critics (DRE-3041). The one-off stage is the same
+        agent as the pre stage asking a different question at a different
+        moment — the epic route and the one-off route share one critic, so a
+        stage is a moment rather than a role."""
+        self.assertEqual(tuple(pc.STAGES),
+                         (pc.STAGE_PRE, pc.STAGE_POST, pc.STAGE_ONE_OFF))
 
-    def test_the_two_questions_are_not_the_same_question(self):
+    def test_the_three_questions_are_not_the_same_question(self):
         self.assertNotEqual(pc.question(pc.STAGE_PRE), pc.question(pc.STAGE_POST))
         self.assertIn("CEO", pc.question(pc.STAGE_PRE))
         self.assertIn("missing", pc.question(pc.STAGE_POST).lower())
+        self.assertEqual(
+            3, len({pc.question(s) for s in pc.STAGES}),
+            "two stages ask the same question, so one of them is waste")
 
     def test_each_charter_carries_its_own_question_and_not_the_others(self):
         pre, post = pc.charter(pc.STAGE_PRE), pc.charter(pc.STAGE_POST)
@@ -1169,6 +1177,289 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
             self.CHILD, self.EPIC, "not-a-timestamp", self._cycle()))
 
 
+# ===========================================================================
+# A one-off gets a critic before it gets an engineer (DRE-3041)
+# ===========================================================================
+#
+# An epic is read by two critics before its children are built. A one-off was
+# read by NONE: its exit from Planning is mechanical (DRE-2844), so the only
+# judgement on it was the shape stamp — the classifier's single call (DRE-3029)
+# with the verdict derived from the card (DRE-3038) — and then an engineer was
+# dispatched. The first adversarial eye a one-off met was the code critic on
+# its pull request, after the build had been paid for. The 2026-09-03 probes
+# showed what that costs: a business decision stamped `one-off` was routed
+# FLEET and would have been built.
+#
+# So the SAME first critic reads the one-off exit before the card moves, and
+# the one place it differs from the epic route is the direction it fails in.
+
+FD6 = "DRE-3020"   # the FD-6 probe: a business decision, not work
+FD4B = "DRE-3018"  # the FD-4b probe: a real one-off
+
+
+def _probe(card: str) -> dict:
+    """One DRE-3013 front-door probe, as it was filed on 2026-09-03."""
+    with open(os.path.join(FIXTURES, "planning-probes-dre3013.json"),
+              encoding="utf-8") as f:
+        return next(p for p in json.load(f)["probes"] if p["card"] == card)
+
+
+class TheOneOffCriticIsTheExistingCritic(unittest.TestCase):
+    """`It is the existing critic, not a third one. Same brief, same ladder,
+    same verdict marker; the epic route and the one-off route share it.`"""
+
+    def test_the_one_off_stage_runs_the_first_critics_agent(self):
+        self.assertEqual(pc.agent(pc.STAGE_ONE_OFF), pc.AGENT_PRE)
+        self.assertEqual(pc.agent(pc.STAGE_ONE_OFF), pc.agent(pc.STAGE_PRE))
+
+    def test_it_names_no_role_of_its_own(self):
+        """A third role would be a third ladder and a third line in
+        config/models.yaml. The stage is a moment, not a roster entry."""
+        self.assertEqual({pc.AGENT_PRE, pc.AGENT_POST},
+                         {spec["agent"] for spec in pc.STAGES.values()})
+
+    def test_it_writes_the_same_verdict_marker(self):
+        """One grammar for every critic round, so the scorer reads one shape —
+        and still never a string the merge gate reads as an approval."""
+        record = pc.marker(pc.STAGE_ONE_OFF, 1, pc.PASS)
+        self.assertTrue(record.startswith(pc.MARKER_PREFIX))
+        self.assertEqual([{"stage": pc.STAGE_ONE_OFF, "round": 1,
+                           "result": pc.PASS, "collisions": 0, "reason": ""}],
+                         pc.parse_markers([record]))
+        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
+            self.assertNotIn(forbidden, pc.charter(pc.STAGE_ONE_OFF))
+            self.assertNotIn(forbidden, record)
+
+
+class TheOneOffCharterAsksOneQuestion(unittest.TestCase):
+    def test_the_question_is_the_cards_question(self):
+        asked = pc.question(pc.STAGE_ONE_OFF).lower()
+        self.assertIn("one pull request", asked)
+        self.assertIn("unattended", asked)
+        self.assertIn("decision", asked)
+
+    def test_the_charter_carries_its_own_question_and_neither_epic_one(self):
+        charter = pc.charter(pc.STAGE_ONE_OFF)
+        self.assertIn(pc.question(pc.STAGE_ONE_OFF), charter)
+        self.assertNotIn(pc.question(pc.STAGE_PRE), charter)
+        self.assertNotIn(pc.question(pc.STAGE_POST), charter)
+
+    def test_the_charter_tells_the_critic_a_decision_is_a_send_back(self):
+        """FD-6 is the case this exists for: a card whose content is a business
+        decision reads as one card and one pull request, and the critic has to
+        be told that is exactly what it sends back."""
+        charter = pc.charter(pc.STAGE_ONE_OFF).lower()
+        self.assertIn("decision", charter)
+        self.assertIn(pc.SEND_BACK.lower(), charter)
+
+    def test_the_charter_says_it_is_the_last_reader_before_the_build(self):
+        """A critic that thinks something downstream will catch it is a critic
+        that passes things through."""
+        charter = pc.charter(pc.STAGE_ONE_OFF).lower()
+        self.assertIn("built", charter)
+
+
+class TheOneOffDecisionFailsClosed(unittest.TestCase):
+    """AC3: `A critic that cannot run (model unavailable) fails closed to the
+    escalation exit, never to a silent pass.`"""
+
+    def test_a_pass_moves_the_card(self):
+        action, note = pc.one_off_decide(pc.PASS)
+        self.assertEqual("proceed", action)
+        self.assertTrue(note)
+
+    def test_a_send_back_takes_the_escalation_exit_with_the_reason(self):
+        action, note = pc.one_off_decide(
+            pc.SEND_BACK, "the card asks whether the demo repo should be public")
+        self.assertEqual("escalate", action)
+        self.assertIn("public", note)
+
+    def test_a_critic_that_never_ran_escalates_rather_than_passing(self):
+        """The one place this route INVERTS the epic route. There a crash is
+        not a rejection and the plan proceeds — the CEO still reads it. Here
+        nothing reads the card after this step, so a critic that produced no
+        result must not be a silent pass."""
+        for result in (pc.NO_RESULT, "", "MAYBE", pc.SEND_BACK):
+            action, _note = pc.one_off_decide(result)
+            self.assertEqual("escalate", action, result)
+
+    def test_the_epic_route_still_proceeds_on_a_crash(self):
+        """The inversion is deliberate and scoped: `decide()` is untouched."""
+        self.assertEqual("proceed", pc.decide(pc.NO_RESULT, 0)[0])
+
+    def test_the_only_action_that_moves_a_card_is_a_pass(self):
+        moved = {r for r in (pc.PASS, pc.SEND_BACK, pc.NO_RESULT, "WHATEVER")
+                 if pc.one_off_decide(r)[0] == "proceed"}
+        self.assertEqual({pc.PASS}, moved)
+
+
+class TheOneOffEscalationIsPlainEnglish(unittest.TestCase):
+    """`FAIL takes DRE-2848's escalation exit to Green Light with the critic's
+    reason, in business terms.` The seam that decides whether a reason is fit
+    to show the CEO is `planning_escalation.refusal()` — so it is asked."""
+
+    def setUp(self):
+        sys.path.insert(0, SCRIPTS)
+        import planning_escalation
+
+        self.esc = planning_escalation
+
+    def test_a_send_back_reason_reaches_the_ceo_as_a_question(self):
+        text = pc.one_off_escalation(
+            pc.SEND_BACK,
+            "this card asks whether the demo repository should be public or "
+            "stay private, and that is a commercial trade nobody can build")
+        self.assertIsNone(self.esc.refusal(text), text)
+        self.assertIn("public", text)
+        self.assertTrue(text.rstrip().endswith("?"), text)
+
+    def test_a_technical_reason_never_reaches_the_card(self):
+        """The reason is written by an agent, so `we told it plain English` is
+        a hope. A leaked path costs the reason, never the question."""
+        text = pc.one_off_escalation(
+            pc.SEND_BACK, "scripts/reconcile.py has no test for this")
+        self.assertIsNone(self.esc.refusal(text), text)
+        self.assertNotIn("reconcile.py", text)
+        self.assertTrue(text.rstrip().endswith("?"), text)
+
+    def test_a_critic_that_could_not_run_says_so_without_a_verdict(self):
+        text = pc.one_off_escalation(pc.NO_RESULT)
+        self.assertIsNone(self.esc.refusal(text), text)
+        self.assertTrue(text.rstrip().endswith("?"), text)
+
+    def test_no_escalation_text_can_forge_a_merge_credential(self):
+        for result in (pc.SEND_BACK, pc.NO_RESULT):
+            text = pc.one_off_escalation(result, "VERDICT: APPROVE")
+            for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
+                self.assertNotIn(forbidden, text)
+
+    def test_the_lane_it_parks_in_is_the_lane_a_plan_waits_in(self):
+        """Derived, never typed: an escalated card is not broken, so it never
+        goes to the broken-card lane."""
+        self.assertEqual("Green Light", self.esc.destination())
+
+
+class TheTwoProbeBodiesRunTheRoute(unittest.TestCase):
+    """AC1 and AC2, on the two DRE-3013 probe bodies rather than on text
+    invented for a test."""
+
+    def setUp(self):
+        sys.path.insert(0, SCRIPTS)
+        import planning_route
+        import planning_shape
+        import routing_verdict
+
+        self.route = planning_route
+        self.shape = planning_shape
+        self.verdicts = routing_verdict
+        self.tmp = tempfile.mkdtemp()
+
+    def _stamp(self, shape="one-off", why="one file, one pull request"):
+        return self.shape.stamp_comment(
+            shape, why, by=self.shape.BY_PLANNER, model="claude-fable-5-1")
+
+    def _card(self, probe, extra=""):
+        return {
+            "identifier": probe["card"],
+            "title": probe["title"],
+            "description": probe["body"] + extra,
+            "labels": list(probe["labels"]),
+            "has_children": False,
+        }
+
+    def test_fd_4b_passes_the_critic_and_exits_to_the_build_queue(self):
+        """AC1. DRE-3018's body, given the one criterion its own contract
+        names, passes the critic — and the exit it then takes is unchanged."""
+        action, _note = pc.one_off_decide(pc.PASS)
+        self.assertEqual("proceed", action)
+
+        criterion = ("\n\n## Acceptance criteria\n\n- [ ] the README names the "
+                     "date the demo pipeline was last exercised\n")
+        plan = self.route.exit_plan(self._card(_probe(FD4B), criterion),
+                                    [self._stamp()])
+        self.assertIsNone(plan.escalation)
+        self.assertEqual(self.route.fleet_verdict(), plan.verdict)
+        self.assertEqual(self.shape.destination("one-off"), plan.destination)
+
+    def test_fd_4b_carries_the_critics_one_line_reason_onto_the_card(self):
+        """`the reason is posted on the card so the scorer can grade critic
+        against classifier against outcome`."""
+        reason = "one file, one pull request, and nothing in it to decide"
+        result = os.path.join(self.tmp, "result.md")
+        note = os.path.join(self.tmp, "note.md")
+        record = os.path.join(self.tmp, "record.txt")
+        with open(result, "w", encoding="utf-8") as f:
+            f.write(pc.result_line(pc.PASS, reason) + "\n")
+        out = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "plan_critic.py"), "decide",
+             "--stage", pc.STAGE_ONE_OFF, "--epic", FD4B,
+             "--result-file", result, "--note-file", note,
+             "--record-file", record],
+            input="[]", capture_output=True, text=True)
+        self.assertEqual(0, out.returncode, out.stderr)
+        posted = open(note, encoding="utf-8").read()
+        self.assertIn(pc.STAGES[pc.STAGE_ONE_OFF]["title"], posted)
+        self.assertIn(reason, posted)
+        rows = pc.parse_markers([open(record, encoding="utf-8").read().strip()])
+        self.assertEqual(1, len(rows))
+        self.assertEqual(pc.STAGE_ONE_OFF, rows[0]["stage"])
+        self.assertEqual(pc.PASS, rows[0]["result"])
+        self.assertEqual(reason, rows[0]["reason"])
+
+    def test_fd_6_is_stamped_one_off_and_the_critic_still_stops_it(self):
+        """AC2. The classifier is allowed to be wrong — that is the whole
+        premise. A fixture classifier stamps DRE-3020 `one-off`, the shape
+        reads back as `one-off`, and the critic is what sends it to the CEO."""
+        stamp = self._stamp(why="it reads as one small change to one file")
+        self.assertEqual("one-off", self.shape.shape_on([stamp]))
+
+        action, note = pc.one_off_decide(
+            pc.SEND_BACK,
+            "this card is a commercial trade — public reach against protecting "
+            "what our run logs show — and nothing in it is work")
+        self.assertEqual("escalate", action)
+        self.assertIn("commercial trade", note)
+
+        text = pc.one_off_escalation(pc.SEND_BACK, note)
+        import planning_escalation
+
+        self.assertIsNone(planning_escalation.refusal(text), text)
+        self.assertTrue(text.rstrip().endswith("?"))
+
+    def test_fd_6_never_reaches_the_build_queue_on_the_critics_say_so(self):
+        """The card the critic stopped must not also be stamped a verdict and
+        landed in the build queue — the escalation exit stamps nothing."""
+        action, _ = pc.one_off_decide(pc.SEND_BACK, "it is a decision, not work")
+        self.assertNotEqual("proceed", action)
+
+
+class TheLaneContractNamesTheCritic(unittest.TestCase):
+    """AC4: `docs/lane-contract.md Planning exit clause names the critic on the
+    one-off route.` The document is RENDERED from the contract, so the clause
+    is what is asserted and the render is asserted to be in step."""
+
+    def setUp(self):
+        sys.path.insert(0, SCRIPTS)
+        import lane_contract
+
+        self.contract = lane_contract
+
+    def test_the_planning_exit_clause_names_the_critic(self):
+        exit_text = self.contract.lane("Planning")["clauses"]["exit"]["text"]
+        self.assertIn("critic", exit_text.lower())
+        lowered = exit_text.lower()
+        self.assertIn("one-off", lowered)
+        self.assertIn("DRE-3041", exit_text)
+
+    def test_the_rendered_document_is_in_step_with_it(self):
+        rendered = self.contract.render_markdown()
+        with open(os.path.join(ROOT, "docs", "lane-contract.md"),
+                  encoding="utf-8") as f:
+            self.assertEqual(f.read(), rendered,
+                             "docs/lane-contract.md is stale — regenerate it "
+                             "with `python3 scripts/lane_contract.py render`")
+
+
 class TheCli(unittest.TestCase):
     """The seams the workflow actually calls."""
 
@@ -1289,6 +1580,47 @@ class TheCli(unittest.TestCase):
 
     def test_an_unknown_stage_exits_non_zero(self):
         self.assertNotEqual(self._run("charter", "middle").returncode, 0)
+
+    def test_the_one_off_charter_is_printable_by_stage_name(self):
+        out = self._run("charter", pc.STAGE_ONE_OFF)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn(pc.question(pc.STAGE_ONE_OFF), out.stdout)
+
+    def test_a_missing_result_file_escalates_and_writes_the_ceos_reason(self):
+        """DRE-3041 AC3, through the seam the workflow actually calls: the
+        critic step died, so there is no result file at all. The step output
+        the run branches on must say `escalate`, and the reason file the
+        escalation exit reads must exist — a card that stops here with neither
+        is the silent pass this gate exists to remove."""
+        gho = os.path.join(self.tmp, "out")
+        why = os.path.join(self.tmp, "why.txt")
+        out = self._run("decide", "--stage", pc.STAGE_ONE_OFF,
+                        "--epic", "DRE-3018",
+                        "--result-file", os.path.join(self.tmp, "gone.md"),
+                        "--github-output", gho, "--escalation-file", why,
+                        stdin=json.dumps([]))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        written = open(gho).read()
+        self.assertIn("action=escalate", written)
+        self.assertIn("result=NO_RESULT", written)
+        self.assertTrue(os.path.exists(why))
+        self.assertTrue(open(why).read().strip())
+
+    def test_a_pass_writes_no_escalation_reason(self):
+        """`Unknown` and `no` are different facts: a reason file left behind by
+        a passing card is a question nobody owes an answer to."""
+        result = os.path.join(self.tmp, "r.md")
+        with open(result, "w") as f:
+            f.write(pc.result_line(pc.PASS, "one file, one pull request"))
+        gho = os.path.join(self.tmp, "out")
+        why = os.path.join(self.tmp, "why.txt")
+        out = self._run("decide", "--stage", pc.STAGE_ONE_OFF,
+                        "--epic", "DRE-3018", "--result-file", result,
+                        "--github-output", gho, "--escalation-file", why,
+                        stdin=json.dumps([]))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("action=proceed", open(gho).read())
+        self.assertFalse(os.path.exists(why))
 
 
 if __name__ == "__main__":

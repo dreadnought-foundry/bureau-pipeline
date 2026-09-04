@@ -272,6 +272,115 @@ class TheBoundIsWired(unittest.TestCase):
                            doc["jobs"]["plan"]["timeout-minutes"])
 
 
+ONE_OFF_MODEL = "Select model — one-off critic"
+ONE_OFF_CTX = "One-off critic — context"
+ONE_OFF_CRITIC = "Pre-approval critic — the one-off exit"
+ONE_OFF_DECISION = "One-off critic — decision"
+ONE_OFF_ESCALATE = "One-off critic — escalate"
+ONE_OFF_EXIT = "One-off route — checked on the way out"
+
+
+class ThePreApprovalCriticReadsTheOneOffExit(unittest.TestCase):
+    """DRE-3041. A one-off used to reach an engineer having been read by
+    nobody: the shape stamp was the only judgement on the fast path, and the
+    first adversarial eye was the code critic on the pull request, after the
+    build had been paid for.
+
+    The rail these pin: the SAME first critic reads the card between the stamp
+    and the move, and the move happens only if it passed.
+    """
+
+    def test_it_runs_only_on_the_one_off_route(self):
+        for fragment in (ONE_OFF_MODEL, ONE_OFF_CRITIC, ONE_OFF_DECISION):
+            self.assertIn("steps.shape.outputs.route == 'one-off'",
+                          str(step_named(fragment).get("if")), fragment)
+
+    def test_it_runs_before_the_card_leaves_planning(self):
+        """`before planning_route.py exit moves the card`. After the move the
+        card is in the build queue and an agent picks it up."""
+        self.assertLess(index_of(ONE_OFF_CRITIC), index_of(ONE_OFF_DECISION))
+        self.assertLess(index_of(ONE_OFF_DECISION), index_of(ONE_OFF_EXIT))
+
+    def test_the_exit_moves_the_card_only_on_a_pass(self):
+        gate = str(step_named(ONE_OFF_EXIT).get("if") or "")
+        self.assertIn("steps.oneoff.outputs.action == 'proceed'", gate)
+
+    def test_a_fail_takes_the_escalation_exit(self):
+        """DRE-2848's exit, not a second one — the same seam the classifier's
+        refusal uses, so the card parks in the lane a plan waits in."""
+        step = step_named(ONE_OFF_ESCALATE)
+        self.assertIn("steps.oneoff.outputs.action == 'escalate'",
+                      str(step.get("if")))
+        self.assertIn("planning_escalation.py escalate", str(step.get("run")))
+        self.assertIn("--reason-file", str(step.get("run")))
+
+    def test_the_escalation_step_names_no_lane_of_its_own(self):
+        import lane_contract
+        body = str(step_named(ONE_OFF_ESCALATE).get("run") or "")
+        for lane in lane_contract.lane_names(status="live"):
+            self.assertNotIn(lane, body,
+                             f"the escalation step names the lane {lane!r}")
+
+    def test_a_critic_that_cannot_run_still_reaches_the_decision(self):
+        """AC3, read off the rail. A model that cannot be selected and a critic
+        step that died must both land in the decision step, which fails closed —
+        so neither may abort the job and take the decision with it."""
+        for fragment in (ONE_OFF_MODEL, ONE_OFF_CRITIC):
+            self.assertTrue(step_named(fragment).get("continue-on-error"),
+                            f"{fragment} must not abort the run")
+        gate = str(step_named(ONE_OFF_DECISION).get("if") or "")
+        self.assertIn("!cancelled()", gate)
+
+    def test_the_critic_step_is_skipped_when_no_model_was_selected(self):
+        self.assertIn("steps.oomodel.outputs.model != ''",
+                      str(step_named(ONE_OFF_CRITIC).get("if")))
+
+    def test_the_decision_writes_the_reason_the_escalation_reads(self):
+        run = str(step_named(ONE_OFF_DECISION).get("run") or "")
+        self.assertIn(f"--stage {pc.STAGE_ONE_OFF}", run)
+        self.assertIn("--escalation-file", run)
+
+    def test_it_is_the_existing_critic_and_not_a_third_role(self):
+        """`No new role in config/models.yaml.` The step selects the first
+        critic's ladder and assembles the first critic's context."""
+        self.assertIn(f"model_fallback.py select {pc.AGENT_PRE}",
+                      str(step_named(ONE_OFF_MODEL).get("run")))
+        self.assertIn(f"assemble_context.py assemble {pc.AGENT_PRE}",
+                      str(step_named(ONE_OFF_CTX).get("run")))
+
+    def test_the_prompt_carries_the_one_off_charter_and_question(self):
+        prompt = prompt_of(ONE_OFF_CRITIC)
+        self.assertIn(f"charter {pc.STAGE_ONE_OFF}", prompt)
+        self.assertIn(pc.question(pc.STAGE_ONE_OFF), prompt)
+        self.assertNotIn(pc.question(pc.STAGE_PRE), prompt)
+        self.assertNotIn(pc.question(pc.STAGE_POST), prompt)
+
+    def test_the_prompt_reads_the_card_and_the_stamps_reason(self):
+        """`reads the card and the stamp's --why`."""
+        prompt = prompt_of(ONE_OFF_CRITIC)
+        self.assertIn("UNTRUSTED CARD TEXT", prompt)
+        self.assertIn("${{ steps.card.outputs.description }}", prompt)
+        self.assertIn("planning_shape.py read", prompt)
+
+    def test_the_prompt_writes_a_result_file_and_forges_no_credential(self):
+        prompt = prompt_of(ONE_OFF_CRITIC)
+        self.assertIn(pc.RESULT_PREFIX, prompt)
+        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
+            self.assertNotIn(forbidden, prompt)
+
+    def test_the_call_is_bounded(self):
+        """`Cost stays bounded. One call per one-off classification.` One agent
+        step on the route, and a turn budget the roster already carries."""
+        on_route = [s for s in agent_steps()
+                    if "one-off" in str(s.get("if") or "")]
+        self.assertEqual(1, len(on_route),
+                         "a one-off run must ask for exactly one critic call")
+        args = str((on_route[0].get("with") or {}).get("claude_args") or "")
+        turns = [int(m) for m in re.findall(r"--max-turns\s+(\d+)", args)]
+        self.assertEqual(1, len(turns))
+        self.assertLessEqual(turns[0], 40)
+
+
 class TheRoster(unittest.TestCase):
     """agents.yaml is the console's contract; config/models.yaml is the ladder."""
 
@@ -300,6 +409,13 @@ class TheRoster(unittest.TestCase):
     def test_the_roles_the_workflow_selects_are_the_roles_the_config_names(self):
         for name in (pc.AGENT_PRE, pc.AGENT_POST):
             self.assertIn(f"model_fallback.py select {name}", wf_src())
+
+    def test_the_one_off_stage_added_no_role(self):
+        """DRE-3041: `No new role in config/models.yaml.` Every stage's agent
+        is one of the two the roster already carries."""
+        for stage in pc.STAGES:
+            self.assertIn(pc.agent(stage), (pc.AGENT_PRE, pc.AGENT_POST))
+            self.assertIn(pc.agent(stage), self.models["agents"])
 
 
 class TheStandard(unittest.TestCase):
