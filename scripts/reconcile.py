@@ -125,6 +125,10 @@ import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
+# DRE-3035: ONE reading of the operator's controls on Intake — the hold, the
+# window and the per-sweep cap. `groomer.py drain` is the other thing that
+# moves a card out of the lane and reads the same switch from the same place.
+import intake_controls  # noqa: E402
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -351,11 +355,25 @@ PLANNING_MINUTES = int(
 # consecutive green sweeps printed, in plain English, the exact reason five
 # cards were frozen, and nobody read one. A report is a record; a move is a
 # gate.
+#
+# The window, the cap and the hold are the operator's three controls on the
+# lane, and `intake_controls` is the ONE reading of them — `groomer.py drain`
+# is the other thing that moves a card out of Intake, and a switch two readers
+# interpret separately is a pen with a hole in it (DRE-3035). None of them uses
+# a bare `int()` any more: each arrives as a workflow_call input, and an unset
+# input interpolates to the EMPTY STRING, which `int("")` turns into a red
+# sweep. Unset, empty and unparseable all mean the default — `resolve_max_wip`'s
+# rule, applied to the knobs the cutover ADR promised the operator.
 INTAKE_LANE = ("Intake",)
-INTAKE_MAX_AGE_MINUTES = int(
-    os.environ.get("INTAKE_MAX_AGE_MINUTES", STALE_MINUTES["Intake"])
-)
+INTAKE_MAX_AGE_MINUTES = intake_controls.max_age_minutes()
 INTAKE_AGED_TAG = "intake-aged"
+
+# The pen's switch, read once at import like every other knob here. Set, the
+# age-out moves nothing and says so once per pass; cleared, it resumes. The
+# operator sets it before a cutover run and clears it when the front door is
+# proven — with 209 cards entering Intake at once, this is the difference
+# between a trickle the CEO can read and ~70 cards an hour across the fleet.
+INTAKE_HOLD = intake_controls.hold()
 
 # How many aged cards one sweep may move. The cutover (backlog_cutover.py) puts
 # the whole legacy Backlog into Intake at once, so every one of those cards
@@ -364,7 +382,7 @@ INTAKE_AGED_TAG = "intake-aged"
 # nobody can read — the failure this mechanism exists to prevent, achieved from
 # the other side. The cap HOLDS the remainder; it never forgets one. They stay
 # in Intake, still the oldest, and the next sweep takes the next three.
-INTAKE_ESCALATION_CAP = int(os.environ.get("INTAKE_ESCALATION_CAP", "3"))
+INTAKE_ESCALATION_CAP = intake_controls.escalation_cap()
 
 # What the escalation says when the card carries no stated reason at all.
 # Console-honesty rule 2: absent data is rendered as absent, never as an
@@ -1387,6 +1405,46 @@ def intake_escalation_note(identifier: str, minutes: float, reason: str | None) 
     )
 
 
+def _intake_candidates() -> tuple[list[dict], list[tuple[float, dict]]]:
+    """`(waiting, aged)` — the Intake cards this gate speaks for, and those
+    past the window, oldest first.
+
+    Split out so a HELD sweep can report the size of the pen without
+    duplicating the walk, and so the two exemptions live in one place. Costs
+    zero Linear requests: the lane read is shared and `card_comment_bodies`
+    reads the bodies `active_cards` already selected inline (DRE-2929).
+    """
+    waiting, aged = [], []
+    for card in active_cards(INTAKE_LANE):
+        if card["state"]["name"] != "Intake":
+            continue  # this rule speaks for one lane only
+        if hand_built(card):
+            print(
+                f"intake: {card['identifier']} is labeled '{HAND_BUILT_LABEL}' — "
+                "the pipeline is not classifying this card, so time spent in "
+                "Intake is not a strand"
+            )
+            continue
+        if routing_verdict.is_parked(card_comment_bodies(card)):
+            # DRE-2724, the same rule both watchdogs already apply: PARKED is
+            # the vocabulary's own "deliberately not dispatchable, never
+            # reported as stalled". A clock that moves one into Green Light
+            # un-parks a decision somebody made on purpose, and does it in the
+            # queue the CEO reads — the loudest possible place to override
+            # someone (DRE-3035).
+            print(
+                f"intake: {card['identifier']} is routed PARKED — deliberately "
+                "not built, so time spent in Intake is not a strand"
+            )
+            continue
+        waiting.append(card)
+        age = age_minutes(card["updatedAt"])
+        if age >= INTAKE_MAX_AGE_MINUTES:
+            aged.append((age, card))
+    aged.sort(key=lambda pair: pair[0], reverse=True)  # oldest first
+    return waiting, aged
+
+
 def escalate_aged_intake() -> set[str]:
     """Move Intake cards past INTAKE_MAX_AGE_MINUTES into Green Light (DRE-2687).
 
@@ -1426,26 +1484,24 @@ def escalate_aged_intake() -> set[str]:
 
     Hand-built cards are skipped on DRE-2524's rule: no classification is
     coming from the pipeline for work a person is doing by hand, so time spent
-    in Intake is not a strand.
+    in Intake is not a strand. PARKED cards are skipped on DRE-2724's, and
+    `INTAKE_HOLD` stops the whole gate — both below.
 
     Returns the identifiers escalated this sweep.
     """
     escalated: set[str] = set()
-    aged = []
-    for card in active_cards(INTAKE_LANE):
-        if card["state"]["name"] != "Intake":
-            continue  # this rule speaks for one lane only
-        if hand_built(card):
-            print(
-                f"intake: {card['identifier']} is labeled '{HAND_BUILT_LABEL}' — "
-                "the pipeline is not classifying this card, so time spent in "
-                "Intake is not a strand"
-            )
-            continue
-        age = age_minutes(card["updatedAt"])
-        if age >= INTAKE_MAX_AGE_MINUTES:
-            aged.append((age, card))
-    aged.sort(key=lambda pair: pair[0], reverse=True)  # oldest first
+    waiting, aged = _intake_candidates()
+
+    # The operator's switch (DRE-3035). Read AFTER the walk, which costs
+    # nothing — the lane read is shared — so the held pass can say how much is
+    # behind the pen rather than only that it is closed. One line per pass: a
+    # hold that moved nothing and said nothing is indistinguishable from the
+    # stall it exists to prevent.
+    if INTAKE_HOLD is not None:
+        print(intake_controls.notice(
+            INTAKE_HOLD, len(waiting), f"{len(aged)} past the window"))
+        return escalated
+
     for age, card in aged[:INTAKE_ESCALATION_CAP]:
         ident = card["identifier"]
         try:

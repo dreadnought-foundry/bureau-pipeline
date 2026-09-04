@@ -83,14 +83,21 @@ head sha: once the population moves, the id changes and the old approval stops
 authorising anything. Pass `drain` the same shaping flags the proposal was built
 with, or it will derive a different batch and refuse.
 
-Four refusals, all of them before any write:
+Five refusals, all of them before any write:
 
+- **the pen is held** — `intake_hold` is set on the stub, so the operator has
+  said "not this week" about the whole lane, and that answer outranks any
+  batch's approval. The refusal prints the date the pen was closed and how big
+  the batch was (DRE-3035, `docs/backlog-cutover.md`);
 - **no approval** — nothing leaves Intake;
 - **an approval written by the pipeline's own Linear identity** — the proposer
   cannot approve its own proposal;
 - **an approval naming another batch** — the population moved;
 - **a terminal destination** — the drain moves cards to `Planning` and refuses
   `Canceled`, `Duplicate` and `Done` outright.
+
+`propose` is deliberately not held: it writes nothing but a comment, and a held
+pen still wants a batch prepared for the day it opens.
 
 An approved batch is moved to `Planning`, which is where the classification
 happens (DRE-2719), and each card is assigned its cycle.

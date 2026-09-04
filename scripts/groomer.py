@@ -97,6 +97,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
+import intake_controls  # noqa: E402 — ONE reading of the operator's Intake switch
 import linear_ops  # noqa: E402
 
 # --------------------------------------------------------------------------- #
@@ -162,6 +163,21 @@ NO_REPO = "(no repo label)"
 # findings this exists to make. A false collision costs one ordering constraint;
 # a missed one costs a merge conflict.
 BOILERPLATE_THRESHOLD = 12
+
+
+# The operator's switch on the whole lane (DRE-3035), read once at import. The
+# drain and the sweep's age-out are the two things that move a card out of
+# Intake, and they read it from one place — a switch two readers interpret
+# separately is a pen with a hole in it. `propose` is untouched: it writes
+# nothing but a comment, and a held pen still wants a batch prepared for the
+# day it opens.
+INTAKE_HOLD = intake_controls.hold()
+
+
+class IntakeHeld(RuntimeError):
+    """`INTAKE_HOLD` is set, so nothing leaves Intake. Raised BEFORE any write
+    and before the approval is even read: an operator who closed the pen has
+    said "not this week" about every batch, including one approved last week."""
 
 
 class NotApproved(RuntimeError):
@@ -938,9 +954,17 @@ def approval_problem(proposal: dict, records: list[dict]) -> str | None:
 def drain(lops, proposal: dict, *, card: str, to: str = DRAIN_TO) -> dict:
     """Move the APPROVED batch out of Intake, in the proposed order.
 
-    Refuses — before any write — a terminal destination, a missing or foreign
-    approval, and a cycle Linear does not carry.
+    Refuses — before any write — a closed pen, a terminal destination, a
+    missing or foreign approval, and a cycle Linear does not carry.
     """
+    if INTAKE_HOLD is not None:
+        # First, and ahead of the approval: the hold is the operator's answer
+        # about the lane, not about this batch. Said out loud once per pass so
+        # a held drain reads as refused rather than as a run that moved nothing.
+        raise IntakeHeld(intake_controls.notice(
+            INTAKE_HOLD,
+            proposal.get("population", 0),
+            f"{len(proposal['outcomes']['now'])} in the approved batch"))
     if to in NEVER_WRITES:
         raise WillNotCancel(
             f"the drain will not write {to!r}: the groomer recommends and never "
@@ -1054,7 +1078,7 @@ def main(argv=None) -> int:
 
     try:
         result = drain(linear_ops, proposal, card=args.card)
-    except (NotApproved, WillNotCancel, ValueError) as e:
+    except (IntakeHeld, NotApproved, WillNotCancel, ValueError) as e:
         print(f"groomer: refused — {e}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2))
