@@ -232,6 +232,84 @@ jobs:
             echo "harness code: main ($MAIN_SHA) — this pull request does not change scripts/harness, so its run drives the sandbox with the sweep every other run uses"
           fi
 
+      # Is this checkout allowed at the SHARED sandbox at all?
+      #
+      # DRE-3075 lets main's run and a pull request's proving run drive the
+      # sandbox side by side, and the only thing keeping them apart is that
+      # each sweep collects its own namespace. That rule lives entirely in the
+      # driver — which, by the time this step runs, is main's copy (DRE-3101,
+      # above) unless the PR itself touches scripts/harness/, in which case
+      # it is genuinely the PR's own head at whatever vintage the branch was
+      # cut. That second case is exactly the one this guard exists for: a PR
+      # testing the harness runs its own code, so its own contract
+      # declaration is what's on disk and what must be checked.
+      #
+      # 2026-09-04, the cost of having neither fix yet: run 33910802510
+      # started at 19:22 for PR #260, whose head forked from a7bfa52 and
+      # predated DRE-3075. Its sweep was the unscoped one, so it closed every
+      # open harness PR it found — including main's live gate_paths probe
+      # #957, opened 50 minutes earlier. Main's run 33903196184 spent 70 of
+      # its 76 minutes polling a closed PR and went red naming the sandbox's
+      # critic, which had reviewed another lane's PR in minutes while it
+      # waited.
+      #
+      # This step is the guard, and it sits HERE for two reasons: the whole
+      # checkout is the stale thing, so the check cannot be a script in it —
+      # but on a pull_request event GitHub runs the workflow file from the
+      # merge ref, so this file is current even when the driver is months old.
+      # And it runs BEFORE the mints below: a driver that will not be let near
+      # the sandbox is never handed a token for it.
+      #
+      # The driver is READ, never imported: an old enough one may not import
+      # at all, and "it crashed" must not read as "it is fine".
+      - name: Refuse a driver that predates the sandbox-isolation contract
+        env:
+          # The floor. Raise it in the same PR that raises
+          # framework.SANDBOX_ISOLATION_CONTRACT — the two are pinned
+          # together by tests/test_harness_driver_contract.py.
+          REQUIRED_CONTRACT: "1"
+        run: |
+          python3 - <<'PY'
+          import ast
+          import os
+          import pathlib
+          import sys
+
+          NAME = "SANDBOX_ISOLATION_CONTRACT"
+          required = int(os.environ["REQUIRED_CONTRACT"])
+          source = pathlib.Path("scripts/harness/framework.py")
+
+          declared = 0
+          try:
+              tree = ast.parse(source.read_text(encoding="utf-8"))
+          except (OSError, SyntaxError) as e:
+              print(f"could not read {source}: {e}")
+              tree = None
+          for node in getattr(tree, "body", []):
+              if not isinstance(node, ast.Assign):
+                  continue
+              if not any(getattr(t, "id", "") == NAME for t in node.targets):
+                  continue
+              if isinstance(node.value, ast.Constant) and isinstance(
+                  node.value.value, int
+              ):
+                  declared = node.value.value
+
+          if declared >= required:
+              print(f"driver sandbox-isolation contract {declared} (need {required}) — ok")
+              sys.exit(0)
+
+          sys.exit(
+              f"::error title=Harness driver too old::this checkout declares "
+              f"sandbox-isolation contract {declared} and the shared sandbox "
+              f"requires {required}. Its sweep is not scoped to this run's "
+              f"namespace, so it would close the probe PRs of any harness run "
+              f"beside it — that is how run 33903196184 lost 70 minutes and "
+              f"turned main red. Rebase this branch onto main and push again; "
+              f"nothing else on the branch needs to change."
+          )
+          PY
+
       # Only the named-scenario path needs test tooling: the DRE-2490
       # unverified_claim scenario proves a shipped test is non-vacuous by
       # RUNNING it against a mutant, and that needs pytest on the runner. The
