@@ -236,11 +236,11 @@ jobs:
         with:
           ref: main
           path: .driver-from-main
-          # The driver directory alone. Everything else — merge_gate.py,
-          # the workflows, the tests — stays the PR's, because the PR is
-          # what this run is proving.
+          # The driver directory alone, cone mode (the default), which is
+          # directory-shaped and recursive — `scenarios/` comes with it.
+          # Everything else — merge_gate.py, the workflows, the tests —
+          # stays the PR's, because the PR is what this run is proving.
           sparse-checkout: scripts/harness
-          sparse-checkout-cone-mode: false
 
       - name: Install main's scripts/harness/ (DRE-3101)
         if: steps.driver.outputs.source == 'main'

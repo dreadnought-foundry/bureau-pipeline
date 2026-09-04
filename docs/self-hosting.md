@@ -104,14 +104,26 @@ commit in between. That is the trade — a skipped head, never a skipped
 channel. In the run list those skips look alarming and are not: a displaced run
 has `run_started_at == created_at`, because it never ran.
 
-**The residual gap, written down rather than papered over.** The group is one
-constant shared by the `push` and `pull_request` triggers, because it guards a
-single sandbox repo whose leftover-sweep would delete a concurrent run's
-branches. So a PR harness run and the trunk's proving run compete for the same
-pending slot, and the trunk's can lose (2026-09-03, run `33832750432`,
-`main@46ca2476`, displaced by the DRE-3059 PR run). Closing that needs a real
-lock on the sandbox, not a second concurrency group; until then the condition
-is reported rather than prevented.
+**The gap that used to sit here is closed, and how it closed is the point.**
+The group was one constant shared by the `push` and `pull_request` triggers,
+because it guarded a single sandbox repo whose leftover-sweep would delete a
+concurrent run's branches — so a PR harness run and the trunk's proving run
+competed for the same pending slot, and the trunk's could lose (2026-09-03, run
+`33832750432`, `main@46ca2476`, displaced by the DRE-3059 PR run). DRE-3075 gave
+each kind of run its own group (`integration-harness-main`,
+`integration-harness-pr-<number>`) and made that safe by carving the sandbox
+into a NAMESPACE per run, so each sweep collects only its own branches and
+probe files.
+
+**And a namespace is only worth what the code enforcing it is.** The scoping
+lives in `scripts/harness/`, which a `pull_request` run read from the PR's own
+head — so every branch cut before DRE-3075 merged still ran the old,
+un-namespaced sweep and wiped main's live probe out of the shared sandbox. On
+2026-09-04 no main proving run finished between 10:00 and 12:00 PT while
+pull-request runs kept passing, because main has one slot and the pull requests
+have many. DRE-3101 takes the driver from `main` for a `pull_request` run — the
+PR's own copy runs only when the PR is what changes `scripts/harness/`, and the
+`integration-harness` receipt says which of the two drove the sandbox.
 
 ### Reading a channel that did not move
 
