@@ -900,6 +900,101 @@ def leak_record(source_epic: str, leaks: list) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# diffing a replay's plan against the historical one                           #
+# --------------------------------------------------------------------------- #
+
+#: The columns of a plan's shape, in the order the diff prints them, each with
+#: the one sentence that says how to read it.
+SHAPE_COLUMNS = (
+    ("cards", "how many cards the epic was cut into"),
+    ("with-footprint", "cards declaring a `**Files:**` line"),
+    ("footprint-collisions", "pairs whose DECLARED footprints intersect"),
+    ("serialized-pairs", "pairs wired with a real `blockedBy` relation"),
+    ("with-verdict", "cards carrying a routing verdict"),
+    ("proof-and-demo", "the epic ends with both cards"),
+)
+
+
+def plan_shape(children: list) -> dict:
+    """What a plan DECLARED, counted — with no reference to what happened next.
+
+    This is the half of a replay that can be compared without inventing
+    anything. A per-card diff would need a correspondence between the replay's
+    new cards and the historical children; nothing can establish that
+    mechanically, and with the footprint line missing from the population there
+    is not even a file list to match on.
+
+    Every count reads the planner's OUTPUT the way `proof_and_demo` does — the
+    cards themselves, out of Linear. `serialized-pairs` counts formal
+    `blockedBy` relations only: a `**Blocked by:**` prose line documents a
+    relation and cannot create one (DRE-2670, DRE-2676), so counting the
+    sentence would report a plan as serialized that the board never was.
+    """
+    footprints = {c["identifier"]: set(declared_files(c.get("body") or ""))
+                  for c in children}
+    titles = [c.get("title") or "" for c in children]
+    edges = 0
+    intersecting = 0
+    for a, b in itertools.combinations(sorted(footprints), 2):
+        by_id = {c["identifier"]: c for c in children}
+        if (b in (by_id[a].get("blocked_by") or [])
+                or a in (by_id[b].get("blocked_by") or [])):
+            edges += 1
+        if footprints[a] & footprints[b]:
+            intersecting += 1
+    return {
+        "cards": len(children),
+        "with-footprint": sum(1 for f in footprints.values() if f),
+        "footprint-collisions": intersecting,
+        "serialized-pairs": edges,
+        "with-verdict": sum(1 for c in children
+                            if claimed_verdict(c.get("comments") or ())),
+        "proof-and-demo": (any(proof_and_demo.is_proof(t) for t in titles)
+                           and any(proof_and_demo.is_demo(t) for t in titles)),
+    }
+
+
+def render_diff(before_epic: str, before: dict,
+                after_epic: str, after: dict) -> str:
+    """The replay's plan beside the plan it is replaying.
+
+    Deliberately says what it is NOT, in the document itself: a shape diff is
+    not a per-card comparison, and reading it as one would turn "the replay cut
+    five cards where the original cut three" into a claim about which cards.
+    """
+    out = [
+        f"# {after_epic} replaying {before_epic} — the two plans, side by side",
+        "",
+        f"**{before_epic}** is the plan that ran; **{after_epic}** is the "
+        "replay, planned from the same pre-plan text with the historical plan "
+        "held out.",
+        "",
+        "This is **not a per-card comparison.** Nothing can mechanically say "
+        "which replay card corresponds to which historical child, so what is "
+        "diffed is the SHAPE of the decomposition. Read a moved number as a "
+        "question to go and look at, never as a verdict on a card.",
+        "",
+        "| | " + before_epic + " | " + after_epic + " | how to read it |",
+        "| --- | --- | --- | --- |",
+    ]
+    for key, blurb in SHAPE_COLUMNS:
+        out.append(f"| `{key}` | {before.get(key)} | {after.get(key)} | {blurb} |")
+    out += [
+        "",
+        f"`{CONTAMINATED_DIMENSION}` is on this table for completeness and is "
+        "still excluded from every score: plan.yml bounces an epic until the "
+        "pair exists, so both columns are the gate's answer rather than either "
+        "planner's.",
+        "",
+        f"What each plan then did is the other half — run `score` on "
+        f"{before_epic}. A replay's own children never merge (nothing ships "
+        "from the demo repo), so scoring the replay reports UNKNOWN on every "
+        "history row, which is correct and is why the shape is what moves.",
+    ]
+    return "\n".join(out) + "\n"
+
+
+# --------------------------------------------------------------------------- #
 # the report                                                                   #
 # --------------------------------------------------------------------------- #
 
@@ -1147,6 +1242,14 @@ def main(argv=None) -> int:
     card.add_argument("--out", help="write the card as JSON")
     card.add_argument("--body-out", help="write the frozen pre-plan text")
 
+    diffing = sub.add_parser(
+        "diff", help="the replay's plan beside the plan it is replaying")
+    diffing.add_argument("--before", required=True,
+                         help="the historical epic's collect JSON")
+    diffing.add_argument("--after", required=True,
+                         help="the replay epic's collect JSON")
+    diffing.add_argument("--out", help="write the markdown diff")
+
     leak = sub.add_parser("leak-check")
     leak.add_argument("--plan", required=True, help="the historical plan")
     leak.add_argument("--context", required=True, help="what the replay was handed")
@@ -1199,6 +1302,21 @@ def main(argv=None) -> int:
             with open(args.body_out, "w", encoding="utf-8") as fh:
                 fh.write(built["body"])
         print(built["title"])
+        return 0
+
+    if command == "diff":
+        with open(args.before, encoding="utf-8") as fh:
+            before = json.load(fh)
+        with open(args.after, encoding="utf-8") as fh:
+            after = json.load(fh)
+        report = render_diff(
+            before["epic"]["identifier"], plan_shape(before["children"]),
+            after["epic"]["identifier"], plan_shape(after["children"]),
+        )
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                fh.write(report)
+        print(report)
         return 0
 
     if command == "leak-check":

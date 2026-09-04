@@ -617,6 +617,28 @@ class LeakTest(unittest.TestCase):
         self.assertIn("a leaked line", record)
         self.assertIn("discarded", record.lower())
 
+    def test_the_historical_plan_is_the_cards_the_planner_produced(self):
+        """What the replay must not see is not a document somewhere — it is the
+        cards the plan cut. `historical_plan` renders them so `leak-check` has
+        something real to compare the frozen epic text against."""
+        plan = planner_score.historical_plan([
+            child("DRE-1", title="extract the tenant-scoped response store"),
+            child("DRE-2", title="teach the poll to return every group"),
+        ])
+        self.assertIn("extract the tenant-scoped response store", plan)
+        self.assertIn("teach the poll to return every group", plan)
+
+    def test_a_frozen_epic_still_carrying_its_own_plan_is_caught(self):
+        """The case the harness exists to stop: an epic description that names
+        the children the plan produced hands the replay its answer."""
+        children = [child("DRE-1", title="extract the tenant-scoped response "
+                                         "store behind a facade")]
+        frozen = ("Do the thing.\n\nThe cards were: extract the tenant-scoped "
+                  "response store behind a facade.\n")
+        leaks = planner_score.plan_leaks(
+            frozen, planner_score.historical_plan(children))
+        self.assertTrue(leaks)
+
     def test_a_clean_replay_scores(self):
         doc = reference()
         replay = {"epic": "DRE-1000", "context": "the epic as the CEO wrote it",
