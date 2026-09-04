@@ -877,6 +877,29 @@ def plan_leaks(context: str, plan: str) -> list:
             if _normalise(line) in haystack]
 
 
+def historical_plan(children: list) -> str:
+    """The plan a replay must not see, rendered from the cards it produced.
+
+    The plan is not a document filed somewhere — it is the decomposition, and
+    the decomposition IS the children: their titles, what each one says to
+    build, the footprint each declares. Rendering them here means `leak-check`
+    compares the frozen epic text against the real answer rather than against a
+    write-up that may or may not still exist.
+    """
+    out = []
+    for child in children:
+        # The title goes on a line of its OWN, never inside the heading with
+        # the identifier: `plan_leaks` compares whole lines, and a title glued
+        # to `DRE-1 —` matches nothing an epic description would ever contain.
+        out.append(f"## {child.get('identifier')}")
+        out.append("")
+        out.append(child.get("title") or "")
+        out.append("")
+        out.append((child.get("body") or "").strip())
+        out.append("")
+    return "\n".join(out)
+
+
 def leak_record(source_epic: str, leaks: list) -> str:
     """The record of a discarded replay. The leak is written down, not just
     refused — a replay quietly re-run until it comes out clean is the same
@@ -1250,6 +1273,11 @@ def main(argv=None) -> int:
                          help="the replay epic's collect JSON")
     diffing.add_argument("--out", help="write the markdown diff")
 
+    rendering = sub.add_parser(
+        "historical-plan", help="the cards the plan cut, as the leak reference")
+    rendering.add_argument("--from", dest="source", required=True,
+                           help="the epic's collect JSON")
+
     leak = sub.add_parser("leak-check")
     leak.add_argument("--plan", required=True, help="the historical plan")
     leak.add_argument("--context", required=True, help="what the replay was handed")
@@ -1317,6 +1345,11 @@ def main(argv=None) -> int:
             with open(args.out, "w", encoding="utf-8") as fh:
                 fh.write(report)
         print(report)
+        return 0
+
+    if command == "historical-plan":
+        with open(args.source, encoding="utf-8") as fh:
+            print(historical_plan(json.load(fh)["children"]))
         return 0
 
     if command == "leak-check":

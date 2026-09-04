@@ -214,6 +214,37 @@ Three rules bound it, all in code rather than in this document:
   the `mid_epic` growth record, which is planner output spliced into the epic's
   own description.
 
+The leak check runs **before** the card is filed, not after. A replay that saw
+the answer cannot be salvaged by scoring it more carefully, and discarding one
+after the fact has already spent a planner run. Its reference is
+`historical_plan()` — the cards the plan actually cut, because the
+decomposition *is* the plan.
+
+### What the diff compares, and what it deliberately does not
+
+`planner_score.py diff --before <historical> --after <replay>` puts the two
+decompositions side by side:
+
+| | DRE-2514 | DRE-2668 | how to read it |
+| --- | --- | --- | --- |
+| `cards` | 47 | 50 | how many cards the epic was cut into |
+| `with-footprint` | 0 | 0 | cards declaring a `**Files:**` line |
+| `footprint-collisions` | 0 | 0 | pairs whose DECLARED footprints intersect |
+| `serialized-pairs` | 11 | 41 | pairs wired with a real `blockedBy` relation |
+| `with-verdict` | 0 | 13 | cards carrying a routing verdict |
+
+*(Two historical epics, run as a smoke test of the command — DRE-2668 is not a
+replay of DRE-2514.)*
+
+**It is not a per-card comparison, and it does not pretend to be.** Nothing can
+mechanically say which replay card corresponds to which historical child;
+matching on the declared footprint would be the obvious way and 0 of 147 cards
+declare one. So what is diffed is the SHAPE of the decomposition, and a moved
+number is a question to go and look at rather than a verdict on a card. A
+replay's own children never merge — nothing ships from the demo repo — so
+scoring the replay reports UNKNOWN on every history row, correctly, which is
+why the shape is the half that moves.
+
 No replay has been run yet. The harness ships with this card; the first replay
 belongs to the model comparison DRE-3016 links to, which needs the new ladder to
 exist.
