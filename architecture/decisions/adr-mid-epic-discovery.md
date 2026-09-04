@@ -87,9 +87,11 @@ once.
 
 `validate_card.infer_agent_label` decides what a card *is* from whether it has
 children (`if "[epic]" in t or has_children: return "agent:planner"`), and
-`reconcile.promote_ready` skips every `agent:planner` card because epics are
-promoted by humans and never by the sweep. **Giving a card sub-issues silently
-converts it into an epic and stops it ever being promoted.**
+`reconcile.promote_ready` skips every card `mid_epic.is_epic()` answers yes for
+— the shape stamp, or that same pair of facts when nothing has stamped one
+(DRE-3044) — because epics are promoted by humans and never by the sweep.
+**Giving a card sub-issues silently converts it into an epic and stops it ever
+being promoted.**
 
 So `linear_ops.cmd_subissue` refuses a parent that is not already an epic, and
 says why — the reclassification, the permanent non-promotion, and the route that

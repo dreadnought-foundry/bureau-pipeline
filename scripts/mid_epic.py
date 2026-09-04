@@ -66,7 +66,8 @@ the CEO reads it where the plan is, not in a log.
 
 `validate_card.infer_agent_label` decides what a card IS from whether it has
 children (`if "[epic]" in t or has_children: return "agent:planner"`), and
-`reconcile.promote_ready` skips every `agent:planner` card because epics are
+`reconcile.promote_ready` skips every card `is_epic()` answers yes for — which
+is that same pair of facts when nothing has stamped a shape — because epics are
 promoted by humans and never by the sweep. **Giving a card sub-issues silently
 converts it into an epic and stops it ever being promoted.** So a mid-epic
 discovery becomes a new SIBLING card under the same epic, with its own number —
@@ -315,9 +316,10 @@ def subissue_refusal(parent_title, has_children: bool,
         "Giving a card sub-issues silently converts it INTO an epic: "
         "validate_card.infer_agent_label reads children as epic-ness and "
         "classifies the parent agent:planner, and reconcile.promote_ready skips "
-        "every agent:planner card because epics are promoted by humans and never "
-        "by the sweep. The parent would stop being promoted, permanently, with "
-        "nothing anywhere saying so.\n\n"
+        "every card this same helper reads as an epic — children included — "
+        "because epics are promoted by humans and never by the sweep. The "
+        "parent would stop being promoted, permanently, with nothing anywhere "
+        "saying so.\n\n"
         "A mid-epic discovery becomes a new SIBLING card under the same epic, "
         "with its own number — not a sub-issue, and not a 'DRE-1234a' suffix. "
         "Use: python3 scripts/mid_epic.py discovery <EPIC> --kind "

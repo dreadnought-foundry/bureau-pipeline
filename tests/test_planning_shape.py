@@ -196,20 +196,30 @@ class TestPromotabilityAndMarks:
         assert any("promot" in p for p in planning_shape.config_problems(doc))
 
     @pytest.mark.parametrize("name", ["epic", "wave"])
-    def test_the_planned_shapes_carry_the_mark_that_already_stops_the_sweep(self, name):
+    def test_the_planned_shapes_carry_the_planner_ownership_mark(self, name):
         """`agent:planner` is the existing signal that a card is a container the
-        planner owns — reuse it rather than invent a second one, exactly as
-        WORKBENCH reuses `hand-built` (DRE-2724)."""
+        planner OWNS — reuse it rather than invent a second one, exactly as
+        WORKBENCH reuses `hand-built` (DRE-2724).
+
+        Ownership is all it says. It is deliberately NOT what stops the sweep
+        (DRE-3044): the relay requires the label before it will dispatch the
+        planner at all, so every card off the front door wears it, and reading
+        it as "not promotable" made every one-off un-promotable."""
         assert "agent:planner" in planning_shape.marks(name)
 
-    def test_the_mark_this_rests_on_really_stops_the_sweep(self):
-        """The claim above is only true while the sweep honours the label. If
-        `promote_ready` stops skipping `agent:planner`, marking an epic with it
-        stops meaning "not promotable" and this vocabulary is lying."""
-        source = inspect.getsource(reconcile.promote_ready)
-        assert "agent:planner" in source, (
-            "reconcile.promote_ready no longer skips agent:planner cards — the "
-            "epic and wave marks no longer mean what this file says they mean"
+    def test_the_shape_this_rests_on_really_stops_the_sweep(self):
+        """What "promotable: false" rests on is the STAMP, and the claim is only
+        true while the sweep honours it. `promote_ready` asks the one epic
+        helper — `mid_epic.is_epic()`, which reads the shape first — so if that
+        read goes away, marking an epic stops meaning "not promotable" and this
+        vocabulary is lying."""
+        source = inspect.getsource(reconcile.card_is_epic)
+        assert "mid_epic.is_epic" in source, (
+            "the sweep no longer asks the one epic helper — the epic and wave "
+            "shapes no longer mean what this file says they mean"
+        )
+        assert "card_is_epic" in inspect.getsource(reconcile.promote_ready), (
+            "promote_ready no longer consults the epic helper at all"
         )
 
     def test_a_one_off_carries_no_marks(self):

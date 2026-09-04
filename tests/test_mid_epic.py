@@ -43,6 +43,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402
 import planning_shape  # noqa: E402
+import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
 SCRIPTS = ROOT / "scripts"
@@ -172,6 +173,7 @@ WALKED = {
     ("mid_epic", "subissue_refusal"),
     ("routing_verdict", "route"),
     ("linear_ops", "cmd_subissue"),
+    ("reconcile", "card_is_epic"),
 }
 
 
@@ -214,6 +216,32 @@ class TestEveryCallerIsWalked:
         assert mid_epic.subissue_refusal(
             "the intake front door", False, shape="epic"
         ) is None
+
+    def _sweep_card(self, stamp: str, *, children: int = 0) -> dict:
+        return {
+            "identifier": "DRE-3018",
+            "title": PROBE_TITLE,
+            "labels": {"nodes": [{"name": n} for n in PROBE_LABELS]},
+            "comments": {"nodes": [{"body": _stamp(stamp)}]},
+            "children": {"nodes": [{"id": f"kid-{n}"} for n in range(children)]},
+        }
+
+    def test_card_is_epic_says_no_to_a_planner_owned_one_off(self):
+        """`reconcile.card_is_epic` — the sweep's reader, and the caller
+        DRE-3038 did not touch (DRE-3044). It answered "epic" for every card off
+        the front door, so `promote_ready` skipped DRE-3018 on every sweep and
+        the one-off never left Backlog."""
+        assert reconcile.card_is_epic(self._sweep_card("one-off")) is False
+
+    def test_card_is_epic_still_says_yes_to_a_stamped_epic(self):
+        assert reconcile.card_is_epic(self._sweep_card("epic")) is True
+
+    def test_card_is_epic_still_says_yes_to_an_unstamped_card_with_children(self):
+        """The unstamped fallback the sweep keeps: `is_epic` reads the two facts
+        `validate_card.infer_agent_label` derives `agent:planner` from."""
+        card = self._sweep_card("one-off", children=2)
+        card["comments"]["nodes"] = []
+        assert reconcile.card_is_epic(card) is True
 
     def test_cmd_subissue_refuses_a_child_of_a_planner_owned_one_off(self):
         """`linear_ops.cmd_subissue` — the create seam, where the refusal is an

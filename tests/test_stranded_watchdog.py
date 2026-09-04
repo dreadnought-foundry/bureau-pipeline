@@ -47,8 +47,14 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import planning_shape  # noqa: E402
 import reconcile  # noqa: E402
 import validate_card  # noqa: E402
+
+# The shape stamps, built by the writer that stamps them — hand-writing the
+# comment here would let the vocabulary drift without this file noticing.
+_EPIC_STAMP = planning_shape.shape_comment("epic", "a decomposition the planner owns")
+_ONE_OFF_STAMP = planning_shape.shape_comment("one-off", "one card, one pull request")
 
 
 @pytest.fixture(autouse=True)
@@ -271,18 +277,51 @@ def test_planning_cards_are_not_this_sweeps_business(monkeypatch):
     assert seen == [1], "the Planning lane must still be swept, by its own rule"
 
 
-def test_routable_epic_in_todo_not_flagged():
+@pytest.mark.parametrize(
+    "title,bodies",
+    [
+        ("[EPIC] the front door", []),
+        ("a decomposed piece of work", [_EPIC_STAMP]),
+    ],
+    ids=["epic-title", "epic-stamp"],
+)
+def test_routable_epic_in_todo_not_flagged(title, bodies):
     """Epics past Planning are containers — no run ever targets them, so
-    'no run receipts' is their NORMAL state, not a strand."""
+    'no run receipts' is their NORMAL state, not a strand.
+
+    Epic-ness is the SHAPE, not `agent:planner` (DRE-3044) — so the fixture
+    carries a shape the card actually has, and wears the label too, exactly as
+    a real epic out of Planning does.
+    """
     card = _card(
         state="Todo",
         labels=("repo:agent-bureau", "agent:planner"),
         minutes_stale=999,
     )
-    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    card["title"] = title
+    flagged, comment, add_label = _run_watchdog([card], bodies=bodies)
     assert flagged == set()
     comment.assert_not_called()
     add_label.assert_not_called()
+
+
+def test_a_promoted_one_off_wearing_agent_planner_is_still_watched():
+    """DRE-3044: the exemption used to key on `agent:planner`, and EVERY card
+    the relay dispatches to plan.yml from Planning wears that label — including
+    the one-offs the sweep now promotes into these lanes. Exempting those is the
+    watchdog going blind on exactly the cards this fix newly lets through: a
+    one-off is real work with a real run to wait for, so a missing run receipt
+    is the DRE-1993 strand, not a container's normal state."""
+    card = _card(
+        state="Todo",
+        labels=("repo:agent-bureau", "agent:planner"),
+        minutes_stale=999,
+    )
+    card["title"] = "a plain one-off title"
+    flagged, comment, add_label = _run_watchdog([card], bodies=[_ONE_OFF_STAMP])
+    assert flagged == {"DRE-1978"}
+    assert "no agent run" in comment.call_args.args[1]
+    add_label.assert_called_once_with("DRE-1978", reconcile.HOLD_LABEL)
 
 
 def test_other_repos_routable_cards_left_to_their_own_sweep():

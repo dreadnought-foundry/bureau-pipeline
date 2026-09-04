@@ -29,8 +29,9 @@ WHAT THIS PINS, one section per acceptance criterion:
   7. Creating a sub-issue OF A CARD is refused with a message naming the
      reclassification consequence. `validate_card.infer_agent_label` decides what
      a card IS from whether it has children, and `reconcile.promote_ready` skips
-     every `agent:planner` card — so giving a card sub-issues silently converts
-     it into an epic and stops it ever being promoted.
+     every card `mid_epic.is_epic()` answers yes for (DRE-3044) — so giving a
+     card sub-issues silently converts it into an epic and stops it ever being
+     promoted.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_mid_epic_discovery.py -v
 """
