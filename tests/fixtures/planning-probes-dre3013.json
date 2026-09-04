@@ -1,0 +1,53 @@
+{
+  "_readme": [
+    "The four DRE-3013 front-door probes, as they were filed on 2026-09-03,",
+    "and the classification each one is owed (DRE-3029).",
+    "",
+    "They are the fixtures because they are the only four card bodies whose",
+    "expected outcome is written down somewhere other than the test that",
+    "asserts it: DRE-3013 recorded what each probe should do, and every one of",
+    "them stopped at a hand stamp instead. A body invented for a test proves",
+    "the parser reads what the test wrote; these four prove the classifier",
+    "decides what the operator proof said it must.",
+    "",
+    "`expect` is one of the shape names in config/planning-shapes.json, or",
+    "`escalate` — the DRE-2848 exit. `why` is the sentence from DRE-3013.",
+    "",
+    "Bodies are the probe descriptions with the Linear markdown links",
+    "flattened to their titles; nothing else is edited."
+  ],
+  "probes": [
+    {
+      "card": "DRE-3018",
+      "expect": "one-off",
+      "why": "one file, one pull request, no decision inside it",
+      "title": "PROOF FD-4b: a one-off card in Planning with agent:planner — expect a shape stamp, a verdict and Backlog",
+      "labels": ["repo:agent-bureau-demo", "agent:planner"],
+      "body": "**A deliberate probe, not real work.** Created 2026-09-03 17:55 PT for DRE-3013's test FD-4b.\n\nPlaced in **Planning** with `agent:planner` so the relay dispatches `agent-plan` to agent-bureau-demo, where the planner run stamps the planning shape and routes on it.\n\n**The one-off:** add one line to the demo repo's README stating the date the demo pipeline was last exercised. One file. One pull request. No design, no decision, no second card.\n\n**Contract:** the shape stamp reads **one-off**; the one-off route sends it straight to the build queue — a routing verdict on this card, no plan artifact, and it **never reaches Green Light**.\n**If it lands in Green Light, or a child card is created, or it sits here unplanned, FD-4b FAILS** as written."
+    },
+    {
+      "card": "DRE-3019",
+      "expect": "epic",
+      "why": "three one-file children with one real ordering edge — a plan the CEO approves",
+      "title": "EPIC PROOF FD-0: the demo repo says when it was last exercised and by what",
+      "labels": ["repo:agent-bureau-demo", "agent:planner"],
+      "body": "**A deliberate probe epic, not real work.** Created 2026-09-03 18:00 PT for DRE-3013's tests FD-5, FD-8 and FD-9. Its children are throwaway too; one Cancel on this epic takes the lot.\n\n## The epic it pretends to be\n\nThe demo repo (`agent-bureau-demo`) is the fleet's sandbox: probes and replays run there so nothing ships. Today nothing in the repo says when it was last used or by which run, so a person opening it cannot tell a live sandbox from an abandoned one.\n\n**Outcome:** the repo carries, in three separate places, a record of its last exercise — a line in the README, an appended entry in a changelog, and a script that writes both. Each is a single file; none depends on the others being written first, except that the script is the thing that writes the other two, so it comes last.\n\n## Why this shape\n\nThree one-file children with one real ordering edge, so the plan has something to get right (the footprint and the edge) and something to get wrong (splitting the script from the files it writes). Small enough to plan in one run.\n\n## Acceptance criteria\n\n- [ ] The repo records its last exercise in three places: a stamp in the README, an entry in the changelog, and a script that writes both.\n- [ ] The stamp reads identically in both files — one format, written once and reused, not two spellings that drifted apart.\n- [ ] The CEO can answer \"when was this repo last exercised, and by what\" from the repo's front page alone."
+    },
+    {
+      "card": "DRE-3020",
+      "expect": "escalate",
+      "why": "a business decision, not work — no acceptance criterion an agent could satisfy decides it",
+      "title": "PROOF FD-6: a card that is a business decision, not work — expect the escalation exit",
+      "labels": ["repo:agent-bureau-demo", "agent:planner"],
+      "body": "**A deliberate probe, not real work.** Created 2026-09-03 18:00 PT for DRE-3013's test FD-6.\n\n## The decision it carries, and there is nothing to build\n\nShould the demo repo be **public**, so a prospect can read a real pipeline run before signing, or stay **private**, because its run logs show the model names, the token cadence and the internal card vocabulary?\n\nBoth are defensible. Public sells; private protects. The trade is commercial, not technical, and no acceptance criterion an agent could satisfy decides it. A planner that decomposes this into cards has misread it.\n\n## Contract\n\nHand-planning is an escalation and nothing else. The one exit from Planning that is not a plan: the run states the question in business terms — no diff, no code — posts it here, and parks this card in **Green Light** for the CEO.\n\n**If a child card is created, a shape of one-off or epic is stamped and routed, or the card sits here unplanned, FD-6 FAILS** as written."
+    },
+    {
+      "card": "DRE-3021",
+      "expect": "escalate",
+      "why": "it claims two shapes at once — a one-line README change and a fleet-wide programme, both said to be the whole of the work",
+      "title": "PROOF FD-7: a card that claims two shapes at once — expect Planning to refuse it",
+      "labels": ["repo:agent-bureau-demo", "agent:planner"],
+      "body": "**A deliberate probe, not real work.** Created 2026-09-03 18:00 PT for DRE-3013's test FD-7.\n\nThis card is deliberately shapeless. It asks for a one-line change to the demo repo's README **and** describes itself as a programme spanning every product repo in the fleet with a decomposition into epics, and it says both are the whole of the work. It names no outcome a person could observe, no file, and no acceptance criterion.\n\n## Contract\n\nExactly one shape is stamped per card, and a card the stamp cannot classify — two shapes, or none — is **refused, never defaulted**.\n\n**If this card is routed anywhere, or a child is created, FD-7 FAILS.**"
+    }
+  ]
+}
