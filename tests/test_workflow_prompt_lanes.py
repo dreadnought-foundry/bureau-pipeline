@@ -31,7 +31,8 @@ EXPECTED_PROMPT_FILES = {
     "agent-fix.yml": 1,
     "agent-task.yml": 1,
     "medic.yml": 1,
-    "plan.yml": 6,
+    # 6 → 7 with DRE-3041: the pre-approval critic reads the one-off exit.
+    "plan.yml": 7,
     "qa-review.yml": 2,
     "red-main-repair.yml": 1,
     "verify.yml": 2,
@@ -129,9 +130,13 @@ class TestMedicDuplicateSuppression:
 
 class TestPlanPromptMatchesTheNewModel:
     def _planner_prompt(self) -> str:
-        # The first prompt in plan.yml is the planner's; the rest are the two
-        # critics and the re-plan paths.
-        return next(p.body for p in cwp.prompts(WORKFLOWS) if p.workflow == "plan.yml")
+        # Selected by what the prompt SAYS, not by where it sits. It used to be
+        # "the first prompt in plan.yml", which held until DRE-3041 put the
+        # pre-approval critic's prompt on the one-off route ahead of it — and
+        # the symptom was these assertions quietly checking a critic.
+        return next(p.body for p in cwp.prompts(WORKFLOWS)
+                    if p.workflow == "plan.yml"
+                    and "standards for the planner" in p.body)
 
     def test_the_epic_activates_at_in_progress(self):
         import re

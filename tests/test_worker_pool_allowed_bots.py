@@ -128,15 +128,16 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
 
     def test_expected_files_each_carry_a_pooled_worker_allowlist(self):
         # The known sites, pinned per-file so a file-level regression is
-        # named directly in the failure. plan.yml carries SIX: the planner,
+        # named directly in the failure. plan.yml carries SEVEN: the planner,
         # its one re-plan pass after a send-back, the first critic's two
-        # rounds and the post-approval critic (DRE-2721), plus the wave
-        # planner on the wave route (DRE-2845).
+        # rounds and the post-approval critic (DRE-2721), the wave planner on
+        # the wave route (DRE-2845), and the pre-approval critic on the
+        # one-off route (DRE-3041).
         expected = {
             "qa-review.yml": 2,
             "verify.yml": 2,
             "agent-task.yml": 1,
-            "plan.yml": 6,
+            "plan.yml": 7,
         }
         for filename, count in expected.items():
             sites = [

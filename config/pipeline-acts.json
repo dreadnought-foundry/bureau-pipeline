@@ -1099,6 +1099,22 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-note.md\")\"",
+      "step": "One-off critic — decision",
+      "kind": "not-an-act",
+      "means": "The pre-approval critic's note on a one-off — the judgement the person who filed the card reads.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_critic.py. Where the critic stops the card, the ESCALATION that follows is the thing the pipeline did, and it is posted by planning_escalation.py under its own tag."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-record.txt\")\"",
+      "step": "One-off critic — decision",
+      "kind": "not-an-act",
+      "means": "The pre-approval critic's round record on a one-off, posted alone because it is only a credential while nothing else shares its comment.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. It is an approval credential in its own grammar, and a second grammar in the same comment is exactly what its 'alone' rule forbids."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "🛑 The post-approval review found a gap",
       "step": "Second critic sent the plan back",
       "kind": "undeclared-act",
