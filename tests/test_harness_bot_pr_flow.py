@@ -233,11 +233,12 @@ class FakeGitHub:
         return list(self.check_runs.get(sha, []))
 
 
-def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE):
+def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE,
+         faketime=None):
     # Composed the way __main__ composes it: the namespace OPENS the run id,
     # so the run's branches sit in the slice its own sweep owns (DRE-3075).
     run_id = framework.namespaced_run_id(namespace, run_id)
-    faketime = _FakeTime()
+    faketime = faketime or _FakeTime()
     return framework.HarnessContext(
         gh=gh,
         repo="dreadnought-foundry/bureau-harness",
@@ -382,6 +383,30 @@ class FailureModeTest(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.failed_phase, "verify")
         self.assertIn("agent-bureau-bot", "\n".join(result.errors))
+
+    def test_a_probe_pr_swept_mid_wait_fails_at_once_naming_the_closure(self):
+        # The same blindness gate_paths' named leg cost us on run
+        # 33899093729: a wait that polls only for a COMMENT cannot tell
+        # "the critic has not answered yet" from "the PR this wait is
+        # about was closed and its branch deleted by a concurrent harness
+        # run's sweep", so it burns its whole verdict budget and then
+        # blames the critic. This is the first wait of the first scenario,
+        # so it is the first place the run would sit for over an hour.
+        def swept_by_another_run(fake, pr):
+            fake.close_pr("x", pr["number"])
+            fake.branches.pop(pr["head"]["ref"], None)
+
+        gh = FakeGitHub()
+        gh.on_create_pr = swept_by_another_run
+        faketime = _FakeTime()
+        ctx = _ctx(gh, faketime=faketime)
+        result = framework.run_scenario(bot_pr_flow.SCENARIO, ctx)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed_phase, "verify")
+        errors = "\n".join(result.errors).lower()
+        self.assertIn("closed", errors)
+        self.assertIn("sweep", errors)
+        self.assertLess(faketime.now, ctx.verdict_timeout)
 
     def test_even_a_failed_run_cleans_up_its_branch(self):
         gh = FakeGitHub()  # no hook: no verdict ever appears → verify times out

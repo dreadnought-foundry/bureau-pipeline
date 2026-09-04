@@ -239,6 +239,50 @@ class WaitUntilTest(unittest.TestCase):
         self.assertIn("critic verdict", str(caught.exception))
 
 
+class ProbePrTest(unittest.TestCase):
+    """The one state a polling wait cannot recover from: its PR is gone.
+
+    Run 33899093729 — a concurrent harness run's unscoped sweep closed
+    main's live probe PR and deleted its branch 20 minutes in; the wait
+    kept polling for a critic comment that could never arrive and spent
+    the whole 4200s budget before blaming the critic.
+    """
+
+    class _GH:
+        def __init__(self, pr):
+            self.pr = pr
+
+        def get_pr(self, repo, number):
+            return self.pr
+
+    def _pr(self, **over):
+        pr = {"number": 7, "state": "open", "merged": False,
+              "head": {"ref": "agent/harness-local-1-x", "sha": "a" * 40}}
+        pr.update(over)
+        return pr
+
+    def test_open_pr_is_returned_unchanged(self):
+        pr = self._pr()
+        self.assertIs(framework.probe_pr(self._GH(pr), "r", 7), pr)
+
+    def test_merged_pr_is_returned_not_raised_on(self):
+        # `merged` is a success for the skew/stale legs — the helper reports
+        # a PR that VANISHED, and a merge is the pipeline doing its job.
+        pr = self._pr(state="closed", merged=True)
+        self.assertIs(framework.probe_pr(self._GH(pr), "r", 7), pr)
+
+    def test_closed_unmerged_pr_raises_naming_the_sweep(self):
+        pr = self._pr(state="closed")
+        with self.assertRaises(framework.ScenarioFailure) as caught:
+            framework.probe_pr(self._GH(pr), "r", 7)
+        message = str(caught.exception)
+        self.assertIn("#7", message)
+        self.assertIn("closed", message)
+        # The cause a reader needs named, because the wait's own
+        # description names the pipeline it was waiting on instead.
+        self.assertIn("sweep", message)
+
+
 class VerdictStateTest(unittest.TestCase):
     """The verify phase's verdict analysis — every state distinguishable so
     a live failure names WHAT went wrong, not just "no merge"."""
