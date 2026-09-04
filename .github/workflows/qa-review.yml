@@ -520,6 +520,45 @@ jobs:
       # cardless shapes are stated plainly and card bookkeeping no-ops.
       # Inputs ride env only — nothing agent-influenced is interpolated
       # into this script, so it is also executable verbatim by the tests.
+      # ── Act-registry consumer receipt (DRE-3091) ──────────────────────────
+      # `config/pipeline-acts.json` is a contract the console reads, and twice
+      # in twelve hours a PR declaring an act the console did not know was
+      # approved, merged, and broke every open PR in agent-bureau (DRE-3081,
+      # DRE-3090). The critic had no way to see it. These two steps put the
+      # producer-side guard's result in front of it before it approves.
+      #
+      # The files list decides, not the repo name: only bureau-pipeline carries
+      # this file, so a product repo's review never reaches the mint.
+      - name: Does this PR change the act registry?
+        id: actsreg
+        if: steps.decide.outputs.review == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          gh pr view "$PR" --json files --jq '.files[].path' \
+            > /tmp/cardctx-changed.txt 2>/dev/null || : > /tmp/cardctx-changed.txt
+          if grep -qxF 'config/pipeline-acts.json' /tmp/cardctx-changed.txt; then
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+            echo "this PR changes the act registry — the console's ACTS will be read"
+          fi
+
+      # Best effort BY DESIGN, exactly as harness.yml's console mint is: this
+      # is another repository and another installation, and a mint that cannot
+      # happen must cost the receipt paragraph, never the whole review. When
+      # the token is empty the guard reports SKIPPED with the reason and the
+      # critic reads that instead of a verdict it cannot trust.
+      - name: Mint console token (act-registry receipt — best effort)
+        id: console
+        if: steps.actsreg.outputs.touched == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: agent-bureau
+
       - name: Build card review context
         id: cardctx
         if: steps.decide.outputs.review == 'true'
@@ -527,6 +566,9 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
+          # DRE-3091: empty on every review that is not about the act registry,
+          # which is every review outside this repo.
+          BUREAU_CONSOLE_TOKEN: ${{ steps.console.outputs.token }}
           # DRE-3084: the commit this review is about to judge, so a
           # refutation is read back for THIS head and never for an older one.
           HEAD_SHA: ${{ steps.pr.outputs.sha }}
@@ -564,11 +606,23 @@ jobs:
             echo "refuted=true" >> "$GITHUB_OUTPUT"
             echo "re-review after refutation: found a contested finding on $SHA8"
           fi
+          # DRE-3091 — the act-registry consumer check, over THIS PR's registry
+          # (the `.` checkout is the head; `.bureau-pipeline` is the channel and
+          # would answer for main, which is the very state this PR changes).
+          # Writes an empty file when the PR does not touch the registry, and
+          # never exits non-zero: the receipt is not a gate, the tests.yml job
+          # is.
+          : > /tmp/cardctx-acts.txt
+          python3 .bureau-pipeline/scripts/check_act_consumers.py context \
+            --changed-files /tmp/cardctx-changed.txt \
+            --registry config/pipeline-acts.json \
+            --out /tmp/cardctx-acts.txt || : > /tmp/cardctx-acts.txt
           python3 .bureau-pipeline/scripts/review_card_context.py \
             --card "$CARD" \
             --branch "$BRANCH" \
             --pr-body-file /tmp/cardctx-pr-body.txt \
-            --refutation-file /tmp/cardctx-refutation.txt
+            --refutation-file /tmp/cardctx-refutation.txt \
+            --acts-consumer-file /tmp/cardctx-acts.txt
 
       # Model selection for the critic (DRE-2316 / DRE-2317). This step exists
       # because the critic used to carry a pinned Sonnet id twice in this file:
