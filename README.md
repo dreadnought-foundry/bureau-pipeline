@@ -762,15 +762,16 @@ across 70 days, 7.4/day:
   fires on *not moving*, which is what a merge train produces, and it used to
   point at a promote-channel run log that in exactly that case held nothing:
   a displaced harness run triggered no promotion attempt at all. Every
-  completed harness run on `main` now leaves a receipt naming one of
-  `harness-passed-promoting` · `harness-cancelled-by-newer-push` ·
-  `harness-failed` · `channel-held` · `no-harness-stamp` ·
-  `not-ahead-of-channel`, and the watcher counts the harness runs on `main`
-  that concluded `cancelled` since the channel head. **Two or more and it
-  says MERGE TRAIN**, not unknown — one skipped head is the queue-behind rule
-  working (GitHub keeps a single pending run per concurrency group), two is
-  merges arriving faster than the harness can prove them. The alarm's *title*
-  does not move with the diagnosis, so the card still dedups. See
+  completed harness run now leaves a receipt naming one of
+  `harness-passed-promoting` · `harness-run-not-on-main` ·
+  `harness-cancelled-by-newer-push` · `harness-failed` · `channel-held` ·
+  `no-harness-stamp` · `not-ahead-of-channel`, and the watcher counts the
+  harness runs on `main` that concluded `cancelled` since the channel head.
+  **Two or more and it says MERGE TRAIN**, not unknown — one skipped head is
+  the queue-behind rule working (GitHub keeps a single pending run per
+  concurrency group), two is merges arriving faster than the harness can prove
+  them — and it adds whether a run is proving main right now. The alarm's
+  *title* does not move with the diagnosis, so the card still dedups. See
   `docs/self-hosting.md`, "Queue behind, never cancel".
 - **Where the hold's age comes from** (DRE-2603). The repository-variables API
   needs admin scope and answers 403 to the workflow's token, so its answer is

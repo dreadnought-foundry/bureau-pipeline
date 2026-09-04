@@ -156,6 +156,18 @@ jobs:
             fi
           fi
           echo "cancelled=${CANCELLED}" >> "$GITHUB_OUTPUT"
+          # …and whether anything is proving main right now. A train with a run
+          # working on it needs nothing; a train that has stopped with the
+          # trunk still unproven does. Same empty-on-failure rule.
+          IN_FLIGHT=""
+          if OUT="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/harness.yml/runs?branch=main&per_page=100" \
+            --jq '[.workflow_runs[]
+                   | select(.status != "completed")] | length' \
+            2>/dev/null)"; then
+            IN_FLIGHT="$OUT"
+          fi
+          echo "in_flight=${IN_FLIGHT}" >> "$GITHUB_OUTPUT"
 
       # The watcher's own pulse: the last run it completed before this one. An
       # empty answer is "we have never run" — which is not a gap, and must not
@@ -198,6 +210,7 @@ jobs:
           LAST_RUN: ${{ steps.pulse.outputs.last }}
           HOLD_UPDATED: ${{ steps.holdset.outputs.updated }}
           CANCELLED_RUNS: ${{ steps.train.outputs.cancelled }}
+          IN_FLIGHT: ${{ steps.train.outputs.in_flight }}
         run: |
           python3 scripts/channel_watch.py \
             --commits-ahead "$AHEAD" \
@@ -206,6 +219,7 @@ jobs:
             --hold-updated "$HOLD_UPDATED" \
             --last-run "$LAST_RUN" \
             --cancelled-harness-runs "$CANCELLED_RUNS" \
+            --harness-in-flight "$IN_FLIGHT" \
             --title-file "$RUNNER_TEMP/alarm-title.txt" \
             --body-file "$RUNNER_TEMP/alarm-body.md" \
             >> "$GITHUB_STEP_SUMMARY"

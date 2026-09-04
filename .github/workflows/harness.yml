@@ -252,7 +252,45 @@ jobs:
           SCENARIOS: ${{ inputs.scenarios }}
           PYTHONPATH: scripts
         run: |
+          # The clock the duration receipt reads (DRE-3070). Recorded here, in
+          # the scenarios' own step, so the number is about the scenarios and
+          # not about the checkout and three token mints ahead of them.
+          echo "SCENARIOS_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
           python3 -m harness --repo "$HARNESS_REPO" --scenarios "$SCENARIOS"
+
+      # How long that took, on the record, every time (DRE-3070). Nothing
+      # reported a harness run's own length, and on 2026-09-03 that absence
+      # cost the channel an evening: a PR run took 18 minutes while the main
+      # run behind it sat on the step above for 54, waiting on a sandbox whose
+      # Linear quota had been exhausted. Its only bound was the job's
+      # 180-minute timeout, so the queue behind it — and the channel — was
+      # frozen for as long as the wait lasted, and nothing distinguished "the
+      # queue is long" from "this run is hung" until an operator read the logs.
+      #
+      # This does not shorten the wait. It makes it VISIBLE: a number in the
+      # summary of every run, and a warning annotation past the budget, so the
+      # difference shows up in the run list instead of in the channel.
+      #
+      # `always()`, because a run that went red or was cancelled at the cap is
+      # exactly when the number is wanted.
+      - name: Scenario duration receipt
+        if: always()
+        env:
+          # Well clear of the observed healthy runs (9m40s–18m) and well under
+          # the job's own timeout, which is a ceiling for a bad day rather than
+          # a budget: past it the run is CANCELLED and stamps nothing at all.
+          BUDGET_MINUTES: "40"
+        run: |
+          if [ -z "${SCENARIOS_STARTED_AT:-}" ]; then
+            echo "scenarios never started — nothing to time" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          ELAPSED=$(( ( $(date +%s) - SCENARIOS_STARTED_AT ) / 60 ))
+          echo "⏱ harness scenarios: ${ELAPSED}m (budget ${BUDGET_MINUTES}m)" \
+            >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ELAPSED" -gt "$BUDGET_MINUTES" ]; then
+            echo "::warning title=Harness over budget::scenarios took ${ELAPSED}m against a ${BUDGET_MINUTES}m budget. A run this long holds the sandbox, holds every queued run behind it, and holds the release channel with them — look for a hung scenario or a failing sandbox, not a busy queue."
+          fi
 
       # The release gate's record (scripts/release_gate.py reads exactly
       # this context): success on green, an honest failure on red — a

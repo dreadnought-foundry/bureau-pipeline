@@ -30,16 +30,24 @@ a newer push arrived are cancelled before they start.
 
 The channel surviving that is the design (`docs/self-hosting.md`, "Queue
 behind, never cancel"). What was NOT survivable is that the whole case was
-invisible: this workflow only ran on a GREEN harness run, so a displaced run
-produced no promote-channel run, no receipt, and nothing for the staleness
-alarm to read. "The channel is quiet" and "the channel is starved" looked
-identical.
+invisible: this workflow only ran on a GREEN harness run on main, so a
+displaced run produced no promote-channel run, no receipt, and nothing for the
+staleness alarm to read — and a PR-head run produced a bare `skipped`, which
+reads identically to a defect. "The channel is quiet", "the channel is
+starved", and "that run was never about the channel" all looked the same.
 
-So every completed harness run on main now reaches this decision, and the
-decision names which of three things happened — `harness-cancelled-by-newer-push`
-· `harness-failed` · `harness-passed-promoting` — machine-readably, so
-`channel_watch.py` can count merge trains instead of reporting the cause as
-unknown.
+So EVERY completed harness run now reaches this decision, and the decision
+names which of four things happened:
+
+    harness-run-not-on-main         a PR-head run — nothing owed
+    harness-cancelled-by-newer-push a merge train displaced it
+    harness-failed                  a red trunk
+    harness-passed-promoting        the channel moved
+
+machine-readably, so `channel_watch.py` can count merge trains instead of
+reporting the cause as unknown. Three more names cover the refusals that
+already existed and were equally silent: `channel-held`, `no-harness-stamp`,
+`not-ahead-of-channel`.
 """
 
 from __future__ import annotations
@@ -75,13 +83,19 @@ DIVERGED = "diverged"
 CANCELLED = "cancelled"
 SUCCESS = "success"
 
+#: The only branch whose harness runs are promotion candidates. A PR-head run
+#: proved a commit that is not on the trunk.
+TRUNK = "main"
+
 #: The receipt vocabulary (DRE-3070). Stable strings: the staleness alarm and
 #: docs/self-hosting.md both name them, so they are constants here and nowhere
 #: else. The first three are the card's three reasons; the rest are the
-#: refusals that already existed and were equally unnamed.
+#: refusals that already existed and were equally unnamed. `docs/self-hosting.md`
+#: carries the same table, pinned by a test.
 OUTCOME_PROMOTING = "harness-passed-promoting"
 OUTCOME_CANCELLED = "harness-cancelled-by-newer-push"
 OUTCOME_FAILED = "harness-failed"
+OUTCOME_NOT_MAIN = "harness-run-not-on-main"
 OUTCOME_HELD = "channel-held"
 OUTCOME_UNPROVEN = "no-harness-stamp"
 OUTCOME_NOT_AHEAD = "not-ahead-of-channel"
@@ -129,20 +143,39 @@ def evaluate(
     hold: str | None = None,
     ancestry: str | None = None,
     conclusion: str | None = None,
+    branch: str | None = None,
 ) -> Decision:
     """Return ``(promote, reason, outcome)``. The reason is operator-facing.
 
-    Order is deliberate: the hold is checked FIRST so that a deliberately
-    paused channel reads as paused, never as broken. Everything after it fails
-    closed.
+    Order is deliberate. The BRANCH comes first: a hold is a statement about
+    the channel, and a PR-head run never approaches the channel — reporting it
+    as held would be true of the channel and useless about the run. After that
+    the hold, so a deliberately paused channel reads as paused rather than as
+    broken, and everything below it fails closed.
 
     `conclusion` is the triggering harness run's own conclusion, when the
     caller knows it. It is read BEFORE the commit status because the two answer
     different questions: the status says whether this sha was ever proved (by
     any run), the conclusion says what THIS run did. A cancelled run must
     never promote on a stamp some earlier run left behind.
+
+    `branch` and `conclusion` are both optional and both mean "nobody said"
+    when absent — the stamp and the ancestry stay the authorities, which is
+    what every caller before DRE-3070 relied on.
     """
-    # 1. The hold switch. Approved as a switch (D2), and the distinction is the
+    # 1. Was this run ever about the trunk? The PR trigger runs the same
+    #    harness against a PR head, which proves a commit that is not on main.
+    #    Skipping it was always right; saying nothing about it was not — on
+    #    2026-09-03 four of these produced four bare `skipped` runs and it took
+    #    reading all of them to learn nothing was wrong.
+    if branch is not None and branch != TRUNK:
+        return Decision(False, (
+            f"not promoting {sha}: its harness run was on {branch!r}, not "
+            f"{TRUNK}. A PR-head run proves a commit that is not on the trunk "
+            f"— nothing is wrong and nothing is owed."
+        ), OUTCOME_NOT_MAIN)
+
+    # 2. The hold switch. Approved as a switch (D2), and the distinction is the
     #    whole lesson: a hold that is a switch is a control, a hold that is a
     #    habit is the July failure wearing a different hat. So it must be
     #    explicit and it must say who stopped it and why — DRE-2552 alarms if
@@ -153,7 +186,7 @@ def evaluate(
             f"{hold.strip()}. Clear the hold variable to resume."
         ), OUTCOME_HELD)
 
-    # 2. What the triggering run did (DRE-3070). Cancelled is the merge-train
+    # 3. What the triggering run did (DRE-3070). Cancelled is the merge-train
     #    arm and it is NOT a failure: GitHub keeps one pending run per
     #    concurrency group, so a head still waiting when the next merge lands
     #    is dropped before it starts. The channel advances to the head that DID
@@ -172,7 +205,7 @@ def evaluate(
             f"{conclusion}). This is a red trunk, not a busy one."
         ), OUTCOME_FAILED)
 
-    # 3. The harness must have proved THIS sha. Never promote on unverifiable
+    # 4. The harness must have proved THIS sha. Never promote on unverifiable
     #    data — the merge gate's compare-blip rule, and the reason a fetch
     #    failure is indistinguishable from no stamp here.
     verdict = _harness_verdict(combined)
@@ -184,7 +217,7 @@ def evaluate(
             f"move {CHANNEL}."
         ), OUTCOME_UNPROVEN)
 
-    # 4. The channel may only ever advance. Two harness runs can finish out of
+    # 5. The channel may only ever advance. Two harness runs can finish out of
     #    order; without this, the later-finishing older commit wins and the
     #    channel silently regresses — which would look exactly like a working
     #    channel while shipping older code.
@@ -229,6 +262,12 @@ def main(argv: list[str] | None = None) -> int:
              "cancelled / failure / …). Absent means 'nobody said', and the "
              "commit status stays the only authority.",
     )
+    parser.add_argument(
+        "--branch", default=None,
+        help="the branch the triggering harness run was on. Anything but "
+             f"{TRUNK!r} is a PR-head run and no candidate; absent means "
+             "'nobody said'.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -243,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         hold=args.hold,
         ancestry=args.ancestry,
         conclusion=(args.conclusion or None),
+        branch=(args.branch or None),
     )
     # The receipt: the token first so it can be grepped out of a run log, the
     # prose after it so a human never has to.

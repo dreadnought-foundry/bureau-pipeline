@@ -115,25 +115,50 @@ is reported rather than prevented.
 
 ### Reading a channel that did not move
 
-Every completed harness run on `main` now leaves a promote-channel receipt
-naming one outcome, so "the channel is quiet" and "the channel is starved" are
-different strings instead of the same silence:
+Every completed harness run — on `main` or on a PR head — now leaves a
+promote-channel receipt naming one outcome, so "the channel is quiet", "the
+channel is starved" and "that run was never about the channel" are different
+strings instead of the same silence:
 
 | receipt | what happened | what to do |
 | --- | --- | --- |
 | `harness-passed-promoting` | green run, strictly ahead — `stable` moved | nothing |
+| `harness-run-not-on-main` | a PR-head run; it proved a commit that is not on the trunk | nothing — it was never a candidate |
 | `harness-cancelled-by-newer-push` | displaced by a merge train; never started | nothing — it advances when the trunk quietens |
 | `harness-failed` | the harness went red on this commit | a red trunk; the medic and `red-main-repair.yml` own it |
 | `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
 
+Before this, those runs concluded `skipped` with nothing else on them: on
+2026-09-03 four consecutive PR-head runs each produced one, and learning that
+nothing was wrong meant opening all four.
+
 `channel-watch.yml` counts the `cancelled` harness runs on `main` since the
 channel head and, at two or more, names a **merge train** in the staleness
-alarm instead of reporting the cause as unknown. One skipped head is the rule
-above working; two is merges arriving faster than the harness can prove them.
-The lever is the harness's duration or the merge rate — never cancelling the
-run in progress.
+alarm instead of reporting the cause as unknown — and says whether a run is
+proving main right now, because a train with a run working on it needs nothing
+and a train that has stopped with the trunk still unproven does. One skipped
+head is the rule above working; two is merges arriving faster than the harness
+can prove them. The lever is the harness's duration or the merge rate — never
+cancelling the run in progress.
+
+### How long a run is allowed to take
+
+The other half of a starved channel is a single run that will not end. Every
+harness run now writes `⏱ harness scenarios: Nm (budget 40m)` to its summary
+and raises a GitHub warning past the budget. Healthy runs measure 9–18 minutes;
+the budget sits well above that and well below the job's 180-minute timeout,
+which is a ceiling for a bad day rather than a budget — past it the run is
+*cancelled*, and a cancelled run stamps nothing at all.
+
+The number exists because on 2026-09-03 a main run sat on `Run harness
+scenarios` for 54 minutes: the sandbox's Linear quota had been exhausted and
+the scenario was waiting on a sweep that would never come. Nothing
+distinguished that from a long queue until an operator read the logs and
+cancelled it by hand. **The warning does not shorten the wait** — a scenario's
+own wait still has no deadline shorter than the job timeout, and the harness
+does not yet fail fast when the sandbox itself has died.
 
 Mechanics of pinning, the canary channel, and the promotion/rollback moves
 live in the README under "Release channel: pinning, canary, promotion".

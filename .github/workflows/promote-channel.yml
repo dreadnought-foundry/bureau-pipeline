@@ -48,15 +48,21 @@ permissions:
 
 jobs:
   promote:
-    # Every completed harness run on MAIN reaches the decision — not only the
-    # green ones (DRE-3070). A PR-head run proved a commit that is not on the
-    # trunk and is still none of our business; a run that was cancelled or that
-    # failed is very much our business, because it is the reason the channel
-    # did not move and it used to leave no record at all. The condition used to
-    # read `conclusion == 'success' && …`, so on the evening of 2026-09-03 the
-    # thirteen displaced runs produced thirteen absences. Only a green run
-    # promotes — that is `steps.decide.outputs.promote`, below, unchanged.
-    if: github.event.workflow_run.head_branch == 'main'
+    # EVERY completed harness run reaches the decision (DRE-3070) — the
+    # condition that used to live here (`conclusion == 'success' &&
+    # head_branch == 'main'`) is now the decision's own first two questions,
+    # answered out loud instead of silently.
+    #
+    # Both halves of it produced silence on 2026-09-03: the displaced main runs
+    # never triggered a promotion attempt at all, and the PR-head runs
+    # triggered four whose only record was the word `skipped`, so learning that
+    # nothing was wrong meant opening all four. Skipping was right both times;
+    # not saying so was what cost the evening.
+    #
+    # Only a green run on the trunk promotes — that is
+    # `steps.decide.outputs.promote`, below, unchanged — and the API calls and
+    # the token mint are still gated on that same pair, so the added runs cost
+    # a checkout and one `python3`.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -67,7 +73,9 @@ jobs:
       # release-gate.yml.
       - name: Mint bot token
         id: app
-        if: github.event.workflow_run.conclusion == 'success'
+        if: >-
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_branch == 'main'
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
@@ -81,7 +89,9 @@ jobs:
       # night — two API calls per displaced merge would be pure noise. The
       # decision step reads `{}` (the file is absent) and never gets that far.
       - name: Fetch the candidate's combined commit status
-        if: github.event.workflow_run.conclusion == 'success'
+        if: >-
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_branch == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ github.event.workflow_run.head_sha }}
@@ -94,7 +104,9 @@ jobs:
       # anything unreadable stays unknown and fails closed downstream.
       - name: Compare the candidate against the current channel head
         id: ancestry
-        if: github.event.workflow_run.conclusion == 'success'
+        if: >-
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_branch == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ github.event.workflow_run.head_sha }}
@@ -122,13 +134,18 @@ jobs:
           # the commit status, which says whether the sha was ever proved by
           # any run — a cancelled run must not ride an older run's stamp.
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          # The branch the run was on. Through env, never interpolated into
+          # the shell line — a head branch is attacker-controllable text on a
+          # fork PR (the tests.yml `BASE_REF` rule).
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           python3 scripts/promote_channel.py \
             --sha "$CANDIDATE" \
             --statuses-file combined_status.json \
             --ancestry "$ANCESTRY" \
             --hold "$HOLD" \
-            --conclusion "$CONCLUSION"
+            --conclusion "$CONCLUSION" \
+            --branch "$BRANCH"
 
       # Force, because the channel is a MOVING ref by design — that is what
       # makes it a staged deploy rather than a frozen pin.

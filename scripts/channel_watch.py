@@ -276,13 +276,28 @@ def _is_merge_train(cancelled_harness_runs: int | None) -> bool:
     )
 
 
-def _merge_train_headline(cancelled_harness_runs: int | None) -> str:
+def _merge_train_headline(
+    cancelled_harness_runs: int | None,
+    harness_in_flight: bool | None = None,
+) -> str:
+    """"…merge train, main proving" — the card's own words for the headline.
+
+    The second clause is the difference between a channel that needs nothing
+    (a run is working on it right now, and will promote when it lands) and one
+    that needs looking at (the train has stopped and still nothing is proving
+    the trunk). Unread stays silent: an unanswered API call is not a fact.
+    """
     if not _is_merge_train(cancelled_harness_runs):
         return ""
-    return (
+    line = (
         f" A merge train is starving it: {cancelled_harness_runs} harness runs "
         f"on main were cancelled before they could prove anything."
     )
+    if harness_in_flight is True:
+        line += " A run is proving main now."
+    elif harness_in_flight is False:
+        line += " Nothing is proving main right now."
+    return line
 
 
 def _cause_line(cancelled_harness_runs: int | None) -> str:
@@ -329,6 +344,7 @@ def evaluate(
     hold_since: str | None = None,
     watcher_gap_hours: float | None = None,
     cancelled_harness_runs: int | None = None,
+    harness_in_flight: bool | None = None,
 ) -> Verdict:
     """Decide what the channel is doing. Pure — no clock, no network.
 
@@ -404,7 +420,7 @@ def evaluate(
             f"The release channel has not moved in {_days(channel_age_hours)} "
             f"while the engine moved {commits_ahead} commits."
         )
-        head += _merge_train_headline(cancelled_harness_runs)
+        head += _merge_train_headline(cancelled_harness_runs, harness_in_flight)
         return Verdict(
             state=STALE,
             alarm=True,
@@ -451,6 +467,15 @@ def _int_or_none(raw: str | None) -> int | None:
         return None
 
 
+def _bool_or_none(count: int | None) -> bool | None:
+    """A count of in-flight runs as a tri-state. None stays None.
+
+    Deliberately NOT `bool(count)`: `None` is "the API did not answer" and
+    must not collapse into "nothing is running", which is a claim.
+    """
+    return None if count is None else count > 0
+
+
 def _timestamp_or_none(raw: str | None) -> str | None:
     """The value if it reads as a timestamp, else None — a failed read is absent.
 
@@ -479,6 +504,11 @@ def main(argv: list[str] | None = None) -> int:
                              "when the token is allowed to read it")
     parser.add_argument("--last-run", default=None,
                         help="ISO date this watcher last completed a run")
+    parser.add_argument("--harness-in-flight", default=None,
+                        help="how many harness runs on main are queued or "
+                             "running right now. Qualifies a merge train as "
+                             "'main proving' vs 'nothing proving main'; "
+                             "unreadable stays silent, never a guess.")
     parser.add_argument("--cancelled-harness-runs", default=None,
                         help="how many harness runs on main concluded "
                              "`cancelled` since the channel head — the "
@@ -502,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
         hold_since=hold_since,
         watcher_gap_hours=hours_since(args.last_run, now=args.now),
         cancelled_harness_runs=_int_or_none(args.cancelled_harness_runs),
+        harness_in_flight=_bool_or_none(_int_or_none(args.harness_in_flight)),
     )
 
     print(verdict.detail)
