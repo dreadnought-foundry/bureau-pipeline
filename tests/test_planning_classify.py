@@ -890,6 +890,22 @@ class TestTheTransport:
         assert decision.model == "claude-fable-5-1"
         assert planning_shape.stamped_by(lops.bodies)[1] == "claude-fable-5-1"
 
+    def test_the_cli_credential_failure_is_read_off_the_envelope(self, monkeypatch):
+        """The shape the CLI actually returns when it cannot authenticate,
+        recorded from a live invocation on 2026-09-04: exit 1, `is_error` true
+        UNDER `subtype: "success"`, and the reason in `result`. Reading the exit
+        code alone would report "exit 1" for a credential problem — the
+        unattributable-400 failure in a new place."""
+        _subscription_env(monkeypatch)
+        _fake_cli(monkeypatch, returncode=1, stdout=json.dumps({
+            "type": "result", "subtype": "success", "is_error": True,
+            "num_turns": 1, "modelUsage": {},
+            "result": "Not logged in · Please run /login",
+        }))
+        with pytest.raises(planning_classify.TransportError) as caught:
+            planning_classify._call_real(MODEL, "the prompt")
+        assert "Not logged in" in str(caught.value)
+
     def test_a_cli_that_did_not_answer_is_a_transport_failure(self, monkeypatch):
         _subscription_env(monkeypatch)
         _fake_cli(monkeypatch, returncode=1, stdout="")
@@ -957,6 +973,23 @@ class TestTheTwoReasons:
         assert decision.requeue is False
         assert decision.escalates is True
 
+    def test_the_failed_run_is_one_the_medic_actually_reruns(self, monkeypatch,
+                                                             capsys):
+        """The requeue IS the red run, so it only exists if the medic retries
+        it. `Agent Plan` is on the medic's watch list and its three back-off
+        classes are the critic's, GitHub's own 5xx and Linear's quota — a
+        classification 429 is none of them. Pinned rather than assumed: the
+        wording this module prints is what the medic reads, so a rewrite of the
+        log line that drifted into a back-off signature would silently turn one
+        retry into none.
+        """
+        import medic_classify
+
+        self._transport_decision(monkeypatch)
+        log = capsys.readouterr().err
+        assert "429" in log, "the run log does not say what happened"
+        assert medic_classify.classify("Agent Plan", log) == "normal"
+
     def test_a_model_that_cannot_tell_is_not_a_transport_failure(self):
         """The other reason, and the one the CEO owns. It must not borrow the
         transport wording — an infrastructure failure and a card nobody can
@@ -1010,6 +1043,88 @@ class TestTheTwoReasons:
         assert planning_shape.stamped_by(lops.bodies) == (
             planning_shape.BY_PLANNER, MODEL
         )
+
+    def test_the_spent_budget_parks_the_card_without_claiming_a_judgement(self):
+        """The park after the retry is the same door, and the note must not say
+        the same thing: "the reasoning itself is the deliverable" is true of
+        hand-planning and plainly false of a classifier that could not reach a
+        model twice. A confident wrong answer is worse than none."""
+        reason = planning_escalation.transport_reason("HTTP 429")
+        note = planning_escalation.escalation_comment("DRE-3017", reason,
+                                                     transport=True)
+        assert "the reasoning itself is the deliverable" not in note
+        assert "no judgement is being asked of you" in note
+        assert "429" in note
+        assert planning_escalation.jargon(note) == ()
+
+    def test_the_hand_planning_note_is_unchanged_by_that(self):
+        """The guard above is worth nothing if it moved DRE-2848's own words."""
+        note = planning_escalation.escalation_comment(
+            "DRE-3020", "This is a commercial trade, not a technical one.")
+        assert "the reasoning itself is the deliverable" in note
+        assert "waiting on judgement" in note
+
+    def test_the_workflow_passes_the_transport_flag_to_that_note(self):
+        doc = yaml.safe_load(WF.read_text(encoding="utf-8"))
+        step = next(
+            s for s in doc["jobs"]["plan"]["steps"]
+            if "planning_escalation.py escalate" in json.dumps(s.get("run") or "")
+        )
+        assert "steps.classify.outputs.transport == 'true'" in step["run"]
+        assert "--transport" in step["run"]
+
+    def test_the_stamp_the_classifier_writes_is_the_one_the_router_reads(self):
+        """FD-4a end to end, as far as a suite can carry it: the classifier
+        stamps DRE-3017's body `one-off` and the routing step reads THAT stamp
+        to pick the route. Two systems, so neither one green on its own is the
+        evidence — and this seam is what a run that 429'd never reached."""
+        import planning_route
+
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        planning_classify.run(
+            lops, probe["card"],
+            call=_caller(_answer(shape="one-off", tells=(1, 4))),
+            model=MODEL,
+        )
+        plan = planning_route.exit_plan(_card(probe), lops.bodies)
+        assert plan.route.shape == "one-off"
+
+    def test_the_probe_bodies_state_no_exit_condition_to_route_on(self):
+        """The finding this card cannot fix, pinned so it is not rediscovered.
+
+        DRE-3074 asks for DRE-3017 to leave Planning with a FLEET verdict, and
+        it will not: DRE-3038's rule reads the verdict OFF THE CARD, and every
+        one of DRE-3013's probe bodies states its contract in prose rather than
+        as `- [ ]` acceptance criteria — so the router refuses them all with
+        NEEDS WORK and sends them back for the missing exit condition. That is
+        the shipped rule working, on cards written before it, and it is
+        independent of the transport this card fixes: the classification is
+        reached, the stamp is written, and the ROUTING then asks a question the
+        probe never answered. Fixing it is a change to DRE-3038's rule or to the
+        probes, and neither belongs in a transport card.
+        """
+        import routing_verdict
+
+        for probe in _probes():
+            if probe["expect"] not in planning_shape.shapes():
+                continue
+            decision = routing_verdict.route(
+                probe["title"], probe["body"], probe["labels"], False, None,
+                shape=probe["expect"],
+            )
+            if probe["expect"] == "one-off":
+                assert decision.verdict == "NEEDS WORK", (
+                    f"{probe['card']} now routes {decision.verdict} — if the "
+                    "probe grew acceptance criteria, DRE-3074's first criterion "
+                    "is finally satisfiable and this test should say so"
+                )
+                assert "acceptance criteria" in decision.reason
+
+    def test_the_decision_probe_goes_to_the_ceos_queue_and_not_the_build_one(self):
+        """FD-6's other half: the lane an escalation lands in is derived, so the
+        test asserts the derivation rather than a name typed twice."""
+        assert planning_escalation.destination() == "Green Light"
 
     def test_the_requeue_receipt_is_plain_english_and_tagged(self):
         note = planning_escalation.transport_comment("DRE-3017", "HTTP 429")

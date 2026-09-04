@@ -211,6 +211,10 @@ jobs:
       # stated in business terms and posted at most once. Nothing below this
       # runs — the routing step is gated on the same output — so the card
       # leaves this run parked, never stopped.
+      #
+      # `--transport` is the one thing that varies (DRE-3074): the park is the
+      # same, but a card whose classifier failed to reach a model twice must not
+      # be told the reasoning is the deliverable. Same door, honest note.
       - name: Classification refused — park the card for the CEO
         if: steps.classify.outputs.escalate == 'true'
         env:
@@ -218,7 +222,8 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "${{ github.event.client_payload.identifier }}" \
-            --reason-file "${{ runner.temp }}/classifier-escalation.txt"
+            --reason-file "${{ runner.temp }}/classifier-escalation.txt" \
+            ${{ steps.classify.outputs.transport == 'true' && '--transport' || '' }}
 
       # --- Planning branches three ways on the shape (DRE-2844) -------------
       #

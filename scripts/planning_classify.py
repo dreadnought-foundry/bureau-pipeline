@@ -752,7 +752,12 @@ def _call_claude_code(model: str, prompt: str) -> Answer:
 
     stdout, stderr = done.stdout or "", (done.stderr or "")[:400]
     envelope = _envelope(stdout)
-    if done.returncode != 0 or envelope is None:
+    # The envelope is read BEFORE the exit code, because it is the informative
+    # half: the CLI exits 1 on a credential failure and puts the reason in
+    # `result` ("Not logged in · Please run /login"), and `is_error` can be true
+    # under `subtype: "success"`. A run that says only "exit 1" is the
+    # unattributable-400 problem in a new place.
+    if envelope is None:
         raise TransportError(
             f"the classification call exited {done.returncode} with no readable "
             f"answer: {stderr or stdout[:400]}",
@@ -760,9 +765,16 @@ def _call_claude_code(model: str, prompt: str) -> Answer:
         )
     if envelope.get("is_error") or envelope.get("subtype") not in (None, "success"):
         raise TransportError(
-            f"the classification call reported {envelope.get('subtype')!r}: "
-            f"{str(envelope.get('result'))[:400]}",
+            f"the classification call reported subtype "
+            f"{envelope.get('subtype')!r}, is_error "
+            f"{envelope.get('is_error')!r}: {str(envelope.get('result'))[:400]}",
             str(envelope.get("subtype") or "no answer"),
+        )
+    if done.returncode != 0:
+        raise TransportError(
+            f"the classification call exited {done.returncode} after reporting "
+            f"success: {stderr or stdout[:400]}",
+            f"exit {done.returncode}",
         )
     used = list((envelope.get("modelUsage") or {}).keys())
     return Answer(text=str(envelope.get("result") or ""),
@@ -987,6 +999,9 @@ def _cmd_classify(identifier: str, github_output: str | None,
         _write_outputs(github_output, [
             ("escalate", "true"), ("requeue", "false"), ("shape", ""),
             ("model", decision.model or ""), ("answered", answered),
+            # The park is the same; what the note may CLAIM is not. A transport
+            # failure that outlived its retry is not the CEO's judgement to make.
+            ("transport", "true" if decision.transport else "false"),
         ])
         print(f"{identifier} cannot be classified: {reason}")
         return 0

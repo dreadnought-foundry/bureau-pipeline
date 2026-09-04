@@ -580,7 +580,7 @@
     },
     {
       "file": "scripts/planning_escalation.py",
-      "anchor": "escalation_comment(identifier, reason)",
+      "anchor": "escalation_comment(identifier, reason, transport)",
       "kind": "undeclared-act",
       "means": "Planning cannot proceed on its own, so the card is parked and a human is asked.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. A hold in the strict sense: the next actor is a person, and the card waits."

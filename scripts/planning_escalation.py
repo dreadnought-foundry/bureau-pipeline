@@ -296,14 +296,29 @@ def refusal(reason: str | None) -> str | None:
     return None
 
 
-def escalation_comment(identifier: str, reason: str | None) -> str:
+def escalation_comment(identifier: str, reason: str | None,
+                       transport: bool = False) -> str:
     """The note that IS the escalation. One card, one of these.
 
     Written to `standards/comms.md`: purpose in the first sentence, the reason
     in its own block, and exactly one ask as the closing line.
+
+    `transport` is DRE-3074's second arrival at this door, and it changes what
+    the note CLAIMS rather than what it does. The sentences below were written
+    for hand-planning, where the reasoning is genuinely the deliverable; said
+    over a classifier that failed to reach a model twice running they would be
+    plainly untrue, and a confident wrong answer is worse than none
+    (`standards/console-honesty.md`). The card still parks — an infrastructure
+    failure that outlived its retry needs a person — it just parks saying what
+    happened.
     """
     lane = destination()
     lines = [
+        f"{ESCALATION_MARK} {ESCALATION_TAG}: {identifier} could not be "
+        "classified and needs you to look — the step that reads new cards has "
+        "now failed twice to reach the model it asks, so nothing has read this "
+        "card at all."
+        if transport else
         f"{ESCALATION_MARK} {ESCALATION_TAG}: {identifier} needs a decision from "
         "you before it can be planned — the reasoning itself is the deliverable "
         "here, and that part is not work an agent can do.",
@@ -318,9 +333,17 @@ def escalation_comment(identifier: str, reason: str | None) -> str:
         lines += [f"**Why it needs you:** {NOT_PLAIN_ENGLISH}", ""]
     lines += [
         f"This card is parked in **{lane}** — your decision queue, the same "
+        "place a plan waits for you. There is nothing wrong with the card and "
+        "no judgement is being asked of you: something on our side is down, and "
+        "it is here so it is not forgotten while we fix it."
+        if transport else
+        f"This card is parked in **{lane}** — your decision queue, the same "
         "place a plan waits for you. It is not broken and it has not failed "
         "anything; it is correct and waiting on judgement.",
         "",
+        "Move it back to be picked up once we tell you the classifier is "
+        "reading cards again."
+        if transport else
         "Answer it here and move the card back to be picked up, or park it if "
         "we should not do this at all.",
     ]
@@ -404,7 +427,8 @@ def requeue(linear_ops, identifier: str, reason: str | None) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def escalate(linear_ops, identifier: str, reason: str | None) -> bool:
+def escalate(linear_ops, identifier: str, reason: str | None,
+             transport: bool = False) -> bool:
     """Post the escalation and park the card. True when the note was written.
 
     The note lands BEFORE the move, always: moving the card without the
@@ -424,7 +448,8 @@ def escalate(linear_ops, identifier: str, reason: str | None) -> bool:
     if already:
         print(f"{identifier}: already escalated, under {ESCALATION_TAG}")
     else:
-        linear_ops.cmd_comment(identifier, escalation_comment(identifier, reason))
+        linear_ops.cmd_comment(
+            identifier, escalation_comment(identifier, reason, transport))
         posted = True
     linear_ops.cmd_state(identifier, lane)
     return posted
@@ -686,7 +711,7 @@ def _cmd_escalate(args) -> int:
         # The raw text goes to the run log and nowhere near the card.
         print(f"the stated reason is not fit for the card: {why}", file=sys.stderr)
         print(f"--- the planner wrote ---\n{reason}", file=sys.stderr)
-    escalate(linear_ops, args.identifier, reason)
+    escalate(linear_ops, args.identifier, reason, args.transport)
     print(f"{args.identifier} escalated out of {ORIGIN} → {destination()}")
     return 0
 
@@ -700,6 +725,10 @@ def main(argv=None) -> int:
     esc.add_argument("identifier")
     esc.add_argument("--why", default=None)
     esc.add_argument("--reason-file", dest="reason_file", default=None)
+    # DRE-3074: the same park, said honestly. A transport failure that outlived
+    # its one retry still needs a person, and telling that person the reasoning
+    # is the deliverable would be a confident wrong answer.
+    esc.add_argument("--transport", action="store_true")
 
     req = sub.add_parser("requeue")
     req.add_argument("identifier")
