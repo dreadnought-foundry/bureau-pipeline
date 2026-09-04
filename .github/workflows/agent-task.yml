@@ -84,6 +84,16 @@ jobs:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
+      # WHEN THE CLOCK STARTED (DRE-3043). GitHub kills an App installation
+      # token at exactly 60 minutes, and the checkout below writes THIS token
+      # into `http.https://github.com/.extraheader` — so this timestamp, not
+      # the agent step's, is when every git credential on the runner begins
+      # ageing. The pool probes, `setup.sh` and the card gate all sit between
+      # here and the agent; a floor measured from the agent would warn late.
+      - name: Record credential mint time
+        id: minted
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           token: ${{ steps.app.outputs.token }}
@@ -328,6 +338,30 @@ jobs:
               "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting. ${{ steps.model.outputs.why }} Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } 2>&1 | tee "$PRE_AGENT_LOG"
 
+      # A LOUD FLOOR, NOT A SILENT CEILING (DRE-3043). The re-mint below makes
+      # an expired credential survivable; this makes it VISIBLE while the agent
+      # can still act on it. At 50 minutes from the mint, with nothing of this
+      # card's work on GitHub, the card gets one line — "credential expires in
+      # 10 minutes — push what is green" — and briefs/engineer.md tells the
+      # agent to push a WIP branch and carry on, so an expiry costs a rebase
+      # rather than a rebuild. Backgrounded: it must never hold up the agent,
+      # and credential_clock.py swallows every failure of its own for the same
+      # reason (a heartbeat that blocks a build is worse than no heartbeat).
+      - name: Credential floor (50-minute warning)
+        id: clock
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          MINTED_AT: ${{ steps.minted.outputs.at }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          nohup python3 .bureau-pipeline/scripts/credential_clock.py watch \
+            --card "$CARD" --minted-at "$MINTED_AT" --run-url "$RUN_URL" \
+            > "$RUNNER_TEMP/credential-clock.log" 2>&1 &
+          disown || true
+          echo "credential floor armed: warns on the card at 50 minutes if nothing has been pushed"
+
       - name: Implement card
         id: claude
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -436,6 +470,70 @@ jobs:
                decomposes it instead of re-deriving it.
                Write at most ONE of escalation / blocker / hand-back.
 
+      # ---- RE-MINT BEFORE THE PUSH (DRE-3043) ----
+      # The token minted at the top of this job is dead by now if the run
+      # passed an hour: GitHub gives an App installation token exactly 60
+      # minutes, and every git credential on the runner is that token — the
+      # `GH_TOKEN` the agent opens its PR with AND the extraheader
+      # actions/checkout wrote for `git push`. On 2026-09-03 run 33822932627
+      # finished DRE-3029 ten minutes after that deadline: 5,001 tests green,
+      # not one byte of it pushed, ~$20 and 70 minutes rebuilt from scratch.
+      #
+      # Tokens are cheap and a stale one is a lost run, so mint a fresh one
+      # from the SAME pool app the worker used (an explicit per-N map again —
+      # Actions cannot index secrets dynamically) and hand it to the rescue
+      # step below. continue-on-error + always(): a mint that fails must leave
+      # the run exactly as it was, never fail a build that is otherwise fine.
+      - name: Mint fresh push token
+        id: pushtoken
+        if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # Deliver what the agent could not. push_rescue.py re-points GIT's
+      # credential — not only `gh`'s — at the fresh token (unsetting the stale
+      # extraheader first: http.extraheader is multi-valued and `git config`
+      # REFUSES to overwrite a key holding more than one value, which is what
+      # actions/checkout leaves behind on a repo with submodules), pushes the
+      # card's branch if GitHub does not have it, and opens the PR if the card
+      # has none. A STRICT no-op when the agent pushed its own work, and it
+      # never fails the job: a red step here summons the medic to re-run a run
+      # that already did the work. Its `local_work` output is what the Report
+      # step reads to say `credential`, not `died`.
+      #
+      # BEFORE the two steps below on purpose: both resolve this card's branch
+      # from `git branch -r`, and both must see the branch this step delivers.
+      - name: Push rescue
+        id: rescue
+        if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        env:
+          # Through the environment, never argv: an argv element is readable by
+          # every process on the runner. Falls back to the job-start token when
+          # the re-mint itself failed, so this step is never worse than the
+          # behaviour it replaces.
+          PUSH_TOKEN: ${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          CARD_URL: ${{ github.event.client_payload.url }}
+          CARD_TITLE: ${{ steps.card.outputs.title }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          python3 .bureau-pipeline/scripts/push_rescue.py rescue \
+            --card "$CARD" --repo "$REPO" --base "$BASE" \
+            --card-url "$CARD_URL" --card-title "$CARD_TITLE" \
+            >> "$GITHUB_OUTPUT"
+
       # DRE-1346 Fix 1: the execution result can end {"subtype":"success",
       # "is_error":true} (usage-limit/API death mid-run) — previously the
       # job went green and the medic never fired. Fail loudly on a no-evidence
@@ -541,7 +639,14 @@ jobs:
           # it.
           EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
-          DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" || echo none)
+          # --work-on-runner (DRE-3043): what the Push rescue step OBSERVED —
+          # committed work for this card that GitHub does not have. It is the
+          # difference between "the agent died with no PR" and "the run did the
+          # work and its credential expired before it could deliver it", and it
+          # is a fact from the disk, never a reading of the transcript.
+          LOCAL_WORK="${{ steps.rescue.outputs.local_work }}"
+          DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" \
+            --work-on-runner "$LOCAL_WORK" || echo none)
 
           # DID THE AGENT START AT ALL? (DRE-2931.) Every class above presumes
           # a run: a run that failed BEFORE claude-code-action took no turn,
@@ -727,6 +832,18 @@ jobs:
                 "$CARD" "turn-exhaustion-requeue" --since "dead-run-budget-reset" || echo 0)
               ERR_FLAGS="--turn-exhaustion --execution-file $EXEC_FILE"
               PARK_TAG_FLAGS="--turn-exhaustion"
+            elif [ "$DEATH_CLASS" = "credential_expiry" ]; then
+              # DRE-3043. The re-mint above did not save this one — so say what
+              # actually happened. The run finished the card and GitHub refused
+              # the push; calling that "the agent died" sends whoever reads the
+              # card to the model, the service and the card itself, none of
+              # which is at fault. It spends the SHARED dead-run budget (the
+              # rebuild is real) and passes NO --error-model, so no
+              # `model-error:` marker arms the DRE-1354 fallback against a
+              # model that never failed.
+              PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
+                "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
+              ERR_FLAGS="--credential-expiry"
             else
               PRIOR=$(python3 .bureau-pipeline/scripts/linear_ops.py count-comments \
                 "$CARD" "dead-run-requeue" --since "dead-run-budget-reset" || echo 0)
