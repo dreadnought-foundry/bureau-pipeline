@@ -112,9 +112,26 @@ planner scorer can grade critic against classifier against outcome.
 
 ## Both plan loops are bounded
 
-**Two failed rounds at either critic and the plan reaches the CEO regardless**,
-with the critic's stated reason attached. Nothing circles a third time. An
-unbounded loop is how 17 cards sat in a lane for 27 days.
+**Two failed rounds at either critic and the loop ends**, with the critic's
+stated reason attached. Nothing circles a third time. An unbounded loop is how
+17 cards sat in a lane for 27 days.
+
+What "ends" means depends on which side of the CEO the critic sits (DRE-3088):
+
+* **Before approval**, the plan reaches the CEO regardless. Proceeding here
+  costs a person a read, and the CEO can still send it back.
+* **After approval**, every send-back first gets one **re-plan** with the
+  critic's finding — the planner revises the children in place — and the epic
+  returns to Green Light with a receipt saying what changed, for re-approval
+  by moving it to **In Progress** (never Todo: an epic in Todo dispatches
+  nothing). Two failed rounds and the plan **parks** in Green Light with
+  `needs-human` and both findings quoted. It is never activated as it stands:
+  "proceed" on this side means agents build it, and a plan the critic held
+  twice is exactly the specification that would make them build the wrong
+  thing. Green Light with the hold label is a watched queue, not the unread
+  lane the 27-day failure lived in — and the sweep's own gate
+  (`plan_critic.post_release`) reads the bound the same way, so no cron sweep
+  promotes the children of a parked epic either.
 
 The two stages count their rounds separately — a send-back before approval does
 not spend the budget after it. A round the critic **passed** is not a failure,
