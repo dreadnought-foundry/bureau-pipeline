@@ -944,6 +944,231 @@ class TheChildrenJsonCarriesTheLabels(unittest.TestCase):
             linear_ops.child_json_records(self.NODES)), [])
 
 
+class ThePostMarkerReleasesTheChildren(unittest.TestCase):
+    """DRE-3059 — the second half of DRE-2721's sentence gets a reader.
+
+    *Two critics: one before you read it, one after you approve it — and only
+    then are the children promotable.* The second clause had no reader:
+    `promote_ready()` asked whether the parent epic was active and never
+    whether the plan had been read since it was approved. On 2026-09-03 the
+    sweep promoted DRE-3026 and DRE-3027 eighty-two seconds after the CEO
+    approved their epic, with no post-critic verdict on it, because none had
+    run at all.
+
+    So the release is a fact the sweep can READ, and it is read out of the
+    markers this module already writes — never out of elapsed time, an
+    adjacent lane, or the absence of a comment (standards/console-honesty.md
+    rule 1).
+    """
+
+    EPIC = "DRE-3019"
+    APPROVED = "2026-09-10T12:04:00.000Z"   # after the cutoff: gated
+    OLD = "2026-09-01T12:04:00.000Z"        # before it: grandfathered
+    CHILD = "DRE-3026"
+
+    def _cycle(self, *bodies):
+        return [ours(pc.cycle_marker(self.EPIC))] + [ours(b) for b in bodies]
+
+    # --- the release ------------------------------------------------------
+
+    def test_the_post_stage_records_stage_post_and_result_pass(self):
+        """The marker the sweep reads is the one `decide` already writes."""
+        line = pc.marker(pc.STAGE_POST, 1, pc.PASS)
+        self.assertIn("stage=post", line)
+        self.assertIn("result=PASS", line)
+
+    def test_a_post_pass_releases_the_children(self):
+        state, _ = pc.post_release(
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.PASS)), self.EPIC)
+        self.assertEqual(state, pc.POST_RELEASED)
+
+    def test_no_post_marker_at_all_is_not_run(self):
+        """The incident: the route never ran, so nothing recorded anything."""
+        state, _ = pc.post_release(self._cycle(), self.EPIC)
+        self.assertEqual(state, pc.POST_NOT_RUN)
+
+    def test_a_pre_pass_does_not_release_the_children(self):
+        """The first critic protects the CEO's attention. It is not the one
+        that says the specification is buildable."""
+        state, _ = pc.post_release(
+            self._cycle(pc.marker(pc.STAGE_PRE, 1, pc.PASS)), self.EPIC)
+        self.assertEqual(state, pc.POST_NOT_RUN)
+
+    def test_a_send_back_holds_and_carries_the_reason(self):
+        state, detail = pc.post_release(
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK,
+                                  "DRE-9003 migrates a table but no card runs it")),
+            self.EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertIn("no card runs it", detail)
+
+    def test_a_literal_fail_holds_the_same_way(self):
+        """Anything that is not a PASS and not a crash holds. The vocabulary
+        this module writes is SEND_BACK; a marker saying FAIL is still the
+        critic declining to release the plan, and reading an unknown verdict as
+        a pass is the one direction that must never happen."""
+        state, detail = pc.post_release(
+            self._cycle(pc.marker(pc.STAGE_POST, 1, "FAIL", "the epic has no proof card")),
+            self.EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertIn("no proof card", detail)
+
+    def test_a_crash_is_not_a_rejection(self):
+        """console-honesty rule 1, unchanged: a critic that produced no result
+        did not decide anything, and `decide` already lets the plan proceed on
+        one. The gate must agree with the route, or the two disagree about the
+        same marker."""
+        state, _ = pc.post_release(
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT)), self.EPIC)
+        self.assertEqual(state, pc.POST_RELEASED)
+
+    def test_the_bound_still_releases_after_two_failed_rounds(self):
+        """`two failed rounds at either critic and the plan proceeds
+        regardless` — the gate must not turn the bound into an unbounded hold,
+        which is the 27-day failure the bound exists to stop."""
+        state, detail = pc.post_release(
+            self._cycle(
+                pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "first gap"),
+                pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "second gap"),
+            ),
+            self.EPIC)
+        self.assertEqual(state, pc.POST_RELEASED)
+        self.assertIn("second gap", detail)
+
+    def test_the_newest_round_is_the_one_that_counts(self):
+        """A send-back the CEO settled, then a pass: the plan is released."""
+        state, _ = pc.post_release(
+            self._cycle(
+                pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap"),
+                pc.marker(pc.STAGE_POST, 2, pc.PASS),
+            ),
+            self.EPIC)
+        self.assertEqual(state, pc.POST_RELEASED)
+
+    def test_a_pass_from_a_previous_planning_attempt_releases_nothing(self):
+        """A re-planned epic is a different plan. The pass that released the
+        old one says nothing about this one."""
+        thread = [
+            ours(pc.marker(pc.STAGE_POST, 1, pc.PASS)),
+            ours(pc.cycle_marker(self.EPIC)),
+        ]
+        state, _ = pc.post_release(thread, self.EPIC)
+        self.assertEqual(state, pc.POST_NOT_RUN)
+
+    def test_a_stray_pass_releases_nothing(self):
+        """The marker is this gate's credential (DRE-2721 review). Anyone with
+        comment access on the epic can post the line; only the pipeline's own
+        comment records a round."""
+        thread = [
+            ours(pc.cycle_marker(self.EPIC)),
+            stray(pc.marker(pc.STAGE_POST, 1, pc.PASS)),
+        ]
+        state, _ = pc.post_release(thread, self.EPIC)
+        self.assertEqual(state, pc.POST_NOT_RUN)
+
+    def test_a_pass_quoted_inside_prose_releases_nothing(self):
+        thread = [
+            ours(pc.cycle_marker(self.EPIC)),
+            ours("The plan is fine. For the record: "
+                 + pc.marker(pc.STAGE_POST, 1, pc.PASS)),
+        ]
+        state, _ = pc.post_release(thread, self.EPIC)
+        self.assertEqual(state, pc.POST_NOT_RUN)
+
+    # --- the refusal the sweep prints -------------------------------------
+
+    def test_the_refusal_names_the_card_the_epic_and_the_missing_critic(self):
+        refusal = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED, self._cycle())
+        self.assertIsNotNone(refusal)
+        first = refusal.splitlines()[0]
+        self.assertIn(self.CHILD, first)
+        self.assertIn(self.EPIC, first)
+        self.assertIn("approved at", first)
+        self.assertIn("2026-09-10 12:04 UTC", first)
+        self.assertIn("second critic has not passed it", first)
+        self.assertIn("holding", first)
+
+    def test_a_pass_refuses_nothing(self):
+        self.assertIsNone(pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.PASS))))
+
+    def test_a_fail_refuses_and_quotes_the_critics_reason(self):
+        refusal = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.marker(pc.STAGE_POST, 1, "FAIL",
+                                  "DRE-9003 migrates a table but no card runs it")))
+        self.assertIsNotNone(refusal)
+        self.assertIn("DRE-9003 migrates a table but no card runs it", refusal)
+        self.assertIn(self.EPIC, refusal.splitlines()[0])
+
+    def test_the_two_refusals_carry_DIFFERENT_tags(self):
+        """The sweep posts a refusal at most once per tag, so "nobody has read
+        this plan" and "the critic found a gap" must not silence each other —
+        they are different facts with different next actions."""
+        missing = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED, self._cycle())
+        held = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
+        self.assertEqual(pc.refusal_tag(missing), pc.POST_UNREAD_TAG)
+        self.assertEqual(pc.refusal_tag(held), pc.POST_SENT_BACK_TAG)
+        self.assertNotEqual(pc.POST_UNREAD_TAG, pc.POST_SENT_BACK_TAG)
+        self.assertNotIn(pc.POST_UNREAD_TAG, pc.POST_SENT_BACK_TAG)
+        self.assertNotIn(pc.POST_SENT_BACK_TAG, pc.POST_UNREAD_TAG)
+
+    def test_refusal_tag_ignores_a_notice_this_module_did_not_write(self):
+        self.assertIsNone(pc.refusal_tag("🚨 mid-epic-no-verdict: something else"))
+        self.assertIsNone(pc.refusal_tag(None))
+
+    def test_the_refusal_is_not_a_verdict_credential(self):
+        refusal = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED, self._cycle())
+        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
+            self.assertNotIn(forbidden, refusal)
+
+    # --- the day it merges ------------------------------------------------
+
+    def test_an_epic_approved_before_the_cutoff_is_not_re_gated(self):
+        """The fleet must not freeze on the day this lands: an epic whose
+        approval predates the change has no marker to find and never will."""
+        self.assertIsNone(pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.OLD, self._cycle()))
+
+    def test_the_cutoff_is_written_into_the_code(self):
+        """Pinned, so the grandfather clause is a date somebody chose rather
+        than a window that quietly moves with the clock."""
+        self.assertEqual(pc.GATED_FROM, "2026-09-05T00:00:00Z")
+
+    def test_an_epic_approved_after_the_cutoff_is_gated(self):
+        just_after = "2026-09-05T00:00:01.000Z"
+        self.assertIsNotNone(pc.promotion_refusal(
+            self.CHILD, self.EPIC, just_after, self._cycle()))
+
+    # --- unknown is unknown ------------------------------------------------
+
+    def test_an_unreadable_green_light_abstains(self):
+        """Refusing every child of every epic whose history Linear cannot
+        report would freeze the board — the same abstention
+        `mid_epic.promotion_refusal` makes for the same reason."""
+        self.assertIsNone(pc.promotion_refusal(
+            self.CHILD, self.EPIC, None, self._cycle()))
+
+    def test_an_unreadable_thread_abstains_and_an_empty_one_does_not(self):
+        """`the read failed` and `the epic has no comments` are different
+        facts (console-honesty rule 2): the first abstains, the second is
+        exactly the incident and refuses."""
+        self.assertIsNone(pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED, None))
+        self.assertIsNotNone(pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED, []))
+
+    def test_a_malformed_green_light_abstains(self):
+        self.assertIsNone(pc.promotion_refusal(
+            self.CHILD, self.EPIC, "not-a-timestamp", self._cycle()))
+
+
 class TheCli(unittest.TestCase):
     """The seams the workflow actually calls."""
 
