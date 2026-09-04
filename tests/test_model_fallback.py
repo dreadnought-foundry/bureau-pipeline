@@ -19,10 +19,15 @@ are cached with a short TTL so we don't probe on every dispatch, and recovery
 within the ladder is free: when a skipped model comes back, the next probe after
 the TTL sees it available and `select` returns it again.
 
-The ladder is Opus-first and Fable is not on it (2026-08-09). Fable's absence is
-a COST/QUOTA policy, not an outage — see FableIsNotABuildModelTest at the foot
-of this file for the incident that made it one. Availability decides how far
-DOWN the ladder we walk; ladder membership is a human decision.
+The workhorse ladder is Opus-first and Fable is not on it (2026-08-09). Fable's
+absence is a COST/QUOTA policy, not an outage — see FableIsNotABuildModelTest at
+the foot of this file for the incident that made it one. Availability decides
+how far DOWN the ladder we walk; ladder membership is a human decision.
+
+Since DRE-3015 the planner walks a ladder of its own (`judgement`, headed by
+`claude-fable-5-1`); every role that builds still shares the workhorse one.
+The kinds and the policy that bounds them are pinned in
+tests/test_model_policy.py — this file is about the ladder WALK.
 
 These tests drive the ladder walk with a STUBBED availability function — no real
 network. The is_error heartbeat helpers (attempt_marker/error_marker) and the
@@ -44,6 +49,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import model_fallback as mf  # noqa: E402
 
 FABLE = "claude-fable-5"
+# The current Fable id, on the JUDGEMENT ladder since 2026-09-03 (DRE-3015) —
+# the planner's, and no build role's. A different model from the id above.
+FABLE51 = "claude-fable-5-1"
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
 # Rotated OUT of the ladder (Opus 5 replaced it) but still recognizable, so a
@@ -62,7 +70,7 @@ def fixed_clock(t):
 
 class LadderShapeTest(unittest.TestCase):
     def test_ladder_is_best_first(self):
-        # Best → worst. The ladder is the contract; both roles share it.
+        # Best → worst. The ladder is the contract; every build role shares it.
         # Fable is deliberately absent — see FableIsNotABuildModelTest.
         self.assertEqual(mf.LADDER, [OPUS, SONNET])
 
@@ -122,19 +130,23 @@ class SelectLadderTest(unittest.TestCase):
             mf.select("engineer", probe=lambda m: avail[m]), OPUS
         )
 
-    def test_top_of_ladder_available_returns_it_for_planner(self):
-        # No role hardcodes a model — both walk the same ladder.
+    def test_top_of_ladder_available_returns_it_for_the_other_build_roles(self):
+        # No role hardcodes a model — every build role walks the one ladder.
+        # (The planner left this list on 2026-09-03: it is `judgement` now and
+        # walks its own ladder — see tests/test_model_policy.py.)
         avail = {OPUS: True, SONNET: True}
-        self.assertEqual(
-            mf.select("planner", probe=lambda m: avail[m]), OPUS
-        )
+        for role in ("devops", "frontend", "fixer", "repairer"):
+            with self.subTest(role=role):
+                mf.clear_availability_cache()
+                self.assertEqual(mf.select(role, probe=lambda m: avail[m]), OPUS)
 
     def test_all_available_returns_opus_best_first(self):
         # Fable probes available too (Anthropic enabled it, 2026-08-09) and is
         # still not chosen: it is not on the walk. See FableIsNotABuildModelTest.
-        avail = {FABLE: True, OPUS: True, SONNET: True}
+        avail = {FABLE: True, FABLE51: True, OPUS: True, SONNET: True}
         self.assertEqual(mf.select("engineer", probe=lambda m: avail[m]), OPUS)
-        self.assertEqual(mf.select("planner", probe=lambda m: avail[m]), OPUS)
+        mf.clear_availability_cache()
+        self.assertEqual(mf.select("devops", probe=lambda m: avail[m]), OPUS)
 
     def test_opus_unavailable_returns_sonnet(self):
         avail = {OPUS: False, SONNET: True}
@@ -186,9 +198,10 @@ class CachingTest(unittest.TestCase):
         first = list(calls)
         self.assertIn(OPUS, first)
         self.assertIn(SONNET, first)
-        # Second select within the TTL: nothing new probed — served from cache.
+        # A second role on the SAME ladder within the TTL: nothing new probed —
+        # served from cache.
         self.assertEqual(
-            mf.select("planner", probe=probe, clock=fixed_clock(t)), SONNET
+            mf.select("devops", probe=probe, clock=fixed_clock(t)), SONNET
         )
         self.assertEqual(calls, first, "probe re-called within TTL window")
 
@@ -299,7 +312,19 @@ class CliTest(unittest.TestCase):
 
     def test_cli_select_returns_top_of_ladder_when_available(self):
         self.assertEqual(
-            self._select("planner", {FABLE: True, OPUS: True, SONNET: True}),
+            self._select("devops", {FABLE: True, OPUS: True, SONNET: True}),
+            OPUS,
+        )
+
+    def test_cli_select_walks_the_planners_own_ladder(self):
+        # The planner is `judgement` (DRE-3015): its top rung is the current
+        # Fable, and the CLI is the entry point plan.yml actually calls.
+        self.assertEqual(
+            self._select("planner", {FABLE51: True, OPUS: True, SONNET: True}),
+            FABLE51,
+        )
+        self.assertEqual(
+            self._select("planner", {FABLE51: False, OPUS: True, SONNET: True}),
             OPUS,
         )
 
@@ -458,13 +483,22 @@ class AgentsRegistryAlignment(unittest.TestCase):
             if isinstance(a.get("model"), str)
         }
 
-    def test_engineer_and_planner_ladder_matches_config(self):
+    def test_build_role_ladders_match_the_config(self):
         declared = self._configured_ladders()
-        for role in ("engineer", "planner"):
+        for role in ("engineer", "devops", "frontend"):
             self.assertEqual(
                 declared[role], mf.LADDER,
                 f"{role}: config ladder {declared[role]} != mf.LADDER {mf.LADDER}",
             )
+
+    def test_the_planner_walks_its_own_ladder_not_the_build_one(self):
+        # DRE-3015. Resolved through the config like every other role — the
+        # point is that it is a DIFFERENT ladder, headed by a model no build
+        # role can reach.
+        declared = self._configured_ladders()
+        self.assertNotEqual(declared["planner"], mf.LADDER)
+        self.assertEqual(declared["planner"][0], FABLE51)
+        self.assertEqual(mf.ladder_for("planner"), declared["planner"])
 
     def test_no_configured_ladder_references_a_retired_model(self):
         """EVERY agent's ladder must draw from KNOWN, selectable models.
@@ -551,11 +585,16 @@ class FableIsNotABuildModelTest(unittest.TestCase):
     time. It is "a stronger model becoming AVAILABLE must never silently promote
     itself onto the build path": the ladder starts at Opus and does not contain
     Fable at all, and no build role can reach it even with every probe green.
-    Fable stays a KNOWN model (attribution) and is reserved for the advisory /
-    reviewer role the config-driven redesign will introduce.
+    Fable stays a KNOWN model (attribution) and is reserved for the roles that
+    judge rather than build.
+
+    The planner LEFT this list on 2026-09-03 (DRE-3015) — it is `judgement`
+    now and its ladder is headed by `claude-fable-5-1`. That is a decision a
+    human made in config/models.yaml, which is the only way up; nothing here is
+    relaxed, and tests/test_model_policy.py pins the same guard from both sides.
     """
 
-    BUILD_ROLES = ("engineer", "planner", "devops", "frontend")
+    BUILD_ROLES = ("engineer", "devops", "frontend")
 
     def setUp(self):
         mf.clear_availability_cache()
@@ -593,7 +632,9 @@ class FableIsNotABuildModelTest(unittest.TestCase):
         # Whatever the probe says about the ladder's own models — all up, all
         # down, only-Fable-up — the answer is never Fable, because Fable is not
         # on the walk. The fall-through case matters most: "nothing available"
-        # must land on Sonnet, never escalate.
+        # must land on Sonnet, never escalate. BOTH Fable ids are checked: the
+        # excluded `claude-fable-5` and the `claude-fable-5-1` the planner runs
+        # on since DRE-3015.
         for avail in (
             {OPUS: True, SONNET: True},
             {OPUS: False, SONNET: True},
@@ -604,6 +645,7 @@ class FableIsNotABuildModelTest(unittest.TestCase):
                 mf.clear_availability_cache()
                 got = mf.select("engineer", probe=lambda m: avail.get(m, True))
                 self.assertNotEqual(got, FABLE)
+                self.assertNotEqual(got, FABLE51)
                 self.assertIn(got, mf.LADDER)
 
     def test_fable_stays_known_so_in_flight_markers_still_attribute(self):
@@ -620,7 +662,7 @@ class FableIsNotABuildModelTest(unittest.TestCase):
         # point. The stub probe comes from BUREAU_FAKE_AVAILABLE: no network.
         env = dict(os.environ)
         env["BUREAU_FAKE_AVAILABLE"] = json.dumps(
-            {FABLE: True, OPUS: True, SONNET: True}
+            {FABLE: True, FABLE51: True, OPUS: True, SONNET: True}
         )
         script = os.path.join(
             os.path.dirname(__file__), "..", "scripts", "model_fallback.py"
