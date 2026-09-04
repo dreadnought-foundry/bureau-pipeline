@@ -131,17 +131,38 @@ class TheShell(unittest.TestCase):
             "#!/bin/bash\n" + (f"printf '%s\\n' {' '.join(repr(f) for f in files)}\n" if files else "true\n"))
         os.chmod(Path(self.bin, "gh"), 0o755)
 
-    def _run_step(self):
+    def _run_step_raw(self):
+        """The step's shell exactly as GitHub runs it: `bash -eo pipefail`."""
         run = _step(STEP)["run"]
         env = dict(self.env, PATH=self.bin + os.pathsep + os.environ["PATH"],
                    GH_TOKEN="test", PR_NUMBER="9999",
                    GITHUB_REPOSITORY="dreadnought-foundry/bureau-pipeline",
                    GITHUB_OUTPUT=os.path.join(self.tmp, "out"))
         Path(env["GITHUB_OUTPUT"]).write_text("")
-        out = subprocess.run(["bash", "-e", "-c", run], cwd=self.work,
+        out = subprocess.run(["bash", "-eo", "pipefail", "-c", run], cwd=self.work,
                              capture_output=True, text=True, env=env)
+        return out, Path(env["GITHUB_OUTPUT"]).read_text()
+
+    def _run_step(self):
+        out, outputs = self._run_step_raw()
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
-        return out.stdout, Path(env["GITHUB_OUTPUT"]).read_text()
+        return out.stdout, outputs
+
+    def _failing_gh(self):
+        Path(self.bin, "gh").write_text("#!/bin/bash\necho 'gh: HTTP 502' >&2\nexit 1\n")
+        os.chmod(Path(self.bin, "gh"), 0o755)
+
+    def test_a_failed_files_query_fails_the_step_instead_of_taking_mains_copy(self):
+        """Critic finding on #269: `gh api … | grep -c … || true` forgave a
+        failed API call as "no changes", so a PR that IS changing the harness
+        would have been quietly handed main's copy on a GitHub blip — and its
+        own change never exercised. The call must fail loudly."""
+        self._failing_gh()
+        out, outputs = self._run_step_raw()
+        self.assertNotEqual(out.returncode, 0, "a failed files query was read as 'no changes'")
+        self.assertNotIn("source=", outputs)
+        self.assertIn("OLD = True", Path(self.work, "scripts", "harness", "framework.py").read_text(),
+                      "the PR's copy must be left alone when the question could not be asked")
 
     def test_a_pr_that_leaves_the_harness_alone_runs_mains_copy(self):
         self._fake_gh(["other.py"])
