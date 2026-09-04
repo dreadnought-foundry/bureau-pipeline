@@ -653,6 +653,41 @@ def verdict_state(comments, qa_login: str, head_sha: str) -> tuple[str, str]:
     return token, line
 
 
+def probe_pr(gh, repo: str, number) -> dict:
+    """The probe PR, with the ONE state a polling wait cannot recover from
+    named where it happens: closed, unmerged, gone out from under the wait.
+
+    A wait that polls for a COMMENT — a critic verdict, the gate's status
+    note — reads only `list_comments`, so it cannot tell "the pipeline has
+    not answered yet" from "the pull request this wait is about no longer
+    exists". Both look like an empty list, and the first is worth waiting
+    the full budget for while the second can never resolve. So the wait
+    sits out its budget and then reports the pipeline it was waiting on.
+
+    That is run 33899093729, red main: at 17:36 a concurrent PR harness run
+    — driving the sandbox from its own head, which predated the namespaced
+    sweep (DRE-3075) — closed main's live `gate_paths` probe PR #929 and
+    deleted its branch. Main's named leg spent 70 of the run's 76 minutes
+    waiting for a critic comment on a closed PR and failed with `timed out
+    after 4200s waiting for a critic comment on PR #929`. The sandbox's
+    critic was healthy throughout: a PR-lane harness run reviewed the same
+    leg's PR in minutes at 18:16.
+
+    A MERGE is not this state. It is closure by the pipeline doing its job,
+    and it is the success the skew and stale legs wait for, so it passes
+    through untouched.
+    """
+    pr = gh.get_pr(repo, number)
+    if pr.get("merged") or pr.get("state") == "open":
+        return pr
+    raise ScenarioFailure(
+        f"probe PR #{number} is {pr.get('state')!r} and not merged — it was "
+        "closed out from under this wait (a concurrent harness run's sweep, "
+        "or a human). Nothing more can happen on it, so waiting longer would "
+        "only time out against whatever the pipeline was asked for"
+    )
+
+
 def find_real_dependabot_pr(prs) -> Optional[dict]:
     """The OLDEST open PR that is genuinely Dependabot's, from REST list
     shapes: dependabot/-named head, NOT the harness's own dependabot-named
