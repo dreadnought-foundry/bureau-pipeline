@@ -18,7 +18,10 @@ what the card is. So:
      Title and children are the fallback, for a card nothing has classified.
   3. Every caller is WALKED here, and the walk is DISCOVERED from the source
      rather than listed — a new caller that reads epic-ness some other way
-     fails this file rather than shipping.
+     fails this file rather than shipping. That is two walks, not one:
+     `is_epic()` itself, and `routing_verdict.route()`, which decides the same
+     thing one level removed. A caller of `route()` that passes no shape gets
+     title-and-children detection only, so it owes the same answer here.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_mid_epic.py -v
 """
@@ -212,6 +215,125 @@ class TestEveryCallerIsWalked:
         with card.patched():
             created = linear_ops.cmd_subissue("DRE-3013", "a child", "## What\n- work")
         assert created["identifier"] == "DRE-3040"
+
+
+# ===========================================================================
+# 3: the same walk, one level removed — every caller of routing_verdict.route()
+# ===========================================================================
+#
+# `route()` is where `is_epic()` is READ, so a caller that does not pass the
+# card's shape gets title-and-children detection and nothing else. That is
+# right for a card with no comments to read a stamp from and wrong for one that
+# has them — and the difference is invisible at the `is_epic` walk above,
+# because these callers never name it.
+def _route_call_sites() -> set:
+    """Every `routing_verdict.route()` call in `scripts/`, as
+    (module, enclosing function).
+
+    An attribute call on the module, plus a bare `route(` inside
+    `routing_verdict` itself. Deliberately not "any function named route" —
+    `scripts/harness/scenarios/` ships a fixture of that name that has nothing
+    to do with routing a card.
+    """
+    found: set = set()
+    for path in sorted(SCRIPTS.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for inner in ast.walk(node):
+                if not isinstance(inner, ast.Call):
+                    continue
+                func = inner.func
+                if (isinstance(func, ast.Attribute) and func.attr == "route"
+                        and isinstance(func.value, ast.Name)
+                        and func.value.id == "routing_verdict"):
+                    found.add((path.stem, node.name))
+                elif (path.stem == "routing_verdict"
+                        and isinstance(func, ast.Name) and func.id == "route"):
+                    found.add((path.stem, node.name))
+    return found
+
+
+WALKED_ROUTE = {
+    ("planning_route", "_one_off_check"),
+    ("critic_score", "observe"),
+    ("critic_score", "judgement_from_body"),
+    ("proof_and_demo", "_verdict"),
+    ("routing_verdict", "main"),
+}
+
+
+class TestEveryRouteCallerIsWalked:
+    def test_the_walk_covers_every_call_site_in_the_repo(self):
+        assert _route_call_sites() == WALKED_ROUTE, (
+            "a caller of routing_verdict.route() is not walked below — it "
+            "decides epic-ness one level removed and owes the same answer"
+        )
+
+    def test_the_audit_still_reads_a_stamped_epic_as_an_epic(self):
+        """`critic_score.observe` grades how the critic classified real cards,
+        and it already holds their comment bodies. An epic whose title says
+        nothing and whose children do not exist yet is exactly the population
+        it audits — read as a buildable card, it produces a wrong accuracy
+        number, quietly."""
+        import critic_score
+
+        card = {
+            "identifier": "DRE-3013", "title": "operator-proof the front door",
+            "description": "## Acceptance criteria\n- [ ] every path is walked\n",
+            "labels": ["agent:planner", "repo:agent-bureau"], "has_children": False,
+        }
+        seen = critic_score.observe(card, [_stamp("epic")])
+        assert seen["source"] == "epic"
+        assert seen["verdict"] is None
+
+    def test_the_audit_reads_a_stamped_one_off_as_work(self):
+        """The pairing: the stamp is what decides, not the label both cards
+        wear."""
+        import critic_score
+
+        card = {
+            "identifier": "DRE-3018", "title": PROBE_TITLE,
+            "description": PROBE_BODY, "labels": PROBE_LABELS,
+            "has_children": False,
+        }
+        seen = critic_score.observe(card, [_stamp("one-off")])
+        assert seen["source"] != "epic"
+        assert seen["verdict"] == "NEEDS WORK"
+
+    def test_a_body_scored_for_an_epic_is_scored_as_a_plan_test(self):
+        import critic_score
+
+        assert critic_score.judgement_from_body(
+            "## Acceptance criteria\n- [ ] every child ships green\n",
+            title="the front door", labels=["agent:planner"], shape="epic",
+        ) == "plan-test"
+
+    def test_a_proof_card_wearing_the_planner_label_still_gets_a_verdict(self):
+        """`proof_and_demo._verdict` reads records from `children-detail`,
+        which carry no comments — so there is no stamp to pass, and there does
+        not need to be: an epic's children are never epics. What it must not do
+        is read the label as one."""
+        import proof_and_demo
+
+        verdict, _ = proof_and_demo._verdict({
+            "identifier": "DRE-3019", "title": "PROOF: the front door holds",
+            "body": "## Acceptance criteria\n- [ ] observed in production\n",
+            "labels": ["agent:planner", "repo:agent-bureau"],
+        })
+        assert verdict in proof_and_demo.confirming_verdicts()
+
+    def test_the_classify_command_can_be_given_the_stamp(self, capsys):
+        """The CLI is a caller too, and it read `--has-children` but had no way
+        to say what the card is stamped."""
+        import json as _json
+
+        routing_verdict.main(
+            ["classify", "--title", "the front door", "--label", "agent:planner",
+             "--shape", "epic"]
+        )
+        assert _json.loads(capsys.readouterr().out)["source"] == "epic"
 
 
 class _FakeParent:
