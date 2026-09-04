@@ -62,6 +62,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "test")
 
+import check_reconcile_env as lint  # noqa: E402
 import pipeline_act  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -94,109 +95,78 @@ RUN_URL = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/3
 # --------------------------------------------------------------------------- #
 # the lint: a workflow step is a call site                                     #
 # --------------------------------------------------------------------------- #
-
-#: `VAR=` opening its own line (`export VAR=` too) — how the sweep's other
-#: steps derive a variable in shell rather than declaring it in `env:`.
-_ASSIGNMENT = re.compile(r"(?m)^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)=")
-
-#: `VAR=value python3 …` — the per-command prefix form (linear-sync's merge
-#: step and plan.yml both pass REPO/REPO_SLUG that way).
-_PREFIXED = re.compile(r"([A-Z][A-Z0-9_]*)=")
-
-
-def _invocations(run: str) -> list:
-    """Every logical line of `run` that EXECUTES reconcile.py.
-
-    Continuations folded, comments dropped: three workflows discuss the helper
-    in prose, and a lint that reads a sentence about a call site as a call site
-    reports findings nobody can fix.
-    """
-    folded = run.replace("\\\n", " ")
-    return [
-        line.strip()
-        for line in folded.splitlines()
-        if "reconcile.py" in line and not line.strip().startswith("#")
-    ]
-
-
-def call_sites(doc: dict, workflow: str) -> list:
-    """`(workflow, step, provided vars, invocations)` per reconcile.py step."""
-    out = []
-    top = set(doc.get("env") or {})
-    for job in (doc.get("jobs") or {}).values():
-        job_env = set((job or {}).get("env") or {})
-        for step in (job or {}).get("steps") or []:
-            run = step.get("run")
-            if not isinstance(run, str):
+def strip_repo_slug(doc: dict) -> dict:
+    """The incident, put back: the conflict-sweep step as it shipped before
+    this card, with REPO_SLUG removed from its env and its shell."""
+    stripped = 0
+    for job in doc["jobs"].values():
+        for step in job.get("steps") or []:
+            if step.get("name") != CONFLICT_STEP:
                 continue
-            lines = _invocations(run)
-            if not lines:
-                continue
-            provided = top | job_env | set(step.get("env") or {})
-            provided |= set(_ASSIGNMENT.findall(run))
-            for line in lines:
-                provided |= set(_PREFIXED.findall(line))
-            out.append((workflow, step.get("name") or "<unnamed>", provided, lines))
-    return out
-
-
-def shipped_call_sites() -> list:
-    out = []
-    for path in sorted(WORKFLOWS.glob("*.yml")):
-        out.extend(call_sites(yaml.safe_load(path.read_text()), path.name))
-    return out
-
-
-def missing_env(sites: list) -> dict:
-    """`{"workflow / step": [missing vars]}` — the lint's whole finding set."""
-    found = {}
-    for workflow, step, provided, _ in sites:
-        absent = [v for v in reconcile.REQUIRED_ENV if v not in provided]
-        if absent:
-            found[f"{workflow} / {step}"] = absent
-    return found
+            (step.get("env") or {}).pop("REPO_SLUG", None)
+            step["run"] = "\n".join(
+                line for line in step["run"].splitlines()
+                if not re.match(r"\s*(export\s+)?REPO_SLUG\b", line)
+            )
+            stripped += 1
+    assert stripped == 1, "the conflict-sweep step was not found"
+    return doc
 
 
 class ReconcileCallSitesDeclareTheirArguments(unittest.TestCase):
-    """The lint. A missing variable fails this build, not a live sweep."""
+    """The lint (`scripts/check_reconcile_env.py`, a named step in
+    `tests.yml`). A missing variable fails that build, not a live sweep."""
 
     def test_the_helper_declares_what_a_caller_must_pass(self):
-        """The required set is the HELPER's, so the lint cannot drift from it.
+        """The required set is the HELPER's, read out of reconcile.py, so the
+        lint cannot drift from what it checks.
 
         REPO_SLUG is the one that matters and the one that hides: REPO raises
         on absence, REPO_SLUG defaults, and a wrong default is silent.
         """
         self.assertIn("REPO_SLUG", reconcile.REQUIRED_ENV)
         self.assertIn("REPO", reconcile.REQUIRED_ENV)
+        self.assertEqual(tuple(reconcile.REQUIRED_ENV), lint.required_env())
 
     def test_every_shipped_call_site_provides_every_required_variable(self):
-        self.assertEqual({}, missing_env(shipped_call_sites()))
+        violations, stats = lint.check_dir()
+        self.assertEqual([], violations)
+        # A lint that finds no call sites passes vacuously.
+        self.assertGreaterEqual(stats["call_sites"], 4, stats)
 
     def test_the_conflict_sweep_is_one_of_the_call_sites(self):
-        """A lint that finds no call sites passes vacuously."""
-        sites = shipped_call_sites()
-        self.assertIn(CONFLICT_STEP, [step for _, step, _, _ in sites])
-        self.assertGreaterEqual(len(sites), 4, [s[:2] for s in sites])
+        self.assertIn(
+            CONFLICT_STEP,
+            [step for _, step, _, _ in lint.listing()],
+        )
 
     def test_a_call_site_that_drops_a_variable_is_a_finding(self):
-        """The incident, replayed against the lint: strip REPO_SLUG back out of
-        the shipped step and the build must go red naming it."""
-        doc = yaml.safe_load(LINEAR_SYNC.read_text())
-        stripped = 0
-        for job in doc["jobs"].values():
-            for step in job.get("steps") or []:
-                if step.get("name") != CONFLICT_STEP:
-                    continue
-                (step.get("env") or {}).pop("REPO_SLUG", None)
-                step["run"] = "\n".join(
-                    line for line in step["run"].splitlines()
-                    if not re.match(r"\s*(export\s+)?REPO_SLUG\b", line)
-                )
-                stripped += 1
-        self.assertEqual(1, stripped, "the conflict-sweep step was not found")
-        found = missing_env(call_sites(doc, "linear-sync.yml"))
-        self.assertEqual(
-            {f"linear-sync.yml / {CONFLICT_STEP}": ["REPO_SLUG"]}, found
+        """Replay the incident against the lint: the build must go red, and it
+        must name the variable, on the step that omitted it."""
+        doc = strip_repo_slug(yaml.safe_load(LINEAR_SYNC.read_text()))
+        violations = lint.check_workflow(doc, "linear-sync.yml")
+        self.assertEqual(1, len(violations), violations)
+        self.assertIn(CONFLICT_STEP, violations[0])
+        self.assertIn("REPO_SLUG", violations[0])
+
+    def test_the_lint_exits_non_zero_on_that_finding(self):
+        """Not merely a finding in a list — the CI step goes red."""
+        with tempfile.TemporaryDirectory() as td:
+            broken = Path(td) / "linear-sync.yml"
+            broken.write_text(yaml.safe_dump(
+                strip_repo_slug(yaml.safe_load(LINEAR_SYNC.read_text()))
+            ))
+            self.assertEqual(1, lint.main(["check_reconcile_env.py", td]))
+
+    def test_the_lint_runs_in_ci(self):
+        """A guard nothing runs is a guard nobody keeps."""
+        tests_yml = yaml.safe_load((WORKFLOWS / "tests.yml").read_text())
+        runs = [
+            step.get("run", "")
+            for step in tests_yml["jobs"]["unit"]["steps"]
+        ]
+        self.assertTrue(
+            any("check_reconcile_env.py" in run for run in runs), runs
         )
 
 

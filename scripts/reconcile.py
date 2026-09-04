@@ -179,9 +179,9 @@ REPO_SLUG = os.environ.get("REPO_SLUG", "atlas")
 #: then sat DIRTY with no critic and no fix loop, because a conflicted pull
 #: request emits no workflow events for anything else to notice (DRE-3042).
 #:
-#: A missing variable on a call site is a missing argument, so the call sites
-#: are checked against this tuple in CI (tests/test_linear_sync_workflow.py)
-#: rather than at 19:19 on a Thursday.
+#: A missing variable on a call site is a missing argument, so every workflow
+#: step that runs this file is checked against this tuple in CI
+#: (`scripts/check_reconcile_env.py`) rather than at 19:19 on a Thursday.
 REQUIRED_ENV = ("REPO", "REPO_SLUG", "LINEAR_API_KEY")
 
 # The stall windows come from the lane contract (DRE-2726), not from a second

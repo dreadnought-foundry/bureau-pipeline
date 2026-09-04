@@ -57,6 +57,15 @@ jobs:
       # the WIP band the fast path exists for.
       - name: WIP cap single-source check
         run: python3 scripts/check_wip_cap.py
+      # reconcile.py call sites (DRE-3042): a workflow step that runs the
+      # sweep is a call site, and the sweep takes its arguments from the
+      # environment. linear-sync's conflict sweep never set REPO_SLUG —
+      # absence there does not raise, it defaults, so the step dispatched a
+      # workflow this repo cannot dispatch and died having dispatched nothing
+      # while a conflicted PR (#244) sat unnoticed. A missing variable is a
+      # missing argument, and it belongs in this build, not in a live sweep.
+      - name: reconcile.py call sites pass their arguments
+        run: python3 scripts/check_reconcile_env.py
       # Red-main watcher coverage (DRE-2820): the repair rail watched ONE
       # workflow by name, the harness shipped as a second one, and a red main
       # was invisible for fourteen hours. The watched set is derived from the
