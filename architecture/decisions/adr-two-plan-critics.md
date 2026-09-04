@@ -40,13 +40,24 @@ because it has already been spent.
 | Reviews | A moving document | A frozen specification |
 | Question | Is this fit to take the CEO's time? | Given this is now the specification, what is missing? |
 | Cross-epic scope | This epic only | This epic plus every epic in Green Light / Todo / In Progress, named one by one |
-| A send-back means | One revision round with the planner | The epic returns to Green Light and nothing promotes |
+| A send-back means | One revision round with the planner | One revision round with the planner, then the epic returns to Green Light with a receipt saying what changed; nothing promotes (DRE-3088) |
+| At the bound (two failed rounds) | The plan proceeds to the CEO regardless, reason attached | The epic PARKS in Green Light with `needs-human` and both findings; it is never activated as it stands (DRE-3088) |
 
-**Both loops are bounded at two failed rounds.** After the second, the plan
-proceeds to the CEO regardless with the critic's stated reason attached.
-Nothing circles a third time — an unbounded loop is how 17 cards sat in a lane
-for 27 days. A round the critic passed is not a failure and a round it crashed
-on was never a decision, so neither spends the budget.
+**Both loops are bounded at two failed rounds, and what the bound does depends
+on which side of the CEO the critic sits (amended by DRE-3088, 2026-09-04).**
+Before approval, the second failed round sends the plan to the CEO regardless,
+with the critic's stated reason attached — "proceed" there costs a person a
+read. After approval, "proceed" means agents build it, so the second failed
+round **parks** the epic in Green Light with `needs-human` and both findings,
+and the sweep's own gate (`plan_critic.post_release`) reads the bound the same
+way, so no cron sweep promotes the children either. Every post-approval
+send-back first gets one re-plan with the critic's finding, so the CEO
+re-approves a revised plan, never the same one; on DRE-3060 (2026-09-04) the
+original rule sent the identical plan back three times and then activated it.
+Nothing circles a third time on either side — an unbounded loop is how 17
+cards sat in a lane for 27 days, and Green Light with the hold label is a
+watched queue, not that lane. A round the critic passed is not a failure and
+a round it crashed on was never a decision, so neither spends the budget.
 
 **The bound is scoped to one planning attempt.** An epic sent back to Triage is
 re-planned from scratch, and the new plan gets its own rounds; the plan route
