@@ -132,5 +132,14 @@ jobs:
       # A no-op is the ordinary outcome and must not read as a failure. The
       # reason is printed either way so "why did the channel not move?" is
       # answerable from the run alone.
+      #
+      # Since DRE-3076 that sentence has a third form. A harness run that died
+      # because the SANDBOX was down never judged the commit, and its stamp
+      # description leads with promote_channel.BLOCKED_MARKER; the reason then
+      # says "blocked by the sandbox, nothing proven either way, the next run
+      # re-proves" instead of "the stamp reports failure", which reads as *this
+      # commit is bad* and sends someone to a diff nobody looked at. The
+      # distinction is carried in the DESCRIPTION, which is why the status
+      # fetch above takes the whole payload rather than --jq'ing out a state.
       - name: Say what happened
         run: echo "${{ steps.decide.outputs.reason }}" >> "$GITHUB_STEP_SUMMARY"

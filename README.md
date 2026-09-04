@@ -691,6 +691,21 @@ What this channel automated is the *proof*, never the release: cutting or
 moving a `vN` tag is still **operator-only**, exactly as the promotion block
 above describes. No repo consumes a `vN` tag.
 
+**"Not proven yet" is a third answer, and the receipt says so (DRE-3076).**
+A harness run can end without judging the commit at all: on 2026-09-03 the
+SANDBOX's own reconcile sweep was rate-limited by Linear at 20:27 PT, and the
+scenario waiting on it sat until the job's three-hour ceiling — no promotion,
+50 commits behind, until an operator killed the run by hand. Each scenario wait
+now carries its own ten-minute deadline, at which it reads the sandbox's most
+recent sweep / gate / linear-sync run; a failed one ends the run inside a
+minute with that failure quoted. The stamp stays red — unproven is not proven,
+and the PR-gating check must still hold — but its description leads with
+`harness blocked:`, and `promote-channel.yml`'s receipt then reads *blocked by
+the sandbox, nothing proven either way, the next run re-proves* instead of
+*harness failed*, which would send someone looking at a diff nobody judged.
+The deadline is a liveness checkpoint, not a shorter budget: a healthy-but-slow
+critic keeps its full 70 minutes.
+
 Every consumer stub now rides `…@stable` **and** passes
 `pipeline_ref: stable`. That input is **required** since DRE-2689 — a caller
 must pass the same ref it pins in `uses:`, or it runs one ref's workflow YAML

@@ -84,6 +84,12 @@ _UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
 # whole thing invites an earlier, unrelated line.
 _TAIL_LINES = 400
 
+# The raw payload `linear_ops` appends after it has already NAMED the condition
+# (DRE-2923: the body is captured so the medic's classifier can read it). The
+# classifier reads the whole log and is untouched by this; a receipt gets the
+# sentence, not the JSON.
+_BODY_DUMP = re.compile(r"\s+[—-]\s+body:\s.*$")
+
 
 def workflow_stem(run: dict) -> str:
     """The workflow file's stem, `self-` stripped — `reconcile`, `merge-gate`."""
@@ -114,7 +120,8 @@ def error_summary(log_text: str | None) -> Optional[str]:
             fallback = fallback or line.removeprefix("##[error]")
             continue
         if any(signal.search(line) for signal in _SIGNALS):
-            return line.replace("##[error]", "")[:QUOTE_TEXT_LIMIT]
+            named = _BODY_DUMP.sub("", line.replace("##[error]", ""))
+            return named[:QUOTE_TEXT_LIMIT]
     return fallback[:QUOTE_TEXT_LIMIT] if fallback else None
 
 
@@ -137,7 +144,16 @@ def receipt_line(quote: str) -> str:
     flat = " ".join(flat.split())
     if len(flat) <= RECEIPT_LIMIT:
         return flat
-    return flat[: RECEIPT_LIMIT - 1].rstrip() + "…"
+    # Elide the MIDDLE, not the tail. Both ends are load-bearing and the middle
+    # is not: the head carries the marker the promote receipt is recognised by,
+    # and the CAUSE is at the end — a tail clamp of the 2026-09-03 quote kept
+    # "harness blocked: sandbox Reconcile (reusable) failure at 2026-09-03T20:2"
+    # and threw away "rate limited: 2500 requests/hour exhausted", which is the
+    # only part anyone reads the receipt for.
+    keep = RECEIPT_LIMIT - 1
+    head = flat[: keep // 2].rstrip()
+    tail = flat[-(keep - len(head)):].lstrip()
+    return f"{head}…{tail}"
 
 
 @dataclass
@@ -258,8 +274,14 @@ def probe(clients, repo: str, log: Callable = print) -> Callable:
                 log(f"sandbox probe: {failure.quote()}")
                 return failure.quote()
             return None
-        log("sandbox probe: no identity could read the sandbox's runs — "
-            "treating the sandbox as unknown, not dead, and waiting on")
+        # Loud on purpose (Q1/Q2 of the vendor premortem): reading Actions
+        # runs is an `actions: read` grant, which is not the checks grant the
+        # qa App is proven for. If neither installation has it the fail-fast
+        # is inert — degraded, never wrong — and the ONLY way anyone finds out
+        # is an annotation on the first run that needed it.
+        log("::warning::sandbox probe: no identity could read "
+            f"{repo}'s workflow runs — the sandbox is UNKNOWN, not dead, so "
+            "this wait runs its full budget (needs `actions: read`)")
         return None
 
     return ask

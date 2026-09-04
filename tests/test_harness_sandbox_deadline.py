@@ -216,6 +216,27 @@ class ReceiptLineTest(unittest.TestCase):
         self.assertLessEqual(len(line), sandbox_health.RECEIPT_LIMIT)
         self.assertTrue(line.startswith(promote_channel.BLOCKED_MARKER))
 
+    def test_the_clamp_keeps_the_cause_not_only_the_preamble(self):
+        """The 2026-09-03 quote, clamped. A tail clamp kept the timestamp and
+        threw away the rate limit — the only part anyone reads it for."""
+        line = sandbox_health.receipt_line(
+            f"{promote_channel.BLOCKED_MARKER} sandbox Reconcile (reusable) "
+            "failure at 2026-09-03T20:27:11Z (linear_ratelimited): reconcile: "
+            "Linear API returned 400 from https://api.linear.app/graphql: "
+            f"{RATE_LIMIT_QUOTE}"
+        )
+        self.assertLessEqual(len(line), sandbox_health.RECEIPT_LIMIT)
+        self.assertTrue(line.startswith(promote_channel.BLOCKED_MARKER))
+        self.assertIn("rate limited", line)
+
+    def test_the_raw_payload_dump_is_not_what_gets_quoted(self):
+        """`linear_ops` appends the API's body AFTER naming the condition. The
+        sentence is the receipt; the JSON is for the medic's classifier."""
+        summary = sandbox_health.error_summary(SWEEP_LOG.read_text())
+        self.assertIn(RATE_LIMIT_QUOTE, summary)
+        self.assertNotIn("body:", summary)
+        self.assertNotIn("Rate limit exceeded. Only", summary)
+
     def test_newlines_and_control_characters_cannot_ride_into_the_receipt(self):
         """A `blocked_reason=` line in $GITHUB_OUTPUT is a key=value file: a
         newline in the value is a second key, and the value is log text."""
@@ -309,6 +330,55 @@ class WaitDeadlineTest(unittest.TestCase):
         ctx, _ = self._ctx(lambda d, e: self.fail("probed"), deadline=0)
         with self.assertRaises(framework.HarnessTimeout):
             ctx.wait("a verdict", lambda: None, timeout=60.0)
+
+
+class FixtureSandboxTest(unittest.TestCase):
+    """The card's own test, end to end: a fixture sandbox whose SWEEP has
+    failed — the scenario fails within the deadline with the sweep's error
+    quoted. Everything real except GitHub: the shipped probe, the shipped
+    wait, the shipped phase runner, and the actual 2026-09-01 sweep log."""
+
+    def setUp(self):
+        self.gh = FakeSandbox(
+            [_run("reconcile.yml", "failure", name="Reconcile (reusable)")],
+            logs={91: SWEEP_LOG.read_text()},
+        )
+        self.clock = Clock()
+        self.ctx = framework.HarnessContext(
+            gh=self.gh, repo=SANDBOX, run_id="gha-1-1",
+            clock=self.clock, sleep=self.clock.sleep, log=lambda *a: None,
+            sandbox_probe=sandbox_health.probe(
+                (self.gh,), SANDBOX, log=lambda *a: None
+            ),
+        )
+
+        class WaitsForever(framework.Scenario):
+            name = "waits_forever"
+
+            def verify(inner, ctx):
+                ctx.wait("a critic verdict that will never come",
+                         lambda: None, timeout=ctx.verdict_timeout)
+
+        self.result = framework.run_scenario(WaitsForever(), self.ctx)
+
+    def test_the_scenario_fails_with_the_sweeps_own_error_quoted(self):
+        self.assertFalse(self.result.ok)
+        self.assertEqual(self.result.failed_phase, "verify")
+        self.assertIn(RATE_LIMIT_QUOTE, self.result.blocked)
+        self.assertIn("Reconcile", self.result.blocked)
+
+    def test_it_fails_inside_the_deadline_not_the_job_timeout(self):
+        self.assertLessEqual(
+            self.clock.now, framework.WAIT_DEADLINE_SECONDS + 60,
+            "the whole card: 10 minutes, not the job's 180",
+        )
+
+    def test_the_probe_reads_the_sandbox_once_not_on_every_poll(self):
+        """Twenty polls per deadline; the liveness read happens at the
+        deadline, so a healthy long wait costs a handful of calls, not a
+        thousand."""
+        self.assertEqual(self.gh.run_calls, 1)
+        self.assertEqual(self.gh.log_calls, 1)
 
 
 class EveryWaitCarriesTheDeadlineTest(unittest.TestCase):
