@@ -97,6 +97,118 @@ jobs:
       - name: Every receipt composes through the one writer
         run: python3 scripts/check_act_receipts.py
 
+  # The act registry's CONSUMER (DRE-3091). Its own job, because it is the one
+  # check here that leaves the repository: it reads the console's `ACTS` out of
+  # agent-bureau and fails when this repo declares an act the console cannot
+  # read. The console has always checked this, and only the console did — so it
+  # fired in the wrong repo, after the fact, and held every open agent-bureau
+  # PR hostage twice in twelve hours (DRE-3081 22:26 PT 2026-09-03, DRE-3090
+  # 09:13 PT 2026-09-04) until someone filed a one-line console card.
+  #
+  # WHY IT IS NOT A STEP IN `unit`: `unit` runs with no secrets and must stay
+  # that way, and this needs a token for another repository. Splitting it also
+  # keeps the no-skip assertion honest — the guard SKIPS offline (loudly, with
+  # the reason) so every other run of the suite stays green without a token,
+  # and it is this job, and only this job, where a skip is red.
+  acts-consumers:
+    name: act registry consumers
+    # Premortem Q1/Q2 (DRE-2047/2067): a dependabot-triggered pull_request runs
+    # AS dependabot[bot] and gets GitHub's SEPARATE Dependabot secrets store —
+    # for us EMPTY — so the mint below would yield nothing, the guard would
+    # skip, and the no-skip assertion would turn every dependency bump red on
+    # a question no bump can answer. The guard sits on the JOB so no step
+    # executes and the run concludes `skipped`, which the merge gate's
+    # GREEN_CONCLUSIONS admits (the harness.yml pattern).
+    if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # WHICH RUNS ACTUALLY NEED THE CONSOLE (DRE-3091 review). This job has no
+      # path filter — `on: pull_request` with no `paths:` — so without this step
+      # every pull request in this repo, whatever it changed, would put another
+      # repository's availability in front of its own merge: one transient mint
+      # or API blip turns this job red, `merge_gate.py`'s GREEN_CONCLUSIONS
+      # rejects a `failure`, and the gate waits on a question that PR never
+      # asked. That is the pattern this card exists to END (DRE-3081, DRE-3090),
+      # not to relocate from agent-bureau into here. So the CHANGED FILES
+      # decide, exactly as `steps.actsreg` decides for the critic's receipt in
+      # qa-review.yml, and the load-bearing steps below are gated on the answer.
+      # A run that leaves the registry alone skips them and concludes success.
+      #
+      # FAIL CLOSED: if the file list cannot be read the answer is "yes". A gate
+      # that fails open on an API blip is not a gate — it would let exactly the
+      # PR this exists to stop through, silently and green.
+      - name: Does this run change the act registry?
+        id: actsreg
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # PR events compare the base against the head (a three-dot compare —
+          # the merge base, so a stale base branch does not invent changes);
+          # a push to main compares the range it just pushed.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" \
+               --jq '.files[].filename' > /tmp/acts-changed.txt; then
+            if grep -qxF 'config/pipeline-acts.json' /tmp/acts-changed.txt; then
+              echo "touched=true" >> "$GITHUB_OUTPUT"
+              echo "this run changes the act registry — the console's ACTS will be read"
+            else
+              echo "the act registry is unchanged — nothing to ask the console"
+            fi
+          else
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+            echo "could not read this run's changed files — asking the console anyway"
+          fi
+      - name: Install test tooling (cached)
+        if: steps.actsreg.outputs.touched == 'true'
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+      # Scoped to the console's repository and nothing else. NOT the job's own
+      # GITHUB_TOKEN: that one is scoped to this repository, 404s on
+      # agent-bureau, and would report "unread" for a reason nobody could act
+      # on.
+      #
+      # `continue-on-error` for the same reason harness.yml:224 and this PR's
+      # qa-review.yml mint carry it — agent-bureau is another installation, and
+      # a mint that cannot happen must not be an opaque red action step. Here
+      # the run still ends red, because on a registry change the console MUST be
+      # readable; the difference is that the guard runs, skips, and `assert-ran`
+      # below names the reason a person can act on.
+      - name: Mint console token (reads agent-bureau's ACTS)
+        id: console
+        if: steps.actsreg.outputs.touched == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+          repositories: agent-bureau
+      - name: Every declared act is known to the console
+        if: steps.actsreg.outputs.touched == 'true'
+        env:
+          LINEAR_API_KEY: test-key
+          REPO: test/test
+          GH_TOKEN: test
+          BUREAU_CONSOLE_TOKEN: ${{ steps.console.outputs.token }}
+        run: |
+          python3 -m pytest tests/test_pipeline_acts_consumers.py -v -rs \
+            --junit-xml=/tmp/acts-consumers.xml
+      # The other half of "skips loudly, never passes silently": in THIS job
+      # the console must be readable, so a skipped or empty report is a build
+      # that proved nothing and is failed here rather than reported green.
+      # `always()` on purpose — a red suite must not hide a skip behind it —
+      # but still only on a run that changed the registry, or a missing report
+      # would fail every PR that correctly never wrote one.
+      - name: The guard did not skip
+        if: always() && steps.actsreg.outputs.touched == 'true'
+        run: python3 scripts/check_act_consumers.py assert-ran /tmp/acts-consumers.xml
+
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching
   # tests/ must precede the first commit changing non-test code (docs-only

@@ -50,6 +50,15 @@ of it is ever a runtime lookup.
   or has a row there, and a row must match exactly one real site (by file,
   anchor, and the workflow step when one file posts the same command from
   several) — so the block is a countable debt, not a mute button.
+  A third block, **`console`** (DRE-3091), names the file's reader in the OTHER
+  repository — agent-bureau's `console/backend/receipts.py` and its `ACTS`.
+  `python3 scripts/check_act_consumers.py check` fails when this file declares
+  an act the console does not carry, so the sequencing rule is enforced rather
+  than remembered: **a new act ships console-first**, and the pipeline PR
+  cannot merge ahead of the console one. `docs/pipeline-acts.md` is that rule
+  written down, with the two mornings that produced it. Offline the guard
+  SKIPS with the reason printed — never a silent pass — and the `act registry
+  consumers` job in `tests.yml` is where a skip is red.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.

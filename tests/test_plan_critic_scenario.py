@@ -106,7 +106,9 @@ elif cmd == "comment":
         json.dump(records, f)
     log("comment " + args[1].replace("\\n", " | "))
 elif cmd == "state":
-    log("state " + args[1])
+    log("state " + " ".join(args[1:]))
+elif cmd == "add-label":
+    log("add-label " + args[1])
 elif cmd == "children":
     print(os.environ.get("STUB_KIDS", "4"))
 elif cmd == "epics-in-flight":
@@ -309,15 +311,63 @@ class CriticWalk(unittest.TestCase):
         self.assertNotIn("promote", log)
         self.assertIn("operator step", log)
 
-    def test_two_failed_rounds_after_approval_promote_anyway(self):
+    def test_a_send_back_after_approval_asks_for_re_approval_in_progress(self):
+        """DRE-3088: the receipt names the approval move — In Progress — and
+        never Todo, where an epic dispatches nothing (DRE-2725). And it says
+        what the re-plan changed, because that is what the CEO reads before
+        approving the revised plan."""
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        out = self._outputs()
+        self.assertEqual(out["action"], "hold")
+        self.assertEqual(out["bound"], "false")
+        with open(os.path.join(self.tmp, "post-replan-summary.md"), "w") as f:
+            f.write("Added DRE-9004, the operator step for the migration.")
+        self._shell("second critic sent the plan back", BOUND="false",
+                    FINDING=out["reason"], REPLAN_OUTCOME="success")
+        receipt = self._thread()[-1]
+        self.assertIn("state Green Light", self._log())
+        self.assertNotIn("add-label", self._log(), "round 1 is a revision, not a park")
+        self.assertIn("In Progress", receipt)
+        self.assertNotIn("Todo", receipt)
+        self.assertIn("Added DRE-9004", receipt)
+        self.assertIn("no card manufactures the operator step", receipt)
+
+    def test_a_dead_re_plan_still_parks_the_epic_in_green_light(self):
+        """The lane move never depends on the re-plan finishing."""
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        self._shell("second critic sent the plan back", BOUND="false",
+                    FINDING="no card manufactures the operator step", REPLAN_OUTCOME="failure")
+        self.assertIn("state Green Light", self._log())
+        self.assertIn("did not finish", self._thread()[-1])
+
+    def test_two_failed_rounds_after_approval_park_with_needs_human(self):
+        """DRE-3088: the bound after approval PARKS. The old rail activated the
+        epic here — "two failed rounds and the work proceeds regardless" — and
+        built a plan the critic had held twice."""
         for reason in ("no card manufactures the operator step",
                        "still no card manufactures the operator step"):
             self._critic_writes("post", pc.SEND_BACK, reason)
             self._shell("second critic — decision")
         out = self._outputs()
-        self.assertEqual(out["action"], "proceed")
+        self.assertEqual(out["action"], "hold")
+        self.assertEqual(out["bound"], "true")
         self.assertIn("still no card", self._note())
         self.assertIn("two failed rounds", self._note().lower())
+        self._shell("second critic sent the plan back", BOUND="true",
+                    FINDING=out["reason"], REPLAN_OUTCOME="success")
+        log = self._log()
+        self.assertIn("state Green Light", log)
+        self.assertIn("add-label needs-human", log)
+        self.assertNotIn("promote", log)
+        self.assertNotIn("state In Progress", log)
+        receipt = self._thread()[-1]
+        self.assertIn("Held twice", receipt)
+        self.assertNotIn("Todo", receipt)
+        # ...and the sweep's gate reads the same thread the same way.
+        state, _ = pc.post_release(self._thread(), EPIC)
+        self.assertEqual(state, pc.POST_HELD)
 
     # --- 7: a re-plan is a fresh attempt ----------------------------------
 
@@ -359,6 +409,55 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(self._outputs()["action"], "proceed")
         self.assertIn("two failed rounds", self._note().lower())
 
+    # --- 7b: only the approval move activates (DRE-3100) --------------------
+
+    def test_a_planning_entry_with_children_is_a_re_plan_not_an_activation(self):
+        """DRE-3060, 2026-09-04: the CEO moved an epic with nine children
+        through Planning to say "plan this again"; the route read "not Triage,
+        and children exist" as approval, the post-approval critic held the plan
+        twice more, and the rail activated it anyway. A Planning entry is a
+        planner's verb whatever the child count."""
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "planning"},
+            STUB_KIDS="9",
+        )
+        out = self._outputs()
+        self.assertEqual(out["mode"], "plan")
+        self.assertEqual(out["kids"], "9")
+        log = self._log()
+        self.assertIn("state Planning", log, "a re-plan opens a fresh planning attempt")
+        self.assertNotIn("state In Progress", log)
+        self.assertNotIn("promote", log)
+
+    def test_a_todo_entry_with_children_does_not_activate_either(self):
+        """An epic in Todo dispatches nothing at the relay (DRE-2725); if one
+        ever reached this step it must still not be read as approved."""
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "todo"},
+            STUB_KIDS="3",
+        )
+        self.assertEqual(self._outputs()["mode"], "plan")
+
+    def test_only_the_in_progress_entry_activates(self):
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "in progress"},
+            STUB_KIDS="9",
+        )
+        self.assertEqual(self._outputs()["mode"], "activate")
+        self.assertNotIn("state Planning", self._log())
+
+    def test_an_approved_epic_that_was_never_planned_is_planned_first(self):
+        """The forgiving fallback, unchanged: In Progress with no children."""
+        self._shell(
+            "Route — plan or activate",
+            subs={"${{ github.event.client_payload.trigger_state }}": "in progress"},
+            STUB_KIDS="0",
+        )
+        self.assertEqual(self._outputs()["mode"], "plan")
+
     # --- 8: the round history is the pipeline's own ------------------------
 
     def test_a_stray_comment_cannot_forge_the_round_history(self):
@@ -394,13 +493,17 @@ class CriticWalk(unittest.TestCase):
                        "still no card manufactures the operator step"):
             self._critic_writes("post", pc.SEND_BACK, reason)
             self._shell("second critic — decision")
-        self.assertEqual(self._outputs()["action"], "proceed")
+        # The bound is reached: after approval that is a park, not a release
+        # (DRE-3088), and `bound=true` is the signal the park step reads.
+        self.assertEqual(self._outputs()["bound"], "true")
 
         self._stray_comment(pc.cycle_marker(EPIC))
         self._critic_writes("post", pc.SEND_BACK, "and still none")
         self._shell("second critic — decision")
-        self.assertEqual(self._outputs()["action"], "proceed",
+        self.assertEqual(self._outputs()["bound"], "true",
                          "a stray boundary reopened a loop the bound had closed")
+        self.assertNotEqual(self._outputs()["round"], "1",
+                            "a stray boundary handed the plan a fresh budget")
 
     # --- 8b: a record is a comment that says nothing else -------------------
 
@@ -448,12 +551,12 @@ class CriticWalk(unittest.TestCase):
                        "still no card manufactures the operator step"):
             self._critic_writes("post", pc.SEND_BACK, reason)
             self._shell("second critic — decision")
-        self.assertEqual(self._outputs()["action"], "proceed")
+        self.assertEqual(self._outputs()["bound"], "true")
 
         self._pipeline_comment(self._planner_write_up(pc.cycle_marker(EPIC)))
         self._critic_writes("post", pc.SEND_BACK, "and still none")
         self._shell("second critic — decision")
-        self.assertEqual(self._outputs()["action"], "proceed",
+        self.assertEqual(self._outputs()["bound"], "true",
                          "a quoted boundary reopened a loop the bound had closed")
 
     def test_the_run_posts_its_records_as_comments_of_their_own(self):

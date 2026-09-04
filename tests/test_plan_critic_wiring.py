@@ -120,6 +120,57 @@ class TheFirstCriticRunsBeforeTheCeo(unittest.TestCase):
         self.assertNotIn("action", gate.lower())
 
 
+POST_REPLAN = "Re-plan after the second critic sent it back"
+SENT_BACK = "Second critic sent the plan back"
+
+
+class ASendBackAfterApprovalRevisesThenParks(unittest.TestCase):
+    """DRE-3088, read off the rail. A held plan is revised once before it goes
+    back to the CEO; a plan held twice parks; and no receipt names Todo."""
+
+    def test_the_re_plan_runs_between_the_decision_and_the_park(self):
+        self.assertLess(index_of(SECOND), index_of(POST_REPLAN))
+        self.assertLess(index_of(POST_REPLAN), index_of(SENT_BACK))
+        self.assertLess(index_of(SENT_BACK), index_of(ACTIVATE))
+
+    def test_the_re_plan_is_gated_on_a_hold_and_cannot_strand_the_epic(self):
+        replan = step_named(POST_REPLAN)
+        self.assertIn("action == 'hold'", str(replan.get("if")))
+        self.assertIn("mode == 'activate'", str(replan.get("if")))
+        self.assertTrue(replan.get("continue-on-error"),
+                        "a re-plan that dies must not stop the Green Light move")
+        self.assertIn("RE-plan", str(replan["with"]["prompt"]))
+        self.assertIn("post1.outputs.reason", str(replan["with"]["prompt"]))
+
+    def test_the_park_reads_the_bound_and_stamps_needs_human(self):
+        run = str(step_named(SENT_BACK).get("run") or "")
+        self.assertIn('"$BOUND" = "true"', run)
+        self.assertIn("add-label", run)
+        self.assertIn("needs-human", run)
+        self.assertIn("Green Light", run)
+
+    def test_no_receipt_on_the_activate_route_names_todo(self):
+        for fragment in (SENT_BACK,):
+            run = str(step_named(fragment).get("run") or "")
+            self.assertIn("In Progress", run)
+            self.assertNotIn("Todo", run)
+
+    def test_the_activate_step_is_reached_only_on_proceed(self):
+        self.assertIn("action == 'proceed'", str(step_named(ACTIVATE).get("if")))
+
+    def test_the_approval_lane_is_a_live_lane_of_the_contract(self):
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import lane_contract  # noqa: E402
+        self.assertIn(pc.APPROVAL_LANE, lane_contract.lane_names())
+        self.assertNotEqual(pc.APPROVAL_LANE, "Todo")
+
+    def test_the_standard_says_the_post_bound_parks(self):
+        text = open(os.path.join(ROOT, "standards", "plan-critic.md")).read()
+        self.assertIn("two failed rounds", text.lower())
+        self.assertIn("needs-human", text)
+        self.assertIn("never Todo", text)
+
+
 class TheSecondCriticRunsAfterApproval(unittest.TestCase):
     def test_it_runs_on_the_activate_route(self):
         self.assertIn("mode == 'activate'", str(step_named(SECOND).get("if")))

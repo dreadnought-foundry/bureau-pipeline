@@ -215,6 +215,32 @@ class TheBound(unittest.TestCase):
         self.assertIn("the migration card has no operator step", note)
         self.assertIn("two failed rounds", note.lower())
 
+    def test_the_post_stage_parks_at_the_bound_instead_of_building(self):
+        """DRE-3088: after approval, "proceed" means agents build it. A plan the
+        second critic held twice is the specification that would make them
+        build the wrong thing, so the bound HOLDS on this side of the CEO —
+        the workflow parks the epic with needs-human and both findings."""
+        action, note = pc.decide(
+            pc.SEND_BACK, prior_send_backs=1,
+            reason="still no card manufactures the operator step",
+            stage=pc.STAGE_POST,
+        )
+        self.assertEqual(action, "hold")
+        self.assertIn("two failed rounds", note.lower())
+        self.assertIn("needs-human", note)
+        self.assertIn("still no card manufactures the operator step", note)
+
+    def test_the_post_stage_first_send_back_still_holds_for_a_revision(self):
+        action, note = pc.decide(pc.SEND_BACK, prior_send_backs=0, stage=pc.STAGE_POST)
+        self.assertEqual(action, "hold")
+        self.assertIn("round 1", note.lower())
+
+    def test_at_bound_is_only_a_real_send_back_on_the_last_round(self):
+        self.assertTrue(pc.at_bound("hold", 1, pc.SEND_BACK))
+        self.assertFalse(pc.at_bound("hold", 0, pc.SEND_BACK), "round 1 is not the bound")
+        self.assertFalse(pc.at_bound("proceed", 1, pc.PASS), "a pass never reaches the bound")
+        self.assertFalse(pc.at_bound("proceed", 5, pc.NO_RESULT), "a crash never reaches the bound")
+
     def test_a_plan_can_never_circle_a_third_time(self):
         for prior in (2, 3, 17):
             action, _ = pc.decide(pc.SEND_BACK, prior_send_backs=prior)
@@ -1030,18 +1056,37 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
             self._cycle(pc.marker(pc.STAGE_POST, 1, pc.NO_RESULT)), self.EPIC)
         self.assertEqual(state, pc.POST_RELEASED)
 
-    def test_the_bound_still_releases_after_two_failed_rounds(self):
-        """`two failed rounds at either critic and the plan proceeds
-        regardless` — the gate must not turn the bound into an unbounded hold,
-        which is the 27-day failure the bound exists to stop."""
+    def test_the_bound_parks_after_two_failed_rounds(self):
+        """DRE-3088: two failed rounds at the second critic and the plan is
+        HELD, not released — the workflow parks the epic with needs-human, and
+        this gate must agree with `decide` about the same marker, or a cron
+        sweep would promote the children of an epic the route just parked
+        (the two-promoters incident of 2026-09-03). Both findings travel with
+        it, because the person settling it needs to see what was said twice."""
         state, detail = pc.post_release(
             self._cycle(
                 pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "first gap"),
                 pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "second gap"),
             ),
             self.EPIC)
-        self.assertEqual(state, pc.POST_RELEASED)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertIn("two failed rounds", detail.lower())
+        self.assertIn("first gap", detail)
         self.assertIn("second gap", detail)
+        self.assertIn("needs-human", detail)
+
+    def test_decide_and_the_gate_agree_at_the_bound(self):
+        """The one property the incident was about: whatever `decide` says on
+        the last round, the sweep's gate says too."""
+        action, _ = pc.decide(pc.SEND_BACK, prior_send_backs=1,
+                              reason="second gap", stage=pc.STAGE_POST)
+        state, _ = pc.post_release(
+            self._cycle(
+                pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "first gap"),
+                pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "second gap"),
+            ),
+            self.EPIC)
+        self.assertEqual((action, state), ("hold", pc.POST_HELD))
 
     def test_the_newest_round_is_the_one_that_counts(self):
         """A send-back the CEO settled, then a pass: the plan is released."""
@@ -1110,6 +1155,30 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
         self.assertIsNotNone(refusal)
         self.assertIn("DRE-9003 migrates a table but no card runs it", refusal)
         self.assertIn(self.EPIC, refusal.splitlines()[0])
+
+    def test_every_refusal_names_the_approval_lane_and_never_todo(self):
+        """DRE-3088: an epic in Todo dispatches nothing (DRE-2725). Both
+        refusals used to tell the CEO to "move the epic to Todo again", which
+        is the one instruction that strands it forever."""
+        missing = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED, self._cycle())
+        held = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
+        for refusal in (missing, held):
+            self.assertIn(pc.APPROVAL_LANE, refusal)
+            self.assertNotIn("Todo", refusal)
+        self.assertEqual(pc.APPROVAL_LANE, "In Progress")
+
+    def test_the_bound_refusal_says_parked_not_released(self):
+        parked = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "first gap"),
+                        pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "second gap")))
+        self.assertIsNotNone(parked, "a plan held twice must still refuse promotion")
+        self.assertIn("first gap", parked)
+        self.assertIn("second gap", parked)
+        self.assertNotIn("regardless", parked)
 
     def test_the_two_refusals_carry_DIFFERENT_tags(self):
         """The sweep posts a refusal at most once per tag, so "nobody has read

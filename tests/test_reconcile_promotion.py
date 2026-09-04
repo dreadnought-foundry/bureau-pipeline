@@ -434,9 +434,11 @@ class TestAFailHoldsWithTheCriticsReason:
         assert board.promote() == 0
         assert self.REASON in board.comments_on(WORK[0])[0]
 
-    def test_the_bound_still_releases_after_two_failed_rounds(self):
-        """Two failed rounds and the plan proceeds regardless — the gate must
-        not turn DRE-2721's bound into an unbounded hold."""
+    def test_the_bound_parks_after_two_failed_rounds(self):
+        """DRE-3088: two failed rounds at the second critic and the children
+        stay put — the workflow parks the epic in Green Light with
+        needs-human, and this gate must agree with it, or a cron sweep would
+        promote the children of an epic the route just parked."""
         board = _Board(
             *_work_in_backlog(), green_light=APPROVED,
             epic_thread=_epic_thread(
@@ -446,7 +448,10 @@ class TestAFailHoldsWithTheCriticsReason:
                                    plan_critic.SEND_BACK, self.REASON),
             ),
         )
-        assert board.promote() == 2
+        assert board.promote() == 0
+        posted = board.comments_on(WORK[0])
+        assert self.REASON in posted[0]
+        assert "first gap" in posted[0]
 
 
 class TestTheFleetDoesNotFreezeOnTheDayThisMerges:

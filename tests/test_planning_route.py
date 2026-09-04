@@ -661,6 +661,14 @@ class TestPlanYmlBranchesThreeWays:
         assert "trigger_state" in route
         assert "mode=activate" in route and "mode=plan" in route
 
+    def test_only_the_approval_move_activates(self):
+        """DRE-3100: the activate branch reads the lane the card ENTERED and
+        activates on In Progress alone. "Not Triage, and children exist" let a
+        Planning entry activate DRE-3060 twice on 2026-09-04."""
+        route = _step("Route — plan or activate")["run"]
+        assert '"$FROM" = "in progress"' in route
+        assert '"$FROM" != "triage"' not in route
+
 
 # ===========================================================================
 # 7: the one-off's verdict is READ FROM THE CARD, never defaulted (DRE-3038)

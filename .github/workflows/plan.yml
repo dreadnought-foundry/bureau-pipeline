@@ -61,6 +61,15 @@ jobs:
     #                                  ───────
     #                                  25.7 min
     #
+    # The activate route is shorter but, since DRE-3088, also two agents:
+    #
+    #   second critic 40 turns × 7 s = 4.7 min
+    #   re-plan       60 turns × 7 s = 7.0 min   (only on a send-back)
+    #
+    # The ceiling below is sized by the wiring test as if EVERY agent step in
+    # this file ran in one job — a conservative proxy no single route reaches
+    # — so it rose 55 → 65 when the post-approval re-plan was added.
+    #
     # at the 7 s/turn upper end measured on completed runs, plus roughly 8
     # minutes the turn arithmetic does not model: token minting, two
     # checkouts, card validation, model selection (three probes), context
@@ -93,7 +102,7 @@ jobs:
     # sums every budget in the file, and raising the ceiling is cheaper than
     # teaching a safety margin to reason about branches. Still well inside the
     # 120-minute Planning stall window, which the same test checks.
-    timeout-minutes: 55
+    timeout-minutes: 65
     # Read by the `publish` job below (DRE-2720): the plan artifact is
     # rendered and published from a SEPARATE job so the document portal never
     # enters the planner agent's workspace.
@@ -334,12 +343,21 @@ jobs:
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
       # The EPIC route, unchanged (DRE-2844 gates it, it does not rewrite it).
-      # The CEO's two verbs: Triage = "planner, deal with this" (plan, or
-      # RE-plan if children exist); Todo = "approved — build" (activate; or
-      # plan first if the epic was never planned, as a forgiving fallback).
-      # The shape says WHICH route a card takes; it never says whether an
-      # approved epic activates — that is still the CEO's move and this step's
-      # question.
+      # The CEO's two verbs: Planning or Triage = "planner, deal with this"
+      # (plan, or RE-plan if children exist); In Progress = "approved — build"
+      # (activate; or plan first if the epic was never planned, as a forgiving
+      # fallback). The shape says WHICH route a card takes; it never says
+      # whether an approved epic activates — that is still the CEO's move and
+      # this step's question.
+      #
+      # ONLY the In Progress entry activates (DRE-3100). Until 2026-09-04 the
+      # test was "not Triage, and children exist", so an epic the CEO moved
+      # through Planning to say "plan this again" was read as approved: the
+      # post-approval critic ran, sent DRE-3060's plan back for the second and
+      # third time, and the rail activated it anyway (twice, 09:48 and 09:54
+      # PT). The relay sends the lane the card ENTERED, lower-cased, and the
+      # approval move is In Progress (DRE-2725) — so that is the one word this
+      # step reads as approval.
       - name: Route — plan or activate
         id: route
         if: steps.gate.outputs.bounced != 'true' && steps.shape.outputs.route == 'epic'
@@ -353,7 +371,7 @@ jobs:
           FROM="${{ github.event.client_payload.trigger_state }}"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC")
           echo "kids=$KIDS" >> "$GITHUB_OUTPUT"
-          if [ "$FROM" != "triage" ] && [ "$KIDS" -gt 0 ]; then
+          if [ "$FROM" = "in progress" ] && [ "$KIDS" -gt 0 ]; then
             # DRE-2721: the activate route now only ROUTES. The state change,
             # the announcement and the promotion moved to "Activate the
             # approved epic" below, because the second critic runs between the
@@ -1439,26 +1457,126 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
 
-      # Held: the epic goes back to the CEO's queue with the finding, and the
-      # children do NOT promote. Green Light is where a plan waits on a human
-      # judgement (config/lane-contract.json) — the CEO re-approves by moving
-      # it to Todo again, which starts round 2 against the markers this run
-      # just wrote.
-      - name: Second critic sent the plan back
+      # Held: the plan gets ONE revision with the critic's finding before it
+      # goes back to the CEO (DRE-3088). Until this step existed, a send-back
+      # parked the identical plan in Green Light, the CEO's only move was to
+      # approve it again, and the same critic met the same gap — "planning does
+      # the same review and it doesn't change anything" (DRE-3060, 2026-09-04).
+      # Same shape as the pre-approval `Re-plan after send-back`: the planner
+      # in RE-plan mode, editing the existing children in place. It runs on
+      # every hold, round 1 and round 2 alike, so an epic already one round in
+      # still comes back revised. There is no plan-artifact.md in this mode —
+      # the artifact job only runs on the plan route — so the revision lives in
+      # the cards, and the summary file below is what the CEO reads.
+      #
+      # `continue-on-error`: the Green Light move below must never depend on
+      # this agent finishing. A re-plan that dies at its turn cap leaves the
+      # epic parked with the finding, not stranded In Progress with a
+      # SEND_BACK marker and no lane move.
+      - name: Re-plan after the second critic sent it back
+        id: postreplan
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          claude_args: |
+            --max-turns 60
+            --model ${{ steps.model.outputs.model }}
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+          prompt: |
+            Read .bureau-pipeline/agent-context.md FIRST — note that it is now
+            the CRITIC's context; re-read briefs/planner.md and
+            standards/card-quality.md yourself before you change anything.
+
+            You are the PLANNER, in RE-plan mode. The CEO approved epic
+            ${{ github.event.client_payload.identifier }} and the SECOND critic —
+            the one that reads an approved plan as the specification agents
+            will build from — SENT IT BACK. Its finding:
+
+            ${{ steps.post1.outputs.reason }}
+
+            Fix exactly that. Read the existing children first:
+              python3 .bureau-pipeline/scripts/linear_ops.py children-json "${{ github.event.client_payload.identifier }}"
+            Update the existing sub-issues in place (`linear_ops.py`
+            set-description) and create only the cards that are genuinely
+            missing — do NOT duplicate cards, and do not delete work the critic
+            did not object to. Every card you create or change must meet
+            standards/card-quality.md.
+
+            Then WRITE a plain-English summary of what changed — which cards
+            were added, which were rewritten and why, in business terms, no
+            file paths — to ${{ runner.temp }}/post-replan-summary.md. The CEO
+            reads that file before approving the revised plan; write it for them.
+
+      # The mechanical findings, re-run against the revision, so the next
+      # round's critic — and the CEO — read checks against the plan as it now
+      # stands. Best-effort for the same reason as the re-plan: the park below
+      # must happen whatever these steps do.
+      - name: Mechanical findings — the revised plan (after approval)
+        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        continue-on-error: true
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
-          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
+          NOTE="${{ runner.temp }}/plan-mechanical.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" \
+            | python3 .bureau-pipeline/scripts/plan_critic.py mechanical \
+                --surfaces-dir console/design/images/screens \
+                --note-file "$NOTE"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "🛑 The post-approval review found a gap, so nothing has started building. Move this epic to Todo again once it is settled — the review runs once more and then the work proceeds either way."
+            "$(cat "$NOTE")"
+
+      # Held: the epic goes back to the CEO's queue with the finding and the
+      # revision, and the children do NOT promote. Green Light is where a plan
+      # waits on a human judgement (config/lane-contract.json). The CEO
+      # re-approves by moving it to In Progress again — NEVER Todo, where an
+      # epic dispatches nothing (DRE-2725) — which starts the next round
+      # against the markers this run just wrote.
+      #
+      # At the BOUND (`bound=true`: two failed rounds since approval) the epic
+      # parks with `needs-human` instead. It is never activated as it stands:
+      # on this side of the CEO "proceed" means agents build it, and a plan the
+      # critic held twice is the specification that makes them build the wrong
+      # thing. The sweep's gate (`plan_critic.post_release`) reads the bound the
+      # same way, so no cron sweep promotes the children either (DRE-3088).
+      - name: Second critic sent the plan back
+        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BOUND: ${{ steps.post1.outputs.bound }}
+          FINDING: ${{ steps.post1.outputs.reason }}
+          REPLAN_OUTCOME: ${{ steps.postreplan.outcome }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
+          if [ -s "$SUMMARY" ]; then
+            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+          elif [ "$REPLAN_OUTCOME" = "success" ]; then
+            CHANGED="The re-plan ran but wrote no summary — read the children before approving."
+          else
+            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+          fi
+          if [ "$BOUND" = "true" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "🛑 Held twice since approval — parked for you with needs-human; nothing is building and nothing will until a person settles it. The critic's finding this round: ${FINDING}. ${CHANGED} When it is settled, clear needs-human and approve it again by moving the epic to In Progress, or route it through Planning for a fresh plan."
+          else
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "🛑 The post-approval review found a gap, so nothing has started building. The critic's finding: ${FINDING}. ${CHANGED} Read the revised plan, then approve it again by moving the epic to In Progress — the review runs once more; a plan sent back twice parks for you rather than being built as it stands."
+          fi
 
       # Proceeding: the state change, the announcement and the event-driven
-      # promotion that used to live in the route step. Reached on a PASS, on a
-      # critic that produced no result (a crash is not a rejection), and on the
-      # second failed round — where the reason travels with it rather than the
-      # plan circling.
+      # promotion that used to live in the route step. Reached on a PASS and on
+      # a critic that produced no result (a crash is not a rejection) — never on
+      # a held plan: the bound parks above (DRE-3088).
       - name: Activate the approved epic
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'proceed'
         env:
