@@ -17,6 +17,17 @@ is the floor. Every rule here exists because its violation shipped a bug.
   `.bureau-pipeline/scripts/check_tdd_commits.py`). Exit 1 means reorder now.
   The same check runs in CI as `TDD commit discipline`, where the only remedy
   left is a human rewriting your branch — this is the last moment it is free.
+- **The rule as it is ENFORCED, in one sentence.** That script is the rule and
+  this is its restatement: *at least one commit touching `tests/` must appear
+  **STRICTLY BEFORE** the first commit that changes non-test code.* One RED
+  commit before the FIRST implementation commit — **not one before every
+  implementation commit**. Docs-only and ops-only branches are exempt, and so
+  is a `.py` change that is docstrings alone. **Reviewers: hold a branch to
+  that rule and no other.** "A RED test immediately before each implementation
+  commit" is a stricter standard nothing enforces, and blocking on it rejects a
+  compliant branch — it cost agent-bureau #2247 ~22 hours, a fix-loop attempt
+  and an operator decision (DRE-3005). Whether to tighten what is enforced is
+  an operator/standards call; until it is made, the enforced rule is the rule.
 - **Scope = exactly the card.** No drive-by refactors, no scope creep. If the
   card is wrong or ambiguous, STOP and write the blocker — a wrong guess costs a
   full review cycle.
