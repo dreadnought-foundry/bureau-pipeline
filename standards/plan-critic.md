@@ -20,6 +20,25 @@ Does every card carry observable acceptance criteria, a repo, a size? Do the
 cards sum to the epic? Is anything plainly ambiguous? Do two cards touch the
 same file?
 
+**"Observable" is not enough on its own — ask WHEN it becomes observable.** A
+criterion whose verb is *observed*, *watched* or *seen in production*, or that
+names a run id, a deploy, a live account or a tag move that does not exist yet,
+can only be met after the change is merged — and a criterion that requires the
+merge **cannot gate the merge**. That is a card defect readable here, so send it
+back to be written as two cards: the build card keeps what a reviewer can check
+against the diff, and the observation becomes a follow-up carrying `needs-human`
+and `no-code`, blocked by the build card
+(`standards/card-quality.md`). The same question applies on the one-off route
+below, which reads cards through this same standard.
+
+DRE-3075 was filed with two such criteria and every agent downstream then
+behaved correctly: the build agent met the one provable criterion and said "not
+provable before merge" for the rest, the critic blocked on unmet criteria, the
+fix agent had no code to change and burned four dispatches establishing that,
+and PR #252 sat `CONFLICTING` for eleven hours until an operator decision moved
+it. Nobody was wrong; the card was, and the cost landed on the human. Caught
+here it costs one send-back.
+
 It protects attention, and **it cannot do more than that, because intent is not
 settled yet.** It does not redesign the plan, rank the work, or judge whether
 the epic is worth doing — that is the CEO's call, and the plan exists to let
