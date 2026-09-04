@@ -685,8 +685,16 @@ def foreign_harness_refs(gh, repo: str, namespace: str, log=print) -> list:
     with an empty list: an unnameable run is reported as unnameable, never
     guessed at (`standards/console-honesty.md` rule 1 — unknown is shown as
     unknown).
+
+    That includes an unreadable NAMESPACE: this runs while an exception is
+    already being raised, and a second one thrown from the report would
+    replace the failure a reader actually needs with a naming problem.
     """
-    ns = validate_namespace(namespace)
+    try:
+        ns = validate_namespace(namespace)
+    except ValueError as e:
+        log(f"wipe report: cannot scope the report ({e})")
+        return []
     refs = []
     for prefix in HARNESS_BRANCH_PREFIXES:
         try:
