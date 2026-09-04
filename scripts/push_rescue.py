@@ -19,10 +19,12 @@ So the step that pushes mints a FRESH token first (the workflow's own
 
   1. RE-POINT GIT, NOT ONLY `gh`. The header `actions/checkout` left behind is
      what `git push` authenticates with, and `http.extraheader` is
-     MULTI-VALUED — git sends every value it finds, so a fresh header appended
-     beside the dead one sends two Authorization headers and GitHub refuses the
-     pair. The stale value is unset first, and the re-point happens BEFORE any
-     credentialed read (`git ls-remote` is one).
+     MULTI-VALUED: git sends every value it finds, and `git config <key>
+     <value>` REFUSES a key that already holds more than one ("error: cannot
+     overwrite multiple values with a single value", exit 5), leaving every
+     dead header in place. So the stale values are unset first — that is what
+     makes the re-point unconditional rather than best-effort — and it happens
+     BEFORE any credentialed read (`git ls-remote` is one).
   2. PUSH what GitHub does not have.
   3. OPEN THE PR if the card has none — the incident's other half is a branch
      that landed and a `gh pr create` that died.
@@ -152,11 +154,23 @@ def basic_auth_header(token: str) -> str:
 def repoint_git_credential(token: str, *, run, workdir: str = ".") -> None:
     """Point git at `token`, having removed whatever was there.
 
-    `--unset-all` first is the load-bearing half. `http.extraheader` is
-    multi-valued: `git config <key> <value>` on a key that already has a value
-    ADDS a second one, git sends both, and GitHub answers 401 to the pair. The
-    unset is allowed to fail — an unset of a key that is not set exits 5, which
-    is the normal case on a runner that never checked out over HTTPS.
+    `--unset-all` first is the load-bearing half, and not for the reason it
+    looks like. `http.extraheader` is multi-valued, and `git config <key>
+    <value>` REFUSES to write a key that already holds more than one value:
+
+        error: cannot overwrite multiple values with a single value
+               Use a regexp, --add or --replace-all …
+
+    exit 5, both dead headers still in place. `actions/checkout` leaves more
+    than one whenever it configures submodules or a second remote, so on
+    exactly those repositories the re-point would fail and the rescue would
+    push with the corpse. Unsetting first makes it unconditional. (And git
+    sends EVERY value it finds, so `--add`-ing a live header beside a dead one
+    would send two Authorization headers rather than fixing anything.)
+
+    The unset itself is allowed to fail: unsetting a key that is not set exits
+    5 too, and that is the normal case on a runner that never checked out over
+    HTTPS.
     """
     run(["git", "-C", workdir, "config", "--local", "--unset-all",
          GITHUB_EXTRAHEADER])

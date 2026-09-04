@@ -16,9 +16,10 @@ push. Four things close it, and each one is pinned below:
   1. RE-MINT BEFORE THE PUSH — a step after the agent mints a fresh token from
      the same App and delivers what the agent could not (`push_rescue.py`).
   2. GIT GETS THE FRESH TOKEN, NOT ONLY `gh` — the checkout's extraheader is
-     re-pointed, and the stale value is UNSET first: `http.extraheader` is
-     multi-valued and git sends every value it finds, so a fresh header
-     appended beside the dead one sends two Authorization headers.
+     re-pointed, and the stale values are UNSET first: `http.extraheader` is
+     multi-valued and `git config <key> <value>` refuses to overwrite a key
+     holding more than one, so on a repo where checkout left two the re-point
+     would fail outright and the push would use the corpse.
   3. A LOUD FLOOR — at 50 minutes with nothing pushed the card says so
      (`credential_clock.py`), and the brief tells the agent to push a WIP
      branch, so an expiry costs a rebase rather than a rebuild.
@@ -178,9 +179,11 @@ class GitGetsTheFreshToken(unittest.TestCase):
         self.assertIn(f"AUTHORIZATION: basic {expected}", sets[0])
 
     def test_the_stale_header_is_unset_before_the_fresh_one_is_written(self):
-        # http.extraheader is MULTI-valued: git sends every value it finds, so
-        # a fresh header appended beside the dead one is two Authorization
-        # headers and GitHub refuses the pair. Order is the whole fix.
+        # http.extraheader is MULTI-valued, and `git config <key> <value>`
+        # refuses a key that already holds more than one ("cannot overwrite
+        # multiple values with a single value", exit 5). Unsetting first is
+        # what makes the re-point unconditional; the scenario suite drives the
+        # two-value repository that proves it.
         fake = FakeGit()
         _rescue(fake)
         unset = next(

@@ -47,8 +47,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import push_rescue  # noqa: E402
+
+import test_platform_fault_scenario as platform_fault  # noqa: E402
 
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-task.yml"
 
@@ -167,7 +170,7 @@ sys.exit(0)
 class Fixture:
     """A sandbox that is a real repository with a real remote."""
 
-    def __init__(self, td: str, *, token: str, open_prs=()):
+    def __init__(self, td: str, *, token: str, open_prs=(), stale_headers: int = 1):
         self.root = Path(td)
         self.token = token
         self.bare = self.root / "remote.git"
@@ -194,7 +197,12 @@ class Fixture:
         self._git("update-ref", "refs/remotes/origin/main", "HEAD")
 
         # The credential actions/checkout leaves behind: the job-start token.
-        self._git("config", "--local", EXTRAHEADER, _header(STALE_TOKEN))
+        # `stale_headers=2` is the repository checkout produces when it also
+        # configures submodules — the state where a naive `git config <key>
+        # <value>` re-point fails outright rather than replacing anything.
+        for n in range(stale_headers):
+            self._git("config", "--local", "--add", EXTRAHEADER,
+                      _header(f"{STALE_TOKEN}-{n}" if n else STALE_TOKEN))
 
         self.bin.mkdir()
         _executable(self.bin / "git", GIT_SHIM)
@@ -359,6 +367,112 @@ class TheNegativeControl(unittest.TestCase):
         # A red step here summons the medic to re-run a run that already did
         # the work — the DRE-1921 shape.
         self.assertEqual(self.proc.returncode, 0, self.proc.stderr)
+
+
+class TwoStaleHeadersAreStillReplaced(unittest.TestCase):
+    """`http.extraheader` is multi-valued and `actions/checkout` leaves more
+    than one on a repository with submodules. `git config <key> <value>` then
+    answers *cannot overwrite multiple values with a single value* (exit 5)
+    and changes nothing — so a re-point that did not unset first would fail on
+    exactly those repositories, quietly, and push with the corpse."""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
+        self.fx = Fixture(self.td.name, token=FRESH_TOKEN, stale_headers=2)
+        self.fx.park_the_stop_notes(self.addCleanup)
+        self.sha = self.fx.agent_finished_its_work()
+        self.proc = self.fx.run_the_rescue_step()
+
+    def test_the_fixture_really_seeds_two_and_a_naive_write_fails_on_it(self):
+        # Guards the fixture itself, twice over: a seeding that silently
+        # collapsed to one value would make the assertions below pass for the
+        # wrong reason, and a git that quietly replaced a multi-valued key
+        # would mean this scenario tests nothing at all.
+        with tempfile.TemporaryDirectory() as td:
+            untouched = Fixture(td, token=FRESH_TOKEN, stale_headers=2)
+            self.assertEqual(len(_header_values(untouched.work)), 2)
+            naive = subprocess.run(
+                [shutil.which("git"), "-C", str(untouched.work), "config",
+                 "--local", EXTRAHEADER, _header(FRESH_TOKEN)],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(naive.returncode, 0, naive.stdout)
+            self.assertIn("multiple values", naive.stderr)
+            self.assertEqual(len(_header_values(untouched.work)), 2)
+
+    def test_the_branch_still_reaches_github(self):
+        self.assertEqual(self.fx.remote_sha(), self.sha, self.proc.stderr)
+
+    def test_exactly_one_credential_is_left_behind(self):
+        self.assertEqual(_header_values(self.fx.work), [_header(FRESH_TOKEN)])
+
+
+def _header_values(work) -> list:
+    out = subprocess.run(
+        [shutil.which("git"), "-C", str(work), "config", "--get-all",
+         EXTRAHEADER],
+        capture_output=True, text=True,
+    ).stdout.splitlines()
+    return [v.strip() for v in out]
+
+
+class TheReportStepSaysCredentialNotDied(unittest.TestCase):
+    """The medic's half, driven through the REAL Report block.
+
+    `tests/test_credential_expiry.py` proves the classifier and the requeue
+    note in isolation, and the wiring at the source. Neither of them RUNS the
+    shell, and the shell is where the three facts have to meet: what the Push
+    rescue step observed, which class the classifier names, and which flag
+    reaches `dead_run.py decide`. So this reuses the DRE-2931 fixture — the
+    real `check_agent_result.py` and `dead_run.py`, only the Linear seam and
+    the PR lookup stubbed — and drives the run the incident actually produced:
+    an agent that finished cleanly (no is_error), no PR, and its work sitting
+    on the runner.
+    """
+
+    FINISHED_BUT_UNPUSHED = {
+        "type": "result", "subtype": "success", "is_error": False,
+        "num_turns": 88, "total_cost_usd": 20.4, "duration_ms": 4_200_000,
+        "result": "The work is finished and green, and this run could not open "
+                  "the pull request: its GitHub credential expired.",
+    }
+
+    def report(self, *, local_work="true", prior="0"):
+        with tempfile.TemporaryDirectory() as td:
+            return platform_fault.run_report(
+                td,
+                execution=self.FINISHED_BUT_UNPUSHED,
+                claude_outcome="success",
+                local_work=local_work,
+            )
+
+    def test_the_receipt_names_the_credential_and_never_says_died(self):
+        proc, journal = self.report()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        body = platform_fault.comments(journal)[0]
+        self.assertIn("credential", body.lower())
+        self.assertNotIn("died", body.lower())
+        self.assertNotIn("no PR and no blocker note", body)
+
+    def test_it_records_no_model_as_having_failed(self):
+        _, journal = self.report()
+        body = platform_fault.comments(journal)[0]
+        self.assertNotIn("model-error:", body)
+        self.assertNotIn("claude-opus-5", body)
+
+    def test_it_still_requeues_the_card(self):
+        _, journal = self.report()
+        self.assertEqual(
+            [e["args"][1] for e in platform_fault.ops(journal, "state")], ["Todo"]
+        )
+
+    def test_the_same_run_without_local_work_reads_as_a_silent_death(self):
+        # The control: local_work is the ONLY new input, so if this said
+        # "credential" too the assertions above would prove nothing.
+        _, journal = self.report(local_work="false")
+        body = platform_fault.comments(journal)[0]
+        self.assertIn("no PR and no blocker note", body)
 
 
 class TheHappyPathIsUntouched(unittest.TestCase):

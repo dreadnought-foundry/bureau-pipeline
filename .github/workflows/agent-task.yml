@@ -502,8 +502,9 @@ jobs:
 
       # Deliver what the agent could not. push_rescue.py re-points GIT's
       # credential — not only `gh`'s — at the fresh token (unsetting the stale
-      # extraheader first: http.extraheader is multi-valued, so appending a
-      # second Authorization header makes GitHub refuse the pair), pushes the
+      # extraheader first: http.extraheader is multi-valued and `git config`
+      # REFUSES to overwrite a key holding more than one value, which is what
+      # actions/checkout leaves behind on a repo with submodules), pushes the
       # card's branch if GitHub does not have it, and opens the PR if the card
       # has none. A STRICT no-op when the agent pushed its own work, and it
       # never fails the job: a red step here summons the medic to re-run a run
