@@ -133,6 +133,62 @@ def test_an_absent_window_never_crashes_the_sweep(raw):
 
 
 # --------------------------------------------------------------------------
+# 2b: the wire — env in, module constant out
+# --------------------------------------------------------------------------
+# Everything above tests the resolver, and everything below patches the module
+# constant. Neither proves the ONE thing the workflow actually does: set an
+# environment variable and start the process. A fresh interpreter is the only
+# honest way to assert an import-time constant, so the wire gets its own test
+# rather than being assumed by the two halves that surround it.
+_PROBE = (
+    "import json, reconcile, groomer;"
+    "print(json.dumps({'hold': reconcile.INTAKE_HOLD,"
+    " 'groomer_hold': groomer.INTAKE_HOLD,"
+    " 'window': reconcile.INTAKE_MAX_AGE_MINUTES,"
+    " 'cap': reconcile.INTAKE_ESCALATION_CAP}))"
+)
+
+
+def _probe(**env) -> dict:
+    import json
+    import subprocess
+
+    child = dict(os.environ)
+    child.update({"LINEAR_API_KEY": "test-key", "REPO": "test/test",
+                  "REPO_SLUG": "test", "GH_TOKEN": "test"})
+    for name in ("INTAKE_HOLD", "INTAKE_MAX_AGE_MINUTES", "INTAKE_ESCALATION_CAP"):
+        child.pop(name, None)
+    child.update(env)
+    out = subprocess.run(  # nosec B603 — fixed argv, no shell
+        [sys.executable, "-c", _PROBE], cwd=str(ROOT / "scripts"),
+        env=child, capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
+
+
+def test_the_environment_the_workflow_sets_reaches_the_constants_the_code_reads():
+    got = _probe(INTAKE_HOLD=HOLD_SINCE, INTAKE_MAX_AGE_MINUTES="20160",
+                 INTAKE_ESCALATION_CAP="1")
+    assert got["hold"] == HOLD_SINCE
+    assert got["groomer_hold"] == HOLD_SINCE, (
+        "the drain read a different switch from the sweep — a pen with a hole"
+    )
+    assert got["window"] == 20160
+    assert got["cap"] == 1
+
+
+def test_an_absent_input_leaves_the_code_default_in_force():
+    """The card's own criterion. An unset workflow input is the EMPTY STRING,
+    not an absent variable, so both spellings are asserted."""
+    for env in ({}, {"INTAKE_HOLD": "", "INTAKE_MAX_AGE_MINUTES": "",
+                     "INTAKE_ESCALATION_CAP": ""}):
+        got = _probe(**env)
+        assert got["hold"] is None, f"the pen closed itself on {env!r}"
+        assert got["groomer_hold"] is None
+        assert got["window"] == lane_contract.stale_minutes()["Intake"]
+        assert got["cap"] == intake_controls.DEFAULT_CAP
+
+
+# --------------------------------------------------------------------------
 # 3: the sweep's age-out honours the hold
 # --------------------------------------------------------------------------
 def test_a_held_intake_moves_no_card(monkeypatch):
@@ -156,6 +212,16 @@ def test_a_held_intake_says_so_once_per_pass(monkeypatch, capsys):
     assert HOLD_SINCE in lines[0]
     assert "4 cards waiting" in lines[0]
     assert "4 past the window" in lines[0]
+
+
+def test_a_bare_switch_holds_the_sweep_just_as_hard(monkeypatch):
+    """`hold()` returns `""` for a dated-less switch, and `""` is FALSY. A
+    reader written as `if INTAKE_HOLD:` would open the pen for exactly the
+    operator who typed `true` — the check is against None and this pins it."""
+    monkeypatch.setattr(reconcile, "INTAKE_HOLD", "")
+    escalated, _comment, advanced = _run(_aged_batch(2))
+    assert escalated == set()
+    assert not advanced.called
 
 
 def test_clearing_the_hold_resumes_the_age_out(monkeypatch):
@@ -231,6 +297,15 @@ def test_a_held_drain_moves_nothing_even_with_a_valid_approval(monkeypatch):
     )
 
 
+def test_a_bare_switch_holds_the_drain_just_as_hard(monkeypatch):
+    monkeypatch.setattr(groomer, "INTAKE_HOLD", "")
+    proposal = _proposal()
+    ops = FakeOps(comments=[_approval(proposal)])
+    with pytest.raises(groomer.IntakeHeld):
+        groomer.drain(ops, proposal, card=PROPOSAL_CARD)
+    assert ops.state_writes == []
+
+
 def test_clearing_the_hold_lets_the_approved_batch_drain(monkeypatch):
     monkeypatch.setattr(groomer, "INTAKE_HOLD", None)
     proposal = _proposal()
@@ -244,10 +319,13 @@ def test_a_held_drain_exits_refused_rather_than_silently_doing_nothing(monkeypat
     pen must report as refused, not as a successful run that moved zero cards."""
     monkeypatch.setattr(groomer, "INTAKE_HOLD", HOLD_SINCE)
     proposal = _proposal()
+    ops = FakeOps(comments=[_approval(proposal)])
     monkeypatch.setattr(groomer, "_build", lambda args: proposal)
-    monkeypatch.setattr(groomer.linear_ops, "comment_records",
-                        lambda identifier: [_approval(proposal)])
+    # The whole write layer is the fake, so a regression that walks past the
+    # hold fails as an assertion here rather than as a live Linear call.
+    monkeypatch.setattr(groomer, "linear_ops", ops)
     assert groomer.main(["drain", "--card", PROPOSAL_CARD]) == 2
+    assert ops.state_writes == []
 
 
 # --------------------------------------------------------------------------
