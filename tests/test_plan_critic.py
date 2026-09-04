@@ -1204,6 +1204,45 @@ def _probe(card: str) -> dict:
         return next(p for p in json.load(f)["probes"] if p["card"] == card)
 
 
+class _Lops:
+    """Every Linear seam the classifier and the escalation touch, and nothing
+    else — the same stand-in shape as tests/test_planning_classify.py."""
+
+    def __init__(self, probe: dict, bodies=()):
+        self.probe = probe
+        self.bodies = list(bodies)
+        self.comments: list[str] = []
+        self.labels: list[str] = []
+        self.states: list[str] = []
+
+    def gql(self, query, variables=None):  # critic_score.read_card
+        return {
+            "issue": {
+                "identifier": self.probe["card"],
+                "title": self.probe["title"],
+                "description": self.probe["body"],
+                "labels": {"nodes": [{"name": n} for n in self.probe["labels"]]},
+                "children": {"nodes": []},
+            }
+        }
+
+    def comment_bodies(self, identifier):
+        return list(self.bodies)
+
+    def count_comments(self, identifier, needle, **kwargs):
+        return sum(1 for body in self.bodies if needle in body)
+
+    def cmd_comment(self, identifier, body, *flags):
+        self.comments.append(body)
+        self.bodies.append(body)
+
+    def add_label(self, identifier, label):
+        self.labels.append(label)
+
+    def cmd_state(self, identifier, lane, *flags):
+        self.states.append(lane)
+
+
 class TheOneOffCriticIsTheExistingCritic(unittest.TestCase):
     """`It is the existing critic, not a third one. Same brief, same ladder,
     same verdict marker; the epic route and the one-off route share it.`"""
@@ -1407,12 +1446,32 @@ class TheTwoProbeBodiesRunTheRoute(unittest.TestCase):
         self.assertEqual(reason, rows[0]["reason"])
 
     def test_fd_6_is_stamped_one_off_and_the_critic_still_stops_it(self):
-        """AC2. The classifier is allowed to be wrong — that is the whole
-        premise. A fixture classifier stamps DRE-3020 `one-off`, the shape
-        reads back as `one-off`, and the critic is what sends it to the CEO."""
-        stamp = self._stamp(why="it reads as one small change to one file")
-        self.assertEqual("one-off", self.shape.shape_on([stamp]))
+        """AC2, end to end and with NO HAND STAMP anywhere in it.
 
+        A fixture classifier reads DRE-3020 — the FD-6 probe, a pure business
+        decision — and gets it wrong, stamping `one-off`. That is the premise,
+        not a contrivance: the classifier is one model call, and on the night
+        of 2026-09-03 exactly this card was stamped and routed FLEET. The
+        critic is what stands between it and the build queue, and the card
+        ends where FD-6 says it must — in the CEO's decision queue, with a
+        question a non-technical reader can answer.
+        """
+        import planning_classify
+        import planning_escalation
+
+        lops = _Lops(_probe(FD6))
+        decision = planning_classify.run(
+            lops, FD6, model="claude-fable-5-1",
+            call=lambda _model, _prompt: json.dumps({
+                "shape": "one-off", "decision": False, "tells": [1, 2],
+                "why": "it reads as one small change to one repository",
+            }))
+        self.assertFalse(decision.escalates)
+        self.assertEqual("one-off", self.shape.shape_on(lops.comment_bodies(FD6)))
+        self.assertEqual((self.shape.BY_PLANNER, "claude-fable-5-1"),
+                         self.shape.stamped_by(lops.comment_bodies(FD6)))
+
+        # ...and now the critic, which is the only reader left.
         action, note = pc.one_off_decide(
             pc.SEND_BACK,
             "this card is a commercial trade — public reach against protecting "
@@ -1421,16 +1480,19 @@ class TheTwoProbeBodiesRunTheRoute(unittest.TestCase):
         self.assertIn("commercial trade", note)
 
         text = pc.one_off_escalation(pc.SEND_BACK, note)
-        import planning_escalation
-
         self.assertIsNone(planning_escalation.refusal(text), text)
         self.assertTrue(text.rstrip().endswith("?"))
 
+        planning_escalation.escalate(lops, FD6, text)
+        self.assertEqual(["Green Light"], lops.states)
+        self.assertTrue(any("commercial trade" in body for body in lops.comments))
+
     def test_fd_6_never_reaches_the_build_queue_on_the_critics_say_so(self):
         """The card the critic stopped must not also be stamped a verdict and
-        landed in the build queue — the escalation exit stamps nothing."""
+        landed in the build queue — the escalation exit stamps nothing, and the
+        run's move step is gated on `proceed`."""
         action, _ = pc.one_off_decide(pc.SEND_BACK, "it is a decision, not work")
-        self.assertNotEqual("proceed", action)
+        self.assertNotEqual(pc.PROCEED, action)
 
 
 class TheLaneContractNamesTheCritic(unittest.TestCase):
