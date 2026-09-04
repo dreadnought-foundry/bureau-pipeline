@@ -68,6 +68,9 @@ EXPECTED_STUBS = {
     # DRE-2683. Manual dispatch only, by decision D5 — the trigger shape is
     # asserted in tests/test_groomer_wiring.py, which fails if a cron appears.
     "self-groomer.yml": ("groomer.yml", "Groomer"),
+    # DRE-3016. Manual dispatch only, following the same D5 reasoning — the
+    # trigger shape is asserted in tests/test_planner_score.py.
+    "self-planner-replay.yml": ("planner-replay.yml", "Planner Replay"),
     # verify.yml deliberately has NO stub: its scope gate targets UI cards
     # (**Design:** lines) / multi-system app diffs, and bureau-pipeline has no
     # runnable app surface to verify behaviorally.

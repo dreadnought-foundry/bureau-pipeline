@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -436,18 +437,34 @@ class RoutingTest(unittest.TestCase):
 
 
 class ApprovalTest(unittest.TestCase):
-    def test_a_plan_the_critic_held_disagrees(self):
+    def test_a_plan_the_critic_sent_back_disagrees(self):
+        import plan_critic
+
         result = planner_score.score(
-            epic(comments=(planner_score.PLAN_HOLD_MARKER + " the plan is wrong",)),
+            epic(comments=(plan_critic.marker(
+                "pre", 1, plan_critic.SEND_BACK, "two cards own one file"),)),
             [child("DRE-1")], doc=reference(),
         )
         row = [r for r in result["rows"] if r["dimension"] == "approval"][0]
         self.assertEqual(row["outcome"], "disagree")
         self.assertEqual(row["observed"], "revised")
 
+    def test_a_critic_round_that_passed_is_not_read_as_a_send_back(self):
+        """The mutation: the same shape of marker, the other result. Matching
+        the prefix rather than the result would book every planned epic as
+        revised."""
+        import plan_critic
+
+        result = planner_score.score(
+            epic(comments=(plan_critic.marker("pre", 1, plan_critic.PASS),)),
+            [child("DRE-1")], doc=reference(),
+        )
+        row = [r for r in result["rows"] if r["dimension"] == "approval"][0]
+        self.assertEqual(row["outcome"], "agree")
+
     def test_an_amended_epic_disagrees(self):
         result = planner_score.score(
-            epic(comments=(f"🧭 {planner_score.AMENDMENT_TAG}: the plan no longer "
+            epic(comments=(f"🔁 {planner_score.AMENDMENT_TAG}: the plan no longer "
                            "describes the work",)),
             [child("DRE-1")], doc=reference(),
         )
@@ -492,8 +509,8 @@ class ReportTest(unittest.TestCase):
         )
         report = planner_score.render_report(result, doc=doc)
         agreement, _, rest = report.partition("## Disagreement")
-        self.assertIn("DRE-9", rest)
-        self.assertNotIn("| DRE-9 ", agreement)
+        self.assertIn("| DRE-9 | `file-footprint` |", rest)
+        self.assertNotIn("`file-footprint`", agreement)
 
 
 # --------------------------------------------------------------------------
@@ -607,6 +624,102 @@ class LeakTest(unittest.TestCase):
         result = planner_score.score(epic(), [child("DRE-1")], doc=doc,
                                      replay=replay)
         self.assertEqual(result["replay"]["leaks"], [])
+
+
+# --------------------------------------------------------------------------
+# collecting the history — an unreadable repo is never a clean sheet
+# --------------------------------------------------------------------------
+class FakeLinear:
+    """Records every call. `collect` READS; it writes nothing anywhere."""
+
+    def __init__(self, children):
+        self.children = children
+        self.writes: list = []
+
+    def gql(self, _query, variables):
+        return {"issue": {
+            "identifier": variables["id"], "title": "[EPIC] a thing",
+            "description": "Do the thing.",
+            "children": {"nodes": self.children},
+        }}
+
+    @staticmethod
+    def child_detail_records(nodes):
+        import linear_ops
+
+        return linear_ops.child_detail_records(nodes)
+
+    @staticmethod
+    def comment_bodies(_identifier):
+        return []
+
+    def cmd_comment(self, *a):  # pragma: no cover - must not run
+        self.writes.append(a)
+
+    def cmd_state(self, *a):  # pragma: no cover - must not run
+        self.writes.append(a)
+
+
+class CollectTest(unittest.TestCase):
+    NODES = [{
+        "identifier": "DRE-1", "title": "a card", "createdAt": "2026-01-01",
+        "description": "**Files:** a.py",
+        "labels": {"nodes": [{"name": "repo:agent-bureau"}]},
+        "inverseRelations": {"nodes": []},
+    }]
+
+    def test_a_repo_this_token_cannot_see_is_unknown_never_a_clean_sheet(self):
+        """The DRE-2034 class, one seam over and measured on this run:
+        `gh pr list --repo <invisible> --search head:agent/DRE-N` exits 0 and
+        prints `[]`. Nothing failed, so `card_pr`'s rc guard never fires, and
+        every child of an unreadable repo would score a perfect footprint on a
+        file list nobody ever read."""
+        lops = FakeLinear(self.NODES)
+        history = planner_score.collect(
+            "DRE-1000", lops=lops,
+            finder=lambda *a, **k: None,          # what gh really returns
+            readable=lambda _repo: False,
+        )
+        self.assertIsNone(history["children"][0]["pr"])
+        self.assertIn("cannot read", history["children"][0]["pr_unreadable"])
+
+        result = planner_score.score(history["epic"], history["children"],
+                                     doc=reference())
+        row = [r for r in result["rows"] if r["dimension"] == "file-footprint"][0]
+        self.assertEqual(row["outcome"], "unknown")
+        self.assertEqual(result["counts"]["agree"], 0)
+
+    def test_a_readable_repo_is_looked_up_and_scored(self):
+        """The other half of the mutation: with the same fake PR, a repo the
+        token CAN see produces a real row rather than an unknown."""
+        lops = FakeLinear(self.NODES)
+        history = planner_score.collect(
+            "DRE-1000", lops=lops,
+            finder=lambda *a, **k: {"number": 3, "state": "MERGED",
+                                    "files": [{"path": "a.py"}]},
+            readable=lambda _repo: True,
+        )
+        result = planner_score.score(history["epic"], history["children"],
+                                     doc=reference())
+        row = [r for r in result["rows"] if r["dimension"] == "file-footprint"][0]
+        self.assertEqual(row["outcome"], "agree")
+
+    def test_the_repo_is_probed_once_per_repo_not_once_per_card(self):
+        nodes = [dict(self.NODES[0], identifier=f"DRE-{n}") for n in (1, 2, 3)]
+        probes: list = []
+        planner_score.collect(
+            "DRE-1000", lops=FakeLinear(nodes),
+            finder=lambda *a, **k: None,
+            readable=lambda repo: probes.append(repo) or True,
+        )
+        self.assertEqual(probes, ["dreadnought-foundry/agent-bureau"])
+
+    def test_collect_writes_nothing_to_linear(self):
+        lops = FakeLinear(self.NODES)
+        planner_score.collect("DRE-1000", lops=lops,
+                              finder=lambda *a, **k: None,
+                              readable=lambda _repo: True)
+        self.assertEqual(lops.writes, [])
 
 
 # --------------------------------------------------------------------------
@@ -735,8 +848,11 @@ class WorkflowWiringTest(unittest.TestCase):
         body = (self.workflows / "planner-replay.yml").read_text(encoding="utf-8")
         self.assertIn(planner_score.REPLAY_REPO, body)
         for slug in validate_card.VALID_SLUGS - {planner_score.REPLAY_REPO}:
-            self.assertNotIn(
-                f"repo:{slug}", body,
+            # \b-anchored: `repo:agent-bureau-demo` is not a mention of
+            # `agent-bureau`, the same substring trap DRE-2025 fixed for card
+            # identifiers in head refs.
+            self.assertIsNone(
+                re.search(rf"repo:{re.escape(slug)}\b(?!-)", body),
                 f"the replay workflow names {slug} — it may only file cards in "
                 f"{planner_score.REPLAY_REPO}",
             )

@@ -1,0 +1,41 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo.
+# @main on purpose: this repo is the canary channel; the fleet rides tags.
+#
+# workflow_dispatch AND NOTHING ELSE (DRE-3016, following the groomer's D5): a
+# replay spends a full planner run and files a card, so it runs when someone
+# asks for it. tests/test_planner_score.py fails the build if a cron appears.
+#
+# `contents: read` and nothing more: the harness reads Linear and GitHub and
+# writes to no repository at all.
+name: Planner Replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: score (read-only) or replay (also files the throwaway epic)
+        type: choice
+        options: [score, replay]
+        default: score
+      epic:
+        description: the already-planned epic to score, or to replay
+        type: string
+        required: true
+      replay_number:
+        description: the <n> in the throwaway epic's PROOF-PL-<n> title
+        type: string
+        default: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/planner-replay.yml@main
+    with:
+      pipeline_ref: main
+      mode: ${{ inputs.mode }}
+      epic: ${{ inputs.epic }}
+      replay_number: ${{ inputs.replay_number }}
+    secrets: inherit

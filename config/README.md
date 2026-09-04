@@ -42,6 +42,16 @@ of it is ever a runtime lookup.
 - **`critic-audit-dre2649.json`** — the held-back review the critic is scored
   against (DRE-2685), transcribed once with a quote per judgement.
   `docs/critic-score-dre2649.md` records the run.
+- **`planner-audit.json`** — the dimensions the PLANNER is scored on (DRE-3016),
+  read by `scripts/planner_score.py`. It carries no judgement rows and that is
+  the difference from the file above: the planner's held-out answer is
+  **history** — the merged PR's file list, the turn-cap receipts, the readiness
+  guard's returns, the escalations, the plan critic's send-backs — read live on
+  every run rather than transcribed. One dimension, `proof-and-demo`, is
+  excluded as contaminated because `plan.yml` runs `scripts/proof_and_demo.py`
+  and the planner cannot leave the workflow without the answer; the exclusion
+  names that gate in `enforced_by` and `planner_score.py check` fails if the
+  workflow stops running it. `docs/planner-audit.md` records the first run.
 
 ---
 

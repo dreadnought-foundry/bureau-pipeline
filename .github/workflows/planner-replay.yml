@@ -1,0 +1,134 @@
+# The planner replay harness (DRE-3016): freeze an already-planned epic at its
+# PRE-PLAN text, file it as a throwaway epic in the demo repo, and let the
+# normal plan rail plan it. The historical plan and what its children actually
+# did are the held-out answer — "a review it has never seen", for the planner.
+#
+# WHAT THIS WORKFLOW MAY DO, AND THE LIST IS SHORT:
+#   * read an epic and its children out of Linear;
+#   * file ONE throwaway epic, `PROOF-PL-<n>`, labelled repo:agent-bureau-demo;
+#   * score a plan against history and print the report.
+# It writes to no product repo, checks out no product repo, and holds
+# `contents: read` and nothing else. `scripts/planner_score.py replay-card`
+# refuses the card BEFORE it is created if the repo label is anything but the
+# demo repo or the title is not a throwaway — the cheapest place to stop a card
+# being filed in the wrong repo is before it exists.
+#
+# ON DEMAND, NEVER ON A SCHEDULE. Same decision as the groomer's D5 (DRE-2683):
+# a replay spends a full planner run and files a card, so it runs when someone
+# asks for it. tests/test_planner_score.py fails the build if a cron appears.
+#
+# Reusable workflow: permissions live in the calling stub.
+name: Planner Replay (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: >-
+          bureau-pipeline ref for the INTERNAL checkout (scripts). REQUIRED
+          since DRE-2689: a caller must pass the same ref it pins in `uses:`,
+          or it runs channel workflow YAML over another ref's scripts.
+        type: string
+        required: true
+      mode:
+        description: >-
+          `score` reads an epic and prints the audit — it writes nothing.
+          `replay` additionally FILES the throwaway epic in the demo repo.
+          The default is the read-only one.
+        type: string
+        required: false
+        default: score
+      epic:
+        description: the already-planned epic to score, or to replay
+        type: string
+        required: true
+      replay_number:
+        description: the <n> in the throwaway epic's PROOF-PL-<n> title
+        type: string
+        required: false
+        default: "1"
+    secrets:
+      LINEAR_API_KEY:
+        required: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: planner-replay-${{ inputs.epic }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      # The reference validates itself before anything reads a card: the
+      # excluded dimension must still name a gate plan.yml really runs, or the
+      # exclusion is keeping a real result out of the number.
+      - name: Check the audit reference
+        run: python3 .bureau-pipeline/scripts/planner_score.py check
+
+      - name: Score the plan against what its children did
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          REPO: ${{ github.repository }}
+          EPIC: ${{ inputs.epic }}
+        run: |
+          set -euo pipefail
+          # Every input through env, never interpolated into the shell line.
+          python3 .bureau-pipeline/scripts/planner_score.py collect \
+            --epic "$EPIC" > history.json
+          python3 .bureau-pipeline/scripts/planner_score.py score \
+            --epic "$EPIC" --out score.json --report score.md < history.json
+          {
+            echo "### Planner audit — $EPIC"
+            echo
+            cat score.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The throwaway epic. `replay-card` freezes the source epic at its
+      # pre-plan text (the planner's own growth record is stripped — handing it
+      # back is handing back a piece of the plan) and REFUSES the card unless it
+      # is labelled repo:agent-bureau-demo under a PROOF-PL- title.
+      - name: File the throwaway replay epic
+        if: inputs.mode == 'replay'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          REPO: ${{ github.repository }}
+          EPIC: ${{ inputs.epic }}
+          N: ${{ inputs.replay_number }}
+        run: |
+          set -euo pipefail
+          python3 .bureau-pipeline/scripts/linear_ops.py description "$EPIC" \
+            > source-epic.md
+          python3 .bureau-pipeline/scripts/planner_score.py replay-card \
+            --epic "$EPIC" --n "$N" \
+            --body-file source-epic.md \
+            --out replay-card.json --body-out replay-body.md
+          TITLE=$(python3 -c 'import json; print(json.load(open("replay-card.json"))["title"])')
+          # The labels are read back out of the GUARDED card rather than
+          # written here, so exactly one place decides which repo a replay can
+          # be filed in — and `replay-card` has already refused any other.
+          mapfile -t LABEL_FLAGS < <(python3 -c 'import json; [print("--label\n" + n) for n in json.load(open("replay-card.json"))["labels"]]')
+          python3 .bureau-pipeline/scripts/linear_ops.py oneoff \
+            "$TITLE" replay-body.md "${LABEL_FLAGS[@]}"
+
+      # The leak check. If the historical plan reached the planner's context,
+      # the replay is DISCARDED and the leak recorded — a replay that saw the
+      # answer cannot be salvaged by scoring it more carefully.
+      - name: Discard the replay if the historical plan leaked
+        if: inputs.mode == 'replay'
+        env:
+          EPIC: ${{ inputs.epic }}
+        run: |
+          set -euo pipefail
+          if [ -f historical-plan.md ] && [ -f replay-body.md ]; then
+            python3 .bureau-pipeline/scripts/planner_score.py leak-check \
+              --epic "$EPIC" --plan historical-plan.md \
+              --context replay-body.md --record leak.md
+          fi
