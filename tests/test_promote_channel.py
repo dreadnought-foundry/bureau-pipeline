@@ -61,12 +61,15 @@ def _status(state, context=CONTEXT):
 
 
 def _decide(combined=None, *, hold=None, ancestry="ahead"):
+    # `[:2]` because the decision grew a third member in DRE-3070 (the
+    # machine-readable outcome the staleness alarm counts); these tests are
+    # about the first two.
     return promote_channel.evaluate(
         _combined(_status("success")) if combined is None else combined,
         SHA,
         hold=hold,
         ancestry=ancestry,
-    )
+    )[:2]
 
 
 class EvaluateTest(unittest.TestCase):
@@ -146,6 +149,81 @@ class EvaluateTest(unittest.TestCase):
         self.assertTrue(ok)
 
 
+class SkipReceiptTest(unittest.TestCase):
+    """DRE-3070. A no-op promotion is ordinary — but "nothing happened" and
+    "the run proving this commit was killed by the next merge" are different
+    facts, and on 2026-09-03 the channel reported neither. The receipt names
+    which of THREE things happened, machine-readably, so the staleness alarm
+    can count merge trains instead of saying `unknown`."""
+
+    def _decide(self, conclusion, combined=None, **kw):
+        return promote_channel.evaluate(
+            _combined(_status("success")) if combined is None else combined,
+            SHA, ancestry="ahead", conclusion=conclusion, **kw
+        )
+
+    def test_a_cancelled_run_is_named_as_a_newer_push_not_a_failure(self):
+        d = self._decide("cancelled")
+        self.assertFalse(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_CANCELLED)
+        self.assertIn("cancelled", d.reason.lower())
+        self.assertIn("newer", d.reason.lower())
+        self.assertNotIn("failed", d.reason.lower())
+
+    def test_a_failed_run_is_named_as_a_failure_not_a_merge_train(self):
+        d = self._decide("failure")
+        self.assertFalse(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_FAILED)
+        self.assertIn("fail", d.reason.lower())
+
+    def test_a_timed_out_run_is_a_failure_not_a_merge_train(self):
+        """Anything that is neither green nor cancelled is the failure arm —
+        a run that died is never reported as a queue effect."""
+        self.assertEqual(self._decide("timed_out").outcome,
+                         promote_channel.OUTCOME_FAILED)
+
+    def test_a_green_run_says_it_is_promoting(self):
+        d = self._decide("success")
+        self.assertTrue(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_PROMOTING)
+        self.assertIn("promoting", d.reason.lower())
+
+    def test_the_three_reasons_are_distinct(self):
+        outcomes = {self._decide(c).outcome
+                    for c in ("cancelled", "failure", "success")}
+        self.assertEqual(len(outcomes), 3)
+
+    def test_a_cancelled_run_is_never_promoted_even_with_a_green_stamp(self):
+        """The stamp on a cancelled run's sha can only be an older run's. Fail
+        closed: the conclusion is read before the status."""
+        self.assertFalse(self._decide("cancelled").promote)
+
+    def test_the_hold_still_outranks_everything(self):
+        """Order is unchanged (promote_channel's own rule): a deliberately
+        paused channel reads as paused, never as a merge train."""
+        d = self._decide("cancelled", hold="who=Ada paused for the rehearsal")
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_HELD)
+
+    def test_an_unstated_conclusion_still_falls_through_to_the_stamp(self):
+        """Back-compat: the stamp remains the authority when nobody says what
+        the run concluded."""
+        d = promote_channel.evaluate(
+            _combined(_status("success")), SHA, ancestry="ahead"
+        )
+        self.assertTrue(d.promote)
+
+    def test_a_refusal_on_the_stamp_is_still_named(self):
+        d = self._decide("success", _combined())
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_UNPROVEN)
+
+    def test_a_channel_already_there_is_named_not_confused_with_a_skip(self):
+        d = promote_channel.evaluate(
+            _combined(_status("success")), SHA,
+            ancestry="identical", conclusion="success",
+        )
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_NOT_AHEAD)
+
+
 class WorkflowWiringTest(unittest.TestCase):
     def setUp(self):
         self.wf = yaml.safe_load(WORKFLOW.read_text())
@@ -174,6 +252,25 @@ class WorkflowWiringTest(unittest.TestCase):
         for step in move:
             self.assertNotIn("secrets.GITHUB_TOKEN", step)
             self.assertNotIn("github.token", step)
+
+    def test_a_skipped_promotion_still_runs_and_leaves_a_receipt(self):
+        """DRE-3070: the job used to require a GREEN harness run, so the whole
+        merge-train case — every displaced run on the incident evening —
+        produced no promote-channel run at all and therefore no record. A
+        channel that goes quiet must say which of the three things happened."""
+        condition = str(self.wf["jobs"]["promote"].get("if", ""))
+        self.assertIn("head_branch", condition,
+                      "only main is a promotion candidate")
+        self.assertNotIn(
+            "conclusion == 'success'", condition,
+            "a non-green harness run must still reach the decision, or a "
+            "skipped promotion leaves no receipt naming why",
+        )
+
+    def test_the_harness_conclusion_reaches_the_decision(self):
+        text = WORKFLOW.read_text()
+        self.assertIn("--conclusion", text)
+        self.assertIn("workflow_run.conclusion", text)
 
     def test_release_gate_actually_matches_the_channel_ref(self):
         """`tags: ["v*"]` does not match `stable`. Without this the gate is
