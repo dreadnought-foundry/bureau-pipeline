@@ -137,6 +137,96 @@ class StalenessTest(unittest.TestCase):
         self.assertEqual(channel_watch.QUIET_BACKSTOP_HOURS, 14 * DAY)
 
 
+class MergeTrainDiagnosisTest(unittest.TestCase):
+    """DRE-3070. The alarm already fires on "not moving" — which a merge train
+    is — but it fired saying the cause was unreadable: *"promotion has stopped
+    happening, or every run since has refused. The Promote Channel run log says
+    which."* On 2026-09-03 the run log said neither, because a displaced
+    harness run produced no promote-channel run at all.
+
+    So the alarm now reads the cancelled-by-push count and NAMES the merge
+    train. The title must not move with it — one condition, one card."""
+
+    def _stale(self, **kw):
+        return _watch(commits_ahead=50, channel_age_hours=4 * DAY, **kw)
+
+    def test_a_stale_channel_with_cancelled_runs_says_merge_train(self):
+        v = self._stale(cancelled_harness_runs=13)
+        self.assertTrue(v.alarm)
+        self.assertEqual(v.state, channel_watch.STALE)
+        self.assertIn("merge train", v.headline.lower())
+        self.assertIn("13", v.headline + v.detail)
+
+    def test_it_says_merge_train_rather_than_unknown(self):
+        v = self._stale(cancelled_harness_runs=13)
+        self.assertNotIn("the Promote Channel run log says which", v.detail)
+
+    def test_without_cancellations_the_cause_is_still_reported_as_unknown(self):
+        """The honest answer when nothing was displaced — never a guess."""
+        v = self._stale(cancelled_harness_runs=0)
+        self.assertNotIn("merge train", v.headline.lower())
+        self.assertIn("run log", v.detail)
+
+    def test_an_unread_count_is_not_a_merge_train(self):
+        """An API blip must not be rendered as a diagnosis."""
+        for absent in (None,):
+            v = self._stale(cancelled_harness_runs=absent)
+            self.assertNotIn("merge train", v.headline.lower())
+
+    def test_one_skipped_head_is_the_queue_working_not_a_train(self):
+        """The queue-behind rule drops intermediate heads BY DESIGN, so a
+        single cancellation is the mechanism working and must not be alarmed
+        on as its own diagnosis."""
+        v = self._stale(cancelled_harness_runs=1)
+        self.assertNotIn("merge train", v.headline.lower())
+
+    def test_the_threshold_is_the_stated_one(self):
+        self.assertEqual(channel_watch.MERGE_TRAIN_CANCELLATIONS, 2)
+        v = self._stale(
+            cancelled_harness_runs=channel_watch.MERGE_TRAIN_CANCELLATIONS
+        )
+        self.assertIn("merge train", v.headline.lower())
+
+    def test_the_card_title_does_not_move_with_the_diagnosis(self):
+        """Dedup is by exact title — a diagnosis in the title would mint a
+        second card the first busy night."""
+        self.assertEqual(self._stale(cancelled_harness_runs=13).title,
+                         self._stale(cancelled_harness_runs=0).title)
+
+    def test_cancellations_alone_are_not_an_alarm(self):
+        """A healthy channel that skipped a head or two is silent: the train
+        is a CAUSE the stale alarm reports, never a condition of its own."""
+        v = _watch(commits_ahead=2, channel_age_hours=1.0,
+                   cancelled_harness_runs=13)
+        self.assertFalse(v.alarm)
+
+    def test_a_held_channel_is_still_held_not_a_merge_train(self):
+        v = self._stale(hold="who=Ada since=2026-09-01 rehearsal",
+                        cancelled_harness_runs=13)
+        self.assertEqual(v.state, channel_watch.HELD)
+
+    def test_a_train_with_a_run_in_flight_says_main_is_proving(self):
+        """The card's own words: "merge train, main proving" rather than
+        "quiet". A channel with a run working on it right now needs no action;
+        a channel with nothing proving it might."""
+        v = self._stale(cancelled_harness_runs=13, harness_in_flight=True)
+        self.assertIn("proving main", v.headline.lower())
+
+    def test_a_train_with_nothing_running_says_nothing_is_proving_main(self):
+        v = self._stale(cancelled_harness_runs=13, harness_in_flight=False)
+        self.assertIn("nothing is proving main", v.headline.lower())
+
+    def test_an_unread_in_flight_state_says_neither(self):
+        v = self._stale(cancelled_harness_runs=13, harness_in_flight=None)
+        self.assertNotIn("proving main", v.headline.lower())
+
+    def test_in_flight_alone_never_speaks(self):
+        """Without a train there is nothing to qualify — a healthy channel
+        does not narrate its own harness."""
+        v = self._stale(cancelled_harness_runs=0, harness_in_flight=True)
+        self.assertNotIn("proving main", v.headline.lower())
+
+
 class HeldChannelTest(unittest.TestCase):
     """2. Held is a state, not a breakage — and it does not go quiet."""
 
@@ -346,6 +436,16 @@ class WorkflowWiringTest(unittest.TestCase):
         self.assertIn("find-open", self.text)
         self.assertIn("linear_ops.py create", self.text)
         self.assertIn("linear_ops.py comment", self.text)
+
+    def test_it_counts_the_harness_runs_a_merge_train_cancelled(self):
+        """DRE-3070: the reader behind the merge-train diagnosis. Counted from
+        the harness's own run records on main, not scraped from a step summary
+        — the run record is the thing that cannot go missing."""
+        self.assertIn("harness.yml/runs", self.text)
+        self.assertIn("--cancelled-harness-runs", self.text)
+
+    def test_it_reads_whether_anything_is_proving_main_right_now(self):
+        self.assertIn("--harness-in-flight", self.text)
 
     def test_it_cannot_move_the_channel(self):
         """Structurally incapable, the model-drift guarantee: an alarm that
