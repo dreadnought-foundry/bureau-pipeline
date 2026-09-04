@@ -913,6 +913,37 @@ def card_comment_bodies(card: dict) -> list[str]:
     ]
 
 
+def card_is_epic(card: dict, bodies: list[str] | None = None) -> bool:
+    """Is this card an epic — the question the sweep must never promote a yes to.
+
+    ONE helper answers it, `mid_epic.is_epic()` as DRE-3038 left it, the same
+    one `routing_verdict.route()` asks. The sweep used to keep a second spelling
+    — `if "agent:planner" in labels` — and that label is the one the RELAY
+    REQUIRES before it will dispatch the planner at all, so every card that
+    comes out of Planning wears it. Every one-off among them was therefore
+    skipped as an epic and sat in Backlog forever: the label it needed to get
+    classified was the label that stopped it being built (DRE-3044, observed on
+    DRE-3018 and DRE-3020 across every sweep from 2026-09-03 17:32 PT).
+
+    So epic-ness is read off the SHAPE STAMP (DRE-2843) first, and off the two
+    facts `validate_card.infer_agent_label` derives `agent:planner` FROM second
+    — `[EPIC]` in the title, or any children at all. A card nothing has
+    classified therefore keeps exactly the answer it had, including the
+    invariant `mid_epic.subissue_refusal` rests on: give a card sub-issues and
+    it stops being promoted.
+
+    `bodies` is the card's comment bodies when the caller has already read them
+    (they come free with the candidates query); absent, they are read off the
+    card here.
+    """
+    kids = ((card.get("children") or {}).get("nodes")) or []
+    return mid_epic.is_epic(
+        card.get("title"),
+        bool(kids),
+        routing_verdict.shape_of(card_comment_bodies(card) if bodies is None else bodies),
+    )
+
+
 def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
     """The paged board read itself. `comments(last: 50)` is inline — the shape
     backlog_children already uses — so every reader downstream gets the bodies
@@ -1818,6 +1849,11 @@ def backlog_children() -> list[dict]:
     made "every Backlog card" mean "the first 100 Linear happened to return" —
     126 of the 226 cards on the 2026-08-26 census were not promotion
     candidates, and nothing said so.
+
+    `children(first: 1)` is selected for `card_is_epic` (DRE-3044): the gate
+    asks whether a card has ANY children, so one node answers it, and reading a
+    field the query never fetched would report "no children" for every epic on
+    the board.
     """
     return linear_ops.gql_paged(
         """query($after: String) {
@@ -1827,6 +1863,7 @@ def backlog_children() -> list[dict]:
            }) { nodes {
              id identifier title description createdAt
              parent { identifier state { name } }
+             children(first: 1) { nodes { id } }
              labels { nodes { name } }
              comments(last: 50) { nodes { body } }
              inverseRelations(first: 20) { nodes {
@@ -2216,10 +2253,14 @@ def promote_ready(active_count: int) -> int:
         if card_repo(card) != REPO_SLUG:
             continue  # deliberately silent: another repo's card, see above
         labels = [lbl["name"].lower() for lbl in card["labels"]["nodes"]]
-        if "agent:planner" in labels:
+        # The comments come free with the candidates query (DRE-2929), and three
+        # gates below read them — the epic test, the wave record and the
+        # verdict. One comprehension, hoisted to the first of them.
+        bodies = card_comment_bodies(card)
+        if card_is_epic(card, bodies):
             print(
-                f"promotion: {card['identifier']} carries agent:planner — epics "
-                "are promoted by humans, never by the sweep; skipping"
+                f"promotion: {card['identifier']} is an epic — epics are "
+                "promoted by humans, never by the sweep; skipping"
             )
             continue
         if HOLD_LABEL in labels:
@@ -2234,16 +2275,10 @@ def promote_ready(active_count: int) -> int:
         # Progressive commitment (DRE-2846). An epic inside an approved wave is
         # recorded `committed-in-sequence`: the wave's approval covered the
         # SHAPE and the ORDER and nothing else, so it is not an approval to
-        # build. Read off the card's own RECORD, deliberately not off the
-        # `agent:planner` skip above — that is a LABEL, a human edits labels in
-        # Linear, and one edit must not turn a wave's approval into an approval
-        # of everything under it. The comments come free with the dependency-gate
-        # query; the green-light history is bought only for a card that actually
-        # carries the record.
-        bodies = [
-            n.get("body") or ""
-            for n in (card.get("comments") or {}).get("nodes", [])
-        ]
+        # build. Read off the card's own RECORD, deliberately not off the epic
+        # skip above — a wave's epic is skipped there for BEING an epic, and
+        # that is a different fact from "the wave approved its order". The
+        # green-light history is bought only for a card that carries the record.
         if wave_commitment.state(bodies) is not None:
             committed = wave_commitment.promotion_refusal(
                 card["identifier"], bodies,
