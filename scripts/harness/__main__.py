@@ -31,8 +31,15 @@ Env (harness.yml sets all of these):
   HARNESS_RUN_ID        default --run-id (else a local one is generated)
   HARNESS_VERDICT_TIMEOUT / HARNESS_MERGE_TIMEOUT / HARNESS_POLL_INTERVAL
                         seconds, optional overrides
+  HARNESS_WAIT_DEADLINE_MINUTES
+                        minutes, optional — how often a wait stops to ask
+                        whether the SANDBOX is still alive (DRE-3076). The
+                        deadline is not a shorter budget: a healthy-but-slow
+                        sandbox keeps its full one. `0` switches the check off.
 
-Exit 0 iff every selected scenario passed.
+Exit 0 iff every selected scenario passed; 1 if one failed; 2 on a bad
+invocation; `framework.BLOCKED_EXIT` (3) when the SANDBOX blocked the run —
+nothing proven about the commit either way, and the next run re-proves.
 """
 
 from __future__ import annotations
@@ -41,7 +48,7 @@ import argparse
 import os
 import sys
 
-from harness import app_token, framework
+from harness import app_token, framework, sandbox_health
 from harness.github_api import GitHub
 from harness.scenarios import discover
 
@@ -65,6 +72,48 @@ def token_supplier(
         return mint(app_id, private_key_pem, repo)
 
     return supply
+
+
+def wait_deadline_seconds(raw: str | None) -> float:
+    """The per-wait sandbox-liveness deadline, in seconds, from the workflow's
+    minutes-shaped input. Empty (a push/pull_request run, where the `inputs`
+    context does not resolve) means the driver's own default; a value that is
+    not a number means the same, loudly, rather than crashing the run."""
+    text = (raw or "").strip()
+    if not text:
+        return framework.WAIT_DEADLINE_SECONDS
+    try:
+        return max(0.0, float(text) * 60.0)
+    except ValueError:
+        print(
+            f"note: HARNESS_WAIT_DEADLINE_MINUTES={text!r} is not a number — "
+            f"using the default "
+            f"{framework.WAIT_DEADLINE_SECONDS / 60:.0f} minutes"
+        )
+        return framework.WAIT_DEADLINE_SECONDS
+
+
+def write_blocked_receipt(cause: str, log=print) -> str:
+    """Publish the block so the workflow's stamp step can carry it.
+
+    `blocked_reason` becomes the `integration-harness` status description, and
+    `promote_channel.evaluate` reads its marker to say *blocked by sandbox*
+    instead of *harness failed*. The line is sanitised and clamped by
+    `sandbox_health.receipt_line` — it is sandbox log text going into a
+    `key=value` file.
+    """
+    line = sandbox_health.receipt_line(cause)
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as fh:
+            fh.write("blocked=true\n")
+            fh.write(f"blocked_reason={line}\n")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as fh:
+            fh.write(f"### Harness blocked by the sandbox\n\n{cause}\n")
+    log(f"::error::{line}")
+    return line
 
 
 def select_names(available: dict, wanted: list) -> list:
@@ -176,9 +225,29 @@ def main(argv=None) -> int:
             "note: HARNESS_CONSOLE_TOKEN unset — the console's state lists "
             "cannot be read; the lane-contract clause reports UNEVALUATED"
         )
+    # Is the sandbox alive? (DRE-3076) Asked only when a wait passes its
+    # deadline. The qa client leads because it is the identity proven to read
+    # the sandbox's run records; the worker client is the fallback, and a
+    # listing neither can read leaves the sandbox UNKNOWN, never dead.
+    deadline = wait_deadline_seconds(os.environ.get("HARNESS_WAIT_DEADLINE_MINUTES"))
+    sandbox_probe = (
+        sandbox_health.probe((gh_qa, gh), args.repo) if deadline > 0 else None
+    )
+    if deadline > 0:
+        print(
+            f"note: each wait checks the sandbox's own sweep/gate/linear-sync "
+            f"runs every {deadline / 60:.0f} min; a failed one ends the run "
+            f"with its cause quoted"
+        )
+    else:
+        print(
+            "note: HARNESS_WAIT_DEADLINE_MINUTES=0 — no sandbox-liveness "
+            "check; a stuck wait runs its full budget"
+        )
     print(f"harness run {run_id} on {args.repo}: scenarios {names}")
 
     results = []
+    blocked = None
     for name in names:
         ctx = framework.HarnessContext(
             gh=gh,
@@ -209,16 +278,44 @@ def main(argv=None) -> int:
                     "HARNESS_POLL_INTERVAL", framework.POLL_INTERVAL_SECONDS
                 )
             ),
+            wait_deadline=deadline,
+            sandbox_probe=sandbox_probe,
         )
-        results.append(framework.run_scenario(available[name], ctx))
+        result = framework.run_scenario(available[name], ctx)
+        results.append(result)
+        if result.blocked:
+            # Stop. Every remaining scenario waits on the same dead sandbox,
+            # and re-proving that one deadline at a time is how one blocked
+            # run became three hours (2026-09-03).
+            blocked = result.blocked
+            remaining = names[names.index(name) + 1:]
+            if remaining:
+                print(
+                    f"harness BLOCKED by the sandbox — not starting "
+                    f"{remaining}; they would wait on the same failure"
+                )
+            break
 
     failed = [r for r in results if not r.ok]
     print("\n== harness summary ==")
     for r in results:
-        status = "PASS" if r.ok else f"FAIL at {r.failed_phase}"
+        if r.ok:
+            status = "PASS"
+        elif r.blocked:
+            status = f"BLOCKED at {r.failed_phase}"
+        else:
+            status = f"FAIL at {r.failed_phase}"
         print(f"  {r.scenario}: {status}")
         for err in r.errors:
             print(f"    - {err}")
+    if blocked:
+        # Not a verdict on the commit: the sandbox never let us reach one.
+        print(
+            "\nharness BLOCKED BY SANDBOX — this commit is NOT proven and NOT "
+            "disproven; the next run re-proves it."
+        )
+        write_blocked_receipt(blocked)
+        return framework.BLOCKED_EXIT
     return 1 if failed else 0
 
 

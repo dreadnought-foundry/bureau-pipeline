@@ -52,7 +52,6 @@ from harness.framework import (
     same_bot,
     sweep_leftovers,
     verdict_state,
-    wait_until,
 )
 
 # The reconcile sweep's receipt contract (reconcile.py posts these; the
@@ -145,13 +144,10 @@ class DependabotFlow(framework.Scenario):
             return pr["head"]["sha"] if pr["head"]["sha"] != old_head else None
 
         try:
-            ctx.state["head"] = wait_until(
+            ctx.state["head"] = ctx.wait(
                 f"dependabot rebasing PR #{number}",
                 poll_rebased,
                 timeout=REBASE_TIMEOUT,
-                interval=ctx.poll_interval,
-                clock=ctx.clock,
-                sleep=ctx.sleep,
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(
@@ -177,13 +173,10 @@ class DependabotFlow(framework.Scenario):
             return None
 
         try:
-            review_runs = wait_until(
+            review_runs = ctx.wait(
                 f"the review check runs on {tracker['head']} to conclude",
                 poll_review_runs,
                 timeout=CHECKS_TIMEOUT,
-                interval=ctx.poll_interval,
-                clock=ctx.clock,
-                sleep=ctx.sleep,
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(
@@ -250,14 +243,11 @@ class DependabotFlow(framework.Scenario):
             return state not in ("none", "neutral", "stale") or None
 
         try:
-            wait_until(
+            ctx.wait(
                 f"a sha-bound verdict on PR #{number} via the reconcile "
                 "dispatch route",
                 poll_verdict,
                 timeout=ctx.verdict_timeout + RECONCILE_CRON_ALLOWANCE,
-                interval=ctx.poll_interval,
-                clock=ctx.clock,
-                sleep=ctx.sleep,
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(

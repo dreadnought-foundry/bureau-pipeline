@@ -168,6 +168,15 @@ jobs:
       # with the machine-readable outcome, so "the channel is quiet" and "the
       # channel is starved by a merge train" are different strings rather than
       # the same silence.
+      #
+      # Since DRE-3076 that sentence has a third form. A harness run that died
+      # because the SANDBOX was down never judged the commit, and its stamp
+      # description leads with promote_channel.BLOCKED_MARKER; the reason then
+      # says "blocked by the sandbox, nothing proven either way, the next run
+      # re-proves" instead of "the stamp reports failure", which reads as *this
+      # commit is bad* and sends someone to a diff nobody looked at. The
+      # distinction is carried in the DESCRIPTION, which is why the status
+      # fetch above takes the whole payload rather than --jq'ing out a state.
       - name: Say what happened
         env:
           OUTCOME: ${{ steps.decide.outputs.outcome }}

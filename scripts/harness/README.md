@@ -30,12 +30,48 @@ cut the fleet pins is still a human act.
 | `agent_run.py` | runs a REAL build agent on the SHIPPED `agent-task.yml` prompt against a sandbox clone (DRE-2490) |
 | `agent_scenario.py` | the adversarial scenarios' shared shape: seeding, the carrier issue, `## Unmet criteria` parsing, cleanup |
 | `github_api.py` | stdlib REST client — one client per bot identity |
+| `sandbox_health.py` | is the sandbox alive? the failed sweep/gate/linear-sync run a stuck wait quotes (DRE-3076) |
 | `scenarios/` | one module per scenario, discovered by convention (`SCENARIO` export); siblings add files, never edit a registry |
 | `__main__.py` | CLI: `PYTHONPATH=scripts python3 -m harness --scenarios bot_pr_flow` |
 
 The `lane_contract` scenario additionally reads `LINEAR_API_KEY` (one read-only
 query) and, when `HARNESS_CONSOLE_TOKEN` is set, the console repository's own
 state lists. Neither is a write path.
+
+## Waits, deadlines, and a dead sandbox (DRE-3076)
+
+Every wait a scenario takes goes through `HarnessContext.wait`, never
+`framework.wait_until` directly — pinned by
+`tests/test_harness_sandbox_deadline.py`, because the wait somebody adds
+next year is the one that costs the three hours.
+
+Two clocks, and they answer different questions:
+
+* **The budget** (`verdict_timeout` 70 min, `merge_timeout` 20 min) is how
+  long a HEALTHY pipeline may take. It is pinned to the critic job's own
+  wall clock by `tests/test_harness_wiring.py` and must stay generous — a
+  shorter one reports FAIL on a slow-but-honest review (run 33274348041).
+* **The deadline** (`wait_deadline`, 10 minutes, the
+  `wait_deadline_minutes` dispatch input) is a LIVENESS CHECKPOINT, not a
+  shorter budget. Every ten minutes a waiting scenario reads the sandbox's
+  most recent `reconcile` / `merge-gate` / `linear-sync` run. A FAILED one
+  ends the run at once, quoting that run's own error line; a healthy or
+  unreadable one changes nothing and the wait keeps its full budget.
+  Unknown is never dead.
+
+A blocked run stops there — the remaining scenarios would wait on the same
+corpse — exits `framework.BLOCKED_EXIT` (3), and writes the quote to its
+`blocked_reason` output. `harness.yml` makes that the `integration-harness`
+status description, and `promote_channel.py` reads its
+`harness blocked:` marker: the channel then reports *blocked by the sandbox,
+not proven either way* rather than *harness failed*. The stamp is still red,
+because unproven is not proven and this check gates boundary PRs.
+
+Origin: 2026-09-03, run `52e9ecc4`. The sandbox's sweep died at 20:27 PT on
+`Linear API returned 400 … rate limited: 2500 requests/hour exhausted`; the
+scenario waiting on it had no way to tell that from slowness, so it waited
+out `timeout-minutes: 180` and `stable` sat 50 commits behind until a human
+cancelled the run.
 
 ## Namespacing and self-cleaning
 

@@ -127,6 +127,7 @@ strings instead of the same silence:
 | `harness-cancelled-by-newer-push` | displaced by a merge train; never started | nothing — it advances when the trunk quietens |
 | `harness-failed` | the harness went red on this commit | a red trunk; the medic and `red-main-repair.yml` own it |
 | `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
+| `harness-blocked-by-sandbox` | the harness never judged this commit — its own sandbox (reconcile/merge-gate/linear-sync) failed first | nothing proven either way; the next run re-proves this trunk |
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
 
