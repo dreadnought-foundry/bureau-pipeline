@@ -258,6 +258,54 @@ class TheSandboxIsStillSerialisedTest(unittest.TestCase):
         )
 
 
+class DurationBudgetTest(unittest.TestCase):
+    """A harness run's own length is the other half of a starved channel, and
+    nothing reported it. On 2026-09-03 a PR run took 18 minutes and the main
+    run behind it sat on `Run harness scenarios` for 54 before an operator
+    killed it by hand — the sandbox's Linear quota had been exhausted and the
+    scenario was waiting on a sweep that would never come. The only bound was
+    the job's 180-minute timeout, i.e. three hours of frozen channel.
+
+    This does not fix that wait. It makes it VISIBLE at the end of every run:
+    how long the scenarios took, and a GitHub warning annotation past a budget,
+    so "the queue is long" and "this run is hung" stop looking identical."""
+
+    def setUp(self):
+        self.doc = yaml.safe_load(HARNESS.read_text())
+        self.text = HARNESS.read_text()
+        self.steps = self.doc["jobs"]["harness"]["steps"]
+
+    def _step(self, needle):
+        for s in self.steps:
+            if needle in str(s.get("name", "")):
+                return s
+        self.fail(f"no step named like {needle!r}")
+
+    def test_the_run_reports_how_long_the_scenarios_took(self):
+        step = self._step("Scenario duration")
+        self.assertIn("GITHUB_STEP_SUMMARY", str(step.get("run", "")))
+
+    def test_the_duration_receipt_survives_a_failing_run(self):
+        """A run that went red is exactly when the number is wanted."""
+        self.assertIn("always()", str(self._step("Scenario duration").get("if", "")))
+
+    def test_it_warns_past_a_budget(self):
+        step = self._step("Scenario duration")
+        self.assertIn("::warning", str(step.get("run", "")))
+
+    def test_the_budget_is_well_under_the_job_timeout(self):
+        """A budget at the timeout is not a budget: the job is cancelled at the
+        cap, and a cancelled run skips the stamp step entirely."""
+        budget = int(self._step("Scenario duration")["env"]["BUDGET_MINUTES"])
+        self.assertLess(budget, self.doc["jobs"]["harness"]["timeout-minutes"])
+        self.assertGreater(budget, 18, "the observed healthy run took 18m")
+
+    def test_the_duration_is_measured_across_the_scenarios_only(self):
+        """Not the whole job — the checkout and three token mints are not what
+        starves a channel, and folding them in would move the budget."""
+        self.assertIn("SCENARIOS_STARTED_AT", self.text)
+
+
 class TheRuleIsWrittenDownTest(unittest.TestCase):
     """A change that contradicts a document updates it in the same PR. The
     release-channel doc described a channel that advances on every proven
@@ -276,9 +324,10 @@ class TheRuleIsWrittenDownTest(unittest.TestCase):
             self.assertIn(token, self.doc.lower(),
                           f"the doc does not explain {token}")
 
-    def test_the_doc_names_the_three_receipt_reasons(self):
+    def test_the_doc_names_the_receipt_reasons(self):
         for outcome in (promote_channel.OUTCOME_CANCELLED,
                         promote_channel.OUTCOME_FAILED,
+                        promote_channel.OUTCOME_NOT_MAIN,
                         promote_channel.OUTCOME_PROMOTING):
             self.assertIn(outcome, self.doc,
                           "a receipt vocabulary nobody wrote down is one "

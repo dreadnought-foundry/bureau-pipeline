@@ -205,6 +205,27 @@ class MergeTrainDiagnosisTest(unittest.TestCase):
                         cancelled_harness_runs=13)
         self.assertEqual(v.state, channel_watch.HELD)
 
+    def test_a_train_with_a_run_in_flight_says_main_is_proving(self):
+        """The card's own words: "merge train, main proving" rather than
+        "quiet". A channel with a run working on it right now needs no action;
+        a channel with nothing proving it might."""
+        v = self._stale(cancelled_harness_runs=13, harness_in_flight=True)
+        self.assertIn("proving main", v.headline.lower())
+
+    def test_a_train_with_nothing_running_says_nothing_is_proving_main(self):
+        v = self._stale(cancelled_harness_runs=13, harness_in_flight=False)
+        self.assertIn("nothing is proving main", v.headline.lower())
+
+    def test_an_unread_in_flight_state_says_neither(self):
+        v = self._stale(cancelled_harness_runs=13, harness_in_flight=None)
+        self.assertNotIn("proving main", v.headline.lower())
+
+    def test_in_flight_alone_never_speaks(self):
+        """Without a train there is nothing to qualify — a healthy channel
+        does not narrate its own harness."""
+        v = self._stale(cancelled_harness_runs=0, harness_in_flight=True)
+        self.assertNotIn("proving main", v.headline.lower())
+
 
 class HeldChannelTest(unittest.TestCase):
     """2. Held is a state, not a breakage — and it does not go quiet."""
@@ -422,6 +443,9 @@ class WorkflowWiringTest(unittest.TestCase):
         — the run record is the thing that cannot go missing."""
         self.assertIn("harness.yml/runs", self.text)
         self.assertIn("--cancelled-harness-runs", self.text)
+
+    def test_it_reads_whether_anything_is_proving_main_right_now(self):
+        self.assertIn("--harness-in-flight", self.text)
 
     def test_it_cannot_move_the_channel(self):
         """Structurally incapable, the model-drift guarantee: an alarm that

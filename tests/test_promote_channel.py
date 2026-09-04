@@ -162,6 +162,41 @@ class SkipReceiptTest(unittest.TestCase):
             SHA, ancestry="ahead", conclusion=conclusion, **kw
         )
 
+    def test_a_pr_run_says_it_was_never_a_candidate(self):
+        """The fourth reason. A PR-head harness run proves a commit that is
+        not on the trunk, so it was rightly skipped — but the run said only
+        `skipped`, and on the incident evening it took reading four of them to
+        learn that nothing was wrong."""
+        d = self._decide("success", branch="agent/DRE-3042-conflict-sweep")
+        self.assertFalse(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_NOT_MAIN)
+        self.assertIn("main", d.reason.lower())
+
+    def test_a_pr_run_is_not_reported_as_a_hold(self):
+        """Branch is read before the hold: a hold is a statement about the
+        CHANNEL, and a PR run never approaches the channel."""
+        d = self._decide("success", branch="agent/x", hold="who=Ada rehearsal")
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_NOT_MAIN)
+
+    def test_a_main_run_is_unaffected_by_naming_its_branch(self):
+        d = self._decide("success", branch=promote_channel.TRUNK)
+        self.assertTrue(d.promote)
+        self.assertEqual(d.outcome, promote_channel.OUTCOME_PROMOTING)
+
+    def test_an_unstated_branch_is_not_a_pr_run(self):
+        """Back-compat, and fail-open only in the direction that is safe: with
+        nobody saying, the stamp and the ancestry remain the authorities."""
+        self.assertTrue(self._decide("success").promote)
+
+    def test_the_four_reasons_are_distinct(self):
+        outcomes = {
+            self._decide("success", branch="agent/x").outcome,
+            self._decide("cancelled").outcome,
+            self._decide("failure").outcome,
+            self._decide("success").outcome,
+        }
+        self.assertEqual(len(outcomes), 4)
+
     def test_a_cancelled_run_is_named_as_a_newer_push_not_a_failure(self):
         d = self._decide("cancelled")
         self.assertFalse(d.promote)
@@ -258,19 +293,41 @@ class WorkflowWiringTest(unittest.TestCase):
         merge-train case — every displaced run on the incident evening —
         produced no promote-channel run at all and therefore no record. A
         channel that goes quiet must say which of the three things happened."""
-        condition = str(self.wf["jobs"]["promote"].get("if", ""))
-        self.assertIn("head_branch", condition,
-                      "only main is a promotion candidate")
+        condition = str(self.wf["jobs"]["promote"].get("if", "") or "")
         self.assertNotIn(
             "conclusion == 'success'", condition,
             "a non-green harness run must still reach the decision, or a "
             "skipped promotion leaves no receipt naming why",
         )
+        self.assertNotIn(
+            "head_branch", condition,
+            "a PR-head run must reach the decision too — it is rightly not "
+            "promoted, and on 2026-09-03 it took reading four `skipped` runs "
+            "to learn that nothing was wrong",
+        )
 
-    def test_the_harness_conclusion_reaches_the_decision(self):
+    def test_the_harness_conclusion_and_branch_reach_the_decision(self):
         text = WORKFLOW.read_text()
         self.assertIn("--conclusion", text)
         self.assertIn("workflow_run.conclusion", text)
+        self.assertIn("--branch", text)
+        self.assertIn("workflow_run.head_branch", text)
+
+    def test_only_a_main_candidate_spends_api_calls(self):
+        """Every harness run now reaches the receipt; only a green one on the
+        trunk is worth two API calls and a token mint."""
+        for step in self.wf["jobs"]["promote"]["steps"]:
+            if "gh api" not in str(step.get("run", "")) \
+                    and "app-token" not in str(step.get("uses", "")):
+                continue
+            cond = str(step.get("if", ""))
+            # Either it is gated on the trunk directly, or on the decision —
+            # which cannot be `promote` for anything but a green trunk run.
+            self.assertTrue(
+                "head_branch == 'main'" in cond
+                or "steps.decide.outputs.promote" in cond,
+                f"step {step.get('name')!r} spends API calls on PR runs",
+            )
 
     def test_release_gate_actually_matches_the_channel_ref(self):
         """`tags: ["v*"]` does not match `stable`. Without this the gate is
