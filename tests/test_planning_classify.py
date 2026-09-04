@@ -212,11 +212,19 @@ def _ban_raw_api(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", forbidden)
 
 
-def _envelope(text: str, model: str | None = None, **extra) -> str:
-    """One `claude -p --output-format json` result envelope."""
+def _envelope(text: str, model: str | None = None, usage: dict | None = None,
+              **extra) -> str:
+    """One `claude -p --output-format json` result envelope.
+
+    `usage` is the whole `modelUsage` map, in the order the CLI wrote it —
+    which is what DRE-3083 is about: the envelope lists EVERY model the run
+    billed, so the order it comes back in says nothing about which one answered.
+    """
     doc = {"type": "result", "subtype": "success", "is_error": False, "result": text}
     if model:
         doc["modelUsage"] = {model: {"inputTokens": 10, "outputTokens": 5}}
+    if usage is not None:
+        doc["modelUsage"] = dict(usage)
     doc.update(extra)
     return json.dumps(doc)
 
@@ -776,7 +784,7 @@ class TestThePlanWorkflow:
         classify_id = self._step("planning_classify.py")["id"]
         step = next(
             s for s in self._steps()
-            if f"steps.{classify_id}.outputs.model" in json.dumps(s.get("run") or "")
+            if f"steps.{classify_id}.outputs.receipt" in json.dumps(s.get("run") or "")
         )
         assert model_fallback.MARKER_PREFIX in step["run"], (
             "the classifier's heartbeat must be the same marker every other "
@@ -1147,3 +1155,180 @@ class TestTheTwoReasons:
             planning_escalation.transport_comment(probe["card"], "HTTP 429")])
         assert planning_escalation.requeue(lops, probe["card"], "HTTP 429") is False
         assert lops.comments == []
+
+
+# ===========================================================================
+# L. the receipt names the model that ANSWERED, and says what was asked for
+#    (DRE-3083)
+# ===========================================================================
+class TestTheAnsweredModel:
+    """`modelUsage` lists EVERY model the run billed, and Claude Code bills
+    Haiku for its own side work (titles, summaries) before or alongside the main
+    turn. `used[0]` was therefore "the first model billed": on all three
+    re-classification runs of 2026-09-03 23:21–23:35 PT the card receipt read
+    `claude-haiku-4-5-20251001` while the step had asked for — and been answered
+    by — `claude-fable-5-1`.
+    """
+
+    HAIKU = "claude-haiku-4-5-20251001"
+    FABLE = "claude-fable-5-1"
+
+    def _billed(self) -> dict:
+        """The envelope shape the finding was recorded from: Haiku FIRST, and
+        the model that actually read the card second, with the larger output."""
+        return {
+            self.HAIKU: {"inputTokens": 4210, "outputTokens": 18},
+            self.FABLE: {"inputTokens": 3180, "outputTokens": 622},
+        }
+
+    def test_the_model_that_answered_is_the_one_with_the_most_output(self):
+        assert planning_classify.answered_model({"modelUsage": self._billed()}) \
+            == self.FABLE
+
+    def test_the_requested_model_wins_when_the_envelope_billed_it(self):
+        """Asked for Fable, Fable is in the usage — nothing else answered it,
+        whatever the side work cost."""
+        usage = dict(self._billed())
+        usage[self.HAIKU]["outputTokens"] = 99_999
+        assert planning_classify.answered_model(
+            {"modelUsage": usage}, self.FABLE) == self.FABLE
+
+    def test_a_real_fallback_is_reported_honestly(self):
+        """Only Haiku billed: Haiku answered, and the receipt says so rather
+        than repeating what we asked for."""
+        assert planning_classify.answered_model(
+            {"modelUsage": {self.HAIKU: {"inputTokens": 4210, "outputTokens": 622}}},
+            self.FABLE,
+        ) == self.HAIKU
+
+    def test_an_envelope_that_billed_nothing_names_no_model(self):
+        assert planning_classify.answered_model({"modelUsage": {}}, self.FABLE) is None
+        assert planning_classify.answered_model({}, self.FABLE) is None
+
+    def test_the_transport_reads_the_answering_model_off_that_envelope(
+        self, monkeypatch
+    ):
+        """The whole path, not just the helper: the CLI returns the recorded
+        envelope and the Answer names Fable."""
+        _subscription_env(monkeypatch)
+        _fake_cli(monkeypatch, stdout=_envelope(
+            _answer(shape="one-off"), usage=self._billed()))
+
+        answer = planning_classify._call_real(self.FABLE, "the prompt")
+        assert answer.model == self.FABLE, (
+            "the first model billed is not the model that read the card"
+        )
+
+    def test_the_stamp_records_the_answering_model_not_the_billed_one(
+        self, monkeypatch
+    ):
+        """What DRE-3016's scorer and DRE-3077's split ledger read back."""
+        _subscription_env(monkeypatch)
+        _fake_cli(monkeypatch, stdout=_envelope(
+            _answer(shape="one-off"), usage=self._billed()))
+
+        probe = _probe("DRE-3017")
+        lops = _Lops(probe)
+        decision = planning_classify.run(lops, probe["card"], model=self.FABLE)
+        assert decision.model == self.FABLE
+        assert decision.asked == self.FABLE
+        assert planning_shape.stamped_by(lops.bodies)[1] == self.FABLE
+
+    def test_every_modelusage_reader_in_scripts_goes_through_the_one_seam(self):
+        """The card's last criterion, as a check rather than a memory: any
+        transport that reads `modelUsage` resolves it through `answered_model`,
+        so a second one cannot re-derive "the first model billed"."""
+        readers = sorted(
+            path.name for path in (ROOT / "scripts").glob("*.py")
+            if "modelUsage" in path.read_text(encoding="utf-8")
+        )
+        for name in readers:
+            text = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+            assert "answered_model" in text, (
+                f"scripts/{name} reads modelUsage without the one seam that "
+                "knows which entry actually answered"
+            )
+
+
+class TestTheReceiptSaysBoth:
+    """The receipt is read by people and by the ladder, and both need the two
+    halves: what we asked for, and what answered. When they differ the line says
+    so out loud — the same `DEGRADED` flag the advisory ladder's selection note
+    leads with."""
+
+    ASKED = "claude-fable-5-1"
+    FELL_TO = "claude-haiku-4-5-20251001"
+
+    @staticmethod
+    def _degraded_flag() -> str:
+        """The ladder's own word, read off the note rather than typed twice."""
+        return model_fallback.selection_note(
+            {"model": "m", "role": "planner", "degraded": True}
+        ).split()[0]
+
+    def test_it_names_both_models(self):
+        receipt = planning_classify.model_receipt(self.ASKED, self.ASKED)
+        assert receipt == f"{self.ASKED} (asked) / {self.ASKED} (answered)"
+
+    def test_a_run_that_answered_on_the_model_it_asked_for_is_not_degraded(self):
+        assert self._degraded_flag() not in planning_classify.model_receipt(
+            self.ASKED, self.ASKED)
+
+    def test_a_swapped_model_is_flagged_degraded(self):
+        receipt = planning_classify.model_receipt(self.ASKED, self.FELL_TO)
+        assert receipt.startswith(self._degraded_flag() + " ")
+        assert f"{self.ASKED} (asked)" in receipt
+        assert f"{self.FELL_TO} (answered)" in receipt
+
+    def test_an_unknown_half_is_shown_as_unknown_never_guessed(self):
+        """`standards/console-honesty.md` rule 2: absent is absent, not the
+        other half repeated."""
+        receipt = planning_classify.model_receipt(self.ASKED, None)
+        assert "unknown (answered)" in receipt
+        assert receipt.startswith(self._degraded_flag() + " ")
+
+    def test_the_receipt_is_one_line(self):
+        assert "\n" not in planning_classify.model_receipt(self.ASKED, self.FELL_TO)
+
+    def test_the_classify_command_writes_the_receipt_for_the_heartbeat(
+        self, monkeypatch, tmp_path
+    ):
+        out = tmp_path / "github-output"
+        monkeypatch.setattr(planning_classify, "run", lambda lops, ident: (
+            planning_classify.Decision(shape="one-off", why="w", answered=True,
+                                       model=self.FELL_TO, asked=self.ASKED)
+        ))
+        assert planning_classify._cmd_classify("DRE-3083", str(out), None) == 0
+        written = dict(
+            line.split("=", 1) for line in
+            out.read_text(encoding="utf-8").strip().splitlines()
+        )
+        assert written["model"] == self.FELL_TO
+        assert written["asked"] == self.ASKED
+        assert written["receipt"] == planning_classify.model_receipt(
+            self.ASKED, self.FELL_TO)
+
+    def test_the_heartbeat_posts_that_receipt(self):
+        step = TestThePlanWorkflow._step("planning classifier read the card")
+        classify_id = TestThePlanWorkflow._step("planning_classify.py")["id"]
+        assert f"steps.{classify_id}.outputs.receipt" in step["run"]
+        assert f"steps.{classify_id}.outputs.model }}}}" not in step["run"], (
+            "the heartbeat naming one model is what DRE-3083 found wrong"
+        )
+        assert model_fallback.MARKER_PREFIX in step["run"]
+
+    def test_the_act_registry_still_quotes_the_line_it_declares(self):
+        """`check_act_receipts.py` finds this site by its anchor — a receipt
+        reworded out from under the registry is a site nothing declares."""
+        registry = json.loads(
+            (ROOT / "config" / "pipeline-acts.json").read_text(encoding="utf-8"))
+        anchors = [
+            entry["anchor"] for entry in registry["unconverted"]
+            if "planning classifier read the card" in (entry.get("anchor") or "")
+        ]
+        assert anchors, "the classifier heartbeat has no declaration"
+        workflow = WF.read_text(encoding="utf-8")
+        for anchor in anchors:
+            assert anchor in workflow, (
+                f"the registry declares {anchor!r}, which plan.yml no longer says"
+            )
