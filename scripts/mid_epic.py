@@ -116,10 +116,13 @@ UNRECORDED_TAG = "mid-epic-unrecorded"  # on the EPIC: it grew, its plan did not
 AMENDMENT_STATE = "Planning"
 
 # The planning shape (DRE-2843) that means "this card is an epic". Named here
-# rather than imported: `planning_shape` is read by `planning_route`, which
-# reads `routing_verdict`, which reads THIS module — so importing it back would
-# close a cycle. `tests/test_mid_epic.py` binds the word to the vocabulary
-# instead, so a shape renamed in the file fails there rather than drifting.
+# rather than derived: the vocabulary carries no "which of these is the epic"
+# marker to read, and `planning_shape` would have to be imported and its config
+# parsed to answer a question this module asks on every subissue create. So the
+# word is written once and BOUND by `tests/test_mid_epic.py`, which checks it
+# against the vocabulary and against the one route that stops for a human — a
+# shape renamed in the file fails there rather than drifting into a stamp that
+# means nothing.
 EPIC_SHAPE = "epic"
 
 # The lanes that mean a human has green-lit this epic — the same pair

@@ -82,7 +82,7 @@ CLI:
     python3 scripts/routing_verdict.py render         # rewrite the document
     python3 scripts/routing_verdict.py check          # validate the file
     python3 scripts/routing_verdict.py classify --title T --body-file F \\
-        [--label L ...] [--has-children]              # print the decision as JSON
+        [--label L ...] [--has-children] [--shape S]  # print the decision as JSON
     python3 scripts/routing_verdict.py stamp DRE-N VERDICT --why "…"
 """
 
@@ -679,6 +679,26 @@ def _matches(text: str, phrases) -> str | None:
     return None
 
 
+def shape_of(comment_bodies) -> str | None:
+    """The planning shape stamped on a card, read tolerantly — None when
+    nothing has classified it, or when what is stamped cannot be read as one
+    shape.
+
+    ONE definition of that read, because `route()` is where epic-ness is
+    decided and every caller holding a card's comments owes it the same answer
+    (DRE-3038). Two shapes or a word the vocabulary does not carry is a fault
+    `planning_shape.fault()` reports to the card's own thread; here it simply
+    means nothing has classified this, which is exactly the case the title and
+    the children answer.
+    """
+    import planning_shape
+
+    try:
+        return planning_shape.shape_on(comment_bodies or ())
+    except Exception:  # noqa: BLE001 — an unreadable stamp is no stamp
+        return None
+
+
 def label_verdict(labels, doc: dict | None = None) -> str | None:
     """Precedence 1. An EXACT lower-cased label match — `no-codegen` is not
     `no-code`."""
@@ -1016,6 +1036,9 @@ def main(argv=None) -> int:
     classify.add_argument("--body-file")
     classify.add_argument("--label", action="append", default=[])
     classify.add_argument("--has-children", action="store_true")
+    # What the card is stamped (DRE-2843). The CLI is a caller like any other,
+    # and epic-ness is read off the stamp before the title and the children.
+    classify.add_argument("--shape", default=None)
 
     stamp = sub.add_parser("stamp")
     stamp.add_argument("identifier")
@@ -1047,7 +1070,8 @@ def main(argv=None) -> int:
         if args.body_file:
             with open(args.body_file, encoding="utf-8") as fh:
                 body = fh.read()
-        decision = route(args.title, body, args.label, has_children=args.has_children)
+        decision = route(args.title, body, args.label,
+                         has_children=args.has_children, shape=args.shape)
         print(json.dumps({
             "verdict": decision.verdict,
             "source": decision.source,

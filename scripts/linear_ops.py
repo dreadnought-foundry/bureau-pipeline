@@ -1184,15 +1184,16 @@ def _stamped_shape(identifier: str) -> str | None:
     """The planning shape stamped on a card (DRE-2843), or None.
 
     The second leg of the epic test, and the one that replaced `agent:planner`
-    (DRE-3038): the stamp says what the card IS. Never raises — a card carrying
-    two stamps or a word the vocabulary does not know has no readable shape,
-    which is exactly the "nothing has classified this" case the title and the
-    children answer.
+    (DRE-3038): the stamp says what the card IS. The tolerant read itself is
+    `routing_verdict.shape_of` — ONE definition, because every caller that
+    decides epic-ness owes the same answer — and this only buys the comments.
+    Never raises: an unreadable read is "nothing has classified this", which is
+    the case the title and the children answer.
     """
-    import planning_shape
+    import routing_verdict
 
     try:
-        return planning_shape.shape_on(comment_bodies(identifier))
+        return routing_verdict.shape_of(comment_bodies(identifier))
     except Exception as exc:  # noqa: BLE001 — an unreadable stamp is no stamp
         print(f"{identifier}: could not read a planning shape ({exc})", file=sys.stderr)
         return None
