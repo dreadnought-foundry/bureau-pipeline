@@ -995,10 +995,10 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "🧠 model-attempt: ${{ steps.classify.outputs.model }} — planning classifier read the card.",
+      "anchor": "🧠 model-attempt: ${{ steps.classify.outputs.receipt }} — planning classifier read the card.",
       "step": "Classifier heartbeat — the model that answered",
       "kind": "not-an-act",
-      "means": "Which model actually answered the classification, so DRE-3015's judgement ladder can be read off the card.",
+      "means": "Which model was asked for and which one actually answered the classification, so DRE-3015's judgement ladder can be read off the card and a fall off the top rung is visible (DRE-3083).",
       "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided. Two grammars on one line would give its readers two keys to disagree over. Its grammar is `model-attempt:`, owned by scripts/model_fallback.py — the same one the planner's own heartbeat above writes."
     },
     {

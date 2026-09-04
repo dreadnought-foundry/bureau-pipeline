@@ -73,6 +73,17 @@ rather than a place in a human's queue (`planning_escalation.requeue`, capped at
 `TRANSPORT_CAP`). Only a model that read the card and could not tell is a
 decision for the CEO.
 
+**The receipt names the model that ANSWERED, and says what was asked for**
+(DRE-3083). Claude Code's `--output-format json` envelope lists every model the
+run BILLED, and the CLI bills its own side work to Haiku, so the first key was
+`claude-haiku-4-5-20251001` on three runs answered by `claude-fable-5-1`. The
+model is picked out of that ledger by `answered_model`, and the heartbeat writes
+both halves through `model_receipt` — `<asked> (asked) / <answered> (answered)`,
+led by `DEGRADED` when they differ, the same flag the ladder's own selection note
+uses. One id could not tell a clean run on the top rung from a silent fall off
+it, and DRE-3015's ladder, DRE-3016's scorer and DRE-3077's split ledger all read
+this line as "the model that did this".
+
 ## The vendor boundary (standards/vendor-boundaries.md)
 
 Q1 actor — the call is made by the plan job itself, with the same CLAUDE
@@ -234,6 +245,10 @@ class Decision:
     tells: tuple = ()
     question: str | None = None
     model: str | None = None
+    # The model this run ASKED for, beside the one that answered (DRE-3083).
+    # Both, because the receipt has to say when they differ: `model` alone
+    # cannot tell a clean run on the top rung from a silent fall off it.
+    asked: str | None = None
     refusal: str | None = None
     already: bool = False
     # DRE-3074. `transport` says the call never reached a model, and `requeue`
@@ -722,6 +737,64 @@ def _envelope(stdout: str) -> dict | None:
     return None
 
 
+def _output_tokens(entry) -> int:
+    """One `modelUsage` entry's output-token count, or 0 for anything the CLI
+    wrote in a shape we do not recognise. Never raises: an unreadable count is
+    a model that did not visibly answer, not a failed classification."""
+    if not isinstance(entry, dict):
+        return 0
+    try:
+        return int(entry.get("outputTokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def answered_model(envelope, requested: str | None = None) -> str | None:
+    """The model that ANSWERED, out of every model the run billed (DRE-3083).
+
+    `modelUsage` is a ledger, not an attribution: Claude Code bills its own side
+    work — titles, summaries — to Haiku before or alongside the main turn, so
+    the map routinely lists two models and the FIRST key is whichever was billed
+    first. Reading `list(...)[0]` therefore reported `claude-haiku-4-5-20251001`
+    on all three of the 2026-09-03 re-classification runs, which asked for and
+    were answered by `claude-fable-5-1`.
+
+    Two rules, in order:
+      * the model we ASKED for, when the envelope billed it at all — it ran, so
+        it is what read the card, whatever the side work cost;
+      * otherwise the entry with the most OUTPUT tokens — a real fallback is
+        reported honestly rather than papered over with the request.
+
+    None when nothing was billed: unknown is shown as unknown
+    (`standards/console-honesty.md` rule 2), never inferred from the request.
+    """
+    usage = envelope.get("modelUsage") if isinstance(envelope, dict) else None
+    if not isinstance(usage, dict) or not usage:
+        return None
+    if requested and requested in usage:
+        return requested
+    # `max` keeps the first of equal counts, so the envelope's own order breaks
+    # a tie rather than the dict's iteration order changing the answer.
+    return max(usage, key=lambda name: _output_tokens(usage[name]))
+
+
+def model_receipt(asked: str | None, answered: str | None) -> str:
+    """The heartbeat's model half: what was asked for AND what answered.
+
+    One line, because it rides a `$GITHUB_OUTPUT` assignment and a Linear
+    comment. A run that answered on something other than the model it asked for
+    leads with `DEGRADED`, the same flag `model_fallback.selection_note` puts on
+    a ladder that fell — one word, one meaning, wherever a model is recorded.
+
+    A half we do not know is written `unknown`. Repeating the other half would
+    make a fallback we never saw look like a clean run on the model we picked.
+    """
+    asked = " ".join((asked or "").split()) or "unknown"
+    answered = " ".join((answered or "").split()) or "unknown"
+    head = "DEGRADED " if answered != asked else ""
+    return f"{head}{asked} (asked) / {answered} (answered)"
+
+
 def _call_claude_code(model: str, prompt: str) -> Answer:
     """One bounded Claude Code run — the transport the rest of this pipeline
     uses, and the one a subscription token can actually authenticate.
@@ -776,9 +849,8 @@ def _call_claude_code(model: str, prompt: str) -> Answer:
             f"success: {stderr or stdout[:400]}",
             f"exit {done.returncode}",
         )
-    used = list((envelope.get("modelUsage") or {}).keys())
     return Answer(text=str(envelope.get("result") or ""),
-                  model=used[0] if used else None)
+                  model=answered_model(envelope, model))
 
 
 def _call_real(model: str, prompt: str) -> Answer:
@@ -829,17 +901,22 @@ def classify(card: dict, *, call=None, model: str | None = None,
     try:
         prompt = prompt_for(card, doc=doc)
     except (ClassifyError, planning_shape.ShapeError) as e:
-        return Decision(model=model, refusal=_unreachable(e))
+        return Decision(model=model, asked=model, refusal=_unreachable(e))
     try:
         answer = _answer_of((call or _call_real)(model, prompt))
     except TransportError as e:
         # DRE-3074's split: nothing read the card, so there is nothing here for
         # a human to decide. `run()` spends the budget; this only names the fact.
-        return Decision(model=model, transport=True, refusal=_transport(e))
+        return Decision(model=model, asked=model, transport=True,
+                        refusal=_transport(e))
     except Exception as e:  # noqa: BLE001 — any failed call is a refusal
-        return Decision(model=model, refusal=_unreachable(e))
+        return Decision(model=model, asked=model, refusal=_unreachable(e))
+    # `or model` is the STAMP's floor, not an attribution: a planner stamp must
+    # name a model, and a transport that reported none still ran the one we
+    # asked for. Every real Claude Code success bills its `modelUsage`, so this
+    # falls back only for the plain-string `call` seam.
     decision = parse(answer.text, doc=doc, model=answer.model or model)
-    return dataclasses.replace(decision, answered=True)
+    return dataclasses.replace(decision, answered=True, asked=model)
 
 
 def _unreachable(error: Exception) -> str:
@@ -921,7 +998,7 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
         # card nobody classified goes to a human — not to a red run that leaves
         # it sitting in Planning.
         print(f"{identifier}: the stamp could not be written: {e}", file=sys.stderr)
-        return Decision(model=decision.model, refusal=(
+        return Decision(model=decision.model, asked=decision.asked, refusal=(
             "We read this card but could not record the answer, so nothing "
             "downstream can act on it yet."
         ))
@@ -974,6 +1051,20 @@ def _write_reason(path: str | None, reason: str) -> None:
         print(f"planning classify: could not write the reason: {exc}")
 
 
+def _model_pairs(decision: Decision) -> list:
+    """The model half of every branch's step outputs, written once (DRE-3083).
+
+    `receipt` is the heartbeat's line as this module composes it — the workflow
+    posts it rather than assembling one, because a receipt assembled in YAML is
+    a second answer to "which model answered" that nothing tests.
+    """
+    return [
+        ("model", decision.model or ""),
+        ("asked", decision.asked or ""),
+        ("receipt", model_receipt(decision.asked, decision.model)),
+    ]
+
+
 def _cmd_classify(identifier: str, github_output: str | None,
                   escalation_file: str | None,
                   transport_file: str | None = None) -> int:
@@ -988,7 +1079,7 @@ def _cmd_classify(identifier: str, github_output: str | None,
         _write_reason(transport_file, reason)
         _write_outputs(github_output, [
             ("escalate", "false"), ("requeue", "true"), ("shape", ""),
-            ("model", decision.model or ""), ("answered", answered),
+            *_model_pairs(decision), ("answered", answered),
         ])
         print(f"{identifier} was not classified this run: {reason}")
         return 0
@@ -998,7 +1089,7 @@ def _cmd_classify(identifier: str, github_output: str | None,
         _write_reason(escalation_file, reason)
         _write_outputs(github_output, [
             ("escalate", "true"), ("requeue", "false"), ("shape", ""),
-            ("model", decision.model or ""), ("answered", answered),
+            *_model_pairs(decision), ("answered", answered),
             # The park is the same; what the note may CLAIM is not. A transport
             # failure that outlived its retry is not the CEO's judgement to make.
             ("transport", "true" if decision.transport else "false"),
@@ -1010,7 +1101,7 @@ def _cmd_classify(identifier: str, github_output: str | None,
         ("escalate", "false"),
         ("requeue", "false"),
         ("shape", decision.shape or ""),
-        ("model", decision.model or ""),
+        *_model_pairs(decision),
         ("answered", answered),
         ("already", "true" if decision.already else "false"),
     ])
