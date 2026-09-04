@@ -189,7 +189,7 @@ class GatePaths(framework.Scenario):
 
     # ── setup ────────────────────────────────────────────────────────────
     def setup(self, ctx):
-        ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.log)
+        ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.namespace, ctx.log)
         base, base_sha = ctx.gh.default_branch(ctx.repo)
         ctx.state["base"], ctx.state["base_sha"] = base, base_sha
         ctx.log(f"[{self.name}] base {base}@{base_sha}")
@@ -670,11 +670,11 @@ class GatePaths(framework.Scenario):
         _, tip = gh.default_branch(repo)
         if not tip:
             raise ScenarioFailure("default branch has no readable tip sha")
-        leftovers = [
-            pr["number"]
-            for pr in gh.list_open_prs(repo)
-            if framework.is_harness_ref((pr.get("head") or {}).get("ref", ""))
-        ]
+        # This run's own namespace only: the other lane's harness PRs
+        # are open because that run is still using them (DRE-3075).
+        leftovers = framework.leftover_pr_numbers(
+            gh, repo, ctx.namespace
+        )
         if leftovers:
             raise ScenarioFailure(
                 f"open harness PRs left behind after cleanup: {leftovers}"

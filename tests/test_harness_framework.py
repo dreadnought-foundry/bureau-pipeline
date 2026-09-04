@@ -387,7 +387,11 @@ class SweepTest(unittest.TestCase):
         # A crashed run that merged its probe but died before cleanup.
         gh.files[("main", "harness_runs/crashed-bot_pr_flow.md")] = "stale"
 
-        swept = framework.sweep_leftovers(gh, "o/r", log=lambda *_: None)
+        # The sweep runs under the crashed run's OWN namespace (DRE-3075):
+        # `crashed` is the leading segment of that run id.
+        swept = framework.sweep_leftovers(
+            gh, "o/r", "crashed", log=lambda *_: None
+        )
 
         self.assertNotIn("agent/harness-crashed-bot_pr_flow", gh.branches)
         self.assertIn("agent/DRE-500-real-work", gh.branches)
@@ -402,7 +406,7 @@ class SweepTest(unittest.TestCase):
         from test_harness_bot_pr_flow import FakeGitHub
 
         gh = FakeGitHub(default_branch="main")
-        swept = framework.sweep_leftovers(gh, "o/r", log=lambda *_: None)
+        swept = framework.sweep_leftovers(gh, "o/r", "main", log=lambda *_: None)
         self.assertEqual(
             swept, {"branches_deleted": 0, "prs_closed": 0, "files_deleted": 0}
         )
@@ -416,7 +420,9 @@ class SweepTest(unittest.TestCase):
         crashed = gh.seed_pr(head="dependabot/harness-crashed-gate_paths-named")
         real = gh.seed_pr(head="dependabot/pip/pytest-9.1.1")
 
-        swept = framework.sweep_leftovers(gh, "o/r", log=lambda *_: None)
+        swept = framework.sweep_leftovers(
+            gh, "o/r", "crashed", log=lambda *_: None
+        )
 
         self.assertNotIn("dependabot/harness-crashed-gate_paths-named", gh.branches)
         self.assertIn("dependabot/pip/pytest-9.1.1", gh.branches)

@@ -73,7 +73,9 @@ class LegacyProbeDirSweepTest(unittest.TestCase):
         gh.files[("main", f"{framework.PROBE_DIR}/crashed-bot_pr_flow.md")] = "stale"
         gh.files[("main", "harness_runs/gha-old-gate_paths-base-advance.md")] = "stale"
 
-        swept = framework.sweep_leftovers(gh, "o/r", log=lambda *_: None)
+        swept = framework.sweep_leftovers(
+            gh, "o/r", "crashed", log=lambda *_: None
+        )
 
         self.assertNotIn(
             ("main", f"{framework.PROBE_DIR}/crashed-bot_pr_flow.md"), gh.files

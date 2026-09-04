@@ -915,10 +915,10 @@
     },
     {
       "file": ".github/workflows/agent-task.yml",
-      "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting.",
+      "anchor": "🧠 model-attempt: ${{ steps.model.outputs.model }} — $ROLE agent starting (turns=${{ steps.model.outputs.turns }}).",
       "step": "Card → In Progress",
       "kind": "not-an-act",
-      "means": "Which model this run started on, and why — the line the DRE-1354 fallback reads to pick the alternate.",
+      "means": "Which model this run started on, how many turns it was given and why — the line the DRE-1354 fallback reads to pick the alternate, and the line DRE-3097's budget diagnosis reads back to see what budget a dead run actually had.",
       "why": "It is already machine-readable, in its own single-definition grammar, and it describes an AGENT's run rather than something the pipeline decided. Two grammars on one line would give its readers two keys to disagree over. Its grammar is `model-attempt:`, owned by scripts/model_fallback.py and read back by the medic's rerun."
     },
     {

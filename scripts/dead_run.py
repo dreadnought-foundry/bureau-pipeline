@@ -188,6 +188,8 @@ def decide(
     error_model: str | None = None,
     turn_exhaustion: bool = False,
     turn_facts: str = "",
+    budget_not_size: bool = False,
+    raise_to: str = "",
     cancelled: bool = False,
     pre_agent: bool = False,
     failed_step: str = "",
@@ -214,6 +216,18 @@ def decide(
     reading only that bit is the bug this closes). `turn_facts` is the clause
     check_agent_result.turn_exhaustion_facts() builds — the cap it hit and what
     it spent — so the message names real numbers instead of a shrug.
+
+    `budget_not_size`/`raise_to` (DRE-3097): the hold has TWO causes and used
+    to name one. `turn_budget.diagnose()` reads the card's own thread — every
+    dead run reached the same progress marker or a later one, and the last is
+    `implementation green` or later — and when that holds, the evidence says
+    the work FINISHES and the run does not. DRE-3088 died three times at the
+    150-turn cap, each run reaching `⏳ 3/5 implementation green`, the third
+    AFTER the card had been split to XS: the receipt told a human to split a
+    card that splitting had already failed to fix. `raise_to` is the label to
+    apply (`turns:250`), and it is empty when the card is already on the top
+    rung — the receipt then reports the diagnosis without naming a label the
+    selector would refuse.
 
     `cancelled` (DRE-2074): the agent step was cancelled — killed by the job
     timeout or an external cancel while still working, NOT a death. Wins over
@@ -305,6 +319,34 @@ def decide(
         # actual remedy (DRE-2312).
         facts = turn_facts or "the turn cap"
         if prior_dead >= turn_cap:
+            if budget_not_size:
+                # DRE-3097. Same hold, same lane, same label — a different
+                # DIAGNOSIS, because the card's own thread carries one. The
+                # prefix is load-bearing: medic_retry.HELD_RECEIPT_MARK and
+                # split_ledger.TURN_HOLD_MARK both match on it, and a park the
+                # medic does not recognise is a turn-cap death it retries.
+                remedy = (
+                    f"label it `{raise_to}` and return it to Todo"
+                    if raise_to
+                    else "this card is already on the largest budget the "
+                         "pipeline offers, so the next move really is a "
+                         "smaller card"
+                )
+                return Decision(
+                    "hold",
+                    [
+                        f"🚨 held-for-human ({TURN_TAG} cap reached): the agent "
+                        f"ran out of steps {prior_dead + 1} times in a row — "
+                        f"the last run hit {facts} and stopped mid-task. Every "
+                        f"one of those runs reached the same progress marker "
+                        f"or a later one, and the last got as far as "
+                        f"implementation green. That is budget, not size: the "
+                        f"work finishes but the run does not — raise `turns:` "
+                        f"rather than splitting the card again. Parked in "
+                        f"Backlog with the '{HOLD_LABEL}' label; {remedy}."
+                        f"{run_suffix}"
+                    ],
+                )
             return Decision(
                 "hold",
                 [
@@ -314,7 +356,9 @@ def decide(
                     f"doing real work, so the evidence says this card does not "
                     f"fit inside one run: parked in Backlog with the "
                     f"'{HOLD_LABEL}' label until a human splits it into smaller "
-                    f"pieces (or raises the turn budget).{run_suffix}"
+                    f"pieces (or raises the turn budget with a `turns:` label — "
+                    f"the runs did not get far enough, consistently enough, for "
+                    f"the budget to be the reading).{run_suffix}"
                 ],
             )
         return Decision(
@@ -607,7 +651,8 @@ def main(argv: list[str]) -> int:
     """CLI for the workflow:
 
       decide <prior_dead> [--is-error] [--error-model M] [--cancelled]
-             [--turn-exhaustion [--execution-file PATH]] [--run-url U]
+             [--turn-exhaustion [--execution-file PATH] [--comments-file PATH]]
+             [--run-url U]
              [--pre-agent [--failed-step NAME] [--rate-limited]]
              [--credential-expiry [--push-status N] [--artifact NAME]]
       park <CARD>
@@ -616,7 +661,11 @@ def main(argv: list[str]) -> int:
     With --turn-exhaustion, <prior_dead> is the card's `turn-exhaustion-requeue`
     count (its own budget) and --execution-file names the run's result JSON —
     read here, so decide() stays the no-I/O core, for the cap and spend the
-    message quotes.
+    message quotes. --comments-file names the card's thread (the JSON array
+    `linear_ops.py dump-comments` prints), read the same way and for the same
+    reason: `turn_budget.diagnose()` answers budget-vs-size off the phase
+    receipts in it, and an unreadable thread falls back to the split text
+    rather than claiming a diagnosis it has no evidence for (DRE-3097).
 
     `decide` prints (to stdout) the action on the first line, then a blank
     line, then the comment body. The workflow reads line 1 for the branch and
@@ -627,9 +676,9 @@ def main(argv: list[str]) -> int:
     """
     usage = ("usage: dead_run.py decide <prior_dead> [--is-error] "
              "[--error-model M] [--cancelled] [--turn-exhaustion] "
-             "[--execution-file PATH] [--pre-agent] [--failed-step NAME] "
-             "[--rate-limited] [--credential-expiry] [--push-status N] "
-             "[--artifact NAME] [--run-url U] | "
+             "[--execution-file PATH] [--comments-file PATH] [--pre-agent] "
+             "[--failed-step NAME] [--rate-limited] [--credential-expiry] "
+             "[--push-status N] [--artifact NAME] [--run-url U] | "
              "park <CARD> | park-unlanded [--run-url U] [--turn-exhaustion]")
     if not argv:
         print(usage)
@@ -665,6 +714,7 @@ def main(argv: list[str]) -> int:
     run_url = _flag_value(rest, "--run-url")
     exec_path = _flag_value(rest, "--execution-file")
     failed_step = _flag_value(rest, "--failed-step")
+    comments_path = _flag_value(rest, "--comments-file")
     turn_facts = ""
     if turn_exhaustion and exec_path:
         import check_agent_result  # local: only this branch needs the loader
@@ -672,12 +722,36 @@ def main(argv: list[str]) -> int:
         turn_facts = check_agent_result.turn_exhaustion_facts(
             check_agent_result._load_execution(exec_path)
         )
+    # DRE-3097: budget-vs-size, off the card's own phase receipts. Every step
+    # of this is fail-soft — an unreadable or absent thread leaves
+    # `budget_not_size` False, which is the message the pipeline has always
+    # sent. A diagnosis is a claim, and no evidence is not a claim.
+    budget_not_size = False
+    raise_to = ""
+    if turn_exhaustion and comments_path:
+        try:
+            import json as _json
+
+            import turn_budget  # local: only this branch needs it
+
+            with open(comments_path) as fh:
+                bodies = _json.load(fh)
+            found = turn_budget.diagnose(bodies if isinstance(bodies, list) else [])
+            budget_not_size = bool(found["budget_not_size"])
+            raise_to = found["label"]
+        except Exception as exc:
+            print(f"dead_run: could not diagnose budget-vs-size from "
+                  f"{comments_path} ({exc}) — reporting the split remedy, "
+                  f"which is what this receipt has always said",
+                  file=sys.stderr)
     d = decide(
         prior_dead,
         is_error=is_error,
         error_model=error_model,
         turn_exhaustion=turn_exhaustion,
         turn_facts=turn_facts,
+        budget_not_size=budget_not_size,
+        raise_to=raise_to,
         cancelled=cancelled,
         pre_agent=pre_agent,
         failed_step=failed_step,

@@ -46,13 +46,17 @@ MERGE_GATE_YML = (
 )
 
 
-def _ctx(gh, run_id="gha-1-1"):
+def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE):
+    # Composed the way __main__ composes it: the namespace OPENS the run id,
+    # so the run's branches sit in the slice its own sweep owns (DRE-3075).
+    run_id = framework.namespaced_run_id(namespace, run_id)
     faketime = _FakeTime()
     return framework.HarnessContext(
         gh=gh,
         gh_qa=gh,
         repo="dreadnought-foundry/bureau-harness",
         run_id=run_id,
+        namespace=namespace,
         worker_login=WORKER,
         qa_login=QA,
         verdict_timeout=100,
@@ -288,7 +292,8 @@ class HappyPathTest(unittest.TestCase):
 
     def test_run_after_simulated_crash_sweeps_dependabot_named_leftovers(self):
         gh = FakeGitHub()
-        stale_branch = "dependabot/harness-crashed-gate_paths-named"
+        # A previous run of THIS lane — same namespace, hence swept.
+        stale_branch = "dependabot/harness-local-crashed-gate_paths-named"
         gh.branches[stale_branch] = gh._new_sha()
         gh.seed_pr(head=stale_branch)
         result, gh = _run(gh=gh)

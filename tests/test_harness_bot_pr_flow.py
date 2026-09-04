@@ -53,6 +53,11 @@ class FakeGitHub:
         self.prs = {}  # number -> PR dict (REST shape)
         self.comments = {}  # number -> [comment dict]
         self.commits = {}  # sha -> REST commit shape (parents/author/committer)
+        # ISO8601 commit dates, keyed by branch name or (branch, path) — what
+        # the sweep reads to tell a live run's leftover from a dead one's
+        # (DRE-3075). Absent = the real client could not resolve a date, which
+        # the sweep must never read as permission to delete.
+        self.dates = {}
         self.check_runs = {}  # sha -> [check-run dicts]
         self.on_create_pr = None  # hook(fake, pr) — the test's "pipeline"
         self.on_poll = None  # hook(fake) — fired on get_pr/list_comments polls
@@ -70,11 +75,14 @@ class FakeGitHub:
             "committer": {"login": login},
         }
 
-    def seed_pr(self, head, state="open", login=WORKER):
+    def seed_pr(self, head, state="open", login=WORKER, created_at=None):
         number = len(self.prs) + 1
         self.prs[number] = {
             "number": number,
             "state": state,
+            # REST carries this on every list shape; the sweep uses it to
+            # date a foreign-namespace leftover without a second call.
+            "created_at": created_at,
             "merged": False,
             "merged_by": None,
             "user": {"login": login},
@@ -215,6 +223,9 @@ class FakeGitHub:
     def get_commit(self, repo, sha):
         return self.commits[sha]
 
+    def last_commit_date(self, repo, ref, path=None):
+        return self.dates.get((ref, path) if path else ref)
+
     def list_pr_commits(self, repo, number):
         return list(self.prs[number].get("commits_payload") or [])
 
@@ -222,12 +233,16 @@ class FakeGitHub:
         return list(self.check_runs.get(sha, []))
 
 
-def _ctx(gh, run_id="gha-1-1"):
+def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE):
+    # Composed the way __main__ composes it: the namespace OPENS the run id,
+    # so the run's branches sit in the slice its own sweep owns (DRE-3075).
+    run_id = framework.namespaced_run_id(namespace, run_id)
     faketime = _FakeTime()
     return framework.HarnessContext(
         gh=gh,
         repo="dreadnought-foundry/bureau-harness",
         run_id=run_id,
+        namespace=namespace,
         worker_login=WORKER,
         qa_login=QA,
         verdict_timeout=100,
@@ -315,17 +330,22 @@ class HappyPathTest(unittest.TestCase):
         # branch, an open PR, and a merged probe file. The next run must
         # sweep them and pass.
         gh = FakeGitHub()
-        stale_branch = "agent/harness-crashed-run-bot_pr_flow"
+        # The crashed run is a previous run of THIS lane, so its leftovers
+        # are in this run's own namespace (DRE-3075) — another lane's are
+        # left alone, which tests/test_harness_main_slot.py covers.
+        stale_branch = "agent/harness-local-crashed-run-bot_pr_flow"
         gh.branches[stale_branch] = gh._new_sha()
         gh.seed_pr(head=stale_branch)
-        gh.files[("main", bot_pr_flow.probe_path("crashed-run"))] = "stale"
+        gh.files[("main", bot_pr_flow.probe_path("local-crashed-run"))] = "stale"
 
         gh.on_create_pr = _happy_pipeline
         result = framework.run_scenario(bot_pr_flow.SCENARIO, _ctx(gh, "gha-2-1"))
 
         self.assertTrue(result.ok, result.errors)
         self.assertNotIn(stale_branch, gh.branches)
-        self.assertNotIn(("main", bot_pr_flow.probe_path("crashed-run")), gh.files)
+        self.assertNotIn(
+            ("main", bot_pr_flow.probe_path("local-crashed-run")), gh.files
+        )
         self.assertEqual(gh.list_open_prs("x"), [])
 
 

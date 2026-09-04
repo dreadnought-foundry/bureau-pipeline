@@ -1,0 +1,59 @@
+{
+  "_readme": [
+    "turn-budgets.json — how many turns a build run gets (DRE-3097).",
+    "",
+    "THE INCIDENT. agent-task.yml carried `--max-turns 150` as a literal.",
+    "DRE-3088 died at it three times in a row on 2026-09-04 ($19.12, $19.12,",
+    "$17.53); every one of those runs reached `⏳ 3/5 implementation green` and",
+    "died in the two steps after it, and the third death came AFTER the card had",
+    "been split to XS. Splitting did not help because the cost was never the size",
+    "of the change — it was the size of the file the agent has to read and re-read",
+    "(plan.yml is ~1,850 lines). The park receipt already named the other remedy,",
+    "'or raises the turn budget', and there was no handle on it.",
+    "",
+    "THE RULE: THE SET IS THE GUARD. The turn count is a KNOB and the run's own",
+    "cap is the GUARD — a card picks a rung, it does not name a number. `allowed`",
+    "is a closed, ordered set of reviewed rungs, exactly the way membership of a",
+    "model ladder in models.yaml is a reviewed spend decision. A `turns:` label",
+    "carrying anything else is refused, out loud, and the card falls back to what",
+    "it would otherwise have got. Raising the ceiling changes the bill only for",
+    "the runs that today produce nothing at all: --max-turns is a ceiling, not a",
+    "target, and a card that finishes in 90 turns costs 90 turns' worth whatever",
+    "the ceiling says.",
+    "",
+    "WHY A FILE, not a lookup: the same constraint models.yaml and repo-map.json",
+    "are documented under in config/README.md — the workflows that read this run",
+    "in a product repo's Actions with no AWS credentials and no token for a",
+    "private repo, so selection must resolve out of the public .bureau-pipeline",
+    "checkout the workflow already does.",
+    "",
+    "Read through scripts/turn_budget.py, never parsed inline. An unreadable file",
+    "degrades to the default map in that module rather than failing a build."
+  ],
+
+  "version": 1,
+
+  "default": 150,
+
+  "allowed": [150, 250, 400],
+
+  "label_prefix": "turns:",
+
+  "size_label_prefix": "size:",
+
+  "size": {
+    "XS": 150,
+    "S": 150,
+    "M": 250,
+    "L": 400,
+    "XL": 400
+  },
+
+  "rungs": {
+    "150": "the default, unchanged. What every card ran on before DRE-3097 and what every card that carries neither label still runs on.",
+    "250": "the first raise. DRE-3088's runs each reached implementation green and died in the two steps after it — the commit ordering for the TDD check and the PR — so the work that was left was small and the margin was zero.",
+    "400": "the top rung, for a card whose work is spread across files large enough that reading them is the spend. Nothing above it: past here the answer is a smaller card, and the job's 120-minute wall clock is the real ceiling anyway."
+  },
+
+  "size_note": "size:XS…size:XL mean EFFORT (config/planning-shapes.json) and already sit on the board, so a card that carries one need not carry a second label saying the same thing. XL maps onto the top rung rather than adding one — the set stays closed."
+}
