@@ -181,13 +181,13 @@ class DecisionCliTest(unittest.TestCase):
                     )
             finally:
                 os.environ.pop("GITHUB_OUTPUT", None)
-        self.assertEqual(code, 0)
-        self.assertIn("blocked", buf.getvalue().lower())
-        written = open(out).read()
-        self.assertIn("promote=false", written)
-        # One line per key: a reason with a newline in it would corrupt the
-        # output file the workflow parses.
-        self.assertEqual(len(written.strip().splitlines()), 2, written)
+            self.assertEqual(code, 0)
+            self.assertIn("blocked", buf.getvalue().lower())
+            written = open(out).read()
+            self.assertIn("promote=false", written)
+            # One line per key: a reason with a newline in it would corrupt
+            # the output file the workflow parses.
+            self.assertEqual(len(written.strip().splitlines()), 2, written)
 
 
 if __name__ == "__main__":

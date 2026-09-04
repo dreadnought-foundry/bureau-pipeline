@@ -46,6 +46,18 @@ on:
           the driver, so name at most two per dispatch (job timeout below).
         required: false
         default: ""
+      wait_deadline_minutes:
+        description: >-
+          Per-wait SANDBOX-LIVENESS deadline, in minutes — separate from the
+          job timeout below, and deliberately NOT a shorter budget (DRE-3076).
+          Every this many minutes a waiting scenario stops and reads the
+          sandbox's own sweep / gate / linear-sync runs; a FAILED one ends the
+          run with its cause quoted, a healthy-but-slow one keeps its full
+          budget. The passing PR run does all its scenarios in 18 minutes, so
+          a single silent wait past ten is already a fault. `0` switches the
+          check off.
+        required: false
+        default: "10"
   # DRE-2551: automatic promotion needs a PROVEN commit on the trunk, and
   # until now nothing ever proved one. The PR trigger stamps the PR head; the
   # fleet merges with merge commits, so that stamp never transfers to main's
@@ -191,6 +203,7 @@ jobs:
           repositories: agent-bureau
 
       - name: Run harness scenarios
+        id: scenarios
         env:
           HARNESS_REPO: dreadnought-foundry/bureau-harness
           # The lane_contract scenario's ONE Linear call: a read-only GraphQL
@@ -226,6 +239,13 @@ jobs:
           HARNESS_QA_APP_PRIVATE_KEY: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
           SCENARIOS: ${{ inputs.scenarios }}
+          # DRE-3076. On push/pull_request the `inputs` context does not
+          # resolve and this is empty — the driver then uses its own default
+          # (framework.WAIT_DEADLINE_SECONDS), which is the same number as the
+          # input's default above; tests/test_harness_sandbox_deadline.py pins
+          # them together. Those are exactly the runs that stalled the channel,
+          # so the deadline must NOT be dispatch-only.
+          HARNESS_WAIT_DEADLINE_MINUTES: ${{ inputs.wait_deadline_minutes }}
           PYTHONPATH: scripts
         run: |
           python3 -m harness --repo "$HARNESS_REPO" --scenarios "$SCENARIOS"
@@ -234,15 +254,30 @@ jobs:
       # this context): success on green, an honest failure on red — a
       # later green run overwrites it, GitHub keeps the latest status per
       # context. Cancelled runs proved nothing and stamp nothing.
+      #
+      # DRE-3076: the DESCRIPTION carries one more fact. When the driver died
+      # because the SANDBOX was down (a failed sweep / gate / linear-sync run,
+      # e.g. Linear rate-limited on 2026-09-03), it writes the sandbox's quoted
+      # failure to `blocked_reason` — already marker-prefixed and clamped to
+      # GitHub's 140-character description limit — and that becomes the
+      # description. promote_channel.py reads the marker and says "blocked by
+      # sandbox, not proven yet" instead of "harness failed", which would send
+      # someone looking at a diff that was never judged. The stamp stays RED:
+      # unproven is not proven, and the PR-gating check must still hold.
       - name: Stamp tested sha with the harness verdict
         if: success() || failure()
         env:
           GH_TOKEN: ${{ github.token }}
           TESTED_SHA: ${{ steps.tested.outputs.sha }}
           STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
+          BLOCKED_REASON: ${{ steps.scenarios.outputs.blocked_reason }}
         run: |
+          DESCRIPTION="integration harness: ${STATE}"
+          if [ -n "$BLOCKED_REASON" ]; then
+            DESCRIPTION="$BLOCKED_REASON"
+          fi
           gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
             -f state="$STATE" \
             -f context="integration-harness" \
-            -f description="integration harness: ${STATE}" \
+            -f description="$DESCRIPTION" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

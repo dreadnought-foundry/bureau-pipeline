@@ -10,15 +10,23 @@ deletes, branch-protection refusals).
 from __future__ import annotations
 
 import base64
+import io
 import json
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
 API_URL = "https://api.github.com"
 _RETRIES = 3
 _BACKOFF_SECONDS = 5
+
+# Bounds on the Actions log archive read (DRE-3076). The driver wants one
+# failing LINE out of a sandbox run; it must never pull a multi-megabyte
+# archive into memory while a scenario is already past its deadline.
+_LOG_MEMBER_CAP = 40
+_LOG_BYTE_CAP = 256 * 1024
 
 # App installation tokens die exactly one hour after mint. A client given
 # a token_supplier re-mints proactively at 50 minutes — comfortably inside
@@ -99,7 +107,20 @@ class GitHub:
                 return self._attempt(method, path, body)
             raise
 
-    def _attempt(self, method: str, path: str, body: dict | None = None):
+    def request_bytes(self, method: str, path: str) -> bytes:
+        """One REST call whose body is NOT json — the Actions log archive is a
+        zip (DRE-3076). Same auth, retry and re-mint path as `request`."""
+        if self._supplier and self._clock() - self._minted_at >= TOKEN_REFRESH_SECONDS:
+            self._remint()
+        try:
+            return self._attempt(method, path, raw=True)
+        except GitHubError as e:
+            if e.status == 401 and self._remint():
+                return self._attempt(method, path, raw=True)
+            raise
+
+    def _attempt(self, method: str, path: str, body: dict | None = None,
+                 raw: bool = False):
         url = path if path.startswith("http") else f"{self._api}{path}"
         data = json.dumps(body).encode() if body is not None else None
         last_error: Exception | None = None
@@ -118,6 +139,8 @@ class GitHub:
             )
             try:
                 status, payload = self._opener(req)
+                if raw:
+                    return payload or b""
                 return json.loads(payload) if payload else None
             except urllib.error.HTTPError as e:
                 detail = e.read().decode(errors="replace")[:500]
@@ -276,6 +299,54 @@ class GitHub:
         )
         runs = out.get("check_runs") if isinstance(out, dict) else None
         return runs if isinstance(runs, list) else []
+
+    # ── actions (is the sandbox's own machinery alive? DRE-3076) ─────────
+    def list_workflow_runs(self, repo, per_page: int = 50) -> list[dict]:
+        """The sandbox's most recent COMPLETED workflow runs, newest first.
+
+        One call answers "what did the sweep / the gate / linear-sync last
+        do?" — the question a scenario that has been waiting past its deadline
+        needs answered before it decides the sandbox is dead.
+        """
+        out = self.request(
+            "GET",
+            f"/repos/{repo}/actions/runs?status=completed&per_page={int(per_page)}",
+        )
+        runs = out.get("workflow_runs") if isinstance(out, dict) else None
+        return runs if isinstance(runs, list) else []
+
+    def run_log_text(self, repo, run_id) -> str | None:
+        """A completed run's logs as text, or None when GitHub will not serve
+        them (410 past retention, 403 without `actions: read`, 404).
+
+        GitHub answers with a zip archive of one file per step; the driver
+        wants the failing LINE, so the members are concatenated in name order
+        — the same text `gh run view --log` prints, which is what
+        `medic_classify` already reads.
+        """
+        try:
+            payload = self.request_bytes(
+                "GET", f"/repos/{repo}/actions/runs/{int(run_id)}/logs"
+            )
+        except (GitHubError, ValueError, TypeError):
+            return None
+        if not payload:
+            return None
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                names = sorted(
+                    n for n in archive.namelist() if not n.endswith("/")
+                )
+                chunks = []
+                for name in names[:_LOG_MEMBER_CAP]:
+                    with archive.open(name) as member:
+                        chunks.append(
+                            member.read(_LOG_BYTE_CAP).decode(errors="replace")
+                        )
+            return "\n".join(chunks)
+        except (zipfile.BadZipFile, OSError):
+            # Not a zip: GitHub occasionally serves plain text on small runs.
+            return payload.decode(errors="replace")
 
     # ── pull requests ────────────────────────────────────────────────────
     def create_pr(self, repo, head, base, title, body) -> dict:

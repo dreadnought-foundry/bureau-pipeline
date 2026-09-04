@@ -74,7 +74,6 @@ from harness.framework import (
     scenario_branch,
     sweep_leftovers,
     verdict_state,
-    wait_until,
 )
 
 import merge_gate
@@ -293,13 +292,11 @@ class GatePaths(framework.Scenario):
             return state == "APPROVE" or None
 
         try:
-            wait_until(
+            ctx.wait(
                 f"a bound APPROVE to race on PR #{number}",
                 poll_approve,
                 timeout=ctx.verdict_timeout,
                 interval=min(ctx.poll_interval, STALE_POLL_INTERVAL),
-                clock=ctx.clock,
-                sleep=ctx.sleep,
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(
@@ -350,13 +347,10 @@ class GatePaths(framework.Scenario):
                 )
             return None
 
-        merged = wait_until(
+        merged = ctx.wait(
             f"the gate merging PR #{number} on a FRESH verdict",
             poll_merged,
             timeout=ctx.verdict_timeout + ctx.merge_timeout,
-            interval=ctx.poll_interval,
-            clock=ctx.clock,
-            sleep=ctx.sleep,
         )
         final_head = merged["head"]["sha"]
         state, detail = verdict_state(
@@ -412,13 +406,10 @@ class GatePaths(framework.Scenario):
             return None
 
         try:
-            merged = wait_until(
+            merged = ctx.wait(
                 f"the gate merging the behind-base PR #{number} untouched",
                 poll_merged,
                 timeout=ctx.verdict_timeout + ctx.merge_timeout,
-                interval=ctx.poll_interval,
-                clock=ctx.clock,
-                sleep=ctx.sleep,
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(
@@ -500,13 +491,10 @@ class GatePaths(framework.Scenario):
             comments = ctx.gh.list_comments(ctx.repo, number)
             return comments if _human_wait_comments(comments, ctx.qa_login) else None
 
-        wait_until(
+        ctx.wait(
             f"the waiting-for-human state on PR #{number}",
             poll_human,
             timeout=ctx.merge_timeout,
-            interval=ctx.poll_interval,
-            clock=ctx.clock,
-            sleep=ctx.sleep,
         )
 
         # A second, observable gate wake: this PR's own critic comment
@@ -518,13 +506,10 @@ class GatePaths(framework.Scenario):
             state, _ = verdict_state(comments, ctx.qa_login, h1)
             return comments if state != "none" else None
 
-        wait_until(
+        ctx.wait(
             f"a critic comment on PR #{number} (the second gate wake)",
             poll_critic,
             timeout=ctx.verdict_timeout,
-            interval=ctx.poll_interval,
-            clock=ctx.clock,
-            sleep=ctx.sleep,
         )
         ctx.sleep(GATE_GRACE_SECONDS)
 
@@ -572,16 +557,13 @@ class GatePaths(framework.Scenario):
 
         if provable:
             if state == "APPROVE":
-                merged = wait_until(
+                merged = ctx.wait(
                     f"the minor/patch Dependabot PR #{number} auto-merging",
                     lambda: (
                         (p := ctx.gh.get_pr(ctx.repo, number)).get("merged")
                         and p or None
                     ),
                     timeout=ctx.merge_timeout,
-                    interval=ctx.poll_interval,
-                    clock=ctx.clock,
-                    sleep=ctx.sleep,
                 )
                 merged_by = (merged.get("merged_by") or {}).get("login") or ""
                 if not same_bot(merged_by, ctx.qa_login):
@@ -621,15 +603,12 @@ class GatePaths(framework.Scenario):
             # A bound verdict exists, so the gate HAS woken — the state
             # comment must appear (allow one more evaluation's latency).
             waits = _human_wait_comments(
-                wait_until(
+                ctx.wait(
                     f"the waiting-for-human state on the real PR #{number}",
                     lambda: (
                         c := ctx.gh.list_comments(ctx.repo, number)
                     ) and _human_wait_comments(c, ctx.qa_login) and c or None,
                     timeout=ctx.merge_timeout,
-                    interval=ctx.poll_interval,
-                    clock=ctx.clock,
-                    sleep=ctx.sleep,
                 ),
                 ctx.qa_login,
             )

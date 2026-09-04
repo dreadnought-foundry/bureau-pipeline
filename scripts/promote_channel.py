@@ -41,6 +41,19 @@ STATUS_CONTEXT = "integration-harness"
 #: first promotion and cannot possibly move anything backwards.
 NO_CHANNEL_YET = "no-channel-yet"
 
+#: What the harness driver writes at the FRONT of the stamp's description when
+#: a run died on a dead SANDBOX rather than on the commit (DRE-3076) — see
+#: `harness/sandbox_health.py`, which composes the line, and harness.yml, which
+#: carries it into the status.
+#:
+#: The distinction is the point of the marker. "harness failed" reads as *this
+#: commit is bad*; on 2026-09-03 the commit was fine and the sandbox's own
+#: reconcile sweep had been rate-limited by Linear, and the run that followed
+#: proved the same trunk green in eleven minutes. Marker first, because GitHub
+#: clamps a status description at 140 characters and a clamped receipt must
+#: still be recognisable here.
+BLOCKED_MARKER = "harness blocked:"
+
 #: GitHub's compare API vocabulary (base=channel, head=candidate).
 AHEAD = "ahead"
 BEHIND = "behind"
@@ -58,8 +71,8 @@ def matches(pattern: str, ref: str) -> bool:
     return fnmatch.fnmatch(ref, pattern)
 
 
-def _harness_verdict(combined: dict | None) -> str | None:
-    """The harness's own state for this sha, or None if it never said.
+def _harness_stamp(combined: dict | None) -> dict | None:
+    """The harness's own stamp for this sha, or None if it never said.
 
     A `{}` substitute (what the caller writes when the status fetch fails) and
     a genuinely absent stamp are the same answer: we do not know, so we do not
@@ -67,8 +80,26 @@ def _harness_verdict(combined: dict | None) -> str | None:
     """
     for status in (combined or {}).get("statuses") or []:
         if status.get("context") == STATUS_CONTEXT:
-            return status.get("state")
+            return status
     return None
+
+
+def _harness_verdict(combined: dict | None) -> str | None:
+    """The stamp's state alone."""
+    stamp = _harness_stamp(combined)
+    return stamp.get("state") if stamp else None
+
+
+def blocked_by_sandbox(combined: dict | None) -> str | None:
+    """The sandbox's quoted failure when the harness never got to judge this
+    commit, else None.
+
+    Read BEFORE the state, and independently of it: the marker says the run
+    proved nothing, which is true whatever colour the stamp ended up wearing.
+    """
+    stamp = _harness_stamp(combined) or {}
+    description = (stamp.get("description") or "").strip()
+    return description if description.startswith(BLOCKED_MARKER) else None
 
 
 def evaluate(
@@ -95,7 +126,20 @@ def evaluate(
             f"{hold.strip()}. Clear the hold variable to resume."
         )
 
-    # 2. The harness must have proved THIS sha. Never promote on unverifiable
+    # 2. Blocked by the SANDBOX (DRE-3076) — read before the state, because it
+    #    is a different fact. The harness never judged this commit: its own
+    #    proving ground was down (a Linear rate limit, on 2026-09-03). Nothing
+    #    is proven and nothing is disproven, so this is neither a promotion nor
+    #    a defect, and the receipt must not send anyone looking at the diff.
+    blocked = blocked_by_sandbox(combined)
+    if blocked:
+        return False, (
+            f"not promoting {sha}: the harness was BLOCKED BY THE SANDBOX, "
+            f"not by this commit — {blocked}. Nothing is proven either way; "
+            f"the next run re-proves this trunk."
+        )
+
+    # 3. The harness must have proved THIS sha. Never promote on unverifiable
     #    data — the merge gate's compare-blip rule, and the reason a fetch
     #    failure is indistinguishable from no stamp here.
     verdict = _harness_verdict(combined)
@@ -107,7 +151,7 @@ def evaluate(
             f"move {CHANNEL}."
         )
 
-    # 3. The channel may only ever advance. Two harness runs can finish out of
+    # 4. The channel may only ever advance. Two harness runs can finish out of
     #    order; without this, the later-finishing older commit wins and the
     #    channel silently regresses — which would look exactly like a working
     #    channel while shipping older code.
@@ -153,7 +197,10 @@ def main(argv: list[str] | None = None) -> int:
     if out:
         with open(out, "a") as fh:
             fh.write(f"promote={'true' if ok else 'false'}\n")
-            fh.write(f"reason={reason}\n")
+            # One line, always. `$GITHUB_OUTPUT` is a key=value file, so a
+            # newline inside the value is a second KEY — and since DRE-3076 the
+            # reason can quote a sandbox log, which is not ours to trust.
+            fh.write(f"reason={' '.join(reason.split())}\n")
     # A refusal is ordinary, not a failure — the caller branches on `promote`.
     return 0
 

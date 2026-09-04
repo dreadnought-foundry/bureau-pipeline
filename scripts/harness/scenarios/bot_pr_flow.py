@@ -37,7 +37,6 @@ from harness.framework import (
     same_bot,
     sweep_leftovers,
     verdict_state,
-    wait_until,
 )
 
 
@@ -131,13 +130,10 @@ class BotPrFlow(framework.Scenario):
             return state == "APPROVE" or None
 
         try:
-            wait_until(
+            ctx.wait(
                 f"a qa-authored critic APPROVE bound to {head_sha} on PR #{number}",
                 poll_verdict,
                 timeout=ctx.verdict_timeout,
-                interval=ctx.poll_interval,
-                clock=ctx.clock,
-                sleep=ctx.sleep,
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(
@@ -156,13 +152,10 @@ class BotPrFlow(framework.Scenario):
                 )
             return None
 
-        merged = wait_until(
+        merged = ctx.wait(
             f"the merge gate merging PR #{number}",
             poll_merged,
             timeout=ctx.merge_timeout,
-            interval=ctx.poll_interval,
-            clock=ctx.clock,
-            sleep=ctx.sleep,
         )
         merged_by = (merged.get("merged_by") or {}).get("login") or ""
         if not same_bot(merged_by, ctx.qa_login):
