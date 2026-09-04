@@ -86,11 +86,31 @@ a person dragging a card — and both modules say so. What this module guarantee
 is that nothing HERE declares a way past
 Planning.
 
+## Two reasons, not one (DRE-3074)
+
+An escalation says *a human is owed a decision*. It is the wrong sentence for
+the other way planning stops: the classifier's call never reached a model at
+all. On 2026-09-03 that was every call — the classifier posted to the raw
+Messages API with a subscription token, which answers 429 to every request —
+and so every card entering Planning was parked in the CEO's queue on the words
+*"We could not get an answer from the system that reads new cards."* A one-line
+README change (DRE-3017) sat there waiting for a decision nobody had been asked
+to make.
+
+`requeue()` is the other reason. It says the plumbing failed, it does NOT move
+the card, and it is budgeted at `TRANSPORT_REQUEUE_CAP`: the first failure
+leaves the card in Planning for the next sweep to read again, and a second one
+— a transport that is still down when the card comes back round — escalates
+through the seam above, because a card nothing will ever classify must not sit
+in Planning forever either. Nothing retries inside the run: re-issuing a call
+at a rate limit is the DRE-1921 medic loop.
+
 CLI:
 
     python3 scripts/planning_escalation.py check
     python3 scripts/planning_escalation.py escalate DRE-N --why "…"
     python3 scripts/planning_escalation.py escalate DRE-N --reason-file <path>
+    python3 scripts/planning_escalation.py requeue DRE-N --reason-file <path>
 """
 
 from __future__ import annotations
@@ -118,6 +138,18 @@ PLAN_WORKFLOW = os.path.join(ROOT, ".github", "workflows", "plan.yml")
 # back as a stamp the card never earned.
 ESCALATION_TAG = "planning-escalation"
 ESCALATION_MARK = "🙋"
+
+# The OTHER record (DRE-3074): the classifier's call never reached a model, so
+# nobody is owed a decision — the card is owed another attempt. A tag of its
+# own, because it is counted (`TRANSPORT_REQUEUE_CAP`) and because a note that
+# carried `ESCALATION_TAG` would suppress the real escalation that follows it.
+TRANSPORT_TAG = "planning-classify-transport"
+TRANSPORT_MARK = "🔌"
+
+# How many times one card's classification may fail on the transport before it
+# stops being a blip. ONE: the next planner run to read this card tries again,
+# and a transport still down by then is not something waiting will fix.
+TRANSPORT_REQUEUE_CAP = 1
 
 # The lane the escalation leaves FROM. Hand-planning is an escalation OUT of
 # Planning, so the card has been through Planning by the time it parks — which
@@ -315,6 +347,62 @@ def escalate(linear_ops, identifier: str, reason: str | None) -> bool:
         posted = True
     linear_ops.cmd_state(identifier, lane)
     return posted
+
+
+# --------------------------------------------------------------------------- #
+# the other reason: the call never reached a model (DRE-3074)                  #
+# --------------------------------------------------------------------------- #
+
+
+def transport_comment(identifier: str, reason: str | None) -> str:
+    """The note a requeued card carries. Not an escalation, and it says so.
+
+    Written for whoever opens the card next — which is usually nobody, because
+    the next planner run classifies it and this note is simply the record that
+    an attempt was made and did not reach anything. It names the failure in the
+    words the run log uses (`HTTP 429, transport`) because that is what tells an
+    operator this was plumbing rather than a card nobody could read.
+    """
+    stated = (reason or "").strip()
+    return "\n".join([
+        f"{TRANSPORT_MARK} {TRANSPORT_TAG}: {identifier} was not classified on "
+        "this run, and nobody needs to do anything about it.",
+        "",
+        "**What happened:** " + (
+            stated or "The classifier could not reach its model (transport)."
+        ),
+        "",
+        "This is our own plumbing, not a question about the card. The card has "
+        "not moved and it is queued to be read again on the next sweep.",
+    ])
+
+
+def requeue(linear_ops, identifier: str, reason: str | None,
+            cap: int = TRANSPORT_REQUEUE_CAP) -> bool:
+    """Record a failed transport and leave the card where it is. True when it
+    was requeued; False once the budget is spent and the card has ESCALATED.
+
+    The lane is deliberately untouched on the requeue path: `Planning` is where
+    a card owing a classification belongs, and moving it into the CEO's queue
+    for a 429 is exactly the defect this closes. The budget is counted off the
+    card's own comments, the same way every other bounded retry in this
+    pipeline counts — so two runs that each fail once do not requeue forever.
+    """
+    already = 0
+    try:
+        already = linear_ops.count_comments(identifier, TRANSPORT_TAG)
+    except Exception as exc:  # noqa: BLE001 — a read failure must not strand the card
+        print(f"{identifier}: could not read prior requeues ({exc})", file=sys.stderr)
+    if already >= cap:
+        print(
+            f"{identifier}: the classifier has now failed to reach a model "
+            f"{already + 1} time(s) — escalating rather than requeueing again",
+            file=sys.stderr,
+        )
+        escalate(linear_ops, identifier, reason)
+        return False
+    linear_ops.cmd_comment(identifier, transport_comment(identifier, reason))
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -565,6 +653,20 @@ def _cmd_escalate(args) -> int:
     return 0
 
 
+def _cmd_requeue(args) -> int:
+    import linear_ops
+
+    reason = _read_reason(args)
+    if requeue(linear_ops, args.identifier, reason):
+        print(f"{args.identifier} left in {ORIGIN} to be classified again")
+    else:
+        print(
+            f"{args.identifier} escalated out of {ORIGIN} → {destination()} — "
+            "the classifier has failed to reach a model more than once"
+        )
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command")
@@ -574,6 +676,11 @@ def main(argv=None) -> int:
     esc.add_argument("identifier")
     esc.add_argument("--why", default=None)
     esc.add_argument("--reason-file", dest="reason_file", default=None)
+
+    again = sub.add_parser("requeue")
+    again.add_argument("identifier")
+    again.add_argument("--why", default=None)
+    again.add_argument("--reason-file", dest="reason_file", default=None)
 
     args = parser.parse_args(argv)
     command = args.command or "check"
@@ -590,6 +697,9 @@ def main(argv=None) -> int:
 
     if command == "escalate":
         return _cmd_escalate(args)
+
+    if command == "requeue":
+        return _cmd_requeue(args)
 
     parser.print_usage(sys.stderr)
     return 2

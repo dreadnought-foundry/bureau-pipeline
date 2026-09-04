@@ -48,19 +48,60 @@ the size tests from the `too big for one run` section of
 standard renames it in the prompt and in the stamp's reason. A prompt that
 restated any of the three would be a second copy, and the copy is what drifts.
 
+## The transport (DRE-3074) — and the two reasons
+
+DRE-3029 shipped this as ONE raw POST to `/v1/messages` with whatever CLAUDE
+credential the run held. Every repo in the fleet runs `CLAUDE_AUTH_MODE ==
+'subscription'`, and **a subscription OAuth token cannot call the raw Messages
+API: it answers HTTP 429 `rate_limit_error` to every request, regardless of
+load.** So the first three planner runs that ever reached this step
+(33836071343, 33836087399, 33836089993) escalated all three cards they read to
+the CEO inside twenty seconds, on the same sentence, and a one-line README
+change sat in the decision queue. The fail-closed rule worked exactly as
+specified; the transport under it could never answer.
+
+There are therefore two transports behind one interface (`transport()`):
+
+  * **`claude-code`** — the default, and the only one a subscription token can
+    use. `plan.yml` runs the call as a bounded `claude-code-action` step —
+    one turn, no tools — exactly as it runs the planner and both critics, and
+    this module reads the answer back out of the run's own execution record
+    (`answer_from_execution`). Two CLI halves, `prompt` and `answer`.
+  * **`api`** — the raw POST, kept as the fast path where there IS an
+    `ANTHROPIC_API_KEY`. It refuses to run without one rather than falling back
+    to the bearer token, because that fallback IS the defect.
+
+And two REASONS, which used to be one. A call that failed BEFORE any model read
+the card — 429, 401, 5xx, a crashed run, no credential — is our own plumbing
+failing. It is not a judgement anybody can answer, so it says so
+(`_transport_down`) and the card is requeued for the next sweep
+(`planning_escalation.requeue`) instead of being parked in the CEO's queue.
+Only a model that DID read the card and could not tell is a decision for the
+CEO. The split is `Decision.transport`, and the two properties `escalates` /
+`requeues` are how a caller acts on it.
+
 ## The vendor boundary (standards/vendor-boundaries.md)
 
 Q1 actor — the call is made by the plan job itself, with the same CLAUDE
-credential the planner agent and the availability probe already use
-(`model_fallback.auth_headers`). No new secret, no new identity, no dispatch.
+credential the planner agent and the availability probe already use. Since
+DRE-3074 the subscription path goes through `claude-code-action`, the same
+action the planner and both critics in this workflow run under, with the same
+`allowed_bots` list — so a run dispatched by reconcile (initiating as
+`github-actions`, DRE-2053) is admitted here exactly as it is there. No new
+secret, no new identity, no dispatch.
 Q2 secrets — the step reads the same `CLAUDE_AUTH_MODE` switch as the
-model-selection step beside it, so it gets the same store that step gets.
-Q3 retry — ONE call, never retried. A rerun of the same card finds the stamp and
-makes no call at all; a rerun after an escalation posts nothing twice, because
-`planning_escalation.escalate` is keyed on its own tag.
-Q4 limitations — the answer is bounded (`MAX_TOKENS`) and time-boxed
-(`TIMEOUT_SECONDS`); a truncated, empty or non-JSON answer is a refusal, and a
-429 is a failed call, which is a refusal too. Never a stamp.
+model-selection step beside it, so it gets the same store that step gets, and
+the action is handed both token shapes the same way every other agent step in
+this file is handed them.
+Q3 retry — ONE call, never retried inside the run. A rerun of the same card
+finds the stamp and makes no call at all; a rerun after an escalation posts
+nothing twice, because `planning_escalation.escalate` is keyed on its own tag.
+A TRANSPORT failure is requeued once and once only — re-issuing a call at a
+rate limit inside the same run is the DRE-1921 medic loop, and it is not done.
+Q4 limitations — the answer is bounded (`--max-turns 1` / `MAX_TOKENS`) and
+time-boxed; a truncated, empty or non-JSON answer is a refusal. A 429 is not:
+it is a failed TRANSPORT, and it never reaches the CEO. Never a stamp either
+way.
 Q5 our own crash — nothing is written before the stamp, so a crash anywhere in
 here leaves the card exactly as it arrived, in Planning with no stamp, and the
 next run classifies it. No receipt blocks the recovery.
@@ -68,8 +109,12 @@ next run classifies it. No receipt blocks the recovery.
 CLI:
 
     python3 scripts/planning_classify.py check
-    python3 scripts/planning_classify.py classify DRE-N \\
+    python3 scripts/planning_classify.py prompt DRE-N \\
         [--github-output F] [--escalation-file F]
+    python3 scripts/planning_classify.py answer DRE-N --execution-file F \\
+        [--model M] [--github-output F] [--escalation-file F]
+    python3 scripts/planning_classify.py classify DRE-N \\
+        [--github-output F] [--escalation-file F]   # the api fast path
 """
 
 from __future__ import annotations
@@ -123,6 +168,12 @@ TIMEOUT_SECONDS = 60
 
 _API_URL = "https://api.anthropic.com/v1/messages"
 
+# The two transports, behind one interface. `claude-code` is the default
+# because it is the only one a subscription token can use, and every repo in
+# the fleet is on a subscription token.
+TRANSPORT_CLAUDE_CODE = "claude-code"
+TRANSPORT_API = "api"
+
 
 class ClassifyError(RuntimeError):
     """The prompt cannot be composed — the brief, the standard or the
@@ -131,13 +182,33 @@ class ClassifyError(RuntimeError):
     run."""
 
 
+class TransportError(ClassifyError):
+    """The call never reached a model (DRE-3074).
+
+    A 429, a 401, a 5xx, a crashed run, no credential at all: every one of them
+    arrives BEFORE any model reads the card, so none of them is a judgement a
+    person can answer. `status` carries the HTTP status when there was one, so
+    the reason can name it — "HTTP 429, transport" is what tells an operator
+    this was plumbing rather than a card nobody could classify.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
 @dataclass(frozen=True)
 class Decision:
     """What the classifier concluded, and what the run does about it.
 
     `refusal` is the whole branch: None means stamp `shape`, anything else is a
     sentence — in plain English, because a human reads it — saying why this card
-    is going to the CEO instead.
+    is not being stamped.
+
+    `transport` splits that branch in two (DRE-3074). A refusal the MODEL wrote
+    is a decision for the CEO and the card parks in their queue; a refusal that
+    means "we never reached a model" is our own plumbing, and the card is
+    requeued rather than put in front of somebody who cannot act on it.
     """
 
     shape: str | None = None
@@ -147,10 +218,22 @@ class Decision:
     model: str | None = None
     refusal: str | None = None
     already: bool = False
+    transport: bool = False
+
+    @property
+    def unclassified(self) -> bool:
+        """Nothing was stamped, whichever exit this takes."""
+        return self.refusal is not None
 
     @property
     def escalates(self) -> bool:
-        return self.refusal is not None
+        """The CEO owes this card an answer."""
+        return self.refusal is not None and not self.transport
+
+    @property
+    def requeues(self) -> bool:
+        """Nobody owes this card anything — it is owed another attempt."""
+        return self.refusal is not None and self.transport
 
 
 # --------------------------------------------------------------------------- #
@@ -517,23 +600,50 @@ def escalation_reason(identifier: str, decision: Decision) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _call_real(model: str, prompt: str) -> str:
+def transport(env: dict | None = None) -> str:
+    """Which transport this run's classification goes over.
+
+    An `ANTHROPIC_API_KEY` means the raw Messages API is genuinely available,
+    and it is the cheaper path — one POST, no action, no runner install. A run
+    without one holds the subscription OAuth token, which **cannot call
+    `/v1/messages` at all**: it answers 429 `rate_limit_error` to every request
+    whatever the load (DRE-3074). So the absence of an API key is not "use the
+    other credential on the same URL" — it is a different transport.
+    """
+    env = os.environ if env is None else env
+    return (
+        TRANSPORT_API if (env.get("ANTHROPIC_API_KEY") or "").strip()
+        else TRANSPORT_CLAUDE_CODE
+    )
+
+
+def _call_api(model: str, prompt: str) -> str:
     """One `/v1/messages` POST. Raises on anything that is not an answer.
 
     stdlib only (urllib), and the same auth block the availability probe uses —
     this file adds no dependency and no secret.
 
-    An HTTP error is re-raised WITH its body: a bare 400 is unattributable, and
-    the difference between "this model is gone", "we are rate-limited" and "the
-    credential is wrong" is the whole of what the run log has to say about a
-    card that just went to the CEO (`tests/test_linear_error_body.py`).
+    It REFUSES to run without an API key (DRE-3074) rather than falling back to
+    the bearer token `model_fallback.auth_headers()` would happily supply: that
+    fallback is the defect, and the refusal is what the OAuth-mode test pins.
+
+    An HTTP error is re-raised WITH its body and its status: a bare 400 is
+    unattributable, and the difference between "this model is gone", "we are
+    rate-limited" and "the credential is wrong" is the whole of what the run log
+    has to say about a card that just went to the CEO
+    (`tests/test_linear_error_body.py`).
     """
     import urllib.error
     import urllib.request
 
+    if transport() != TRANSPORT_API:
+        raise TransportError(
+            "this run holds a subscription token, which cannot call the raw "
+            "Messages API — the classification goes over the Claude Code path"
+        )
     headers = model_fallback.auth_headers()
-    if headers is None:
-        raise ClassifyError(
+    if headers is None:  # pragma: no cover - transport() already answered this
+        raise TransportError(
             "this run carries no Anthropic credential, so the card cannot be "
             "classified"
         )
@@ -557,14 +667,95 @@ def _call_real(model: str, prompt: str) -> str:
             detail = e.read().decode("utf-8", "replace")[:400]
         except Exception:  # pragma: no cover - defensive
             detail = ""
-        raise ClassifyError(
-            f"the classification call returned HTTP {e.code}: {detail}"
+        raise TransportError(
+            f"the classification call returned HTTP {e.code}: {detail}",
+            status=e.code,
         ) from e
+    except OSError as e:
+        # urllib.error.URLError, a timeout, a reset connection — the call never
+        # reached a model, which is the same fact a 429 states.
+        raise TransportError(f"the classification call did not connect: {e}") from e
     return "".join(
         block.get("text") or ""
         for block in body.get("content") or ()
         if isinstance(block, dict)
     )
+
+
+def _call_real(model: str, prompt: str) -> str:
+    """The default transport for a ONE-SHOT `classify` call.
+
+    Only the api path can be driven from inside this process: the Claude Code
+    path is a workflow step, so its two halves are the `prompt` and `answer`
+    CLI commands and `plan.yml` is what joins them. Saying so is a transport
+    failure rather than a crash — a card is never left worse off for it.
+    """
+    if transport() == TRANSPORT_API:
+        return _call_api(model, prompt)
+    raise TransportError(
+        "the Claude Code path is a workflow step, so a one-shot call has no "
+        "transport here — run `prompt`, make the call, then `answer`"
+    )
+
+
+def answer_from_execution(path: str) -> tuple:
+    """`(answer, model)` out of a `claude-code-action` execution record.
+
+    The action writes the raw message list to
+    `$RUNNER_TEMP/claude-execution-output.json` (see `execution_result.py`,
+    which reads the same file for the death gates). With `--max-turns 1` and no
+    tools the record is two entries: the assistant's answer and the result.
+
+    The MODEL is read off the record rather than off the selector, because they
+    are different facts and DRE-3015 asks for the second one: the selector says
+    which model was ASKED, and only the run says which one answered.
+
+    Raises `TransportError` for every way this file can fail to carry an
+    answer — an absent or unreadable file, a run that errored, a run that
+    finished with nothing to say. All of them mean no model read the card.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise TransportError(
+            f"the classification run left no readable record at {path}: {e}"
+        ) from e
+
+    entries = data if isinstance(data, list) else [data]
+    result, model = None, None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message")
+        if isinstance(message, dict) and (message.get("model") or "").strip():
+            model = message["model"].strip()
+        if "is_error" in entry or entry.get("type") == "result":
+            result = entry
+    if result is None:
+        raise TransportError(
+            "the classification run recorded no result at all, so nothing read "
+            "the card"
+        )
+    usage = result.get("modelUsage")
+    if isinstance(usage, dict) and usage:
+        # The action's own accounting of what answered. One key under
+        # --max-turns 1; the first is the one that produced the answer.
+        model = next(iter(usage)) or model
+    if result.get("is_error") is True:
+        status = result.get("api_error_status")
+        raise TransportError(
+            "the classification run failed: "
+            f"{result.get('subtype') or result.get('result') or 'error'}",
+            status=status if isinstance(status, int) else None,
+        )
+    text = result.get("result")
+    if not isinstance(text, str) or not text.strip():
+        raise TransportError(
+            "the classification run ended with no answer text, so there is "
+            "nothing to read"
+        )
+    return text, model
 
 
 def classify(card: dict, *, call=None, model: str | None = None,
@@ -581,7 +772,11 @@ def classify(card: dict, *, call=None, model: str | None = None,
         return Decision(model=model, refusal=_unreachable(e))
     try:
         answer = (call or _call_real)(model, prompt)
-    except Exception as e:  # noqa: BLE001 — any failed call is a refusal
+    except (TransportError, OSError) as e:
+        # The two shapes of "no model read this card": our own transport saying
+        # so, and the network saying so underneath an injected one.
+        return Decision(model=model, transport=True, refusal=_transport_down(e))
+    except Exception as e:  # noqa: BLE001 — any other failed call is a refusal
         return Decision(model=model, refusal=_unreachable(e))
     return parse(answer, doc=doc, model=model)
 
@@ -600,22 +795,38 @@ def _unreachable(error: Exception) -> str:
     )
 
 
+def _transport_down(error: Exception) -> str:
+    """The reason for a call that never reached a model (DRE-3074).
+
+    It names the status where there is one, because "HTTP 429, transport" is
+    what tells whoever reads the card that this was our plumbing and not a card
+    nobody could classify — the distinction three planner runs could not make
+    on 2026-09-03, when every card entering Planning went to the CEO on the
+    same sentence.
+    """
+    print(f"planning classify: the call did not answer: {error}", file=sys.stderr)
+    status = getattr(error, "status", None)
+    detail = f"HTTP {status}, transport" if status else "transport"
+    return (
+        f"The classifier could not reach its model ({detail}), so nothing has "
+        "read this card yet. This is our own plumbing failing rather than a "
+        "question about the card, and the card is queued to be read again."
+    )
+
+
 # --------------------------------------------------------------------------- #
 # the run                                                                      #
 # --------------------------------------------------------------------------- #
 
 
-def run(lops, identifier: str, *, call=None, model: str | None = None,
-        doc: dict | None = None) -> Decision:
-    """Classify `identifier` and stamp the answer, or return the escalation.
+def _prior(lops, identifier: str, doc: dict | None = None) -> Decision | None:
+    """What the card ALREADY says, when that settles it — or None to classify.
 
     A card that already carries a shape is left alone and NOT re-read: a hand
     stamp is an override, and an override the classifier could talk over is not
     one. That is also why nothing here writes over an existing stamp — the
     refusal lives in `planning_shape.stamp_refusal`, one seam for both writers.
     """
-    import critic_score
-
     bodies = lops.comment_bodies(identifier)
     try:
         existing = planning_shape.shape_on(bodies, doc)
@@ -628,10 +839,58 @@ def run(lops, identifier: str, *, call=None, model: str | None = None,
         ))
     if existing is not None:
         return Decision(shape=existing, already=True, why="already classified")
+    return None
 
-    card = critic_score.read_card(lops, identifier)
-    decision = classify(card, call=call, model=model, doc=doc)
-    if decision.escalates:
+
+def prepare(lops, identifier: str, *, model: str | None = None,
+            doc: dict | None = None) -> tuple:
+    """`(decision, prompt)` — everything that happens BEFORE the call.
+
+    The first half of the Claude Code path (DRE-3074): the workflow asks what
+    this card owes, and gets either a decision that settles it with no model
+    call at all (already stamped, two stamps, a prompt that will not compose) or
+    an empty-refusal `Decision` carrying the model to call and the prompt to
+    send. `run(..., answer=…)` is the second half, and it repeats the
+    already-stamped read so a stamp written between the two steps still wins.
+    """
+    import critic_score
+
+    prior = _prior(lops, identifier, doc)
+    if prior is not None:
+        return prior, ""
+    if not model:
+        try:
+            model = model_fallback.select(ROLE)
+        except Exception as e:  # noqa: BLE001 — an unpicked model is a refusal
+            return Decision(refusal=_unreachable(e)), ""
+    try:
+        prompt = prompt_for(critic_score.read_card(lops, identifier), doc=doc)
+    except (ClassifyError, planning_shape.ShapeError) as e:
+        return Decision(model=model, refusal=_unreachable(e)), ""
+    return Decision(model=model), prompt
+
+
+def run(lops, identifier: str, *, call=None, model: str | None = None,
+        doc: dict | None = None, answer: str | None = None) -> Decision:
+    """Classify `identifier` and stamp the answer, or return the refusal.
+
+    `answer` is the Claude Code path's second half: the text a bounded workflow
+    step already got back, parsed and stamped by the same code the one-shot
+    path uses. Everything about the judgement — the parsing, the refusals, the
+    stamp — is transport-blind, which is the point of the seam.
+    """
+    import critic_score
+
+    prior = _prior(lops, identifier, doc)
+    if prior is not None:
+        return prior
+
+    if answer is None:
+        card = critic_score.read_card(lops, identifier)
+        decision = classify(card, call=call, model=model, doc=doc)
+    else:
+        decision = parse(answer, doc=doc, model=model)
+    if decision.unclassified:
         return decision
 
     try:
@@ -697,37 +956,120 @@ def _write_reason(path: str | None, reason: str) -> None:
         print(f"planning classify: could not write the reason: {exc}")
 
 
+def _write_block(path: str | None, key: str, value: str) -> None:
+    """A MULTILINE step output, in GitHub's own heredoc form.
+
+    The prompt is the one output that cannot be whitespace-collapsed — it is
+    the fenced card body, and collapsing it would erase the sentinel lines.
+    The delimiter is content-derived and checked, so a card body cannot close
+    the block early and write a step output of its own.
+    """
+    if not path:
+        return
+    import hashlib
+
+    delimiter = "PROMPT_" + hashlib.sha256(value.encode()).hexdigest()[:32]
+    if delimiter in value:  # pragma: no cover - a sha256 of the text, in the text
+        raise ClassifyError("the prompt contains its own output delimiter")
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+    except OSError as exc:
+        print(f"planning classify: could not write the prompt output: {exc}")
+
+
+def _report(identifier: str, decision: Decision, github_output: str | None,
+            escalation_file: str | None, *, call: bool = False) -> int:
+    """The step outputs and the log line for one decision.
+
+    THREE exits, not two (DRE-3074): `escalate` is the CEO's queue, `requeue`
+    is our own plumbing having failed, and neither is `shape`. They are separate
+    outputs on purpose — a workflow that read one boolean could only ever send
+    a transport failure to the lane it must not go to.
+    """
+    reason = ""
+    if decision.unclassified:
+        reason = escalation_reason(identifier, decision)
+        _write_reason(escalation_file, reason)
+    _write_outputs(github_output, [
+        ("call", "true" if call else "false"),
+        ("escalate", "true" if decision.escalates else "false"),
+        ("requeue", "true" if decision.requeues else "false"),
+        ("shape", decision.shape or ""),
+        ("model", decision.model or ""),
+        ("already", "true" if decision.already else "false"),
+    ])
+    if decision.requeues:
+        print(f"{identifier} was not classified: {reason}")
+    elif decision.escalates:
+        print(f"{identifier} cannot be classified: {reason}")
+    elif decision.already:
+        print(f"{identifier} is already classified {decision.shape} — left alone")
+    elif call:
+        print(f"{identifier} needs one classification call on {decision.model}")
+    else:
+        print(f"{identifier} classified {decision.shape} on {decision.model}")
+    return 0
+
+
+def _cmd_prompt(args) -> int:
+    """Compose the one bounded prompt, or settle the card without a call."""
+    import linear_ops
+
+    decision, prompt = prepare(linear_ops, args.identifier)
+    if prompt:
+        _write_block(args.github_output, "prompt", prompt)
+        _write_reason(args.prompt_file, prompt)
+    return _report(
+        args.identifier, decision, args.github_output, args.escalation_file,
+        call=bool(prompt),
+    )
+
+
+def _cmd_answer(args) -> int:
+    """Read the bounded Claude Code step's own record, and stamp what it says."""
+    import linear_ops
+
+    try:
+        answer, model = answer_from_execution(args.execution_file)
+    except TransportError as e:
+        decision = Decision(
+            model=args.model or None, transport=True, refusal=_transport_down(e)
+        )
+    else:
+        decision = run(
+            linear_ops, args.identifier, answer=answer, model=model or args.model
+        )
+    return _report(
+        args.identifier, decision, args.github_output, args.escalation_file
+    )
+
+
 def _cmd_classify(identifier: str, github_output: str | None,
                   escalation_file: str | None) -> int:
     import linear_ops
 
     decision = run(linear_ops, identifier)
-    if decision.escalates:
-        reason = escalation_reason(identifier, decision)
-        _write_reason(escalation_file, reason)
-        _write_outputs(github_output, [
-            ("escalate", "true"), ("shape", ""), ("model", decision.model or ""),
-        ])
-        print(f"{identifier} cannot be classified: {reason}")
-        return 0
-
-    _write_outputs(github_output, [
-        ("escalate", "false"),
-        ("shape", decision.shape or ""),
-        ("model", decision.model or ""),
-        ("already", "true" if decision.already else "false"),
-    ])
-    if decision.already:
-        print(f"{identifier} is already classified {decision.shape} — left alone")
-    else:
-        print(f"{identifier} classified {decision.shape} on {decision.model}")
-    return 0
+    return _report(identifier, decision, github_output, escalation_file)
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("check")
+
+    compose = sub.add_parser("prompt")
+    compose.add_argument("identifier")
+    compose.add_argument("--github-output", default=None)
+    compose.add_argument("--prompt-file", dest="prompt_file", default=None)
+    compose.add_argument("--escalation-file", dest="escalation_file", default=None)
+
+    read = sub.add_parser("answer")
+    read.add_argument("identifier")
+    read.add_argument("--execution-file", dest="execution_file", required=True)
+    read.add_argument("--model", default=None)
+    read.add_argument("--github-output", default=None)
+    read.add_argument("--escalation-file", dest="escalation_file", default=None)
 
     run_cmd = sub.add_parser("classify")
     run_cmd.add_argument("identifier")
@@ -747,6 +1089,12 @@ def main(argv=None) -> int:
             f"{len(found)} problem(s)"
         )
         return 1 if found else 0
+
+    if command == "prompt":
+        return _cmd_prompt(args)
+
+    if command == "answer":
+        return _cmd_answer(args)
 
     if command == "classify":
         return _cmd_classify(args.identifier, args.github_output, args.escalation_file)

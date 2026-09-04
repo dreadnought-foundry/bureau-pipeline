@@ -148,21 +148,105 @@ jobs:
       #
       # The hand CLI is unchanged and is the OVERRIDE: a card that already
       # carries a stamp is left alone, no call is made, and the hand stamp wins.
-      - name: Classify the card — one-off, epic or wave
+      #
+      # DRE-3074 moved the CALL. It was one raw POST to /v1/messages with
+      # whatever CLAUDE credential the run held — and every repo in the fleet
+      # runs CLAUDE_AUTH_MODE == 'subscription', whose OAuth token cannot call
+      # that API at all: it answers HTTP 429 rate_limit_error to every request
+      # regardless of load. The first three planner runs to reach this step
+      # (33836071343, 33836087399, 33836089993) therefore escalated all three
+      # cards they read to the CEO within twenty seconds, on the same sentence.
+      # So the call is now a bounded claude-code-action step, the same
+      # transport the planner and both critics below already run on. The prompt
+      # and the parsing are unchanged; only the transport moved.
+      #
+      # Three steps, because the call is an action rather than a function:
+      # compose → call → read. The first two are skipped entirely for a card
+      # that already carries a stamp (`call == 'false'`), so an override still
+      # costs nothing.
+      - name: Classify the card — compose the one bounded prompt
         id: classify
         if: steps.gate.outputs.bounced != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The same credential the model-selection step below reads, through
           # the same switch — one auth block, no new secret (Q1/Q2 of the
-          # vendor premortem).
+          # vendor premortem). This step makes no model call; it needs the
+          # token because picking the model probes the ladder.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
-          python3 .bureau-pipeline/scripts/planning_classify.py classify \
+          python3 .bureau-pipeline/scripts/planning_classify.py prompt \
             "${{ github.event.client_payload.identifier }}" \
             --github-output "$GITHUB_OUTPUT" \
             --escalation-file "${{ runner.temp }}/classifier-escalation.txt"
+
+      # The one bounded model call. ONE turn, NO tools: the classifier reads a
+      # prompt and answers with a JSON object, and anything it could do with a
+      # tool would be something it was not asked to do. The prompt is composed
+      # by planning_classify.prompt_for, which puts the card's own text inside
+      # the sentinel fence through scripts/sanitize_untrusted.py — the same
+      # defanging every other prompt in this file gets, done one layer down
+      # because the prompt is assembled in Python rather than in YAML.
+      #
+      # continue-on-error: a failed call is exactly the case the step below
+      # exists to classify. Letting it end the job would leave the card in
+      # Planning with nothing said, which is the silence DRE-3074 is about.
+      - name: Classify the card — the one bounded model call
+        id: classify_call
+        if: steps.classify.outputs.call == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ steps.app.outputs.token }}
+          # github-actions: reconcile dispatches on the workflow's own
+          # GITHUB_TOKEN, so its workflow_dispatch runs initiate as
+          # github-actions (DRE-2053) — the same list every agent step here
+          # carries, for the same reason.
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          claude_args: |
+            --max-turns 1
+            --model ${{ steps.classify.outputs.model }}
+            --allowedTools ""
+          prompt: |
+            ${{ steps.classify.outputs.prompt }}
+
+      # The answer, read out of the run's OWN record rather than out of a file
+      # the model was asked to write — it has no tools, so it could not write
+      # one. The record also says which model actually answered, which is the
+      # fact DRE-3015 has been unable to read: the selector says which model
+      # was asked for, and only this says which one replied.
+      - name: Classify the card — read the answer and stamp it
+        id: classified
+        if: always() && !cancelled() && steps.classify.outputs.call == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EXEC_FILE="${{ steps.classify_call.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          python3 .bureau-pipeline/scripts/planning_classify.py answer \
+            "${{ github.event.client_payload.identifier }}" \
+            --execution-file "$EXEC_FILE" \
+            --model "${{ steps.classify.outputs.model }}" \
+            --github-output "$GITHUB_OUTPUT" \
+            --escalation-file "${{ runner.temp }}/classifier-escalation.txt"
+
+      # Which model actually answered, on the card, in the machine-readable
+      # form the board already reads. Posted for the call that happened, so a
+      # card left alone by an existing stamp gets no heartbeat for a call
+      # nothing made.
+      - name: Classifier heartbeat — the model that answered
+        if: always() && !cancelled() && steps.classified.outputs.model != ''
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py comment \
+            "${{ github.event.client_payload.identifier }}" \
+            "🧠 model-attempt: ${{ steps.classified.outputs.model }} — card classifier answered"
 
       # The refusal branch, and it is DRE-2848's exit rather than a second one:
       # the same `escalate` seam the planner's own hand-planning escalation
@@ -170,12 +254,30 @@ jobs:
       # stated in business terms and posted at most once. Nothing below this
       # runs — the routing step is gated on the same output — so the card
       # leaves this run parked, never stopped.
+      #
+      # It fires only for a refusal a MODEL wrote. A call that never reached a
+      # model takes the branch below it instead (DRE-3074).
       - name: Classification refused — park the card for the CEO
-        if: steps.classify.outputs.escalate == 'true'
+        if: always() && !cancelled() && (steps.classify.outputs.escalate == 'true' || steps.classified.outputs.escalate == 'true')
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
+            "${{ github.event.client_payload.identifier }}" \
+            --reason-file "${{ runner.temp }}/classifier-escalation.txt"
+
+      # The transport branch (DRE-3074). A 429/401/5xx, a crashed call or a
+      # missing credential all arrive BEFORE any model reads the card, so
+      # nobody can answer them: the card stays in Planning with the failure
+      # recorded, and the next sweep reads it again. Requeued ONCE — a
+      # transport still down when the card comes back round escalates, because
+      # a card nothing will ever classify must not sit here forever either.
+      - name: Classification never reached a model — requeue the card
+        if: always() && !cancelled() && (steps.classify.outputs.requeue == 'true' || steps.classified.outputs.requeue == 'true')
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_escalation.py requeue \
             "${{ github.event.client_payload.identifier }}" \
             --reason-file "${{ runner.temp }}/classifier-escalation.txt"
 
@@ -196,10 +298,13 @@ jobs:
       # the step above has already classified it or parked it, so this refusal
       # is the belt-and-braces one; it is SKIPPED after an escalation, because
       # a card that just parked in the CEO's queue must not then be told a
-      # stamp is missing.
+      # stamp is missing. Since DRE-3074 it is skipped after a REQUEUE for the
+      # same reason: a card whose classifier never reached a model has no stamp
+      # and is simply waiting to be read again, and telling it a stamp is
+      # missing is the notice this whole path exists to stop writing.
       - name: Planning shape — which route this card takes
         id: shape
-        if: steps.gate.outputs.bounced != 'true' && steps.classify.outputs.escalate != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.classify.outputs.escalate != 'true' && steps.classified.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true' && steps.classified.outputs.requeue != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |

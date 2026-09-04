@@ -988,6 +988,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "🧠 model-attempt: ${{ steps.classified.outputs.model }} — card classifier answered",
+      "step": "Classifier heartbeat — the model that answered",
+      "kind": "not-an-act",
+      "means": "Which model actually answered the card classifier's one bounded call.",
+      "why": "The same line as the planner heartbeat above it, for the same reason: already machine-readable in its own single-definition grammar (`model-attempt:`, owned by scripts/model_fallback.py), and describing which MODEL replied rather than something the pipeline decided. DRE-3074 added it because the classifier's model was the one thing DRE-3015's ladder could not be read from — the selector records which model was asked for, and only the run's own record says which one answered."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<plan>\"",
       "step": "Plan epic",
       "kind": "not-an-act",
@@ -1183,6 +1191,13 @@
       "kind": "not-an-act",
       "means": "The 50-minute credential floor (DRE-3043): the run is ten minutes from losing the only credential it has and nothing of this card's work has reached GitHub yet.",
       "why": "A WARNING ADDRESSED TO THE AGENT, not something the pipeline did. It creates no obligation on the pipeline, hands the work to nobody and has nothing to discharge — the three questions a trailer answers — and the run continues either way. It is the same shape as the ⏳ n/5 progress heartbeats briefs/engineer.md already asks for, and deliberately the SAME grammar, so the console reads one kind of line rather than two. Nothing downstream keys on it: push_rescue.py is what recovers an expiry, and check_agent_result.py classifies one from the runner's own disk — neither of them from this comment."
+    },
+    {
+      "file": "scripts/planning_escalation.py",
+      "anchor": "transport_comment(identifier, reason)",
+      "kind": "undeclared-act",
+      "means": "The card classifier's call never reached a model, so the card is left in Planning to be read again rather than parked in the CEO's queue.",
+      "why": "Act-shaped, and the registry has no row for it — the same shape, and the same debt, as the escalation seam beside it in this file. Giving either a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber) and it cannot be made for one of the pair alone: pipeline_act binds every *_TAG constant in a declared emitter, so declaring this act would demand a row for `planning-escalation` in the same breath, which would put a trailer on a note DRE-2848's tests pin. Named here so the debt is countable rather than invisible. It already carries its own idempotency key (planning-classify-transport), counted by planning_escalation.requeue to cap the requeue at one."
     }
   ]
 }

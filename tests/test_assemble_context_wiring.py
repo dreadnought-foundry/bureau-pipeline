@@ -12,7 +12,11 @@ import os
 import re
 import unittest
 
+import yaml
+
 WF_DIR = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows")
+
+ACTION = "anthropics/claude-code-action"
 
 
 def src(workflow: str) -> str:
@@ -66,13 +70,39 @@ class InjectionWiringTest(unittest.TestCase):
 
     def test_assemble_runs_before_the_agent_step(self):
         # The blob must exist before the claude-code-action step that reads it.
+        #
+        # "That reads it" is load-bearing, and it used to be read as "the first
+        # one in the file" (DRE-3074). plan.yml's first claude-code-action step
+        # is now the card classifier: one bounded turn, no tools, a prompt
+        # composed in Python that names no context blob and could not open one
+        # if it did. Ordering the Assemble step before THAT would mean
+        # assembling a planner's context for a card the run has not yet decided
+        # is an epic. So the pin follows the dependency instead of the line
+        # number — the first agent step whose prompt actually names the blob.
         for wf, _ in WIRED:
-            body = src(wf)
-            assemble_pos = body.index("assemble_context.py assemble")
-            action_pos = body.index("anthropics/claude-code-action@v1")
-            self.assertLess(
-                assemble_pos, action_pos,
-                f"{wf}: Assemble step must precede the agent step",
+            doc = yaml.safe_load(src(wf))
+            readers = 0
+            for job_id, job in (doc.get("jobs") or {}).items():
+                steps = job.get("steps") or []
+                assembles = [
+                    i for i, s in enumerate(steps)
+                    if "assemble_context.py assemble" in str(s.get("run") or "")
+                ]
+                for i, step in enumerate(steps):
+                    uses = str(step.get("uses") or "")
+                    prompt = str((step.get("with") or {}).get("prompt") or "")
+                    if not uses.startswith(ACTION) or "agent-context.md" not in prompt:
+                        continue
+                    readers += 1
+                    self.assertTrue(
+                        [at for at in assembles if at < i],
+                        f"{wf}: job {job_id!r} step {step.get('name')!r} reads "
+                        "agent-context.md with no Assemble step before it",
+                    )
+            self.assertTrue(
+                readers,
+                f"{wf}: no claude-code-action step points its agent at "
+                "agent-context.md — the Assemble step is dead weight",
             )
 
     def test_agent_task_assemble_guarded_against_bounce(self):
