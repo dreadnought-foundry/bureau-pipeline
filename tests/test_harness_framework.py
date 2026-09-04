@@ -272,9 +272,13 @@ class ProbePrTest(unittest.TestCase):
         self.assertIs(framework.probe_pr(self._GH(pr), "r", 7), pr)
 
     def test_closed_unmerged_pr_raises_naming_the_sweep(self):
+        # DRE-3101 changed the TYPE and not the message: a probe another run
+        # wiped says nothing about the commit under test, so it stops the run
+        # the way a dead sandbox does (`SandboxBlocked`, receipt and all)
+        # rather than reporting a red trunk nobody judged.
         pr = self._pr(state="closed")
-        with self.assertRaises(framework.ScenarioFailure) as caught:
-            framework.probe_pr(self._GH(pr), "r", 7)
+        with self.assertRaises(framework.SandboxBlocked) as caught:
+            framework.probe_pr(self._GH(pr), "r", 7, log=lambda *a, **k: None)
         message = str(caught.exception)
         self.assertIn("#7", message)
         self.assertIn("closed", message)
