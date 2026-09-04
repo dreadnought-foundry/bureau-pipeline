@@ -13,7 +13,8 @@
 #      available, for a HUMAN to decide;
 #   3. opens ONE Linear card when the catalog offers a model config/models.yaml
 #      has never named (DRE-2317). That discovery may join the ADVISORY ladder
-#      at most — never the build path — and only when a human edits the config.
+#      at most — never the build path, and never the planning one (DRE-3015) —
+#      and only when a human edits the config.
 #
 # It does NOT change the ladder. Adoption stays a deliberate one-line human
 # edit, because a new model can ship breaking API changes (Opus 5 turned
