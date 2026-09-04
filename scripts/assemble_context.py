@@ -125,7 +125,16 @@ COMMS = "comms.md"
 UNTRUSTED = "untrusted-content.md"
 
 # Brief file per role, relative to the repo root (mirrors agents.yaml briefPath).
-# Roles without a brief (critic, fix, medic) get None — standards only.
+# Roles without a brief (fix, medic) get None — standards only.
+#
+# The critic gained one in DRE-3084. It carries what its PROMPT cannot: the
+# standing facts about the critic's own position that a run cannot re-derive
+# and that a wrong assumption about has cost real hours — a fixture carrying a
+# real card id is a snapshot and never the card, and a finding the fix agent
+# disproves with evidence gets one honest re-read. It deliberately does NOT
+# restate the charter, the review strategy or the verdict format: those are
+# built per PR in qa-review.yml, and a second copy of them here would be the
+# drift the plan critics' brief-less entries below exist to avoid.
 ROLE_BRIEF: dict[str, str | None] = {
     "engineer": "engineer.md",
     "frontend": "frontend.md",
@@ -138,7 +147,7 @@ ROLE_BRIEF: dict[str, str | None] = {
     # be a second copy of it that nothing checks.
     "plan-critic-pre": None,
     "plan-critic-post": None,
-    "critic": None,
+    "critic": "critic.md",
     "fix": None,
     "medic": None,
 }

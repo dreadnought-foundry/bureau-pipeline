@@ -47,6 +47,16 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  # DRE-3084: the fix loop dispatches ONE re-review when the fix agent refutes
+  # a finding with evidence and pushes nothing. The App token holds no Actions
+  # permission (DRE-1254 — "HTTP 403: Resource not accessible by
+  # integration"), so that dispatch rides the workflow's own GITHUB_TOKEN and
+  # the grant has to live here, in the stub, exactly as it does for
+  # self-merge-gate.yml's conflict dispatch. Without it the reusable degrades
+  # loudly — it warns and parks the card for a human, which is the behaviour
+  # before this card — so a fleet stub that has not been updated stalls no
+  # worse than it does today.
+  actions: write
 
 jobs:
   call:

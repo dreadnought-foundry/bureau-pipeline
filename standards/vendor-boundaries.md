@@ -19,6 +19,10 @@ retry semantics, or command limitations.
    to the triggering actor: a dependabot-triggered `pull_request` run gets the
    SEPARATE Dependabot secrets store — for us EMPTY — plus a read-only token,
    and `secrets: inherit` passes nothing.
+   **And having a credential is not the same as being allowed to use it HERE:**
+   a subscription OAuth token cannot call the raw Anthropic Messages API at all
+   — it answers 429 to every request, at any load — so the question is which
+   ENDPOINT each credential may reach, not only which store holds it (DRE-3074).
 3. **What does the vendor actually do on retry / close / reopen / ignore /
    rebase / re-file** — and does our state machine survive EACH? Closing a
    Dependabot PR does not end it; ignoring one version invites the next; a
@@ -83,6 +87,20 @@ The June lessons (same class, quota-shaped):
   crashed on a GitHub rate-limit: re-running against an exhausted limit cannot
   succeed and deepens it — six PRs looped and burned the bot's quota twice.
   Classify before retrying; every retry at a vendor boundary is bounded. *Q5.*
+
+The Anthropic boundary (same class, credential-shaped):
+
+- **DRE-3074 (2026-09-03)** — the new planning classifier made ONE raw POST to
+  `https://api.anthropic.com/v1/messages` with the credential the workflow hands
+  it, which on `CLAUDE_AUTH_MODE == 'subscription'` — every repo in the fleet —
+  is an OAuth token. That token cannot call the raw Messages API: it answers
+  **429 `rate_limit_error` to every request, regardless of load**. All three
+  planner runs that evening escalated to the CEO inside twenty seconds, and a
+  plain one-line README change sat in the decision queue. The fail-closed
+  behaviour was correct; the transport was never usable. **Every other agent
+  step in this pipeline runs its model through `claude-code-action` for exactly
+  this reason** — a new model call goes down that path, and a raw POST is only
+  for a run holding a real API key. *Q2.*
 
 ## Critic: the checklist is a review gate
 

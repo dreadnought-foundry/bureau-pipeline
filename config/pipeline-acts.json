@@ -327,6 +327,22 @@
       }
     },
     {
+      "name": "fix-finding-refuted",
+      "tag": "refuted-finding",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "The fix agent answered the reviewer's blocking finding with evidence the reviewer could not read and pushed nothing, so the pipeline re-dispatched ONE review of the same commit with that evidence attached.",
+      "state": "dispatched",
+      "next_actor": "qa-review.yml",
+      "discharges": null,
+      "subscriber": "qa-review.yml",
+      "why": "The sibling of `fix-attempt-disputed`, and the difference is who is being asked. A blocker asks a HUMAN because the fixer cannot settle the disagreement; a refutation settles it with evidence and needs only the reviewer to look again — the two agents are built to see different things (the critic holds no Linear key on purpose, DRE-2696), so a finding the fixer disproves is evidence the critic never had. The tag is ADOPTED because it is the per-head idempotency key in the same receipt: `refuted-finding @<sha8>` is what the fix loop counts to allow exactly ONE re-review per commit, and what qa-review.yml reads back to put the refutation in the critic's context. A second refutation on the same head is a loop, not a re-review, and escalates as `fix-attempt-disputed` does.",
+      "emits": {
+        "file": ".github/workflows/agent-fix.yml",
+        "anchor": "refuted the finding: $(cat /tmp/fix-refutation.txt)"
+      }
+    },
+    {
       "name": "run-failure-diagnosed",
       "tag": "medic-diagnosis",
       "adopted": false,
@@ -580,10 +596,17 @@
     },
     {
       "file": "scripts/planning_escalation.py",
-      "anchor": "escalation_comment(identifier, reason)",
+      "anchor": "escalation_comment(identifier, reason, transport)",
       "kind": "undeclared-act",
       "means": "Planning cannot proceed on its own, so the card is parked and a human is asked.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. A hold in the strict sense: the next actor is a person, and the card waits."
+    },
+    {
+      "file": "scripts/planning_escalation.py",
+      "anchor": "transport_comment(identifier, reason)",
+      "kind": "undeclared-act",
+      "means": "The classifier could not reach its model, so the card was not classified this run and the run is failed to buy one retry.",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as its sibling above, which this receipt was split out of (DRE-3074). Giving it a row is a REGISTRY change: a tag, a kind, a state, a next actor and a subscriber, and the state it would declare is the one the registry has no word for yet — the card did not move and nobody was asked. Named here so the debt is countable rather than invisible. It already carries its own idempotency key (planning-classify-transport), read back by planning_classify.py, which BUDGETS off it: a trailer beside that key would be a second grammar over a comment whose count is load-bearing."
     },
     {
       "file": "scripts/planning_route.py",
@@ -820,6 +843,30 @@
     },
     {
       "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🔁 The fix agent answered the reviewer's finding with evidence instead of changing the code",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The card-side half of `fix-finding-refuted`: the fixer settled the finding with evidence, pushed nothing, and one re-review of the same commit is on its way.",
+      "why": "The CARD-SIDE half of an act the registry already declares, and the registry pins ONE `emits` site per act — the same reason `fix-attempt-disputed`'s card half is named here. Admitting a second surface is a REGISTRY change, not an emission one. Its PR-side half composes `fix-finding-refuted` a dozen lines above it in this same step, and carries the `refuted-finding @<sha8>` key that both the cap and qa-review.yml read."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 The fix agent answered the reviewer's finding with evidence, but the pipeline could not start the second look",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The re-review dispatch was refused (the repo's agent-fix stub lacks `actions: write`), so the refutation parks for a human instead of promising a look nobody will take.",
+      "why": "The degrade path of `fix-finding-refuted`, and deliberately NOT that act: the act's state is `dispatched` and here nothing was. Giving the failure its own row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber — not an emission change. Named here so the debt is countable, and it is expected to be empty in practice: it fires only in a repo whose stub has not been updated, which the README's 'The agent-fix stub's actions: write' section exists to prevent."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "🙋 The fix agent and the reviewer disagree about the same point twice",
+      "step": "Report",
+      "kind": "undeclared-act",
+      "means": "The cap: a second refutation on the same commit, with the one automatic re-review already spent, so the card goes to a person with both readings quoted.",
+      "why": "The CARD-SIDE half of `fix-attempt-disputed`, which this branch composes on the PR side — the registry pins ONE `emits` site per act and that act's card half is already named here for the ordinary dispute. Two card wordings for one act is a wording question, not a registry one; admitting either as a second `emits` surface is the registry change this row defers."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
       "anchor": "🙋 The fix agent disagrees with the reviewer's blocking finding",
       "step": "Report",
       "kind": "undeclared-act",
@@ -988,6 +1035,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "🧠 model-attempt: ${{ steps.classify.outputs.receipt }} — planning classifier read the card.",
+      "step": "Classifier heartbeat — the model that answered",
+      "kind": "not-an-act",
+      "means": "Which model was asked for and which one actually answered the classification, so DRE-3015's judgement ladder can be read off the card and a fall off the top rung is visible (DRE-3083).",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided. Two grammars on one line would give its readers two keys to disagree over. Its grammar is `model-attempt:`, owned by scripts/model_fallback.py — the same one the planner's own heartbeat above writes."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<plan>\"",
       "step": "Plan epic",
       "kind": "not-an-act",
@@ -1080,6 +1135,22 @@
       "step": "Second critic — decision",
       "kind": "not-an-act",
       "means": "The plan critic's the post-approval round record, posted alone because it is only a credential while nothing else shares its comment.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. It is an approval credential in its own grammar, and a second grammar in the same comment is exactly what its 'alone' rule forbids."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-note.md\")\"",
+      "step": "One-off critic — decision",
+      "kind": "not-an-act",
+      "means": "The pre-approval critic's note on a one-off — the judgement the person who filed the card reads.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_critic.py. Where the critic stops the card, the ESCALATION that follows is the thing the pipeline did, and it is posted by planning_escalation.py under its own tag."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-record.txt\")\"",
+      "step": "One-off critic — decision",
+      "kind": "not-an-act",
+      "means": "The pre-approval critic's round record on a one-off, posted alone because it is only a credential while nothing else shares its comment.",
       "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. It is an approval credential in its own grammar, and a second grammar in the same comment is exactly what its 'alone' rule forbids."
     },
     {

@@ -46,6 +46,18 @@ on:
           the driver, so name at most two per dispatch (job timeout below).
         required: false
         default: ""
+      wait_deadline_minutes:
+        description: >-
+          Per-wait SANDBOX-LIVENESS deadline, in minutes — separate from the
+          job timeout below, and deliberately NOT a shorter budget (DRE-3076).
+          Every this many minutes a waiting scenario stops and reads the
+          sandbox's own sweep / gate / linear-sync runs; a FAILED one ends the
+          run with its cause quoted, a healthy-but-slow one keeps its full
+          budget. The passing PR run does all its scenarios in 18 minutes, so
+          a single silent wait past ten is already a fault. `0` switches the
+          check off.
+        required: false
+        default: "10"
   # DRE-2551: automatic promotion needs a PROVEN commit on the trunk, and
   # until now nothing ever proved one. The PR trigger stamps the PR head; the
   # fleet merges with merge commits, so that stamp never transfers to main's
@@ -91,8 +103,25 @@ on:
 # scoped to the run's own sandbox namespace (HARNESS_NAMESPACE below); an
 # unscoped sweep would delete the branches the other live run is
 # mid-scenario on, which is why separate groups alone were not the fix.
-# Never cancel-in-progress: killing a run mid-scenario is exactly the
-# crashed-run mess the sweep exists to mop up.
+#
+# QUEUE BEHIND, NEVER CANCEL — and the release channel depends on it
+# (DRE-3070). `promote-channel.yml` moves `stable` only for a commit a harness
+# run PROVED, so a harness run that never finishes is a channel that never
+# advances. With `cancel-in-progress: false` the run proving commit N is
+# allowed to finish and promote, and the newest head queues behind it: on a
+# night of fourteen merges the channel advances to N and then to the latest,
+# rather than to nothing.
+#
+# What that costs, stated because it looks like a bug in the run list: GitHub
+# keeps at most ONE pending run per group, so a head still waiting when the
+# next push arrives is cancelled BEFORE IT STARTS. Those are the `cancelled`
+# conclusions on the incident evening of 2026-09-03 — every one has
+# `run_started_at == created_at` and was cancelled one to two seconds after
+# the next run in the group was created. Nothing in progress was ever killed.
+# Skipping an intermediate head is the intended trade; the skip is now
+# RECORDED rather than silent (promote_channel.OUTCOME_CANCELLED), and the
+# staleness alarm counts those records to say "merge train" instead of
+# "unknown". See docs/self-hosting.md, "Queue behind, never cancel".
 concurrency:
   group: >-
     integration-harness-${{ github.event_name == 'pull_request'
@@ -209,6 +238,7 @@ jobs:
           repositories: agent-bureau
 
       - name: Run harness scenarios
+        id: scenarios
         env:
           HARNESS_REPO: dreadnought-foundry/bureau-harness
           # The lane_contract scenario's ONE Linear call: a read-only GraphQL
@@ -257,23 +287,83 @@ jobs:
             ${{ github.event_name == 'pull_request'
             && format('pr{0}', github.event.pull_request.number) || 'main' }}
           SCENARIOS: ${{ inputs.scenarios }}
+          # DRE-3076. On push/pull_request the `inputs` context does not
+          # resolve and this is empty — the driver then uses its own default
+          # (framework.WAIT_DEADLINE_SECONDS), which is the same number as the
+          # input's default above; tests/test_harness_sandbox_deadline.py pins
+          # them together. Those are exactly the runs that stalled the channel,
+          # so the deadline must NOT be dispatch-only.
+          HARNESS_WAIT_DEADLINE_MINUTES: ${{ inputs.wait_deadline_minutes }}
           PYTHONPATH: scripts
         run: |
+          # The clock the duration receipt reads (DRE-3070). Recorded here, in
+          # the scenarios' own step, so the number is about the scenarios and
+          # not about the checkout and three token mints ahead of them.
+          echo "SCENARIOS_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
           python3 -m harness --repo "$HARNESS_REPO" --scenarios "$SCENARIOS"
+
+      # How long that took, on the record, every time (DRE-3070). Nothing
+      # reported a harness run's own length, and on 2026-09-03 that absence
+      # cost the channel an evening: a PR run took 18 minutes while the main
+      # run behind it sat on the step above for 54, waiting on a sandbox whose
+      # Linear quota had been exhausted. Its only bound was the job's
+      # 180-minute timeout, so the queue behind it — and the channel — was
+      # frozen for as long as the wait lasted, and nothing distinguished "the
+      # queue is long" from "this run is hung" until an operator read the logs.
+      #
+      # This does not shorten the wait. It makes it VISIBLE: a number in the
+      # summary of every run, and a warning annotation past the budget, so the
+      # difference shows up in the run list instead of in the channel.
+      #
+      # `always()`, because a run that went red or was cancelled at the cap is
+      # exactly when the number is wanted.
+      - name: Scenario duration receipt
+        if: always()
+        env:
+          # Well clear of the observed healthy runs (9m40s–18m) and well under
+          # the job's own timeout, which is a ceiling for a bad day rather than
+          # a budget: past it the run is CANCELLED and stamps nothing at all.
+          BUDGET_MINUTES: "40"
+        run: |
+          if [ -z "${SCENARIOS_STARTED_AT:-}" ]; then
+            echo "scenarios never started — nothing to time" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          ELAPSED=$(( ( $(date +%s) - SCENARIOS_STARTED_AT ) / 60 ))
+          echo "⏱ harness scenarios: ${ELAPSED}m (budget ${BUDGET_MINUTES}m)" \
+            >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ELAPSED" -gt "$BUDGET_MINUTES" ]; then
+            echo "::warning title=Harness over budget::scenarios took ${ELAPSED}m against a ${BUDGET_MINUTES}m budget. A run this long holds the sandbox, holds every queued run behind it, and holds the release channel with them — look for a hung scenario or a failing sandbox, not a busy queue."
+          fi
 
       # The release gate's record (scripts/release_gate.py reads exactly
       # this context): success on green, an honest failure on red — a
       # later green run overwrites it, GitHub keeps the latest status per
       # context. Cancelled runs proved nothing and stamp nothing.
+      #
+      # DRE-3076: the DESCRIPTION carries one more fact. When the driver died
+      # because the SANDBOX was down (a failed sweep / gate / linear-sync run,
+      # e.g. Linear rate-limited on 2026-09-03), it writes the sandbox's quoted
+      # failure to `blocked_reason` — already marker-prefixed and clamped to
+      # GitHub's 140-character description limit — and that becomes the
+      # description. promote_channel.py reads the marker and says "blocked by
+      # sandbox, not proven yet" instead of "harness failed", which would send
+      # someone looking at a diff that was never judged. The stamp stays RED:
+      # unproven is not proven, and the PR-gating check must still hold.
       - name: Stamp tested sha with the harness verdict
         if: success() || failure()
         env:
           GH_TOKEN: ${{ github.token }}
           TESTED_SHA: ${{ steps.tested.outputs.sha }}
           STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
+          BLOCKED_REASON: ${{ steps.scenarios.outputs.blocked_reason }}
         run: |
+          DESCRIPTION="integration harness: ${STATE}"
+          if [ -n "$BLOCKED_REASON" ]; then
+            DESCRIPTION="$BLOCKED_REASON"
+          fi
           gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
             -f state="$STATE" \
             -f context="integration-harness" \
-            -f description="integration harness: ${STATE}" \
+            -f description="$DESCRIPTION" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

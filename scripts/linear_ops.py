@@ -106,6 +106,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -195,6 +196,45 @@ def _api_error(code: int | str, body: str) -> LinearError:
     return LinearError(f"{detail}: {body[:BODY_CHARS]!r}")
 
 
+# The one-shot retry (DRE-3087). A sweep is dozens of calls through this seam,
+# and on 2026-09-04 two of them died on ONE lost socket each — a connection
+# reset during a TLS handshake, a read timeout — while the next sweep passed.
+# A second attempt is what tells a hiccup from an outage, so we take exactly
+# one: enough for the fault that heals itself, never enough to hammer a peer
+# that is genuinely down.
+_MAX_ATTEMPTS = 2
+RETRY_BACKOFF_SECONDS = 1.0
+
+# The statuses a second attempt can actually fix: a gateway that was not there
+# for one request. NOT 500 (Linear's own code path failing) and above all not
+# any 4xx — Linear answers quota exhaustion with a 400 on the wire (DRE-2923),
+# so retrying a 4xx spends the request that proves there are none left.
+_RETRYABLE_STATUSES = frozenset({502, 503, 504})
+
+
+def is_transient(exc: BaseException) -> bool:
+    """True when `exc` is a network fault a single retry can plausibly clear.
+
+    The two shapes from the incident arrive either bare — `urlopen` lets the
+    socket's own `ConnectionResetError` / `TimeoutError` through on a read —
+    or wrapped in a `URLError`, which is what a failed TLS handshake looks
+    like. A `URLError` whose reason is a plain string ("unknown url type") is a
+    programming error wearing a network error's type: never retried.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in _RETRYABLE_STATUSES
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        return isinstance(reason, BaseException) and is_transient(reason)
+    return isinstance(exc, (ConnectionResetError, TimeoutError))
+
+
+def _note_transient(exc: BaseException) -> None:
+    """One line, so a sweep that needed the retry says so. Without it the only
+    evidence of a fault is a run that took a second longer than usual."""
+    print(f"transient network fault, retried once: {exc}", file=sys.stderr)
+
+
 def _error_body(exc: urllib.error.HTTPError) -> str:
     """The response body off a raised HTTPError. Reading it can itself fail
     (a truncated response, an already-consumed stream) — an unreadable body
@@ -206,24 +246,44 @@ def _error_body(exc: urllib.error.HTTPError) -> str:
 
 
 def gql(query: str, variables: dict | None = None) -> dict:
-    req = urllib.request.Request(
-        API,
-        data=json.dumps({"query": query, "variables": variables or {}}).encode(),
-        headers={
-            "Authorization": os.environ["LINEAR_API_KEY"],
-            "Content-Type": "application/json",
-        },
-    )
-    # B310: URL is the constant https://api.linear.app endpoint, no user input.
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
-            out = json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        # CAPTURE THE BODY, NOT THE STATUS (DRE-2923). urllib's own message is
-        # `HTTP Error 400: Bad Request` — no endpoint, no reason, and a
-        # traceback that ends inside urllib without naming the call. The reason
-        # is in the body and it was being thrown away.
-        raise _api_error(exc.code, _error_body(exc)) from exc
+    payload = json.dumps({"query": query, "variables": variables or {}}).encode()
+    for attempt in range(_MAX_ATTEMPTS):
+        # A fresh Request per attempt: a retry re-sends the call, it does not
+        # re-drive an object urllib has already handled.
+        req = urllib.request.Request(
+            API,
+            data=payload,
+            headers={
+                "Authorization": os.environ["LINEAR_API_KEY"],
+                "Content-Type": "application/json",
+            },
+        )
+        # B310: URL is the constant https://api.linear.app endpoint, no user
+        # input.
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
+                out = json.loads(resp.read())
+            break
+        except urllib.error.HTTPError as exc:
+            if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
+                _note_transient(exc)
+                time.sleep(RETRY_BACKOFF_SECONDS)
+                continue
+            # CAPTURE THE BODY, NOT THE STATUS (DRE-2923). urllib's own message
+            # is `HTTP Error 400: Bad Request` — no endpoint, no reason, and a
+            # traceback that ends inside urllib without naming the call. The
+            # reason is in the body and it was being thrown away.
+            raise _api_error(exc.code, _error_body(exc)) from exc
+        except OSError as exc:
+            # URLError IS an OSError, and so are the bare ConnectionResetError /
+            # TimeoutError a socket raises mid-read — one clause covers both
+            # ways the 2026-09-04 faults arrived (DRE-3087). Anything this
+            # retry cannot clear propagates untouched, exactly as before.
+            if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
+                _note_transient(exc)
+                time.sleep(RETRY_BACKOFF_SECONDS)
+                continue
+            raise
     if out.get("errors"):
         errors = json.dumps(out["errors"])
         condition = rate_limit_condition(errors)

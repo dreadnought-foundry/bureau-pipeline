@@ -74,9 +74,11 @@ DOCUMENTED_EXCEPTIONS = {
         "around that sanitizer, which is the discipline the stage exists to "
         "enforce. The Linear WORK of this workflow is done by ordinary "
         "steps that do hold the key (Plan visual QA, Post verdict). And "
-        "unlike the fix and repair agents, the critic is handed no brief "
-        "claiming the key is in its env: assemble_context.py maps role "
-        "'critic' to standards only, briefs['critic'] is None."
+        "unlike the fix and repair agents, nothing the critic is handed "
+        "claims the key is in its env: briefs/critic.md (DRE-3084) carries "
+        "the standing facts about the critic's own position and names no "
+        "credential at all — checked, not trusted, by "
+        "tests/test_refuted_verdict_rereview.py."
     ),
     (
         "qa-review.yml",

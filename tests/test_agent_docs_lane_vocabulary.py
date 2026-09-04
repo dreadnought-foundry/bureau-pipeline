@@ -43,6 +43,28 @@ def alias_names() -> list[str]:
     return [e["from"] for e in _contract()["aliases"]["entries"]]
 
 
+def lane_writing_briefs() -> list[Path]:
+    """Briefs whose agent can actually move a card between lanes.
+
+    A lane move is a Linear write, so the roster's own `credentials` list
+    answers it: an agent handed no LINEAR_API_KEY cannot make one however
+    thoroughly it is taught the vocabulary. Read off agents.yaml rather than
+    written down here, so a brief joins or leaves this population when its
+    agent's credentials change and not when someone remembers to edit a list.
+    """
+    import yaml
+
+    with open(ROOT / "agents.yaml", encoding="utf-8") as fh:
+        roster = yaml.safe_load(fh)["agents"]
+    briefs = [
+        ROOT / a["briefPath"]
+        for a in roster
+        if a.get("briefPath") and "LINEAR_API_KEY" in (a.get("credentials") or [])
+    ]
+    assert briefs, "no briefed agent holds a Linear key — the scan is vacuous"
+    return briefs
+
+
 def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -78,8 +100,15 @@ class TestTheLiveVocabularyIsActuallyTaught:
         # Intake and Green Light are the two lanes the wave introduced, and
         # Triage's job changed under them. An agent that has never been told
         # they exist routes a card to the lane it knew.
+        #
+        # The population is every brief whose agent can actually WRITE a lane,
+        # which is a question the roster already answers: a lane move goes
+        # through Linear, so an agent with no LINEAR_API_KEY cannot make one.
+        # DERIVED, never listed (DRE-3084 gave the critic a brief and the
+        # critic is denied Linear on purpose) — a hardcoded exemption is how
+        # the next brief joins the population by nobody's decision.
         required = ("Intake", "Green Light", "Triage")
-        for brief in BRIEFS:
+        for brief in lane_writing_briefs():
             body = _text(brief)
             missing = [n for n in required if n not in body]
             assert not missing, f"{brief.relative_to(ROOT)} never names {missing}"

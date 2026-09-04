@@ -524,6 +524,9 @@ bureau-pipeline soaks every merge). Per stub:
   concurrency, `cancel-in-progress: false`. App-actor only; no dependabot path.
 - **self-plan.yml** — `repository_dispatch: [agent-plan]`; same shape.
 - **self-agent-fix.yml** — `issue_comment: [created]` + `workflow_dispatch`;
+  `actions: write` for the refuted-finding re-review dispatch (DRE-3084 — the
+  App token 403s on Actions, so it rides the workflow's own token, and a stub
+  without the grant degrades to a warning + a human park rather than a stall);
   no stub actor guard — the reusable's qa-bot-author job-if is the gate, and it
   skips a dependabot-authored comment clean before any secret is used.
 - **self-merge-gate.yml** — `workflow_run: [Pipeline Tests, QA Review]` +

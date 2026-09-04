@@ -212,6 +212,33 @@ The reconcile sweep runs the same audit in every repo it sweeps and prints a
 job whose trigger was a qa-bot verdict — the case that otherwise reads as the
 harmless duplicate-dispatch cancel it shares a conclusion with.
 
+### The agent-fix stub's `actions: write` (DRE-3084)
+
+Permissions live in the stub too, so this one is likewise not fixable from
+here. Every `agent-fix` stub in the fleet needs:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+```
+
+`actions: write` is what lets the fix loop dispatch **one** re-review when the
+fix agent refutes a blocking finding with evidence and pushes nothing (the
+critic and the fixer are built to see different things — the critic holds no
+Linear key on purpose, so a finding the fixer disproves against the live card
+or a real test run is evidence the critic never had). The App token carries no
+Actions permission at all (DRE-1254: *"HTTP 403: Resource not accessible by
+integration"*), so the dispatch rides the workflow's own `GITHUB_TOKEN`, and
+only the stub can grant it — the same reason `self-merge-gate.yml` carries it
+for the conflict dispatch.
+
+A stub without it **degrades, it does not break**: the dispatch 403s, the run
+prints a `::warning::`, the PR says so and the card parks for a human — which
+is exactly what happened before this card existed. So the fleet loses the
+automatic second look until its stub is updated, and loses nothing else.
+
 What the product repo still carries:
 
 - `.github/workflows/ci.yml` (+ any other product CI) — product-specific.
@@ -691,6 +718,21 @@ What this channel automated is the *proof*, never the release: cutting or
 moving a `vN` tag is still **operator-only**, exactly as the promotion block
 above describes. No repo consumes a `vN` tag.
 
+**"Not proven yet" is a third answer, and the receipt says so (DRE-3076).**
+A harness run can end without judging the commit at all: on 2026-09-03 the
+SANDBOX's own reconcile sweep was rate-limited by Linear at 20:27 PT, and the
+scenario waiting on it sat until the job's three-hour ceiling — no promotion,
+50 commits behind, until an operator killed the run by hand. Each scenario wait
+now carries its own ten-minute deadline, at which it reads the sandbox's most
+recent sweep / gate / linear-sync run; a failed one ends the run inside a
+minute with that failure quoted. The stamp stays red — unproven is not proven,
+and the PR-gating check must still hold — but its description leads with
+`harness blocked:`, and `promote-channel.yml`'s receipt then reads *blocked by
+the sandbox, nothing proven either way, the next run re-proves* instead of
+*harness failed*, which would send someone looking at a diff nobody judged.
+The deadline is a liveness checkpoint, not a shorter budget: a healthy-but-slow
+critic keeps its full 70 minutes.
+
 Every consumer stub now rides `…@stable` **and** passes
 `pipeline_ref: stable`. That input is **required** since DRE-2689 — a caller
 must pass the same ref it pins in `uses:`, or it runs one ref's workflow YAML
@@ -758,6 +800,22 @@ across 70 days, 7.4/day:
   this cadence and is a habit forming. A held channel is reported as **held —
   with who and when** — never as broken; unknown parts are printed as unknown
   rather than guessed.
+- **A stale channel now names the commonest cause** (DRE-3070). The alarm
+  fires on *not moving*, which is what a merge train produces, and it used to
+  point at a promote-channel run log that in exactly that case held nothing:
+  a displaced harness run triggered no promotion attempt at all. Every
+  completed harness run now leaves a receipt naming one of
+  `harness-passed-promoting` · `harness-run-not-on-main` ·
+  `harness-cancelled-by-newer-push` · `harness-failed` · `channel-held` ·
+  `harness-blocked-by-sandbox` · `no-harness-stamp` · `not-ahead-of-channel`,
+  and the watcher counts the
+  harness runs on `main` that concluded `cancelled` since the channel head.
+  **Two or more and it says MERGE TRAIN**, not unknown — one skipped head is
+  the queue-behind rule working (GitHub keeps a single pending run per
+  concurrency group), two is merges arriving faster than the harness can prove
+  them — and it adds whether a run is proving main right now. The alarm's
+  *title* does not move with the diagnosis, so the card still dedups. See
+  `docs/self-hosting.md`, "Queue behind, never cancel".
 - **Where the hold's age comes from** (DRE-2603). The repository-variables API
   needs admin scope and answers 403 to the workflow's token, so its answer is
   used only when it *is* a timestamp — an error body is a failed read, never a

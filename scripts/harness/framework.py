@@ -123,9 +123,47 @@ VERDICT_TIMEOUT_SECONDS = float(
 MERGE_TIMEOUT_SECONDS = 1200.0
 POLL_INTERVAL_SECONDS = 30.0
 
+# The per-wait DEADLINE (DRE-3076) — the thing the budgets above are not.
+#
+# Those budgets answer "how long may a healthy pipeline take?", and they have
+# to be generous: the critic's own job clock is 65 minutes. What they cannot
+# answer is "is anything still happening at all?", so on 2026-09-03 a scenario
+# waiting on a sweep that had died at 20:27 PT on a Linear rate limit waited
+# out the JOB's `timeout-minutes: 180` — no promotion for three hours, on the
+# night the channel was busiest.
+#
+# So this is not a shorter cap; a shorter cap would report FAIL on a healthy
+# slow review (run 33274348041, DRE-2466). It is a CHECKPOINT: every this many
+# seconds a wait stops and asks a different question — did the sandbox's own
+# sweep / gate / linear-sync just fail? — and only a YES ends it. A healthy
+# sandbox keeps the full budget. The passing PR run does all its scenarios in
+# 18 minutes, so a single silent wait past ten is already a fault worth
+# looking at.
+WAIT_DEADLINE_SECONDS = 10 * 60.0
+
+#: The driver's exit code for "the SANDBOX blocked this run" — distinct from 1
+#: (a scenario failed, which is a statement about the commit) and 2 (bad
+#: invocation). Nothing is proven either way; the next run re-proves.
+BLOCKED_EXIT = 3
+
 
 class HarnessTimeout(Exception):
     """A polled condition never became true within its budget."""
+
+
+class SandboxBlocked(Exception):
+    """The sandbox's own machinery is failing — the harness has been waiting on
+    a corpse.
+
+    NOT a verdict on the commit under test, and the whole point of having its
+    own type: a rate-limited sandbox is not a failed commit. `.cause` is the
+    marker-prefixed quote of the sandbox's last failure, which becomes the
+    promote receipt.
+    """
+
+    def __init__(self, message: str, cause: str = ""):
+        super().__init__(message)
+        self.cause = cause or message
 
 
 class ScenarioFailure(Exception):
@@ -241,10 +279,38 @@ class HarnessContext:
     verdict_timeout: float = VERDICT_TIMEOUT_SECONDS  # ≥ the critic's own cap
     merge_timeout: float = MERGE_TIMEOUT_SECONDS
     poll_interval: float = POLL_INTERVAL_SECONDS
+    # How often a wait stops to ask whether the sandbox is still alive
+    # (DRE-3076). 0 disables the check — the operator's escape hatch, and the
+    # pre-DRE-3076 behaviour.
+    wait_deadline: float = WAIT_DEADLINE_SECONDS
+    # `(description, elapsed) -> quote | None`, from sandbox_health.probe. None
+    # here means no probe is wired and every wait runs its full budget.
+    sandbox_probe: Optional[Callable] = None
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
     log: Callable = print
     state: dict = field(default_factory=dict)  # per-run scratch, phase→phase
+
+    def wait(self, description, poll, timeout, interval=None):
+        """THE way a scenario waits for the sandbox to do something.
+
+        Every wait goes through here rather than calling `wait_until` directly,
+        because the deadline is not something a call site should have to
+        remember: the wait somebody adds next year is exactly the one that
+        would sit for the job's three-hour ceiling
+        (`tests/test_harness_sandbox_deadline.py` pins the absence of bare
+        calls in `scenarios/`).
+        """
+        return wait_until(
+            description,
+            poll,
+            timeout=timeout,
+            interval=self.poll_interval if interval is None else interval,
+            clock=self.clock,
+            sleep=self.sleep,
+            deadline=self.wait_deadline,
+            on_deadline=self.sandbox_probe,
+        )
 
 
 @dataclass
@@ -254,6 +320,11 @@ class ScenarioResult:
     failed_phase: Optional[str] = None
     errors: list = field(default_factory=list)
     notes: list = field(default_factory=list)
+    #: The sandbox's quoted last failure when THIS scenario died on a dead
+    #: sandbox rather than on anything the commit did (DRE-3076). Set means
+    #: "not proven either way"; the driver stops the run and the promote
+    #: receipt says blocked, not failed.
+    blocked: Optional[str] = None
 
 
 class Scenario:
@@ -286,6 +357,14 @@ def run_scenario(scenario: Scenario, ctx: HarnessContext) -> ScenarioResult:
         ctx.log(f"[{scenario.name}] {phase}")
         try:
             getattr(scenario, phase)(ctx)
+        except SandboxBlocked as e:
+            # Recorded apart from a failure ON PURPOSE: the scenario did not
+            # find anything wrong with the commit — it never got to look.
+            result.ok = False
+            result.failed_phase = phase
+            result.blocked = e.cause
+            result.errors.append(f"{phase}: blocked by the sandbox: {e}")
+            break
         except Exception as e:  # any failure: record, stop progressing
             result.ok = False
             result.failed_phase = phase
@@ -302,17 +381,45 @@ def run_scenario(scenario: Scenario, ctx: HarnessContext) -> ScenarioResult:
 
 
 def wait_until(description, poll, timeout, interval, clock=time.monotonic,
-               sleep=time.sleep):
+               sleep=time.sleep, deadline=None, on_deadline=None):
     """Poll until `poll()` returns truthy (that value is returned) or
     `timeout` seconds elapse (HarnessTimeout, naming what was awaited).
     Exceptions from poll() propagate — scenarios use that to fail fast on
-    a state that can never become the awaited one."""
+    a state that can never become the awaited one.
+
+    `on_deadline(description, elapsed)` is the sandbox-liveness question
+    (DRE-3076), asked every `deadline` seconds and once more when the budget
+    expires. It returns a quote when the SANDBOX has failed, and that ends the
+    wait with `SandboxBlocked` — the run stops there rather than waiting out
+    the job's ceiling. It returns None for healthy and for unknown alike, and
+    the wait then keeps its full budget: a slow critic is not a dead sandbox.
+
+    Scenarios call `HarnessContext.wait`, which wires both from the context;
+    this signature is the mechanism, not the call site.
+    """
     start = clock()
+    # `deadline <= 0` is the operator's off switch and means no liveness check
+    # AT ALL, expiry included — the pre-DRE-3076 behaviour. `deadline=None`
+    # keeps the check but only at expiry.
+    probing = bool(on_deadline) and (deadline is None or deadline > 0)
+    next_check = deadline if (probing and deadline) else None
     while True:
         value = poll()
         if value:
             return value
-        if clock() - start >= timeout:
+        elapsed = clock() - start
+        expired = elapsed >= timeout
+        if probing and (expired or (next_check is not None and elapsed >= next_check)):
+            cause = on_deadline(description, elapsed)
+            if cause:
+                raise SandboxBlocked(
+                    f"{cause} — gave up after {elapsed:.0f}s waiting for "
+                    f"{description}",
+                    cause=cause,
+                )
+            if next_check is not None:
+                next_check = elapsed + deadline
+        if expired:
             raise HarnessTimeout(
                 f"timed out after {timeout:.0f}s waiting for {description}"
             )

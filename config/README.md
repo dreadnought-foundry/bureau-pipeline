@@ -52,6 +52,16 @@ of it is ever a runtime lookup.
   and the planner cannot leave the workflow without the answer; the exclusion
   names that gate in `enforced_by` and `planner_score.py check` fails if the
   workflow stops running it. `docs/planner-audit.md` records the first run.
+- **`split-ledger.json`** — every card that did not fit one run (DRE-3077),
+  derived by `python3 scripts/split_ledger.py derive` from Linear and the run
+  receipts: the turn-cap deaths and what they cost, the splits and the pieces
+  they became, the hand-backs, each card's declared footprint against what its
+  pieces actually touched, and which of DRE-2893's four tells applied in
+  hindsight. **Generated, not hand-edited** — the file carries the timestamp it
+  was derived at, and `docs/split-ledger.md` is rendered from it. A read that
+  fails records `UNKNOWN`, never `0`: the ten seed rows include five cards whose
+  pieces live in a repo this rail's token cannot see, and a clean-looking
+  footprint there would be composed entirely of reads that never happened.
 
 ---
 
