@@ -222,6 +222,18 @@ class TestThePromptIsDerived:
         prompt = planning_classify.prompt_for(card)
         assert "harmless shape: wave" in prompt
 
+    def test_the_prompt_states_whether_the_card_already_has_children(self):
+        """An epic being ACTIVATED arrives here unstamped, and a card with
+        children is an epic whatever its body says. The classifier is told,
+        rather than left to infer it from prose."""
+        card = _card(_probe("DRE-3019"))
+        assert "Children already created: no" in planning_classify.prompt_for(card)
+        card["has_children"] = True
+        assert "Children already created: yes" in planning_classify.prompt_for(card)
+
+    def test_the_brief_says_children_settle_it(self):
+        assert "children is an epic" in planning_classify.brief_prompt()
+
     def test_the_shipped_prompt_composes(self):
         assert planning_classify.problems() == []
 
@@ -340,6 +352,23 @@ class TestRefusalNeverADefault:
         assert decision.shape is None
         assert lops.comments == [], f"{what} produced a stamp"
         assert decision.refusal, f"{what} was refused with no reason stated"
+
+    def test_a_stamp_that_cannot_be_written_parks_the_card(self, monkeypatch):
+        """Every card leaves Planning or parks in one run. A stamp this module
+        cannot compose is a card nobody classified, and a card nobody
+        classified goes to a human — not to a red run that leaves it sitting."""
+        def boom(*args, **kwargs):
+            raise planning_shape.ShapeError("the vocabulary went missing")
+
+        monkeypatch.setattr(planning_shape, "stamp", boom)
+        probe = _probe("DRE-3018")
+        lops = _Lops(probe)
+        decision = planning_classify.run(
+            lops, probe["card"], call=_caller(_answer(shape="one-off")), model=MODEL
+        )
+        assert decision.escalates
+        reason = planning_classify.escalation_reason(probe["card"], decision)
+        assert planning_escalation.refusal(reason) is None
 
     def test_a_good_answer_is_not_refused(self):
         """The guard above is only worth anything if the gate can open."""

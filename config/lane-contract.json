@@ -240,7 +240,7 @@
           "text": "A classification exists: one-off, epic, or wave — or the card has sat here past the lane's own stall window, in which case the sweep moves it to Green Light carrying whatever reason is already stated on it (DRE-2687). Intake is the one planning lane with a timer, because a lane nothing drains is what this wave exists to remove.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2719 makes Planning decide the classification; the aged-card exit is live"
+          "pending": null
         },
         "writers": {
           "text": "Anything that creates a card, the retroactive pass that moves the legacy Backlog in, and nothing that moves one onward.",
@@ -252,7 +252,7 @@
           "text": "The card exists and carries no classification yet.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2719"
+          "pending": null
         }
       }
     },
@@ -267,10 +267,10 @@
           "text": "The card has been classified as needing a plan.",
           "enforced_from": "5",
           "assertion": null,
-          "pending": "DRE-2719"
+          "pending": null
         },
         "exit": {
-          "text": "The card leaves by the route its shape declares (DRE-2844): a one-off goes straight to the build queue, carrying its routing verdict and owing no plan artifact and no green light; an epic leaves for the CEO on a plan artifact, and for an epic it is still no artifact, no exit; a wave leaves to be decomposed into epics before anything is approved. A card carrying no shape does not leave at all — it is refused, with the reason naming the missing stamp. There is a fourth exit and it is the only one that is not a plan: the planner ESCALATES, with a reason stated in business terms, and the card parks in Green Light (DRE-2848). Hand-planning is that escalation and nothing else — no label, flag or lane skips this lane, and the one sanctioned bypass past the Todo gate, `break-glass`, returns the card here for the classification it went round.",
+          "text": "The card leaves by the route its shape declares (DRE-2844): a one-off goes straight to the build queue, carrying its routing verdict and owing no plan artifact and no green light; an epic leaves for the CEO on a plan artifact, and for an epic it is still no artifact, no exit; a wave leaves to be decomposed into epics before anything is approved. A card carrying no shape is CLASSIFIED by the run before it routes (DRE-3029) — one bounded read of the card against the three shapes, stamped with who made the call and on which model — so nothing sits here owing a stamp a person has to write by hand. There is a fourth exit and it is the only one that is not a plan: the run ESCALATES, with a reason stated in business terms, and the card parks in Green Light (DRE-2848) — the classifier takes it for a card it cannot place, and the planner for an epic whose reasoning is itself the deliverable. Hand-planning is that escalation and nothing else — no label, flag or lane skips this lane, and the one sanctioned bypass past the Todo gate, `break-glass`, returns the card here for the classification it went round.",
           "enforced_from": "5",
           "assertion": null,
           "pending": "DRE-2720 writes the epic's artifact, DRE-2844 branches the exit on the shape and DRE-2848 adds the escalation exit; the gate that refuses an epic's exit without an artifact is Phase 5"

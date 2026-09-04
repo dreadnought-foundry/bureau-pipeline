@@ -39,17 +39,23 @@ check rather than becoming a dead end:
 
 Read a shape THERE. The table above is a copy, and the copy is what drifts.
 
-**The run reads the shape before you start, and it decides whether you start at
-all** (`planning_route.py decide`). A one-off is checked and moved with no agent
+**The run CLASSIFIES the card before you start, and the shape decides whether
+you start at all.** A card that arrives unstamped is classified by the run
+itself — one bounded call, the section below, stamped `by: planner` with the
+model it ran on (DRE-3029) — and only then routed (`planning_route.py decide`).
+A one-off is checked and moved with no agent
 run — nobody is dispatched to plan it. You are dispatched for an **epic**, where
 the process below is unchanged, and for a **wave**, which asks for a different
 document (see the artifact section). Three things not to get wrong:
 
-- **Exactly one shape per card, and a card carrying none is REFUSED, never
-  defaulted.** A defaulted shape is a classification nobody made. Two shapes are
-  refused with both named — picking between them would be inventing the decision
-  rather than reading it — and an unrecognised word is refused as a word, with
-  the shapes that do exist named. Three faults, three different fixes.
+- **Exactly one shape per card, and a card that cannot be classified is
+  REFUSED, never defaulted.** A defaulted shape is a classification nobody made.
+  Two shapes are refused with both named — picking between them would be
+  inventing the decision rather than reading it — and an unrecognised word is
+  refused as a word, with the shapes that do exist named. Refusing is not
+  stopping: the card parks in the CEO's decision queue with the question stated
+  in business terms, which is the escalation exit at the end of this brief. A
+  hand stamp is the OVERRIDE — a person's call wins over the run's.
 - **Shape is not size.** `size:XS` through `size:XL` already exist and mean
   EFFORT; this axis is how the work is STRUCTURED and what gate it owes. A
   `size:L` one-off is perfectly legitimate — a large single card that still ships
@@ -59,6 +65,60 @@ document (see the artifact section). Three things not to get wrong:
 - **A one-off never reaches the CEO, by design.** Nothing escalates it, which is
   why its routing verdict has to be right (DRE-2735). Do not give it a green
   light it does not owe, and do not make it a one-child epic to get one.
+
+## Classifying the card itself (DRE-3029)
+
+*The section below IS the classification prompt.* `planning_classify.py` reads
+it out of this brief and sends it, with the shapes and the size tests appended
+from the files that own them, as one bounded call on your ladder — before any
+planner agent is dispatched. So it is written to whoever is doing the
+classifying, and editing it here changes what the run asks. Nothing else in this
+brief is used that way.
+
+You are given one card — a title and a body, written by the CEO or by another
+agent — and you answer one question: **is this one-off, epic, or wave?** The
+shapes are listed below with what each one means; nothing else is a valid
+answer.
+
+Three rules decide it, in this order:
+
+1. **Is this a decision rather than work?** A card whose deliverable is a
+   judgement — should we go public or stay private, do we charge for this — has
+   no shape, however it is written. There is nothing to build until a person
+   chooses, and decomposing it into cards is misreading it. Say so instead of
+   picking a shape: that is the escalation exit (DRE-2848), and it is a normal
+   answer, not a failure.
+2. **Does it hold together as ONE piece of work?** Walk the size tests listed
+   below and name the ones you actually checked. Any one of them tripping means
+   this is not a one-off.
+3. **Bias toward the SMALLER shape, and say why.** Under-sizing is loud —
+   a one-off that turns out to be an epic is handed back within one run, and
+   costs a run. Over-sizing is silent: an epic's paperwork spent on a one-line
+   change is a planner run, a document and a CEO decision nobody needed, and
+   nothing anywhere reports it. When the card sits between two shapes, take the
+   smaller one and name the doubt in your reason.
+
+One fact outranks all three, and the card states it: **a card that already has
+children is an epic**, whatever its body says. Children are cards that ship
+separately, which is what the word means; nothing with them is one pull request.
+
+**Refuse rather than guess.** If two shapes both fit, if none does, or if the
+body is a decision, you escalate — you never pick the one that seems likeliest.
+A shape nobody can defend is worse than no shape, because everything downstream
+treats it as settled.
+
+Answer with ONE JSON object and nothing else:
+
+* `shape` — one of the shape names below, or `null` when you cannot classify it.
+  Where the card genuinely claims two, give both as a list; naming them is what
+  the person reading it needs.
+* `why` — one line, plain English, saying what made it that shape.
+* `tells` — the NUMBERS of the size tests you checked, as a list.
+* `decision` — `true` when the card is a decision rather than work, `false`
+  otherwise.
+* `question` — when you cannot classify it, the question a non-technical reader
+  has to answer, in business terms. No code, no file names, no commands: a
+  question written in technical terms is not shown to the CEO at all.
 
 ## Where what you create lands
 

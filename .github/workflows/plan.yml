@@ -80,6 +80,11 @@ jobs:
     # raising the ceiling is the cheaper answer than teaching a safety margin
     # to reason about branches. 50 is still well inside the 120-minute
     # Planning stall window.
+    #
+    # DRE-3029's classification step adds no turn budget and no rung to that
+    # sum: it is ONE `/v1/messages` call, capped at `TIMEOUT_SECONDS` in
+    # planning_classify.py, which fits inside the ~8 minutes of non-turn work
+    # the margin above already carries.
     timeout-minutes: 50
     # Read by the `publish` job below (DRE-2720): the plan artifact is
     # rendered and published from a SEPARATE job so the document portal never
@@ -119,6 +124,61 @@ jobs:
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
 
+      # --- Planning classifies the card itself (DRE-3029) -------------------
+      #
+      # The shape below is the only judgement on the fast path, and until this
+      # step it was a PERSON'S: every card reaching Planning unstamped got a
+      # `planning-no-shape` comment telling a human to run a script, and the
+      # four DRE-3013 probes each stopped there in under twenty seconds. Two
+      # hundred cards is two hundred hand classifications.
+      #
+      # So the run classifies what it finds unstamped: ONE bounded call, on the
+      # planner's own ladder, reading the card against the three shapes in
+      # `config/planning-shapes.json` and against DRE-2848's escalation test —
+      # is this a decision rather than work? It stamps the answer with `by:
+      # planner` and the model id, so DRE-3016's scorer can grade the
+      # classifier separately from the plan.
+      #
+      # A card it CANNOT classify is not a dead stop. Two shapes claimed, none,
+      # a body that is a decision, or a model that did not answer: the run posts
+      # the question in business terms and parks the card in the CEO's decision
+      # queue — DRE-2848's exit, below — instead of leaving a card in Planning
+      # owing a stamp nobody will write. It never defaults to a shape it is
+      # unsure of; that half is DRE-2843's rule and this step keeps it.
+      #
+      # The hand CLI is unchanged and is the OVERRIDE: a card that already
+      # carries a stamp is left alone, no call is made, and the hand stamp wins.
+      - name: Classify the card — one-off, epic or wave
+        id: classify
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The same credential the model-selection step below reads, through
+          # the same switch — one auth block, no new secret (Q1/Q2 of the
+          # vendor premortem).
+          ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_classify.py classify \
+            "${{ github.event.client_payload.identifier }}" \
+            --github-output "$GITHUB_OUTPUT" \
+            --escalation-file "${{ runner.temp }}/classifier-escalation.txt"
+
+      # The refusal branch, and it is DRE-2848's exit rather than a second one:
+      # the same `escalate` seam the planner's own hand-planning escalation
+      # uses, so the card parks in the lane a plan waits in, with the question
+      # stated in business terms and posted at most once. Nothing below this
+      # runs — the routing step is gated on the same output — so the card
+      # leaves this run parked, never stopped.
+      - name: Classification refused — park the card for the CEO
+        if: steps.classify.outputs.escalate == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
+            "${{ github.event.client_payload.identifier }}" \
+            --reason-file "${{ runner.temp }}/classifier-escalation.txt"
+
       # --- Planning branches three ways on the shape (DRE-2844) -------------
       #
       # The shape is stamped by `planning_shape.py` (DRE-2843) and answers how
@@ -132,10 +192,14 @@ jobs:
       # A card carrying NO shape is REFUSED, never defaulted: it gets the
       # notice naming the missing stamp, posted once, and this run stops
       # there. Deliberately not a red run — an unclassified card is owed a
-      # message, not a failed workflow that summons the medic.
+      # message, not a failed workflow that summons the medic. Since DRE-3029
+      # the step above has already classified it or parked it, so this refusal
+      # is the belt-and-braces one; it is SKIPPED after an escalation, because
+      # a card that just parked in the CEO's queue must not then be told a
+      # stamp is missing.
       - name: Planning shape — which route this card takes
         id: shape
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.classify.outputs.escalate != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |

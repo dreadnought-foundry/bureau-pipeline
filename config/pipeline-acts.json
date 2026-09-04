@@ -585,7 +585,7 @@
     },
     {
       "file": "scripts/planning_shape.py",
-      "anchor": "shape_comment(name, reason)",
+      "anchor": "shape_comment(name, reason, doc, by=by, model=model)",
       "kind": "not-an-act",
       "means": "The plan-shape stamp a card carries out of planning.",
       "why": "A judgement in another registry's vocabulary, with its own single writer and its own readers — the same shape this file is, for a different question. A verdict says where the work goes or what it is; an act says what the pipeline did on its own. One line carrying both grammars would let two registries answer for the same comment, and the reader could not tell which one was speaking."
