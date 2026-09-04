@@ -147,6 +147,12 @@ class FakeGit:
             return 0, "", ""
         if "fetch" in rest:
             return 0, "", ""
+        if "format-patch" in rest or "diff" in rest:
+            # The DRE-3098 patch write-out. Empty on purpose: this suite is
+            # about the re-mint, and a fake that produced a patch would drop a
+            # file on the real runner. tests/test_rescue_push_token.py owns
+            # what the patch is and where it goes.
+            return 0, "", ""
         raise AssertionError(f"FakeGit has no answer for: {joined}")
 
     def argv_containing(self, *needles) -> list[list[str]]:
@@ -658,9 +664,13 @@ class TheWorkflowWiring(unittest.TestCase):
         step = _step("Push rescue")
         self.assertIn("push_rescue.py", step["run"])
         self.assertIn("steps.pushtoken.outputs.token", step["env"]["PUSH_TOKEN"])
-        # …and falls back to the job-start token if the re-mint itself failed,
-        # so the step is never worse than doing nothing.
-        self.assertIn("steps.worker.outputs.token", step["env"]["PUSH_TOKEN"])
+        # The job-start token was the fallback here until DRE-3098: that is the
+        # credential the agent step held, the failure being rescued from may
+        # have invalidated it, and on run 33896126776 pushing with it answered
+        # `error: 400` twenty-six minutes into the run. The retry credential is
+        # a SECOND mint of this step's own — see
+        # tests/test_rescue_push_token.py.
+        self.assertNotIn("steps.worker.outputs.token", step["env"]["PUSH_TOKEN"])
         self.assertTrue(str(step.get("if", "")).startswith("always()"))
 
     def test_the_rescue_never_runs_for_a_bounced_or_duplicate_dispatch(self):

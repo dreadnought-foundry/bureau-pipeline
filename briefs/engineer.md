@@ -100,6 +100,8 @@ An expiry after that costs a rebase, not a rebuild; an expiry before it costs
 the whole run. The workflow re-mints a fresh token after you finish and
 delivers your branch if you could not, so a push you never managed is still
 recoverable — but only if the work is COMMITTED. Uncommitted changes are not.
+If GitHub refuses that delivery twice (DRE-3098), the committed branch is
+uploaded to the run as `rescue-<CARD>.patch` — again, only what is committed.
 
 This does not change the TDD commit order: the RED test commit still comes
 first, and a WIP checkpoint pushed after it is just the same commits, earlier.
