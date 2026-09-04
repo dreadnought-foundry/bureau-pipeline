@@ -258,6 +258,15 @@ jobs:
       # would be a second answer to the same question. Gated on `answered`, not
       # on the outcome: a card that escalated because the model could not tell
       # still had a model read it, and a card whose call 429'd did not.
+      #
+      # It says BOTH halves (DRE-3083) — `<asked> (asked) / <answered>
+      # (answered)`, with a leading DEGRADED when they differ, the same flag the
+      # ladder's own selection note leads with. One model id could not tell a
+      # clean run on the top rung from a silent fall off it, and for three runs
+      # on 2026-09-03 it named Haiku on a Fable answer because the CLI's
+      # `modelUsage` lists every model the run billed. The line is composed in
+      # planning_classify.py and posted here: a receipt assembled in YAML is a
+      # second answer to "which model answered" that nothing tests.
       - name: Classifier heartbeat — the model that answered
         if: steps.classify.outputs.answered == 'true'
         env:
@@ -265,7 +274,7 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ github.event.client_payload.identifier }}" \
-            "🧠 model-attempt: ${{ steps.classify.outputs.model }} — planning classifier read the card."
+            "🧠 model-attempt: ${{ steps.classify.outputs.receipt }} — planning classifier read the card."
 
       - name: Planning shape — which route this card takes
         id: shape
