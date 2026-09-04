@@ -117,6 +117,11 @@ class BotPrFlow(framework.Scenario):
         last = {"state": "none", "detail": ""}
 
         def poll_verdict():
+            # The verdict wait is the run's longest and its first, so it is
+            # the first place a probe PR closed out from under us costs a
+            # full budget and a failure that names the critic instead of
+            # the sweep that took the PR (run 33899093729).
+            framework.probe_pr(ctx.gh, ctx.repo, number)
             comments = ctx.gh.list_comments(ctx.repo, number)
             state, detail = verdict_state(comments, ctx.qa_login, head_sha)
             last.update(state=state, detail=detail)

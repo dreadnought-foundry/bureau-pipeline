@@ -471,7 +471,11 @@ class GatePaths(framework.Scenario):
         number, h1 = leg["pr"], leg["h1"]
 
         def _pr_untouched():
-            pr = ctx.gh.get_pr(ctx.repo, number)
+            # Through probe_pr, so a PR closed out from under this leg ends
+            # the wait naming the closure — the skew and stale legs have
+            # always failed fast on that state and this one never did
+            # (run 33899093729).
+            pr = framework.probe_pr(ctx.gh, ctx.repo, number)
             if pr.get("merged"):
                 raise ScenarioFailure(
                     f"named leg: the gate MERGED PR #{number} — a "
@@ -513,12 +517,10 @@ class GatePaths(framework.Scenario):
         )
         ctx.sleep(GATE_GRACE_SECONDS)
 
-        pr = _pr_untouched()
-        if pr.get("state") != "open":
-            raise ScenarioFailure(
-                f"named leg: PR #{number} is {pr.get('state')} — the honest "
-                "waiting state means the PR stays open for a human"
-            )
+        # Still open, still untouched: _pr_untouched now covers BOTH — a
+        # merge and any other closure each raise there, so the post-grace
+        # state check that used to live here can no longer be reached.
+        _pr_untouched()
         waits = _human_wait_comments(
             ctx.gh.list_comments(ctx.repo, number), ctx.qa_login
         )

@@ -59,6 +59,18 @@ Two clocks, and they answer different questions:
   unreadable one changes nothing and the wait keeps its full budget.
   Unknown is never dead.
 
+Neither clock answers a third question, so `framework.probe_pr` does: **is
+the thing this wait is about still there?** Every wait that polls a probe
+PR reads it through that helper, and a PR found closed-and-unmerged ends
+the wait at once naming the closure. A wait polling only for a COMMENT
+cannot otherwise tell "the pipeline has not answered yet" from "the pull
+request no longer exists" — both are an empty list — so it spends its whole
+budget and then reports the pipeline it was waiting on. On run
+`33899093729` that cost 70 of a 76-minute run and read as `timed out after
+4200s waiting for a critic comment on PR #929`; the critic was healthy and
+the PR had been closed 20 minutes in by a concurrent harness run whose
+driver predated the namespaced sweep below.
+
 A blocked run stops there — the remaining scenarios would wait on the same
 corpse — exits `framework.BLOCKED_EXIT` (3), and writes the quote to its
 `blocked_reason` output. `harness.yml` makes that the `integration-harness`
