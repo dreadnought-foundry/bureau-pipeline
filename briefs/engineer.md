@@ -81,6 +81,33 @@ supplement to this brief — it adds to these conventions, it does not replace t
   (or fix/chore as appropriate). PR body: what + why in 2-3 sentences, card
   URL, test evidence ("N new tests, all green locally").
 
+## Push before the credential expires (DRE-3043)
+
+Your run's GitHub credential dies at **60 minutes**, and it is the only one
+you have: the token that lets you `git push` and the token that lets `gh` open
+a PR are the same App installation token, minted at the top of the job. A card
+that takes longer than an hour therefore cannot deliver its own work unless you
+get something onto GitHub before the deadline.
+
+At the 50-minute mark, if nothing has been pushed, your card gets a comment
+saying `credential expires in 10 minutes — push what is green`. When you see
+it — or any time you are past roughly 45 minutes with nothing pushed — **stop
+and push a WIP branch immediately**, then carry on:
+
+    git add -A && git commit -m "wip(DRE-N): checkpoint" && git push -u origin agent/DRE-N-<slug>
+
+An expiry after that costs a rebase, not a rebuild; an expiry before it costs
+the whole run. The workflow re-mints a fresh token after you finish and
+delivers your branch if you could not, so a push you never managed is still
+recoverable — but only if the work is COMMITTED. Uncommitted changes are not.
+
+This does not change the TDD commit order: the RED test commit still comes
+first, and a WIP checkpoint pushed after it is just the same commits, earlier.
+
+(Origin: bureau-pipeline run 33822932627. The agent finished DRE-3029 at 18:53
+with 5,001 tests green and a credential that had died at 18:43. ~$20 and 70
+minutes of correct work were rebuilt from scratch.)
+
 ## Build by default; escalate by exception (DRE-1655)
 You are **autonomous by default**. Research the card, and if you are confident
 you understand what's wanted and how to do it safely, **build and ship it** —

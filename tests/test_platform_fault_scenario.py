@@ -245,6 +245,12 @@ def run_report(
         "github.repository": REPO,
         "github.run_id": "33468806067",
         "steps.claude.outputs.execution_file": exec_file,
+        # DRE-3043: the Push rescue step's observation. None of the three runs
+        # this fixture drives left committed work on the runner — attempts 2
+        # and 3 never reached the agent at all — so it is "false" here, and
+        # the classifications below are the ones they had before that step
+        # existed.
+        "steps.rescue.outputs.local_work": "false",
     })
     script = os.path.join(td, "report.sh")
     with open(script, "w", encoding="utf-8") as fh:

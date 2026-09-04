@@ -1160,6 +1160,13 @@
       "kind": "seam",
       "means": "The merge gate's post-exactly-once write, after the late re-read that makes it safe under a racing peer.",
       "why": "A SEAM, not a site with a body of its own: it takes a body its callers own and decides only whether to post it, exactly as `_post_pr_note` does. `_post_pr_note` is excluded in code because the card named it; excluding this one is a change to the guard's model of what a seam is, and the card that makes that call also has to convert the callers. Named here so the shape is countable rather than invisible. It is also the point where the DRE-2508 marker contract is enforced on the body it was handed, which is a second reason its callers own the wording."
+    },
+    {
+      "file": "scripts/credential_clock.py",
+      "anchor": "linear_ops.cmd_comment(card, body)",
+      "kind": "not-an-act",
+      "means": "The 50-minute credential floor (DRE-3043): the run is ten minutes from losing the only credential it has and nothing of this card's work has reached GitHub yet.",
+      "why": "A WARNING ADDRESSED TO THE AGENT, not something the pipeline did. It creates no obligation on the pipeline, hands the work to nobody and has nothing to discharge — the three questions a trailer answers — and the run continues either way. It is the same shape as the ⏳ n/5 progress heartbeats briefs/engineer.md already asks for, and deliberately the SAME grammar, so the console reads one kind of line rather than two. Nothing downstream keys on it: push_rescue.py is what recovers an expiry, and check_agent_result.py classifies one from the runner's own disk — neither of them from this comment."
     }
   ]
 }

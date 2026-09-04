@@ -29,6 +29,21 @@ TURN EXHAUSTION IS ITS OWN CLASS (DRE-2312), on its own tag and its own cap:
                at the same milestone — the cap is a race the retry can win),
                and the SECOND one holds saying the card needs splitting.
 
+A CREDENTIAL EXPIRY IS NOT A DEATH EITHER (DRE-3043):
+
+  - credential_expiry : the run did the whole card and could not deliver it.
+              The App installation token minted at the top of the job lives
+              exactly one hour and every git credential on the runner is that
+              token, so a card that takes longer than an hour cannot push its
+              own branch. On 2026-09-03 run 33822932627 finished DRE-3029 with
+              a green 5,001-test suite ten minutes after its credential died,
+              and the card was told an agent had died with no PR — which sends
+              the reader to the model, the service and the card, three places
+              with nothing wrong in them. It spends the SHARED dead-run budget
+              (a rebuild is a rebuild) and writes NO model-error marker,
+              because no model failed. `push_rescue.py` is what makes it rare;
+              this is what it is called when the re-mint did not save it.
+
 A PLATFORM FAULT IS NOT A DEATH CLASS EITHER (DRE-2931). Everything above
 presumes the agent RAN. A run that dies before claude-code-action is reached —
 a Linear write refused at `Card → In Progress`, a context assembly that blew
@@ -171,6 +186,7 @@ def decide(
     pre_agent: bool = False,
     failed_step: str = "",
     rate_limited: bool = False,
+    credential_expiry: bool = False,
     run_url: str = "",
     cap: int = REQUEUE_CAP,
     turn_cap: int = TURN_REQUEUE_CAP,
@@ -206,6 +222,14 @@ def decide(
     was not the card's. `failed_step` names the step GitHub reported as failed;
     `rate_limited` says the failure was Linear answering RATELIMITED, which is
     a wait rather than a fault at all.
+
+    `credential_expiry` (DRE-3043): the work was finished ON THE RUNNER and
+    GitHub refused the push, because the App installation token the job started
+    with had aged out at 60 minutes. Ranked BELOW cancellation, the pre-agent
+    fault and turn exhaustion — each of those is a fuller account of the same
+    run — and above the silent/is_error classes, which would call it a death.
+    It spends the shared dead-run budget (a rebuild is a rebuild) and records
+    no `model-error:` marker, because no model failed.
     """
     run_suffix = f" Run: {run_url}" if run_url else ""
     if cancelled:
@@ -290,6 +314,42 @@ def decide(
                 f"varies run to run. If the next run hits the cap too, the card "
                 f"needs splitting into smaller pieces or a larger turn "
                 f"budget.{run_suffix}"
+            ],
+        )
+    if credential_expiry:
+        # DRE-3043. The word this branch exists to remove is "died": the run
+        # did the whole card and could not deliver it, because the App
+        # installation token every git credential on the runner is built from
+        # lives one hour. Reported as a death it sends the reader to the model,
+        # the service and the card — three places with nothing wrong in them.
+        #
+        # It spends the SHARED dead-run budget: a rebuild is a rebuild whatever
+        # the cause, and the cap is what stops a card looping. It records no
+        # `model-error:` marker, because no model failed.
+        note = (
+            f"the run's GitHub credential expired before the branch could "
+            f"reach GitHub — the agent finished the work and could not deliver "
+            f"it. Installation tokens live one hour and every git credential "
+            f"on the runner is that token. This is a CREDENTIAL expiry: not a "
+            f"fault in the model, the service or the card"
+        )
+        if prior_dead >= cap:
+            return Decision(
+                "hold",
+                [
+                    f"🚨 held-for-human ({DEAD_TAG} cap reached): {note}, and "
+                    f"it has now happened {prior_dead + 1} times. Parked in "
+                    f"Backlog with the '{HOLD_LABEL}' label — the re-mint at "
+                    f"the push is not recovering this card, so a human needs "
+                    f"to look at the App credentials before it is retried."
+                    f"{run_suffix}"
+                ],
+            )
+        return Decision(
+            "requeue",
+            [
+                f"🪦 {DEAD_TAG}: {note}. Requeued to Todo for a fresh attempt "
+                f"(attempt {prior_dead + 1}/{cap + 1}).{run_suffix}"
             ],
         )
     cause = (
@@ -516,6 +576,7 @@ def main(argv: list[str]) -> int:
       decide <prior_dead> [--is-error] [--error-model M] [--cancelled]
              [--turn-exhaustion [--execution-file PATH]] [--run-url U]
              [--pre-agent [--failed-step NAME] [--rate-limited]]
+             [--credential-expiry]
       park <CARD>
       park-unlanded [--run-url U] [--turn-exhaustion]
 
@@ -534,8 +595,8 @@ def main(argv: list[str]) -> int:
     usage = ("usage: dead_run.py decide <prior_dead> [--is-error] "
              "[--error-model M] [--cancelled] [--turn-exhaustion] "
              "[--execution-file PATH] [--pre-agent] [--failed-step NAME] "
-             "[--rate-limited] [--run-url U] | park <CARD> | "
-             "park-unlanded [--run-url U] [--turn-exhaustion]")
+             "[--rate-limited] [--credential-expiry] [--run-url U] | "
+             "park <CARD> | park-unlanded [--run-url U] [--turn-exhaustion]")
     if not argv:
         print(usage)
         return 2
@@ -563,6 +624,7 @@ def main(argv: list[str]) -> int:
     turn_exhaustion = "--turn-exhaustion" in rest
     pre_agent = "--pre-agent" in rest
     rate_limited = "--rate-limited" in rest
+    credential_expiry = "--credential-expiry" in rest
     error_model = _flag_value(rest, "--error-model") or None
     run_url = _flag_value(rest, "--run-url")
     exec_path = _flag_value(rest, "--execution-file")
@@ -584,6 +646,7 @@ def main(argv: list[str]) -> int:
         pre_agent=pre_agent,
         failed_step=failed_step,
         rate_limited=rate_limited,
+        credential_expiry=credential_expiry,
         run_url=run_url,
     )
     print(d.action)

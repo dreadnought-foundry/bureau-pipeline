@@ -67,18 +67,17 @@ def _steps() -> list[dict]:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["execute"]["steps"]
 
 
-def _step(name: str) -> dict:
-    for step in _steps():
-        if step.get("name") == name:
-            return step
-    raise AssertionError(f"agent-task.yml has no step named {name!r}")
-
-
 def _step_index(name: str) -> int:
+    """The step whose name IS `name`, or begins with it — the parenthetical
+    half of a step name is a label, not the identity."""
     for i, step in enumerate(_steps()):
-        if step.get("name") == name:
+        if str(step.get("name") or "").startswith(name):
             return i
     raise AssertionError(f"agent-task.yml has no step named {name!r}")
+
+
+def _step(name: str) -> dict:
+    return _steps()[_step_index(name)]
 
 
 class FakeGit:
@@ -122,7 +121,12 @@ class FakeGit:
                 return 0, self.create_url + "\n", ""
             return 0, "", ""
         if "for-each-ref" in rest:
-            return 0, "".join(f"{b}\n" for b in self.branches), ""
+            # The glob the caller asked for, honoured — a fake that answers
+            # every pattern with every branch cannot show that another card's
+            # branch is left alone.
+            prefix = rest[-1].removeprefix("refs/heads/").removesuffix("*")
+            matched = [b for b in self.branches if b.startswith(prefix)]
+            return 0, "".join(f"{b}\n" for b in matched), ""
         if "rev-parse" in rest:
             return (0, self.local_sha + "\n", "") if self.local_sha else (128, "", "no")
         if "ls-remote" in rest:
@@ -240,10 +244,16 @@ class TheRescueDelivers(unittest.TestCase):
 
     def test_the_pushed_ref_is_fetched_so_the_report_step_can_see_it(self):
         # Both later steps resolve the card's branch with `git branch -r`.
-        # A push that leaves no remote-tracking ref reads as "no branch".
+        # A push that leaves no remote-tracking ref reads as "no branch" — and
+        # a bare `fetch origin <branch>` obeys the narrow `remote.origin.fetch`
+        # actions/checkout configures, so the refspec is written out in full.
         fake = FakeGit(remote_sha="")
         _rescue(fake)
-        self.assertTrue(fake.argv_containing("fetch"), fake.calls)
+        fetches = fake.argv_containing("fetch")
+        self.assertTrue(fetches, fake.calls)
+        self.assertIn(
+            f"+refs/heads/{BRANCH}:refs/remotes/origin/{BRANCH}", fetches[0]
+        )
 
     def test_the_pr_body_carries_the_card_url(self):
         fake = FakeGit(remote_sha="")
@@ -292,6 +302,50 @@ class TheRescueIsANoOpOnTheHappyPath(unittest.TestCase):
         self.assertFalse(out.local_work)
         self.assertEqual(fake.argv_containing("push"), [])
         self.assertEqual(fake.argv_containing("create"), [])
+
+    def test_an_agent_that_chose_a_different_exit_is_not_overruled(self):
+        # An escalation asks the CEO a question and a blocker parks the card;
+        # both are decisions the prompt asks the agent to make for itself, and
+        # a rescue that opened a PR anyway would overrule the one thing this
+        # step has no business deciding.
+        import tempfile
+
+        for name in ("agent-escalation.txt", "agent-blocker.txt",
+                     "agent-handback.txt"):
+            with tempfile.TemporaryDirectory() as td:
+                note = os.path.join(td, name)
+                with open(note, "w", encoding="utf-8") as fh:
+                    fh.write("the agent stopped on purpose\n")
+                fake = FakeGit(remote_sha="")
+                out = push_rescue.rescue(
+                    CARD, REPO, FRESH, run=fake, log=lambda *_: None,
+                    stop_notes=(note,),
+                )
+                self.assertFalse(out.rescued, name)
+                self.assertFalse(out.local_work, name)
+                self.assertEqual(fake.calls, [], name)
+
+    def test_the_stop_notes_are_the_prompts_own_three_paths(self):
+        self.assertEqual(
+            set(push_rescue.STOP_NOTES),
+            {"/tmp/agent-escalation.txt", "/tmp/agent-blocker.txt",
+             "/tmp/agent-handback.txt"},
+        )
+
+    def test_an_empty_stop_note_does_not_stop_the_rescue(self):
+        # The workflow's own branches test these files with `-s`: a zero-byte
+        # leftover is not a decision.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            note = os.path.join(td, "agent-blocker.txt")
+            open(note, "w", encoding="utf-8").close()
+            fake = FakeGit(remote_sha="")
+            out = push_rescue.rescue(
+                CARD, REPO, FRESH, run=fake, log=lambda *_: None,
+                stop_notes=(note,),
+            )
+        self.assertTrue(out.rescued)
 
     def test_another_cards_branch_is_never_touched(self):
         fake = FakeGit(branches=["agent/DRE-9999-something-else"])

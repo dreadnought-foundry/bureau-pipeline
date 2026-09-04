@@ -46,7 +46,18 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import push_rescue  # noqa: E402
+
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-task.yml"
+
+
+def push_rescue_stop_notes():
+    """The step's own list, read from the module rather than restated — a
+    fourth escape hatch added later must be parked too."""
+    return push_rescue.STOP_NOTES
+
 
 CARD = "DRE-3043"
 BRANCH = f"agent/{CARD}-push-before-token-expiry"
@@ -191,7 +202,7 @@ class Fixture:
         self.output.write_text("", encoding="utf-8")
 
         # The pipeline checkout the workflow step calls into.
-        shutil.copytree(ROOT / "scripts", self.root / ".bureau-pipeline" / "scripts",
+        shutil.copytree(ROOT / "scripts", self.work / ".bureau-pipeline" / "scripts",
                         ignore=shutil.ignore_patterns("__pycache__"))
 
     def _git(self, *args):
@@ -208,6 +219,18 @@ class Fixture:
             [self.real_git, "-C", str(self.work), "rev-parse", BRANCH],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
+
+    def park_the_stop_notes(self, addCleanup):
+        """The step reads the agent's three real escape-hatch paths, and any
+        of them present makes it a deliberate no-op. A leftover from another
+        test — or from the live agent run this suite is executing inside —
+        would silently turn every assertion below green for the wrong reason.
+        Moved aside and put back, never deleted: they are not this test's."""
+        for path in push_rescue_stop_notes():
+            if os.path.exists(path):
+                parked = path + ".parked-by-test"
+                os.replace(path, parked)
+                addCleanup(os.replace, parked, path)
 
     def run_the_rescue_step(self):
         run = substitute(rescue_step()["run"], {})
@@ -268,6 +291,7 @@ class AnExpiredStartTokenStillDelivers(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory()
         self.addCleanup(self.td.cleanup)
         self.fx = Fixture(self.td.name, token=FRESH_TOKEN)
+        self.fx.park_the_stop_notes(self.addCleanup)
         self.sha = self.fx.agent_finished_its_work()
         self.proc = self.fx.run_the_rescue_step()
 
@@ -316,6 +340,7 @@ class TheNegativeControl(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory()
         self.addCleanup(self.td.cleanup)
         self.fx = Fixture(self.td.name, token=STALE_TOKEN)
+        self.fx.park_the_stop_notes(self.addCleanup)
         self.sha = self.fx.agent_finished_its_work()
         self.proc = self.fx.run_the_rescue_step()
 
@@ -346,6 +371,7 @@ class TheHappyPathIsUntouched(unittest.TestCase):
             self.td.name, token=FRESH_TOKEN,
             open_prs=[{"url": "https://github.com/x/y/pull/240", "number": 240}],
         )
+        self.fx.park_the_stop_notes(self.addCleanup)
         self.sha = self.fx.agent_finished_its_work()
         # The agent's own push, with its own (still live) credential.
         subprocess.run(

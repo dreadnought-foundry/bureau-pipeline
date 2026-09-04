@@ -45,10 +45,24 @@ re-derives it from `is_error` locally (agent-task.yml did, and DRE-2695's
 turn-exhausted BUILD run was reported as an API/model death with a
 `model-error:` marker while the shared predicate sat one import away).
 
-    python3 check_agent_result.py classify <execution-json-path>
+    python3 check_agent_result.py classify <execution-json-path> \
+        [--work-on-runner true|false]
 
-prints exactly one of `turn_exhaustion` / `api_death` / `none` — the form the
-workflows call, so a shell branch never needs its own is_error test.
+prints exactly one of `turn_exhaustion` / `credential_expiry` / `api_death` /
+`none` — the form the workflows call, so a shell branch never needs its own
+is_error test.
+
+DRE-3043 — THE CREDENTIAL AGED OUT WITH THE WORK FINISHED. `credential_expiry`
+is the third class, and the only one that can be true of a run whose record
+does NOT say is_error: the agent finished cleanly, the branch was ready, and
+the installation token every git credential on the runner is built from had
+died ten minutes earlier (run 33822932627, card DRE-3029 — 5,001 tests green,
+none of it pushed). Reported as a silent death it reads "agent died with no PR
+and no blocker note", which is false in the one way that matters: the run did
+the work. The evidence is either GitHub's own refusal in the record
+(`push_credential_refused`) or the Push rescue step's observation that
+committed work for this card is on the runner and GitHub does not have it,
+passed in as `--work-on-runner`.
 
 DRE-2931 — DID THE AGENT START AT ALL. classify_death() answers "which kind of
 death", and every answer it can give presumes there WAS a run. A run that dies
@@ -94,6 +108,11 @@ from execution_result import (  # noqa: E402
 DEATH_NONE = "none"
 DEATH_TURN_EXHAUSTION = "turn_exhaustion"
 DEATH_API = "api_death"
+# DRE-3043: the work is finished ON THE RUNNER and GitHub refused the push.
+# Not a death of the agent, the model or the service — the run did the work and
+# could not deliver it, because the installation token every git credential on
+# the runner is built from lives one hour.
+DEATH_CREDENTIAL_EXPIRY = "credential_expiry"
 
 # claude-code-action's own names for hitting the turn ceiling. `subtype` is the
 # canonical one; `terminal_reason`/`stop_reason` and the human sentence in
@@ -109,6 +128,25 @@ _TURN_CAP_NUMBER = re.compile(r"maximum number of turns\s*\((\d+)\)", re.I)
 # returns in well under a second, on one turn, having spent nothing. A run that
 # spent money and took minutes did not fail to reach the service.
 _OUTAGE_MAX_DURATION_MS = 1000
+
+# What GitHub and git say when the credential is dead (DRE-3043). git's two
+# sentences are what `git push` prints over HTTPS; `bad credentials` and
+# `http 401`/`http 403` are `gh`'s. All GitHub-specific on purpose: a bare
+# "401" would swallow an Anthropic auth failure, which is an api_death.
+_PUSH_REFUSAL_TEXT = (
+    "fatal: authentication failed",
+    "remote: invalid username or password",
+    "could not read username for 'https://github.com'",
+    "bad credentials",
+    "http 401",
+    "http 403",
+)
+
+
+def _truthy(value: str) -> bool:
+    """A shell boolean. The workflow passes a step output, which is the string
+    "true"/"false" (or empty when the step was skipped)."""
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _number(execution: dict, field: str) -> int | float | None:
@@ -157,23 +195,74 @@ def _turn_cap_evidence(execution: dict) -> bool:
     return False
 
 
-def classify_death(execution: dict | None) -> str:
+def push_credential_refused(execution: dict | None) -> bool:
+    """True when the record positively says GitHub refused a credentialed
+    write (DRE-3043).
+
+    The strings are GitHub's and git's own, never a generic "401": an
+    Anthropic 401 is an api_death and reads nothing like these. Same shape as
+    _turn_cap_evidence — a POSITIVE signature, so the class is never inferred
+    from the absence of another one.
+    """
+    if not isinstance(execution, dict):
+        return False
+    for field in ("result", "errors", "error"):
+        value = execution.get(field)
+        if not value:
+            continue
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        lowered = text.lower()
+        if any(marker in lowered for marker in _PUSH_REFUSAL_TEXT):
+            return True
+    return False
+
+
+def classify_death(execution: dict | None, *, work_on_runner: bool = False) -> str:
     """Which kind of death this execution result records (DRE-2312).
 
     DEATH_TURN_EXHAUSTION — it ran out of turns: a failed ATTEMPT, retried at
     most once and then escalated with the real reason.
+    DEATH_CREDENTIAL_EXPIRY — the work is on the runner and GitHub refused the
+    push (DRE-3043).
     DEATH_API — an API/model death: the outage path, unchanged (bounded
     retries, model fallback, outage wording).
     DEATH_NONE — it did not die (or there is no result record to say so).
+
+    `work_on_runner` is what the Push rescue step OBSERVED — committed work for
+    this card that GitHub does not have — never something read out of the
+    transcript. It is a keyword with a False default so every existing caller
+    (fix_dead_run, medic_retry, dead_run) keeps the answer it had.
+
+    ORDER MATTERS, and it is the order of the evidence's strength:
+
+      * an OUTAGE signature first — a run that returned in 400ms on one turn
+        having spent nothing did not push anything and did not exhaust a
+        budget, whatever else its record says (DRE-2365);
+      * TURN EXHAUSTION next, because an agent that commits its RED tests and
+        then runs out of steps ALSO leaves work on the runner. The budget
+        ceiling is the honest story there, and it is the one with a remedy;
+      * the CREDENTIAL last of the three. GitHub's own refusal in the record
+        beats an api_death, because a push GitHub refused is not the service
+        being unreachable — but it is only read on a record that already says
+        is_error, so no existing caller's answer moves. `work_on_runner` is
+        the route that does not need the record to say anything at all, and it
+        is the one the incident needed: the DRE-3029 agent finished CLEANLY and
+        reported in prose that it could not push, so its record carries no
+        error string to match on.
     """
-    if not is_error_death(execution):
-        return DEATH_NONE
-    if has_service_outage_signature(execution):
-        # Nothing that returned in 400ms on one turn exhausted 60 turns.
+    if is_error_death(execution):
+        if has_service_outage_signature(execution):
+            # Nothing that returned in 400ms on one turn exhausted 60 turns.
+            return DEATH_API
+        if _turn_cap_evidence(execution):
+            return DEATH_TURN_EXHAUSTION
+        if push_credential_refused(execution):
+            return DEATH_CREDENTIAL_EXPIRY
+    if work_on_runner:
+        return DEATH_CREDENTIAL_EXPIRY
+    if is_error_death(execution):
         return DEATH_API
-    if _turn_cap_evidence(execution):
-        return DEATH_TURN_EXHAUSTION
-    return DEATH_API
+    return DEATH_NONE
 
 
 def agent_started(
@@ -322,8 +411,21 @@ def main(argv: list[str]) -> int:
     # exit 0. This is the form the workflows call — one shared predicate, no
     # inline `is_error` test in a shell step. Handled before the positional
     # parsing below; "classify" is not a plausible execution-file path.
+    #
+    # `--work-on-runner <bool>` (DRE-3043) is the Push rescue step's own
+    # observation — committed work for this card that GitHub does not have —
+    # passed in rather than guessed at here.
     if argv and argv[0] == "classify":
-        print(classify_death(_load_execution(argv[1] if len(argv) > 1 else "")))
+        rest = argv[1:]
+        work_on_runner = False
+        if "--work-on-runner" in rest:
+            i = rest.index("--work-on-runner")
+            work_on_runner = _truthy(rest[i + 1] if i + 1 < len(rest) else "")
+            del rest[i : i + 2]
+        print(classify_death(
+            _load_execution(rest[0] if rest else ""),
+            work_on_runner=work_on_runner,
+        ))
         return 0
     # `started <execution-json-path> [--claude-outcome X] [--branch REF]`
     # (DRE-2931): did this run consume an attempt at the work? Same shape and
