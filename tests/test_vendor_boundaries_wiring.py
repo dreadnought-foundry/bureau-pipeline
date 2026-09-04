@@ -140,6 +140,17 @@ class SeedIncidentsTest(unittest.TestCase):
     def test_rollout_date_named(self):
         self.assertIn("2026-07-12", body())
 
+    def test_the_anthropic_credential_lesson(self):
+        """DRE-3074: the estate knew a subscription token 429s on the raw
+        Messages API and the checklist did not say so, so a new model call was
+        written straight to it and every card entering Planning escalated to the
+        CEO. Q2 has to ask which ENDPOINT a credential may reach, not only which
+        store holds it."""
+        text = body()
+        self.assertIn("DRE-3074", text)
+        self.assertIn("429", text)
+        self.assertIn("claude-code-action", text)
+
 
 class CriticSectionTest(unittest.TestCase):
     """On a boundary-touching PR the critic walks the checklist and treats

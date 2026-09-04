@@ -50,11 +50,11 @@ def _combined(state, description=""):
 
 class BlockedReceiptTest(unittest.TestCase):
     def _reason(self, combined):
-        promote, reason = promote_channel.evaluate(
+        decision = promote_channel.evaluate(
             combined, SHA, hold=None, ancestry="ahead"
         )
-        self.assertFalse(promote, "a blocked run proves nothing")
-        return reason
+        self.assertFalse(decision.promote, "a blocked run proves nothing")
+        return decision.reason
 
     def test_a_blocked_run_reads_as_not_proven_yet(self):
         quote = (
@@ -68,6 +68,13 @@ class BlockedReceiptTest(unittest.TestCase):
         self.assertIn("rate limited: 2500 requests/hour exhausted", reason)
         # And it is explicit that the commit was never judged.
         self.assertIn("next run", reason.lower())
+
+    def test_a_blocked_run_reports_the_blocked_outcome(self):
+        quote = f"{promote_channel.BLOCKED_MARKER} sandbox Reconcile failed"
+        decision = promote_channel.evaluate(
+            _combined("failure", quote), SHA, hold=None, ancestry="ahead"
+        )
+        self.assertEqual(decision.outcome, promote_channel.OUTCOME_BLOCKED)
 
     def test_an_ordinary_red_harness_still_reads_as_a_harness_failure(self):
         """The negative half — without it the new branch could swallow every
@@ -84,19 +91,19 @@ class BlockedReceiptTest(unittest.TestCase):
         """Belt and braces: the marker means "not proven", whatever state a
         future writer pairs it with."""
         quote = f"{promote_channel.BLOCKED_MARKER} sandbox Merge Gate failed"
-        promote, reason = promote_channel.evaluate(
+        decision = promote_channel.evaluate(
             _combined("success", quote), SHA, hold=None, ancestry="ahead"
         )
-        self.assertFalse(promote, reason)
+        self.assertFalse(decision.promote, decision.reason)
 
     def test_the_hold_still_wins_over_the_blocked_receipt(self):
         """Order is load-bearing: a deliberately paused channel reads as
         paused, never as broken and never as blocked."""
         quote = f"{promote_channel.BLOCKED_MARKER} sandbox Reconcile failed"
-        _, reason = promote_channel.evaluate(
+        decision = promote_channel.evaluate(
             _combined("failure", quote), SHA, hold="cutting v6", ancestry="ahead"
         )
-        self.assertIn("HELD", reason)
+        self.assertIn("HELD", decision.reason)
 
     def test_the_marker_is_what_the_harness_actually_writes(self):
         """One constant, both ends. A receipt the reader does not recognise is
@@ -112,10 +119,10 @@ class BlockedReceiptTest(unittest.TestCase):
         )
         line = sandbox_health.receipt_line(failure.quote())
         self.assertTrue(line.startswith(promote_channel.BLOCKED_MARKER))
-        _, reason = promote_channel.evaluate(
+        decision = promote_channel.evaluate(
             _combined("failure", line), SHA, hold=None, ancestry="ahead"
         )
-        self.assertIn("blocked", reason.lower())
+        self.assertIn("blocked", decision.reason.lower())
 
     def test_the_receipt_survives_githubs_description_clamp(self):
         """GitHub silently truncates a status description at 140 characters.
@@ -125,11 +132,11 @@ class BlockedReceiptTest(unittest.TestCase):
             + "detail " * 100
         )
         self.assertLessEqual(len(long_quote), 140)
-        _, reason = promote_channel.evaluate(
+        decision = promote_channel.evaluate(
             _combined("failure", long_quote[:140]), SHA, hold=None,
             ancestry="ahead",
         )
-        self.assertIn("blocked", reason.lower())
+        self.assertIn("blocked", decision.reason.lower())
 
 
 class ReceiptIsSurfacedTest(unittest.TestCase):
@@ -140,11 +147,16 @@ class ReceiptIsSurfacedTest(unittest.TestCase):
         return yaml.safe_load(WORKFLOW.read_text())
 
     def test_the_decision_reason_reaches_the_run_summary(self):
+        """The reason travels through an env var, not a direct interpolation
+        into the run script — untrusted sandbox-log text is not ours to
+        splice into a shell line (the `BRANCH` rule this step already
+        follows for `head_branch`)."""
         steps = self._doc()["jobs"]["promote"]["steps"]
         summaries = [
             s for s in steps
             if "GITHUB_STEP_SUMMARY" in (s.get("run") or "")
-            and "steps.decide.outputs.reason" in (s.get("run") or "")
+            and "steps.decide.outputs.reason" in str(s.get("env") or {})
+            and "REASON" in (s.get("run") or "")
         ]
         self.assertTrue(summaries, "the receipt must be printed to the summary")
 
@@ -185,9 +197,10 @@ class DecisionCliTest(unittest.TestCase):
             self.assertIn("blocked", buf.getvalue().lower())
             written = open(out).read()
             self.assertIn("promote=false", written)
+            self.assertIn(f"outcome={promote_channel.OUTCOME_BLOCKED}", written)
             # One line per key: a reason with a newline in it would corrupt
             # the output file the workflow parses.
-            self.assertEqual(len(written.strip().splitlines()), 2, written)
+            self.assertEqual(len(written.strip().splitlines()), 3, written)
 
 
 if __name__ == "__main__":

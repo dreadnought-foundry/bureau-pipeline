@@ -593,11 +593,11 @@ class TestPlanYmlBranchesThreeWays:
                     "destination comes from config/planning-shapes.json"
                 )
 
-    def test_a_one_off_run_reaches_no_agent_and_no_artifact(self):
+    def test_a_one_off_run_writes_no_artifact_and_asks_one_model(self):
         """Everything the epic route owes — the planner, both critics, the
         artifact check, the publish job — hangs off the plan/activate mode that
         only the epic route sets. A one-off run therefore writes no plan
-        artifact and asks no model.
+        artifact and never runs the planner.
 
         Two steps run on a critic's DECISION rather than on the mode directly,
         so the chain is walked: the decision steps themselves are mode-gated.
@@ -605,6 +605,13 @@ class TestPlanYmlBranchesThreeWays:
         The wave route's own agent (DRE-2845) hangs off the SHAPE instead —
         there is no mode on that branch — so an agent step qualifies either
         way, as long as the shape it waits for is not the one-off.
+
+        DRE-3041 narrowed this from "asks no model" to "asks one". A one-off
+        that no model reads is a one-off nothing judges: the shape stamp was
+        the only reader on the fast path, and a business decision stamped
+        `one-off` was routed FLEET and would have been built. The pre-approval
+        critic is the ONE agent step a one-off run may reach, and this asserts
+        it stays one — the cheap route stays cheap.
         """
         for producer in ("First critic — round 1 decision", "Second critic — decision"):
             assert "steps.route.outputs.mode" in _step(producer)["if"], (
@@ -612,16 +619,24 @@ class TestPlanYmlBranchesThreeWays:
                 "hang off it escape the branch"
             )
         gated = ("steps.route.outputs.mode", "steps.pre1.outputs", "steps.post1.outputs")
+        on_the_one_off_route = []
         for step in _steps():
             if str(step.get("uses", "")).startswith("anthropics/claude-code-action"):
                 condition = step.get("if", "")
                 shapes = re.findall(
                     r"steps\.shape\.outputs\.route == '([a-z-]+)'", condition)
+                if shapes == ["one-off"]:
+                    on_the_one_off_route.append(step.get("name"))
+                    continue
                 assert any(g in condition for g in gated) or (
                     shapes and "one-off" not in shapes), (
                     f"agent step {step.get('name')!r} is gated on neither the "
                     f"mode nor a shape a one-off cannot be"
                 )
+        assert on_the_one_off_route == ["Pre-approval critic — the one-off exit"], (
+            "exactly one agent step may run on the one-off route — the "
+            f"pre-approval critic (DRE-3041); found {on_the_one_off_route}"
+        )
         for fragment in ("Plan artifact — check", "Plan artifact — upload source"):
             assert "steps.route.outputs.mode == 'plan'" in _step(fragment)["if"]
         publish = _jobs()["publish"]["if"]

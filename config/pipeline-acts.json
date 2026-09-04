@@ -580,10 +580,17 @@
     },
     {
       "file": "scripts/planning_escalation.py",
-      "anchor": "escalation_comment(identifier, reason)",
+      "anchor": "escalation_comment(identifier, reason, transport)",
       "kind": "undeclared-act",
       "means": "Planning cannot proceed on its own, so the card is parked and a human is asked.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. A hold in the strict sense: the next actor is a person, and the card waits."
+    },
+    {
+      "file": "scripts/planning_escalation.py",
+      "anchor": "transport_comment(identifier, reason)",
+      "kind": "undeclared-act",
+      "means": "The classifier could not reach its model, so the card was not classified this run and the run is failed to buy one retry.",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as its sibling above, which this receipt was split out of (DRE-3074). Giving it a row is a REGISTRY change: a tag, a kind, a state, a next actor and a subscriber, and the state it would declare is the one the registry has no word for yet — the card did not move and nobody was asked. Named here so the debt is countable rather than invisible. It already carries its own idempotency key (planning-classify-transport), read back by planning_classify.py, which BUDGETS off it: a trailer beside that key would be a second grammar over a comment whose count is load-bearing."
     },
     {
       "file": "scripts/planning_route.py",
@@ -988,6 +995,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "🧠 model-attempt: ${{ steps.classify.outputs.model }} — planning classifier read the card.",
+      "step": "Classifier heartbeat — the model that answered",
+      "kind": "not-an-act",
+      "means": "Which model actually answered the classification, so DRE-3015's judgement ladder can be read off the card.",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided. Two grammars on one line would give its readers two keys to disagree over. Its grammar is `model-attempt:`, owned by scripts/model_fallback.py — the same one the planner's own heartbeat above writes."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<plan>\"",
       "step": "Plan epic",
       "kind": "not-an-act",
@@ -1080,6 +1095,22 @@
       "step": "Second critic — decision",
       "kind": "not-an-act",
       "means": "The plan critic's the post-approval round record, posted alone because it is only a credential while nothing else shares its comment.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. It is an approval credential in its own grammar, and a second grammar in the same comment is exactly what its 'alone' rule forbids."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-note.md\")\"",
+      "step": "One-off critic — decision",
+      "kind": "not-an-act",
+      "means": "The pre-approval critic's note on a one-off — the judgement the person who filed the card reads.",
+      "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/plan_critic.py. Where the critic stops the card, the ESCALATION that follows is the thing the pipeline did, and it is posted by planning_escalation.py under its own tag."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-record.txt\")\"",
+      "step": "One-off critic — decision",
+      "kind": "not-an-act",
+      "means": "The pre-approval critic's round record on a one-off, posted alone because it is only a credential while nothing else shares its comment.",
       "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. It is an approval credential in its own grammar, and a second grammar in the same comment is exactly what its 'alone' rule forbids."
     },
     {

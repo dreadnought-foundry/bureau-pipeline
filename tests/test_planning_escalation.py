@@ -413,12 +413,19 @@ class TestNoLabelFlagOrLaneSkipsPlanning:
         DRE-3029 added the second clause: a card the classifier could not place
         has already parked in the CEO's queue, and telling it a stamp is missing
         on the way past would be the message that card is leaving behind.
+
+        DRE-3074 added the third, which is the same step's OTHER exit: a call
+        that never reached a model classified nothing, so there is no shape to
+        route on — and the run is failing anyway, so the clause is what makes
+        that explicit rather than incidental. All three are the classifier's own
+        outcomes; none is a label, an input or a lane.
         """
         steps = _steps()
         route = _step("planning_route.py decide")
         assert route["if"].strip() == (
             "steps.gate.outputs.bounced != 'true' && "
-            "steps.classify.outputs.escalate != 'true'"
+            "steps.classify.outputs.escalate != 'true' && "
+            "steps.classify.outputs.requeue != 'true'"
         )
         assert steps  # the workflow parsed
 
