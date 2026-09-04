@@ -88,6 +88,19 @@ class TestTheLabelIsNotTheClassification:
         assert mid_epic.is_epic("[EPIC] mis-titled", True, shape="one-off") is False
         assert mid_epic.is_epic("a plain title", False, shape="epic") is True
 
+    def test_the_epic_shape_it_reads_is_a_shape_the_vocabulary_carries(self):
+        """`mid_epic` cannot import `planning_shape` — that would close a cycle
+        through `routing_verdict` — so the word is named there and bound here.
+        Rename the shape in `config/planning-shapes.json` and this fails rather
+        than the stamp quietly ceasing to mean anything."""
+        import planning_route
+
+        assert mid_epic.EPIC_SHAPE in planning_shape.shapes()
+        stops = [r.shape for r in planning_route.routes() if r.owes_green_light]
+        assert stops == [mid_epic.EPIC_SHAPE], (
+            "the shape that stops for a human is the shape that is an epic"
+        )
+
     def test_the_title_and_children_still_answer_an_unstamped_card(self):
         assert mid_epic.is_epic("[EPIC] the front door", False) is True
         assert mid_epic.is_epic("[epic] lowercase counts too", False) is True

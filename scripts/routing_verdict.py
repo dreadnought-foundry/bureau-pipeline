@@ -760,10 +760,17 @@ def plan_test(description: str, children_labels, doc: dict | None = None) -> tup
 
 
 def route(title, description, labels=(), has_children: bool = False,
-          doc: dict | None = None) -> Decision:
-    """The routing decision for one card, in strict precedence."""
+          doc: dict | None = None, *, shape: str | None = None) -> Decision:
+    """The routing decision for one card, in strict precedence.
+
+    `shape` is the card's planning stamp (DRE-2843) when the caller has read
+    one. It is what says whether this is an epic; the title and any children
+    answer only for a card nothing has classified. The `agent:planner` label is
+    NOT read — it says who owns the card, and reading it as epic-ness sent
+    every one-off down the epic branch with no verdict at all (DRE-3038).
+    """
     labels = list(labels or [])
-    if mid_epic.is_epic(title, labels, has_children):
+    if mid_epic.is_epic(title, has_children, shape):
         return Decision(
             verdict=None,
             source="epic",

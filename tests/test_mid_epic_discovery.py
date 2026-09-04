@@ -436,33 +436,42 @@ class TestGrowthIsLegible:
 class TestACardHasNoChildren:
     def test_a_sub_issue_of_a_plain_card_is_refused(self):
         refusal = mid_epic.subissue_refusal(
-            "deploy-console.sh records a mutable tag", ["agent:engineer", "repo:atlas"],
-            has_children=False,
+            "deploy-console.sh records a mutable tag", has_children=False
         )
         assert refusal is not None
 
     def test_the_refusal_names_the_reclassification_consequence(self):
         """"Refused" is not enough — the writer's next move is a suffix or a
         sub-issue, and both are wrong. Say what giving a card children DOES."""
-        refusal = mid_epic.subissue_refusal(
-            "a plain card", ["agent:engineer"], has_children=False
-        )
+        refusal = mid_epic.subissue_refusal("a plain card", has_children=False)
         low = refusal.lower()
         assert "agent:planner" in low
         assert "promot" in low, "the consequence is that it stops being promoted"
         assert "sibling" in low, "the refusal must name the route that works"
 
     @pytest.mark.parametrize(
-        "title,labels,has_children",
+        "title,has_children,shape",
         [
-            ("[EPIC] the intake front door", ["agent:planner"], False),
-            ("the intake front door", ["agent:planner"], False),
-            ("[epic] lowercase counts too", ["agent:engineer"], False),
-            ("an epic that already has children", ["agent:engineer"], True),
+            ("[EPIC] the intake front door", False, None),
+            ("[epic] lowercase counts too", False, None),
+            ("an epic that already has children", True, None),
+            # The stamp is what carries an epic whose title says nothing and
+            # whose children do not exist yet (DRE-3038) — the case
+            # `agent:planner` used to cover.
+            ("the intake front door", False, "epic"),
         ],
     )
-    def test_a_real_epic_is_not_refused(self, title, labels, has_children):
-        assert mid_epic.subissue_refusal(title, labels, has_children) is None
+    def test_a_real_epic_is_not_refused(self, title, has_children, shape):
+        assert mid_epic.subissue_refusal(title, has_children, shape) is None
+
+    def test_the_planner_label_alone_is_no_longer_an_epic(self):
+        """DRE-3038: `agent:planner` says the planner OWNS the card, not that
+        the card is an epic — and every card dispatched to `plan.yml` from
+        Planning carries it. A one-off wearing it may not be given children."""
+        assert mid_epic.subissue_refusal("a one-off in Planning", False) is not None
+        assert mid_epic.subissue_refusal(
+            "a one-off in Planning", False, "one-off"
+        ) is not None
 
     def test_the_epic_test_matches_the_classifier_that_causes_the_harm(self):
         """The refusal exists because `validate_card.infer_agent_label` reads
@@ -480,6 +489,8 @@ class TestACardHasNoChildren:
                                                             "initiative:bureau"]
         ), patch.object(
             linear_ops, "_issue_has_children", return_value=False
+        ), patch.object(
+            linear_ops, "comment_bodies", return_value=[]
         ), patch.object(linear_ops, "gql") as gql:
             get_issue.return_value = {
                 "id": "uuid-2716", "identifier": "DRE-2716",

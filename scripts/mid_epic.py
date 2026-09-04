@@ -73,6 +73,13 @@ discovery becomes a new SIBLING card under the same epic, with its own number �
 not a `2716a`/`2716b` suffix, not a child. `subissue_refusal()` is the guard;
 `linear_ops.cmd_subissue` calls it before it creates anything.
 
+`is_epic()` answers that question from the SHAPE STAMP (DRE-2843) first and the
+title/children second. It does not read `agent:planner` and is not given the
+labels, so it cannot: that label says the planner OWNS the card, every card
+dispatched to `plan.yml` from Planning carries it, and reading it as epic-ness
+answered "epic, no verdict" for every one-off — which is how one fixed FLEET
+sentence came to be stamped on cards whose criteria said otherwise (DRE-3038).
+
 CLI:
   discovery <EPIC> --kind addition --because "<one line>" \\
                    --title "<title>" --body <file> [--label <name>]
@@ -107,6 +114,13 @@ UNRECORDED_TAG = "mid-epic-unrecorded"  # on the EPIC: it grew, its plan did not
 # Where an amendment sends the epic. Planning, not Intake: the epic exists, it
 # is the RECOMMENDATION that changed.
 AMENDMENT_STATE = "Planning"
+
+# The planning shape (DRE-2843) that means "this card is an epic". Named here
+# rather than imported: `planning_shape` is read by `planning_route`, which
+# reads `routing_verdict`, which reads THIS module — so importing it back would
+# close a cycle. `tests/test_mid_epic.py` binds the word to the vocabulary
+# instead, so a shape renamed in the file fails there rather than drifting.
+EPIC_SHAPE = "epic"
 
 # The lanes that mean a human has green-lit this epic — the same pair
 # reconcile.EPIC_ACTIVE_STATES treats as activated (DRE-1893: the CEO's
@@ -260,27 +274,37 @@ def promotion_refusal(identifier, created_at, green_lit_at, comment_bodies) -> s
 # --- a card has no children --------------------------------------------------
 
 
-def is_epic(parent_title, parent_labels, has_children: bool) -> bool:
+def is_epic(parent_title, has_children: bool, shape: str | None = None) -> bool:
     """Is this card already an epic?
 
-    The test that matters is the one that causes the harm:
-    `validate_card.infer_agent_label` returns `agent:planner` for `[EPIC]` in
-    the title or ANY children at all. The `agent:planner` label is the third
-    leg — a card already carrying it is already an epic by every consumer's
-    reckoning, and reading it costs no query.
+    Reads the SHAPE STAMP first (DRE-2843) and the title/children second. The
+    stamp is what says what a card IS; a caller that has read it passes it, and
+    a card nothing has classified falls back to the two facts that reclassify a
+    card on their own — `validate_card.infer_agent_label` returns
+    `agent:planner` for `[EPIC]` in the title or ANY children at all.
+
+    It does NOT read `agent:planner`, and it is not given the labels so that it
+    cannot (DRE-3038). That label says the planner OWNS the card, which is a
+    different question — and every card the relay dispatches to `plan.yml` from
+    Planning carries it, so reading it as epic-ness answered "epic, no verdict"
+    for every ONE-OFF. `routing_verdict.route()` then never ran its own
+    precedence, and `planning_route._one_off_check()` stamped a fixed FLEET
+    sentence on cards whose acceptance criteria said otherwise (observed on
+    DRE-3018 and DRE-3020, both with zero criteria, both stamped FLEET).
     """
-    title = (parent_title or "").lower()
-    labels = [(l or "").lower() for l in (parent_labels or [])]
-    return "[epic]" in title or bool(has_children) or "agent:planner" in labels
+    if shape:
+        return shape.strip().lower() == EPIC_SHAPE
+    return "[epic]" in (parent_title or "").lower() or bool(has_children)
 
 
-def subissue_refusal(parent_title, parent_labels, has_children: bool) -> str | None:
+def subissue_refusal(parent_title, has_children: bool,
+                     shape: str | None = None) -> str | None:
     """Why a sub-issue must not be created under this parent, or None.
 
     The refusal fires when the parent is NOT already an epic — because that is
     exactly when adding a child CHANGES what the parent is.
     """
-    if is_epic(parent_title, parent_labels, has_children):
+    if is_epic(parent_title, has_children, shape):
         return None
     return (
         f"a card has no children — refusing to create a sub-issue of "

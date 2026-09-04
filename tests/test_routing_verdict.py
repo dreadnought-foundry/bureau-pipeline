@@ -549,14 +549,34 @@ class TestAnEpicGetsAPlanTest:
     def test_an_epic_is_never_given_a_buildability_verdict(self):
         """"Could an agent build this unattended" is meaningless for a card the
         planner owns."""
-        for title, labels, children in (
-            ("[EPIC] Wave 1.5", [], False),
-            ("Wave 1.5", ["agent:planner"], False),
-            ("Wave 1.5", [], True),
+        for title, labels, children, shape in (
+            ("[EPIC] Wave 1.5", [], False, None),
+            ("Wave 1.5", [], True, None),
+            # The stamp, not the label: `agent:planner` says the planner owns
+            # the card (DRE-3038), and every card dispatched to `plan.yml` from
+            # Planning carries it — including every one-off.
+            ("Wave 1.5", ["agent:planner"], False, "epic"),
         ):
-            decision = routing_verdict.route(title, EPIC_BODY, labels, has_children=children)
+            decision = routing_verdict.route(
+                title, EPIC_BODY, labels, has_children=children, shape=shape
+            )
             assert decision.verdict is None, f"{title!r} was given {decision.verdict}"
             assert decision.source == "epic"
+
+    def test_the_planner_label_alone_does_not_make_a_card_an_epic(self):
+        """The finding DRE-3038 closed: every one-off dispatched from Planning
+        wears `agent:planner`, so this branch answered "epic, no verdict" for
+        all of them and the whole precedence below never ran."""
+        decision = routing_verdict.route(
+            "Trim the trailing slash", EPIC_BODY, ["agent:planner"], has_children=False
+        )
+        assert decision.source != "epic"
+        assert decision.plan_questions == (), "it is not given a plan test either"
+        # It reaches the criteria rule, which is the whole point — a body with
+        # no criteria at all lands on NEEDS WORK rather than on silence.
+        assert routing_verdict.route(
+            "Trim the trailing slash", "Just do the thing.", ["agent:planner"]
+        ).verdict == "NEEDS WORK"
 
     def test_an_epic_carrying_a_role_label_is_still_not_routed(self):
         """Precedence 1 must not fire on an epic: an epic labelled `agent:ops`

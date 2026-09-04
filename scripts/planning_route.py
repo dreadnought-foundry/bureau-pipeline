@@ -10,7 +10,8 @@ This module is the branch. It reads the shape stamped by `planning_shape.py`
 (DRE-2843) and answers *which route does this card take out of Planning*:
 
   * **one-off** — checked, then straight to the build queue. No plan artifact,
-    no green light, and it never reaches the CEO.
+    no green light, and it never reaches the CEO. Unless the check cannot route
+    it at all, which is the one case where it does — see below.
   * **epic** — the existing path, unchanged: plan artifact, children, green
     light. `plan.yml` performs it; nothing here re-implements it.
   * **wave** — handed to the wave route, which owes a decomposition into epics
@@ -46,6 +47,24 @@ same hole, burning a planner run each cycle.
 
 `tests/test_planning_route.py` exercises the promotion rather than trusting
 2735 being closed.
+
+## The verdict is READ OFF THE CARD, never defaulted (DRE-3038)
+
+The check routes a one-off exactly as `routing_verdict.route()` routes a child:
+role label, then the anchored title convention, then the acceptance criteria,
+then NEEDS WORK when the card states none. It used to answer with one fixed
+FLEET sentence for every one-off, because `mid_epic.is_epic()` read
+`agent:planner` as "this is an epic" — and every card the relay dispatches here
+from Planning carries that label, so the precedence never ran. DRE-3018 and
+DRE-3020 were both stamped FLEET with zero `- [ ]` items between them; a card
+whose criteria said "by hand" would have been too. That label says who OWNS the
+card; the shape stamp says what it is, and the stamp is what this passes on.
+
+A one-off nothing can route does not leave Planning quietly with a verdict
+saying it is unbuildable. It takes the escalation exit with the reason — the
+one exit that is not a plan (DRE-2848) — so the CEO, or the classifier, gets it
+back. Nothing is stamped on that path: the card has not left the planning
+segment, so it is not carrying a verdict out of it.
 
 CLI:
 
@@ -127,6 +146,11 @@ class Exit:
     `verdict` is the routing verdict to stamp on the way out, or None — which
     happens in two different cases the `reason` tells apart: the card already
     carries one, and the mechanical check could not decide.
+
+    `escalation` is set when the card does not leave the planning segment at
+    all: the check routed it back here, so a person is owed the reason instead
+    of the card owing a verdict (DRE-2848). Nothing is stamped on that path —
+    the card has not left Planning, so it is not carrying a verdict out of it.
     """
 
     route: Route
@@ -134,6 +158,7 @@ class Exit:
     verdict: str | None
     reason: str
     note: str
+    escalation: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -177,8 +202,18 @@ def destinations(doc: dict | None = None) -> tuple:
     writer whose lane is computed says which lanes it can reach, or it is
     reported as a writer nothing can check. Read from the file like everything
     else here, so a shape re-pointed at a new lane is covered by saying so once.
+
+    The escalation lane is one of them (DRE-3038): a one-off the mechanical
+    check cannot route does not leave Planning, it parks for a person — so this
+    module can put a card there, and a census that did not say so would be
+    wrong about a writer rather than merely quiet about it.
     """
-    return tuple(dict.fromkeys(route.destination for route in routes(doc)))
+    lanes = [route.destination for route in routes(doc)]
+    try:
+        lanes.append(_escalation_lane(doc))
+    except Exception as exc:  # noqa: BLE001 — a census must not become a crash
+        print(f"planning route: no escalation lane to report ({exc})", file=sys.stderr)
+    return tuple(dict.fromkeys(lanes))
 
 
 def route_problems(doc: dict | None = None) -> list:
@@ -276,26 +311,28 @@ def fleet_verdict() -> str:
     return promotable[0]
 
 
-def _one_off_check(card: dict, comment_bodies, doc: dict | None = None) -> tuple:
+def _one_off_check(card: dict, comment_bodies, shape: str,
+                   doc: dict | None = None) -> tuple:
     """`(verdict to stamp, why)` for a card leaving on the one-off route.
 
-    The shape is the default and the mechanical rule is the override.
+    The CARD decides, and there is no default (DRE-3038). This routes exactly
+    as `routing_verdict.route()` routes a child of an epic — an explicit role
+    label, then the anchored title convention, then the acceptance criteria,
+    then NEEDS WORK when the card states none — and the shape is passed through
+    so the stamp, not the `agent:planner` label, is what answers "is this an
+    epic". Reading that label as epic-ness is what sent every one-off down the
+    epic branch with no verdict, leaving this function to stamp one fixed
+    sentence: about one dead build per misrouted one-off, observed on DRE-3018
+    and DRE-3020.
 
-    A one-off is "one card, one pull request" — which is a statement that an
-    unattended agent builds it, and that is exactly what the promotable verdict
-    means. So the shape decides unless the mechanical rule (an explicit role
-    label, the anchored title convention, then the acceptance criteria) says
-    otherwise: a criterion naming an interactive flow routes it to a person, a
-    card with no exit condition at all is not buildable as written.
-
-    That default is load-bearing, not a convenience. The mechanical rule
-    reaches FLEET only through the static-visual phrases, and those now match
-    the prose real cards write rather than phrases nobody does (DRE-2831) — but
-    they still decide only about one carded card in six, so a route that
-    stamped only what the rule decided would leave most one-offs in Backlog
-    with no verdict, which is the DRE-2735 loop this card exists to stay out
-    of. No model is asked either way: this run is the cheap route, and asking
-    one would put the planner cost back into the shape that exists to avoid it.
+    The one branch the shape still answers is the JUDGEMENT call — criteria
+    that exist and name neither an interactive flow nor a live-state
+    observation. There the card has stated an exit condition and nothing in it
+    asks for a person, and a one-off is one card and one pull request, so an
+    unattended agent can satisfy it. The reason names the criteria that were
+    read, so the verdict comment says what decided rather than reciting a
+    sentence. No model is asked: this run is the cheap route, and asking one
+    would put the planner cost back into the shape that exists to avoid it.
     """
     carried = routing_verdict.verdicts_on(comment_bodies)
     if carried:
@@ -303,17 +340,81 @@ def _one_off_check(card: dict, comment_bodies, doc: dict | None = None) -> tuple
             f"the card already carries {' and '.join(carried)} — a card leaving "
             "Planning carries exactly one verdict"
         )
+    description = card.get("description") or ""
     decision = routing_verdict.route(
         card.get("title") or "",
-        card.get("description") or "",
+        description,
         card.get("labels") or (),
         bool(card.get("has_children")),
+        doc,
+        shape=shape,
     )
     if decision.verdict is not None:
         return decision.verdict, decision.reason
-    return fleet_verdict(), (
-        "the card is shaped one-off — one card, one pull request — and nothing "
-        "in its acceptance criteria says a person has to drive it"
+    return fleet_verdict(), _judgement_reason(description, doc)
+
+
+def _judgement_reason(description: str, doc: dict | None = None) -> str:
+    """Why a one-off whose criteria name neither signal is built by the fleet.
+
+    Names the criteria it read — the branch that decided, on this card, in this
+    card's own words. `criteria_verdict()` already reports the judgement call in
+    the abstract; what a reader of the verdict comment needs is which criterion
+    was weighed.
+    """
+    criteria = routing_verdict.acceptance_criteria(description)
+    return (
+        f"the card states {len(criteria)} acceptance "
+        f"{'criterion' if len(criteria) == 1 else 'criteria'} and none of them "
+        "names an interactive flow or a live-state observation, so an "
+        "unattended agent can satisfy the exit condition as written — read on: "
+        + "; ".join(f"“{c}”" for c in criteria)
+    )
+
+
+def _comes_back_to_planning(verdict: str, doc: dict | None = None) -> bool:
+    """Does this verdict send the card back into the planning segment?
+
+    DERIVED from the lane contract, not a list of verdict names: NEEDS WORK
+    routes to Planning today, and a vocabulary that added another route home
+    would be covered without anybody remembering to widen a condition. Every
+    other verdict names a lane in the work segment, where somebody — the fleet,
+    or an operator — picks the card up.
+    """
+    try:
+        lane = lane_contract.lane(routing_verdict.destination(verdict, doc))
+    except (lane_contract.UnknownLane, routing_verdict.UnknownVerdict):
+        return False
+    return lane.get("segment") == "planning"
+
+
+def _escalation_lane(doc: dict | None = None) -> str:
+    """Where a card that cannot be routed parks — the lane a plan waits in.
+
+    Imported late on purpose: `planning_escalation` reads THIS module to derive
+    that lane (exactly one route stops for a human), so importing it at the top
+    would close a cycle. Late is still one source: the derivation stays there.
+    """
+    import planning_escalation
+
+    return planning_escalation.destination(doc)
+
+
+def _escalation_reason(reason: str) -> str:
+    """The plain-English reason the CEO reads on a one-off nothing can route.
+
+    Hand-planning is an escalation and nothing else (DRE-2848), and a one-off
+    the mechanical check sends back to Planning is that case: it is one card
+    and one pull request, and it still cannot be handed to anyone as written.
+    The check's own reason carries the missing thing, so it is repeated rather
+    than summarised — `planning_escalation.refusal()` reads the text before it
+    reaches the card, so a reason that is not fit to show never shows.
+    """
+    return (
+        "This card is one card and one pull request, so there is no plan to "
+        "write for it — but it cannot go to the build queue as written: "
+        f"{reason} Until that is settled nobody can tell whether the work has "
+        "been done, so it is with you rather than in the queue."
     )
 
 
@@ -376,7 +477,16 @@ def exit_plan(card: dict, comment_bodies, doc: dict | None = None) -> Exit:
             "nothing for this module to perform."
         )
     if route.shape == "one-off":
-        verdict, reason = _one_off_check(card, comment_bodies, doc)
+        verdict, reason = _one_off_check(card, comment_bodies, route.shape, doc)
+        if verdict is not None and _comes_back_to_planning(verdict, doc):
+            return Exit(
+                route=route,
+                destination=_escalation_lane(doc),
+                verdict=verdict,
+                reason=reason,
+                note="",
+                escalation=_escalation_reason(reason),
+            )
         note = _one_off_note(route, verdict, reason)
     else:
         verdict, reason = None, "a wave owes a decomposition before anything is built"
@@ -459,6 +569,20 @@ def _cmd_exit(identifier: str) -> int:
     card = critic_score.read_card(linear_ops, identifier)
     bodies = linear_ops.comment_bodies(identifier)
     plan = exit_plan(card, bodies)
+
+    if plan.escalation is not None:
+        # The card does not leave Planning, so it is stamped with nothing and
+        # marked with nothing: it takes the one exit that is not a plan, and a
+        # person gets it back with the reason (DRE-2848). Posted once and the
+        # move re-asserted, by the module that owns that route.
+        import planning_escalation
+
+        planning_escalation.escalate(linear_ops, identifier, plan.escalation)
+        print(
+            f"{identifier} does not leave Planning on the {plan.route.shape} "
+            f"route — {plan.reason} It is escalated to {plan.destination}."
+        )
+        return 0
 
     if plan.verdict:
         refusal = routing_verdict.stamp_refusal(plan.verdict, bodies)

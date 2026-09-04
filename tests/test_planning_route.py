@@ -771,6 +771,14 @@ class TestANeedsWorkOneOffDoesNotLeaveSilently:
         assert plan.destination == planning_escalation.destination()
         assert plan.destination != planning_shape.destination("one-off")
 
+    def test_the_module_says_it_can_write_that_lane(self):
+        """`ready_lane_writers.py` (DRE-2859) reads `destinations()` for every
+        write whose lane is computed at the call site. `_cmd_exit` can now put
+        a card in the escalation lane, so the census has to say so."""
+        import planning_escalation
+
+        assert planning_escalation.destination() in planning_route.destinations()
+
     def test_the_reason_it_escalates_with_is_fit_for_the_ceo(self):
         import planning_escalation
 

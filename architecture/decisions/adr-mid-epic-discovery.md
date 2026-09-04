@@ -100,9 +100,16 @@ with its own number. Not a `2716a`/`2716b` suffix, not a child.
 
 - One extra Linear read per epic per sweep (the green light), cached across that
   epic's children the way the epic-level blocker gate already is.
-- The `subissue` create seam buys one children read only when the parent's title
-  and labels both fail the epic test — the planner's own path (every parent is
-  `agent:planner`) buys nothing.
+- The `subissue` create seam buys one read of the parent's planning shape stamp
+  when its title does not already say `[EPIC]`, and a children read only when
+  the stamp does not settle it either. **Amended 2026-09-04 (DRE-3038):** the
+  epic test used to read `agent:planner` as a third leg, so the planner's own
+  path bought nothing — but that label says the planner *owns* the card, every
+  card dispatched to `plan.yml` from Planning carries it, and reading it as
+  epic-ness answered "epic, no verdict" for every one-off. The shape stamp
+  (DRE-2843) is what says what a card *is*, so the planner's path now costs one
+  comment read per child and a one-off wearing the label can no longer be given
+  children.
 - A card hand-added to a running epic now sits in Backlog until somebody files it
   properly. That is the intended trade: fifteen minutes of an unread agent run is
   more expensive than a refusal that names its own remedy.
