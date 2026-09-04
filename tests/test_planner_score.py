@@ -26,6 +26,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_planner_score.py -v
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 import sys
@@ -947,6 +948,134 @@ class WorkflowWiringTest(unittest.TestCase):
         body = (self.workflows / "planner-replay.yml").read_text(encoding="utf-8")
         self.assertIn("planner_score.py", body)
         self.assertIn("replay-card", body)
+
+    def test_the_harness_looks_the_epic_up_before_it_files_it(self):
+        """Nothing in Linear enforces unique titles, so the dedupe is ours to
+        write — the same `find-open` guard red-main-repair.yml and
+        model-drift.yml mint their cards behind."""
+        body = (self.workflows / "planner-replay.yml").read_text(encoding="utf-8")
+        self.assertIn("linear_ops.py find-open", body)
+        self.assertLess(
+            body.index("linear_ops.py find-open"),
+            body.index("linear_ops.py oneoff"),
+            "the existing-card lookup must precede the oneoff, or a re-dispatch "
+            "at the same --epic/--replay_number files a second throwaway epic",
+        )
+
+    def test_the_harness_answers_the_crash_question_where_it_is_read(self):
+        """standards/vendor-boundaries.md Q5, answered in the file that has to
+        survive the crash. This PR adds a trigger and secrets wiring, which
+        makes the harness boundary-touching and the answer mandatory."""
+        body = (self.workflows / "planner-replay.yml").read_text(encoding="utf-8")
+        self.assertIn("Q5", body)
+        self.assertIn("vendor-boundaries", body)
+
+
+# --------------------------------------------------------------------------
+# the crash the guard exists for — the workflow's OWN shell, run twice
+# --------------------------------------------------------------------------
+class ReplayCrashRecoveryTest(unittest.TestCase):
+    """Q5 walked, not asserted: the run dies after filing the epic and an
+    operator re-dispatches it at the same `--epic`/`--replay_number`.
+
+    Unit-green is not live-working — the guard lives in workflow shell, so this
+    executes the step's actual `run:` block against a stub `linear_ops.py` that
+    records its argv. World one is the first dispatch (nothing filed yet, the
+    epic must be filed); world two is the re-dispatch (the epic is already
+    there, and a second one must NOT be filed).
+    """
+
+    STEP = "File the throwaway replay epic"
+
+    def setUp(self):
+        import shutil
+        import tempfile
+
+        import yaml
+
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+        doc = yaml.safe_load(
+            (ROOT / ".github" / "workflows" / "planner-replay.yml")
+            .read_text(encoding="utf-8"))
+        self.run_block = next(
+            step["run"]
+            for job in doc["jobs"].values()
+            for step in job.get("steps") or []
+            if self.STEP.lower() in (step.get("name") or "").lower()
+        )
+        leftover = re.findall(r"\$\{\{(?!\s*secrets)[^}]*\}\}", self.run_block)
+        self.assertEqual(leftover, [], "unmodelled expressions in the step")
+
+        # The artifacts the earlier steps leave behind, exactly as
+        # `planner_score.py replay-card --out/--body-out` writes them.
+        card = planner_score.replay_card("DRE-1000", 2, "the epic as written")
+        (self.tmp / "replay-card.json").write_text(
+            json.dumps(card), encoding="utf-8")
+        (self.tmp / "replay-body.md").write_text(card["body"], encoding="utf-8")
+        self.title = card["title"]
+
+        self.ops = self.tmp / ".bureau-pipeline" / "scripts" / "linear_ops.py"
+        self.ops.parent.mkdir(parents=True)
+
+    def _stub_ops(self, find_open_prints: str) -> None:
+        """A linear_ops.py that answers `find-open` with `find_open_prints` and
+        appends every invocation to argv.log."""
+        self.ops.write_text(
+            "import json, sys\n"
+            "open('argv.log', 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            f"if sys.argv[1] == 'find-open': print({find_open_prints!r})\n",
+            encoding="utf-8",
+        )
+
+    def _run(self):
+        import subprocess
+
+        summary = self.tmp / "summary.md"
+        summary.touch()
+        proc = subprocess.run(
+            ["bash", "-c", self.run_block], cwd=self.tmp,
+            capture_output=True, text=True,
+            env={**os.environ, "GITHUB_STEP_SUMMARY": str(summary)},
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        log = self.tmp / "argv.log"
+        calls = [json.loads(line)
+                 for line in log.read_text(encoding="utf-8").splitlines()] \
+            if log.exists() else []
+        return calls, summary.read_text(encoding="utf-8")
+
+    def test_the_first_dispatch_files_the_epic(self):
+        self._stub_ops("")
+        calls, summary = self._run()
+        oneoff = [c for c in calls if c[0] == "oneoff"]
+        self.assertEqual(len(oneoff), 1, calls)
+        self.assertEqual(oneoff[0][1], self.title)
+        self.assertIn(f"repo:{planner_score.REPLAY_REPO}", oneoff[0])
+        self.assertIn(self.title, summary)
+
+    def test_a_re_dispatch_after_a_crash_files_no_second_epic(self):
+        """The crash's real cost: two throwaway epics for one replay, both
+        labelled agent:planner, both of which the plan rail then plans."""
+        self._stub_ops("DRE-9999")
+        calls, summary = self._run()
+        self.assertEqual([c for c in calls if c[0] == "oneoff"], [], calls)
+        self.assertIn("DRE-9999", summary)
+
+    def test_the_lookup_asks_for_the_title_the_guarded_card_carries(self):
+        """The dedupe key is the title `replay-card` already refused every
+        alternative to — not one this step rebuilds and could drift from."""
+        self._stub_ops("")
+        calls, _ = self._run()
+        find_open = [c for c in calls if c[0] == "find-open"]
+        self.assertEqual(len(find_open), 1, calls)
+        self.assertEqual(find_open[0][1], self.title)
+        self.assertEqual(
+            find_open[0][1], planner_score.replay_title("DRE-1000", 2),
+            "the guard only dedupes while the title stays deterministic in "
+            "(--epic, --replay_number)",
+        )
 
 
 # --------------------------------------------------------------------------

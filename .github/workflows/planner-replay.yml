@@ -17,6 +17,33 @@
 # a replay spends a full planner run and files a card, so it runs when someone
 # asks for it. tests/test_planner_score.py fails the build if a cron appears.
 #
+# VENDOR BOUNDARY (standards/vendor-boundaries.md). This harness adds a trigger
+# and secrets wiring, so it owes the five answers here, where whoever debugs a
+# half-finished run reads them:
+#   Q1 actor — the stub is `workflow_dispatch` only, so a run initiates as the
+#      human who dispatched it. It gates on no bot identity, pushes nothing,
+#      and opens no PR, so no `allowed_bots` list is in the path at all.
+#   Q2 secrets — a `workflow_dispatch` run in this repo reads the repo's normal
+#      secrets store (never the separate Dependabot store), so LINEAR_API_KEY
+#      resolves through the stub's `secrets: inherit`.
+#   Q3 re-run — `score` mode writes nothing and repeats freely. `replay` mode is
+#      idempotent per (`epic`, `replay_number`): the title is derived from
+#      exactly those two inputs, and the filing step looks it up before it
+#      files. `concurrency` is keyed on the epic with `cancel-in-progress:
+#      false`, so two runs on one epic queue rather than race the lookup.
+#   Q4 command limits — `linear_ops.py find-open` matches an EXACT title among
+#      NON-TERMINAL cards. A completed or cancelled replay does not suppress a
+#      fresh one at the same number, which is the behaviour we want: a finished
+#      replay is a finished experiment, not a claim on the number.
+#   Q5 our crash — the ONLY write this workflow makes is that one `oneoff`, and
+#      it sits behind the lookup, so a run that dies anywhere — before the card,
+#      between the card and the summary, or after — is recovered by dispatching
+#      it again at the same inputs. There are no receipts or markers posted
+#      part-way that could block recovery, nothing is retried blind, and the
+#      worst case if the guard ever misses is one extra throwaway epic in
+#      agent-bureau-demo. Bumping `replay_number` by hand is how you ask for a
+#      SECOND replay, never how you repair a crashed one.
+#
 # Reusable workflow: permissions live in the calling stub.
 name: Planner Replay (reusable)
 
@@ -127,6 +154,12 @@ jobs:
             --epic "$EPIC" --plan historical-plan.md \
             --context replay-body.md --record leak.md
 
+      # The one write this workflow makes, and the Q5 answer in code: `oneoff`
+      # dedupes nothing and Linear enforces nothing on titles, so a crashed run
+      # re-dispatched at the same epic and number would file a SECOND throwaway
+      # epic — both labelled agent:planner, both of which the plan rail then
+      # plans. Same `find-open` guard red-main-repair.yml and model-drift.yml
+      # mint their cards behind.
       - name: File the throwaway replay epic
         if: inputs.mode == 'replay'
         env:
@@ -139,6 +172,22 @@ jobs:
           # written here, so exactly one place decides which repo a replay can
           # be filed in — and `replay-card` has already refused any other.
           mapfile -t LABEL_FLAGS < <(python3 -c 'import json; [print("--label\n" + n) for n in json.load(open("replay-card.json"))["labels"]]')
+          # Dedupe on the GUARDED title — the one `replay-card` refused every
+          # alternative to — rather than one rebuilt here that could drift.
+          EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
+          if [ -n "$EXISTING" ]; then
+            {
+              echo "### Replay already filed — nothing to do"
+              echo
+              echo "\`$TITLE\` is already open as $EXISTING, so this run filed"
+              echo "nothing. A replay whose run crashed part-way lands here when"
+              echo "it is dispatched again at the same epic and replay number."
+              echo
+              echo "To run a SECOND, independent replay of this epic, dispatch"
+              echo "with a different \`replay_number\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           python3 .bureau-pipeline/scripts/linear_ops.py oneoff \
             "$TITLE" replay-body.md "${LABEL_FLAGS[@]}"
           {

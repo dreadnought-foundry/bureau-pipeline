@@ -43,10 +43,13 @@ out of the workflow and `planner_score.py check` fails until the dimension is
 scored again — an exclusion nobody re-checks is how a real result stays out of
 the number forever.
 
-On these three epics the exclusion costs the audit **three `missing` rows**,
-because all three predate DRE-2746. That is the exclusion doing its job in the
-other direction: those rows measure when the convention shipped, not whether
-the planner followed it.
+On these three epics the exclusion costs the audit **three `missing` rows**: all
+three predate DRE-2746, and none carries the PAIR. Re-checked live on
+2026-09-04 across every child of each epic — DRE-2514 (47) and DRE-2668 (116)
+carry neither card; DRE-2628 (68) carries `DEMO: the form object …` (DRE-2638)
+and no `PROOF:` card, so the pair is still absent and the row is still
+`missing`. That is the exclusion doing its job in the other direction: those
+rows measure when the convention shipped, not whether the planner followed it.
 
 ## The epics
 
@@ -199,7 +202,7 @@ already-planned epic at its **pre-plan text**, files it as a throwaway
 `PROOF-PL-<n>` epic labelled `repo:agent-bureau-demo`, and lets the normal plan
 rail plan it. The historical plan and the history above are the held-out answer.
 
-Three rules bound it, all in code rather than in this document:
+Four rules bound it, all in code rather than in this document:
 
 * **It files cards in `agent-bureau-demo` and nowhere else.**
   `planner_score.replay_problems()` refuses the card before it is created if the
@@ -213,6 +216,13 @@ Three rules bound it, all in code rather than in this document:
 * **The frozen text is the epic as the CEO wrote it.** `pre_plan_text()` strips
   the `mid_epic` growth record, which is planner output spliced into the epic's
   own description.
+* **One dispatch, one epic — a re-dispatch files nothing.** The title is
+  derived from `epic` and `replay_number` alone, and the workflow asks
+  `linear_ops.py find-open` for it before it files, so a run that crashed
+  part-way is repaired by dispatching it again at the same inputs. Bumping
+  `replay_number` is how you ask for a second, independent replay — never how
+  you recover a crashed one. `find-open` ignores completed and cancelled
+  cards, so a finished replay does not hold its number hostage.
 
 The leak check runs **before** the card is filed, not after. A replay that saw
 the answer cannot be salvaged by scoring it more carefully, and discarding one
