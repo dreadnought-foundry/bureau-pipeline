@@ -332,7 +332,7 @@
           "pending": "the vocabulary exists (DRE-2724); what is still missing is a writer that puts a verdict on EVERY card at planning exit — DRE-2721's second critic"
         },
         "exit": {
-          "text": "The verdict's destination is reached. The sweep promotes a FLEET card to Todo once the dependency gate clears and the WIP cap has room; a human moves a WORKBENCH or OPERATOR card to Todo and works it there; a PARKED card does not leave, and is never reported as stalled.",
+          "text": "The verdict's destination is reached. The sweep promotes a FLEET card to Todo once the dependency gate clears, the WIP cap has room and — for a child of an epic — the second critic has passed the plan since it was approved (DRE-3059); a human moves a WORKBENCH or OPERATOR card to Todo and works it there; a PARKED card does not leave, and is never reported as stalled.",
           "enforced_from": "5",
           "assertion": null,
           "pending": "the sweep already refuses to promote a non-FLEET card (DRE-2724); asserting the transitions needs the history Phase 5 records"
@@ -371,7 +371,7 @@
           "pending": "needs the transition history Phase 5 records"
         },
         "writers": {
-          "text": "The sweep promotes into it; the build run takes cards out of it.",
+          "text": "ONE promoter, and it is the sweep: reconcile.py's promote_ready() is the only thing that moves an epic's child into this lane, whether the 15-minute cron reaches it or plan.yml's activate route runs it the moment the second critic passes — the route triggers that promoter, it never promotes itself. It releases a child only once the epic carries a `plan-critic: stage=post result=PASS` marker for the current planning attempt (DRE-3059). The build run takes cards out of it.",
           "who": ["reconcile.py", "agent-task.yml", "linear_ops.py", "operator"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"

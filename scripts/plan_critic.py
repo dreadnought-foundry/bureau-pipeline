@@ -36,6 +36,13 @@ Three rules baked in, each one bought:
     merge gate reads verdicts out of comments, so these markers deliberately
     share no prefix with one, and every reason an agent writes is collapsed to
     a single line before it can reach `$GITHUB_OUTPUT`.
+  * THE POST MARKER IS WHAT RELEASES THE CHILDREN (DRE-3059). "Only then are
+    the children promotable" is half of DRE-2721's sentence and it had no
+    reader: `reconcile.promote_ready()` released a child on its epic's LANE,
+    so the fifteen-minute sweep promoted two of them eighty-two seconds after
+    an approval that no second critic had reviewed. `post_release` and
+    `promotion_refusal` below are that reader, and the sweep is the only
+    promoter — the activate route runs it rather than promoting itself.
   * ...BUT THE MARKERS ARE THIS GATE'S OWN CREDENTIAL, so a record has to be
     narrower than a line of text somebody wrote. Two conditions, and both are
     required (`trusted_bodies` + `_sole_record`): the pipeline itself wrote the
@@ -72,6 +79,7 @@ import json
 import os
 import re
 import sys
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -538,6 +546,165 @@ def collision_counts(bodies: list) -> dict:
     later = sum(1 for body in trusted_bodies(bodies)
                 if _sole_record(_LATE_COLLISION, body))
     return {"caught_at_review": caught, "found_later": later}
+
+
+# --- The release the sweep reads (DRE-3059) ---------------------------------
+#
+# DRE-2721's design is *two critics: one before you read it, one after you
+# approve it — and only then are the children promotable*. The second half of
+# that sentence had no reader. `reconcile.promote_ready()` released a child
+# once its parent epic was active, its blockers were Done and the WIP cap had
+# room; it never asked whether the plan had been READ since it was approved.
+# On 2026-09-03 the sweep promoted two children eighty-two seconds after the
+# CEO approved their epic, with no post-critic verdict on it, because none had
+# run (DRE-3058 is why none ran).
+#
+# So the release becomes a fact the sweep can read, and it is read out of the
+# markers `decide` already writes — never out of elapsed time or an adjacent
+# lane (standards/console-honesty.md rule 1).
+#
+# THE SCOPE IS THE PLANNING ATTEMPT, not "newer than the epic's last move into
+# an active lane". The route posts the round record and THEN moves the epic to
+# In Progress, so the epic's most recent active-lane entry is always NEWER than
+# the marker that released it — gating on that timestamp would refuse every
+# child of every epic, forever. `current_cycle` is the module's existing answer
+# to "does this record belong to the plan we are looking at", it is already
+# forgery-resistant, and a re-planned epic gets a fresh boundary — which is
+# exactly the invalidation the timestamp was reaching for.
+
+#: The sweep may promote — the second critic has released this plan.
+POST_RELEASED = "released"
+#: No post-critic round on this planning attempt at all. The incident.
+POST_NOT_RUN = "not-run"
+#: The critic ran and declined to release the plan, with the bound unspent.
+POST_HELD = "held"
+
+#: Idempotency tags for the two refusals, in the `dead_run.DEAD_TAG` shape the
+#: sweep already surfaces refusals under. TWO of them, deliberately: the sweep
+#: posts each refusal at most once per tag, and "nobody has read this plan" and
+#: "the critic found a gap" are different facts with different next actions —
+#: one tag would let the first silence the second forever.
+POST_UNREAD_TAG = "plan-critic-post-unread"
+POST_SENT_BACK_TAG = "plan-critic-post-sent-back"
+
+#: Epics green-lit before this instant are NOT re-gated retroactively.
+#:
+#: Written down rather than computed: an epic approved before this shipped has
+#: no post-critic marker on it and never will, so gating it would freeze every
+#: child of every epic in flight on the day this merges. The date is the end of
+#: the day the change was built, so everything already approved is covered and
+#: nothing approved afterwards escapes. `tests/test_plan_critic.py` pins it.
+GATED_FROM = "2026-09-05T00:00:00Z"
+
+
+def post_release(bodies: list, epic: str | None = None) -> tuple[str, str]:
+    """Has the second critic released this epic's children? `(state, detail)`.
+
+    `state` is one of POST_RELEASED / POST_NOT_RUN / POST_HELD, and `detail` is
+    the critic's own words when it has any.
+
+    The three ways a plan is released, and each of them is one the route
+    already takes — the gate and `decide` must agree about the same marker or
+    the sweep and the activate route disagree about the same epic:
+
+      * `result=PASS` — the critic passed it.
+      * `result=NO_RESULT` — a crash is not a rejection (console-honesty rule
+        1). The critic did not decide anything, so it does not get to stop
+        anything, and the route proceeds on one too.
+      * MAX_ROUNDS failed rounds — the bound. Two failed rounds at this critic
+        and the work proceeds regardless with the reason attached; an
+        unbounded hold is the 27-day failure the bound exists to stop.
+
+    Anything else holds. The vocabulary this module writes is SEND_BACK, but an
+    unrecognised verdict is still the critic declining to release the plan, and
+    reading an unknown result as a pass is the one direction that must never
+    happen.
+    """
+    rows = [r for r in parse_markers(current_cycle(bodies, epic))
+            if r["stage"] == STAGE_POST]
+    if not rows:
+        return POST_NOT_RUN, ""
+    last = rows[-1]
+    if last["result"] == PASS:
+        return POST_RELEASED, "the second critic passed this plan"
+    if last["result"] == NO_RESULT:
+        return POST_RELEASED, (
+            "the second critic produced no result — a crash is not a rejection"
+        )
+    failed = sum(1 for r in rows if r["result"] not in (PASS, NO_RESULT))
+    if failed >= MAX_ROUNDS:
+        return POST_RELEASED, (
+            f"{_count_word(failed)} failed rounds at the second critic — the "
+            "bound, so the work proceeds rather than circling. The critic's "
+            "stated reason, unresolved: " + (last["reason"] or "none given")
+        )
+    return POST_HELD, last["reason"]
+
+
+def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
+                      bodies: list | None, *,
+                      gated_from: str = GATED_FROM) -> str | None:
+    """Why `identifier` must not promote yet, or None to let it through.
+
+    Two abstentions, both in the direction that keeps the board moving, and
+    both because unknown is unknown rather than "no" (console-honesty rule 2):
+    an epic whose green light Linear cannot report, and a comment thread the
+    sweep could not read (`bodies is None`, which is NOT the same fact as an
+    epic with no comments — that one is the incident, and it refuses).
+    """
+    if bodies is None or not green_lit_at:
+        return None
+    try:
+        if _ts(green_lit_at) < _ts(gated_from):
+            return None
+    except ValueError:
+        return None  # a timestamp Linear gave us and we cannot read is unknown
+    state, detail = post_release(bodies, epic)
+    if state == POST_RELEASED:
+        return None
+    when = _ts(green_lit_at).astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    if state == POST_NOT_RUN:
+        return (
+            f"🚨 {POST_UNREAD_TAG}: {identifier}'s epic {epic} was approved at "
+            f"{when} but the second critic has not passed it — holding.\n\n"
+            "Two critics review a plan: one before the CEO reads it, one after "
+            "the CEO approves it — and only then are the children promotable. "
+            "Nothing has reviewed this plan since it was approved, so nobody "
+            "has asked what an agent will get wrong with it as the "
+            "specification.\n\n"
+            "**To let it through:** move the epic to Todo again. That re-runs "
+            "the post-approval review, and the children promote on the next "
+            "sweep once it passes."
+        )
+    quoted = one_line(detail) or "no reason recorded"
+    return (
+        f"🚨 {POST_SENT_BACK_TAG}: {identifier}'s epic {epic} was approved at "
+        f"{when} but the second critic sent the plan back — holding. The "
+        f"critic's reason: {quoted}\n\n"
+        "The children stay in Backlog until the gap is settled and the epic is "
+        "moved to Todo again — that re-runs the review, and two failed rounds "
+        "release the work regardless with the reason attached."
+    )
+
+
+def refusal_tag(refusal: str | None) -> str | None:
+    """The idempotency tag `refusal` is surfaced under, or None if it is not
+    one of this module's refusals.
+
+    Read off the notice by the module that wrote it, never inferred by the
+    caller — the same contract `routing_verdict.refusal_tag` has, and for the
+    same reason: pair a notice with the wrong tag and two refusals silence
+    each other.
+    """
+    first = ((refusal or "").splitlines() or [""])[0]
+    for tag in (POST_UNREAD_TAG, POST_SENT_BACK_TAG):
+        if first.startswith(f"🚨 {tag}:"):
+            return tag
+    return None
+
+
+def _ts(iso: str) -> datetime:
+    return datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
 
 
 # --- The bound --------------------------------------------------------------
