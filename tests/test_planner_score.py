@@ -723,6 +723,70 @@ class CollectTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# diffing a replay's plan against the historical one
+# --------------------------------------------------------------------------
+class PlanDiffTest(unittest.TestCase):
+    """The replay's other half. A per-card diff would need a correspondence
+    between the replay's new cards and the historical children, and nothing can
+    make that mechanically — so the diff is taken at the level where both plans
+    really are comparable: the SHAPE of the decomposition."""
+
+    HISTORICAL = [
+        child("DRE-1", files=("a.py",)),
+        child("DRE-2", files=("a.py",)),
+        child("DRE-3", files=("b.py",), verdict="WORKBENCH"),
+    ]
+
+    def test_the_shape_counts_what_a_plan_declared(self):
+        shape = planner_score.plan_shape(self.HISTORICAL)
+        self.assertEqual(shape["cards"], 3)
+        self.assertEqual(shape["with-footprint"], 3)
+        self.assertEqual(shape["serialized-pairs"], 0)
+        self.assertEqual(shape["footprint-collisions"], 1)
+        self.assertEqual(shape["with-verdict"], 3)
+        self.assertFalse(shape["proof-and-demo"])
+
+    def test_a_plan_that_declared_nothing_is_not_counted_as_declaring_it(self):
+        naked = [dict(c, body="just prose") for c in self.HISTORICAL]
+        shape = planner_score.plan_shape(naked)
+        self.assertEqual(shape["with-footprint"], 0)
+        self.assertEqual(shape["footprint-collisions"], 0)
+
+    def test_the_serialized_pair_count_reads_the_relation_not_the_prose(self):
+        """`**Blocked by:**` prose is documentation and cannot create a
+        relation (DRE-2670/2676). Counting the sentence would report a plan as
+        collision-free that the board never serialized."""
+        prose = [
+            child("DRE-1", files=("a.py",)),
+            dict(child("DRE-2", files=("a.py",)),
+                 body="**Files:** a.py\n\n**Blocked by:** DRE-1\n"),
+        ]
+        self.assertEqual(planner_score.plan_shape(prose)["serialized-pairs"], 0)
+        wired = [prose[0], dict(prose[1], blocked_by=["DRE-1"])]
+        self.assertEqual(planner_score.plan_shape(wired)["serialized-pairs"], 1)
+
+    def test_the_diff_names_both_plans_and_every_line_that_moved(self):
+        after = self.HISTORICAL + [child("DRE-4", title="PROOF: watch it run"),
+                                   child("DRE-5", title="DEMO: show the CEO")]
+        report = planner_score.render_diff(
+            "DRE-1000", planner_score.plan_shape(self.HISTORICAL),
+            "PROOF-PL-1", planner_score.plan_shape(after),
+        )
+        self.assertIn("DRE-1000", report)
+        self.assertIn("PROOF-PL-1", report)
+        self.assertIn("cards", report)
+        self.assertIn("3", report)
+        self.assertIn("5", report)
+
+    def test_the_diff_says_plainly_that_it_is_not_a_per_card_comparison(self):
+        report = planner_score.render_diff(
+            "DRE-1000", planner_score.plan_shape(self.HISTORICAL),
+            "PROOF-PL-1", planner_score.plan_shape(self.HISTORICAL),
+        )
+        self.assertIn("not a per-card", report.lower())
+
+
+# --------------------------------------------------------------------------
 # the reference file checks itself
 # --------------------------------------------------------------------------
 class ReferenceTest(unittest.TestCase):
