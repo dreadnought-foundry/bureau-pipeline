@@ -115,7 +115,7 @@ class DependabotFlow(framework.Scenario):
 
     # ── setup: a clean sandbox + the vendor's PR located ─────────────────
     def setup(self, ctx):
-        ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.log)
+        ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.namespace, ctx.log)
         pr = find_real_dependabot_pr(ctx.gh.list_open_prs(ctx.repo))
         if pr is None:
             raise ScenarioFailure(NO_PR_GUIDANCE)
@@ -307,11 +307,11 @@ class DependabotFlow(framework.Scenario):
         _, tip = ctx.gh.default_branch(ctx.repo)
         if not tip:
             raise ScenarioFailure("default branch has no readable tip sha")
-        leftovers = [
-            pr["number"]
-            for pr in ctx.gh.list_open_prs(ctx.repo)
-            if framework.is_harness_ref((pr.get("head") or {}).get("ref", ""))
-        ]
+        # This run's own namespace only: the other lane's harness PRs
+        # are open because that run is still using them (DRE-3075).
+        leftovers = framework.leftover_pr_numbers(
+            ctx.gh, ctx.repo, ctx.namespace
+        )
         if leftovers:
             raise ScenarioFailure(
                 f"open harness PRs left behind after cleanup: {leftovers}"

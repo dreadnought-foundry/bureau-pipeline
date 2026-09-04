@@ -29,6 +29,13 @@ Env (harness.yml sets all of these):
                         will 401 past the hour.
   HARNESS_REPO          default --repo
   HARNESS_RUN_ID        default --run-id (else a local one is generated)
+  HARNESS_NAMESPACE     default --namespace: the slice of the sandbox this
+                        run owns — `main` for a push to main and for a hand
+                        dispatch, `pr<number>` for a pull request's proving
+                        run, `local` off the CLI. Every branch and probe
+                        file the run creates sits under it and the sweep
+                        collects nothing else, so main's run and a PR's run
+                        can share the sandbox instead of queueing (DRE-3075).
   HARNESS_VERDICT_TIMEOUT / HARNESS_MERGE_TIMEOUT / HARNESS_POLL_INTERVAL
                         seconds, optional overrides
 
@@ -101,6 +108,13 @@ def main(argv=None) -> int:
         "--run-id",
         default=os.environ.get("HARNESS_RUN_ID") or framework.new_run_id(),
     )
+    parser.add_argument(
+        "--namespace",
+        default=(
+            os.environ.get("HARNESS_NAMESPACE") or framework.DEFAULT_NAMESPACE
+        ),
+        help="the sandbox slice this run owns (main / pr<number> / local)",
+    )
     args = parser.parse_args(argv)
 
     token = os.environ.get("HARNESS_WORKER_TOKEN")
@@ -134,7 +148,11 @@ def main(argv=None) -> int:
             "spends a real build-agent run"
         )
 
-    run_id = framework.validate_run_id(args.run_id)
+    # The namespace OPENS the run id, so every branch and probe file the
+    # run creates is already inside the slice its sweep owns — nothing has
+    # to remember to prefix anything (DRE-3075).
+    namespace = framework.validate_namespace(args.namespace)
+    run_id = framework.namespaced_run_id(namespace, args.run_id)
     worker_supplier = token_supplier(
         "worker",
         os.environ.get("HARNESS_WORKER_APP_ID", ""),
@@ -176,7 +194,10 @@ def main(argv=None) -> int:
             "note: HARNESS_CONSOLE_TOKEN unset — the console's state lists "
             "cannot be read; the lane-contract clause reports UNEVALUATED"
         )
-    print(f"harness run {run_id} on {args.repo}: scenarios {names}")
+    print(
+        f"harness run {run_id} on {args.repo} [namespace {namespace}]: "
+        f"scenarios {names}"
+    )
 
     results = []
     for name in names:
@@ -186,6 +207,7 @@ def main(argv=None) -> int:
             gh_console=gh_console,
             repo=args.repo,
             run_id=run_id,
+            namespace=namespace,
             worker_login=os.environ.get("HARNESS_WORKER_LOGIN", ""),
             qa_login=qa_login,
             # The agent scenarios clone the sandbox as the worker bot; every

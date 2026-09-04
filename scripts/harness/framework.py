@@ -6,12 +6,24 @@ scenario (a green run that leaves a mess is a fail: cleanup is what
 proves the sandbox is usable for the next run).
 
 Namespacing: every branch a scenario creates is
-`agent/harness-<run-id>-<scenario>`. The `agent/` prefix is the shape
-should_review_pr.py reviews; the `harness-` marker + run id make
-leftovers from ANY crashed previous run identifiable, so sweep_leftovers
-can mop them up without ever touching real work (`agent/DRE-n-*` must
-never match — deleting a real agent's branch would destroy in-flight
-card work).
+`agent/harness-<run-id>-<scenario>`, and every run id opens with its
+NAMESPACE — `main-…` for a push to main and for a hand dispatch,
+`pr<number>-…` for a pull request's proving run, `local-…` off the CLI.
+The `agent/` prefix is the shape should_review_pr.py reviews; the
+`harness-` marker + run id make leftovers from ANY crashed previous run
+identifiable, so sweep_leftovers can mop them up without ever touching
+real work (`agent/DRE-n-*` must never match — deleting a real agent's
+branch would destroy in-flight card work).
+
+The namespace is what lets main's run and a PR's run share the sandbox
+(DRE-3075). They now hold separate concurrency slots, so a PR's 18-minute
+proving run can no longer make five pushes to main queue behind it and
+replace each other — but two live runs mean the sweep can no longer
+delete every harness leftover it finds, because half of them belong to
+the OTHER run. Each sweep collects its own namespace, and a foreign
+namespace's leftover only once it is older than a whole harness run can
+last (STALE_LEFTOVER_SECONDS), which is the one state in which it cannot
+belong to a run that is still going.
 
 Verdict analysis REUSES merge_gate.py's own parsing (authorship,
 structured first-line marker, sha binding), so the harness's idea of "a
@@ -24,6 +36,7 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import merge_gate
@@ -63,6 +76,28 @@ LEGACY_PROBE_DIRS = ("harness_runs",)
 # alphanumerics and dashes only, nothing that could escape the namespace
 # or the ref syntax.
 _RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,60}$")
+
+# The namespace opens the run id and a single dash separates the two, so a
+# namespace may NOT contain that dash: were it allowed, namespace `pr` and
+# namespace `pr-251` would have sweep prefixes where one matches the
+# other's branches, and the isolation would hold only for the namespace
+# pairs someone happened to think about. Without the delimiter the
+# prefixes are pairwise disjoint for ANY two distinct namespaces, which is
+# a property rather than a review. Hence `pr251`, while harness.yml's
+# concurrency group — a different, GitHub-side key — spells it `pr-251`.
+_NAMESPACE_RE = re.compile(r"^[a-z0-9]{1,24}$")
+
+# The namespace of a run nobody told: a CLI run against the sandbox.
+DEFAULT_NAMESPACE = "local"
+
+# When a leftover from ANOTHER namespace may be collected. A run cannot
+# outlive its own job timeout (harness.yml `timeout-minutes: 180`), so
+# anything older than twice that ceiling belongs to no live run — and
+# scoping the sweep must not make a crashed run's mess immortal: a PR that
+# crashed and then merged leaves a namespace nothing would ever sweep
+# again. Pinned to the workflow's own cap by
+# tests/test_harness_main_slot.py.
+STALE_LEFTOVER_SECONDS = 6 * 60 * 60
 
 
 # How long the shipped critic is ALLOWED to take: qa-review.yml's `review`
@@ -111,6 +146,38 @@ def validate_run_id(run_id: str) -> str:
     return run_id
 
 
+def validate_namespace(namespace: str) -> str:
+    if not isinstance(namespace, str) or not _NAMESPACE_RE.match(namespace):
+        raise ValueError(
+            f"unsafe harness namespace {namespace!r}: need lowercase "
+            f"[a-z0-9], 1-24 chars and NO dash (the dash separates the "
+            f"namespace from the run id)"
+        )
+    return namespace
+
+
+def namespaced_run_id(namespace: str, base: str) -> str:
+    """`base`, guaranteed to open with `namespace`. Idempotent, so the
+    local default (`new_run_id()` already yields `local-…`) is unchanged
+    and a re-run cannot double the prefix."""
+    ns = validate_namespace(namespace)
+    if base.startswith(f"{ns}-"):
+        return validate_run_id(base)
+    return validate_run_id(f"{ns}-{base}")
+
+
+def namespace_branch_prefixes(namespace: str) -> tuple:
+    """The branch prefixes ONE namespace owns — what its sweep may delete."""
+    ns = validate_namespace(namespace)
+    return tuple(f"{prefix}{ns}-" for prefix in HARNESS_BRANCH_PREFIXES)
+
+
+def probe_file_prefix(namespace: str) -> str:
+    """Probe files are `<run-id>-<scenario>.md`, so the run id's namespace
+    is the file name's prefix too."""
+    return f"{validate_namespace(namespace)}-"
+
+
 def scenario_branch(run_id: str, scenario_name: str) -> str:
     return f"{HARNESS_BRANCH_PREFIX}{validate_run_id(run_id)}-{scenario_name}"
 
@@ -132,6 +199,17 @@ def is_harness_ref(ref: Optional[str]) -> bool:
     return ref.removeprefix("refs/heads/").startswith(HARNESS_BRANCH_PREFIXES)
 
 
+def is_own_harness_ref(ref: Optional[str], namespace: str) -> bool:
+    """True iff `ref` is a branch THIS namespace's runs created. The sweep
+    rides on this one: a ref that is a harness ref but not our own belongs
+    to another run, which may still be using it (DRE-3075)."""
+    if not ref:
+        return False
+    return ref.removeprefix("refs/heads/").startswith(
+        namespace_branch_prefixes(namespace)
+    )
+
+
 @dataclass
 class HarnessContext:
     """Everything a scenario needs: the client, the sandbox, the identities
@@ -140,6 +218,9 @@ class HarnessContext:
     gh: object
     repo: str
     run_id: str
+    # The sandbox namespace this run owns (DRE-3075) — `main`, `pr<number>`
+    # or `local`. Every sweep is scoped to it, and `run_id` opens with it.
+    namespace: str = DEFAULT_NAMESPACE
     worker_login: str = ""
     qa_login: str = ""
     # Second client for reads only the qa App is proven to have (check-runs
@@ -238,12 +319,71 @@ def wait_until(description, poll, timeout, interval, clock=time.monotonic,
         sleep(interval)
 
 
-def sweep_leftovers(gh, repo: str, log=print) -> dict:
-    """Mop up everything a CRASHED previous run left in the sandbox: open
-    harness PRs, harness branches, and merged probe files on the default
-    branch. Entirely best-effort per item — a leftover that cannot be
-    removed (e.g. branch protection) is logged and skipped, because a
-    namespaced leftover must never fail the NEXT run either."""
+def leftover_pr_numbers(gh, repo: str, namespace: str) -> list:
+    """The open harness PRs of THIS namespace — every scenario's closing
+    "the sandbox is usable for the next run" assertion.
+
+    Scoped for the same reason the sweep is (DRE-3075): another lane's
+    harness PRs are open because that run is still using them, and a
+    cleanup check that counted those would fail a perfectly healthy run
+    for its neighbour's work. One definition, four scenarios.
+    """
+    return [
+        pr["number"]
+        for pr in gh.list_open_prs(repo)
+        if is_own_harness_ref((pr.get("head") or {}).get("ref", ""), namespace)
+    ]
+
+
+def _age_seconds(stamp, now: float) -> Optional[float]:
+    """Seconds since an ISO8601 REST timestamp, or None when there isn't
+    one to read. None means UNKNOWN, and unknown is never old enough."""
+    if not stamp:
+        return None
+    try:
+        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return now - when.timestamp()
+
+
+def _is_stale(stamp, now: float) -> bool:
+    age = _age_seconds(stamp, now)
+    return age is not None and age >= STALE_LEFTOVER_SECONDS
+
+
+def _collectable(gh, repo, ref, path, now, log) -> bool:
+    """May this sweep delete a leftover belonging to ANOTHER namespace?
+
+    Only once it is older than any live run can be. Every failure to
+    establish that answers NO: an unreadable date is not a licence to
+    delete a branch a concurrent run may be pushing to right now.
+    """
+    try:
+        stamp = gh.last_commit_date(repo, ref, path)
+    except Exception as e:
+        log(f"sweep: could not date {path or ref} ({e}) — leaving it alone")
+        return False
+    return _is_stale(stamp, now)
+
+
+def sweep_leftovers(gh, repo: str, namespace: str, log=print, now=None) -> dict:
+    """Mop up everything a CRASHED previous run of THIS namespace left in
+    the sandbox: open harness PRs, harness branches, and merged probe files
+    on the default branch. Entirely best-effort per item — a leftover that
+    cannot be removed (e.g. branch protection) is logged and skipped,
+    because a namespaced leftover must never fail the NEXT run either.
+
+    Another namespace's leftovers are left alone unless they are older than
+    STALE_LEFTOVER_SECONDS (DRE-3075): main's run and a PR's proving run
+    now hold separate concurrency slots and can be in the sandbox at the
+    same time, so an unconditional sweep would delete the branches the
+    other run is mid-scenario on.
+    """
+    ns = validate_namespace(namespace)
+    now = (now or time.time)()
     swept = {"branches_deleted": 0, "prs_closed": 0, "files_deleted": 0}
 
     try:
@@ -255,6 +395,13 @@ def sweep_leftovers(gh, repo: str, log=print) -> dict:
         head = (pr.get("head") or {}).get("ref", "")
         if not is_harness_ref(head):
             continue
+        # `created_at` rides along on the list shape — no second call to
+        # date a foreign PR.
+        if not is_own_harness_ref(head, ns) and not _is_stale(
+            pr.get("created_at"), now
+        ):
+            log(f"sweep: PR #{pr['number']} ({head}) belongs to another run — left")
+            continue
         try:
             gh.close_pr(repo, pr["number"])
             swept["prs_closed"] += 1
@@ -262,6 +409,9 @@ def sweep_leftovers(gh, repo: str, log=print) -> dict:
         except Exception as e:
             log(f"sweep: could not close PR #{pr['number']} ({e})")
 
+    # Listed across ALL namespaces on purpose: a namespace nothing will
+    # ever run again (a PR that crashed and then merged) still owes the
+    # sandbox its cleanup, and the age check is what makes taking it safe.
     stale_branches = []
     for prefix in HARNESS_BRANCH_PREFIXES:
         try:
@@ -269,6 +419,11 @@ def sweep_leftovers(gh, repo: str, log=print) -> dict:
         except Exception as e:
             log(f"sweep: could not list {prefix}* branches ({e}) — skipping")
     for branch in stale_branches:
+        if not is_own_harness_ref(branch, ns) and not _collectable(
+            gh, repo, branch, None, now, log
+        ):
+            log(f"sweep: branch {branch} belongs to another run — left")
+            continue
         try:
             gh.delete_ref(repo, branch)
             swept["branches_deleted"] += 1
@@ -287,20 +442,32 @@ def sweep_leftovers(gh, repo: str, log=print) -> dict:
             entries.extend(gh.list_dir(repo, probe_dir, default))
         except Exception as e:
             log(f"sweep: could not list {probe_dir}/ ({e}) — skipping file sweep")
+    own_file = probe_file_prefix(ns)
     for entry in entries:
         if entry.get("type") != "file":
             continue
+        path = entry["path"]
+        # A LEGACY dir is never written any more, so whatever is in one
+        # predates namespacing and belongs to no live run.
+        legacy = not path.startswith(f"{PROBE_DIR}/")
+        if (
+            not legacy
+            and not path.rsplit("/", 1)[-1].startswith(own_file)
+            and not _collectable(gh, repo, default, path, now, log)
+        ):
+            log(f"sweep: {path} belongs to another run — left")
+            continue
         try:
             if gh.delete_file(
-                repo, default, entry["path"],
+                repo, default, path,
                 "chore(harness): sweep leftover probe file",
             ):
                 swept["files_deleted"] += 1
-                log(f"sweep: deleted leftover {entry['path']}")
+                log(f"sweep: deleted leftover {path}")
         except Exception as e:
-            log(f"sweep: could not delete {entry['path']} ({e})")
+            log(f"sweep: could not delete {path} ({e})")
 
-    log(f"sweep: {swept}")
+    log(f"sweep[{ns}]: {swept}")
     return swept
 
 

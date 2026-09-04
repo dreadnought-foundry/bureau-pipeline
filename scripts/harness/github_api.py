@@ -268,6 +268,38 @@ class GitHub:
         the author/committer identities GitHub attributes it to."""
         return self.request("GET", f"/repos/{repo}/commits/{sha}")
 
+    def last_commit_date(self, repo, ref: str, path: str | None = None) -> str | None:
+        """When `ref` (or the last commit touching `path` on it) was
+        committed, as GitHub's ISO8601 string — None when there is nothing
+        to read.
+
+        The sweep's only way to tell a dead run's leftover from a live
+        run's (DRE-3075). None is returned rather than raised for an absent
+        ref/path, because "I could not date it" and "it is old" must stay
+        different answers: the sweep deletes only on the second.
+        """
+        try:
+            if path is None:
+                out = self.request(
+                    "GET", f"/repos/{repo}/commits/{urllib.parse.quote(ref)}"
+                )
+                commits = [out] if isinstance(out, dict) else []
+            else:
+                out = self.request(
+                    "GET",
+                    f"/repos/{repo}/commits?sha={urllib.parse.quote(ref)}"
+                    f"&path={urllib.parse.quote(path)}&per_page=1",
+                )
+                commits = out if isinstance(out, list) else []
+        except GitHubError as e:
+            if e.status in (404, 409, 422):
+                return None
+            raise
+        if not commits:
+            return None
+        committer = (commits[0].get("commit") or {}).get("committer") or {}
+        return committer.get("date")
+
     def list_check_runs(self, repo, sha: str) -> list[dict]:
         """Check runs on a commit (the record merge-gate.yml itself reads —
         the qa App token is the proven reader for it)."""

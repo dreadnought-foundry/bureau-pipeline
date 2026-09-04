@@ -379,6 +379,47 @@ class SweepIsolationTest(unittest.TestCase):
         )
 
 
+class ScenarioCleanupTest(unittest.TestCase):
+    """A whole scenario, run while the OTHER lane is live in the sandbox.
+
+    Scoping the sweep is only half of it: every scenario ends by asserting
+    the sandbox is clean, and that assertion reading "no open harness PRs
+    at all" would fail a healthy run the moment a second lane exists — the
+    other run's PRs are open BECAUSE it is still using them.
+    """
+
+    def test_a_scenario_passes_beside_another_lanes_live_run(self):
+        import test_harness_bot_pr_flow as bpf
+        from harness.scenarios import bot_pr_flow
+
+        gh = bpf.FakeGitHub()
+        live = "agent/harness-pr251-gha-9-1-bot_pr_flow"
+        gh.branches[live] = gh._new_sha()
+        live_pr = gh.seed_pr(head=live)
+        gh.files[("main", bot_pr_flow.probe_path("pr251-gha-9-1"))] = "live"
+
+        gh.on_create_pr = bpf._happy_pipeline
+        result = framework.run_scenario(bot_pr_flow.SCENARIO, bpf._ctx(gh, "gha-2-1"))
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertIn(live, gh.branches, "the other lane's branch was deleted")
+        self.assertEqual(gh.prs[live_pr]["state"], "open")
+        self.assertIn(
+            ("main", bot_pr_flow.probe_path("pr251-gha-9-1")),
+            gh.files,
+            "the other lane's probe file was deleted",
+        )
+
+    def test_leftover_pr_numbers_reports_only_this_runs_own(self):
+        import test_harness_bot_pr_flow as bpf
+
+        gh = bpf.FakeGitHub()
+        mine = gh.seed_pr(head="agent/harness-main-gha-1-1-bot_pr_flow")
+        gh.seed_pr(head="agent/harness-pr251-gha-9-1-bot_pr_flow")
+        gh.seed_pr(head="agent/DRE-500-real-work")
+        self.assertEqual(framework.leftover_pr_numbers(gh, "o/r", "main"), [mine])
+
+
 class DriverWiringTest(unittest.TestCase):
     """The workflow has to hand the driver the SAME namespace it keys the
     concurrency group on — two expressions, one answer."""
