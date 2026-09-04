@@ -61,6 +61,7 @@ there, and only claims a command can settle are in scope.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -73,6 +74,8 @@ REPO = os.path.join(os.path.dirname(__file__), "..")
 WF_DIR = os.path.join(REPO, ".github", "workflows")
 SCRIPTS = os.path.join(REPO, "scripts")
 STANDARD = os.path.join(REPO, "standards", "verdict-evidence.md")
+CORPUS = os.path.join(os.path.dirname(__file__), "fixtures",
+                      "critic-verdicts-2026-09.json")
 sys.path.insert(0, SCRIPTS)
 
 import verdict_evidence as ve  # noqa: E402
@@ -314,6 +317,83 @@ class NoFalsePositiveTest(unittest.TestCase):
             "case.",
         ))
         self.assertEqual(rc, 0, out)
+
+
+class RealVerdictCorpusTest(unittest.TestCase):
+    """The no-false-positive property, proved against verdicts this repo's
+    critic ACTUALLY posted — not against prose a test author invented.
+
+    Twelve verdicts from PRs #230-#237, every one of which reached its
+    intended outcome and merged. The gate must hold none of them. Two are
+    the reason it is narrower than the first cut, and both teach the same
+    asymmetry:
+
+      * #234 listed the pipeline checks it had run with their results
+        inline — ``- `python3 scripts/check_act_receipts.py` → exit 0, "0
+        problem(s)"``.
+      * #235 wrote "the new test suites (`test_act_emission.py`, …) are
+        real — I ran all 128 of them".
+
+    Both are claims that something PASSED, and **a passing claim cannot
+    block a pull request**. The harm this card exists to stop is a verdict
+    that blocks correct work on a failure that did not happen, so only an
+    ADVERSE outcome is gated — the same asymmetry that leaves an APPROVE
+    and a positive CI-coverage claim alone. #235 also shows why a bare
+    `foo.py` in prose is not a command: those are test FILES being named,
+    not a command line anyone could re-run.
+    """
+
+    def corpus(self):
+        with open(CORPUS, encoding="utf-8") as f:
+            return json.load(f)["verdicts"]
+
+    def test_the_corpus_is_the_real_thing(self):
+        rows = self.corpus()
+        self.assertGreaterEqual(len(rows), 12)
+        self.assertTrue(any("REQUEST_CHANGES" in r["verdict"] for r in rows),
+                        "a corpus of APPROVEs alone would prove nothing — "
+                        "only a blocking verdict is gated at all")
+
+    def test_no_real_verdict_is_held(self):
+        for row in self.corpus():
+            with self.subTest(pr=row["pr"], index=row["index"]):
+                self.assertEqual(
+                    [d.line() for d in ve.defects(row["body"])], [],
+                    f"PR #{row['pr']} merged on this verdict; the gate "
+                    "would have held it",
+                )
+
+    def test_a_passing_run_claim_is_not_gated(self):
+        # The distilled #234 shape. It says what it ran and what it got,
+        # and it blocks nothing by saying so.
+        self.assertEqual(
+            ve.run_claims(
+                "I ran `python3 scripts/check_act_receipts.py` → exit 0, "
+                '"0 problem(s)".'
+            ),
+            [],
+        )
+
+    def test_a_named_test_file_is_not_a_command(self):
+        # The distilled #235 shape: three file names in a sentence that
+        # also says "I ran". A file name is not a command line.
+        self.assertEqual(
+            ve.run_claims(
+                "The new suites (`test_act_emission.py`, "
+                "`test_check_act_receipts.py`) are real — I ran all 128 of "
+                "them and they fail when the call site is mutated."
+            ),
+            [],
+        )
+
+    def test_the_failing_half_of_the_same_shape_is_still_gated(self):
+        # The asymmetry has to cut ONE way only, or it is just an off
+        # switch: the identical sentence reporting a FAILURE is #2247.
+        claims = ve.run_claims(
+            "I ran `python3 scripts/check_act_receipts.py` and it exits 1 "
+            "with a receipt error."
+        )
+        self.assertEqual(len(claims), 1, claims)
 
 
 # ── 3. rule 2 — a CI-coverage claim cites the job ──────────────────────────
