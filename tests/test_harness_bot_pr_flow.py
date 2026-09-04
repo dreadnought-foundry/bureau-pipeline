@@ -53,6 +53,11 @@ class FakeGitHub:
         self.prs = {}  # number -> PR dict (REST shape)
         self.comments = {}  # number -> [comment dict]
         self.commits = {}  # sha -> REST commit shape (parents/author/committer)
+        # ISO8601 commit dates, keyed by branch name or (branch, path) — what
+        # the sweep reads to tell a live run's leftover from a dead one's
+        # (DRE-3075). Absent = the real client could not resolve a date, which
+        # the sweep must never read as permission to delete.
+        self.dates = {}
         self.check_runs = {}  # sha -> [check-run dicts]
         self.on_create_pr = None  # hook(fake, pr) — the test's "pipeline"
         self.on_poll = None  # hook(fake) — fired on get_pr/list_comments polls
@@ -70,11 +75,14 @@ class FakeGitHub:
             "committer": {"login": login},
         }
 
-    def seed_pr(self, head, state="open", login=WORKER):
+    def seed_pr(self, head, state="open", login=WORKER, created_at=None):
         number = len(self.prs) + 1
         self.prs[number] = {
             "number": number,
             "state": state,
+            # REST carries this on every list shape; the sweep uses it to
+            # date a foreign-namespace leftover without a second call.
+            "created_at": created_at,
             "merged": False,
             "merged_by": None,
             "user": {"login": login},
@@ -214,6 +222,9 @@ class FakeGitHub:
 
     def get_commit(self, repo, sha):
         return self.commits[sha]
+
+    def last_commit_date(self, repo, ref, path=None):
+        return self.dates.get((ref, path) if path else ref)
 
     def list_pr_commits(self, repo, number):
         return list(self.prs[number].get("commits_payload") or [])
