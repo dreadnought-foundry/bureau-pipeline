@@ -47,6 +47,14 @@ WHAT IT DELIBERATELY DOES NOT TOUCH:
   * AN APPROVE. The harm is a verdict that BLOCKS correct work; an APPROVE
     blocks nothing, and spending a re-review to police its citation format
     would protect nobody. `defects()` returns nothing for one.
+  * A CLAIM THAT SOMETHING PASSED. Same asymmetry one level down, and it is
+    measured rather than assumed: run over the twelve verdicts this repo
+    merged on between PRs #230 and #237, an un-narrowed gate held two
+    correct reviews — one for listing the pipeline checks it had run with
+    their exit-0 results inline, one for naming three test files beside "I
+    ran all 128 of them" (tests/fixtures/critic-verdicts-2026-09.json).
+    Neither could block anything by being wrong. Only an ADVERSE outcome —
+    a non-zero exit, a failure, a denial — is in scope.
   * FALSE POSITIVES ARE THE REAL RISK HERE. This sits in front of every
     rejection the pipeline makes, so detection is narrow on purpose: a
     command reference AND an explicit assertion about a run's outcome. Bare
@@ -107,13 +115,40 @@ _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*(\S*)", re.M)
 _BACKTICKED = re.compile(r"`([^`\n]{2,200})`")
 
 #: What makes a backticked span a COMMAND rather than a symbol. Either it
-#: opens with a runner the fleet actually invokes, or it names a script the
-#: reader could execute. Anchored at the start for the runners so
-#: `` `npm` `` in "the npm cache" is not a command line.
+#: opens with a runner the fleet actually invokes, or it is a script path
+#: someone could paste into a shell — which a bare `foo.py` is not. The
+#: fleet's critics name test FILES in prose constantly (bp #235: "the new
+#: test suites (`test_act_emission.py`, …) are real — I ran all 128 of
+#: them"), and reading those as commands invents claims out of a sentence
+#: that makes none. Anchored at the start for the runners, so `` `npm` ``
+#: in "the npm cache" is not a command line either.
 _RUNNERS = (
     "python3", "python", "pytest", "npm", "npx", "node", "yarn", "pnpm",
     "make", "gh", "git", "bash", "sh", "ruff", "mypy", "cargo", "go",
     "docker", "terraform", "cdk", "alembic", "curl",
+)
+
+#: THE ASYMMETRY, and the whole reason this gate is safe to put in front of
+#: every rejection the pipeline makes. A claim that a command SUCCEEDED
+#: cannot block a pull request; a claim that it FAILED can, and twice did.
+#: So only an adverse outcome is in scope — the same asymmetry that leaves
+#: an APPROVE and a positive CI-coverage claim alone. Measured, not
+#: assumed: run over the twelve verdicts this repo merged on between
+#: PRs #230 and #237, the un-narrowed gate held two correct reviews, both
+#: for reporting that a check had PASSED
+#: (tests/fixtures/critic-verdicts-2026-09.json).
+_ADVERSE = re.compile(
+    r"\bexit(?:s|ed)?\s+(?:code\s+)?[1-9]\d*\b"
+    r"|\bnon-?zero\b"
+    r"|\bfail(?:s|ed|ing|ure|ures)?\b"
+    r"|\berror(?:s|ed)?\b|\bexception\b|\btraceback\b"
+    r"|\bcrash(?:es|ed)?\b|\bbroke(?:n)?\b|\bbreaks\b"
+    r"|\breject(?:s|ed)?\b|\brefus(?:e|es|ed)\b|\bblock(?:s|ed)\b"
+    r"|\b(?:red|not green)\b"
+    r"|\b(?:does|did|do|is|are|was|were|has|have|can|could|will|would)"
+    r"\s*n[o']?t\b"
+    r"|\bnever\b|\bno\s+(?:such|test|output|match)\b",
+    re.I,
 )
 
 #: An assertion about what a run DID. Deliberately about the outcome of an
@@ -261,28 +296,40 @@ def prose(text: str) -> str:
 
 
 def _commands(sentence: str) -> list[str]:
-    """The backticked spans in `sentence` that read as command lines."""
+    """The backticked spans in `sentence` that read as command lines.
+
+    A script path qualifies only when it is one someone could paste into a
+    shell — it has arguments, or a directory in front of it. A bare
+    `foo.py` in prose is a file being named, not a run being claimed.
+    """
     found = []
     for span in _BACKTICKED.findall(sentence):
-        head = span.strip().split()
-        if not head:
+        words = span.strip().split()
+        if not words:
             continue
-        word = head[0].lstrip("$").rstrip(":")
-        if word in _RUNNERS or word.endswith((".py", ".sh")):
+        head = words[0].lstrip("$").rstrip(":")
+        if head in _RUNNERS:
+            found.append(span.strip())
+        elif head.endswith((".py", ".sh")) and ("/" in head or len(words) > 1):
             found.append(span.strip())
     return found
 
 
 def run_claims(text: str) -> list[str]:
-    """Sentences asserting what running a command DID.
+    """Sentences asserting that running a command went BADLY.
 
-    Both halves are required — a command reference AND an assertion about a
-    run's outcome. Either alone is ordinary review prose, and this gate
-    stands in front of every rejection the pipeline makes.
+    Three halves are required — a command reference, an assertion about a
+    run's outcome, and an ADVERSE outcome — and every one of them narrows a
+    gate that stands in front of every rejection the pipeline makes. A
+    passing run is out of scope on purpose: it blocks nothing, so it cannot
+    block correct work, and holding a review over how it was cited would
+    spend a re-review to protect nobody (see _ADVERSE).
     """
     claims = []
     for sentence in _SENTENCE.split(prose(text)):
         if not sentence.strip() or not _RUN_ASSERTION_RE.search(sentence):
+            continue
+        if not _ADVERSE.search(sentence):
             continue
         if _commands(sentence):
             claims.append(sentence.strip())

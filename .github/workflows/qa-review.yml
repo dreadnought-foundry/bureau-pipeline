@@ -711,10 +711,12 @@ jobs:
             applies to you: a finding asserting what a command or a CI job
             actually DID must carry the run.
 
-            * CITE A COMMAND, PASTE ITS OUTPUT. If a finding says you ran
-              something, or says what it exits with, prints or fails with,
-              put the command AND its actual result together in ONE fenced
-              block. A quoted fragment is not the output:
+            * CITE A FAILING COMMAND, PASTE ITS OUTPUT. If a finding says a
+              command exits non-zero, fails, errors or does not do
+              something, put the command AND its actual result together in
+              ONE fenced block. (A command that PASSED is free — saying
+              "the checks are green" rejects nobody. This is only about the
+              claims that block.) A quoted fragment is not the output:
               `check_tdd_commits.py` prints a per-commit classification line
               for every commit beside its reason, unconditionally, and a
               verdict that reproduced only the reason blocked a correct pull
@@ -984,10 +986,12 @@ jobs:
             applies to you: a finding asserting what a command or a CI job
             actually DID must carry the run.
 
-            * CITE A COMMAND, PASTE ITS OUTPUT. If a finding says you ran
-              something, or says what it exits with, prints or fails with,
-              put the command AND its actual result together in ONE fenced
-              block. A quoted fragment is not the output:
+            * CITE A FAILING COMMAND, PASTE ITS OUTPUT. If a finding says a
+              command exits non-zero, fails, errors or does not do
+              something, put the command AND its actual result together in
+              ONE fenced block. (A command that PASSED is free — saying
+              "the checks are green" rejects nobody. This is only about the
+              claims that block.) A quoted fragment is not the output:
               `check_tdd_commits.py` prints a per-commit classification line
               for every commit beside its reason, unconditionally, and a
               verdict that reproduced only the reason blocked a correct pull

@@ -52,8 +52,11 @@ attempts, and costs an operator decision each time.
   findings are where the critic is meant to be believed, and no evidence
   citation is asked of them. This is narrowly about **factual claims a command
   can settle**.
-- **Only a blocking verdict is gated.** The harm is a verdict that blocks
-  correct work. An APPROVE blocks nothing.
+- **Only a blocking verdict is gated, and inside it only an adverse claim.**
+  The harm is a verdict that blocks correct work. An APPROVE blocks nothing,
+  and neither does "I ran the checks and they pass" — a claim that something
+  SUCCEEDED cannot reject a pull request. Write those however you like; a
+  claim that something failed carries the run.
 - **A claim you cannot evidence is a claim you do not make.** "I could not run
   it" is a legitimate, publishable finding — say that instead, and say what
   evidence would settle it. Softening an unevidenced assertion into a question
