@@ -397,28 +397,29 @@ class TestNoLabelFlagOrLaneSkipsPlanning:
         assert any("skip_planning" in p for p in problems), problems
 
     def test_gating_the_route_on_a_flag_is_a_problem(self):
+        route = _step("planning_route.py decide")
         text = WF.read_text(encoding="utf-8").replace(
-            "        if: steps.gate.outputs.bounced != 'true'\n"
-            "        env:\n"
-            "          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}\n"
-            "        run: |\n"
-            "          python3 .bureau-pipeline/scripts/planning_route.py decide",
-            "        if: steps.gate.outputs.bounced != 'true' && inputs.fast_track != 'true'\n"
-            "        env:\n"
-            "          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}\n"
-            "        run: |\n"
-            "          python3 .bureau-pipeline/scripts/planning_route.py decide",
+            f"        if: {route['if']}\n",
+            f"        if: {route['if']} && inputs.fast_track != 'true'\n",
             1,
         )
         problems = planning_escalation.workflow_problems(text)
         assert any("fast_track" in p or "inputs." in p for p in problems), problems
 
     def test_every_card_that_passes_the_card_gate_is_routed(self):
-        """The routing step's condition is the card gate and nothing else — no
-        label, no input, no lane of its own."""
+        """The routing step's condition is the card gate and the classifier's
+        own refusal, and nothing else — no label, no input, no lane of its own.
+
+        DRE-3029 added the second clause: a card the classifier could not place
+        has already parked in the CEO's queue, and telling it a stamp is missing
+        on the way past would be the message that card is leaving behind.
+        """
         steps = _steps()
         route = _step("planning_route.py decide")
-        assert route["if"].strip() == "steps.gate.outputs.bounced != 'true'"
+        assert route["if"].strip() == (
+            "steps.gate.outputs.bounced != 'true' && "
+            "steps.classify.outputs.escalate != 'true'"
+        )
         assert steps  # the workflow parsed
 
 
@@ -474,14 +475,34 @@ def _step(fragment: str) -> dict:
     raise AssertionError(f"no step in plan.yml carries {fragment!r}")
 
 
+def _escalating_steps() -> list:
+    """Every step that takes the escalation exit. There are two since DRE-3029
+    — the classifier's refusal and the planner's own hand-planning exit — and
+    both must go through this one module rather than inventing a second park."""
+    return [
+        step for step in _steps()
+        if "planning_escalation.py escalate" in (step.get("run") or "")
+    ]
+
+
 class TestPlanYmlEscalates:
     def test_the_escalation_step_calls_the_one_module(self):
-        step = _step("planning_escalation.py escalate")
-        assert "reason-file" in step["run"]
+        steps = _escalating_steps()
+        assert steps
+        for step in steps:
+            assert "reason-file" in step["run"], step.get("name")
 
     def test_it_runs_exactly_when_the_planner_produced_no_cards(self):
-        step = _step("planning_escalation.py escalate")
+        step = _step("Planner escalation")
+        assert "planning_escalation.py escalate" in step["run"]
         assert "steps.kids.outputs.count == '0'" in step["if"]
+
+    def test_the_classifier_takes_the_same_exit(self):
+        """DRE-3029: a card the classification step cannot place parks in the
+        same lane, through the same module, rather than stopping in Planning."""
+        step = _step("Classification refused")
+        assert "planning_escalation.py escalate" in step["run"]
+        assert "steps.classify.outputs.escalate == 'true'" in step["if"]
 
     def test_the_planner_no_longer_parks_a_question_in_the_build_queue(self):
         """It used to send an unanswered epic to Backlog — a process-controlled

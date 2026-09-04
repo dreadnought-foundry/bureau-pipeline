@@ -26,6 +26,21 @@ to prevent (DRE-1494). `config_problems()` refuses a shape named with that
 prefix and refuses a shape whose marks apply a `size:` label, so the axes stay
 apart mechanically rather than by good intentions.
 
+## Who stamped it, and whose stamp wins (DRE-3029)
+
+Every stamp says who made it: `hand` when a person ran the CLI below, `planner`
+plus the model id when the planner run classified the card itself. Two reasons,
+and neither is decoration. DRE-3016's scorer grades the classifier separately
+from the plan, and it cannot do that without knowing which stamps a model wrote
+and on which model. And a person's stamp is an OVERRIDE: where a hand stamp and
+a planner stamp disagree, the hand one is the card's shape and the pair is not
+reported as a conflict. Two stamps from the SAME kind of writer are still
+refused with both named — nobody overrode anything there, and picking between
+them would be inventing the decision.
+
+A stamp written before DRE-3029 carries no `by:` line at all. It reads as
+`hand`, which is what it was: the CLI was the only writer there had ever been.
+
 ## One shape, and three ways a card can fail to carry one
 
 Exactly one shape is stamped per card. The three faults are separate on purpose,
@@ -44,6 +59,9 @@ CLI:
     python3 scripts/planning_shape.py check          # validate the file
     python3 scripts/planning_shape.py read DRE-N     # the shape on a card
     python3 scripts/planning_shape.py stamp DRE-N <shape> --why "…"
+
+The stamp command is the OVERRIDE, not the normal path: the planner run
+classifies a card it finds unstamped (`planning_classify.py`, DRE-3029).
 """
 
 from __future__ import annotations
@@ -82,6 +100,20 @@ NO_SHAPE_TAG = "planning-no-shape"
 # Linear does not silently produce a card with no shape.
 _SHAPE_LINE = re.compile(
     rf"^\s*{SHAPE_MARK}\s*{SHAPE_TAG}:\s*\**([A-Za-z][A-Za-z-]*[A-Za-z])\b"
+)
+
+# Who stamped it (DRE-3029). `hand` is a person at the CLI and is the override;
+# `planner` is the classification step, which must also name its model.
+BY_HAND = "hand"
+BY_PLANNER = "planner"
+STAMPERS = (BY_HAND, BY_PLANNER)
+
+# Read anywhere in the stamp, not only at its head: the marker line is what
+# identifies the comment as a stamp, and this line follows it. A stamp written
+# before DRE-3029 has no such line and reads as `hand` — the CLI was the only
+# writer that had ever existed.
+_BY_LINE = re.compile(
+    r"^\*\*Stamped by:\*\*\s*`([a-z-]+)`(?:\s*·\s*\*\*model:\*\*\s*`([^`]+)`)?", re.M
 )
 
 # The effort axis, and the one prefix a shape may never wear.
@@ -297,8 +329,20 @@ def config_problems(doc: dict | None = None) -> list:
 # --------------------------------------------------------------------------- #
 
 
-def shape_comment(name: str, reason: str, doc: dict | None = None) -> str:
-    """The comment that IS the shape. One card, one of these."""
+def shape_comment(
+    name: str,
+    reason: str,
+    doc: dict | None = None,
+    *,
+    by: str = BY_HAND,
+    model: str | None = None,
+) -> str:
+    """The comment that IS the shape. One card, one of these.
+
+    `by` says who made the call and `model` which model made it — a stamp by a
+    model that does not name the model is a stamp DRE-3016's scorer cannot
+    grade, so it is refused rather than written without one.
+    """
     entry = record(name, doc)
     if not (reason or "").strip():
         raise ShapeError(
@@ -306,10 +350,26 @@ def shape_comment(name: str, reason: str, doc: dict | None = None) -> str:
             "cannot be argued with, and the next reader inherits a word with "
             "nothing behind it."
         )
+    if by not in STAMPERS:
+        raise ShapeError(
+            f"{by!r} is not a stamper — a stamp says who made the call, and the "
+            f"writers are {', '.join(STAMPERS)}"
+        )
+    if by != BY_HAND and not (model or "").strip():
+        raise ShapeError(
+            f"a stamp written by {by!r} must name the model it ran on. A "
+            "classification nobody can attribute to a model is one nothing can "
+            "score separately from the plan (DRE-3016)."
+        )
+    stamped_by = f"**Stamped by:** `{by}`"
+    if (model or "").strip():
+        stamped_by += f" · **model:** `{model.strip()}`"
     lines = [
         f"{SHAPE_MARK} {SHAPE_TAG}: **{name}** — {entry['means']}",
         "",
         f"**Why:** {reason.strip()}",
+        "",
+        stamped_by,
         "",
         f"**Where it goes:** {entry['destination']}. "
         f"**Who handles it there:** {entry['actor']}.",
@@ -327,25 +387,61 @@ def shape_comment(name: str, reason: str, doc: dict | None = None) -> str:
 
 
 def _stamped(comment_bodies) -> list:
-    """Every shape name stamped on the card, lower-cased, in the order first
-    seen. Unfiltered — recognising them is the caller's next step."""
-    seen: list[str] = []
+    """Every shape stamped on the card as `(name, by)`, lower-cased, in the
+    order first seen. Unfiltered — recognising them is the caller's next step.
+
+    A stamp with no `**Stamped by:**` line predates DRE-3029 and reads as
+    `hand`: the CLI was the only writer there had ever been.
+    """
+    seen: list[tuple] = []
     for body in comment_bodies or ():
-        match = _SHAPE_LINE.match((body or "").lstrip())
+        text = (body or "").lstrip()
+        match = _SHAPE_LINE.match(text)
         if not match:
             continue
         name = match.group(1).strip().lower()
-        if name not in seen:
-            seen.append(name)
+        if any(name == found for found, _ in seen):
+            continue
+        who = _BY_LINE.search(text)
+        seen.append((name, (who.group(1) if who else BY_HAND)))
     return seen
+
+
+def stamped_by(comment_bodies) -> tuple:
+    """`(who, model)` for the FIRST stamp on the card, or `(None, None)`.
+
+    Read by DRE-3016's scorer, which grades the classifier separately from the
+    plan and so must be able to tell a model's call from a person's.
+    """
+    for body in comment_bodies or ():
+        text = (body or "").lstrip()
+        if not _SHAPE_LINE.match(text):
+            continue
+        who = _BY_LINE.search(text)
+        if who is None:
+            return (BY_HAND, None)
+        return (who.group(1), who.group(2))
+    return (None, None)
 
 
 def shapes_on(comment_bodies, doc: dict | None = None) -> tuple:
     """Every DISTINCT recognised shape stamped on a card, in the order first
     seen. The marker must OPEN a comment: a body that merely quotes a shape —
-    a fault notice does exactly that — carries none."""
+    a fault notice does exactly that — carries none.
+
+    Where a HAND stamp and a machine stamp disagree, the hand one is the answer
+    (DRE-3029): a person overriding the classifier is the override working, not
+    a card with two shapes on it. Two stamps by the same kind of writer are
+    still both returned, and refused upstream — nobody overrode anything there.
+    """
     known = shapes(doc)
-    return tuple(name for name in _stamped(comment_bodies) if name in known)
+    found = [(name, by) for name, by in _stamped(comment_bodies) if name in known]
+    names = tuple(name for name, _ in found)
+    if len(names) > 1:
+        overrides = tuple(name for name, by in found if by == BY_HAND)
+        if len(overrides) == 1:
+            return overrides
+    return names
 
 
 def unrecognised_on(comment_bodies, doc: dict | None = None) -> tuple:
@@ -355,7 +451,7 @@ def unrecognised_on(comment_bodies, doc: dict | None = None) -> tuple:
     a vocabulary that does not exist is never reported as an unclassified card.
     """
     known = shapes(doc)
-    return tuple(name for name in _stamped(comment_bodies) if name not in known)
+    return tuple(name for name, _ in _stamped(comment_bodies) if name not in known)
 
 
 def shape_on(comment_bodies, doc: dict | None = None) -> str | None:
@@ -420,9 +516,14 @@ def fault(identifier: str, comment_bodies, doc: dict | None = None) -> str | Non
             f"🚨 {NO_SHAPE_TAG}: {identifier} carries no planning shape, so "
             "nothing can say what gate it owes — a plan artifact and a green "
             "light, or neither.\n\n"
-            "**To classify it:** `python3 scripts/planning_shape.py stamp "
-            f'{identifier} <shape> --why "<one line>"`, where `<shape>` is one '
-            "of " + ", ".join(f"**{name}**" for name in shapes(doc)) + "."
+            "**Nothing is waiting for a person here.** The planner run "
+            "classifies a card it finds unstamped, and parks it in the CEO's "
+            "decision queue when it cannot (DRE-3029). This notice says the "
+            "classification has not happened *yet*.\n\n"
+            "**To override it by hand:** `python3 scripts/planning_shape.py "
+            f'stamp {identifier} <shape> --why "<one line>"`, where `<shape>` '
+            "is one of " + ", ".join(f"**{name}**" for name in shapes(doc))
+            + ". A hand stamp is an override and it wins."
         )
     return None
 
@@ -467,16 +568,38 @@ def stamp_refusal(name: str, comment_bodies, doc: dict | None = None) -> str | N
 # --------------------------------------------------------------------------- #
 
 
+def stamp(
+    lops,
+    identifier: str,
+    name: str,
+    reason: str,
+    *,
+    by: str = BY_HAND,
+    model: str | None = None,
+    doc: dict | None = None,
+) -> str | None:
+    """Write the shape onto the card. Returns the refusal, or None when written.
+
+    One seam for both writers — the CLI below and the classification step
+    (`planning_classify.py`, DRE-3029) — so the pre-write refusal, the comment
+    and the marks cannot come apart between them.
+    """
+    refusal = stamp_refusal(name, lops.comment_bodies(identifier), doc)
+    if refusal is not None:
+        return refusal
+    lops.cmd_comment(identifier, shape_comment(name, reason, doc, by=by, model=model))
+    for label in marks(name, doc):
+        lops.add_label(identifier, label)
+    return None
+
+
 def _cmd_stamp(identifier: str, name: str, reason: str) -> int:
     import linear_ops
 
-    refusal = stamp_refusal(name, linear_ops.comment_bodies(identifier))
+    refusal = stamp(linear_ops, identifier, name, reason, by=BY_HAND)
     if refusal is not None:
         print(f"refusing to stamp {identifier}: {refusal}", file=sys.stderr)
         return 1
-    linear_ops.cmd_comment(identifier, shape_comment(name, reason))
-    for label in marks(name):
-        linear_ops.add_label(identifier, label)
     print(
         f"stamped {identifier} {name} → {destination(name)} "
         f"(handled there by {actor(name)})"
