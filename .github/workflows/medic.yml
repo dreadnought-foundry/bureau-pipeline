@@ -176,6 +176,13 @@ jobs:
       # medic that wakes late would push a Claude "resets 8:30pm" a day out.
       # `--account` rides along only when the repo says which account is
       # active (`vars.CLAUDE_ACCOUNT`, the seam DRE-3170 fills).
+      # `--failed-step` is the failed step's NAME off the Jobs API — one read.
+      # The workflow name is "Agent Plan (reusable)" whether the classifier
+      # or the planner died, and the marker's stage has to say which (the
+      # first review of this card found `classify` documented and
+      # unreachable). A refinement of the record, never a condition of it:
+      # an unreadable Jobs API leaves the flag empty and the death is still
+      # marked, as the coarser stage.
       #
       # Fail-open to `false`, out loud: every job here `needs: classify`, so
       # this step must never take the whole medic down — a classifier that
@@ -184,6 +191,7 @@ jobs:
         id: limit
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
           # env, not inline ${{ }} (DRE-1996): the run name is agent-
           # influenced text, and the card came through the same discipline.
           CARD: ${{ steps.r.outputs.card }}
@@ -194,9 +202,12 @@ jobs:
         run: |
           ACCOUNT_FLAGS=()
           if [ -n "${CLAUDE_ACCOUNT:-}" ]; then ACCOUNT_FLAGS=(--account "$CLAUDE_ACCOUNT"); fi
+          FAILED_STEP=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+            --jq '[.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name] | first // ""' \
+            2>/dev/null) || FAILED_STEP=""
           DECISION=$(python3 .bureau-pipeline/scripts/dead_run.py decide 0 \
             --limit-log /tmp/medic-log.txt --workflow "$WORKFLOW_NAME" \
-            --run-id "$RUN_ID" --now "$RUN_UPDATED_AT" \
+            --run-id "$RUN_ID" --now "$RUN_UPDATED_AT" --failed-step "$FAILED_STEP" \
             "${ACCOUNT_FLAGS[@]}") || DECISION=""
           ACTION=$(printf '%s\n' "$DECISION" | head -1)
           if [ "$ACTION" != "limit" ]; then
