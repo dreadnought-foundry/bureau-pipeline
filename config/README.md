@@ -82,6 +82,23 @@ of it is ever a runtime lookup.
   fails records `UNKNOWN`, never `0`: the ten seed rows include five cards whose
   pieces live in a repo this rail's token cannot see, and a clean-looking
   footprint there would be composed entirely of reads that never happened.
+- **`linear-identities.json`** — the two non-human Linear users (DRE-3172):
+  `fleet` (`Agent-Bureau` — every sweep, planner, merge-sync, the relay and
+  the console) and `operator-tools` (`bureau-tools` — the operator's scripts
+  and assistant sessions). Per identity: the display name it must resolve to,
+  the environment variable the check reads its key from, where the key
+  actually lives, what it is for, and the rules `must_not_be_admin` and
+  `must_differ_from` the other. Linear's 2,500 requests/hour limit is PER
+  USER, so two users are two budgets — that is the point, and it is what
+  silently stops being true when a key lands on an admin or both keys land on
+  one user. **No ids in the file**: an id pinned in a file is what goes stale
+  on rotation; the check prints the id it resolved. Read by
+  `scripts/check_linear_identities.py`; not read by any workflow — CI holds
+  only the fleet key, as `secrets.LINEAR_API_KEY`, which is the name the
+  operator-tools key wears on the operator's machine. The operator runs, with
+  `LINEAR_API_KEY_FLEET` and `LINEAR_API_KEY` in the environment:
+  `python3 scripts/check_linear_identities.py check`. A key that is absent
+  is `UNKNOWN` and exits non-zero, never OK.
 
 ---
 

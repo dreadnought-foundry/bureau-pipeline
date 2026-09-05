@@ -96,9 +96,15 @@ path to fail during an emergency. The control is that it is loud and counted,
 not that it is hard to use.
 
 **No agent may apply it.** The relay, reconcile, the planner and every agent
-share one `LINEAR_API_KEY` and resolve to the operator's own Linear user, so
-actor identity cannot tell agent from operator. Enforcement lives at the write
-seam instead: `linear_ops.add_label` and the planner's child-label path refuse
+write to Linear as ONE fleet user, `Agent-Bureau` (non-admin, its own key and
+its own 2,500/hour budget); the operator's scripts and assistant sessions write
+as `bureau-tools` (non-admin, its own key and budget); the CEO approves from
+his own identity. The two non-human users are declared in
+`config/linear-identities.json` and `scripts/check_linear_identities.py check`
+holds the live keys to it (DRE-3172). But actor identity still cannot tell an
+agent's write from an operator-tool write for THIS purpose — the operator's
+own terminal is a tool too, and an operator action must be a person's hand in
+Linear, not a script's. Enforcement lives at the write seam instead: `linear_ops.add_label` and the planner's child-label path refuse
 the marker outright, and a marker applied by a bot actor (an integration we do
 not own) is not honored — the card bounces as if it were absent.
 
