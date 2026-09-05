@@ -37,16 +37,24 @@ happened) AND strand the card at merge time, because the debt would vanish
 between the bypass and the merge. The receipt is written once, by us, and is
 never removed by the pipeline.
 
-NO AGENT MAY APPLY THE MARKER. The relay, reconcile, the planner and every
-agent share one LINEAR_API_KEY, so every automated write resolves to the
-operator's own Linear user — verified live on DRE-2737, where the Todo gate's
-own `agent:engineer` write reads `actor: Frederick Conklin, botActor: None`.
-Actor identity therefore cannot tell an agent from the operator (the same
-conclusion DRE-2725 reached about "who moved the card"), so the load-bearing
-control is the WRITE SEAM: `linear_ops.add_label` and the planner's child-label
-path refuse to apply the marker at all. `refusal_reason()` below is the second
-layer, for writers we do not own — a Linear integration or automation app
-writes as a `botActor`, and its bypass is not honored.
+NO AGENT MAY APPLY THE MARKER. Since DRE-3172 the relay, reconcile, the planner
+and every agent write as ONE fleet user, `Agent-Bureau`, on the fleet's own key
+— no longer as the operator's own Linear user, which is how it read when this
+module was written and was verified live on DRE-2737, where the Todo gate's own
+`agent:engineer` write reads `actor: Frederick Conklin, botActor: None`. The
+operator's scripts and assistant sessions write as a second non-human user,
+`bureau-tools`. Both are declared in `config/linear-identities.json`.
+
+That new signal still does not enforce THIS rule, for the reason README gives:
+an operator ACTION is a person's hand in Linear, and a script running under
+EITHER key is not that — the operator's own terminal is a tool too. So actor
+identity cannot separate the write we must refuse from the one we must honor
+(the same conclusion DRE-2725 reached about "who moved the card"), and the
+load-bearing control is still the WRITE SEAM: `linear_ops.add_label` and the
+planner's child-label path refuse to apply the marker at all.
+`refusal_reason()` below is the second layer, for writers we do not own — a
+Linear integration or automation app writes as a `botActor`, and its bypass is
+not honored.
 
 AND THE PROVENANCE READ IS BEST EFFORT, measured, not assumed. Linear's
 `issue.history` is eventually consistent: on the DRE-2737 live observation

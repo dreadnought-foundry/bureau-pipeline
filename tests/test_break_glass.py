@@ -22,12 +22,14 @@ three properties that make it safe rather than a hole:
   3. It is COUNTED, off the receipt label — so removing the marker mid-flight
      neither strands the card nor undoes the count.
 
-NO AGENT MAY APPLY IT. The fleet shares one LINEAR_API_KEY, so every
-automated write resolves to the operator's own user (verified live on
-DRE-2737: the Todo gate's own `agent:engineer` write reads
-`actor: Frederick Conklin, botActor: None`). Actor identity therefore cannot
-tell agent from operator, which is the same conclusion DRE-2725 reached about
-"who moved the card". So the load-bearing control is the WRITE SEAM — the
+NO AGENT MAY APPLY IT. Since DRE-3172 the fleet writes as its own non-human
+user `Agent-Bureau` and the operator's tools as `bureau-tools`
+(`config/linear-identities.json`); it used to resolve to the operator's own
+user, verified live on DRE-2737 (the Todo gate's own `agent:engineer` write
+reads `actor: Frederick Conklin, botActor: None`). Actor identity still cannot
+enforce this rule either way — an operator action is a person's hand in Linear
+and a script under either key is not that, the same conclusion DRE-2725 reached
+about "who moved the card". So the load-bearing control is the WRITE SEAM — the
 fleet's only label-writing paths refuse to apply the marker — with the
 bot-actor provenance check as the second layer for writers we do not own.
 

@@ -8,10 +8,12 @@ gate's whole round history out of it: two stray comments carrying a forged
 rejection and promote an epic's children to build.
 
 The fix is authorship at the fetch seam, where the Linear client already lives.
-The pipeline's writes all go through one `LINEAR_API_KEY` that resolves to one
-Linear user (README — "the relay, reconcile, the planner and every agent share
-one LINEAR_API_KEY and resolve to the operator's own Linear user"), so "the
-pipeline wrote this" is exactly "the key's own `viewer` wrote this". A bot
+Every unattended write goes through the FLEET key, which resolves to the one
+fleet user `Agent-Bureau` (`config/linear-identities.json`, DRE-3172 — before
+that it resolved to the operator's own user), so "the pipeline wrote this" is
+exactly "the fleet user wrote this". It is computed from the key THIS process
+runs under: on the operator's machine `viewer` is `bureau-tools` instead, and a
+fleet-written comment then reads as somebody else's — the safe direction. A bot
 actor's comment has no `user` at all and is somebody else's integration — the
 same rule README already states for break-glass labels.
 
