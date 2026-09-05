@@ -31,7 +31,23 @@ EITHER
     where plan.yml's failure paths leave it — is bounced out through Intake,
     the lane before Planning exit that nothing polices, and straight back.
     Two writes, said out loud on the receipt, because a same-lane write fires
-    no webhook and the planner would never start.
+    no webhook and the planner would never start. A card in Intake, Backlog or
+    Triage simply enters Planning. A card in a WORK lane is different: plan.yml's
+    ACTIVATE route runs the second critic against a CEO-approved epic that is
+    already In Progress, and dragging that back to Planning would undo the
+    approval and fire a plan-mode run — so there the ORIGINAL run is re-run,
+    which keeps its own trigger.
+
+## Nothing waits without a clock, a switch, or a person being told
+
+The nudge loop leaves a limit-parked card alone, which is right while a
+trigger can still fire and wrong forever if none can. A marker with no reset
+time and no recorded account (an API `rate_limit_error` carries no `resets …`;
+so does a reset in a zone the parser does not read), or a PR-stage marker
+naming no run to re-run, gets ONE `⚠️ limit-recovery:` receipt saying what a
+person does. That receipt opens with a glyph, so it CLOSES the marker: the card
+is back on the sweep's ordinary clock rather than hidden from it, and the sweep
+is not red on every pass for a card nobody was told about.
   * `build` — In Progress → Todo, the sweep's own requeue move, which the relay
     dispatches. A card already in Todo (DRE-3062 died at `Card → In Progress`
     and never left it) gets the sweep's own re-dispatch instead.
@@ -77,12 +93,18 @@ import dead_run  # noqa: E402 — the marker's one definition
 
 RECOVERY_TAG = "limit-recovery"
 RECOVERY_MARK = f"🔁 {RECOVERY_TAG}:"
+# The hand-off: one receipt, a glyph first so it closes the marker.
+HANDOFF_MARK = f"⚠️ {RECOVERY_TAG}:"
 
 TERMINAL_LANES = ("Done", "Canceled", "Duplicate")
 PLANNING_STAGES = ("classify", "plan")
 RERUN_STAGES = ("fix", "review", "sync")
 PLANNING_LANE = "Planning"
 BOUNCE_LANE = "Intake"   # before Planning exit: not policed, and Planning entry re-fires the planner
+# The lanes a planning-stage card may ENTER Planning from. Anything else is a
+# card past Planning exit (Green Light, Todo, In Progress, In Review), and a
+# plan death there is re-run in place — never re-planned.
+REPLAN_FROM = ("Intake", "Backlog", "Triage")
 BUILD_LANE = "Todo"
 
 
@@ -147,12 +169,57 @@ def _lane(card: dict) -> str:
     return (card.get("state") or {}).get("name") or ""
 
 
+def _needs_rerun(card: dict, marker: dict) -> bool:
+    """Whether re-entry means re-running the original run: every PR stage,
+    and a planning stage whose card is already past Planning exit."""
+    stage = marker.get("stage")
+    if stage in RERUN_STAGES:
+        return True
+    return stage in PLANNING_STAGES and _lane(card) not in (PLANNING_LANE, *REPLAN_FROM)
+
+
+def handoff_reason(card: dict, marker: dict) -> str | None:
+    """Why nothing here can ever bring this card back — the ONE sentence a
+    person is told — or None when a trigger and a re-entry both exist."""
+    stage = marker.get("stage")
+    if stage not in PLANNING_STAGES and stage != "build" and stage not in RERUN_STAGES:
+        return f"the marker names a stage this sweep does not know ({stage!r})"
+    if _needs_rerun(card, marker) and not (marker.get("run") or "").isdigit():
+        return (f"the marker names no GitHub run to re-run, so the failed {stage} "
+                f"run has to be re-run by hand (Actions → Re-run failed jobs), or "
+                f"the branch pushed to start it fresh")
+    if (marker.get("reset") is None and marker.get("kind") != "linear"
+            and not marker.get("account")):
+        return ("the marker names no reset time and no account, so nothing here "
+                "can tell when the wall comes down. The card is back on the "
+                "sweep's ordinary clock; if the account is still limited, park it "
+                "in Backlog until the account is released, then return it to Todo")
+    return None
+
+
+def handoff_receipt(marker: dict, reason: str) -> str:
+    return (
+        f"{HANDOFF_MARK} cannot bring this card back on its own — {reason}. "
+        f"(Limit death: {marker.get('kind')} limit in the {marker.get('stage')} "
+        f"stage, run {marker.get('run') or 'unknown'}.)"
+    )
+
+
 def _reenter(card: dict, marker: dict, *, rerun, move, dispatch) -> str:
     """Re-enter the stage the marker names; return what was done, for the
     receipt. Raises RecoveryFailed when the write did not go through."""
     ident = card["identifier"]
     stage = marker["stage"]
     lane = _lane(card)
+    if _needs_rerun(card, marker):
+        run_id = marker.get("run") or ""
+        if not run_id.isdigit():  # handoff_reason() answers this first; belt and braces
+            raise RecoveryFailed("the marker names no GitHub run id to re-run")
+        if not rerun(run_id):
+            raise RecoveryFailed(f"gh run rerun {run_id} --failed did not go through")
+        kept = (" in place, because a card past Planning exit is never re-planned"
+                if stage in PLANNING_STAGES else "")
+        return f"Re-ran the original run {run_id}, failed jobs only{kept}"
     if stage in PLANNING_STAGES:
         if lane == PLANNING_LANE:
             move(ident, BOUNCE_LANE)
@@ -168,13 +235,6 @@ def _reenter(card: dict, marker: dict, *, rerun, move, dispatch) -> str:
             return f"Re-dispatched from {BUILD_LANE} (a same-lane write fires no webhook)"
         move(ident, BUILD_LANE)
         return f"Moved {lane} → {BUILD_LANE}, which dispatches a fresh run"
-    if stage in RERUN_STAGES:
-        run_id = marker.get("run") or ""
-        if not run_id.isdigit():
-            raise RecoveryFailed("the marker names no GitHub run id to re-run")
-        if not rerun(run_id):
-            raise RecoveryFailed(f"gh run rerun {run_id} --failed did not go through")
-        return f"Re-ran the original run {run_id}, failed jobs only"
     raise RecoveryFailed(f"unknown stage {stage!r} in the marker")
 
 
@@ -205,6 +265,13 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
             continue
         marker = waiting(_bodies(card))
         if marker is None:
+            continue
+        reason = handoff_reason(card, marker)
+        if reason is not None:
+            # Told once, and the receipt closes the marker — no WIP spent, no
+            # ERROR line, and the card is the sweep's again next pass.
+            lops.cmd_comment(ident, handoff_receipt(marker, reason))
+            lines.append(f"{RECOVERY_TAG}: {ident} handed to a human — {reason.split('.')[0]}")
             continue
         why = trigger(marker, now, active_account)
         if why is None:
