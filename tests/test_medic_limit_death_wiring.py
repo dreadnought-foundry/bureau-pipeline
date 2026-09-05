@@ -46,7 +46,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 WORKFLOW = ROOT / ".github" / "workflows" / "medic.yml"
 
-import medic_retry  # noqa: E402 — the one card-from-branch rule
+import medic_retry  # noqa: E402 — the one card-resolution rule
 
 RUN_ID = "33912345678"
 UPDATED_AT = "2026-09-05T20:31:00Z"
@@ -131,11 +131,13 @@ def run_step(*, decision: str | None = "limit\n\n" + MARKER, comments: str = "[]
     extra = {"vars.CLAUDE_ACCOUNT": account, **(payload or {})}
     if head_branch is not None:
         extra["github.event.workflow_run.head_branch"] = head_branch
-    # The card is the retry gate's own output (steps.r), read off the head
-    # branch by the ONE extraction medic.yml carries — so the fake publishes
-    # it the way that step does, through the same function.
-    extra["steps.r.outputs.card"] = medic_retry.card_from_branch(
-        extra.get("github.event.workflow_run.head_branch", PAYLOAD["github.event.workflow_run.head_branch"])
+    # The card is the retry gate's own output (steps.r), resolved by the ONE
+    # function — the head branch first, then the failed log a planner run
+    # names itself in (DRE-3223) — so the fake publishes it the way that step
+    # does, through that same function, never by hand.
+    extra["steps.r.outputs.card"] = medic_retry.card_for_run(
+        extra.get("github.event.workflow_run.head_branch", PAYLOAD["github.event.workflow_run.head_branch"]),
+        log_text,
     ) or ""
     env = {k: _render(str(v), extra) for k, v in (step.get("env") or {}).items()}
     script = _render(step["run"], extra)
@@ -352,3 +354,116 @@ class GateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── 5. a planner run's card comes from its own log (DRE-3223) ────────────────
+PLANNER = {"github.event.workflow_run.name": "Agent Plan (reusable)",
+           "github.event.workflow_run.head_branch": "main"}
+PLANNER_LOG_CLAUDE = (
+    "call / bureau-card: DRE-3162\tUNKNOWN STEP\t2026-09-05T20:36:52.3466088Z bureau-card: DRE-3162\n"
+    "call / bureau-card: DRE-3162\tUNKNOWN STEP\t2026-09-05T20:40:01.0000000Z "
+    '{"type":"result","is_error":true,"result":"You\'ve hit your limit · resets 8:30pm (UTC)","num_turns":12}\n'
+)
+PLANNER_LOG_LINEAR = (
+    "call / bureau-card: DRE-3162\tUNKNOWN STEP\t2026-09-05T20:36:52.3466088Z bureau-card: DRE-3162\n"
+    "call / bureau-card: DRE-3162\tUNKNOWN STEP\t2026-09-05T20:40:01.0000000Z "
+    "linear_ops.LinearRateLimited: Linear API returned 400 from https://api.linear.app/graphql: "
+    "rate limited: 2500 requests/hour exhausted\n"
+)
+
+
+class PlannerCardTest(unittest.TestCase):
+    """DRE-3223's acceptance cases, driven through the REAL classifier on a
+    fake failed log, with the card coming from the retry gate's one
+    resolution function. On 2026-09-05 every planner limit death (DRE-3162,
+    3130, 3072, 3169, 3168 ×2) had the gate and no card to mark."""
+
+    def test_a_claude_limit_on_a_planner_run_marks_the_card_the_log_names(self):
+        result = run_step(decision=None, log_text=PLANNER_LOG_CLAUDE, payload=PLANNER,
+                          failed_step="Plan epic")
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertIn("limit=true", result["outputs"], "no rerun, no diagnosis")
+        posts = _comment_calls(result)
+        self.assertEqual(1, len(posts), result["calls"])
+        self.assertIn(" DRE-3162 ", posts[0])
+        self.assertIn(f"🪦 limit-death: kind=claude stage=plan reset=2026-09-06T20:30:00Z run={RUN_ID}", posts[0])
+
+    def test_a_linear_limit_on_a_planner_run_marks_kind_linear(self):
+        result = run_step(decision=None, log_text=PLANNER_LOG_LINEAR, payload=PLANNER,
+                          failed_step="Plan epic")
+        self.assertIn("limit=true", result["outputs"])
+        posts = _comment_calls(result)
+        self.assertEqual(1, len(posts), result["calls"])
+        self.assertIn(" DRE-3162 ", posts[0])
+        self.assertIn(f"🪦 limit-death: kind=linear stage=plan reset=unknown run={RUN_ID}", posts[0])
+
+    def test_a_build_run_still_resolves_its_card_from_the_branch(self):
+        """The branch wins when both speak: a build log can quote any card."""
+        log = PLANNER_LOG_CLAUDE.replace("bureau-card: DRE-3162", "bureau-card: DRE-1")
+        result = run_step(decision=None, log_text=log)
+        posts = _comment_calls(result)
+        self.assertEqual(1, len(posts))
+        self.assertIn(" DRE-3062 ", posts[0])
+        self.assertIn("stage=build", posts[0])
+
+    def test_a_planner_log_naming_no_card_still_blocks_the_rerun_and_posts_nothing(self):
+        log = PLANNER_LOG_CLAUDE.replace("bureau-card: DRE-3162", "")
+        result = run_step(decision=None, log_text=log, payload=PLANNER)
+        self.assertIn("limit=true", result["outputs"])
+        self.assertEqual([], _comment_calls(result))
+
+
+class CardResolutionTest(unittest.TestCase):
+    """One function, two sources — and the log source is structural."""
+
+    def test_branch_first(self):
+        self.assertEqual("DRE-3062", medic_retry.card_for_run("agent/dre-3062-x", PLANNER_LOG_CLAUDE))
+
+    def test_log_when_the_branch_names_nothing(self):
+        self.assertEqual("DRE-3162", medic_retry.card_for_run("main", PLANNER_LOG_CLAUDE))
+
+    def test_the_job_name_field_alone_is_enough(self):
+        only_prefix = "call / bureau-card: DRE-3162\tPlanner agent\t2026-09-05T20:40:01Z is_error\n"
+        self.assertEqual("DRE-3162", medic_retry.card_for_run("main", only_prefix))
+
+    def test_the_echoed_line_alone_is_enough(self):
+        only_echo = "call / plan\tSay the card\t2026-09-05T20:36:52.3466088Z bureau-card: DRE-3162\n"
+        self.assertEqual("DRE-3162", medic_retry.card_for_run("main", only_echo))
+
+    def test_a_bare_line_is_enough(self):
+        self.assertEqual("DRE-3162", medic_retry.card_for_run("main", "bureau-card: dre-3162\n"))
+
+    def test_quoted_prose_does_not_name_a_card(self):
+        prose = "call / plan\tPlanner agent\t2026-09-05T20:40:01Z the card says \"bureau-card: DRE-9\" here\n"
+        self.assertIsNone(medic_retry.card_for_run("main", prose))
+        echoed_script = "call / plan\tUNKNOWN STEP\t2026-09-05T20:40:01Z \x1b[36;1mecho \"bureau-card: DRE-9\"\x1b[0m\n"
+        self.assertIsNone(medic_retry.card_for_run("main", echoed_script))
+
+    def test_nothing_names_nothing(self):
+        self.assertIsNone(medic_retry.card_for_run("main", ""))
+        self.assertIsNone(medic_retry.card_for_run("chore/deps", "no card here"))
+
+    def test_the_gate_uses_the_one_function(self):
+        import inspect
+        self.assertIn("card_for_run(", inspect.getsource(medic_retry._decide_cli))
+
+
+class PlannerSaysItsCardTest(unittest.TestCase):
+    """plan.yml carries the card in the two places the failed log keeps: its
+    job name (the first field of every log line — survives a gh that prints
+    only failed steps) and one echoed line at the top of the job."""
+
+    def setUp(self):
+        with open(ROOT / ".github" / "workflows" / "plan.yml", encoding="utf-8") as f:
+            self.plan = yaml.safe_load(f)
+
+    def test_the_job_is_named_after_the_card(self):
+        self.assertEqual(
+            "bureau-card: ${{ github.event.client_payload.identifier }}",
+            self.plan["jobs"]["plan"].get("name"),
+        )
+
+    def test_the_first_step_says_the_card(self):
+        first = self.plan["jobs"]["plan"]["steps"][0]
+        self.assertIn('echo "bureau-card: $CARD"', first.get("run", ""))
+        self.assertEqual("${{ github.event.client_payload.identifier }}", (first.get("env") or {}).get("CARD"))
