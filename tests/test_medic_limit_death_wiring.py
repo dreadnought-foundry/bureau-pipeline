@@ -60,6 +60,7 @@ PAYLOAD = {
     "github.event.workflow_run.conclusion": "failure",
     "github.repository": "dreadnought-foundry/bureau-pipeline",
     "secrets.LINEAR_API_KEY": "test-key",
+    "github.token": "gh-test-token",
 }
 MARKER = (
     f"🪦 limit-death: kind=claude stage=build reset=2026-09-06T20:30:00Z run={RUN_ID}\n\n"
@@ -69,17 +70,29 @@ MARKER = (
 SHIM = r"""#!/bin/bash
 # Records every python3 call the step makes, one line per call, and answers
 # the three the step needs: the classifier, the card's thread, the comment.
+# With FAKE_DECISION empty the classifier is the REAL dead_run.py, run by the
+# real interpreter on the fake failed log.
 printf '%s\n' "$*" >> "$SHIM_LOG"
 case "$*" in
   *dead_run.py\ decide*)
     if [ "${FAKE_DECIDE_RC:-0}" != "0" ]; then exit "$FAKE_DECIDE_RC"; fi
-    printf '%s\n' "$FAKE_DECISION"; exit 0 ;;
+    if [ -n "${FAKE_DECISION:-}" ]; then printf '%s\n' "$FAKE_DECISION"; exit 0; fi
+    ARGS=(); for a in "${@:2}"; do [ "$a" = "/tmp/medic-log.txt" ] && a="$FAKE_LOG"; ARGS+=("$a"); done
+    exec "$REAL_PYTHON" "$REAL_DEAD_RUN" "${ARGS[@]}" ;;
   *linear_ops.py\ dump-comments*)
     printf '%s\n' "${FAKE_COMMENTS:-[]}"; exit 0 ;;
   *linear_ops.py\ comment*)
     exit "${FAKE_COMMENT_RC:-0}" ;;
 esac
 exit 0
+"""
+
+GH_SHIM = r"""#!/bin/bash
+# The Jobs API read the step makes for the failed step's name (DRE-3171,
+# second review): answers FAKE_FAILED_STEP, or fails with FAKE_GH_RC.
+printf 'gh %s\n' "$*" >> "$SHIM_LOG"
+if [ "${FAKE_GH_RC:-0}" != "0" ]; then echo "gh: boom" >&2; exit "$FAKE_GH_RC"; fi
+printf '%s\n' "${FAKE_FAILED_STEP:-}"
 """
 
 
@@ -106,15 +119,16 @@ def _render(text: str, extra: dict) -> str:
     return re.sub(r"\$\{\{\s*([^}]+?)\s*\}\}", sub, text)
 
 
-def run_step(*, decision: str = "limit\n\n" + MARKER, comments: str = "[]",
-             account: str = "", head_branch: str | None = None,
+def run_step(*, decision: str | None = "limit\n\n" + MARKER, comments: str = "[]",
+             account: str = "", head_branch: str | None = None, log_text: str = "",
+             payload: dict | None = None, failed_step: str = "", gh_rc: int = 0,
              decide_rc: int = 0, comment_rc: int = 0) -> dict:
     """Execute the classify job's limit step as the workflow would.
 
     Returns the recorded python3 calls, the GITHUB_OUTPUT lines, the exit
     status and the combined output."""
     step = _limit_step()
-    extra = {"vars.CLAUDE_ACCOUNT": account}
+    extra = {"vars.CLAUDE_ACCOUNT": account, **(payload or {})}
     if head_branch is not None:
         extra["github.event.workflow_run.head_branch"] = head_branch
     # The card is the retry gate's own output (steps.r), read off the head
@@ -129,6 +143,10 @@ def run_step(*, decision: str = "limit\n\n" + MARKER, comments: str = "[]",
         td = Path(raw)
         (td / "python3").write_text(SHIM)
         os.chmod(td / "python3", 0o755)
+        (td / "gh").write_text(GH_SHIM)
+        os.chmod(td / "gh", 0o755)
+        fake_log = td / "medic-log.txt"
+        fake_log.write_text(log_text)
         log = td / "calls.log"
         log.touch()
         out = td / "github_output"
@@ -140,8 +158,14 @@ def run_step(*, decision: str = "limit\n\n" + MARKER, comments: str = "[]",
                 **os.environ, **env,
                 "PATH": f"{td}:{os.environ['PATH']}",
                 "GITHUB_OUTPUT": str(out),
+                "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline",
                 "SHIM_LOG": str(log),
-                "FAKE_DECISION": decision,
+                "FAKE_DECISION": decision or "",
+                "FAKE_LOG": str(fake_log),
+                "REAL_PYTHON": sys.executable,
+                "REAL_DEAD_RUN": str(ROOT / "scripts" / "dead_run.py"),
+                "FAKE_FAILED_STEP": failed_step,
+                "FAKE_GH_RC": str(gh_rc),
                 "FAKE_COMMENTS": comments,
                 "FAKE_DECIDE_RC": str(decide_rc),
                 "FAKE_COMMENT_RC": str(comment_rc),
@@ -186,6 +210,51 @@ class DecideInvocationTest(unittest.TestCase):
         body = yaml.safe_dump(_medic()["jobs"]["classify"])
         self.assertEqual(1, body.count("--log-failed"), "the failed log is fetched once")
         self.assertIn("--limit-log /tmp/medic-log.txt", body)
+
+
+# ── 1b. the failed step, off the Jobs API (second review of #279) ───────────
+CLASSIFY_STEP = "Classify the card — one-off, epic or wave"
+PLAN_RUN = {"github.event.workflow_run.name": "Agent Plan (reusable)"}
+PLAN_LOG_CLAUDE = (
+    "call / plan\tUNKNOWN STEP\t2026-09-05T20:40:01.0000000Z "
+    '{"type":"result","is_error":true,"result":"You\'ve hit your limit · resets 8:30pm (UTC)","num_turns":12}\n'
+)
+
+
+class FailedStepTest(unittest.TestCase):
+    """`stage=classify` was documented and unreachable: the workflow name is
+    'Agent Plan (reusable)' whether the classifier or the planner died, and
+    the step never passed `--failed-step`. The Jobs API names the failed
+    step; one read, and the record says which of the two it was."""
+
+    def test_the_failed_step_is_read_off_the_jobs_api_and_passed_through(self):
+        result = run_step(failed_step=CLASSIFY_STEP)
+        gh_calls = [c for c in result["calls"] if c.startswith("gh ")]
+        self.assertEqual(1, len(gh_calls), result["calls"])
+        self.assertIn(f"run view {RUN_ID}", gh_calls[0])
+        self.assertIn("--json jobs", gh_calls[0])
+        self.assertIn(f"--failed-step {CLASSIFY_STEP}", _decide_call(result))
+
+    def test_a_classifier_death_on_a_planner_run_is_stage_classify(self):
+        result = run_step(decision=None, log_text=PLAN_LOG_CLAUDE, payload=PLAN_RUN,
+                          failed_step=CLASSIFY_STEP)
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertIn("limit=true", result["outputs"])
+        posts = _comment_calls(result)
+        self.assertEqual(1, len(posts), result["calls"])
+        self.assertIn("🪦 limit-death: kind=claude stage=classify", posts[0])
+
+    def test_a_planner_death_on_a_planner_run_is_stage_plan(self):
+        result = run_step(decision=None, log_text=PLAN_LOG_CLAUDE, payload=PLAN_RUN,
+                          failed_step="Plan epic")
+        self.assertIn("🪦 limit-death: kind=claude stage=plan", _comment_calls(result)[0])
+
+    def test_an_unreadable_jobs_api_still_marks_the_death_and_says_plan(self):
+        """The read is a refinement of the record, never a condition of it."""
+        result = run_step(decision=None, log_text=PLAN_LOG_CLAUDE, payload=PLAN_RUN, gh_rc=1)
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertIn("limit=true", result["outputs"])
+        self.assertIn("🪦 limit-death: kind=claude stage=plan", _comment_calls(result)[0])
 
 
 # ── 2. the marker, once ──────────────────────────────────────────────────────
