@@ -238,9 +238,15 @@ def _reenter(card: dict, marker: dict, *, rerun, move, dispatch) -> str:
     raise RecoveryFailed(f"unknown stage {stage!r} in the marker")
 
 
-def receipt(marker: dict, why: str, what: str) -> str:
+def recovery_receipt(marker: dict, why: str, what: str) -> str:
     """The recovery's own receipt: a pipeline glyph first (it must close the
-    marker), the trigger, what was done, and the run it came back from."""
+    marker), the trigger, what was done, and the run it came back from.
+
+    Not composed through pipeline_act.receipt() YET: a registry row is a
+    console-first change (DRE-3091), so this and the hand-off below are
+    declared in config/pipeline-acts.json's `unconverted` block until the
+    console knows the act — never named `receipt`, so the receipt guard
+    cannot mistake it for the one writer."""
     return (
         f"{RECOVERY_MARK} re-entered {marker['stage']} — {why}. {what}. The "
         f"limit that stopped run {marker.get('run') or 'unknown'} is no longer "
@@ -289,6 +295,6 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
                          f"did not land: {exc}")
             continue
         room -= 1
-        lops.cmd_comment(ident, receipt(marker, why, what))
+        lops.cmd_comment(ident, recovery_receipt(marker, why, what))
         lines.append(f"{RECOVERY_TAG}: {ident} {marker['stage']} re-entered — {why}")
     return lines

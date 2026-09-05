@@ -1313,6 +1313,20 @@
       "kind": "undeclared-act",
       "means": "The second critic sent an approved plan back twice — the bound — so the epic is parked in Green Light with needs-human and both findings, and nothing builds it as it stands (DRE-3088).",
       "why": "Act-shaped, and the registry has no row for it: it is the post-approval bound's new outcome (a park, where the DRE-2721 rail activated the epic). Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the park ships first as an undeclared act and the row follows with its console half. It carries its own idempotency in the needs-human label the sweep already honours."
+    },
+    {
+      "file": "scripts/limit_recovery.py",
+      "anchor": "recovery_receipt(marker, why, what)",
+      "kind": "undeclared-act",
+      "means": "The sweep re-entered the stage a limit death left — the window reset or the account switched — and says which trigger fired and what it did (DRE-3171).",
+      "why": "Act-shaped (a recovery: the work is re-dispatched), and the registry has no row for it. Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the recovery ships first as an undeclared act and the row follows with its console half — together with the `limit-death` marker it answers, whose own emitting site is the medic wiring that follows DRE-3171. Its idempotency is positional: the receipt opens with a glyph and so closes the marker the sweep reads, which is what stops a card being re-dispatched every pass."
+    },
+    {
+      "file": "scripts/limit_recovery.py",
+      "anchor": "handoff_receipt(marker, reason)",
+      "kind": "undeclared-act",
+      "means": "The sweep cannot bring a limit death back on its own — no reset time and no account to watch, or no run to re-run — and says once what a person does (DRE-3171).",
+      "why": "Act-shaped (a hold: the work is handed to a person, told once), and the registry has no row for it. Same sequencing as the recovery above: console first, then the row. Its idempotency is positional, like the recovery's — the receipt closes the marker, so it is posted exactly once per marker and the card is back on the sweep's ordinary clock afterwards."
     }
   ]
 }
