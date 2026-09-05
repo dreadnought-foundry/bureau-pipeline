@@ -81,6 +81,24 @@ of steps.*
 CEO's "needs you" queue, not to the broken-card lane. An agent's question is a
 card waiting on a judgement, not a card that went wrong. The other routes above
 are unchanged.*
+*Amended 2026-09-05 (DRE-3171): a `limit` death is its own class, and it is a
+wait rather than a death. A run that hit the Claude account's usage limit
+("You've hit your limit · resets 8:30pm (UTC)", `rate_limit_error`) or Linear's
+request budget (`LinearRateLimited`, `rate limited: 2500 requests/hour
+exhausted`, a `RATELIMITED` code on the client's own line, or a read timeout
+right after `transient network fault, retried once`) is neither requeued nor
+held, spends neither budget tag, writes no `model-error:` marker, and leaves
+exactly ONE marker on the card — first line `🪦 limit-death: kind=<claude|linear>
+stage=<classify|plan|build|fix|review|sync> reset=<ISO-8601 UTC|unknown>
+run=<run id>` (`account=<label>` when known), then one plain-English paragraph.
+The stage is the workflow the medic was woken for. The reconcile sweep
+(`limit_recovery.py`, one backstop per pass) re-enters that stage once the reset
+time has passed or the active account differs from the one recorded — Planning
+re-entered (bounced through Intake when the card is already there, because
+Planning entry is the planner's trigger), In Progress → Todo for a build, the
+ORIGINAL run re-run `--failed` for fix/review/sync — and posts a `🔁
+limit-recovery:` receipt naming the trigger. The signatures live once, in
+`dead_run.LIMIT_SIGNATURES`.*
 
 **Verdict:** covered.
 

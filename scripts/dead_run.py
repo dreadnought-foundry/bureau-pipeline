@@ -72,6 +72,29 @@ at the card's work:
               action, different sentence — "wait, it refills" and "a step
               broke" are different facts with different next actions.
 
+A LIMIT DEATH IS A WAIT, NOT A DEATH (DRE-3171):
+
+  - limit : the run hit a wall that was never the card's — the Claude
+              account's usage limit (`is_error: true`, "You've hit your
+              limit · resets 8:30pm (UTC)") or Linear's request budget
+              (`LinearRateLimited: … rate limited: 2500 requests/hour
+              exhausted`, or a read timeout right after `transient network
+              fault, retried once`). On 2026-09-05 planner runs, the
+              classifier, critic reviews, DRE-3062's build and two
+              merge-syncs all died this way; the medic retried each once
+              straight back into the same wall, spent an attempt, and then
+              nothing came back to the card until an operator bounced it by
+              hand. decide(limit=LimitDeath(...)) returns the "limit" action:
+              exactly ONE marker comment (LIMIT_MARK, first line pinned —
+              kind, stage, reset time, run id, account when known), NO
+              state move, NO hold label, NO `model-error:` marker, and
+              neither budget tag, so it spends no strike. It wins over every
+              class below cancellation, including a count at the cap: the
+              cap is the card's budget and this was not the card's fault.
+              Bringing the card back is `limit_recovery.py`'s job — the
+              reconcile sweep re-enters the stage that died once the reset
+              time has passed or the account has switched.
+
 A CANCELLED run is NOT a death class (DRE-2074): when the agent step's outcome
 is `cancelled` (the job timeout, or an external/concurrency cancel), the agent
 was killed while still working — it did not die. The old code read the
@@ -102,7 +125,10 @@ unit-tested here so the "is_error counts toward the cap" regression is pinned.
 from __future__ import annotations
 
 import os
+import re
 import sys
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -153,6 +179,196 @@ ERROR_MARKER_PREFIX = "model-error:"
 PARK_STATE = "Backlog"
 PARK_ATTEMPTS = 3
 
+# A limit death's own marker (DRE-3171). Same substring discipline as
+# RESET_TAG: "limit-death" contains neither DEAD_TAG nor TURN_TAG and neither
+# contains it, so the marker spends no budget and no budget receipt reads as a
+# marker — tests/test_limit_death_is_its_own_class.py pins both directions.
+LIMIT_TAG = "limit-death"
+LIMIT_MARK = f"🪦 {LIMIT_TAG}:"
+
+# The fingerprints, as data. The first two are the Claude account's usage
+# limit as claude-code-action's result text and the API's error type carry
+# it; the rest are Linear's request budget as linear_ops composes it
+# (DRE-2923), names it, and — the bare extension code — as the client's error
+# line quotes it. A new wall is one line here, never a branch below.
+LIMIT_SIGNATURES = (
+    "hit your limit",
+    "rate_limit_error",
+    "rate limited: 2500 requests/hour exhausted",
+    "LinearRateLimited",
+    "RATELIMITED",
+)
+# The read-timeout shape seen on 2026-09-05: the quota was gone and the
+# socket never answered, so the ONE retry (DRE-3087) fired and then the
+# second attempt timed out too. Ordered — the second string after the first —
+# because a read timeout on its own is a network fault, not a limit.
+LIMIT_SIGNATURE_PAIRS = (
+    ("transient network fault, retried once", "The read operation timed out"),
+)
+_CLAUDE_LIMIT_SIGNATURES = ("hit your limit", "rate_limit_error")
+# The bare `RATELIMITED` code is line-anchored, exactly as medic_classify
+# anchors it: DRE-2923's own card body quotes the payload and an agent log
+# echoes card text, so the code counts only on a line that also names
+# Linear's client or its host. A quoted payload in prose is not a wall.
+_LINEAR_LINE_ANCHORS = ("api.linear.app", "LinearRateLimited", "rate limited:",
+                        "linear_ops")
+LIMIT_STAGES = ("classify", "plan", "build", "fix", "review", "sync")
+# The workflow the medic was woken for names the stage the death has to
+# re-enter. Prefix-matched, case-insensitively: the reusable is "Agent Plan
+# (reusable)" and the stub is "Agent Plan", and both must read the same.
+_STAGE_BY_WORKFLOW = (
+    ("agent plan", "plan"),
+    ("agent task", "build"),
+    ("agent fix", "fix"),
+    ("qa review", "review"),
+    ("linear sync", "sync"),
+)
+_CLAUDE_RESET = re.compile(
+    r"resets\s+(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>am|pm)\s*\(UTC\)", re.I
+)
+_LINEAR_RESET = re.compile(r"x-ratelimit-requests-reset\s*[:=]\s*(\d{10,13})", re.I)
+_MARKER_LINE = re.compile(
+    rf"^{re.escape(LIMIT_MARK)} kind=(\S+) stage=(\S+) reset=(\S+) run=(\S+)"
+    r"(?: account=(\S+))?\s*$"
+)
+_ISO_Z = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def limit_kind(text: str) -> str | None:
+    """`"claude"` or `"linear"` when `text` — a failed run's log or result —
+    carries one of LIMIT_SIGNATURES / LIMIT_SIGNATURE_PAIRS, else None."""
+    text = text or ""
+    if any(sig in text for sig in _CLAUDE_LIMIT_SIGNATURES):
+        return "claude"
+    for sig in LIMIT_SIGNATURES:
+        if sig in _CLAUDE_LIMIT_SIGNATURES:
+            continue
+        if sig == "RATELIMITED":
+            for line in text.splitlines():
+                if sig in line and any(a in line for a in _LINEAR_LINE_ANCHORS):
+                    return "linear"
+            continue
+        if sig in text:
+            return "linear"
+    for first, second in LIMIT_SIGNATURE_PAIRS:
+        at = text.find(first)
+        if at >= 0 and second in text[at + len(first):]:
+            return "linear"
+    return None
+
+
+def limit_reset(text: str, kind: str, now: datetime) -> datetime | None:
+    """When the wall comes down, UTC — or None when the text does not say.
+
+    Claude's result text says `resets 8:30pm (UTC)` with no date: that is
+    today at 20:30 UTC, or tomorrow when 20:30 has already passed. Linear's
+    reset is the `x-ratelimit-requests-reset` epoch (milliseconds or seconds)
+    when the text carries the header; the client's error line usually does
+    not, and then the honest answer is unknown.
+    """
+    text = text or ""
+    if kind == "linear":
+        found = _LINEAR_RESET.search(text)
+        if not found:
+            return None
+        raw = int(found.group(1))
+        if raw > 10**11:  # milliseconds
+            raw //= 1000
+        return datetime.fromtimestamp(raw, UTC)
+    found = _CLAUDE_RESET.search(text)
+    if not found:
+        return None
+    hour = int(found.group("h")) % 12 + (12 if found.group("ap").lower() == "pm" else 0)
+    minute = int(found.group("m") or 0)
+    now = now.astimezone(UTC)
+    when = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if when <= now:
+        when += timedelta(days=1)
+    return when
+
+
+def limit_stage(workflow_name: str, failed_step: str = "") -> str | None:
+    """The stage a death in `workflow_name` has to re-enter, or None when the
+    workflow is not one a card's run lives in (a Reconcile sweep dying on the
+    quota is a run fault with no card to bring back)."""
+    name = (workflow_name or "").strip().lower()
+    for prefix, stage in _STAGE_BY_WORKFLOW:
+        if name.startswith(prefix):
+            if stage == "plan" and "classif" in (failed_step or "").lower():
+                return "classify"
+            return stage
+    return None
+
+
+def pacific(when: datetime) -> str:
+    """`2026-09-05 13:30 PT` — every time a person reads is Pacific."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        local = when.astimezone(ZoneInfo("America/Los_Angeles"))
+        return local.strftime("%Y-%m-%d %H:%M PT")
+    except Exception:  # noqa: BLE001 — no tz database: say UTC, never a wrong PT
+        return when.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
+                 account: str | None = None) -> str:
+    """The ONE comment a limit death leaves. Line one is the machine-readable
+    marker limit_recovery reads back through parse_limit_marker(); the
+    paragraph is for the person reading the card."""
+    reset_field = reset.astimezone(UTC).strftime(_ISO_Z) if reset else "unknown"
+    first = f"{LIMIT_MARK} kind={kind} stage={stage} reset={reset_field} run={run_id or 'unknown'}"
+    if account:
+        first += f" account={account}"
+    wall = (
+        "the Claude account's usage limit" if kind == "claude"
+        else "Linear's request budget (the workspace's hourly quota)"
+    )
+    when = f"at {pacific(reset)}" if reset else "at a time the run did not say"
+    paragraph = (
+        f"This run hit {wall} during the {stage} stage and stopped there. That "
+        f"is a wait, not a fault in this card, the model or the service: no "
+        f"strike is spent against this card's budget, no model is recorded as "
+        f"having failed, and the card is neither requeued into the same wall "
+        f"nor parked for a human. The reconcile sweep re-enters the {stage} "
+        f"stage on its own once the window resets ({when}) or the account is "
+        f"switched — nothing else needs to happen."
+    )
+    return f"{first}\n\n{paragraph}"
+
+
+def parse_limit_marker(body: str) -> dict | None:
+    """The marker's fields off a comment body, or None when it is not one.
+    `reset` is a UTC datetime or None; `account` is a label or None."""
+    first = (body or "").split("\n", 1)[0].strip()
+    found = _MARKER_LINE.match(first)
+    if not found:
+        return None
+    kind, stage, reset_field, run_id, account = found.groups()
+    reset = None
+    if reset_field != "unknown":
+        try:
+            reset = datetime.strptime(reset_field, _ISO_Z).replace(tzinfo=UTC)
+        except ValueError:
+            reset = None
+    return {"kind": kind, "stage": stage, "reset": reset, "run": run_id,
+            "account": account or None}
+
+
+@dataclass(frozen=True)
+class LimitDeath:
+    """A run that hit a wall: which wall, which stage, when it comes down,
+    which GitHub run died, and — when known — which account it was on."""
+
+    kind: str
+    stage: str
+    reset: datetime | None
+    run_id: str
+    account: str | None = None
+
+    def marker(self) -> str:
+        return limit_marker(self.kind, self.stage, self.reset, self.run_id, self.account)
+
 
 class Decision:
     """What to do about a dead run.
@@ -198,6 +414,7 @@ def decide(
     push_status: str = "",
     artifact: str = "",
     run_url: str = "",
+    limit: LimitDeath | None = None,
     cap: int = REQUEUE_CAP,
     turn_cap: int = TURN_REQUEUE_CAP,
 ) -> Decision:
@@ -258,6 +475,17 @@ def decide(
     only way this happens — run 33896126776 was refused with a 400 twenty-six
     minutes in — so the receipt names the status rather than asserting a
     cause, and names the artifact so the reader knows the work still exists.
+
+    `limit` (DRE-3171): the run hit the Claude account's usage limit or
+    Linear's request budget — a wall that was never the card's. Ranked BELOW
+    cancellation (a killed run is the fuller account) and ABOVE everything
+    else, including the pre-agent fault: DRE-3062's `Card → In Progress` died
+    on RATELIMITED and is exactly this. Blind to `prior_dead` for the same
+    reason the pre-agent fault is. The answer is "limit": ONE marker comment
+    carrying neither budget tag and no `model-error:` marker, no state move,
+    no hold label — the reconcile sweep brings the card back
+    (limit_recovery.py) once the reset time has passed or the account has
+    switched.
     """
     run_suffix = f" Run: {run_url}" if run_url else ""
     if cancelled:
@@ -274,6 +502,13 @@ def decide(
                 f"own conclusion — never over a live run.{run_suffix}"
             ],
         )
+    if limit is not None:
+        # A wall, not a death (DRE-3171). One marker, nothing moved, nothing
+        # counted; limit_recovery.py re-enters the stage when the wall comes
+        # down. Above the pre-agent fault on purpose — DRE-3062's pre-agent
+        # RATELIMITED death is a limit death, and the marker is what lets
+        # the sweep bring it back instead of leaving it for the stale clock.
+        return Decision("limit", [limit.marker()])
     if pre_agent:
         # A platform fault against the RUN (DRE-2931). Checked before every
         # death class because a run that never started cannot have died of
@@ -678,7 +913,9 @@ def main(argv: list[str]) -> int:
              "[--error-model M] [--cancelled] [--turn-exhaustion] "
              "[--execution-file PATH] [--comments-file PATH] [--pre-agent] "
              "[--failed-step NAME] [--rate-limited] [--credential-expiry] "
-             "[--push-status N] [--artifact NAME] [--run-url U] | "
+             "[--push-status N] [--artifact NAME] [--run-url U] "
+             "[--limit-log PATH --workflow NAME --run-id ID [--account L] "
+             "[--now ISO]] | "
              "park <CARD> | park-unlanded [--run-url U] [--turn-exhaustion]")
     if not argv:
         print(usage)
@@ -715,6 +952,36 @@ def main(argv: list[str]) -> int:
     exec_path = _flag_value(rest, "--execution-file")
     failed_step = _flag_value(rest, "--failed-step")
     comments_path = _flag_value(rest, "--comments-file")
+    # DRE-3171: was this a wall rather than a death? Read off the failed run's
+    # own text (`--limit-log`: the result JSON, or `gh run view --log-failed`
+    # output), classified here so the workflow never re-derives a signature.
+    # Fail-soft: an unreadable log, an unknown workflow or no signature all
+    # leave `limit` None and the decision exactly as it has always been.
+    limit = None
+    limit_log = _flag_value(rest, "--limit-log")
+    if limit_log:
+        try:
+            with open(limit_log, encoding="utf-8", errors="replace") as fh:
+                limit_text = fh.read()
+        except OSError:
+            limit_text = ""
+        kind = limit_kind(limit_text)
+        stage = limit_stage(_flag_value(rest, "--workflow"), failed_step)
+        if kind and stage:
+            now_raw = _flag_value(rest, "--now")
+            try:
+                now = datetime.fromisoformat(now_raw) if now_raw else datetime.now(UTC)
+            except ValueError:
+                now = datetime.now(UTC)
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=UTC)
+            limit = LimitDeath(
+                kind=kind,
+                stage=stage,
+                reset=limit_reset(limit_text, kind, now),
+                run_id=_flag_value(rest, "--run-id") or "unknown",
+                account=_flag_value(rest, "--account") or None,
+            )
     turn_facts = ""
     if turn_exhaustion and exec_path:
         import check_agent_result  # local: only this branch needs the loader
@@ -760,6 +1027,7 @@ def main(argv: list[str]) -> int:
         push_status=push_status,
         artifact=artifact,
         run_url=run_url,
+        limit=limit,
     )
     print(d.action)
     print()
