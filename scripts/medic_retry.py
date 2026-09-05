@@ -378,6 +378,43 @@ def card_from_branch(branch: str) -> str | None:
     return match.group(0).upper() if match else None
 
 
+# The card a failed PLANNER run was working on (DRE-3223). A planner runs on
+# the default branch — there is no card branch yet — so the head branch names
+# nothing, and on 2026-09-05 every planner limit death (DRE-3162, 3130, 3072,
+# 3169, 3168 ×2) had the medic's gate and no card to mark. plan.yml now says
+# which card it is running for in two places the failed log carries: its job
+# NAME, which `gh run view --log-failed` prints as the first field of every
+# line (`call / bureau-card: DRE-3162<TAB>…` — survives a gh that prints only
+# failed steps), and one echoed line at the top of the job (`…Z bureau-card:
+# DRE-3162`). Matched ONLY in those structural positions — the job-name
+# field, or the text right after the timestamp — or at the start of a bare
+# line, never as a substring: a planner log quotes card bodies, and
+# DRE-2923's lesson is that quoted prose must not classify. The echoed
+# SCRIPT line (`\x1b[36;1mecho "bureau-card: …"`) has an escape code before
+# the words and does not match either.
+_LOG_CARD = re.compile(
+    r"(?m)^(?:[^\t\n]*/ |[^\t\n]*\t[^\t\n]*\t\S+ )?bureau-card: (DRE-[0-9]+)\b",
+    re.I,
+)
+
+
+def card_from_log(log_text: str) -> str | None:
+    """The card a run's own log names (`bureau-card: DRE-n`), upper-cased, or None."""
+    match = _LOG_CARD.search(log_text or "")
+    return match.group(1).upper() if match else None
+
+
+def card_for_run(branch: str, log_text: str = "") -> str | None:
+    """THE card resolution for a failed run — one function, two sources.
+
+    The head branch first, exactly as before (`agent/DRE-n-…` is the card for
+    every build, fix, review and sync run); then the run's own log, for a
+    planner run whose head is the default branch. The branch wins when both
+    speak: a build run's log can quote any card, its branch names one.
+    """
+    return card_from_branch(branch) or card_from_log(log_text)
+
+
 def card_facts(identifier: str) -> dict:
     """`{"state", "labels", "comments"}` for a card — one read, both rules.
 
@@ -441,7 +478,8 @@ def _read(path: str) -> str:
 
 
 def _decide_cli(args) -> int:
-    card = card_from_branch(args.branch)
+    log_text = _read(args.log)
+    card = card_for_run(args.branch, log_text)
     parked, witness = "", ""
     if card:
         try:
@@ -466,7 +504,7 @@ def _decide_cli(args) -> int:
             )
     decision = decide(
         parked_because=parked,
-        execution=execution_from_log(_read(args.log)),
+        execution=execution_from_log(log_text),
         turn_receipt=witness,
     )
     print(f"retry={'true' if decision.retry else 'false'}")
