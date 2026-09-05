@@ -50,6 +50,15 @@ on:
 
 jobs:
   plan:
+    # The job is NAMED after the card (DRE-3223). `gh run view --log-failed`
+    # prints the job name as the first field of every log line, so a failed
+    # planner run carries its card on every line the medic reads — whatever
+    # step died, and whether or not gh prints more than the failed steps.
+    # The medic's one card resolver (medic_retry.card_for_run) reads it there
+    # when the head branch names nothing, which is every planner run: the
+    # planner runs on the default branch, there is no card branch yet, and on
+    # 2026-09-05 every planner limit death had the gate and no card to mark.
+    name: "bureau-card: ${{ github.event.client_payload.identifier }}"
     runs-on: ubuntu-latest
     # 45, raised from 30 with DRE-2721. The plan route can now run two
     # planner passes and two critic rounds in one job:
@@ -110,6 +119,15 @@ jobs:
       mode: ${{ steps.route.outputs.mode }}
       kids: ${{ steps.kids.outputs.count }}
     steps:
+      # The same fact, said once as the first line of the job's own output
+      # (DRE-3223) — the form the medic greps for at the start of a line, and
+      # the one a person scrolling the log sees first. Env, not inline
+      # (DRE-1996): the identifier arrives in the dispatch payload.
+      - name: Say the card
+        env:
+          CARD: ${{ github.event.client_payload.identifier }}
+        run: |
+          echo "bureau-card: $CARD"
       - name: Mint bot token
         id: app
         uses: actions/create-github-app-token@v3
