@@ -164,6 +164,11 @@ from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E
 # DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
 # card, who picks it up there, and which of the five may be dispatched at all.
 import routing_verdict  # noqa: E402
+# DRE-3138/3144: ONE reading of "is this pull request red only on a fault
+# `main` has since fixed?" — the geometry, the three check-run comparisons,
+# the marker and the receipt body all live there. This file is the wrapper:
+# it reads the payloads, makes the write and posts what the module composed.
+import stale_merge_ref  # noqa: E402
 # DRE-2682: ONE source for "this card is finished" — the terminal states the
 # structural sweep already names, read here rather than spelled a fifth time.
 import structural_repair  # noqa: E402
@@ -2966,6 +2971,213 @@ def unstick_conflicts() -> None:
         )
 
 
+#: Lifetime refreshes per pull request, and the operator's off switch
+#: (DRE-3144). `0` disables the rule fleet-wide without a deploy: a branch
+#: refreshed onto three different `main` commits and still red is not waiting
+#: on a stale merge ref, it is waiting on somebody.
+STALE_MERGE_REFRESH_CAP = int(os.environ.get("STALE_MERGE_REFRESH_CAP", "3"))
+#: Per-sweep pacing, the CRASHED_REVIEW_SWEEP_CAP shape and the same DRE-2049
+#: reasoning: every refresh is a full CI run and possibly a critic run, so an
+#: unpaced sweep after a bad `main` would burst-drain the Actions and LLM
+#: quotas. Oldest PR first; the tail waits for the next ~15-min sweep.
+STALE_MERGE_REFRESH_SWEEP_CAP = 3
+#: An ALIAS, deliberately. The literal lives once, in the module the act
+#: registry declares as this act's emitter and reads the constant off
+#: (pipeline_act._TAG_CONSTANT); a second spelling here would be a second
+#: idempotency key for one act.
+STALE_MERGE_REF_TAG = stale_merge_ref.REFRESH_TAG
+
+
+def refresh_stale_merge_refs() -> None:
+    """DRE-3144: `main` fixed the fault this PR is red on — give it a fresh
+    merge ref, once, and say so.
+
+    Origin (live, 2026-09-02 00:00–00:23 PT): agent-bureau #2240 and #2241
+    both went red on `Console backend (pytest)` because of a fault on `main`
+    (DRE-2962). The fix merged at 00:02 and both stayed red, because their CI
+    had run against a merge ref computed before it — `gh run rerun` re-runs
+    the same jobs against the SAME merge commit, so only a new head helps.
+    An operator ran `gh pr update-branch` by hand at 00:23. #2240 had a critic
+    APPROVE sitting behind a failure that no longer existed anywhere.
+
+    The DECISION is not made here. `stale_merge_ref.decide()` owns the three
+    facts that make a refresh safe (`main` has moved · every failing check
+    also fails on the merge base · every one of them is green on the `main`
+    tip), the per-`main`-commit marker and the lifetime cap; this function
+    reads the payloads it needs, makes the write, and posts the body it
+    composed. Every answer other than `refresh` is one line of log.
+
+    FULL SWEEPS ONLY, and never `--conflicts-only`: at merge time `main`'s CI
+    on the fixing commit has not finished, so the decision would read
+    `unevaluated` there anyway. The cron sweep is where `main` is green.
+
+    The write is a LOUD `PUT …/update-branch` carrying `expected_head_sha`, so
+    a concurrent push is a 422 rather than an update of a head we never read,
+    and it runs under the sweep's DEFAULT `GH_TOKEN` — never
+    `GH_DISPATCH_TOKEN`. That is premortem Q1 (`standards/vendor-boundaries.md`)
+    and it is the whole point of the refresh: the App token's push initiates
+    the `pull_request: synchronize` as `agent-bureau-bot`, which
+    `qa-review.yml`'s `allowed_bots` admits, while a `github.token`-authored
+    update fires no workflows at all (DRE-2037's lesson, from the other side).
+    A failed PUT posts NO receipt and lands in `_write_failures` (DRE-1254).
+
+    DIRTY PRs belong to `unstick_conflicts` — `update-branch` cannot resolve a
+    conflict (DRE-2416) — drafts and non-`agent/` branches are not ours, and a
+    human-parked card is nobody's to touch (DRE-2024). An unreadable read is
+    UNEVALUATED, recorded and skipped, never guessed at (DRE-2034).
+    """
+    if STALE_MERGE_REFRESH_CAP <= 0:
+        print(
+            "stale-merge-ref: STALE_MERGE_REFRESH_CAP is 0 — the operator's "
+            "off switch; no pull request is read and none is refreshed"
+        )
+        return
+    try:
+        prs = json.loads(gh(
+            "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+            "--json", "number,headRefName,headRefOid,baseRefName,"
+            "mergeStateStatus,isDraft,comments",
+        ) or "[]")
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"stale-merge-ref: PR listing failed: {e}")
+        print(f"ERROR: stale-merge-ref: PR listing failed: {e}", file=sys.stderr)
+        return
+
+    eligible = []  # (pr, decision) — refreshed paced below, oldest PR first
+    for pr in prs:
+        number = pr.get("number")
+        try:
+            # Every skip below comes BEFORE the four API reads: a PR this
+            # rule may not act on must not cost a compare and three
+            # check-run payloads to find that out.
+            if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
+                continue
+            if pr.get("mergeStateStatus") == "DIRTY":
+                continue  # unstick_conflicts owns it; update-branch cannot help
+            head, base = pr.get("headRefOid") or "", pr.get("baseRefName") or ""
+            if not head or not base:
+                continue
+            if fix_dispatch_blocked(pr):
+                continue  # human-parked card (DRE-2024)
+            compare = json.loads(gh_read(
+                "api", f"repos/{REPO}/compare/{base}...{head}") or "{}")
+            # The module's own reader, borrowed for the same reason it
+            # borrows `unfixable_checks._check_runs`: the two shas below
+            # address the next three reads, and a second derivation of
+            # "what this compare says" is how two readers come to disagree
+            # about one payload. `decide()` reads it again and is the
+            # authority; this only picks the URLs.
+            read = stale_merge_ref._read_compare(compare)
+            if read is None:
+                print(
+                    f"stale-merge-ref: PR #{number} — the compare payload "
+                    "carries no merge base or no `main` tip; unevaluated"
+                )
+                continue
+            _behind, base_sha, main_sha = read
+            checks = {}
+            for label, sha in (("head", head), ("base", base_sha),
+                               ("main", main_sha)):
+                checks[label] = json.loads(gh_read(
+                    "api", f"repos/{REPO}/commits/{sha}/check-runs") or "{}")
+            decision = stale_merge_ref.decide(
+                compare=compare,
+                head_checks=checks["head"],
+                base_checks=checks["base"],
+                main_checks=checks["main"],
+                # Only the worker bot's own receipts are read back: a forged
+                # comment must not be able to freeze a branch (DRE-1998).
+                receipts=[c.get("body") or "" for c in pr.get("comments") or []
+                          if is_worker_bot_comment(c)],
+                cap=STALE_MERGE_REFRESH_CAP,
+            )
+            if decision.action != stale_merge_ref.REFRESH:
+                print(
+                    f"stale-merge-ref: PR #{number} — {decision.action}: "
+                    f"{decision.reason}"
+                )
+                continue
+            eligible.append((pr, decision))
+        except (ReconcileReadError, ValueError) as e:
+            # Unreadable is never "nothing to do" (DRE-2034): recorded so the
+            # sweep exits red, skipped so nothing is acted on.
+            _read_failures.append(f"stale-merge-ref on PR #{number}: {e}")
+            print(
+                f"ERROR: stale-merge-ref: PR #{number} unevaluated — {e}",
+                file=sys.stderr,
+            )
+        except Exception as e:  # noqa: BLE001 — isolate the PR, sweep the rest
+            _write_failures.append(f"stale-merge-ref on PR #{number}: {e}")
+            print(f"ERROR: stale-merge-ref on PR #{number}: {e}", file=sys.stderr)
+
+    eligible.sort(key=lambda item: item[0]["number"])  # oldest first
+    for pr, decision in eligible[:STALE_MERGE_REFRESH_SWEEP_CAP]:
+        try:
+            _refresh_one_merge_ref(pr, decision)
+        except Exception as e:  # noqa: BLE001 — one PR must not cost the rest
+            _write_failures.append(f"stale-merge-ref on PR #{pr['number']}: {e}")
+            print(
+                f"ERROR: stale-merge-ref on PR #{pr['number']}: {e}",
+                file=sys.stderr,
+            )
+    deferred = len(eligible) - STALE_MERGE_REFRESH_SWEEP_CAP
+    if deferred > 0:
+        print(
+            f"stale-merge-ref: {deferred} eligible PR(s) deferred past the "
+            f"per-sweep cap ({STALE_MERGE_REFRESH_SWEEP_CAP}) — the next sweep "
+            "picks them up oldest-first (DRE-2049)"
+        )
+
+
+def _refresh_one_merge_ref(pr: dict, decision) -> None:
+    """The write, then the two receipts. In that order and no other: a
+    receipt for a refresh that never happened is the DRE-1254 false-receipt
+    class, and `gh api` exits non-zero on anything but the 202 that says
+    GitHub accepted the update."""
+    number, head = pr["number"], pr["headRefOid"]
+    print(
+        f"stale-merge-ref: PR #{number} {head[:8]} — {decision.reason}; "
+        f"refreshing the merge ref onto `main` {decision.main_sha[:8]}"
+    )
+    put = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+        ["gh", "api", "-X", "PUT",
+         f"repos/{REPO}/pulls/{number}/update-branch",
+         "-f", f"expected_head_sha={head}"],
+        capture_output=True, text=True, check=False,
+        # env unset ON PURPOSE: the sweep's default GH_TOKEN is the App
+        # token, and the `synchronize` its push fires must initiate as
+        # agent-bureau-bot. GH_DISPATCH_TOKEN (the stub's github.token)
+        # would fire no workflows at all — see the docstring above.
+    )
+    if put.returncode != 0:
+        err = (
+            f"update-branch on PR #{number} failed rc={put.returncode}: "
+            f"{put.stderr.strip()[:400]}"
+        )
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return
+    spent = sum(
+        1 for c in pr.get("comments") or []
+        if is_worker_bot_comment(c) and STALE_MERGE_REF_TAG in (c.get("body") or "")
+    )
+    body = pipeline_act.receipt("merge-ref-refreshed", stale_merge_ref.receipt_detail(
+        pr_number=number,
+        head_sha=head,
+        main_sha=decision.main_sha,
+        base_sha=decision.base_sha,
+        inherited=decision.inherited,
+        used=spent + 1,
+        cap=STALE_MERGE_REFRESH_CAP,
+    ))
+    # The PR carries the idempotency key the next sweep reads back; the card
+    # carries the same body because the console reads the card.
+    _post_pr_note(number, body)
+    card = branch_card(pr["headRefName"])
+    if card:
+        linear_ops.cmd_comment(card, body)
+
+
 def retrigger_dead_heads() -> None:
     """Lost-event backstop: an open agent PR whose head commit is >15 min
     old with ZERO check-runs means GitHub dropped the push event (or
@@ -4868,6 +5080,11 @@ def main(
         for backstop in (
             drain_retiring_lanes,
             unstick_conflicts,
+            # DRE-3144, beside the conflict sweep because they answer the same
+            # question — why is this pull request stuck with nothing coming?
+            # FULL sweeps only: on the merge event `main`'s CI has not
+            # finished, so the decision would read `unevaluated` anyway.
+            refresh_stale_merge_refs,
             retrigger_dead_heads,
             flag_no_checks_prs,
             flag_unowned_prs,

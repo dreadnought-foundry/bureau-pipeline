@@ -263,6 +263,27 @@ def _drive_rereview_receipt(mp):
     )
 
 
+@site("merge-ref-refreshed", "merge-ref-refreshed")
+def _drive_merge_ref_refresh(mp):
+    """DRE-3144. The body is `stale_merge_ref.receipt_detail()` — this drives
+    the sweep's write path, so the capture covers the PUT succeeding first and
+    the receipt being composed from the decision the module returned."""
+    mp.setattr(reconcile, "STALE_MERGE_REFRESH_CAP", 3)
+    _pr_recorder(mp)
+    reconcile._refresh_one_merge_ref(
+        {"number": 7, "headRefName": "agent/DRE-1-slug",
+         "headRefOid": "d34db33fcafe1234", "comments": []},
+        reconcile.stale_merge_ref.Decision(
+            action=reconcile.stale_merge_ref.REFRESH,
+            reason="red on this head and on the merge base, green on `main`",
+            inherited=["Console backend (pytest)"],
+            base_sha="0badc0de" * 5,
+            main_sha="f00dface" * 5,
+            behind_by=2,
+        ),
+    )
+
+
 @site("reviewer-unavailable", "reviewer-unavailable")
 def _drive_reviewer_down(mp):
     mp.setattr(reconcile, "branch_card", lambda _r: "DRE-1")
