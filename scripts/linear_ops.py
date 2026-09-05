@@ -258,12 +258,14 @@ def _note_response_headers(headers) -> None:
         if _budget["first"] is None:
             _budget["first"] = remaining
         elif remaining > _budget["last"]:
-            # `remaining` can only go up if the window rolled.
+            # `remaining` going UP is the one unambiguous sign the window
+            # rolled (or refilled) under us — first − last would be negative.
             _budget["rolled"] = True
         _budget["last"] = remaining
     if reset_ms is not None:
-        if _budget["reset_ms"] is not None and reset_ms != _budget["reset_ms"]:
-            _budget["rolled"] = True
+        # Kept for the clock only. Linear documents a leaky bucket and does
+        # not promise this value holds still within a window, so a moving
+        # reset is NOT read as a roll — that would blank every multi-call run.
         _budget["reset_ms"] = reset_ms
 
 

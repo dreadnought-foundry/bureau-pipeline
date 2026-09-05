@@ -155,8 +155,10 @@ def test_budget_line_names_no_key_and_no_url(transport, monkeypatch):
 
 
 def test_a_window_that_rolls_mid_run_says_so_instead_of_a_negative_number(transport):
-    """The reset epoch moving is the signal the window rolled; `remaining`
-    going UP is the symptom. Neither may become a negative spend."""
+    """`remaining` going UP is the one unambiguous sign the window rolled.
+    (The reset epoch moving is NOT read as a roll: Linear documents a leaky
+    bucket and does not promise that value holds still within a window.)
+    It must never become a negative spend."""
     transport(
         _Resp(headers=_headers(5, RESET_MS)),
         _Resp(headers=_headers(2499, RESET_MS + 3_600_000)),
@@ -167,6 +169,21 @@ def test_a_window_that_rolls_mid_run_says_so_instead_of_a_negative_number(transp
     assert line.startswith("linear-budget: 5 → 2499 (window rolled")
     assert "-" not in line.split("(")[1]
     assert "spent" not in line
+
+
+def test_a_moving_reset_epoch_alone_is_not_a_roll(transport):
+    """A leaky bucket's reset can drift per request. Only `remaining` going
+    up says the window rolled; a drifting clock with a falling `remaining`
+    is an ordinary spend, and the LATEST reset is the one on the line."""
+    transport(
+        _Resp(headers=_headers(2400, RESET_MS)),
+        _Resp(headers=_headers(2398, RESET_MS + 250)),
+    )
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert linear_ops.budget_line() == (
+        f"linear-budget: 2400 → 2398 (spent 2 this run; window resets {RESET_PT} PT)"
+    )
 
 
 # ── (b) the first RATELIMITED stops the process asking ──────────────────────
