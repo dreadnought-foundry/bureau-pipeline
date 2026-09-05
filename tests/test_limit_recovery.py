@@ -342,6 +342,57 @@ def test_a_human_comment_after_the_marker_does_not_cancel_recovery():
     assert s.moves == [("DRE-3062", "Todo")]
 
 
+@pytest.mark.parametrize(
+    "note",
+    ["👍 approved, go ahead", "🎉 nice work", "👀", "✅ looks right to me",
+     "❌ not this one", "🙏 thanks", "😀", "✨ shiny", "❤️"],
+)
+def test_a_human_comment_that_opens_with_an_emoji_is_not_a_receipt(note):
+    """The critic's finding on #279: 'any non-ASCII first character' read a
+    thumbs-up as the pipeline's own receipt, closed the marker, and silently
+    stopped bringing the card back — the exact stall this module exists to
+    end. A receipt is a glyph the PIPELINE opens with, or the act trailer."""
+    assert not limit_recovery.is_receipt(note)
+    s = Seams()
+    s.recover([card(bodies=[marker(), note])])
+    assert s.moves == [("DRE-3062", "Todo")], note
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    ["🧹 Reconcile: card sat in Todo with no run — re-dispatched.",
+     "🧠 model-attempt: claude-opus-5 — engineer agent starting.",
+     "⏳ 2/5 failing tests written",
+     "🤖 PR opened: https://github.com/o/r/pull/1",
+     "🪦 dead-run-requeue: agent died — requeued to Todo (dead run 1/3).",
+     "🚨 held-for-human (dead-run-requeue cap reached): parked.",
+     "🛑 Agent blocked: needs a decision — parked in Backlog.",
+     "🙋 The agent paused for a decision before building.",
+     "🧯 infrastructure fault before the agent started.",
+     "🔌 The code reviewer was temporarily unavailable.",
+     "♻️ dead-run-budget-reset: un-parked by a human.",
+     "🩺 medic-retry-declined: not retried — parked.",
+     f"{limit_recovery.RECOVERY_MARK} re-entered build — window reset.",
+     f"{limit_recovery.HANDOFF_MARK} cannot bring this card back on its own."],
+)
+def test_every_pipeline_receipt_closes_the_marker(receipt):
+    assert limit_recovery.is_receipt(receipt)
+    s = Seams()
+    s.recover([card(bodies=[marker(), receipt])])
+    assert s.moves == [] and s.comments == [], receipt
+
+
+def test_the_act_trailer_alone_makes_a_receipt():
+    """Every act composed through pipeline_act.receipt() ends with the
+    `📎 pipeline-act:` trailer, whatever glyph it opens with — the one
+    machine-readable claim of pipeline authorship a comment can carry."""
+    import pipeline_act
+
+    body = pipeline_act.receipt("card-stranded", "no agent run has started. Observed: parked.")
+    assert limit_recovery.is_receipt(body)
+    assert limit_recovery.is_receipt("plain words first\n\n" + pipeline_act.trailer("card-stranded"))
+
+
 def test_the_newest_marker_wins():
     s = Seams()
     old = marker(reset=datetime(2026, 9, 5, 12, 0, tzinfo=UTC))
