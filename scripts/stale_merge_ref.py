@@ -67,8 +67,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # shape `gh api` emits, and already carries the conclusion vocabulary. One
 # derivation of it, in one place (DRE-2820).
 from inherited_failures import inherited as _inherited  # noqa: E402
-from unfixable_checks import FAILED_CONCLUSIONS, _check_runs  # noqa: E402
 from unfixable_checks import failed_check_names  # noqa: E402
+
+# `_check_runs` because the `main` tip is the ONE side we ask a green question
+# of, and `failed_check_names` only answers the red one. Borrowing the private
+# reader keeps the payload-shape tolerance (bare object · `--paginate --slurp`
+# pages · flat list) and the "unreadable is not all-green" ValueError in the
+# single place that owns them; re-deriving either here is how two readers come
+# to disagree about the same payload. This card owns two files, so it borrows
+# rather than widening unfixable_checks' surface.
+from unfixable_checks import FAILED_CONCLUSIONS, _check_runs  # noqa: E402
 
 # The act's idempotency key. Written as a literal on purpose: the act registry
 # reads `X_TAG = "..."` constants straight off the emitter file
