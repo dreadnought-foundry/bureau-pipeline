@@ -1,0 +1,1812 @@
+{
+  "now": "2026-09-05T12:00:00Z",
+  "capacity": 8,
+  "batch_cycles": 1,
+  "cards": [
+    {
+      "identifier": "DRE-101",
+      "title": "DRE-101 does a thing",
+      "description": "edits `alpha.ts`",
+      "createdAt": "2026-09-02T12:00:00Z",
+      "priority": 1,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-102",
+      "title": "DRE-102 does a thing",
+      "description": "",
+      "createdAt": "2026-09-03T12:00:00Z",
+      "priority": 2,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:agent-bureau"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-103",
+      "title": "DRE-103 does a thing",
+      "description": "also edits `alpha.ts`",
+      "createdAt": "2026-09-04T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-104",
+      "title": "DRE-104 does a thing",
+      "description": "",
+      "createdAt": "2026-09-01T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": {
+        "identifier": "DRE-200",
+        "title": "[EPIC] DRE-200"
+      },
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-105",
+      "title": "DRE-105 does a thing",
+      "description": "",
+      "createdAt": "2026-08-31T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": {
+        "identifier": "DRE-200",
+        "title": "[EPIC] DRE-200"
+      },
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-106",
+      "title": "DRE-106 does a thing",
+      "description": "old and quiet",
+      "createdAt": "2026-07-27T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-107",
+      "title": "DRE-107 does a thing",
+      "description": "Superseded by: DRE-101",
+      "createdAt": "2026-08-30T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-108",
+      "title": "DRE-108 does a thing",
+      "description": "Blocked by: DRE-109",
+      "createdAt": "2026-09-03T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:agent-bureau"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-109",
+      "title": "DRE-109 does a thing",
+      "description": "",
+      "createdAt": "2026-08-16T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:agent-bureau"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-110",
+      "title": "DRE-110 does a thing",
+      "description": "",
+      "createdAt": "2026-09-02T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-111",
+      "title": "DRE-111 does a thing",
+      "description": "",
+      "createdAt": "2026-09-01T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-112",
+      "title": "DRE-112 does a thing",
+      "description": "",
+      "createdAt": "2026-08-31T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-113",
+      "title": "DRE-113 does a thing",
+      "description": "",
+      "createdAt": "2026-08-30T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-114",
+      "title": "DRE-114 does a thing",
+      "description": "",
+      "createdAt": "2026-08-29T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-115",
+      "title": "DRE-115 does a thing",
+      "description": "",
+      "createdAt": "2026-08-28T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-116",
+      "title": "DRE-116 does a thing",
+      "description": "",
+      "createdAt": "2026-08-27T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-117",
+      "title": "DRE-117 does a thing",
+      "description": "",
+      "createdAt": "2026-08-26T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-118",
+      "title": "DRE-118 does a thing",
+      "description": "",
+      "createdAt": "2026-08-25T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-119",
+      "title": "DRE-119 does a thing",
+      "description": "",
+      "createdAt": "2026-08-24T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-120",
+      "title": "DRE-120 does a thing",
+      "description": "",
+      "createdAt": "2026-09-04T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-121",
+      "title": "DRE-121 does a thing",
+      "description": "",
+      "createdAt": "2026-09-03T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-122",
+      "title": "DRE-122 does a thing",
+      "description": "",
+      "createdAt": "2026-09-02T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-123",
+      "title": "DRE-123 does a thing",
+      "description": "",
+      "createdAt": "2026-09-01T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-124",
+      "title": "DRE-124 does a thing",
+      "description": "",
+      "createdAt": "2026-08-31T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-125",
+      "title": "DRE-125 does a thing",
+      "description": "",
+      "createdAt": "2026-08-30T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-126",
+      "title": "DRE-126 does a thing",
+      "description": "",
+      "createdAt": "2026-08-29T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-127",
+      "title": "DRE-127 does a thing",
+      "description": "",
+      "createdAt": "2026-08-28T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-128",
+      "title": "DRE-128 does a thing",
+      "description": "",
+      "createdAt": "2026-08-27T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-129",
+      "title": "DRE-129 does a thing",
+      "description": "",
+      "createdAt": "2026-08-26T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-130",
+      "title": "DRE-130 does a thing",
+      "description": "",
+      "createdAt": "2026-08-25T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-131",
+      "title": "DRE-131 does a thing",
+      "description": "",
+      "createdAt": "2026-08-24T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-132",
+      "title": "DRE-132 does a thing",
+      "description": "",
+      "createdAt": "2026-09-04T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-133",
+      "title": "DRE-133 does a thing",
+      "description": "",
+      "createdAt": "2026-09-03T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:portico"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    },
+    {
+      "identifier": "DRE-134",
+      "title": "DRE-134 does a thing",
+      "description": "",
+      "createdAt": "2026-09-02T12:00:00Z",
+      "priority": 0,
+      "state": {
+        "name": "Intake"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:engineer"
+          }
+        ]
+      },
+      "parent": null,
+      "project": null,
+      "cycle": null,
+      "inverseRelations": {
+        "nodes": []
+      }
+    }
+  ],
+  "cycles": [
+    {
+      "number": 12,
+      "id": "cyc-12",
+      "startsAt": "2026-09-07T07:00:00.000Z",
+      "endsAt": "2026-09-21T07:00:00.000Z"
+    },
+    {
+      "number": 13,
+      "id": "cyc-13",
+      "startsAt": "2026-09-21T07:00:00.000Z",
+      "endsAt": "2026-10-05T07:00:00.000Z"
+    }
+  ],
+  "proposal": {
+    "generated_at": "2026-09-05T12:00:00Z",
+    "lane": "Intake",
+    "population": 34,
+    "census": {
+      "portico": 18,
+      "bureau-pipeline": 13,
+      "agent-bureau": 3
+    },
+    "capacity": 8,
+    "cycle_days": 14,
+    "window_days": 14,
+    "older_than_window": {
+      "days": 14,
+      "cards": 1,
+      "line": "1 card older than 14 days, not batched \u2014 raise a card's priority to High or Urgent to pull it in."
+    },
+    "batch": {
+      "cycles": [
+        12
+      ],
+      "cards": 8
+    },
+    "repo_order": [
+      "portico",
+      "agent-bureau",
+      "bureau-pipeline"
+    ],
+    "sequence": [
+      {
+        "identifier": "DRE-101",
+        "title": "DRE-101 does a thing",
+        "position": 1,
+        "unit": "DRE-101",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 0,
+        "deferred": false,
+        "cycle": 12,
+        "cycle_id": "cyc-12",
+        "projected": false,
+        "outcome": "now"
+      },
+      {
+        "identifier": "DRE-102",
+        "title": "DRE-102 does a thing",
+        "position": 2,
+        "unit": "DRE-102",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 1,
+        "deferred": false,
+        "cycle": 12,
+        "cycle_id": "cyc-12",
+        "projected": false,
+        "outcome": "now"
+      },
+      {
+        "identifier": "DRE-103",
+        "title": "DRE-103 does a thing",
+        "position": 3,
+        "unit": "DRE-103",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 12,
+        "cycle_id": "cyc-12",
+        "projected": false,
+        "outcome": "now"
+      },
+      {
+        "identifier": "DRE-120",
+        "title": "DRE-120 does a thing",
+        "position": 4,
+        "unit": "DRE-120",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 12,
+        "cycle_id": "cyc-12",
+        "projected": false,
+        "outcome": "now"
+      },
+      {
+        "identifier": "DRE-132",
+        "title": "DRE-132 does a thing",
+        "position": 5,
+        "unit": "DRE-132",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 12,
+        "cycle_id": "cyc-12",
+        "projected": false,
+        "outcome": "now"
+      },
+      {
+        "identifier": "DRE-121",
+        "title": "DRE-121 does a thing",
+        "position": 6,
+        "unit": "DRE-121",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 12,
+        "cycle_id": "cyc-12",
+        "projected": false,
+        "outcome": "now"
+      },
+      {
+        "identifier": "DRE-133",
+        "title": "DRE-133 does a thing",
+        "position": 7,
+        "unit": "DRE-133",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 12,
+        "cycle_id": "cyc-12",
+        "projected": false,
+        "outcome": "now"
+      },
+      {
+        "identifier": "DRE-110",
+        "title": "DRE-110 does a thing",
+        "position": 8,
+        "unit": "DRE-110",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 12,
+        "cycle_id": "cyc-12",
+        "projected": false,
+        "outcome": "now"
+      },
+      {
+        "identifier": "DRE-122",
+        "title": "DRE-122 does a thing",
+        "position": 9,
+        "unit": "DRE-122",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 13,
+        "cycle_id": "cyc-13",
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-134",
+        "title": "DRE-134 does a thing",
+        "position": 10,
+        "unit": "DRE-134",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 13,
+        "cycle_id": "cyc-13",
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-111",
+        "title": "DRE-111 does a thing",
+        "position": 11,
+        "unit": "DRE-111",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 13,
+        "cycle_id": "cyc-13",
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-123",
+        "title": "DRE-123 does a thing",
+        "position": 12,
+        "unit": "DRE-123",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 13,
+        "cycle_id": "cyc-13",
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-105",
+        "title": "DRE-105 does a thing",
+        "position": 13,
+        "unit": "DRE-200",
+        "epic": "DRE-200",
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 13,
+        "cycle_id": "cyc-13",
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-104",
+        "title": "DRE-104 does a thing",
+        "position": 14,
+        "unit": "DRE-200",
+        "epic": "DRE-200",
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 13,
+        "cycle_id": "cyc-13",
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-112",
+        "title": "DRE-112 does a thing",
+        "position": 15,
+        "unit": "DRE-112",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 13,
+        "cycle_id": "cyc-13",
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-124",
+        "title": "DRE-124 does a thing",
+        "position": 16,
+        "unit": "DRE-124",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 13,
+        "cycle_id": "cyc-13",
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-113",
+        "title": "DRE-113 does a thing",
+        "position": 17,
+        "unit": "DRE-113",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 14,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-125",
+        "title": "DRE-125 does a thing",
+        "position": 18,
+        "unit": "DRE-125",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 14,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-114",
+        "title": "DRE-114 does a thing",
+        "position": 19,
+        "unit": "DRE-114",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 14,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-126",
+        "title": "DRE-126 does a thing",
+        "position": 20,
+        "unit": "DRE-126",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 14,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-115",
+        "title": "DRE-115 does a thing",
+        "position": 21,
+        "unit": "DRE-115",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 14,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-127",
+        "title": "DRE-127 does a thing",
+        "position": 22,
+        "unit": "DRE-127",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 14,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-116",
+        "title": "DRE-116 does a thing",
+        "position": 23,
+        "unit": "DRE-116",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 14,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-128",
+        "title": "DRE-128 does a thing",
+        "position": 24,
+        "unit": "DRE-128",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 14,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-117",
+        "title": "DRE-117 does a thing",
+        "position": 25,
+        "unit": "DRE-117",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 15,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-129",
+        "title": "DRE-129 does a thing",
+        "position": 26,
+        "unit": "DRE-129",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 15,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-118",
+        "title": "DRE-118 does a thing",
+        "position": 27,
+        "unit": "DRE-118",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 15,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-130",
+        "title": "DRE-130 does a thing",
+        "position": 28,
+        "unit": "DRE-130",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 15,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-119",
+        "title": "DRE-119 does a thing",
+        "position": 29,
+        "unit": "DRE-119",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 15,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-131",
+        "title": "DRE-131 does a thing",
+        "position": 30,
+        "unit": "DRE-131",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 15,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-109",
+        "title": "DRE-109 does a thing",
+        "position": 31,
+        "unit": "DRE-109",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 3,
+        "deferred": false,
+        "cycle": 15,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-108",
+        "title": "DRE-108 does a thing",
+        "position": 32,
+        "unit": "DRE-108",
+        "epic": null,
+        "repo": "agent-bureau",
+        "project": null,
+        "band": 2,
+        "deferred": false,
+        "cycle": 15,
+        "cycle_id": null,
+        "projected": true,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-106",
+        "title": "DRE-106 does a thing",
+        "position": 33,
+        "unit": "DRE-106",
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "band": 3,
+        "deferred": true,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "outcome": "not-now"
+      },
+      {
+        "identifier": "DRE-107",
+        "title": "DRE-107 does a thing",
+        "position": null,
+        "unit": null,
+        "epic": null,
+        "repo": "portico",
+        "project": null,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "band": null,
+        "deferred": false,
+        "outcome": "dead"
+      }
+    ],
+    "outcomes": {
+      "now": [
+        {
+          "identifier": "DRE-101",
+          "title": "DRE-101 does a thing",
+          "position": 1,
+          "cycle": 12,
+          "cycle_id": "cyc-12",
+          "unit": "DRE-101",
+          "epic": null,
+          "repo": "portico",
+          "projected": false,
+          "band": 0
+        },
+        {
+          "identifier": "DRE-102",
+          "title": "DRE-102 does a thing",
+          "position": 2,
+          "cycle": 12,
+          "cycle_id": "cyc-12",
+          "unit": "DRE-102",
+          "epic": null,
+          "repo": "agent-bureau",
+          "projected": false,
+          "band": 1
+        },
+        {
+          "identifier": "DRE-103",
+          "title": "DRE-103 does a thing",
+          "position": 3,
+          "cycle": 12,
+          "cycle_id": "cyc-12",
+          "unit": "DRE-103",
+          "epic": null,
+          "repo": "portico",
+          "projected": false,
+          "band": 2
+        },
+        {
+          "identifier": "DRE-120",
+          "title": "DRE-120 does a thing",
+          "position": 4,
+          "cycle": 12,
+          "cycle_id": "cyc-12",
+          "unit": "DRE-120",
+          "epic": null,
+          "repo": "bureau-pipeline",
+          "projected": false,
+          "band": 2
+        },
+        {
+          "identifier": "DRE-132",
+          "title": "DRE-132 does a thing",
+          "position": 5,
+          "cycle": 12,
+          "cycle_id": "cyc-12",
+          "unit": "DRE-132",
+          "epic": null,
+          "repo": "bureau-pipeline",
+          "projected": false,
+          "band": 2
+        },
+        {
+          "identifier": "DRE-121",
+          "title": "DRE-121 does a thing",
+          "position": 6,
+          "cycle": 12,
+          "cycle_id": "cyc-12",
+          "unit": "DRE-121",
+          "epic": null,
+          "repo": "portico",
+          "projected": false,
+          "band": 2
+        },
+        {
+          "identifier": "DRE-133",
+          "title": "DRE-133 does a thing",
+          "position": 7,
+          "cycle": 12,
+          "cycle_id": "cyc-12",
+          "unit": "DRE-133",
+          "epic": null,
+          "repo": "portico",
+          "projected": false,
+          "band": 2
+        },
+        {
+          "identifier": "DRE-110",
+          "title": "DRE-110 does a thing",
+          "position": 8,
+          "cycle": 12,
+          "cycle_id": "cyc-12",
+          "unit": "DRE-110",
+          "epic": null,
+          "repo": "bureau-pipeline",
+          "projected": false,
+          "band": 2
+        }
+      ],
+      "not-now": [
+        {
+          "identifier": "DRE-122",
+          "title": "DRE-122 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 13,
+          "projected": false,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-134",
+          "title": "DRE-134 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 13,
+          "projected": false,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-111",
+          "title": "DRE-111 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 13,
+          "projected": false,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-123",
+          "title": "DRE-123 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 13,
+          "projected": false,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-105",
+          "title": "DRE-105 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 13,
+          "projected": false,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-104",
+          "title": "DRE-104 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 13,
+          "projected": false,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-112",
+          "title": "DRE-112 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 13,
+          "projected": false,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-124",
+          "title": "DRE-124 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 13,
+          "projected": false,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-113",
+          "title": "DRE-113 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 14,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-125",
+          "title": "DRE-125 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 14,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-114",
+          "title": "DRE-114 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 14,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-126",
+          "title": "DRE-126 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 14,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-115",
+          "title": "DRE-115 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 14,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-127",
+          "title": "DRE-127 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 14,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-116",
+          "title": "DRE-116 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 14,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-128",
+          "title": "DRE-128 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 14,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-117",
+          "title": "DRE-117 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 15,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-129",
+          "title": "DRE-129 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 15,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-118",
+          "title": "DRE-118 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 15,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-130",
+          "title": "DRE-130 does a thing",
+          "repo": "bureau-pipeline",
+          "reconsidered_in": 15,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-119",
+          "title": "DRE-119 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 15,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-131",
+          "title": "DRE-131 does a thing",
+          "repo": "portico",
+          "reconsidered_in": 15,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-109",
+          "title": "DRE-109 does a thing",
+          "repo": "agent-bureau",
+          "reconsidered_in": 15,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-108",
+          "title": "DRE-108 does a thing",
+          "repo": "agent-bureau",
+          "reconsidered_in": 15,
+          "projected": true,
+          "older_than_window": false
+        },
+        {
+          "identifier": "DRE-106",
+          "title": "DRE-106 does a thing",
+          "repo": "portico",
+          "reconsidered_in": null,
+          "projected": false,
+          "older_than_window": true
+        }
+      ],
+      "dead": [
+        {
+          "identifier": "DRE-107",
+          "title": "DRE-107 does a thing",
+          "repo": "portico",
+          "superseded_by": "DRE-101"
+        }
+      ]
+    },
+    "collisions": {
+      "pairs": [
+        {
+          "before": "DRE-101",
+          "after": "DRE-103",
+          "files": [
+            "alpha.ts"
+          ],
+          "why": "both touch alpha.ts; older card first, and the order is recorded"
+        }
+      ],
+      "boilerplate": {},
+      "unreadable": [
+        "DRE-102",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113",
+        "DRE-114",
+        "DRE-115",
+        "DRE-116",
+        "DRE-117",
+        "DRE-118",
+        "DRE-119",
+        "DRE-120",
+        "DRE-121",
+        "DRE-122",
+        "DRE-123",
+        "DRE-124",
+        "DRE-125",
+        "DRE-126",
+        "DRE-127",
+        "DRE-128",
+        "DRE-129",
+        "DRE-130",
+        "DRE-131",
+        "DRE-132",
+        "DRE-133",
+        "DRE-134"
+      ]
+    },
+    "unhonoured_constraints": [],
+    "unstated_supersessions": [],
+    "deprioritised": [],
+    "id": "45946184638e"
+  }
+}
