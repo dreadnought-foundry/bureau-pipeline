@@ -924,6 +924,21 @@ jobs:
                ## Unmet criteria
 
                with one line per item and the reason it is unmet.
+               EVERY edit you make to the PR body happens HERE, before the
+               push in step 5 — the unmet-criteria section above, and any
+               claim in the description you have since corrected. The push
+               is what re-triggers the review, and the critic reads the body
+               live within seconds of it, so the description your verdict is
+               written against is the one you leave behind at the end of this
+               step. Do NOT edit the PR body after you push: portico #407
+               corrected its description two minutes after pushing, the
+               verdict quoted the sentence that was already gone and demanded
+               the correction that was already there, and the pull request
+               sat blocked for eleven hours over a diff nobody ever alleged a
+               defect in. If you only see the problem after pushing, correct
+               the body anyway — but the verdict in flight was composed
+               against the older text, so expect to answer that finding in
+               the next round rather than reading it as a fresh objection.
                Then prove your work actually MOVED:
                git diff --stat ${{ steps.pr.outputs.head_sha }}..HEAD
                must show changed files — that sha is the head the critic
@@ -933,7 +948,9 @@ jobs:
                itself grounds for REQUEST_CHANGES.
             5. Commit with message "fix(${{ steps.pr.outputs.card }}): address review
                findings (attempt ${{ steps.pr.outputs.attempt }})" and push to the
-               SAME branch. Do NOT open a new PR. Do NOT force-push.
+               SAME branch. Do NOT open a new PR. Do NOT force-push. The PR
+               description is already final at this point (step 4b) — this
+               push is what the next reviewer reads it off.
             6. If a finding is unfixable in scope, or settling it needs a
                judgement only a person can make, do NOT push anything: write
                your reasoning to /tmp/fix-blocker.txt instead. That file asks
