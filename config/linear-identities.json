@@ -1,0 +1,63 @@
+{
+  "_readme": [
+    "THE NON-HUMAN LINEAR IDENTITIES (DRE-3172). One file, read by the check.",
+    "",
+    "Since 2026-09-05 the workspace has three Linear users, and two of them are",
+    "not people. The FLEET user is the one every sweep, planner, merge-sync,",
+    "relay and console run as. The OPERATOR-TOOLS user is the one the",
+    "operator's scripts and assistant sessions run as. The third is the CEO,",
+    "who approves, and is the only admin among them.",
+    "",
+    "WHY TWO. Linear's 2,500 requests/hour limit is PER USER. Two non-human",
+    "users are two separate budgets, so a heavy read from the operator's",
+    "terminal no longer starves every sweep in the fleet (and the other way",
+    "round). That is the whole point, and it is the thing that silently stops",
+    "being true in two ways nobody would notice: a key rotated onto an admin's",
+    "user, or both keys resolving to the SAME user — one budget again, with",
+    "nothing on the board looking any different.",
+    "",
+    "So each identity is declared here with the rules it owes, and",
+    "`python3 scripts/check_linear_identities.py check` asks Linear",
+    "`viewer { id name admin }` for each key and fails, naming the rule, when",
+    "the declaration and the truth disagree. A key that is absent is reported",
+    "UNKNOWN and the check exits non-zero: unknown is never a pass.",
+    "",
+    "TWO PLACES A KEY LIVES, AND THE NAME COLLIDES. `env` is the variable THE",
+    "CHECK reads the key from, and the check is written for the operator's",
+    "machine: there `LINEAR_API_KEY` is the operator-tools key (from .env) and",
+    "the fleet key must be handed over separately as `LINEAR_API_KEY_FLEET`.",
+    "In GitHub Actions the same name `LINEAR_API_KEY` is the FLEET key — every",
+    "workflow reads `secrets.LINEAR_API_KEY`. `lives_in` says where each key",
+    "is actually kept. A reader who conflates the two will misfile a key.",
+    "",
+    "No user ids here on purpose: an id pinned in a file is the thing that",
+    "goes stale on the next rotation. The display name is the declared fact;",
+    "the check prints the id it resolved so the operator can record it.",
+    "",
+    "JSON, not YAML, like its siblings: the reader must import with no pip",
+    "install. Check this file and the live keys:",
+    "  python3 scripts/check_linear_identities.py check"
+  ],
+  "version": 1,
+
+  "identities": [
+    {
+      "name": "fleet",
+      "display_name": "Agent-Bureau",
+      "env": "LINEAR_API_KEY_FLEET",
+      "lives_in": "GitHub Actions secret LINEAR_API_KEY in every product repo (read by every workflow as secrets.LINEAR_API_KEY), and the relay Lambda's environment in agent-bureau",
+      "purpose": "The user every unattended actor writes to Linear as: the sweeps, the planner, merge-sync, the relay and the console.",
+      "must_not_be_admin": true,
+      "must_differ_from": ["operator-tools"]
+    },
+    {
+      "name": "operator-tools",
+      "display_name": "bureau-tools",
+      "env": "LINEAR_API_KEY",
+      "lives_in": "The operator's .env as LINEAR_API_KEY, and AWS Secrets Manager bureau/operator-tools/linear-api-key",
+      "purpose": "The user the operator's own scripts and assistant sessions read and write Linear as, on a budget the fleet cannot spend.",
+      "must_not_be_admin": true,
+      "must_differ_from": ["fleet"]
+    }
+  ]
+}
