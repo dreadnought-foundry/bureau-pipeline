@@ -220,7 +220,7 @@ def test_gh_actions_read_returns_none_and_records_on_403():
 @pytest.mark.parametrize(
     "func_name",
     ["unstick_conflicts", "fix_approved_but_red", "retry_dead_fix_runs",
-     "restart_answered_blockers"],
+     "redispatch_standing_verdicts", "restart_answered_blockers"],
 )
 def test_busy_guard_fails_closed_when_the_read_403s(func_name):
     """A 403 on the busy read must NOT become "nothing is running".

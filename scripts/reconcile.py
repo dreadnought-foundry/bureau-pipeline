@@ -122,6 +122,7 @@ import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE
 # marker from the module that writes it.
 import critic_score  # noqa: E402
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
+import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
@@ -1782,16 +1783,28 @@ def is_qa_bot_comment(comment: dict) -> bool:
     return login.removesuffix("[bot]") == QA_BOT_LOGIN
 
 
-def critic_comment_bodies(pr: dict) -> list[str]:
-    """Bodies of the PR's QA Critic comments, oldest→newest — counting ONLY
-    comments authored by the qa-bot App. Forged critic comments are
-    invisible (not merely non-approving), so a forged trailing comment can
-    never shadow or mask a genuine verdict (DRE-1998)."""
+def critic_comments(pr: dict) -> list[dict]:
+    """The PR's QA Critic comments, oldest→newest — counting ONLY comments
+    authored by the qa-bot App. Forged critic comments are invisible (not
+    merely non-approving), so a forged trailing comment can never shadow or
+    mask a genuine verdict (DRE-1998).
+
+    The comment RECORD, not just its body, because a caller that has to know
+    WHEN the newest verdict landed (redispatch_standing_verdicts) must not
+    re-derive this predicate to get at `createdAt` — one implementation of
+    "which comment is the critic's latest word", or the two readers can
+    disagree about which comment that is.
+    """
     return [
-        c.get("body") or ""
+        c
         for c in pr.get("comments", [])
         if is_qa_bot_comment(c) and "QA Critic" in (c.get("body") or "")
     ]
+
+
+def critic_comment_bodies(pr: dict) -> list[str]:
+    """Bodies of the PR's QA Critic comments, oldest→newest (critic_comments)."""
+    return [c.get("body") or "" for c in critic_comments(pr)]
 
 
 def has_verdict(
@@ -3869,6 +3882,117 @@ def retry_dead_fix_runs() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
+def redispatch_standing_verdicts() -> None:
+    """DRE-3130: re-dispatch the fix agent for a PR carrying a REQUEST_CHANGES
+    verdict on its current head that nobody is working.
+
+    The fourth fix-loop recovery route, beside fix_approved_but_red,
+    retry_dead_fix_runs and restart_answered_blockers, and it covers the case
+    none of them can see: the verdict's OWN trigger never produced a run. On
+    portico PR #407 (DRE-3004) GitHub cancelled the qa-bot's trigger while it
+    was still pending (the DRE-2810 eviction), so there was no dead run to
+    retry, no blocker to answer and no APPROVE to reconcile — just a verdict
+    with nothing coming. The sweep printed the right diagnosis every fifteen
+    minutes for ten hours and a person eventually ran `gh workflow run
+    agent-fix.yml -f pr_number=407` by hand. A detector that only prints
+    (DRE-2564).
+
+    It reads the PULL REQUEST, never the eviction report and never the run
+    listing: a route that fires on a detector's output can only be as right as
+    the detector, and the PR's own thread is the thing the fix job itself
+    reads. All of these must hold:
+
+      * the newest qa-bot-authored QA Critic comment carries
+        `VERDICT: REQUEST_CHANGES` and BINDS THE CURRENT HEAD SHA — read
+        through merge_gate's own grammar, so a quoted verdict in prose is
+        inert and a forged one is invisible (DRE-1998: a forged verdict must
+        not spawn dispatches);
+      * NO worker-bot comment is newer than that verdict. A fix attempt, a
+        hold, a retry marker, DRE-2813's no-work notice — every one of them
+        means the loop already moved, and this sweep stays quiet;
+      * the verdict is older than 20 minutes. The fix run normally starts
+        within seconds of the verdict, so a fresh verdict is not a stalled
+        one. A literal, matching fix_approved_but_red — DRE-3129 owns the
+        eviction window constant and this route never reads it;
+      * the fix budget still has room, decided by fix_budget — the same
+        reading the fix job's own gate makes, so the sweep can never dispatch
+        a run that will refuse to work.
+
+    Self-disarming is the whole safety story: the dispatch posts a worker-bot
+    receipt, which is newer than the verdict, so the same verdict can never be
+    dispatched twice. DIRTY PRs are left to unstick_conflicts, a human-parked
+    card stands the route down (DRE-2024), the fix lane's busy-guard backs it
+    off, and it is one dispatch per sweep — the house pattern, to the letter.
+    """
+    # Unreadable answers BUSY (gh_actions_read): the App token 403s on this
+    # API, and the old `or "[]"` turned that into "nothing running" — the
+    # backoff failed OPEN at every one of these sites.
+    if _actions_runs_busy(fix_workflow()):
+        return
+    prs = json.loads(gh(
+        "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+        "--json", "number,headRefName,headRefOid,mergeStateStatus,comments",
+    ) or "[]")
+    for pr in prs:
+        if not card_branch(pr["headRefName"]) or pr.get("mergeStateStatus") == "DIRTY":
+            continue
+        verdicts = critic_comments(pr)
+        if not verdicts:
+            continue
+        newest = verdicts[-1]
+        line = merge_gate.first_line(newest.get("body") or "")
+        if merge_gate.verdict_token(line, merge_gate.CRITIC_MARKER) != "REQUEST_CHANGES":
+            continue
+        # The CURRENT head only — no content carry. A verdict that binds an
+        # older commit was written about code this PR no longer proposes, and
+        # qa-review owns the next word on it.
+        if merge_gate.verdict_sha(line) != (pr.get("headRefOid") or ""):
+            continue
+        comments = pr.get("comments") or []
+        at = next((i for i, c in enumerate(comments) if c is newest), -1)
+        if any(is_worker_bot_comment(c) for c in comments[at + 1:]):
+            continue  # the loop already spoke about this verdict
+        when = newest.get("createdAt")
+        # 20 minutes, the fix_approved_but_red literal. An unreadable
+        # timestamp is not an old one (DRE-2034) — it waits for the next sweep.
+        if not when or age_minutes(when) < 20:
+            continue
+        # The budget, in the fix job's own shape. The GraphQL listing above
+        # already proved this thread has comments, so an EMPTY REST read is
+        # unreadable rather than empty — and a fabricated fresh budget is how
+        # a dispatch burst starts.
+        thread = _pr_thread(pr["number"])
+        if not thread:
+            print(
+                f"evicted-verdict: PR #{pr['number']} thread unreadable — "
+                "not dispatching on an unread budget"
+            )
+            continue
+        if fix_budget.decide(thread, WORKER_REST_LOGIN, mode="fix").action != "run":
+            continue  # no attempt left to spend; the hold path owns it
+        if fix_dispatch_blocked(pr):
+            continue  # human-parked card (DRE-2024) — the loop is over
+        age = int(age_minutes(when))
+        print(
+            f"evicted-verdict: PR #{pr['number']} has a standing "
+            f"REQUEST_CHANGES on {pr['headRefOid']} from {age}m ago with no "
+            "fix run — re-dispatching fix agent"
+        )
+        gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
+                    "-f", f"pr_number={pr['number']}")
+        _post_pr_note(pr["number"], pipeline_act.receipt("fix-loop-restarted", (
+            "🔁 The reconcile sweep re-dispatched the fix agent (DRE-3130). "
+            f"This pull request has carried a blocking critic verdict on its "
+            f"current head for {age} minutes with no fix run working it, so "
+            "the run that verdict should have started never arrived — most "
+            "often because GitHub cancelled the trigger while it was pending "
+            "(DRE-2810). Nothing is needed from you. One dispatch per "
+            "verdict: this note is newer than the verdict, so the sweep will "
+            "not do it again until the critic speaks next."
+        )))
+        return  # one dispatch per sweep; the busy-guard handles the rest
+
+
 # Answered-blocker restart (DRE-2409). The escalate-by-exception exit door
 # only opened halfway: a recognised operator decision reached the NEXT fix
 # dispatch, but nothing ever fired one. The REQUEST_CHANGES comment that
@@ -5178,6 +5302,11 @@ def main(
             flag_unlanded_work,
             fix_approved_but_red,
             retry_dead_fix_runs,
+            # DRE-3130, beside the dead-fix-run retry because they answer the
+            # same question from the other end: that one restarts a fix run
+            # that DIED, this one starts the fix run a standing verdict never
+            # got (portico #407 sat ten hours on a diagnosis nobody acted on).
+            redispatch_standing_verdicts,
             restart_answered_blockers,
             review_dependabot_prs,
             recover_crashed_reviews,

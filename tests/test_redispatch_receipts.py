@@ -156,6 +156,9 @@ def _sweep_mocks(extra=None):
         # treatment (its own coverage lives in
         # test_operator_decision_restart.py).
         "restart_answered_blockers": MagicMock(),
+        # DRE-3130 added the standing-verdict re-dispatch; same treatment (its
+        # own coverage lives in test_redispatch_standing_verdict.py).
+        "redispatch_standing_verdicts": MagicMock(),
         # DRE-2047 added the dependabot review backstop; same treatment
         # (its own coverage lives in test_dependabot_review_dispatch.py).
         "review_dependabot_prs": MagicMock(),

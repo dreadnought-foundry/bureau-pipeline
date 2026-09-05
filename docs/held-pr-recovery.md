@@ -62,6 +62,32 @@ answer buys real work rather than a repeat of the hold it was written against.
 If that attempt does not satisfy the critic, the loop holds again and asks for
 another answer.
 
+## The sweep's four fix-loop recovery routes
+
+The answered-blocker restart above is one of four. Each reads the PULL
+REQUEST's own state — never a report, never a run listing — backs off while a
+fix run is in flight, honours a human-parked card, leaves `DIRTY` PRs to the
+conflict sweep, and dispatches at most once per sweep.
+
+| Route | Fires when | Log line |
+| -- | -- | -- |
+| approved-but-red | The critic APPROVEd and a CI check is failing, so nothing event-driven will fix it | `approved-but-red: …` |
+| dead-fix-run | The last fix run died of a model/API error or ran out of turns, and its trigger was consumed | `dead fix run: …` |
+| answered-blocker | An operator decision landed after the loop's last 🛑 blocker | `answered blocker: …` |
+| standing-verdict | A REQUEST_CHANGES verdict binds the current head, is over 20 minutes old, and no worker-bot comment is newer than it — the fix run it should have started never arrived | `evicted-verdict: …` |
+
+**The fourth is DRE-3130,** and it exists because the third-party failure it
+covers leaves nothing to retry. On portico PR #407 (DRE-3004) GitHub cancelled
+the qa-bot's REQUEST_CHANGES trigger while it was still pending — the DRE-2810
+eviction — so there was no dead run, no blocker and no APPROVE: just a verdict
+with nothing coming. The sweep printed the correct diagnosis every fifteen
+minutes for ten hours and a person eventually ran the fix workflow by hand.
+
+It disarms itself: the dispatch posts a worker-bot receipt, which is newer
+than the verdict, so the same verdict is never dispatched twice. The fix budget
+is read through `scripts/fix_budget.py` — the same reading the fix job's own
+gate makes — so the sweep can never start a run that will refuse to work.
+
 ## Quick reference
 
 | You see | Do |
@@ -71,7 +97,11 @@ another answer.
 | 🟡 `dispatch-no-work` notice | Nothing. Your answer is standing and still armed. |
 | 🔓 restart receipt | Nothing. The fix loop is running again. |
 | ⚠️ `operator-decision-near-miss` notice | Your comment did not parse — re-post it in the format above |
+| 🔁 re-dispatch receipt on a blocking verdict | Nothing. The sweep started the fix run the verdict never got. |
 
 Related: `scripts/fix_budget.py` (the decision), `scripts/fix_context.py` (the
-predicates), `scripts/reconcile.py::restart_answered_blockers` (the sweep),
-`tests/test_hand_dispatch_no_work.py` (the live sequence, driven end to end).
+predicates), `scripts/reconcile.py::restart_answered_blockers` and
+`::redispatch_standing_verdicts` (the sweeps),
+`tests/test_hand_dispatch_no_work.py` (the live sequence, driven end to end),
+`tests/test_redispatch_standing_verdict.py` (PR #407's thread, driven the same
+way).

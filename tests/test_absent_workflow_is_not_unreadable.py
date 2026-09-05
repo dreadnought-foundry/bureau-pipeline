@@ -333,7 +333,7 @@ def test_the_probe_does_not_touch_the_actions_api():
 @pytest.mark.parametrize(
     "func_name",
     ["unstick_conflicts", "fix_approved_but_red", "retry_dead_fix_runs",
-     "restart_answered_blockers"],
+     "redispatch_standing_verdicts", "restart_answered_blockers"],
 )
 def test_callers_still_fail_closed_when_the_read_is_unreadable(func_name):
     """The DRE-2034 discipline, re-asserted after this change: with the stub
