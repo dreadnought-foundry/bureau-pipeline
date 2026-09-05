@@ -99,12 +99,31 @@ CLI:
     python3 scripts/groomer.py census  [--lane Intake]
     python3 scripts/groomer.py propose [--lane Intake] [--capacity 20]
                                        [--batch-cycles 1] [--priority portico]
-                                       [--window-days 14]
+                                       [--window-days 14] [--no-judgement]
                                        [--out proposal.json] [--post DRE-N]
     python3 scripts/groomer.py drain   --card DRE-N [same shaping flags]
 
 `drain` re-derives the proposal from live state and acts only if the approval
 on the card names the batch it just derived.
+
+## The ranked read (DRE-3150)
+
+Everything above is the RULES, and they are all this module had. `propose` now
+also makes ONE bounded model call — the whole population as a census, against a
+context pack of what is already in flight (`groom_context.py`), read once
+through `groom_judgement.py` — and the model's `now` set fills the batch in the
+model's order.
+
+**The rules constrain that read; they do not re-rank it.** A collision still
+re-orders it, a blocker still holds, an epic is still one unit, and capacity
+still caps. A card the answer omits or garbles is `unranked` and stays exactly
+where the rules had it; a card the read calls `likely-done` joins the dead
+recommendations with its evidence beside the regex's. Every reason passes
+`planning_escalation.refusal` before it is written, because the CEO reads
+outcomes and never code.
+
+`--no-judgement` makes no call at all and is today's groomer byte-for-byte, so
+the audit card can run the two readings over one population.
 """
 
 from __future__ import annotations
@@ -122,8 +141,12 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
+import groom_context  # noqa: E402 — the context pack (DRE-3150)
+import groom_judgement  # noqa: E402 — the one ranked read (DRE-3150)
 import intake_controls  # noqa: E402 — ONE reading of the operator's Intake switch
 import linear_ops  # noqa: E402
+import planning_classify  # noqa: E402 — the model receipt, one definition
+import planning_escalation  # noqa: E402 — the plain-English write guard
 
 # --------------------------------------------------------------------------- #
 # vocabulary                                                                   #
@@ -148,6 +171,19 @@ OUTCOMES = {
         "operator executes."
     ),
 }
+
+# Where a dead RECOMMENDATION came from (DRE-3150). Two readers now propose
+# one, and a recommendation the operator cannot attribute is one they have to
+# re-derive: the description's own `Superseded by:` line, which a person wrote,
+# and the ranked read, which a model wrote. Both land in the same list; only
+# the first ever carries a `superseded_by` target.
+DEAD_FROM_LINE = "superseded-line"
+DEAD_FROM_JUDGEMENT = "judgement"
+
+# The one sentence a reason the plain-English guard refused is replaced with.
+# Written once, here, because the presentation card (DRE-3152) and the console
+# cards render this exact string.
+WITHHELD_REASON = groom_judgement.WITHHELD_REASON
 
 # The lane the drain writes into: Intake's exit is a classification, and
 # Planning is what produces one (DRE-2719).
@@ -634,7 +670,8 @@ def _topo(keys: list[str], edges: set[tuple[str, str]], rank,
 
 def sequence(cards: list[dict], *, collisions: dict | None = None,
              repo_priority=REPO_PRIORITY, broken: list | None = None,
-             now: str | None = None, window_days: int = WINDOW_DAYS) -> list[dict]:
+             now: str | None = None, window_days: int = WINDOW_DAYS,
+             verdicts: dict | None = None) -> list[dict]:
     """The population as ONE order: unit before unit, card before card.
 
     Urgent first, then High, then the last `window_days` of creation — newest
@@ -646,6 +683,14 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
     window: the order is over the whole population. Those rows carry
     `deferred: True`, which is what keeps them out of the batch and out of the
     cycle assignment — they stay in Intake, ungroomed.
+
+    With `verdicts` (DRE-3150) the model's `now` set fills the batch **in the
+    model's order** and the bands become the tie-break beneath it. Everything
+    below this line is unchanged, and that is the point: the constraints decide
+    what is POSSIBLE and the ranking decides what happens first among the
+    possible — so a collision still re-orders the model, a blocker still holds,
+    an epic is still one unit, and capacity still caps. **The rules constrain
+    the read; they do not re-rank it.**
     """
     collisions = collisions if collisions is not None else collision_report(cards)
     by_id = {c["identifier"]: c for c in cards}
@@ -662,7 +707,8 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
     unit_edges = {(unit_of[b], unit_of[a]) for b, a in constraints
                   if unit_of[b] != unit_of[a]}
     unit_index = {u["key"]: u for u in unit_list}
-    batchable = _batchable(unit_list, unit_edges)
+    model_index = _model_index(verdicts, unit_of)
+    batchable = _batchable(unit_list, unit_edges, verdicts=verdicts)
 
     def unit_rank(key):
         # The band first and the repo LAST: Portico separates two cards of the
@@ -670,8 +716,14 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
         # day is the granularity the tie-break is defined at, so the timestamp
         # only orders cards the day cannot separate.
         unit = unit_index[key]
-        return (unit["band"], -_day_ordinal(unit["newest"]), ranks[unit["repo"]],
+        base = (unit["band"], -_day_ordinal(unit["newest"]), ranks[unit["repo"]],
                 -_epoch(unit["newest"]), _card_sort_key(key))
+        if model_index is None:
+            return base
+        # The model's position for this unit, and the bands underneath it as
+        # the tie-break for everything it did not rank `now`. A unit with no
+        # `now` card sorts after every unit that has one, in today's order.
+        return (model_index.get(key, len(model_index)),) + base
 
     ordered_units = _topo([u["key"] for u in unit_list], unit_edges, unit_rank,
                           broken)
@@ -705,7 +757,27 @@ def sequence(cards: list[dict], *, collisions: dict | None = None,
     return rows
 
 
-def _batchable(unit_list: list[dict], unit_edges: set[tuple[str, str]]) -> set[str]:
+def _model_index(verdicts: dict | None, unit_of: dict) -> dict | None:
+    """`{unit key: the model's position for it}`, or None with no judgement.
+
+    A unit's position is its EARLIEST `now` card, so an epic whose third child
+    the model ranked first goes where that child went — the epic is the atom of
+    cycle assignment and the model does not get to split it.
+    """
+    if verdicts is None:
+        return None
+    index: dict = {}
+    for identifier, verdict in verdicts.items():
+        if getattr(verdict, "outcome", None) != "now":
+            continue
+        key = unit_of.get(identifier)
+        if key is not None and key not in index:
+            index[key] = len(index)
+    return index
+
+
+def _batchable(unit_list: list[dict], unit_edges: set[tuple[str, str]], *,
+               verdicts: dict | None = None) -> set[str]:
     """The units the batch may contain: everything inside the window, plus what
     those units need to go first.
 
@@ -715,8 +787,23 @@ def _batchable(unit_list: list[dict], unit_edges: set[tuple[str, str]]) -> set[s
     transitive: a card that blocks a card that collides with a batched card is
     in the batch too, which is the only order that does not leave a conflict
     behind.
+
+    With a judgement (DRE-3150) the model's `now` set is what the batch is made
+    of. A unit the model ranked `not-now` is out — that is the answer it gave —
+    and a unit it said nothing usable about falls back to today's window rule,
+    because an `unranked` card stays exactly where the rules had it.
     """
-    keep = {u["key"] for u in unit_list if u["band"] != BAND_OLDER}
+    if verdicts is None:
+        keep = {u["key"] for u in unit_list if u["band"] != BAND_OLDER}
+    else:
+        keep = set()
+        for unit in unit_list:
+            outcomes = {verdicts[c].outcome for c in unit["cards"]
+                        if c in verdicts}
+            if "now" in outcomes:
+                keep.add(unit["key"])
+            elif not (outcomes - {"unranked"}) and unit["band"] != BAND_OLDER:
+                keep.add(unit["key"])
     predecessors: dict[str, set[str]] = {}
     for before, after in unit_edges:
         predecessors.setdefault(after, set()).add(before)
@@ -790,9 +877,16 @@ def cycle_days(cycles: list[dict]) -> int:
 def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CAPACITY,
             batch_cycles: int = 1, repo_priority=REPO_PRIORITY,
             lane: str = "Intake", now: str | None = None,
-            window_days: int = WINDOW_DAYS) -> dict:
-    """The whole population, sequenced, with one outcome per card."""
+            window_days: int = WINDOW_DAYS, judgement=None) -> dict:
+    """The whole population, sequenced, with one outcome per card.
+
+    `judgement` is a `groom_judgement.Judgement` (or a bare
+    `dict[str, Verdict]`) and `None` is the rules-only path this has always
+    taken — `--no-judgement`, kept byte-for-byte so the audit card can run the
+    two readings over one population (DRE-3150).
+    """
     now = now or _now()
+    verdicts = _verdicts_of(judgement)
     dead, live = [], []
     unstated = []
     for card in sorted(cards, key=lambda c: _card_sort_key(c["identifier"])):
@@ -800,7 +894,20 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         if target:
             dead.append({"identifier": card["identifier"],
                          "title": card.get("title") or "",
-                         "repo": repo_of(card), "superseded_by": target})
+                         "repo": repo_of(card), "superseded_by": target,
+                         "source": DEAD_FROM_LINE})
+            continue
+        # The model's dead recommendation lands in the SAME list as the
+        # regex's, with its evidence beside the other's `Superseded by:` line.
+        # A card the description already condemned is not re-judged: the
+        # declaration on the card is the stronger of the two, because a person
+        # wrote it.
+        verdict = verdicts.get(card["identifier"]) if verdicts else None
+        if verdict is not None and verdict.outcome == "likely-done":
+            dead.append({"identifier": card["identifier"],
+                         "title": card.get("title") or "",
+                         "repo": repo_of(card), "superseded_by": None,
+                         "source": DEAD_FROM_JUDGEMENT})
             continue
         if supersession_gap(card.get("description")):
             unstated.append(card["identifier"])
@@ -810,7 +917,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     broken: list = []
     ordered = sequence(live, collisions=collisions, broken=broken,
                        repo_priority=repo_priority, now=now,
-                       window_days=window_days)
+                       window_days=window_days, verdicts=verdicts)
     # Only what the window admits is given a cycle. A card older than it is not
     # scheduled at all — "not now" here means ungroomed and still in Intake, not
     # "reconsidered in cycle 14", and inventing a cycle for it would say the
@@ -871,8 +978,176 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         "unstated_supersessions": unstated,
     }
     proposal["deprioritised"] = _deprioritised(proposal)
+    proposal["judgement"] = _annotate(proposal, judgement, verdicts,
+                                      window_days=window_days)
+    # LAST, and deliberately after the annotation: `proposal_id` digests the
+    # batch's cards, positions and cycles and NOTHING else, so a reason that
+    # reads differently on a re-run cannot retire a CEO approval of the same
+    # batch (DRE-3150's contract; the same sha-binding idea the merge gate uses).
     proposal["id"] = proposal_id(proposal)
     return proposal
+
+
+# --------------------------------------------------------------------------- #
+# the judgement, written onto the rows                                         #
+# --------------------------------------------------------------------------- #
+
+
+def _verdicts_of(judgement) -> dict | None:
+    """The `{id: Verdict}` map out of whatever `propose` was handed.
+
+    A `groom_judgement.Judgement` carries the receipt beside the verdicts and
+    is what the CLI passes; a bare mapping is the contracted `judge()` return,
+    so both work and neither needs a wrapper at the call site.
+    """
+    if judgement is None:
+        return None
+    return getattr(judgement, "verdicts", judgement) or {}
+
+
+def _showable(text: str | None) -> bool:
+    """Is this fit to put in front of the CEO?
+
+    ONE guard, `planning_escalation.refusal` — the same seam the planner's
+    escalation goes through, because this text is written by a model and the
+    CEO reads outcomes and risk, never code.
+    """
+    return bool(text) and planning_escalation.refusal(text) is None
+
+
+def _rules_reason(outcome: str, row: dict, window_days: int) -> str:
+    """Why the RULES put this card where they put it. Plain English, ours."""
+    if outcome == "dead":
+        return (f"its own description says it was superseded by "
+                f"{row.get('superseded_by')}")
+    if outcome == "now":
+        band = BAND_LABELS.get(row.get("band"))
+        opened = f"marked {band}" if band else "created inside the window"
+        return f"in the batch by the rules — {opened}, position {row['position']}"
+    if row.get("older_than_window"):
+        return (f"older than the {window_days}-day window, so this pass did "
+                f"not groom it")
+    return (f"wanted, and this batch was full — it is reconsidered in cycle "
+            f"{row.get('reconsidered_in')}")
+
+
+def _rules_trigger(row: dict) -> str:
+    """What brings a deferred card back. Always present, because "later" with
+    no trigger is "no" wearing a softer word."""
+    if row.get("older_than_window"):
+        return "when somebody raises its priority to High or Urgent"
+    return f"when cycle {row.get('reconsidered_in')} opens"
+
+
+def _mark(outcome: str, row: dict, verdict, *, window_days: int,
+          withheld: list) -> dict:
+    """The four fields DRE-3150 puts on every row: reason, trigger, evidence,
+    judged.
+
+    Every one of them that a model wrote passes `_showable` first. A refused
+    REASON is replaced with the contract's exact sentence and the card is
+    listed in `withheld`; a refused trigger falls back to the rules' own, and
+    refused evidence is dropped to None — a dead recommendation whose evidence
+    cannot be shown is still reported as judged, and the run log holds the text
+    nobody could put on the page.
+    """
+    identifier = row.get("identifier")
+    # A card its OWN DESCRIPTION condemned was never placed by the read: the
+    # declaration a person wrote outranks it, and the reason has to say what
+    # superseded it rather than that a model could not rank it.
+    if outcome == "dead" and row.get("source") == DEAD_FROM_LINE:
+        verdict = None
+    judged = verdict is not None and verdict.outcome != "unranked"
+    reason = (verdict.reason if verdict is not None
+              else _rules_reason(outcome, row, window_days))
+    if not _showable(reason):
+        if verdict is not None and verdict.outcome == "unranked":
+            # The unranked sentence is ours and always showable; anything else
+            # here is a model's words, refused.
+            reason = verdict.reason
+        else:
+            withheld.append(identifier)
+            reason = WITHHELD_REASON
+
+    trigger = None
+    if outcome == "not-now":
+        trigger = verdict.pointer if (judged and verdict.outcome == "not-now") \
+            else None
+        if trigger is not None and not _showable(trigger):
+            withheld.append(identifier)
+            trigger = None
+        trigger = trigger or _rules_trigger(row)
+
+    evidence = None
+    if outcome == "dead" and judged and verdict.outcome == "likely-done":
+        evidence = verdict.pointer
+        if not _showable(evidence):
+            withheld.append(identifier)
+            evidence = None
+
+    return {"reason": reason, "trigger": trigger, "evidence": evidence,
+            "judged": judged}
+
+
+def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
+              window_days: int) -> dict:
+    """Write the reason, trigger, evidence and judged flag onto every row, and
+    return the proposal's `judgement` block.
+
+    One pass over one map, so a card's reason is the same string in
+    `sequence`, in `outcomes` and in the rendered proposal — three copies of a
+    reason is three chances for them to disagree.
+    """
+    context: dict = {}
+    for row in proposal["outcomes"]["now"]:
+        context[row["identifier"]] = ("now", row)
+    for row in proposal["outcomes"]["not-now"]:
+        context[row["identifier"]] = ("not-now", row)
+    for row in proposal["outcomes"]["dead"]:
+        context[row["identifier"]] = ("dead", row)
+
+    withheld: list = []
+    marks = {
+        identifier: _mark(outcome, row,
+                          (verdicts or {}).get(identifier),
+                          window_days=window_days, withheld=withheld)
+        for identifier, (outcome, row) in context.items()
+    }
+    for rows in (proposal["outcomes"]["now"], proposal["outcomes"]["not-now"],
+                 proposal["outcomes"]["dead"], proposal["sequence"]):
+        for row in rows:
+            row.update(marks.get(row["identifier"], {}))
+    for row in proposal["outcomes"]["dead"]:
+        row.setdefault("source", DEAD_FROM_LINE)
+    for row in proposal["sequence"]:
+        if row.get("outcome") == "dead":
+            row["source"] = next(
+                (d.get("source") for d in proposal["outcomes"]["dead"]
+                 if d["identifier"] == row["identifier"]), DEAD_FROM_LINE)
+
+    unranked = sorted({identifier for identifier, v in (verdicts or {}).items()
+                       if v.outcome == "unranked"}, key=_card_sort_key)
+    return {
+        "enabled": verdicts is not None,
+        "calls": int(getattr(judgement, "calls", 0) or 0),
+        "model_asked": getattr(judgement, "asked", None),
+        "model_answered": getattr(judgement, "answered", None),
+        "receipt": planning_classify.model_receipt(
+            getattr(judgement, "asked", None),
+            getattr(judgement, "answered", None)),
+        "pack": getattr(judgement, "pack", None) or _EMPTY_PACK(),
+        "unranked": unranked,
+        "withheld": sorted(dict.fromkeys(withheld), key=_card_sort_key),
+        "problem": getattr(judgement, "problem", None),
+    }
+
+
+def _EMPTY_PACK() -> dict:
+    """The pack summary of a run that read no pack — zeros, not absence, so the
+    sibling cards read the same keys on both paths."""
+    out = {name: 0 for name in groom_context.SECTIONS}
+    out["truncated"] = []
+    return out
 
 
 def older_than_window_line(count: int, window_days: int) -> str:
@@ -1024,6 +1299,10 @@ def render_proposal(proposal: dict) -> str:
             f"{BAND_LABELS.get(row.get('band'), '—')} | {row['repo']} | "
             f"{row['epic'] or '—'} | {_trim(row['title'])} |")
     add("")
+    # Only when a judgement ran. `--no-judgement` renders exactly what it
+    # rendered before this card, so the audit (DRE-3151) compares two readings
+    # of one population rather than two documents.
+    w.extend(_render_judgement(proposal))
     add("## Collisions, and what the order does about them")
     add("")
     pairs = proposal["collisions"]["pairs"]
@@ -1078,6 +1357,16 @@ def render_proposal(proposal: dict) -> str:
     add("")
     if proposal["outcomes"]["dead"]:
         for row in proposal["outcomes"]["dead"]:
+            if row.get("source") == DEAD_FROM_JUDGEMENT:
+                # The ranked read's own recommendation, with the evidence it
+                # named beside the regex's — or, when the evidence could not be
+                # shown, the fact that it could not.
+                add(f"- {row['identifier']} — "
+                    + (f"points at {row['evidence']}" if row.get("evidence")
+                       else "the evidence it named was not fit to show; it is "
+                            "in the run log")
+                    + f" · {_trim(row['title'])}")
+                continue
             add(f"- {row['identifier']} — superseded by {row['superseded_by']} "
                 f"· {_trim(row['title'])}")
         add("")
@@ -1097,6 +1386,43 @@ def render_proposal(proposal: dict) -> str:
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
     add("")
     return "\n".join(w)
+
+
+def _render_judgement(proposal: dict) -> list:
+    """The ranked read, as the CEO reads it — or nothing at all.
+
+    Nothing at all is the `--no-judgement` path, and it is load-bearing: the
+    audit card runs the two readings over one population and a section that
+    rendered on both would make them differ on the page for no reason.
+    """
+    block = proposal.get("judgement") or {}
+    if not block.get("enabled"):
+        return []
+    w = ["## What the ranked read said", ""]
+    if block.get("problem"):
+        w += [block["problem"], "",
+              "Every card below is placed by the rules alone, exactly as it "
+              "would have been before this read existed.", ""]
+    w += [f"One call, on {block.get('receipt')}, over the whole population.", ""]
+    w.append("| Card | Outcome | Why | Revisit when |")
+    w.append("| -- | -- | -- | -- |")
+    for row in proposal["outcomes"]["now"]:
+        w.append(f"| {row['identifier']} | now | {_trim(row['reason'], 90)} | — |")
+    for row in proposal["outcomes"]["not-now"][:20]:
+        w.append(f"| {row['identifier']} | not now | {_trim(row['reason'], 90)} "
+                 f"| {_trim(row.get('trigger') or '—', 60)} |")
+    w.append("")
+    if block.get("unranked"):
+        w.append(f"{_plural(len(block['unranked']), 'card')} could not be "
+                 f"ranked and stayed where the rules had them.")
+        w.append("")
+    if block.get("withheld"):
+        w.append(f"{_plural(len(block['withheld']), 'card')} had a reason "
+                 f"written in technical terms; it is in the run log rather "
+                 f"than on this page — "
+                 + ", ".join(block["withheld"][:20]) + ".")
+        w.append("")
+    return w
 
 
 # --------------------------------------------------------------------------- #
@@ -1250,14 +1576,34 @@ def _shaping(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--window-days", type=int, default=WINDOW_DAYS,
                         help="how far back the batch reaches, in days of "
                              "creation age (default %(default)s)")
+    parser.add_argument("--no-judgement", dest="judgement",
+                        action="store_false", default=True,
+                        help="sequence by the rules alone and make NO model "
+                             "call — today's groomer, kept byte-for-byte so "
+                             "the two readings can be compared on one "
+                             "population (DRE-3150)")
 
 
 def _build(args) -> dict:
+    """Read the lane and propose. ONE model call unless `--no-judgement`.
+
+    `drain` builds through here too, so the batch it moves is derived the same
+    way the batch the CEO approved was. A read that answers differently
+    produces a different `proposal_id` and the approval gate refuses — which is
+    the gate doing its job, not a bug: the batch on the page is not the batch
+    the drain would move.
+    """
     cards = read_population(linear_ops, args.lane)
     cycles = read_cycles(linear_ops)
+    judgement = None
+    if getattr(args, "judgement", False):
+        judgement = groom_judgement.run(
+            groom_judgement.census(cards), groom_context.read_pack(linear_ops))
+        if judgement.problem:
+            print(f"groomer: {judgement.problem}", file=sys.stderr)
     return propose(cards, cycles=cycles, capacity=args.capacity,
                    batch_cycles=args.batch_cycles, lane=args.lane,
-                   window_days=args.window_days,
+                   window_days=args.window_days, judgement=judgement,
                    repo_priority=tuple(p for p in args.priority.split(",") if p))
 
 
