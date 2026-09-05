@@ -180,6 +180,10 @@ def _sweep_mocks(extra=None):
         # treatment (its own coverage lives in
         # test_operator_decision_restart.py).
         "restart_answered_blockers": MagicMock(),
+        # DRE-3130 added the standing-verdict re-dispatch, which reads the
+        # Actions busy-guard on every full sweep; same treatment (its own
+        # coverage lives in test_redispatch_standing_verdict.py).
+        "redispatch_standing_verdicts": MagicMock(),
         # DRE-2810 added the evicted-fix-run report, which reads the Actions
         # API on every full sweep; same treatment as its siblings above (its
         # own coverage lives in test_fix_concurrency_eviction.py). Its

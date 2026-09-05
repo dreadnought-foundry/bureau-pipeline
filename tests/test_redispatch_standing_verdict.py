@@ -312,15 +312,28 @@ class WiringTest(unittest.TestCase):
         # DRE-3129 owns FIX_EVICTION_WINDOW_MIN and report_evicted_fix_runs.
         # This route reads the PR's own state, never the eviction report — a
         # detector's output is not evidence about a pull request.
+        # assertFalse, not assertNotIn: a failing assertNotIn on a whole
+        # function body dumps it into the report (the house note in
+        # test_fix_concurrency_eviction.py).
         src = inspect.getsource(reconcile.redispatch_standing_verdicts)
-        self.assertNotIn("FIX_EVICTION_WINDOW_MIN", src)
-        self.assertNotIn("report_evicted_fix_runs", src)
+        for name in ("FIX_EVICTION_WINDOW_MIN", "report_evicted_fix_runs"):
+            self.assertFalse(name in src, f"the route reaches for {name}")
 
     def test_the_route_reads_the_pr_not_the_run_listing(self):
         src = inspect.getsource(reconcile.redispatch_standing_verdicts)
-        self.assertIn("pr\", \"list", src)
+        self.assertTrue("pr\", \"list" in src, "the route never lists the PRs")
         # `run list` appears only inside the shared busy-guard, never here.
-        self.assertNotIn("run\", \"list", src)
+        self.assertFalse("run\", \"list" in src, "the route reads the run listing")
+
+    def test_the_operator_page_lists_all_four_recovery_routes(self):
+        # A change that contradicts a document updates that document in the
+        # SAME PR (standards/engineering.md). The page that tells an operator
+        # what the sweep does for a stuck PR now has a fourth answer.
+        page = (ROOT / "docs" / "held-pr-recovery.md").read_text()
+        for route in ("approved-but-red", "dead-fix-run", "answered-blocker",
+                      "standing-verdict", "evicted-verdict:"):
+            self.assertTrue(route in page,
+                            f"docs/held-pr-recovery.md never names {route}")
 
     def test_the_age_threshold_is_the_approved_but_red_literal(self):
         # The contract with DRE-3129: no new window constant, a literal 20

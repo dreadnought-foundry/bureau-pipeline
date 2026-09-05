@@ -449,6 +449,7 @@ def test_a_failed_put_makes_main_exit_non_zero():
         "drain_retiring_lanes", "unstick_conflicts", "retrigger_dead_heads",
         "flag_no_checks_prs", "flag_unowned_prs", "flag_unlanded_work",
         "fix_approved_but_red", "retry_dead_fix_runs",
+        "redispatch_standing_verdicts",
         "restart_answered_blockers", "review_dependabot_prs",
         "recover_crashed_reviews", "check_dependabot_capacity",
         "escalate_aged_intake", "close_finished_epics", "promote_ready",
