@@ -212,6 +212,14 @@ The reconcile sweep runs the same audit in every repo it sweeps and prints a
 job whose trigger was a qa-bot verdict — the case that otherwise reads as the
 harmless duplicate-dispatch cancel it shares a conclusion with.
 
+It looks back a **full day**, and pages the run listing until it reaches that
+far back — one decision, not two (`FIX_EVICTION_WINDOW_MIN` in
+`scripts/reconcile.py`). The window it replaced was three hours: on portico
+PR #407, 2026-09-02, the eviction aged out of it seven hours into a ten-hour
+stall, and the sweep went on printing `0 verdict trigger(s)` the whole time
+(DRE-3004). A detector whose memory is shorter than the failure reports
+nothing precisely when it matters.
+
 ### The agent-fix stub's `actions: write` (DRE-3084)
 
 Permissions live in the stub too, so this one is likewise not fixable from

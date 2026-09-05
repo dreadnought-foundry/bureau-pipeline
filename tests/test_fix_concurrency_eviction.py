@@ -33,6 +33,8 @@ The rule these tests express:
      scanning the workflows directory, not by naming one file from memory.
   5. An Agent Fix run cancelled before it started a single job is reported,
      and a lost verdict trigger is told apart from a duplicate dispatch.
+  6. That report remembers LONGER THAN THE STALL it exists to catch, and the
+     run listing it reads is deep enough to hold the whole window (DRE-3129).
 
 The group and the job gate are LIVE-EXTRACTED from the shipped YAML and
 evaluated as GitHub would evaluate them (scripts/fix_concurrency.py), so a
@@ -47,10 +49,12 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -387,6 +391,204 @@ class SweepEvictionReportTest(unittest.TestCase):
         # 4,000-line source dumps the whole file into the report.)
         for call in ("report_fix_concurrency()", "report_evicted_fix_runs()"):
             self.assertTrue(call in src, f"{call} is never called by the sweep")
+
+
+# --------------------------------------------------------------------------
+# DRE-3129 — the detector's memory has to outlast the stall it exists to catch
+# --------------------------------------------------------------------------
+
+#: portico PR #407 (DRE-3004). The qa-bot's REQUEST_CHANGES trigger was evicted
+#: at 23:49 PT on 2026-09-02 — 06:49Z the next morning — and the PR then sat
+#: ten hours. `NOW` is ten hours after the eviction: still inside the stall,
+#: and long past the 180 minutes the report shipped with, which is why for
+#: seven of those hours the sweep printed `0 verdict trigger(s)` while the only
+#: other signal was the generic `fix-concurrency: WARN`.
+NOW = "2026-09-03T16:49:00Z"
+LOST_RUN = 34_070_407_001  # the evicted verdict trigger
+EVICTOR_RUN = 34_070_407_002  # the notice run that took its slot
+
+
+def _at(hours: float, seconds: float = 0.0, now: str = NOW) -> str:
+    when = (datetime.fromisoformat(now.replace("Z", "+00:00"))
+            - timedelta(hours=hours, seconds=seconds))
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run(run_id: int, hours_before: float, seconds_before: float = 0.0, *,
+         actor: str = fc.QA_BOT_LOGIN, conclusion: str = "cancelled",
+         event: str = "issue_comment") -> dict:
+    """One Agent Fix run record in the shape `RUNS_JQ` hands the sweep."""
+    when = _at(hours_before, seconds_before)
+    return {
+        "id": run_id,
+        "event": event,
+        "status": "completed",
+        "conclusion": conclusion,
+        "created_at": when,
+        "updated_at": when,
+        "actor": actor,
+        "display_title": "QA verdict: REQUEST_CHANGES",
+        "html_url": (
+            f"https://github.com/dreadnought-foundry/portico/actions/runs/{run_id}"),
+    }
+
+
+class _FakeActions:
+    """The two Actions reads this report makes, answered off ONE newest-first
+    sequence of runs and paged the way GitHub pages it.
+
+    Deliberately not a list of pre-split pages: the sweep chooses `per_page`,
+    and a fake that ignored it would let a listing depth that misses runs look
+    complete. It records what was asked, so a test can hold the sweep to its
+    cost as well as to its answer.
+    """
+
+    def __init__(self, runs: list[dict], jobs: str = "0"):
+        self.runs = runs
+        self.jobs = jobs
+        self.listing_reads: list[tuple[int, int]] = []  # (page, per_page)
+        self.jobs_reads: list[int] = []
+
+    def __call__(self, args):
+        url = args[1]
+        job = re.search(r"/actions/runs/(\d+)/jobs", url)
+        if job:
+            self.jobs_reads.append(int(job.group(1)))
+            return self.jobs, None
+        per_page = int(re.search(r"[?&]per_page=(\d+)", url).group(1))
+        page_match = re.search(r"[?&]page=(\d+)", url)
+        page = int(page_match.group(1)) if page_match else 1
+        self.listing_reads.append((page, per_page))
+        start = (page - 1) * per_page
+        return json.dumps(self.runs[start:start + per_page]), None
+
+
+class EvictionWindowTest(unittest.TestCase):
+    """The window outlasts the stall, and the listing covers the window.
+
+    Both halves are ONE decision (DRE-3129): a 24-hour window read off a
+    30-run listing is the same blindness the 180-minute window had, wearing a
+    bigger number — on a busy repo 30 Agent Fix runs is a few hours.
+    """
+
+    def _sweep(self, actions, now: str = NOW) -> str:
+        before = list(reconcile._read_failures)
+        try:
+            with mock.patch.object(
+                    reconcile, "_actions_read", side_effect=actions), \
+                    mock.patch.object(
+                        reconcile, "workflow_on_default_branch", return_value=True):
+                return _capture(reconcile.report_evicted_fix_runs, now)
+        finally:
+            del reconcile._read_failures[len(before):]
+
+    def _across_the_window(self, count: int = 300) -> list[dict]:
+        """`count` uneventful runs spread newest-first across the window — a
+        busy repo's ordinary traffic, and the reason 30 runs is not a day."""
+        span = reconcile.FIX_EVICTION_WINDOW_MIN / 60
+        return [
+            _run(9_000_000 + n, hours_before=span * n / count,
+                 actor=fc.WORKER_BOT_LOGIN, conclusion="success")
+            for n in range(count)
+        ]
+
+    def test_a_ten_hour_old_eviction_is_still_named(self):
+        # THE card's criterion, and PR #407's own timeline: at ten hours the
+        # stall was still running and the report had already forgotten it.
+        lost = _run(LOST_RUN, hours_before=10)
+        evictor = _run(EVICTOR_RUN, hours_before=10, seconds_before=-1,
+                       actor=fc.WORKER_BOT_LOGIN, conclusion="skipped")
+        out = self._sweep(_FakeActions([evictor, lost]))
+        self.assertIn(str(LOST_RUN), out,
+                      "a verdict trigger evicted ten hours ago was not named")
+        self.assertIn(str(EVICTOR_RUN), out)
+        self.assertIn("DRE-2810", out)
+        self.assertIn("1 verdict trigger(s)", out)
+
+    def test_the_window_covers_a_full_day(self):
+        self.assertGreaterEqual(
+            reconcile.FIX_EVICTION_WINDOW_MIN, 1440,
+            "the eviction window must remember a stall of a full day",
+        )
+
+    def test_the_window_is_still_bounded(self):
+        # Bounded on purpose: the jobs read is paid per cancelled run in the
+        # window, so an unbounded memory is an unbounded sweep. A day is the
+        # decision; 25 hours is outside it.
+        out = self._sweep(_FakeActions([_run(LOST_RUN, hours_before=25)]))
+        self.assertNotIn(str(LOST_RUN), out)
+        self.assertIn("0 verdict trigger(s)", out)
+
+    def test_the_summary_line_keeps_its_prefix_and_its_shape(self):
+        # The contract the re-dispatch follow-up reads: only <N> changes.
+        out = self._sweep(_FakeActions([]))
+        self.assertRegex(
+            out,
+            r"(?m)^evicted-fix-run: \d+ verdict trigger\(s\) and \d+ no-op "
+            r"trigger\(s\) were cancelled before starting in the last "
+            rf"{reconcile.FIX_EVICTION_WINDOW_MIN} minutes\.$",
+        )
+
+    def test_a_run_at_the_far_edge_of_the_window_is_inside_the_listing(self):
+        # The two cannot drift: a run half an hour inside the window's far
+        # edge, under 300 runs of ordinary traffic, is still read.
+        edge = reconcile.FIX_EVICTION_WINDOW_MIN / 60 - 0.5
+        lost = _run(LOST_RUN, hours_before=edge)
+        stale = _run(EVICTOR_RUN, hours_before=edge + 6)  # past the window
+        actions = _FakeActions(self._across_the_window() + [lost, stale])
+        out = self._sweep(actions)
+        self.assertIn(str(LOST_RUN), out,
+                      "the run listing does not reach the edge of the window")
+        self.assertNotIn(str(EVICTOR_RUN), out)
+        self.assertEqual(
+            actions.jobs_reads, [LOST_RUN],
+            "the per-run jobs read is paid only for cancelled runs inside the "
+            "window — the age gate runs before it",
+        )
+
+    def test_the_listing_depth_follows_the_window(self):
+        # Widening the window widens the listing by itself. A depth pinned
+        # beside the window is what made 180-over-30 and 1440-over-30 the
+        # same detector.
+        listing = self._across_the_window()
+        deep = _FakeActions(listing)
+        self._sweep(deep)
+        with mock.patch.object(reconcile, "FIX_EVICTION_WINDOW_MIN", 180):
+            shallow = _FakeActions(listing)
+            self._sweep(shallow)
+        self.assertGreater(
+            len(deep.listing_reads), len(shallow.listing_reads),
+            "the listing read the same depth for a 3-hour and a 24-hour "
+            "window, so one of them does not cover its window",
+        )
+
+    def test_a_listing_that_never_reaches_the_window_edge_says_so(self):
+        # More runs inside the window than the sweep will ever read. The read
+        # stays bounded, and a bounded read that did not cover the window is
+        # UNKNOWN — never "nothing was evicted" (the DRE-2034 discipline).
+        flood = [
+            _run(9_500_000 + n, hours_before=0.0, actor=fc.WORKER_BOT_LOGIN,
+                 conclusion="success")
+            for n in range(5_000)
+        ]
+        actions = _FakeActions(flood)
+        out = self._sweep(actions)
+        self.assertIn("UNKNOWN", out)
+        self.assertLessEqual(
+            len(actions.listing_reads), reconcile.FIX_RUNS_MAX_PAGES,
+            "widening the window must not make one sweep an unbounded read",
+        )
+
+    def test_the_jobs_endpoint_is_read_only_for_cancelled_runs(self):
+        runs = [
+            _run(9_600_000 + n, hours_before=float(n),
+                 actor=fc.WORKER_BOT_LOGIN, conclusion="success")
+            for n in range(20)
+        ]
+        runs.insert(5, _run(LOST_RUN, hours_before=5.0))
+        actions = _FakeActions(runs)
+        self._sweep(actions)
+        self.assertEqual(actions.jobs_reads, [LOST_RUN])
 
 
 if __name__ == "__main__":

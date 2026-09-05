@@ -4633,12 +4633,28 @@ def report_break_glass() -> None:
     except Exception as exc:  # noqa: BLE001 — a KPI read never fails the sweep
         print(break_glass.count_line(None, None, error=str(exc)))
 
-#: How far back the eviction report looks. Wider than the sweep's own 15
-#: minutes on purpose (GitHub's cron delivers sweeps 78-100 minutes apart in
-#: practice), so a dropped verdict is named at least once rather than falling
-#: between two ticks. A run named twice costs a log line; one never named is
+#: How far back the eviction report looks — a full day, because the failure it
+#: exists to catch outlasts a sweep by hours (DRE-3129). On portico PR #407
+#: (DRE-3004) the qa-bot's verdict trigger was evicted at 23:49 PT on
+#: 2026-09-02; the old 180-minute window had forgotten it by 02:50, and for the
+#: next seven hours of a ten-hour stall the sweep printed "evicted-fix-run: 0
+#: verdict trigger(s) … in the last 180 minutes" while the only other signal
+#: was the generic `fix-concurrency: WARN`. A detector whose memory is shorter
+#: than the failure reports nothing precisely when it matters. Bounded on
+#: purpose all the same: the per-run jobs read below is paid once per cancelled
+#: run in the window. A run named twice costs a log line; one never named is
 #: the DRE-2810 stall.
-FIX_EVICTION_WINDOW_MIN = 180
+FIX_EVICTION_WINDOW_MIN = 1440
+
+#: GitHub's maximum page size for an Actions run listing.
+FIX_RUNS_PER_PAGE = 100
+
+#: The ceiling on listing pages for ONE eviction report. The depth is derived
+#: from the window (see _fix_runs_in_window), so it cannot drift from it; this
+#: only stops a repo busy enough to fill the whole window with runs from
+#: turning one sweep into an unbounded read. Reaching it is reported as
+#: UNKNOWN, never as "nothing was evicted".
+FIX_RUNS_MAX_PAGES = 5
 
 
 def report_fix_concurrency(workflows: str = _WORKFLOWS_DIR) -> None:
@@ -4693,6 +4709,97 @@ def _fix_run_job_count(run_id) -> int | None:
         return None
 
 
+def _eviction_age_minutes(run: dict, now: str | None) -> float | None:
+    """How old a run is, or None when GitHub's timestamp did not parse.
+    Unreadable is never a fact (DRE-2034), so a run with no usable
+    `created_at` is neither inside the window nor evidence the walk is past
+    it — one definition, used by both readers below."""
+    try:
+        return age_minutes(run.get("created_at") or "", now)
+    except ValueError:
+        return None
+
+
+def _fix_runs_in_window(
+    workflow: str, now: str | None
+) -> tuple[list[dict] | None, str | None]:
+    """Every Agent Fix run GitHub lists back to the edge of the window.
+
+    The window and the listing's depth are ONE decision (DRE-3129). Pages are
+    read newest-first and the walk stops at the first page that reaches past
+    `FIX_EVICTION_WINDOW_MIN`, so widening the window widens the listing by
+    construction. The fixed `per_page=30` this replaced was a few hours of a
+    busy repo's Agent Fix traffic — a 24-hour window read off it would have
+    been the same blindness wearing a bigger number.
+
+    Only the listing is paged; the per-run jobs read stays where it was, paid
+    once per CANCELLED run inside the window and never for the rest.
+
+    Returns `(runs, gap)`:
+      * `(None, None)`   — this repo has no Agent Fix stub. Absence is a third
+                           answer, never a failure (DRE-2525).
+      * `(None, line)`   — the first page was unreadable; `line` is what the
+                           sweep should say instead of a count.
+      * `(runs, None)`   — the walk reached the far edge of the window.
+      * `(runs, line)`   — a partial read: what was listed is real, and `line`
+                           names the part of the window this sweep could not
+                           see.
+    """
+    runs: list[dict] = []
+    for page in range(1, FIX_RUNS_MAX_PAGES + 1):
+        args = ("api",
+                f"repos/{REPO}/actions/workflows/{workflow}/runs"
+                f"?per_page={FIX_RUNS_PER_PAGE}&page={page}",
+                "--jq", fix_concurrency.RUNS_JQ)
+        out, detail = _actions_read(args)
+        if detail is not None:
+            # Absence is adjudicated BEFORE the failure is recorded, or a repo
+            # with no fix stub takes the sweep red (DRE-2525).
+            if page == 1 and workflow_on_default_branch(workflow) is False:
+                return None, None
+            _note_actions_read_failure(args, detail)
+            gap = (
+                "evicted-fix-run: UNKNOWN — the Agent Fix run listing was "
+                "unreadable, so this sweep cannot say whether a verdict "
+                "trigger was evicted."
+                if page == 1 else
+                f"evicted-fix-run: UNKNOWN — page {page} of the Agent Fix run "
+                f"listing was unreadable, so this sweep read back less than "
+                f"the {FIX_EVICTION_WINDOW_MIN}-minute window."
+            )
+            return (None, gap) if page == 1 else (runs, gap)
+        try:
+            listed = json.loads(out) if out else None
+        except ValueError:
+            listed = None
+        if not isinstance(listed, list):
+            gap = (
+                "evicted-fix-run: UNKNOWN — the Agent Fix run listing did not "
+                "parse, so this sweep cannot say whether a verdict trigger was "
+                "evicted."
+                if page == 1 else
+                f"evicted-fix-run: UNKNOWN — page {page} of the Agent Fix run "
+                f"listing did not parse, so this sweep read back less than the "
+                f"{FIX_EVICTION_WINDOW_MIN}-minute window."
+            )
+            return (None, gap) if page == 1 else (runs, gap)
+        runs.extend(listed)
+        past_the_edge = any(
+            (age := _eviction_age_minutes(run, now)) is not None
+            and age > FIX_EVICTION_WINDOW_MIN
+            for run in listed
+        )
+        if past_the_edge or len(listed) < FIX_RUNS_PER_PAGE:
+            return runs, None
+    oldest = runs[-1].get("created_at") if runs else "?"
+    return runs, (
+        f"evicted-fix-run: UNKNOWN — the listing stopped at "
+        f"{FIX_RUNS_MAX_PAGES} pages of {FIX_RUNS_PER_PAGE} runs, back only as "
+        f"far as {oldest}, without reaching the {FIX_EVICTION_WINDOW_MIN}-minute "
+        "window. An eviction older than that was not read."
+    )
+
+
 def report_evicted_fix_runs(now: str | None = None) -> None:
     """Name every Agent Fix run cancelled before it started a job (DRE-2810).
 
@@ -4706,46 +4813,26 @@ def report_evicted_fix_runs(now: str | None = None) -> None:
     — so a run triggered by the qa-bot and cancelled before any job started is
     a verdict that never reached the fix agent, and it is reported as one.
 
+    It looks back `FIX_EVICTION_WINDOW_MIN`, over a listing read to the same
+    depth (`_fix_runs_in_window`) — the memory has to outlast the stall, or the
+    report goes quiet exactly while the PR is stuck (DRE-3129).
+
     This is a report, not a repair: the grouping fix is what stops the
     eviction, and re-dispatching off a log line would race the sweeps that
     already own PR recovery.
     """
-    workflow = fix_workflow()
-    args = ("api", f"repos/{REPO}/actions/workflows/{workflow}/runs?per_page=30",
-            "--jq", fix_concurrency.RUNS_JQ)
-    out, detail = _actions_read(args)
-    if detail is not None:
-        # Absence is a third answer, never a failure (DRE-2525): adjudicate it
-        # BEFORE recording, or a repo with no fix stub takes the sweep red.
-        if workflow_on_default_branch(workflow) is False:
-            return
-        _note_actions_read_failure(args, detail)
-        print(
-            "evicted-fix-run: UNKNOWN — the Agent Fix run listing was "
-            "unreadable, so this sweep cannot say whether a verdict trigger "
-            "was evicted."
-        )
-        return
-    try:
-        runs = json.loads(out) if out else None
-    except ValueError:
-        runs = None
-    if not isinstance(runs, list):
-        print(
-            "evicted-fix-run: UNKNOWN — the Agent Fix run listing did not "
-            "parse, so this sweep cannot say whether a verdict trigger was "
-            "evicted."
-        )
+    runs, gap = _fix_runs_in_window(fix_workflow(), now)
+    if gap:
+        print(gap)
+    if runs is None:
         return
 
     lost = duplicates = 0
     for run in runs:
         if not fix_concurrency.is_cancelled(run):
             continue
-        try:
-            if age_minutes(run.get("created_at") or "", now) > FIX_EVICTION_WINDOW_MIN:
-                continue
-        except ValueError:
+        age = _eviction_age_minutes(run, now)
+        if age is None or age > FIX_EVICTION_WINDOW_MIN:
             continue
         jobs = _fix_run_job_count(run.get("id"))
         if jobs is None:
