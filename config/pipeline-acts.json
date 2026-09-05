@@ -1327,6 +1327,14 @@
       "kind": "undeclared-act",
       "means": "The sweep cannot bring a limit death back on its own — no reset time and no account to watch, or no run to re-run — and says once what a person does (DRE-3171).",
       "why": "Act-shaped (a hold: the work is handed to a person, told once), and the registry has no row for it. Same sequencing as the recovery above: console first, then the row. Its idempotency is positional, like the recovery's — the receipt closes the marker, so it is posted exactly once per marker and the card is back on the sweep's ordinary clock afterwards."
+    },
+    {
+      "file": ".github/workflows/medic.yml",
+      "anchor": "linear_ops.py comment \"$CARD\" \"$BODY\"",
+      "step": "Is this a limit death?",
+      "kind": "undeclared-act",
+      "means": "The medic marks a run that hit the Claude account's usage limit or Linear's request budget: one `🪦 limit-death:` marker on the card, no retry, no strike — the reconcile sweep re-enters the stage once the wall is down (DRE-3171).",
+      "why": "Act-shaped (a refusal to retry into the wall, and the ticket back), and the registry has no row for it. Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the marker ships first as an undeclared act and its row follows with its console half, together with the two limit-recovery receipts scripts/limit_recovery.py posts in answer to it. The body is dead_run.limit_marker()'s, whose first line is machine-readable and pinned; its idempotency is the `run=<id>` on that line, which the step checks before posting so a re-run attempt never writes a second."
     }
   ]
 }
