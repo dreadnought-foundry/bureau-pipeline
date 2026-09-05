@@ -48,6 +48,15 @@ one. Three things here descend from that:
     matches whole words, so a sentence that merely mentions signing in is not
     a card that requires signing in.
 
+## What a checkbox IS is not decided here (DRE-3147)
+
+Markdown spells a checkbox `[ ]` / `[x]`; a good number of this board's older
+cards spell it with the Unicode ballot box, and a reader that knew only the
+first refused four fully specified cards for stating no acceptance criteria.
+`checkbox_marks` carries the one table of marks, and this module, the critic's
+mechanical check and the footprint parser all read it — the reader meets the
+cards where they are, and the board is not edited to suit the reader.
+
 ## The split this card had wrong first time round
 
 Static visual fidelity is FLEET-checkable: `qa-review.yml` runs a visual-QA
@@ -96,6 +105,7 @@ import sys
 from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import checkbox_marks  # noqa: E402
 import lane_contract  # noqa: E402
 import mid_epic  # noqa: E402
 
@@ -130,9 +140,23 @@ _VERDICT_LINE = re.compile(
 
 # Acceptance criteria are checkbox items and nothing else — that is what
 # standards/card-quality.md requires a card to carry, and reading prose instead
-# is how a mention becomes a declaration.
-_CRITERION = re.compile(r"^\s*[-*+]\s*\[[ xX]\]\s*(.+?)\s*$")
+# is how a mention becomes a declaration. WHICH marks count is not decided
+# here: `checkbox_marks` carries the one table, because this module, the
+# critic's mechanical check and the footprint parser all have to agree about
+# what a criterion looks like (DRE-3147).
+_CRITERION = checkbox_marks.ITEM
 _FENCE = re.compile(r"^\s*(```|~~~)")
+
+# The section a refusal quotes back, matched TOLERANTLY on purpose: it exists
+# to show a person what the card actually carries, not to grade the heading,
+# so `## Acceptance` and `## Acceptance criteria` both count.
+_ACCEPTANCE_HEADING = re.compile(r"^\s*#{1,6}\s*acceptance\b", re.IGNORECASE)
+_ANY_HEADING = re.compile(r"^\s*#{1,6}\s")
+
+# How many of those lines a refusal shows. Enough to tell an empty section
+# from one written in a shape the reader does not know; not so many that the
+# escalation becomes the card.
+_QUOTED_LINES = 3
 
 # Inheritable labels a planner's child must carry for the epic's plan to be
 # executable at all: the repo it routes to and the role that builds it.
@@ -653,8 +677,32 @@ def acceptance_criteria(description: str) -> list:
             continue
         match = _CRITERION.match(line)
         if match:
-            out.append(match.group(1))
+            out.append(match.group("text"))
     return out
+
+
+def acceptance_section(description: str) -> list | None:
+    """The non-blank lines under the card's acceptance heading, or None when it
+    has no such heading.
+
+    Blank lines are dropped rather than counted: every card puts one straight
+    after the heading, and a refusal that quoted three lines of which the first
+    was empty would show two. The section ends at the next heading — `## Not in
+    scope` is a different section and quoting it back would say nothing about
+    the criteria.
+    """
+    lines = (description or "").splitlines()
+    for i, line in enumerate(lines):
+        if not _ACCEPTANCE_HEADING.match(line):
+            continue
+        out = []
+        for nxt in lines[i + 1:]:
+            if _ANY_HEADING.match(nxt):
+                break
+            if nxt.strip():
+                out.append(nxt.strip())
+        return out
+    return None
 
 
 def _phrase_re(phrase: str) -> re.Pattern:
@@ -719,6 +767,60 @@ def title_verdict(title: str, doc: dict | None = None) -> str | None:
     return None
 
 
+def _showable(text: str) -> bool:
+    """Is this text fit to put in front of the CEO?
+
+    `planning_escalation` owns that question — the reason this refusal states
+    is relayed into the escalation the CEO reads, and its gate refuses
+    code-shaped text. Imported late because that module reads `planning_route`,
+    which reads this one; late is still one source, and the derivation stays
+    where it belongs. An unreadable answer is read as "no", so a quote that
+    cannot be vetted is never shown.
+    """
+    try:
+        import planning_escalation
+
+        return not planning_escalation.jargon(text)
+    except Exception:  # noqa: BLE001 — cannot vet it, so do not show it
+        return False
+
+
+def _acceptance_evidence(description: str) -> str:
+    """What the card actually carries under its acceptance heading, quoted.
+
+    The refusal used to state a fact about the card and show none of it, so on
+    2026-09-04 four cards reached the CEO saying "no acceptance criteria" over
+    a section holding four or five each. Whoever reads the escalation can now
+    tell at once whether the card is truly empty or merely written in a shape
+    the reader does not know.
+
+    The quote DEGRADES to a count when it would not survive the escalation
+    gate: a card whose acceptance lines name files is common, and quoting one
+    would make the whole reason unfit to show — costing the CEO the refusal
+    itself, which is the opposite of the point.
+    """
+    lines = acceptance_section(description)
+    if lines is None:
+        return "The card has no `## Acceptance` section at all."
+    if not lines:
+        return "Its `## Acceptance` section is empty."
+    shown = lines[:_QUOTED_LINES]
+    quoted = "; ".join(f"“{line}”" for line in shown)
+    more = " and more" if len(lines) > len(shown) else ""
+    evidence = (
+        f"Under `## Acceptance` the card reads: {quoted}{more} — none of it in "
+        "a shape this reader can read as a criterion."
+    )
+    if _showable(evidence):
+        return evidence
+    return (
+        f"Its `## Acceptance` section carries {len(lines)} "
+        f"{'line' if len(lines) == 1 else 'lines'}, none of them in a shape "
+        "this reader can read as a criterion. The text is not quoted here "
+        "because it would not be plain English."
+    )
+
+
 def criteria_verdict(description: str, doc: dict | None = None) -> tuple:
     """Precedence 3, as `(verdict, reason)`.
 
@@ -731,7 +833,7 @@ def criteria_verdict(description: str, doc: dict | None = None) -> tuple:
             "NEEDS WORK",
             "the card states no acceptance criteria, so there is no exit "
             "condition to route on. Name what must be true for this card to be "
-            "done, as `- [ ]` items.",
+            "done, as `- [ ]` items. " + _acceptance_evidence(description),
         )
     for key, signal in _signals(doc):
         for criterion in criteria:
