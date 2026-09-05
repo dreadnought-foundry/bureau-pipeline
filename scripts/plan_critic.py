@@ -100,6 +100,7 @@ from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import checkbox_marks
 import design_parity
 import plan_footprint
 
@@ -1029,7 +1030,10 @@ def sight_block(this_epic: str, epics: list[dict]) -> str:
 # `## Acceptance criteria` and at least one checkable item under it.
 _ACCEPTANCE_HEADING = re.compile(r"^#{1,6}\s*acceptance\s+criteria\s*$",
                                  re.IGNORECASE | re.MULTILINE)
-_CHECK_ITEM = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*\S", re.MULTILINE)
+# WHICH marks count is `checkbox_marks`' answer, not a second one written here
+# (DRE-3147): a card the route reads as carrying criteria and this check reads
+# as carrying none is one card refused twice for the same non-reason.
+_CHECK_ITEM = checkbox_marks.ITEM_MULTILINE
 
 # The `repo:<slug>` LABEL, with a non-empty slug — the canonical and only
 # source of truth for a card's repo (standards/card-quality.md, DRE-1699).

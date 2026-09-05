@@ -49,8 +49,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import checkbox_marks  # noqa: E402
 
 
 class FootprintMissing(ValueError):
@@ -76,8 +81,12 @@ _HEADING = re.compile(
 # checkable acceptance item, or the next `**Label:**` declaration. Anything
 # else on the following lines is the declaration wrapping, which is exactly
 # what the brief's own template does.
+# The checkable item is spelled by `checkbox_marks` and nowhere else
+# (DRE-3147) — a mark this pattern did not know would run the declared
+# footprint straight on into the acceptance criteria.
 _SECTION_END = re.compile(
-    r"^\s*(?:$|#{1,6}\s|```|[-*+]\s*\[[ xX]\]|(?:[-*+]\s+)?\*\*[^*\n]{1,60}\*\*)"
+    r"^\s*(?:$|#{1,6}\s|```|[-*+]\s*" + checkbox_marks.MARK
+    + r"|(?:[-*+]\s+)?\*\*[^*\n]{1,60}\*\*)"
 )
 
 # A path, root-level ones included — dropping the old `/` requirement is the

@@ -142,7 +142,10 @@ class CriticWalk(unittest.TestCase):
         # plan_footprint.py: the declared-footprint parser plan_critic imports
         # (DRE-3040) — the walk runs the real module, so it needs the real
         # dependency beside it.
-        for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py"):
+        # checkbox_marks.py: the one table of criterion marks both of those
+        # read (DRE-3147) — same reason, one module further down.
+        for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
+                     "checkbox_marks.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)
