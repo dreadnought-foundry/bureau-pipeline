@@ -228,7 +228,7 @@ def _reset_budget_state() -> None:
         first=None,  # first `remaining` seen
         last=None,  # last `remaining` seen
         reset_ms=None,  # last reset epoch seen, ms
-        rolled=False,  # the reset epoch moved mid-run
+        refilled=False,  # `remaining` rose at some point mid-run (DRE-3224)
         refused_after=None,  # calls sent before the stop armed; None = not armed
         condition=None,  # the named condition the stop was armed with
         reported=False,  # the exit line was printed
@@ -258,9 +258,12 @@ def _note_response_headers(headers) -> None:
         if _budget["first"] is None:
             _budget["first"] = remaining
         elif remaining > _budget["last"]:
-            # `remaining` going UP is the one unambiguous sign the window
-            # rolled (or refilled) under us — first − last would be negative.
-            _budget["rolled"] = True
+            # A leaky bucket refills WHILE a long sweep runs, so a reading
+            # above the previous one is ordinary — noted, never a roll. Seen
+            # live (DRE-3224): 1675 → 1605 printed `window rolled` because
+            # one mid-run reading sat above the one before it. Whether the
+            # window rolled is decided at the END, on last vs first.
+            _budget["refilled"] = True
         _budget["last"] = remaining
     if reset_ms is not None:
         # Kept for the clock only. Linear documents a leaky bucket and does
@@ -303,16 +306,21 @@ def budget_line() -> str:
 
         linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT)
 
-    N is first − last, never negative: a window that rolled mid-run says
-    `window rolled` instead of a number. After a RATELIMITED it also carries
-    `refused after <N> calls`. Never a key, never a URL."""
+    N is first − last, never negative. A run that ENDS above where it started
+    (last > first) says `window rolled` instead of a number — that and
+    nothing else is a roll (DRE-3224). A run in which `remaining` rose at
+    some point but still ended lower reports the number, an honest lower
+    bound, with `(refilled mid-run)` appended. After a RATELIMITED it also
+    carries `refused after <N> calls`. Never a key, never a URL."""
     first, last = _budget["first"], _budget["last"]
     if first is None or last is None:
         return "linear-budget: unknown (no rate-limit headers seen)"
-    if _budget["rolled"] or last > first:
+    if last > first:
         spent = "window rolled"
     else:
         spent = f"spent {first - last} this run"
+        if _budget["refilled"]:
+            spent += " (refilled mid-run)"
     parts = [spent, f"window resets {_reset_clock()} PT"]
     if _budget["refused_after"] is not None:
         parts.append(f"refused after {_budget['refused_after']} calls")
