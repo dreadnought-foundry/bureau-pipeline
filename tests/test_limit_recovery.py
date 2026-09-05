@@ -186,12 +186,54 @@ def test_linear_with_unknown_reset_recovers_on_the_next_pass():
     assert "quota" in s.comments[0][1].lower()
 
 
-def test_claude_with_unknown_reset_waits_for_an_account_switch():
+def test_claude_with_unknown_reset_but_a_recorded_account_waits_for_the_switch():
     s = Seams()
-    s.recover([card(bodies=[marker(reset=None, account="main")])], now=AFTER, active_account="main")
+    lines = s.recover([card(bodies=[marker(reset=None, account="main")])], now=AFTER, active_account="main")
     assert s.moves == [] and s.comments == []
+    assert any("DRE-3062" in line and "main" in line for line in lines), (
+        "a card waiting on a switch says which account it is waiting to leave"
+    )
     s.recover([card(bodies=[marker(reset=None, account="main")])], now=AFTER, active_account="work")
     assert s.moves == [("DRE-3062", "Todo")]
+
+
+def test_a_marker_nothing_can_trigger_is_handed_to_a_human_once():
+    """Nothing waits without a clock, a switch, or a person being told. A
+    Claude marker with no reset time and no recorded account has none of the
+    first two — an API `rate_limit_error` carries no `resets …`, and so does a
+    reset in a zone the parser does not read — so it gets ONE receipt saying
+    what a human does, and that receipt closes the marker: the card is back on
+    the sweep's ordinary clock instead of hidden from it forever."""
+    s = Seams()
+    lines = s.recover([card(bodies=[marker(reset=None)])], now=AFTER, active_account=None)
+    assert s.moves == [] and s.reruns == [] and s.dispatched == []
+    assert len(s.comments) == 1
+    ident, body = s.comments[0]
+    assert ident == "DRE-3062"
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert limit_recovery.is_receipt(body), "the hand-off must close the marker"
+    assert not any(line.startswith("ERROR:") for line in lines)
+    again = Seams()
+    again.recover([card(bodies=[marker(reset=None), body])], now=AFTER)
+    assert again.comments == [] and again.moves == []
+
+
+def test_a_handed_off_card_is_ordinary_to_the_sweep_again():
+    handoff = Seams()
+    handoff.recover([card(bodies=[marker(reset=None)])])
+    assert limit_recovery.waiting([marker(reset=None), handoff.comments[0][1]]) is None
+
+
+def test_a_planning_stage_marker_on_a_working_card_reruns_the_run_never_replans():
+    """plan.yml's ACTIVATE route runs the second critic against a CEO-approved
+    epic that is already In Progress. A limit death there must not drag the
+    epic back to Planning — that undoes the approval and fires a plan-mode
+    run. The original run is re-run instead; it keeps its own trigger."""
+    for lane in ("Todo", "In Progress", "In Review", "Green Light"):
+        s = Seams()
+        s.recover([card(ident="DRE-3162", lane=lane, bodies=[marker(stage="plan")])])
+        assert s.moves == [], lane
+        assert s.reruns == [RUN], lane
 
 
 # --------------------------------------------------------------------------
@@ -220,8 +262,8 @@ def test_planning_stage_from_planning_bounces_out_through_intake_and_back(stage)
     assert "Planning" in s.comments[0][1]
 
 
-@pytest.mark.parametrize("lane", ["Backlog", "Intake", "Green Light"])
-def test_planning_stage_from_elsewhere_enters_planning_once(lane):
+@pytest.mark.parametrize("lane", ["Backlog", "Intake", "Triage"])
+def test_planning_stage_from_before_planning_exit_enters_planning_once(lane):
     s = Seams()
     s.recover([card(ident="DRE-3162", lane=lane, bodies=[marker(stage="plan")])])
     assert s.moves == [("DRE-3162", "Planning")]
@@ -236,11 +278,20 @@ def test_pr_stages_rerun_the_original_run(stage):
     assert RUN in s.comments[0][1]
 
 
-def test_a_rerun_with_no_run_id_is_reported_not_attempted():
+def test_a_rerun_with_no_run_id_is_handed_to_a_human_once_not_errored_every_pass():
+    """An `ERROR:` here would go into the sweep's write ledger on EVERY pass —
+    a permanently red sweep and a medic woken every fifteen minutes for a card
+    nobody is told about. The honest answer is one receipt naming what a human
+    does, which closes the marker."""
     s = Seams()
     lines = s.recover([card(lane="In Review", bodies=[marker(stage="review", run="unknown")])])
-    assert s.reruns == [] and s.comments == []
-    assert any(line.startswith("ERROR:") and "DRE-3062" in line for line in lines)
+    assert s.reruns == []
+    assert len(s.comments) == 1 and s.comments[0][1].startswith(limit_recovery.HANDOFF_MARK)
+    assert "re-run" in s.comments[0][1].lower()
+    assert not any(line.startswith("ERROR:") for line in lines)
+    again = Seams()
+    again.recover([card(lane="In Review", bodies=[marker(stage="review", run="unknown"), s.comments[0][1]])])
+    assert again.comments == [] and again.reruns == []
 
 
 # --------------------------------------------------------------------------
