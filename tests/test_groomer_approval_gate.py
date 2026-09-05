@@ -12,11 +12,16 @@ eventually does not happen. Revisit the cadence once the calls have been
 checked against a real batch.
 
 The gate is worth nothing if the proposer can approve its own proposal, so the
-approval must come from someone who is not the pipeline: every pipeline write
-goes through one `LINEAR_API_KEY` that resolves to one Linear user, so "the
-pipeline wrote this" is exactly "the key's own viewer wrote this"
-(`linear_ops.comment_records`, DRE-2721 — two stray comments carrying a marker
-line once overrode a real critic rejection).
+approval must come from someone who is not the pipeline — and that is still the
+property this gate leans on. Every unattended write goes through the FLEET key,
+which resolves to the one fleet user `Agent-Bureau` (declared in
+`config/linear-identities.json`, held to by
+`scripts/check_linear_identities.py check`, DRE-3172), so "the pipeline wrote
+this" is exactly "the fleet user wrote this" and `authored_by_pipeline` is true
+only for that user. The operator's own tools write as `bureau-tools` and so read
+as somebody else's — the safe direction (`linear_ops.comment_records`, DRE-2721
+— two stray comments carrying a marker line once overrode a real critic
+rejection).
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groomer_approval_gate.py -v
 """
