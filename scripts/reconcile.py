@@ -134,6 +134,7 @@ import intake_controls  # noqa: E402
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
 import lane_contract  # noqa: E402
+import limit_recovery  # noqa: E402 — DRE-3171: re-enter the stage a limit death left
 import linear_ops  # noqa: E402
 # DRE-2340: ONE implementation of the verdict binding — the sweep must read
 # a verdict exactly the way the gate does (DRE-1998 had to fix an
@@ -5238,6 +5239,34 @@ def repo_epics(active: list[dict]) -> set[str]:
     return {c["identifier"] for c in mine if card_is_epic(c)}
 
 
+def recover_limit_deaths() -> None:
+    """DRE-3171: re-enter the stage a limit death left, once the window has
+    reset or the account has switched. The decision lives in limit_recovery;
+    this is the sweep's half — the board it already read, this repo's cards
+    (an unlabelled Planning card is everybody's, flag_stalled_planning's rule),
+    the WIP room, and the three writes made AS the sweep (DRE-2859: the lane
+    contract names the actor, and the actor is this module). Its own guard: a
+    fault in recovery is logged and never costs the sweep the rest of its
+    pass. `CLAUDE_ACCOUNT` is the seam DRE-3170 fills; unset, only the clock
+    can trigger.
+    """
+    try:
+        cards = [c for c in active_cards() if card_repo(c) in (None, REPO_SLUG)]
+        for line in limit_recovery.recover(
+            linear_ops, datetime.now(UTC), os.environ.get("CLAUDE_ACCOUNT") or None,
+            MAX_WIP - sum(1 for c in cards if card_repo(c) == REPO_SLUG),
+            rerun=lambda run_id: gh_dispatch(
+                "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
+            move=lambda ident, lane: linear_ops.cmd_state(ident, lane),
+            dispatch=redispatch, cards=cards,
+        ):
+            print(line)
+            if line.startswith("ERROR:"):
+                _write_failures.append(line)
+    except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
+        print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
+
+
 def main(
     promote_only: bool = False, conflicts_only: bool = False, close_only: bool = False
 ) -> None:
@@ -5307,6 +5336,9 @@ def main(
             # that DIED, this one starts the fix run a standing verdict never
             # got (portico #407 sat ten hours on a diagnosis nobody acted on).
             redispatch_standing_verdicts,
+            # DRE-3171: a run that hit a usage or request limit comes back on
+            # its own once the wall is down — the stage it died in, re-entered.
+            recover_limit_deaths,
             restart_answered_blockers,
             review_dependabot_prs,
             recover_crashed_reviews,
@@ -5358,6 +5390,8 @@ def main(
         ident, state = card["identifier"], card["state"]["name"]
         if held(card) or ident in flagged:
             continue  # human-hold: untouched until a human removes the label
+        if limit_recovery.waiting(card_comment_bodies(card)):
+            continue  # DRE-3171: a limit death is a wait, and the wall is not down yet
         if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
             continue
 
