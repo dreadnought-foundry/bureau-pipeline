@@ -1731,15 +1731,23 @@ def comment_records(identifier: str) -> list[dict]:
     """Every comment on the card WITH who wrote it, oldest→newest.
 
     `[{"body": str, "authored_by_pipeline": bool}]`. The one authorship fact
-    anything downstream needs: this pipeline's writes all go through a single
-    `LINEAR_API_KEY` that resolves to one Linear user (README — "the relay,
-    reconcile, the planner and every agent share one LINEAR_API_KEY and resolve
-    to the operator's own Linear user"), so "the pipeline wrote this" is
-    exactly "the key's own `viewer` wrote this". A comment from anyone else on
-    the card — a teammate, a guest with comment access — resolves to a
-    different user, and an integration's comment has no `user` at all, which is
-    the same rule README already states for break-glass labels: "a marker
-    applied by a bot actor (an integration we do not own) is not honored."
+    anything downstream needs: every unattended write — the relay, reconcile,
+    the planner, every agent — goes through the FLEET key, which resolves to
+    the one fleet user `Agent-Bureau` (declared in
+    `config/linear-identities.json`, held to by
+    `scripts/check_linear_identities.py check`, DRE-3172). So "the pipeline
+    wrote this" is exactly "the fleet user wrote this", and `authored_by_pipeline`
+    is true only for comments the fleet user wrote. A comment from anyone else
+    on the card — the operator's own tools writing as `bureau-tools`, a
+    teammate, a guest with comment access — resolves to a different user, and
+    an integration's comment has no `user` at all, which is the same rule
+    README already states for break-glass labels: "a marker applied by a bot
+    actor (an integration we do not own) is not honored."
+
+    This is computed from the key this process runs under: `viewer` is whoever
+    `LINEAR_API_KEY` is. In a workflow that is the fleet; on the operator's
+    machine it is `bureau-tools`, and a fleet-written marker then reads as
+    "someone else's" — the safe direction, the same as an unknown viewer.
 
     Why it exists (DRE-2721 review): `plan_critic.py` counts a plan's review
     rounds out of markers in this thread, and `comment_bodies` selected bodies
@@ -1804,8 +1812,10 @@ def agent_label_refusal(label_name: str) -> str | None:
     action — an agent that could bypass the intake gate would eventually
     bypass it for a reason that seemed good at the time, which is the entire
     failure class the intake wave addresses. Actor identity cannot enforce
-    that (the whole fleet shares one LINEAR_API_KEY and resolves to the
-    operator's own user), so the enforcement lives at the WRITE SEAM instead:
+    that: the fleet writes as `Agent-Bureau` and the operator's tools as
+    `bureau-tools` (`config/linear-identities.json`, DRE-3172), but an
+    operator ACTION is a person's hand in Linear, and a script running under
+    either key is not that — so the enforcement lives at the WRITE SEAM instead:
     the label-writing paths below refuse it. The pipeline's own
     `break-glass:used` receipt is a different label and stays writable — the
     gate has to be able to record a bypass.
