@@ -310,3 +310,59 @@ def test_the_exit_hook_is_registered_with_atexit():
     with open(linear_ops.__file__, encoding="utf-8") as f:
         source = f.read()
     assert "atexit.register(_report_budget_at_exit)" in source
+
+
+# ── DRE-3224: a refill mid-run is not a rolled window ───────────────────────
+# Seen live on the channel (agent-bureau reconcile, 2026-09-05): a sweep that
+# went 1675 → 1605 printed `window rolled`, and so did 2186 → 2118. A leaky
+# bucket refills WHILE a long sweep runs, so a reading above the previous one
+# is ordinary; only a run that ENDS above where it started has rolled.
+def _sequence(transport, *readings):
+    """One response per reading, the reset epoch drifting a few seconds
+    between responses, the way the bucket's reset slides as it refills."""
+    transport(
+        *[
+            _Resp(headers=_headers(remaining, RESET_MS + i * 3_000))
+            for i, remaining in enumerate(readings)
+        ]
+    )
+    for _ in readings:
+        linear_ops.gql(QUERY)
+
+
+def test_run_33994820702_1675_to_1605_is_a_spend_of_70_not_a_roll(transport):
+    _sequence(transport, 1675, 1640, 1652, 1620, 1605)
+    line = linear_ops.budget_line()
+    assert "window rolled" not in line
+    assert line.startswith("linear-budget: 1675 → 1605 (spent 70 this run")
+
+
+def test_run_at_16_05_pt_2186_to_2118_is_a_spend_of_68_not_a_roll(transport):
+    _sequence(transport, 2186, 2150, 2158, 2118)
+    line = linear_ops.budget_line()
+    assert "window rolled" not in line
+    assert line.startswith("linear-budget: 2186 → 2118 (spent 68 this run")
+
+
+def test_a_mid_run_refill_that_still_ends_lower_says_so_after_the_number(transport):
+    """The number is an honest lower bound; the refill is named so the reader
+    knows why the run's true spend is higher than first − last."""
+    _sequence(transport, 1675, 1640, 1652, 1605)
+    reset_pt = linear_ops._reset_clock()
+    assert linear_ops.budget_line() == (
+        f"linear-budget: 1675 → 1605 (spent 70 this run (refilled mid-run); "
+        f"window resets {reset_pt} PT)"
+    )
+
+
+def test_a_plain_decrease_carries_no_refill_note(transport):
+    _sequence(transport, 1862, 1820, 1784)
+    line = linear_ops.budget_line()
+    assert "refilled" not in line and "spent 78 this run;" in line
+
+
+def test_a_genuine_roll_that_ends_above_the_start_still_reports_window_rolled(transport):
+    _sequence(transport, 5, 3, 2499, 2497)
+    line = linear_ops.budget_line()
+    assert line.startswith("linear-budget: 5 → 2497 (window rolled;")
+    assert "spent" not in line and "refilled" not in line
