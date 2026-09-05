@@ -69,11 +69,20 @@ same shape makes the whole decision testable without Linear or GitHub.
 ## What a "newer receipt" is
 
 The board read carries comment bodies in order and no timestamps, so newer is
-positional. Every receipt the pipeline writes opens with a glyph (🧹 ⏳ 🧠 🪦
-🚨 🤖 …), and people write in letters — so a later comment whose first
-character is outside ASCII is a pipeline receipt and closes the marker, while
-a person's "looking at this now" does not. The recovery's own `🔁` receipt is
-one, which is what stops a card being re-dispatched every pass.
+positional. A later comment closes the marker when the PIPELINE wrote it, and
+without an authorship read (one request per card, against the very quota this
+module exists to spare) that is read off the body itself, two ways: the
+`📎 pipeline-act:` trailer every composed act ends with, or an opening glyph
+from RECEIPT_GLYPHS — the finite set the pipeline's card writers open with
+(🧹 the sweep, 🧠 ⏳ the run's heartbeats, 🤖 the report step, 🪦 🚨 🛑 🙋 the
+dead-run, hold, blocker and escalation receipts, and this module's own 🔁 and
+⚠️). It used to be "any non-ASCII first character", and the critic on #279
+showed what that does: a person's "👍 approved, go ahead" read as the
+pipeline's own receipt, closed the marker, and the sweep silently stopped
+bringing the card back — the stall this module exists to end. So the set is
+enumerated as data, a glyph people reach for (👍 🎉 👀 ✅ ❌ 🙏) is not in it, and
+a receipt the pipeline opens with a glyph not listed here simply does not close
+the marker — the safe direction, because the recovery's own receipt always does.
 
 Bounded by `wip_room` per pass; skips terminal cards (Done / Canceled /
 Duplicate) and cards held for a human (`needs-human`), which the sweep leaves
@@ -90,6 +99,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the marker's one definition
+import pipeline_act  # noqa: E402 — the trailer is the one claim of pipeline authorship
 
 RECOVERY_TAG = "limit-recovery"
 RECOVERY_MARK = f"🔁 {RECOVERY_TAG}:"
@@ -112,10 +122,28 @@ class RecoveryFailed(RuntimeError):
     """A re-entry that did not land. Reported, never swallowed, never receipted."""
 
 
+# The glyphs the pipeline's card writers open a receipt with — the finite
+# set, as data (see the module docstring for why "any non-ASCII character"
+# was the wrong proxy). Kept to the writers a limit-parked card can actually
+# hear from: the sweep, the run itself, the report step, the medic and the
+# dead-run/hold/blocker/escalation receipts. ✅ and ❌ are deliberately absent:
+# people reach for them, and the one pipeline ✅ (card-done) lands on a card
+# that is already Done and skipped here.
+RECEIPT_GLYPHS = (
+    "🧹", "🧠", "⏳", "🤖", "🪦", "🚨", "🛑", "🙋", "🧯", "🔌", "♻️", "🩺",
+    "🔧", "🔀", "⚡", "🔓", "🚫", "🏁",
+    RECOVERY_MARK[:1], HANDOFF_MARK[:2],
+)
+
+
 def is_receipt(body: str) -> bool:
-    """True when `body` is a pipeline receipt — it opens with a glyph."""
-    stripped = (body or "").lstrip()
-    return bool(stripped) and ord(stripped[0]) > 127
+    """True when `body` is something the PIPELINE wrote on the card: it
+    carries the act trailer, or opens with one of RECEIPT_GLYPHS."""
+    text = body or ""
+    if pipeline_act.read_trailer(text) is not None:
+        return True
+    stripped = text.lstrip()
+    return any(stripped.startswith(glyph) for glyph in RECEIPT_GLYPHS)
 
 
 def waiting(bodies) -> dict | None:
