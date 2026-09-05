@@ -231,6 +231,22 @@
       }
     },
     {
+      "name": "merge-ref-refreshed",
+      "tag": "stale-merge-ref-refresh",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "This pull request was red only on checks that were red on its merge base too and are green on `main` now, so the sweep merged `main` into the branch to get it a fresh merge ref.",
+      "state": "dispatched",
+      "next_actor": "qa-review.yml",
+      "discharges": null,
+      "subscriber": "qa-review.yml",
+      "why": "DRE-3144, from agent-bureau #2240 and #2241 (2026-09-02). Both went red on `Console backend (pytest)` because of a fault on `main` (DRE-2962); the fix merged at 00:02 and both stayed red until an operator ran `gh pr update-branch` by hand at 00:23 — #2240 with a critic APPROVE already sitting behind a failure that no longer existed. A RERUN CANNOT FIX IT: `gh run rerun` re-runs the same jobs against the SAME merge commit, and the merge ref was computed before the fix, so only a new head helps. AT MOST ONCE PER `main` COMMIT: the receipt opens with `stale-merge-ref-refresh @<main sha>` and that marker is the idempotency key, backed by a lifetime cap per pull request whose zero is the operator's fleet-wide off switch. THE VERDICT CARRIES: an update-branch-only head change leaves the three-dot diff unchanged, so content binding (DRE-2340) keeps the standing critic verdict and `should_review_pr.py` skips the re-review — the receipt says so, and says when it will not carry. The next actor is the review stub because the refreshed head is what re-runs CI and, when the diff did change, the critic.",
+      "emits": {
+        "file": "scripts/stale_merge_ref.py",
+        "anchor": "refreshed the merge ref: the fault was on main, not in this pull request"
+      }
+    },
+    {
       "name": "reviewer-unavailable",
       "tag": "reviewer-down",
       "adopted": true,
