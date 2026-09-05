@@ -243,6 +243,10 @@ def test_a_likely_done_row_lands_dead_with_the_models_evidence():
     assert dead["DRE-2"]["source"] == "superseded-line"
     assert dead["DRE-2"]["superseded_by"] == "DRE-1"
     assert dead["DRE-2"]["judged"] is False
+    assert "DRE-1" in dead["DRE-2"]["reason"], (
+        "a card its own description condemned names what superseded it — the "
+        "declaration a person wrote is not a card the read could not rank"
+    )
 
 
 def test_an_unranked_card_carries_the_exact_sentence_and_is_listed():

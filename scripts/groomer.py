@@ -1052,6 +1052,11 @@ def _mark(outcome: str, row: dict, verdict, *, window_days: int,
     nobody could put on the page.
     """
     identifier = row.get("identifier")
+    # A card its OWN DESCRIPTION condemned was never placed by the read: the
+    # declaration a person wrote outranks it, and the reason has to say what
+    # superseded it rather than that a model could not rank it.
+    if outcome == "dead" and row.get("source") == DEAD_FROM_LINE:
+        verdict = None
     judged = verdict is not None and verdict.outcome != "unranked"
     reason = (verdict.reason if verdict is not None
               else _rules_reason(outcome, row, window_days))
