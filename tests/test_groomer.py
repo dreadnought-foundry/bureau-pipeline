@@ -396,9 +396,10 @@ def test_the_rendered_proposal_is_unchanged_without_a_judgement():
 
 
 def test_the_cli_carries_the_no_judgement_switch():
-    parser_help = groomer.main.__doc__ or ""
-    assert "--no-judgement" in (groomer.__doc__ or "") or parser_help
-    import argparse
+    assert "--no-judgement" in (groomer.__doc__ or ""), (
+        "the switch the audit card runs the comparison with is not documented "
+        "where the module documents its own CLI"
+    )
     import contextlib
     import io
     buf = io.StringIO()

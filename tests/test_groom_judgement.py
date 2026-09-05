@@ -296,4 +296,9 @@ def test_the_card_text_travels_inside_the_sentinel_fence():
     prompt = groom_judgement.prompt_for(rows, PACK)
     assert "===== BEGIN UNTRUSTED CARD TEXT =====" in prompt
     assert "[defanged]" in prompt
-    assert prompt.count("===== END UNTRUSTED CARD TEXT =====") == 1
+    closers = [l for l in prompt.splitlines()
+               if l.strip() == "===== END UNTRUSTED CARD TEXT ====="]
+    assert len(closers) == 1, (
+        "the body's own sentinel still ends a line of the prompt, so the card "
+        "can close the fence and address the model from outside it"
+    )
