@@ -24,8 +24,23 @@ def _reset_sweep_board() -> None:
         reset()
 
 
+def _reset_linear_budget() -> None:
+    """The Linear seam's budget ledger and its rate-limit stop are PROCESS
+    state (DRE-3202): in production one process is one run. In a test session
+    one process is hundreds of runs, and several suites drive a RATELIMITED
+    response through `linear_ops.gql` on purpose — without this reset the
+    first of them would arm the stop and every later `gql` call in the
+    session would be refused without touching the transport."""
+    linear_ops = sys.modules.get("linear_ops")
+    reset = getattr(linear_ops, "_reset_budget_state", None)
+    if reset is not None:
+        reset()
+
+
 @pytest.fixture(autouse=True)
 def fresh_sweep_board():
     _reset_sweep_board()
+    _reset_linear_budget()
     yield
     _reset_sweep_board()
+    _reset_linear_budget()
