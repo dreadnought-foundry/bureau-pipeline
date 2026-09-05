@@ -755,13 +755,13 @@ def cmd_actor(identifier: str, role: str) -> None:
 
 NO_CODE_LABEL = "no-code"  # standards/card-quality.md: operator-work cards
 
-# The label that says the PLANNER owns this card. It is deliberately not read as
-# epic-ness anywhere a card is being classified (DRE-3038/DRE-3044 — every card
-# the relay sends to plan.yml wears it, one-offs included). Here the question is
-# a different one: `plan_run.py` routes on this label, so a card carrying it is
-# dispatched to the planner and NEVER to a build agent — which makes any merge
-# on a branch named for it a branch named for the wrong card.
-PLANNER_LABEL = "agent:planner"
+# `agent:planner` is NOT read here, and that is the whole of the note: no
+# caller in this repo reads that label as epic-ness, this one included
+# (DRE-3038/DRE-3044). Every card the relay sends to plan.yml wears it,
+# one-offs included, and nothing strips it once the card is classified — so
+# reading it here would refuse the merge of an ordinary one-off and leave the
+# card open telling its author it is an epic. Epic-ness is `mid_epic.is_epic`
+# and nothing else.
 
 # Title must START with `DEMO:` (case-insensitive, leading whitespace allowed).
 # Anchored on purpose: a card that merely MENTIONS demos — in its body or
@@ -802,16 +802,16 @@ def epic_branch_refusal(
     reads the card with one query and the stamp lives in its comments, and the
     two facts here are the ones the epic in question actually had.
 
-    `agent:planner` is the second leg, and only here. `mid_epic.is_epic` refuses
-    that label on purpose (every card the relay dispatches to plan.yml wears it,
-    so reading it as epic-ness froze one-offs in Backlog — DRE-3044), but the
-    question this function asks is not "should the sweep promote this": a card
-    the planner owns is dispatched to the planner and never to a build agent, so
-    a merged branch named for it is a branch named for the wrong card either way.
+    `labels` is taken and NOT read for epic-ness, deliberately. This function
+    once carried `agent:planner` as a second leg on the argument that such a
+    card is only ever dispatched to the planner; that premise is false for a
+    classified one-off, which keeps the label the relay required to get it into
+    Planning and is promoted and built wearing it (DRE-3044, observed on
+    DRE-3018 and DRE-3020). Reading it here would refuse an ordinary card's
+    merge and tell its author to rebuild a correct branch. The parameter stays
+    because `auto_done_skip_reason` hands every arm the same three facts.
     """
-    if PLANNER_LABEL in [(l or "").strip().lower() for l in labels] or (
-        mid_epic.is_epic(title, has_children)
-    ):
+    if mid_epic.is_epic(title, has_children):
         return (
             "the branch that merged is named for an EPIC, not for a card — and "
             "merging one pull request does not finish an epic's plan. Closing "

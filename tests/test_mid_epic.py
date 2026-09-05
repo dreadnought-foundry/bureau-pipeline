@@ -244,22 +244,30 @@ class TestEveryCallerIsWalked:
         card["comments"]["nodes"] = []
         assert reconcile.card_is_epic(card) is True
 
-    def test_epic_branch_refusal_reads_the_planner_label_on_purpose(self):
+    def test_epic_branch_refusal_does_not_read_the_planner_label_either(self):
         """`linear_ops.epic_branch_refusal` — the merge→Done seam (DRE-3119),
-        and the ONE caller that adds `agent:planner` back as a second leg.
+        and the newest caller, which reads epic-ness the same way as the rest.
 
-        It asks a different question from every other caller here. Theirs is
-        "should this card be classified/promoted/given children", where reading
-        the planner-ownership label as epic-ness froze every one-off in Backlog
-        (DRE-3044). This one asks "may a merged branch named for this card close
-        it", and `plan_run.py` dispatches a card carrying that label to the
-        PLANNER — never to a build agent — so a build branch named for it is a
-        branch named for the wrong card whichever way the card is classified.
-        Refusing costs a comment; closing ends a running plan.
+        It asks a different question — "may a merged branch named for this card
+        close it", not "should this card be promoted" — but the label answers
+        neither. A one-off keeps `agent:planner` through classification and
+        promotion and is dispatched to a build agent wearing it (DRE-3044,
+        DRE-3018/DRE-3020), so reading it here would refuse the merge of an
+        ordinary card and leave it open telling its author it is an epic.
         """
-        refusal = linear_ops.epic_branch_refusal(PROBE_TITLE, PROBE_LABELS, False)
-        assert refusal is not None
-        assert "epic" in refusal.lower()
+        assert linear_ops.epic_branch_refusal(
+            PROBE_TITLE, PROBE_LABELS, False
+        ) is None
+
+    def test_epic_branch_refusal_still_refuses_a_real_epic(self):
+        """Guard the guard: the two facts it does read still answer. The
+        childless case the label used to cover is the `[EPIC]` title's."""
+        assert linear_ops.epic_branch_refusal(
+            "[EPIC] the intake front door", PROBE_LABELS, False
+        ) is not None
+        assert linear_ops.epic_branch_refusal(
+            "the intake front door", PROBE_LABELS, True
+        ) is not None
 
     def test_epic_branch_refusal_still_lets_an_ordinary_card_close(self):
         """The everyday card the whole pipeline rides: no planner label, no

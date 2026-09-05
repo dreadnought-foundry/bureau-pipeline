@@ -17,11 +17,13 @@ is a fleet event: an epic's Done releases nothing, but it ENDS THE PLAN, and
 
 FIX UNDER TEST — a third arm on the same pure predicate,
 `linear_ops.auto_done_skip_reason()`, given the one fact it was missing (does
-the card have children); `agent:planner` is the second leg, because a card the
-planner owns is never dispatched to a build agent at all (`plan_run.py` routes
-on that label), so a merge on its branch is always a branch named for the wrong
-card. `cmd_card_done` passes the facts through from the `get_issue` query it
-already makes, which must therefore SELECT the children.
+the card have children). Epic-ness is `mid_epic.is_epic` and ONLY that: `[EPIC]`
+in the title, or any children. `agent:planner` is not a leg and must not become
+one — every card the relay sends to Planning wears it, nothing strips it once
+the card is classified one-off, and reading it here would refuse an ordinary
+card's merge (DRE-3044, pinned below). `cmd_card_done` passes the facts through
+from the `get_issue` query it already makes, which must therefore SELECT the
+children.
 
 Reconcile's merged-PR backstop — the other caller of the predicate — never
 reaches an epic: `main()` drops `repo_epics(mine)` from the nudge loop before
@@ -65,10 +67,6 @@ import reconcile  # noqa: E402
         # Either leg alone is enough — the card names both.
         ("One River — the phase chain", ["repo:agent-bureau"], True,
          "children alone make it an epic (validate_card.infer_agent_label)"),
-        ("One River — the phase chain", ["repo:agent-bureau", "agent:planner"],
-         False, "agent:planner alone — a card the planner owns is not built"),
-        ("One River — the phase chain", ["Agent:Planner"], False,
-         "label match is case-insensitive, like the no-code arm"),
         # …and the title stamp, which is where an epic with no children yet
         # (a plan still being cut) is readable at all.
         ("[EPIC] One River", [], False, "[EPIC] in the title"),
@@ -97,6 +95,16 @@ def test_an_epic_branch_is_refused(title, labels, has_children, why):
          False, "a build role is not agent:planner"),
         ("Fix codegen", ["no-codegen"], False,
          "the existing arms still answer for their own shapes"),
+        # DRE-3044, the reason `agent:planner` is not a leg here: a card is
+        # classified one-off, promoted, dispatched and BUILT still wearing the
+        # label the relay required to get it into Planning. Nothing strips it.
+        # Reading it as epic-ness here refuses an ordinary card's merge and
+        # tells its author to rebuild a branch that was right all along.
+        ("PROOF-FD-4b — a one-off card in Planning WITH agent:planner",
+         ["repo:agent-bureau-demo", "agent:planner"], False,
+         "the DRE-3018/DRE-3020 shape: a classified one-off keeps the label"),
+        ("One River — the phase chain", ["Agent:Planner"], False,
+         "…in any casing — the label is not read at all"),
     ],
 )
 def test_an_ordinary_card_still_closes(title, labels, has_children, why):
@@ -180,12 +188,29 @@ def test_epic_card_is_not_transitioned():
 
 def test_epic_without_children_yet_is_not_transitioned():
     """An epic whose plan is still being cut has no children to read — the
-    `agent:planner` leg is what refuses it."""
+    `[EPIC]` title stamp is what refuses it."""
     out, state, _ = _run_card_done(
-        _issue("One River — the phase chain", ["agent:planner"], children=0)
+        _issue("[EPIC] One River — the phase chain", ["agent:planner"], children=0)
     )
     state.assert_not_called()
     assert "AUTO-DONE SKIPPED" in out
+
+
+def test_a_classified_one_off_still_wearing_the_planner_label_goes_done():
+    """The DRE-3044 false positive, end-to-end and on the seam that would post
+    it: a one-off keeps `agent:planner` through classification, promotion and
+    dispatch, so this card's merge must close it exactly as before.
+
+    MUTATION CHECK: add `agent:planner` back as a leg of `epic_branch_refusal`
+    and this card is left open carrying an epic's comment — red here.
+    """
+    _, state, comment = _run_card_done(
+        _issue("PROOF-FD-4b — a one-off card in Planning WITH agent:planner",
+               ["repo:agent-bureau-demo", "agent:planner"], children=0,
+               identifier="DRE-3018")
+    )
+    state.assert_called_once_with("DRE-3018", "Done")
+    assert linear_ops.MERGED_NOT_CLOSED_MARKER not in comment.call_args.args[1]
 
 
 def test_ordinary_card_still_goes_done():

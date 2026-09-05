@@ -28,9 +28,10 @@
 # with 21 children and a planner run in flight; an epic's Done ends its plan,
 # and epic_autoclose and prove_phase read it. `card-done` refuses an epic as a
 # third class — read off the same shape the rest of the pipeline uses
-# (`[EPIC]`/children, plus `agent:planner`, whose cards are dispatched to the
-# planner and never to a build agent) — comments the merge on the epic and
-# leaves the state alone. Name the branch for the card the work delivers.
+# (`mid_epic.is_epic`: `[EPIC]` in the title, or any children; never
+# `agent:planner`, which every classified one-off still wears) — comments the
+# merge on the epic and leaves the state alone. Name the branch for the card
+# the work delivers.
 #
 # Reusable workflow: permissions live in the calling stub.
 name: Linear Sync (reusable)
