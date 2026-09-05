@@ -567,9 +567,9 @@
     },
     {
       "file": "scripts/linear_ops.py",
-      "anchor": "merged_not_closed_comment(pr_url, reason)",
+      "anchor": "merged_not_closed_comment(",
       "kind": "undeclared-act",
-      "means": "The merge→Done seam declines to auto-close a card the operator closes by hand, and says why.",
+      "means": "The merge→Done seam declines to auto-close a card a merge cannot close — one the operator closes by hand, or an epic its children close — and says why.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its marker is already read back — the sweep suppresses a repeat with `MERGED_NOT_CLOSED_MARKER` — so it has an idempotency key waiting for a row."
     },
     {

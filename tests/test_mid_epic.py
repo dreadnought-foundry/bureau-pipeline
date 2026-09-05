@@ -174,6 +174,7 @@ WALKED = {
     ("routing_verdict", "route"),
     ("linear_ops", "cmd_subissue"),
     ("reconcile", "card_is_epic"),
+    ("linear_ops", "epic_branch_refusal"),
 }
 
 
@@ -242,6 +243,40 @@ class TestEveryCallerIsWalked:
         card = self._sweep_card("one-off", children=2)
         card["comments"]["nodes"] = []
         assert reconcile.card_is_epic(card) is True
+
+    def test_epic_branch_refusal_does_not_read_the_planner_label_either(self):
+        """`linear_ops.epic_branch_refusal` — the merge→Done seam (DRE-3119),
+        and the newest caller, which reads epic-ness the same way as the rest.
+
+        It asks a different question — "may a merged branch named for this card
+        close it", not "should this card be promoted" — but the label answers
+        neither. A one-off keeps `agent:planner` through classification and
+        promotion and is dispatched to a build agent wearing it (DRE-3044,
+        DRE-3018/DRE-3020), so reading it here would refuse the merge of an
+        ordinary card and leave it open telling its author it is an epic.
+        """
+        assert linear_ops.epic_branch_refusal(
+            PROBE_TITLE, PROBE_LABELS, False
+        ) is None
+
+    def test_epic_branch_refusal_still_refuses_a_real_epic(self):
+        """Guard the guard: the two facts it does read still answer. The
+        childless case the label used to cover is the `[EPIC]` title's."""
+        assert linear_ops.epic_branch_refusal(
+            "[EPIC] the intake front door", PROBE_LABELS, False
+        ) is not None
+        assert linear_ops.epic_branch_refusal(
+            "the intake front door", PROBE_LABELS, True
+        ) is not None
+
+    def test_epic_branch_refusal_still_lets_an_ordinary_card_close(self):
+        """The everyday card the whole pipeline rides: no planner label, no
+        children, no `[EPIC]` stamp — the merge closes it."""
+        assert linear_ops.epic_branch_refusal(
+            "One River: the design contract reaches main",
+            ["repo:agent-bureau", "agent:engineer"],
+            False,
+        ) is None
 
     def test_cmd_subissue_refuses_a_child_of_a_planner_owned_one_off(self):
         """`linear_ops.cmd_subissue` — the create seam, where the refusal is an
