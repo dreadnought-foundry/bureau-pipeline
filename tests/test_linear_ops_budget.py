@@ -61,7 +61,7 @@ RATELIMIT_BODY = json.dumps(
 
 # 2026-09-05 22:00:00 UTC — September is PDT (UTC-7), so 15:00 PT. Hard-coded
 # rather than derived, so the test checks the conversion instead of mirroring it.
-RESET_MS = 1788652800000
+RESET_MS = 1788645600000
 RESET_PT = "15:00"
 
 

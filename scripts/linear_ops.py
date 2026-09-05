@@ -102,6 +102,7 @@ Auth: LINEAR_API_KEY env var.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
@@ -109,6 +110,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_marker  # noqa: E402 — ONE definition of the "which agent acted" marker
@@ -192,8 +195,141 @@ def _api_error(code: int | str, body: str) -> LinearError:
     detail = f"Linear API returned {code} from {API}"
     condition = rate_limit_condition(body)
     if condition:
+        _arm_rate_limit_stop(condition)
         return LinearRateLimited(f"{detail}: {condition} — body: {body[:BODY_CHARS]!r}")
     return LinearError(f"{detail}: {body[:BODY_CHARS]!r}")
+
+
+# ── The budget ledger (DRE-3202) ────────────────────────────────────────────
+# The workspace quota is 2,500 requests per hour, shared by EVERY run in the
+# fleet. On 2026-09-05 it ran dry twice and nothing could say which run spent
+# it — each process knew only that its own call had failed. Linear answers
+# every call with the two headers below, so this seam keeps the first and last
+# `remaining` it saw, counts the requests it sent, and prints ONE line at exit.
+# check_linear_budget.py adds those lines up across the fleet's run logs.
+#
+# The line is printed to STDERR, deliberately. `children`, `count-comments`,
+# `find-open`, `description` and `children-detail` are read through `$(...)`
+# and `> file` by the workflows; a trailer on stdout would corrupt a parsed
+# answer. `gh run view --log` shows both streams, so the reader is unaffected.
+_REMAINING_HEADER = "x-ratelimit-requests-remaining"
+_RESET_HEADER = "x-ratelimit-requests-reset"  # epoch milliseconds
+_PT = ZoneInfo("America/Los_Angeles")
+
+# Process state: one process is one run. Reset only by tests (conftest).
+_budget: dict = {}
+
+
+def _reset_budget_state() -> None:
+    """Fresh ledger: no headers seen, no calls sent, the stop disarmed."""
+    _budget.clear()
+    _budget.update(
+        calls=0,  # requests actually sent (a retry counts: it spends quota)
+        first=None,  # first `remaining` seen
+        last=None,  # last `remaining` seen
+        reset_ms=None,  # last reset epoch seen, ms
+        rolled=False,  # the reset epoch moved mid-run
+        refused_after=None,  # calls sent before the stop armed; None = not armed
+        condition=None,  # the named condition the stop was armed with
+        reported=False,  # the exit line was printed
+    )
+
+
+_reset_budget_state()
+
+
+def _int_header(headers, name: str) -> int | None:
+    """One header as an int, or None. `headers` is an HTTPMessage on a real
+    response, a dict on a fake, or absent on an older stand-in — telemetry
+    must never fail a healthy call, so every shape degrades to None."""
+    try:
+        value = headers.get(name) if headers is not None else None
+        return int(str(value).strip()) if value not in (None, "") else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _note_response_headers(headers) -> None:
+    """Record the two budget headers off a response — success OR error: the
+    RATELIMITED 400 is the response that carries `remaining=0`."""
+    remaining = _int_header(headers, _REMAINING_HEADER)
+    reset_ms = _int_header(headers, _RESET_HEADER)
+    if remaining is not None:
+        if _budget["first"] is None:
+            _budget["first"] = remaining
+        elif remaining > _budget["last"]:
+            # `remaining` can only go up if the window rolled.
+            _budget["rolled"] = True
+        _budget["last"] = remaining
+    if reset_ms is not None:
+        if _budget["reset_ms"] is not None and reset_ms != _budget["reset_ms"]:
+            _budget["rolled"] = True
+        _budget["reset_ms"] = reset_ms
+
+
+def _reset_clock() -> str:
+    """The window's reset as `HH:MM` in Pacific Time — the only clock a reader
+    of these logs uses (`unknown` when Linear did not say)."""
+    reset_ms = _budget["reset_ms"]
+    if reset_ms is None:
+        return "unknown"
+    return datetime.fromtimestamp(reset_ms / 1000, _PT).strftime("%H:%M")
+
+
+def _arm_rate_limit_stop(condition: str) -> None:
+    """The first RATELIMITED arms the stop: every later `gql` in this process
+    raises without sending. Idempotent — the count is the calls BEFORE the
+    first limit, and a second arming must not move it."""
+    if _budget["refused_after"] is None:
+        _budget["refused_after"] = _budget["calls"]
+        _budget["condition"] = condition
+
+
+def _refusal() -> LinearRateLimited:
+    """The no-request refusal. Keeps the endpoint and the named condition on
+    ONE line: medic_classify.is_linear_rate_limited() needs both there to file
+    the run as a back-off instead of retrying into the exhausted quota."""
+    return LinearRateLimited(
+        f"linear error from {API}: {_budget['condition']} — refused after "
+        f"{_budget['refused_after']} calls, no request sent; window resets "
+        f"{_reset_clock()} PT"
+    )
+
+
+def budget_line() -> str:
+    """The one line that says what this process spent of the fleet's hour:
+
+        linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT)
+
+    N is first − last, never negative: a window that rolled mid-run says
+    `window rolled` instead of a number. After a RATELIMITED it also carries
+    `refused after <N> calls`. Never a key, never a URL."""
+    first, last = _budget["first"], _budget["last"]
+    if first is None or last is None:
+        return "linear-budget: unknown (no rate-limit headers seen)"
+    if _budget["rolled"] or last > first:
+        spent = "window rolled"
+    else:
+        spent = f"spent {first - last} this run"
+    parts = [spent, f"window resets {_reset_clock()} PT"]
+    if _budget["refused_after"] is not None:
+        parts.append(f"refused after {_budget['refused_after']} calls")
+    return f"linear-budget: {first} → {last} ({'; '.join(parts)})"
+
+
+def _report_budget_at_exit() -> None:
+    """Print the budget line ONCE, on stderr, if any Linear call was made.
+    Registered with atexit; a process that never touched Linear says nothing."""
+    if _budget["reported"] or not _budget["calls"]:
+        return
+    _budget["reported"] = True
+    try:
+        print(budget_line(), file=sys.stderr, flush=True)
+    except Exception:  # pragma: no cover — telemetry must never fail an exit
+        pass
+
+
+atexit.register(_report_budget_at_exit)
 
 
 # The one-shot retry (DRE-3087). A sweep is dozens of calls through this seam,
@@ -246,6 +382,11 @@ def _error_body(exc: urllib.error.HTTPError) -> str:
 
 
 def gql(query: str, variables: dict | None = None) -> dict:
+    # Stop at the first RATELIMITED (DRE-3202): a rate-limited process asks
+    # nothing more. Every further request would spend the quota that proves
+    # there is none left, against a window that is the whole fleet's.
+    if _budget["refused_after"] is not None:
+        raise _refusal()
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
     for attempt in range(_MAX_ATTEMPTS):
         # A fresh Request per attempt: a retry re-sends the call, it does not
@@ -260,11 +401,14 @@ def gql(query: str, variables: dict | None = None) -> dict:
         )
         # B310: URL is the constant https://api.linear.app endpoint, no user
         # input.
+        _budget["calls"] += 1
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
+                _note_response_headers(getattr(resp, "headers", None))
                 out = json.loads(resp.read())
             break
         except urllib.error.HTTPError as exc:
+            _note_response_headers(getattr(exc, "headers", None))
             if attempt + 1 < _MAX_ATTEMPTS and is_transient(exc):
                 _note_transient(exc)
                 time.sleep(RETRY_BACKOFF_SECONDS)
@@ -299,6 +443,7 @@ def gql(query: str, variables: dict | None = None) -> dict:
             # names the condition but not the host reads as `normal` to the
             # medic, which then retries and diagnoses into the exhausted quota:
             # the DRE-1921 loop this card exists to stop.
+            _arm_rate_limit_stop(condition)
             raise LinearRateLimited(
                 f"linear error from {API}: {condition} — {errors[:BODY_CHARS]}"
             )
