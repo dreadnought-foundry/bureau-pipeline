@@ -37,8 +37,10 @@ def test_rolled_and_unknown_lines_count_as_seen_but_unknowable():
         "linear-budget: 5 → 2499 (window rolled; window resets 16:00 PT)",
         "linear-budget: unknown (no rate-limit headers seen)",
         "linear-budget: 100 → 97 (spent 3 this run; window resets 16:00 PT; refused after 4 calls)",
+        # DRE-3224: a mid-run refill is named after the number, never in its place
+        "linear-budget: 1675 → 1605 (spent 70 this run (refilled mid-run); window resets 16:04 PT)",
     )
-    assert clb.spent_from_log(log) == [None, None, 3]
+    assert clb.spent_from_log(log) == [None, None, 3, 70]
 
 
 def test_aggregate_sums_per_repo_and_workflow_sorted_by_total_desc():
