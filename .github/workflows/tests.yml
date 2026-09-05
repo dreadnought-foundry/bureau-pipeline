@@ -14,7 +14,17 @@ jobs:
   unit:
     name: scripts unit tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The one job here that runs the WHOLE suite, so the only one whose clock
+    # tracks the suite's growth (DRE-3130). It sat at 5 until run 33987398284
+    # reported `6277 passed, 1 skipped, 649 subtests passed in 299.47s` and was
+    # cancelled four seconds later at 5m10s — a required check red on a suite
+    # that had already proved itself. The cap was spent before that PR existed:
+    # the fifteen main runs before it ranged 3m11s to 4m44s, i.e. 16 seconds of
+    # headroom against 93 seconds of run-to-run spread. A budget narrower than
+    # its own variance is a coin flip. 10 is ~2x the longest real run, matching
+    # the other 10-minute jobs in this repo; `tests/test_unit_suite_time_budget.py`
+    # holds it there and carries the measurements.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # The shared plumbing, dogfooded (DRE-2589). This job used to run THREE
