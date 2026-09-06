@@ -1,0 +1,9 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": true,
+  "num_turns": 1,
+  "stop_reason": "max_tokens",
+  "api_error_status": null,
+  "result": "API Error: Claude's response exceeded the 64 output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable."
+}

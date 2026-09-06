@@ -84,6 +84,34 @@ uses. One id could not tell a clean run on the top rung from a silent fall off
 it, and DRE-3015's ladder, DRE-3016's scorer and DRE-3077's split ledger all read
 this line as "the model that did this".
 
+## The call seam takes a budget, and says when the answer was cut (DRE-3258)
+
+The seam above was built for THIS caller — one card in, one sentence out — and
+its bounds were hard-coded to that shape. A second reader has since arrived that
+wants a much larger answer out of one call: one line per card across a 226-card
+lane is on the order of eighteen thousand output tokens and several minutes of
+generation, and against a 1000-token bound such a call is cut off after the first
+forty or so cards while its parser reads the rest as "could not rank" — a run
+that ships looking like it worked.
+
+So `_call_real`, `_call_api` and `_call_claude_code` each take `max_tokens` and
+`timeout_seconds`, keyword-only, and `None` means the transport's own constant.
+`classify()` passes neither, which is the whole safety of the change: the
+classifier's call, its payload, its two wall clocks and its subprocess env are
+byte-for-byte what DRE-3074 shipped. On the API path the budget is the request's
+`max_tokens` and the clock is the `urlopen` timeout; on the Claude Code path the
+budget is `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in the subprocess env — set ONLY when
+a caller asked for one — and the clock is the `subprocess.run` timeout.
+
+And `Answer.truncated` says the answer was CUT rather than refused. It is not a
+`TransportError`: the model read the prompt and answered part of it, so the part
+comes back and the caller decides what to do with the part. The API path reads
+it off `stop_reason`; the CLI path off the CLI's own message for the cut, pinned
+by a committed envelope rather than remembered
+(`tests/fixtures/claude_code_output_max_envelope.json`). For the classifier
+nothing changes either: a cut answer is not a JSON object, so `parse` refuses it
+exactly as it refused it before.
+
 ## The vendor boundary (standards/vendor-boundaries.md)
 
 Q1 actor — the call is made by the plan job itself, with the same CLAUDE
@@ -101,7 +129,11 @@ transport requeue is keyed on its own and BUDGETED off it.
 Q4 limitations — the answer is bounded (`MAX_TOKENS` / `MAX_TURNS`) and
 time-boxed (`TIMEOUT_SECONDS`, `CLI_TIMEOUT_SECONDS`); a truncated, empty or
 non-JSON answer is a refusal. A 429 is a transport failure, which is neither a
-refusal the CEO reads nor a stamp.
+refusal the CEO reads nor a stamp. A caller that raises the budget inherits the
+CLI's own limit: it clamps `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to a per-model
+maximum, so a budget above that runs AT that maximum and a long answer comes
+back cut there rather than at the number asked for. The seam passes the number
+and reports the cut; it does not try to predict the clamp.
 Q5 our own crash — nothing is written before the stamp, so a crash anywhere in
 here leaves the card exactly as it arrived, in Planning with no stamp, and the
 next run classifies it. The one receipt this module's branch writes is the
@@ -229,6 +261,12 @@ class Answer:
 
     text: str = ""
     model: str | None = None
+    # Whether the transport cut the answer off at the output-token budget
+    # (DRE-3258). NOT a failure: the model read the prompt and answered part of
+    # it, so the part comes back and the caller decides what to do with it. A
+    # `TransportError` means nothing read the prompt at all, which is a
+    # different fact and stays a different one.
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -646,12 +684,18 @@ def api_key_mode() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
 
-def _call_api(model: str, prompt: str) -> Answer:
+def _call_api(model: str, prompt: str, *, max_tokens: int | None = None,
+              timeout_seconds: float | None = None) -> Answer:
     """One `/v1/messages` POST — the API-key FAST PATH, and only that.
 
     stdlib only (urllib), and the same auth block the availability probe uses.
     Never reached on a subscription token: that token cannot make this call at
     all (DRE-3074), which is what `_call_real` is for.
+
+    `max_tokens` is the request's own budget and `timeout_seconds` the socket's
+    wall clock (DRE-3258). Both default to `None`, meaning this transport's own
+    constant — so `classify()`, which passes neither, makes exactly the call it
+    made before.
 
     An HTTP error is re-raised WITH its body: a bare 400 is unattributable, and
     the difference between "this model is gone", "we are rate-limited" and "the
@@ -667,9 +711,11 @@ def _call_api(model: str, prompt: str) -> Answer:
             "this run carries no Anthropic credential, so no call was made",
             "no credential",
         )
+    budget = MAX_TOKENS if max_tokens is None else max_tokens
+    wall = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     payload = json.dumps({
         "model": model,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": budget,
         "messages": [{"role": "user", "content": prompt}],
     }).encode()
     req = urllib.request.Request(
@@ -679,7 +725,7 @@ def _call_api(model: str, prompt: str) -> Answer:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(req, timeout=wall) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         detail = ""
@@ -692,8 +738,11 @@ def _call_api(model: str, prompt: str) -> Answer:
             f"HTTP {e.code}",
         ) from e
     except Exception as e:  # noqa: BLE001 — a socket that never answered
+        # The number ACTUALLY used, never the constant: a call given 525s that
+        # reports 60s sends whoever reads the log to a dial that did not fire.
         raise TransportError(
-            f"the classification call did not complete: {e}", "no answer"
+            f"the classification call did not complete within {wall}s: {e}",
+            "no answer",
         ) from e
     return Answer(
         text="".join(
@@ -704,6 +753,9 @@ def _call_api(model: str, prompt: str) -> Answer:
         # The response says which model answered. On a ladder that falls, that
         # is not always the one we asked for.
         model=body.get("model") or None,
+        # The field the response has always carried and this module has never
+        # read (DRE-3258). A cut answer is an answer.
+        truncated=body.get("stop_reason") == "max_tokens",
     )
 
 
@@ -795,28 +847,61 @@ def model_receipt(asked: str | None, answered: str | None) -> str:
     return f"{head}{asked} (asked) / {answered} (answered)"
 
 
-def _call_claude_code(model: str, prompt: str) -> Answer:
+def cut_off(envelope) -> bool:
+    """Whether this result envelope reports an answer cut at the output-token
+    budget (DRE-3258).
+
+    Read off the CLI's OWN message for the cut, pinned by
+    `tests/fixtures/claude_code_output_max_envelope.json`:
+
+        API Error: Claude's response exceeded the <n> output token maximum.
+        To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS
+        environment variable.
+
+    Both halves are required — the sentence and the variable it names — so an
+    answer that happens to discuss output-token maximums is not read as one.
+    """
+    if not isinstance(envelope, dict):
+        return False
+    result = str(envelope.get("result") or "")
+    return "output token maximum" in result and "CLAUDE_CODE_MAX_OUTPUT_TOKENS" in result
+
+
+def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
+                      timeout_seconds: float | None = None) -> Answer:
     """One bounded Claude Code run — the transport the rest of this pipeline
     uses, and the one a subscription token can actually authenticate.
 
     The CLI reads `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) out of the
     environment exactly as `claude-code-action` hands it to them, so this adds
     no secret and no identity — the step's env is unchanged.
+
+    `max_tokens` is how the CLI takes a budget: `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+    in the subprocess environment, set ONLY when a caller asked for one, so the
+    classifier's own subprocess env is byte-for-byte the inherited one it has
+    always been. The CLI clamps that number to a per-model upper limit and this
+    seam does not second-guess the clamp (vendor-boundaries Q4): a budget above
+    the limit runs at the limit, and a long answer is reported cut there rather
+    than at the number asked for.
     """
     if model_fallback.auth_headers() is None:
         raise TransportError(
             "this run carries no Anthropic credential, so no call was made",
             "no credential",
         )
+    env = dict(os.environ)
+    if max_tokens is not None:
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_tokens)
+    wall = CLI_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     try:
         done = subprocess.run(  # nosec B603 — argv list, shell=False
             _cli_argv(model, prompt),
             capture_output=True, text=True, check=False,
-            timeout=CLI_TIMEOUT_SECONDS,
+            timeout=wall, env=env,
         )
     except subprocess.TimeoutExpired as e:
         raise TransportError(
-            f"the classification call ran past {CLI_TIMEOUT_SECONDS}s", "timed out"
+            f"the classification call ran past {wall}s", "timed out"
         ) from e
     except OSError as e:
         raise TransportError(
@@ -836,6 +921,19 @@ def _call_claude_code(model: str, prompt: str) -> Answer:
             f"answer: {stderr or stdout[:400]}",
             f"exit {done.returncode}" if done.returncode else "no answer",
         )
+    # BEFORE either error check, because the CLI reports a cut as an api error:
+    # `is_error` is true and the process exits non-zero (DRE-3258). A model that
+    # read the prompt and answered part of it is not a transport failure, so the
+    # part comes back and the caller decides what to do with it.
+    #
+    # What the caller has to plan for: on this path the PARTIAL TEXT DOES NOT
+    # SURVIVE. Claude Code 2.1.263 emits the cut as an api-error assistant
+    # message and clears the accumulated text behind it, so `result` carries the
+    # message and nothing else. The cut is reported honestly; the partial answer
+    # is the CLI's to give and it does not give it under `--output-format json`.
+    if cut_off(envelope):
+        return Answer(text=str(envelope.get("result") or ""),
+                      model=answered_model(envelope, model), truncated=True)
     if envelope.get("is_error") or envelope.get("subtype") not in (None, "success"):
         raise TransportError(
             f"the classification call reported subtype "
@@ -853,15 +951,22 @@ def _call_claude_code(model: str, prompt: str) -> Answer:
                   model=answered_model(envelope, model))
 
 
-def _call_real(model: str, prompt: str) -> Answer:
+def _call_real(model: str, prompt: str, *, max_tokens: int | None = None,
+               timeout_seconds: float | None = None) -> Answer:
     """The transport, chosen on the credential this run actually holds.
 
     One interface, two implementations — the card's own rule: the Claude Code
     path is the default because it is the only one a subscription token can
     authenticate, and the raw POST survives only where an API key makes it both
     legal and cheaper.
+
+    Both budget keywords pass through to whichever transport `api_key_mode()`
+    picks (DRE-3258), so a caller sizing its own read sets one bound and gets it
+    on either wire.
     """
-    return (_call_api if api_key_mode() else _call_claude_code)(model, prompt)
+    transport = _call_api if api_key_mode() else _call_claude_code
+    return transport(model, prompt, max_tokens=max_tokens,
+                     timeout_seconds=timeout_seconds)
 
 
 def _pick_model() -> str:
