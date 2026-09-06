@@ -2711,28 +2711,45 @@ def promote_ready(active_count: int) -> int:
 
 
 def close_finished_epics(epic_identifiers: set[str]) -> None:
-    """An In Progress epic whose children are all terminal closes itself."""
+    """An In Progress epic whose children are all terminal closes itself.
+
+    Per-epic isolation (DRE-3148): this was the one Linear call in the sweep
+    with no guard, so a single `TimeoutError` from Linear killed the whole
+    run — twice in a row on 2026-09-06. An epic that cannot be read or closed
+    this sweep is logged and skipped; the input is recomputed every pass, so
+    the next sweep closes it and nothing is lost.
+    """
     for epic in sorted(epic_identifiers):
-        kids = linear_ops.gql(
-            "query($id: String!) { issue(id: $id) { children { nodes { state { name } } } } }",
-            {"id": epic},
-        )["issue"]["children"]["nodes"]
-        states = [k["state"]["name"] for k in kids]
-        if (
-            states
-            and all(s in ("Done", "Canceled", "Duplicate") for s in states)
-            and "Done" in states
-        ):
-            linear_ops.cmd_state(epic, "Done")
-            linear_ops.cmd_comment(
-                epic,
-                f"🏁 Epic complete: all {len(states)} children are closed "
-                f"({states.count('Done')} done). Closed automatically by the reconcile sweep.",
+        try:
+            _close_epic_if_finished(epic)
+        except Exception as exc:  # noqa: BLE001 — isolate one epic, sweep the rest
+            print(
+                f"epic-close: could not close {epic} ({exc}) — skipped this sweep",
+                file=sys.stderr,
             )
-            # This epic just shipped — pull the next epics in the dependency
-            # chain into the pipeline (DRE-1772). Merge-time hook; the full
-            # sweep is the backstop.
-            advance_unblocked_epics(epic)
+
+
+def _close_epic_if_finished(epic: str) -> None:
+    kids = linear_ops.gql(
+        "query($id: String!) { issue(id: $id) { children { nodes { state { name } } } } }",
+        {"id": epic},
+    )["issue"]["children"]["nodes"]
+    states = [k["state"]["name"] for k in kids]
+    if (
+        states
+        and all(s in ("Done", "Canceled", "Duplicate") for s in states)
+        and "Done" in states
+    ):
+        linear_ops.cmd_state(epic, "Done")
+        linear_ops.cmd_comment(
+            epic,
+            f"🏁 Epic complete: all {len(states)} children are closed "
+            f"({states.count('Done')} done). Closed automatically by the reconcile sweep.",
+        )
+        # This epic just shipped — pull the next epics in the dependency
+        # chain into the pipeline (DRE-1772). Merge-time hook; the full
+        # sweep is the backstop.
+        advance_unblocked_epics(epic)
 
 
 # UNKNOWN-mergeable polling bounds (DRE-2121). GitHub computes a PR's
