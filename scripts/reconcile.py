@@ -113,6 +113,7 @@ import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
 import time
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402 — ONE source for the sanctioned gate bypass (DRE-2737)
@@ -140,6 +141,10 @@ import linear_ops  # noqa: E402
 # a verdict exactly the way the gate does (DRE-1998 had to fix an
 # independent copy once already).
 import merge_gate  # noqa: E402
+# DRE-3236: ONE reading of "what did this merge touch" — the merged card's
+# dependents and its parent, off the query the merge-sweep gate already makes.
+# The event-driven passes are scoped to exactly that, never re-derived here.
+import merge_sweep_gate  # noqa: E402
 # DRE-2739: ONE source for the mid-epic discovery route — what counts as a card
 # added after the green light, and the verdict it must carry before it promotes.
 import mid_epic  # noqa: E402
@@ -937,9 +942,11 @@ _swept_cards: list[dict] | None = None
 
 
 def reset_sweep_cards() -> None:
-    """Drop the sweep's board snapshot. Called once at the top of main()."""
+    """Drop the sweep's board snapshot — and with it the pass's comment cache
+    in linear_ops (DRE-3236). Called once at the top of main()."""
     global _swept_cards
     _swept_cards = None
+    linear_ops.reset_pass_cache()
 
 
 def card_comment_bodies(card: dict) -> list[str]:
@@ -998,8 +1005,14 @@ def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
     selects it (DRE-3044): `repo_epics()` and `flag_stranded()` read epic-ness
     off these cards through `card_is_epic`, the gate asks whether a card has ANY
     children, and reading a field the query never fetched would report "no
-    children" for every epic on the board."""
-    return linear_ops.gql_paged(
+    children" for every epic on the board.
+
+    The comment window selects `linear_ops.COMMENT_FIELDS` and its pageInfo,
+    and every card's window is handed to the pass's read cache (DRE-3236): a
+    reader downstream that takes an identifier — a receipt count, a clock, an
+    epic's thread with its authors — is then served from this read instead of
+    buying the same comments again, one request per card."""
+    cards = linear_ops.gql_paged(
         """query($states: [String!]!, $after: String) {
            issues(first: 100, after: $after, filter: {
              team: {key: {eq: "DRE"}},
@@ -1008,10 +1021,14 @@ def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
              id identifier title description updatedAt
              state { name } labels { nodes { name } }
              children(first: 1) { nodes { id } }
-             comments(last: 50) { nodes { body } }
+             comments(last: 50) { pageInfo { hasPreviousPage }
+               nodes { body createdAt user { id } } }
            } pageInfo { hasNextPage endCursor } } }""",
         {"states": list(states)},
     )
+    for card in cards:
+        linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+    return cards
 
 
 def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
@@ -1717,11 +1734,9 @@ def agent_run_alive(identifier: str) -> bool:
          life without a GitHub call. The sweep's own 🪦/🧹/🚨 receipts never
          count. With neither signal the card is dead, exactly as before.
     """
-    nodes = linear_ops.gql(
-        """query($id: String!) { issue(id: $id) {
-             comments(last: 50) { nodes { body createdAt } } } }""",
-        {"id": identifier},
-    )["issue"]["comments"]["nodes"]
+    # Off the pass's board read (DRE-3236); one request only when the card was
+    # not in it, or its inline window was full.
+    nodes = linear_ops.comment_timeline(identifier)
     for node in reversed(nodes):  # newest → oldest: the CURRENT attempt's run
         body = (node.get("body") or "").lstrip()
         if not body.startswith(RUN_MARKER):
@@ -1956,7 +1971,7 @@ def redispatch(card: dict) -> bool:
     return ok
 
 
-def backlog_children() -> list[dict]:
+def backlog_children(only: list[str] | None = None) -> list[dict]:
     """EVERY Backlog card, not the first page of them (DRE-2681).
 
     promote_ready() picks its candidates from this list, so an unpaginated page
@@ -1968,23 +1983,42 @@ def backlog_children() -> list[dict]:
     asks whether a card has ANY children, so one node answers it, and reading a
     field the query never fetched would report "no children" for every epic on
     the board.
+
+    `only` — identifiers — narrows the read to those cards, still in Backlog,
+    in one request (DRE-3236): the merge path asks for the merged card's own
+    dependents and nothing else. Same node shape, so the gate that reads them
+    cannot tell the two apart. An empty scope reads nothing.
+
+    The comment window is handed to the pass's read cache, as the active read's
+    is (DRE-3236).
     """
-    return linear_ops.gql_paged(
-        """query($after: String) {
+    if only is not None and not only:
+        return []
+    numbers = [int(ident.split("-")[1]) for ident in (only or ())]
+    scope = "number: {in: $numbers}," if only is not None else ""
+    declared = ", $numbers: [Float!]" if only is not None else ""
+    cards = linear_ops.gql_paged(
+        """query($after: String%s) {
            issues(first: 100, after: $after, filter: {
              team: {key: {eq: "DRE"}},
+             %s
              state: {name: {eq: "Backlog"}}
            }) { nodes {
              id identifier title description createdAt
              parent { identifier state { name } }
              children(first: 1) { nodes { id } }
              labels { nodes { name } }
-             comments(last: 50) { nodes { body } }
+             comments(last: 50) { pageInfo { hasPreviousPage }
+               nodes { body createdAt user { id } } }
              inverseRelations(first: 20) { nodes {
                type issue { identifier state { name } }
              } }
-           } pageInfo { hasNextPage endCursor } } }"""
+           } pageInfo { hasNextPage endCursor } } }""" % (declared, scope),
+        {"numbers": numbers} if only is not None else None,
     )
+    for card in cards:
+        linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+    return cards
 
 
 def card_state(identifier: str) -> str:
@@ -2390,7 +2424,7 @@ def epic_thread(epic: str) -> list | None:
         return None
 
 
-def promote_ready(active_count: int) -> int:
+def promote_ready(active_count: int, candidates: list[dict] | None = None) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
     Two gates, because there are two ways a card can have been approved
@@ -2400,6 +2434,10 @@ def promote_ready(active_count: int) -> int:
     escalates by design — has no approval to inherit, so its VERDICT is the
     approval, written at Planning exit. Refusing it for want of a parent left
     the most common thing anyone files sitting in Backlog forever.
+
+    `candidates` — Backlog cards in `backlog_children`'s shape — replaces the
+    whole-Backlog read when the caller already knows which cards a moment can
+    have changed (the merge path, DRE-3236). Every gate below is the same.
     """
     budget = MAX_WIP - active_count
     if budget <= 0:
@@ -2417,7 +2455,10 @@ def promote_ready(active_count: int) -> int:
     # per epic per sweep. `None` means the read FAILED, which is not the same
     # fact as an epic with no comments and must not be cached as one.
     post_critic: dict[str, list | None] = {}
-    candidates = sorted(backlog_children(), key=lambda c: int(c["identifier"].split("-")[1]))
+    candidates = sorted(
+        backlog_children() if candidates is None else candidates,
+        key=lambda c: int(c["identifier"].split("-")[1]),
+    )
     for index, card in enumerate(candidates):
         if promoted >= budget:
             # ONE line per sweep, not one per card (DRE-2918): a 200-card
@@ -5288,6 +5329,72 @@ def recover_limit_deaths() -> None:
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
 
 
+class MergeScope(NamedTuple):
+    """What the merge that triggered this pass can have changed (DRE-3236)."""
+
+    card: str
+    dependents: list[str]  # the cards the merged card `blocks`
+    parent: str | None  # its epic, if any
+    parent_state: str | None
+
+
+def merged_card_scope() -> MergeScope | None:
+    """The merged card's dependents and parent, off ONE read — or None.
+
+    None means "run the whole pass": a pass with no merged card (the cron, the
+    plan-activate hook), and — out loud — a merged card that cannot be read or
+    whose relations fill the page. That is the merge-sweep gate's own rule:
+    "we could not look" is not "nothing there", and the whole pass is exactly
+    what ran before this scoping existed. A rate-limited read is the one
+    exception and propagates: a whole pass against a spent quota cannot
+    succeed and deepens it (DRE-1921); `run()` exits 75 on it as it does for
+    any other.
+
+    The read is `merge_sweep_gate.QUERY`, and the relation is read by
+    `merge_sweep_gate.dependents` — one reading of which side of a `blocks`
+    relation is the dependent, because getting it backwards here would make
+    every merge promote nothing, silently and permanently.
+    """
+    merged = (os.environ.get("MERGED_CARD") or "").strip().upper()
+    if not merged:
+        return None
+    try:
+        card = (linear_ops.gql(merge_sweep_gate.QUERY, {"id": merged}) or {}).get("issue")
+    except linear_ops.LinearRateLimited:
+        raise
+    except Exception as e:  # noqa: BLE001 — an unreadable scope falls OPEN
+        print(
+            f"merge-scope: could not read {merged} ({e}) — running the whole "
+            "pass, which is what ran before the merge path was scoped",
+            file=sys.stderr,
+        )
+        return None
+    if not card:
+        print(
+            f"merge-scope: Linear returned no issue for {merged} — running the "
+            "whole pass",
+            file=sys.stderr,
+        )
+        return None
+    if ((card.get("relations") or {}).get("pageInfo") or {}).get("hasNextPage"):
+        print(
+            f"merge-scope: {merged}'s relations fill the page, so its dependents "
+            "are not all known — running the whole pass",
+            file=sys.stderr,
+        )
+        return None
+    dependents = sorted({
+        dep["identifier"]
+        for dep in merge_sweep_gate.dependents(card)
+        if dep.get("identifier")
+    })
+    parent = card.get("parent") or {}
+    return MergeScope(
+        merged, dependents, parent.get("identifier") or None,
+        (parent.get("state") or {}).get("name") or None,
+    )
+
+
 def main(
     promote_only: bool = False, conflicts_only: bool = False, close_only: bool = False
 ) -> None:
@@ -5322,6 +5429,10 @@ def main(
     # must not inherit it — every invocation starts from a fresh snapshot,
     # including the two event-driven ones above.
     reset_sweep_cards()
+    # The pass's comment cache (DRE-3236) is opened HERE and nowhere else: the
+    # board reads below fill it, every identifier-taking reader is served from
+    # it, and a CLI caller outside a sweep never sees it.
+    linear_ops.open_pass()
     if conflicts_only:
         try:
             unstick_conflicts()
@@ -5329,6 +5440,24 @@ def main(
             sys.exit(f"reconcile --conflicts-only: {e}")
         return
     if close_only:
+        # Scoped to the merged card's own parent on the merge path (DRE-3236):
+        # that is the only epic this merge can have finished, and the gate
+        # that chose this pass already read that it has. The parent is closed
+        # wherever it is labelled — the same close its own repo's cron would
+        # make — and only from a lane the cron sweeps.
+        scope = merged_card_scope()
+        if scope is not None:
+            epics = (
+                {scope.parent}
+                if scope.parent and scope.parent_state in SWEPT_LANES
+                else set()
+            )
+            close_finished_epics(epics)
+            print(
+                f"close-only: epic close evaluated for {scope.card}'s parent "
+                f"({len(epics)} epic(s))"
+            )
+            return
         epics = repo_epics(active_cards())
         close_finished_epics(epics)
         print(f"close-only: epic close evaluated ({len(epics)} active epic(s))")
@@ -5395,7 +5524,21 @@ def main(
     if not promote_only:
         close_finished_epics(epics)
     mine = [c for c in mine if c["identifier"] not in epics]
-    promote_ready(active_count=len(mine))
+    # On the merge path the candidates are the merged card's own dependents
+    # (DRE-3236) — read in one request by identifier, through the same gates.
+    # A card promotable for any other reason waits for the cron, which
+    # merge_sweep_gate already made the backstop for what the gate declines.
+    scope = merged_card_scope() if promote_only else None
+    if scope is not None:
+        print(
+            f"promote-only: scoped to {scope.card}'s "
+            f"{len(scope.dependents)} dependent(s)"
+        )
+        promote_ready(
+            active_count=len(mine), candidates=backlog_children(only=scope.dependents)
+        )
+    else:
+        promote_ready(active_count=len(mine))
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {len(mine)})")
         # The event-driven gate runs the epic gate too, so it can find a stale

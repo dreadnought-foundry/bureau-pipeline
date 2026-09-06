@@ -140,11 +140,18 @@ jobs:
           # succeed against a spent limit and would deepen it — DRE-1921).
           # MAX_WIP comes from the step env above — the caller's cap, so this
           # fast path and the cron sweep never disagree (DRE-2529).
+          # MERGED_CARD scopes each pass to what THIS merge can have changed
+          # (DRE-3236): the merged card's own dependents for --promote-only,
+          # its own parent for --close-epics. A pass that read the whole board
+          # and walked every epic to act on one card cost 110 requests per
+          # merge on 2026-09-05; everything else waits for the cron, as the
+          # gate above already decided for what it declines.
           # >>> DRE-2930 merge-sweep gate — executed verbatim by tests/test_merge_sweep_gate.py
           SWEEPS=$(python3 .bureau-pipeline/scripts/merge_sweep_gate.py "$CARD")
           for SWEEP in $SWEEPS; do
             REPO="$GITHUB_REPOSITORY" \
               REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
+              MERGED_CARD="$CARD" \
               python3 .bureau-pipeline/scripts/reconcile.py "$SWEEP"
           done
           # <<< DRE-2930 merge-sweep gate

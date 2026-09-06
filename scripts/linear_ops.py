@@ -103,6 +103,7 @@ Auth: LINEAR_API_KEY env var.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import json
 import os
 import re
@@ -510,7 +511,28 @@ def gql_paged(
         seen.add(after)
 
 
-def get_issue(identifier: str) -> dict:
+#: A card read ONCE for a whole command (DRE-3236). `cmd_card_done` reads the
+#: merged card, then `cmd_state` and `cmd_comment` each read it again for the
+#: same id and team — three requests for one fact, on every merge. The memo
+#: holds that one read for the command's duration; `guarded_state_write`'s
+#: pre-write re-read bypasses it (`fresh=True`) because that read is the
+#: DRE-2316 race fix and must be live.
+_card_memo: dict[str, dict] = {}
+
+
+@contextlib.contextmanager
+def _card_read_once(identifier: str):
+    """Read `identifier` once and serve every `get_issue` for it from that
+    read until the block ends."""
+    issue = get_issue(identifier)
+    _card_memo[identifier] = issue
+    try:
+        yield issue
+    finally:
+        _card_memo.pop(identifier, None)
+
+
+def get_issue(identifier: str, *, fresh: bool = False) -> dict:
     """One card, with the facts every caller of it decides on.
 
     `children(first: 1)` is selected for the reason `reconcile._fetch_active_cards`
@@ -518,7 +540,12 @@ def get_issue(identifier: str) -> dict:
     card fetched by a query that never selected children reads as having none —
     an epic that walks straight past the guard written to stop it (DRE-3119).
     One child answers the question; the count is not needed.
+
+    `fresh=True` bypasses `_card_read_once`'s memo: the caller needs the card
+    as it is NOW, not as it was when the command began.
     """
+    if not fresh and identifier in _card_memo:
+        return _card_memo[identifier]
     data = gql(
         """query($id: String!) { issue(id: $id) {
              id identifier title team { id } state { name type }
@@ -688,8 +715,9 @@ def guarded_state_write(
     terminal_target = target_type in _TERMINAL_TYPES
     if not terminal_target:
         # (1) The pre-write re-read. Skipped for a terminal target: closing a
-        # card is always allowed, so there is nothing to refuse.
-        fresh = get_issue(identifier)
+        # card is always allowed, so there is nothing to refuse. LIVE, never
+        # the command's memo (DRE-3236): this read is the race fix.
+        fresh = get_issue(identifier, fresh=True)
         fresh_state = (fresh.get("state") or {}).get("type")
         fresh_name = (fresh.get("state") or {}).get("name", fresh_state)
         if fresh_state in _TERMINAL_TYPES:
@@ -859,6 +887,9 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> None:
              commentCreate(input: $input) { success } }""",
         {"input": {"issueId": issue["id"], "body": body}},
     )
+    # The pass's cached thread is stale the moment this lands (DRE-3236): the
+    # next reader in the pass must see the comment it just posted.
+    _pass["threads"].pop(identifier, None)
     print(f"commented on {identifier}")
 
 
@@ -1056,7 +1087,13 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
     """
     import break_glass
 
-    issue = get_issue(identifier)
+    # ONE read of the merged card for the whole command (DRE-3236): the state
+    # write and the comment below each used to read it again.
+    with _card_read_once(identifier) as issue:
+        _card_done(identifier, pr_url, issue, break_glass)
+
+
+def _card_done(identifier: str, pr_url: str, issue: dict, break_glass) -> None:
     labels = _label_names(issue)
     title = issue.get("title") or ""
     # The fact the epic arm needs, off the query above — no second request.
@@ -1645,6 +1682,200 @@ def cmd_children(identifier: str) -> None:
     print(len(data["issue"]["children"]["nodes"]))
 
 
+# ── The pass's read cache (DRE-3236, absorbing DRE-3175) ─────────────────────
+# A reconcile pass reads the whole board once — `comments(last: 50)` inline on
+# every card (DRE-2929) — and then, wherever a helper took an IDENTIFIER rather
+# than the card, went back to Linear for the same comments: one request per
+# refused Backlog card (`_surface_once` → count_comments), one per escalated
+# Intake card, one per epic thread, one per liveness check. On the card's
+# fixture that was 265 of a 284-request sweep, and the sweep was the fleet's
+# biggest single spender of its 2,500-an-hour quota (DRE-3202's table).
+#
+# So the board reads REMEMBER what they selected, per pass, and every reader
+# below that takes an identifier is served from that memory. Three rules:
+#
+#   * The cache is a PASS's. It is empty and inert until `open_pass()` — which
+#     only `reconcile.main()` calls — so `count-comments`, `dump-comments` and
+#     every CLI caller outside a sweep make exactly the request they always
+#     made, and see the same COMMENT_WINDOW window they always did.
+#     `reset_pass_cache()` closes it (reconcile.reset_sweep_cards, and the
+#     test conftest through it).
+#   * A cached thread answers a reader only if it CARRIES the field the reader
+#     needs — `body` for the counters, `createdAt` for the clocks, `user` for
+#     authorship. The board reads select all three (COMMENT_FIELDS); a read
+#     that selected less misses, and the miss buys the thread rather than a
+#     wrong answer.
+#   * An inline window that is FULL (Linear says `hasPreviousPage`, or — from
+#     a read that did not ask — COMMENT_WINDOW nodes) is not the thread. It is
+#     not cached from the board read; the first reader that asks pays ONE
+#     paged read of the whole thread, oldest first, and that is cached for the
+#     pass. Inside a sweep a busy card's readers therefore see its entire
+#     history rather than a fifty-comment window — the direction every reader
+#     wants: a receipt outside the window still counts as posted, and "the
+#     oldest comment carrying X" really is the oldest.
+#
+# WHICH FIFTY THE WINDOW IS, measured (2026-09-06, DRE-3060, 47 comments):
+# Linear orders a card's comments NEWEST FIRST. `first: 3` answered 09-06,
+# 09-05, 09-04; `last: 3` answered the three OLDEST, ascending; `before:` a
+# `last:` window's endCursor pages toward the newest, ascending, with no gap
+# and no repeat. So `comments(last: 50)` is the fifty oldest, not the fifty
+# newest — for every reader in this file, and it has never mattered because no
+# card has crossed fifty yet (DRE-3060 is the nearest, at 47). Inside a pass
+# the walk below reads the rest, so a sweep is the one consumer that sees a
+# busy card whole; every other reader of the window is a separate defect,
+# recorded on the card that shipped this and not fixed here.
+#
+# A write invalidates: `cmd_comment` drops the card's cached thread, so a
+# receipt this pass posts is on the card when this pass next counts receipts.
+COMMENT_WINDOW = 50
+#: The ONE comment selection every reader here shares. The board reads in
+#: reconcile.py select it inline; the miss path below selects it per card.
+COMMENT_FIELDS = "body createdAt user { id }"
+
+_pass: dict = {"open": False, "threads": {}, "viewer": None, "viewer_read": False}
+
+
+def open_pass() -> None:
+    """Start a pass: an empty cache the board reads may now fill."""
+    _pass.update(open=True, threads={}, viewer=None, viewer_read=False)
+
+
+def reset_pass_cache() -> None:
+    """Drop the pass: the cache is empty and inert until the next open_pass()."""
+    _pass.update(open=False, threads={}, viewer=None, viewer_read=False)
+
+
+def remember_comments(identifier: str, comments: dict | None) -> None:
+    """Cache one card's inline comment window off a board read.
+
+    A window Linear reports as incomplete (`pageInfo.hasPreviousPage`) — or,
+    when the read did not select pageInfo, one that fills COMMENT_WINDOW — is
+    not remembered: the first reader that asks pays one paged read instead.
+    Inert outside a pass.
+    """
+    if not _pass["open"] or not identifier or comments is None:
+        return
+    nodes = list(comments.get("nodes") or [])
+    info = comments.get("pageInfo")
+    if info is not None and "hasPreviousPage" in info:
+        exhausted = bool(info.get("hasPreviousPage"))
+    else:
+        exhausted = len(nodes) >= COMMENT_WINDOW
+    if exhausted:
+        _pass["threads"].pop(identifier, None)
+        return
+    _pass["threads"][identifier] = nodes
+
+
+def _cached_thread(identifier: str, needs: tuple[str, ...]) -> list[dict] | None:
+    """The cached thread, only if every node carries every field in `needs`."""
+    nodes = _pass["threads"].get(identifier)
+    if nodes is None:
+        return None
+    if all(all(field in node for field in needs) for node in nodes):
+        return nodes
+    return None
+
+
+_THREAD_QUERY = """query($id: String!) { viewer { id } issue(id: $id) {
+     comments(last: 50) { pageInfo { hasPreviousPage endCursor }
+       nodes { %s } } } }""" % COMMENT_FIELDS
+# The rest of a busy card's thread, in pages of 100 toward the newest: `last:`
+# with `before:` the previous page's endCursor, which is the direction Linear's
+# newest-first ordering makes "the next hundred after these" (see the block
+# comment above — measured, not assumed).
+_NEWER_PAGE_QUERY = """query($id: String!, $before: String!) { issue(id: $id) {
+     comments(last: 100, before: $before) { pageInfo { hasPreviousPage endCursor }
+       nodes { %s } } } }""" % COMMENT_FIELDS
+
+
+def _fetch_thread(identifier: str) -> tuple[list[dict], str | None]:
+    """`(nodes, viewer_id)`: the card's comments oldest→newest, and who this
+    key is.
+
+    The COMMENT_WINDOW window always — the read every caller made before. The
+    pages beyond it only inside a pass, and only when Linear says there are
+    some (`hasPreviousPage` on a `last:` window means newer comments exist):
+    walked toward the newest, terminating on a missing or repeated cursor the
+    way gql_paged does. Outside a pass the window is what it always was.
+    """
+    data = gql(_THREAD_QUERY, {"id": identifier})
+    me = (data.get("viewer") or {}).get("id")
+    conn = ((data.get("issue") or {}).get("comments")) or {}
+    nodes = list(conn.get("nodes") or [])
+    info = conn.get("pageInfo") or {}
+    seen: set[str] = set()
+    while _pass["open"] and info.get("hasPreviousPage"):
+        before = info.get("endCursor")
+        if not before or before in seen:
+            print(
+                f"comments: {identifier} claims another page with cursor "
+                f"{before!r} — stopping at {len(nodes)} comment(s)",
+                file=sys.stderr,
+            )
+            break
+        seen.add(before)
+        newer = gql(_NEWER_PAGE_QUERY, {"id": identifier, "before": before})
+        conn = ((newer.get("issue") or {}).get("comments")) or {}
+        nodes = nodes + list(conn.get("nodes") or [])
+        info = conn.get("pageInfo") or {}
+    return nodes, me
+
+
+def _thread(identifier: str, *needs: str) -> list[dict]:
+    """The card's comment nodes for a reader that needs `needs`: from the
+    pass's cache when it carries them, else ONE read — cached for the pass.
+    Never asks who the viewer is; only `comment_records` needs that."""
+    cached = _cached_thread(identifier, needs)
+    if cached is not None:
+        return cached
+    nodes, me = _fetch_thread(identifier)
+    _remember(identifier, nodes, me)
+    return nodes
+
+
+def _thread_and_viewer(identifier: str, *needs: str) -> tuple[list[dict], str | None]:
+    """`_thread`, plus the viewer — off the same read on a miss, off the
+    pass's one viewer read on a hit."""
+    cached = _cached_thread(identifier, needs)
+    if cached is not None:
+        return cached, viewer_id()
+    nodes, me = _fetch_thread(identifier)
+    _remember(identifier, nodes, me)
+    return nodes, me
+
+
+def _remember(identifier: str, nodes: list[dict], me: str | None) -> None:
+    """Cache a fetched thread — and the viewer it came with — for the pass.
+    A viewer Linear did not name stays unknown rather than being cached as
+    nobody: the next reader that needs one asks."""
+    if not _pass["open"]:
+        return
+    _pass["threads"][identifier] = nodes
+    if me:
+        _pass.update(viewer=me, viewer_read=True)
+
+
+def viewer_id() -> str | None:
+    """Who `LINEAR_API_KEY` is — read at most once per pass. Outside a pass
+    every call asks, exactly as `comment_records` always did."""
+    if _pass["open"] and _pass["viewer_read"]:
+        return _pass["viewer"]
+    me = ((gql("query { viewer { id } }") or {}).get("viewer") or {}).get("id")
+    if _pass["open"] and me:
+        _pass.update(viewer=me, viewer_read=True)
+    return me
+
+
+def comment_timeline(identifier: str) -> list[dict]:
+    """`[{"body", "createdAt"}]`, oldest→newest — the liveness check's read
+    (reconcile.agent_run_alive), served from the pass's board read."""
+    return [
+        {"body": c.get("body") or "", "createdAt": c.get("createdAt") or ""}
+        for c in _thread(identifier, "body", "createdAt")
+    ]
+
+
 def count_comments(identifier: str, needle: str, *, since: str | None = None) -> int:
     """How many comments on the card contain `needle`. Used by agent-task's
     dead-run requeue cap (an agent ending with no PR and no blocker note).
@@ -1668,14 +1899,10 @@ def count_comments(identifier: str, needle: str, *, since: str | None = None) ->
     The fetch window (`comments(last: 50)`) is unchanged: `since` changes WHICH
     of those comments count, never HOW MANY are read. With `since=None` (the
     generic uses: MERGED_NOT_CLOSED_MARKER, the bad-blocker tag) the behaviour is
-    byte-identical to before.
+    byte-identical to before. Inside a sweep the bodies come off the pass's
+    board read (DRE-3236) — see the cache above.
     """
-    data = gql(
-        """query($id: String!) { issue(id: $id) {
-             comments(last: 50) { nodes { body } } } }""",
-        {"id": identifier},
-    )
-    bodies = [(c.get("body") or "") for c in data["issue"]["comments"]["nodes"]]
+    bodies = [(c.get("body") or "") for c in _thread(identifier, "body")]
     if since:
         # Oldest→newest, so the LAST marker in the list is the most recent reset.
         for i in range(len(bodies) - 1, -1, -1):
@@ -1713,12 +1940,7 @@ def first_comment_at(identifier: str, needle: str) -> str | None:
     comment carries the marker, which callers must treat as UNKNOWN rather than
     as zero: nothing has been ignored if nothing was ever said.
     """
-    data = gql(
-        """query($id: String!) { issue(id: $id) {
-             comments(last: 50) { nodes { body createdAt } } } }""",
-        {"id": identifier},
-    )
-    for node in data["issue"]["comments"]["nodes"]:  # oldest -> newest
+    for node in _thread(identifier, "body", "createdAt"):  # oldest -> newest
         if needle in (node.get("body") or ""):
             return node.get("createdAt") or None
     return None
@@ -1726,13 +1948,9 @@ def first_comment_at(identifier: str, needle: str) -> str | None:
 
 def comment_bodies(identifier: str) -> list[str]:
     """All comment bodies on the card, oldest→newest. Used by the model-fallback
-    selector (DRE-1354) to read which model each prior attempt used / died on."""
-    data = gql(
-        """query($id: String!) { issue(id: $id) {
-             comments(last: 50) { nodes { body } } } }""",
-        {"id": identifier},
-    )
-    return [c.get("body") or "" for c in data["issue"]["comments"]["nodes"]]
+    selector (DRE-1354) to read which model each prior attempt used / died on.
+    Inside a sweep, served from the pass's board read (DRE-3236)."""
+    return [c.get("body") or "" for c in _thread(identifier, "body")]
 
 
 def comment_records(identifier: str) -> list[dict]:
@@ -1768,15 +1986,15 @@ def comment_records(identifier: str) -> list[dict]:
 
     An unknown viewer vouches for nobody. That is the safe direction: the round
     history reads as absent rather than as whatever a stranger wrote.
+
+    Inside a sweep the thread comes off the pass's board read, which selects
+    `user { id }` for exactly this reader (DRE-3236), and the viewer is read
+    once per pass — so the authorship fact is the same one the dedicated
+    query carried, at the cost of one request per pass instead of one per epic.
     """
-    data = gql(
-        """query($id: String!) { viewer { id } issue(id: $id) {
-             comments(last: 50) { nodes { body user { id } } } } }""",
-        {"id": identifier},
-    )
-    me = (data.get("viewer") or {}).get("id")
+    nodes, me = _thread_and_viewer(identifier, "body", "user")
     rows = []
-    for c in data["issue"]["comments"]["nodes"]:
+    for c in nodes:
         author = (c.get("user") or {}).get("id")
         rows.append({
             "body": c.get("body") or "",
