@@ -15,7 +15,8 @@ That distinction is the whole of this file:
     (DRE-3151) can run the two against one population;
   * the proposal says what the one call COST — the output budget it was sized
     with and whether the answer came back cut (DRE-3259) — and neither key may
-    move `proposal_id` or the rendered page.
+    move `proposal_id`, nor put a number on the page when nothing was cut
+    (DRE-3152 renders the cut itself; `tests/test_groomer_render.py` holds it).
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groomer.py -v
 """
@@ -443,15 +444,19 @@ def test_the_rules_only_rows_are_marked_unjudged_and_still_name_a_reason():
         assert row["trigger"], f"{row['identifier']} names no trigger"
 
 
-def test_the_rendered_proposal_is_unchanged_without_a_judgement():
-    """The CEO-facing text is the audit's other half. A judgement section that
-    rendered on the rules-only path would make the two readings differ on the
-    page as well as in the JSON."""
+def test_the_rendered_proposal_names_no_ranked_read_without_a_judgement():
+    """The CEO-facing text is the audit's other half. Nothing the ranked read
+    produced may render on the rules-only path — the one thing that page says
+    about a judgement is that there was not one (DRE-3152 owns the wording;
+    `tests/test_groomer_render.py` holds it)."""
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     proposal = groomer.propose(
         golden["cards"], cycles=golden["cycles"], capacity=golden["capacity"],
         batch_cycles=golden["batch_cycles"], now=golden["now"], judgement=None)
-    assert "judgement" not in groomer.render_proposal(proposal).lower()
+    text = groomer.render_proposal(proposal)
+    assert "What the ranked read said" not in text
+    assert "Could not rank" not in text
+    assert "Ranked by the rules only (judgement off)" in text
 
 
 # --------------------------------------------------------------------------
@@ -503,19 +508,20 @@ def test_the_run_log_names_the_budget_and_what_the_cut_cost(monkeypatch, capsys)
     assert "6 card" in err, "the run log names how many cards the cut cost"
 
 
-def test_the_rendering_does_not_show_the_budget_yet():
-    """DRE-3152 owns the rendering and is blocked by this card. A proposal that
-    printed the budget here would ship the sibling's surface without its
-    review — and it would move `render_proposal`'s output on the fixtures,
-    which this card must not."""
+def test_an_answer_that_was_not_cut_says_nothing_about_a_budget():
+    """DRE-3152 renders the budget only when the answer came back CUT. A whole
+    answer costs the CEO no number: the receipt exists to explain a short read,
+    and a page that prints a token count on every run trains people past it.
+    (The cut page itself is held by `tests/test_groomer_render.py`.)"""
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     judgement = judged(golden["cards"],
                        ranked([c["identifier"] for c in golden["cards"]]))
+    assert judgement.truncated is False
     for proposal in (_fixture_proposal(), _fixture_proposal(judgement)):
         text = groomer.render_proposal(proposal)
         assert "output_budget" not in text
-        assert "budget" not in text.lower()
-        assert "truncated" not in text.lower()
+        assert "token" not in text.lower()
+        assert "cut short" not in text.lower()
 
 
 def test_the_cli_carries_the_no_judgement_switch():
