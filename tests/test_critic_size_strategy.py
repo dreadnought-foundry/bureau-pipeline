@@ -46,9 +46,13 @@ WHAT THIS FILE PINS:
    class).
 
 THRESHOLDS come from this repo's own history, not round numbers:
-  * 50 files / 5,000 changed lines — above the largest review that has ever
-    succeeded here (+4,092 / 29 files; #290's 41 files), so every PR the
-    one-pass review demonstrably handles keeps handling it unchanged.
+  * 10 files / 1,500 changed lines — above every review the critic has been
+    OBSERVED to finish, and below the smallest one it demonstrably could
+    not. LOWERED FROM 50 / 5,000 by DRE-2924: that pair was read off an
+    older sample (#275 at +4,092 across 29 files, #290 at 41 files) and it
+    routed portico PR #364 (18 files / 2,059 lines) to the one-pass review,
+    which then failed to produce a verdict twice. The measurement is in
+    tests/test_critic_turn_wall.py and beside the constant itself.
   * 200 files / 20,000 changed lines — above #297 itself, because #297 is
     exactly the PR that most deserved a review. Also under GitHub's 300-file
     compare cap, so the fail-fast decision is never made on truncated data.
@@ -241,21 +245,43 @@ class StrategySelectionTest(unittest.TestCase):
     def test_the_thresholds_sit_above_this_repos_proven_history(self):
         """Every PR the one-pass review has ACTUALLY completed must keep the
         one-pass review — the thresholds are derived from that history, so a
-        later edit that drops them below it has to fail here."""
+        later edit that drops them below it has to fail here.
+
+        DRE-2924 REPLACED THE SAMPLE. #275 (29 files) and #290 (41 files)
+        used to be listed here as proof that 50 / 5,000 was safe. They were
+        real successes and they are no longer the evidence that governs:
+        measured against the SAME critic on the night of 2026-08-31, every
+        review that finished was <= 6 files / ~1,030 lines and the one at 18
+        files / 2,059 lines could not finish, twice. So the proven set is now
+        the observed one, and the larger historical PRs get the file-list
+        strategy — which reviews them, with more turns, rather than refusing
+        them. tests/test_critic_turn_wall.py holds the full measurement.
+        """
         proven = {
             "#296 (+278/-11, 4 files)": compare(
                 [(f"f{i}.py", 70, 3) for i in range(4)]
             ),
-            "#275 (+4,092, 29 files)": compare(
-                [(f"f{i}.py", 4092 // 29, 0) for i in range(29)]
+            "#361 (507 lines, 4 files)": compare(
+                [(f"f{i}.py", 507 // 4, 0) for i in range(4)]
             ),
-            "#290 (+2,828, 41 files)": compare(
-                [(f"f{i}.py", 2828 // 41, 0) for i in range(41)]
+            "#362 (975 lines, 5 files)": compare(
+                [(f"f{i}.py", 975 // 5, 0) for i in range(5)]
+            ),
+            "#363 (1,026 lines, 6 files)": compare(
+                [(f"f{i}.py", 1026 // 6, 0) for i in range(6)]
             ),
         }
         for name, rec in proven.items():
             with self.subTest(pr=name):
                 self.assertEqual(strategy_for(rec), "standard")
+
+    def test_portico_364_is_no_longer_routed_one_pass(self):
+        """The PR DRE-2924 is about: 18 files / 2,059 lines, two runs, no
+        verdict either time. It must reach the multi-pass strategy."""
+        m = pss.measure(
+            None, {"changedFiles": 18, "additions": 2_059, "deletions": 0}
+        )
+        self.assertEqual(pss.choose(m), "large")
 
     def test_portico_297_gets_the_large_strategy_not_a_fast_failure(self):
         """118 files, +16,909/-628 — the PR this card is about. It must be

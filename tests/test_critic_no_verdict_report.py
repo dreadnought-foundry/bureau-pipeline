@@ -277,11 +277,18 @@ class StepOutputsTest(unittest.TestCase):
         self.assertEqual(parsed["turns"], "25")
         self.assertEqual(parsed["cost"], "3.39")
 
-    def test_a_crash_reports_a_crash_and_no_numbers(self):
+    def test_a_crash_reports_a_crash_and_its_own_fingerprint(self):
+        """DRE-2924 changed the second half of this. A crash used to publish
+        NO numbers, on the reasoning that an agent which never ran has
+        nothing to report — but `num_turns: 1, total_cost_usd: 0` IS the
+        stale-token signature, and withholding it is what let a run that
+        spent 62 turns be described to a pull request as having done no
+        inference. Every failing path publishes what it spent now; the
+        outcome word is unchanged, so the crash wording still fires here."""
         parsed, _ = outputs(AUTH_DEATH, verdict_text=None)
         self.assertEqual(parsed["outcome"], "crash")
-        self.assertNotIn("turns", parsed)
-        self.assertNotIn("cost", parsed)
+        self.assertEqual(parsed["turns"], "1")
+        self.assertEqual(parsed["cost"], "0.00")
 
     def test_a_missing_execution_record_is_unknown_not_completed(self):
         # We have no evidence it ran, so we must not claim it did — the

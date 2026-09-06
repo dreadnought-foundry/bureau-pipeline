@@ -57,11 +57,19 @@ Called from qa-review.yml after each critic attempt:
     python3 check_critic_result.py <execution-json-path> <verdict-path> \
         [--github-output <path>]
 
+DRE-2924: and a run that spent its TURNS says so. `error_max_turns` is
+is_error, so a ceiling death landed on the crash path and the pull request
+was told the reviewer had crashed at startup with no inference — over portico
+PR #364's first attempt, which spent 62 of its 80 turns and ~$2.56. That is
+its own outcome now, and the turns/cost ride on every failing outcome rather
+than only on the one that ended cleanly, because those two numbers are the
+whole difference between the two deaths.
+
 Exit 0 when a real verdict exists (post it). Exit 1 on crash/no-verdict
 (retry, then neutral + loud fail). With --github-output, appends
-`outcome=ok|crash|completed_no_verdict|unknown` plus `turns=` and `cost=`
-(numbers only, and only when the run ended cleanly) to that file. The flag is
-optional: verify.yml calls this same gate without it.
+`outcome=ok|turn_exhaustion|crash|completed_no_verdict|unknown` plus `turns=`
+and `cost=` (numbers only, whenever the execution record carries them) to
+that file. The flag is optional: verify.yml calls this same gate without it.
 """
 
 from __future__ import annotations
@@ -72,10 +80,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from execution_result import (  # noqa: E402
-    completion_scalars,
     load_execution as _load_execution,
     print_completion_detail,
     print_failure_detail,
+    spend_scalars,
 )
 from verdict_cause import verdict_decision  # noqa: E402
 
@@ -168,6 +176,21 @@ def _verdict_is_complete(text: str) -> bool:
     return any(
         line.strip().lower().startswith("## summary")
         for line in text.splitlines()
+    )
+
+
+def is_turn_exhaustion(execution: dict | None) -> bool:
+    """True iff the action itself said it stopped at the turn ceiling.
+
+    DRE-2924. Read off `subtype` alone, which is the action's own statement
+    of why it stopped — not inferred from turns or elapsed time, because an
+    inference is exactly what got this wrong the first time. The auth death
+    carries a different subtype (`error_during_execution`, with an api_error
+    terminal reason), so this cannot swallow it.
+    """
+    return (
+        isinstance(execution, dict)
+        and execution.get("subtype") == _MAX_TURNS_SUBTYPE
     )
 
 
@@ -273,8 +296,14 @@ def outcome(execution: dict | None, real: bool) -> str:
     """One word for what happened, for the workflow to pick its message from.
 
     * `ok` — a genuine verdict; nothing to explain.
-    * `crash` — is_error: true. The auth/startup death the neutral notice was
-      written for, and still the only thing that notice may describe.
+    * `turn_exhaustion` — the run hit its TURN CEILING and left no complete
+      verdict (DRE-2924, portico PR #364: 62 of 80 turns, ~$2.56, nothing
+      readable). It is `is_error: true` and it used to land on `crash`, so
+      the pull request was told the reviewer had never started. A retry hits
+      the same wall; the remedy is a smaller change, not a credential.
+    * `crash` — every other is_error. The auth/startup death the neutral
+      notice was written for, and still the only thing that notice may
+      describe.
     * `completed_no_verdict` — the run ENDED CLEANLY and left nothing usable
       (portico PR #297). Blaming a credential for this is what cost a day.
     * `unknown` — no execution record at all. We cannot prove it ran, so we
@@ -285,6 +314,8 @@ def outcome(execution: dict | None, real: bool) -> str:
     if execution is None:
         return "unknown"
     if execution.get("is_error") is True:
+        if is_turn_exhaustion(execution):
+            return "turn_exhaustion"
         return "crash"
     return "completed_no_verdict"
 
@@ -292,12 +323,18 @@ def outcome(execution: dict | None, real: bool) -> str:
 def write_step_outputs(path: str, execution: dict | None, real: bool) -> None:
     """Append `outcome`/`turns`/`cost` to a $GITHUB_OUTPUT file.
 
-    Numbers only, straight from completion_scalars' whitelist: $GITHUB_OUTPUT
-    is line-oriented, so a value carrying a newline would write a step output
-    of its own — `real=true` among them. A float cannot.
+    Numbers only, straight from spend_scalars' whitelist: $GITHUB_OUTPUT is
+    line-oriented, so a value carrying a newline would write a step output of
+    its own — `real=true` among them. A float cannot.
+
+    DRE-2924: the numbers ride on EVERY failing outcome, not only on the one
+    that ended cleanly. A turn-ceiling death that publishes nothing is
+    indistinguishable from an agent that never started, and the numbers are
+    the only thing that tells them apart — the auth death's own 1-turn/$0
+    shape included.
     """
     lines = [f"outcome={outcome(execution, real)}"]
-    scalars = completion_scalars(execution)
+    scalars = spend_scalars(execution)
     turns = scalars.get("num_turns")
     cost = scalars.get("total_cost_usd")
     if turns is not None:
@@ -344,7 +381,25 @@ def main(argv: list[str]) -> int:
         else:
             print("critic result gate: ok — real verdict")
         return 0
-    if crashed:
+    if crashed and is_turn_exhaustion(execution):
+        # DRE-2924. Turn exhaustion is is_error, so it used to print — and
+        # post — the auth-death wording. It is the opposite of an agent that
+        # never started, and the next reader must not be sent to rotate a
+        # credential that is fine.
+        print(
+            "critic result gate: FAIL — the review ran out of TURNS "
+            f"(subtype={_MAX_TURNS_SUBTYPE}, num_turns="
+            f"{execution.get('num_turns')}) and left no complete verdict. "
+            "This is turn exhaustion, NOT a startup/auth failure: the "
+            "reviewer authenticated, did real work and was billed for it, so "
+            "no credential needs rotating on the strength of this. A retry "
+            "hits the same wall: same ceiling, same work. For the CRITIC that "
+            "means the pull request is too large for the strategy it was "
+            "routed to (pr_size_strategy.py) — verify.yml shares this gate "
+            "and owns its own remedy."
+        )
+        print_failure_detail(execution, "critic result gate")
+    elif crashed:
         print(
             "critic result gate: FAIL — execution result has is_error=true "
             f"(subtype={execution.get('subtype')!r})"
