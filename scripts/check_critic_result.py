@@ -393,8 +393,10 @@ def main(argv: list[str]) -> int:
             "This is turn exhaustion, NOT a startup/auth failure: the "
             "reviewer authenticated, did real work and was billed for it, so "
             "no credential needs rotating on the strength of this. A retry "
-            "hits the same wall — this pull request is too large for the "
-            "review strategy it was routed to (pr_size_strategy.py)."
+            "hits the same wall: same ceiling, same work. For the CRITIC that "
+            "means the pull request is too large for the strategy it was "
+            "routed to (pr_size_strategy.py) — verify.yml shares this gate "
+            "and owns its own remedy."
         )
         print_failure_detail(execution, "critic result gate")
     elif crashed:
