@@ -49,6 +49,21 @@ dependency mid-sentence still declares nothing.
 Ids are read from the WHOLE declaring line, not just the tail after the phrase:
 on an anchored line nothing but markup can precede the phrase, so the two are
 equivalent, and the whole-line read is the one the gate has always used.
+
+FROM THE LINE'S TEXT, NEVER FROM A LINK TARGET (DRE-3161). "The whole line"
+used to mean the whole STRING, hrefs included, and a Linear issue mention
+renders as a markdown link whose target carries the linked card's TITLE as a
+URL slug. So a card whose title names another card poisoned every declaring
+line that linked it: DRE-3061's `**Blocked by:**` line named fourteen cards,
+every one a real relation, and was bounced to Triage on 2026-09-04 for
+"declaring a dependency on DRE-3106" — an id that appears once, at the tail of
+the DRE-3109 mention's slug,
+`…/issue/DRE-3109/operator-confirm-…-pr-2280-dre-3106`. `_text_of` below strips
+link markup before the ids are matched, so a mention contributes its LABEL and
+nothing else. This narrows WHERE ids are read from and nothing else: the
+comparison stays case-insensitive (`DRE-9` and `dre-9` are one declaration, on
+purpose), and an id in the PROSE of a declaring line still declares — which is
+what DRE-3111 and DRE-3112 were correctly bounced for the same afternoon.
 """
 from __future__ import annotations
 
@@ -70,6 +85,45 @@ BLOCKER_LINE = re.compile(
 # fourth answer to the question this module exists to have one answer to.
 CARD_REF = re.compile(r"\bDRE-\d+\b", re.IGNORECASE)
 
+# --------------------------------------------------------------------------- #
+# what counts as the line's TEXT (DRE-3161)                                    #
+# --------------------------------------------------------------------------- #
+# A markdown link — the shape Linear serialises an issue mention as. The LABEL
+# is text and survives; the target does not. `[^)]*` for the target because a
+# Linear mention's is `(https://linear.app/…)` or `(<https://…>)`, neither of
+# which contains a closing paren.
+_MENTION_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+
+# A pasted URL, with or without markdown's angle-bracket autolink wrapper. It is
+# not a link target — there is no label to read instead — so it is replaced by
+# the card it ADDRESSES, and by nothing when it addresses no card. Dropping it
+# whole would fail unsafe in the DRE-2670 direction: `Blocked by: <issue url>`
+# is a real declaration, and the producer would mint no relation for it.
+_URL = re.compile(r"<?https?://[^\s<>)\]]+>?", re.IGNORECASE)
+_ISSUE_IN_URL = re.compile(r"/issue/(DRE-\d+)", re.IGNORECASE)
+
+# Tag markup, kept and dropped in one piece so the mention's label between the
+# tags is what remains. The tag name is alphanumeric on purpose: `<DRE-3109>` is
+# somebody writing a card id in angle brackets, not markup, and stays text.
+_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9]*(?:\s[^>]*)?/?>")
+
+
+def _url_text(match: re.Match) -> str:
+    """A URL's contribution to the line's text: the card it addresses, or
+    nothing. Never its slug — that is the LINKED card's title, and reading it
+    is what bounced DRE-3061 to Triage."""
+    addressed = _ISSUE_IN_URL.search(match.group(0))
+    return f" {addressed.group(1)} " if addressed else " "
+
+
+def line_text(line: str) -> str:
+    """`line` with its link markup removed — what a human reads on the card.
+
+    Order matters: mention labels first (so a link's target is gone before
+    anything else looks at it), then bare URLs, then any tag markup left over.
+    """
+    return _TAG.sub("", _URL.sub(_url_text, _MENTION_LINK.sub(r"\1", line)))
+
 
 def blocker_ids(text: str | None) -> list[str]:
     """Every card id DECLARED as a blocker in `text` — uppercased, de-duplicated,
@@ -77,12 +131,17 @@ def blocker_ids(text: str | None) -> list[str]:
 
     A list, not a set: the producer creates relations in the order the card
     declares them, and the set-returning consumers wrap it themselves.
+
+    The ANCHOR is read on the raw line and the IDS on its text (DRE-3161): the
+    markup a declaration may open with is exactly what `BLOCKER_LINE` already
+    steps over, so stripping links before the anchor would change what counts as
+    a declaration, which this card does not touch.
     """
     found: list[str] = []
     for line in (text or "").splitlines():
         if not BLOCKER_LINE.search(line):
             continue
-        for ref in CARD_REF.findall(line):
+        for ref in CARD_REF.findall(line_text(line)):
             up = ref.upper()
             if up not in found:
                 found.append(up)
@@ -123,6 +182,23 @@ DECLARING: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("**Blocked by:** DRE-100, DRE-101", ("DRE-100", "DRE-101")),
     ("**Blocked by:** DRE-5, DRE-5, DRE-3", ("DRE-5", "DRE-3")),
     ("Serialize after: all other DRE-1200 work", ("DRE-1200",)),
+    # DRE-3161: a mention contributes its LABEL. This is the live DRE-3061 line
+    # in miniature — the slug of the linked card carries `dre-3106`, its title's
+    # own reference to another card, and reading it bounced a fourteen-relation
+    # card to Triage. The whole line, verbatim, is in
+    # `tests/test_prose_blocker_link_slug.py`.
+    (
+        "**Blocked by:** [DRE-3109](https://linear.app/dreadnoughtfoundry/issue/"
+        "DRE-3109/operator-confirm-the-design-contract-is-on-main-pr-2280-dre-3106)",
+        ("DRE-3109",),
+    ),
+    ("**Blocked by:** [DRE-3109](https://x/y), DRE-3160", ("DRE-3109", "DRE-3160")),
+    # …and a URL is still read for the card it ADDRESSES when there is no label.
+    (
+        "Blocked by: https://linear.app/dreadnoughtfoundry/issue/DRE-3109/"
+        "operator-confirm-the-design-contract-is-on-main-pr-2280-dre-3106",
+        ("DRE-3109",),
+    ),
     # A whole body: a real declaration plus prose that denies one. The anchor is
     # per line, never all-or-nothing per body.
     (
@@ -161,6 +237,10 @@ NOT_DECLARING: tuple[str, ...] = (
     "1. Ship the rail. B3 is formally blocked by DRE-2496, per the plan.",
     # A declaring phrase that names nothing declares nothing.
     "Blocked by: the design review",
+    # DRE-3161, the other half: a link whose LABEL is prose names no card, so
+    # the href it points at is not a declaration either.
+    "**Blocked by:** [the design contract](https://linear.app/dreadnoughtfoundry"
+    "/issue/DRE-3106/one-river-the-design-contract-reaches-main)",
 )
 
 FIXTURES: tuple[tuple[str, tuple[str, ...]], ...] = DECLARING + tuple(
