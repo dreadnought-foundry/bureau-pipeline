@@ -12,12 +12,16 @@ That distinction is the whole of this file:
     `likely-done` names its **evidence**, and a reason written in technical
     terms is refused at the write seam rather than put in front of the CEO;
   * `--no-judgement` is today's groomer, unchanged, so the audit card
-    (DRE-3151) can run the two against one population.
+    (DRE-3151) can run the two against one population;
+  * the proposal says what the one call COST — the output budget it was sized
+    with and whether the answer came back cut (DRE-3259) — and neither key may
+    move `proposal_id` or the rendered page.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groomer.py -v
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -77,19 +81,27 @@ CYCLES = [
 
 
 class Counter:
-    def __init__(self, answer=""):
-        self.answer, self.calls = answer, 0
+    """The call seam, counted — and, since DRE-3259, sized: it takes the two
+    keywords `run()` passes and records what the one call asked for."""
 
-    def __call__(self, model, prompt):
+    def __init__(self, answer="", truncated=False):
+        self.answer, self.calls, self.truncated = answer, 0, truncated
+        self.budgets, self.clocks = [], []
+
+    def __call__(self, model, prompt, *, max_tokens=None, timeout_seconds=None):
         self.calls += 1
+        self.budgets.append(max_tokens)
+        self.clocks.append(timeout_seconds)
         import planning_classify
-        return planning_classify.Answer(text=self.answer, model="test-model")
+        return planning_classify.Answer(text=self.answer, model="test-model",
+                                        truncated=self.truncated)
 
 
-def judged(cards, answer, *, model="test-model"):
+def judged(cards, answer, *, model="test-model", truncated=False):
     """A judgement over `cards` from a canned answer, with no model reached."""
     rows = groom_judgement.census(cards, now=NOW)
-    return groom_judgement.run(rows, PACK, call=Counter(answer), model=model)
+    return groom_judgement.run(rows, PACK, call=Counter(answer, truncated),
+                               model=model)
 
 
 def ranked(order, outcome="now", reason="the model wanted it", pointer=None):
@@ -118,6 +130,14 @@ def test_one_model_call_per_propose_run_over_a_250_card_population():
     assert proposal["judgement"]["calls"] == 1
     assert proposal["judgement"]["enabled"] is True
     assert proposal["population"] == 250
+    # …and the one call is sized for the population it was asked about
+    # (DRE-3259). A 250-card answer against the classifier's own 1,000-token
+    # bound comes back cut after the first forty cards.
+    budget = call.budgets[0]
+    assert budget >= groom_judgement.TOKENS_PER_CARD * 250
+    assert call.clocks[0] == groom_judgement.wall_clock_seconds(budget)
+    assert proposal["judgement"]["output_budget"] == budget
+    assert proposal["judgement"]["truncated"] is False
 
 
 # --------------------------------------------------------------------------
@@ -309,6 +329,39 @@ def test_the_judgement_block_carries_every_field_the_contract_names():
     assert block["receipt"] == "test-model (asked) / test-model (answered)"
     assert set(block["pack"]) == set(groom_context.SECTIONS) | {"truncated"}
     assert block["calls"] in (0, 1)
+    # DRE-3259's two keys, beside the ones DRE-3150 shipped.
+    assert set(block) >= {"output_budget", "truncated"}
+    assert block["output_budget"] == groom_judgement.output_budget(1)
+    assert block["truncated"] is False
+
+
+def test_the_answers_cut_and_the_packs_cap_are_never_read_for_each_other():
+    """`judgement.truncated` is the ANSWER being cut at the budget, a bool;
+    `judgement.pack.truncated` is the list of context-pack sections that were
+    capped. Two facts, two types, one name apart."""
+    cards = [card("DRE-1")]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, now=NOW,
+                               judgement=judged(cards, ranked(["DRE-1"])))
+    block = proposal["judgement"]
+    assert block["truncated"] is False
+    assert isinstance(block["pack"]["truncated"], list)
+
+
+def test_a_cut_answer_is_reported_on_the_proposal():
+    cards = [card(f"DRE-{n:02d}") for n in range(10)]
+    # Four whole lines and a fifth cut mid-reason: six cards the answer never
+    # reached, plus the garbled one, come back unranked.
+    answer = ranked([f"DRE-{n:02d}" for n in range(4)]) + "\nDRE-04 | now | it is wa"
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=10, now=NOW,
+                               judgement=judged(cards, answer, truncated=True))
+    block = proposal["judgement"]
+    assert block["truncated"] is True
+    assert block["output_budget"] == groom_judgement.output_budget(10)
+    assert len(block["unranked"]) == 6
+    assert "DRE-04" in block["unranked"]
+    assert block["problem"] is None, (
+        "a cut is not a problem — the run ranked what it read"
+    )
 
 
 def test_a_run_that_could_not_rank_says_so_in_the_proposal():
@@ -374,6 +427,8 @@ def test_no_judgement_makes_no_call_and_says_it_did_not():
     assert block["calls"] == 0
     assert block["model_asked"] is None and block["model_answered"] is None
     assert block["unranked"] == [] and block["withheld"] == []
+    assert block["output_budget"] == 0, "no call, no budget"
+    assert block["truncated"] is False
 
 
 def test_the_rules_only_rows_are_marked_unjudged_and_still_name_a_reason():
@@ -397,6 +452,70 @@ def test_the_rendered_proposal_is_unchanged_without_a_judgement():
         golden["cards"], cycles=golden["cycles"], capacity=golden["capacity"],
         batch_cycles=golden["batch_cycles"], now=golden["now"], judgement=None)
     assert "judgement" not in groomer.render_proposal(proposal).lower()
+
+
+# --------------------------------------------------------------------------
+# what the budget must NOT move (DRE-3259)
+# --------------------------------------------------------------------------
+# Computed on the fixture before this card touched anything, and pinned here:
+# `proposal_id` digests the batch's cards, positions and cycles and nothing
+# else, so neither of the two new keys may retire a CEO approval of the same
+# batch.
+FIXTURE_RULES_ONLY_ID = "45946184638e"
+FIXTURE_JUDGED_ID = "85f53ade431b"
+
+
+def _fixture_proposal(judgement=None):
+    golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    return groomer.propose(
+        golden["cards"], cycles=golden["cycles"], capacity=golden["capacity"],
+        batch_cycles=golden["batch_cycles"], now=golden["now"],
+        judgement=judgement)
+
+
+def test_the_proposal_id_is_untouched_by_the_budget_keys():
+    golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    judgement = judged(golden["cards"],
+                       ranked([c["identifier"] for c in golden["cards"]]))
+    assert _fixture_proposal()["id"] == FIXTURE_RULES_ONLY_ID
+    assert _fixture_proposal(judgement)["id"] == FIXTURE_JUDGED_ID
+
+
+def test_the_run_log_names_the_budget_and_what_the_cut_cost(monkeypatch, capsys):
+    """`_build` prints the budget beside the problem line, and prints the cut
+    and its count when there was one — the proposal is read by the CEO, and the
+    number that explains a short answer belongs in the run log."""
+    cards = [card(f"DRE-{n:02d}") for n in range(10)]
+    answer = ranked([f"DRE-{n:02d}" for n in range(4)]) + "\nDRE-04 | now | it is wa"
+    judgement = judged(cards, answer, truncated=True)   # BEFORE the patch below
+
+    monkeypatch.setattr(groomer, "read_population", lambda lops, lane: cards)
+    monkeypatch.setattr(groomer, "read_cycles", lambda lops: CYCLES)
+    monkeypatch.setattr(groom_context, "read_pack", lambda lops: PACK)
+    monkeypatch.setattr(groom_judgement, "run", lambda rows, pack: judgement)
+
+    groomer._build(argparse.Namespace(
+        lane="Intake", capacity=10, batch_cycles=1, judgement=True,
+        window_days=groomer.WINDOW_DAYS,
+        priority=",".join(groomer.REPO_PRIORITY)))
+    err = capsys.readouterr().err
+    assert str(groom_judgement.output_budget(10)) in err
+    assert "6 card" in err, "the run log names how many cards the cut cost"
+
+
+def test_the_rendering_does_not_show_the_budget_yet():
+    """DRE-3152 owns the rendering and is blocked by this card. A proposal that
+    printed the budget here would ship the sibling's surface without its
+    review — and it would move `render_proposal`'s output on the fixtures,
+    which this card must not."""
+    golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    judgement = judged(golden["cards"],
+                       ranked([c["identifier"] for c in golden["cards"]]))
+    for proposal in (_fixture_proposal(), _fixture_proposal(judgement)):
+        text = groomer.render_proposal(proposal)
+        assert "output_budget" not in text
+        assert "budget" not in text.lower()
+        assert "truncated" not in text.lower()
 
 
 def test_the_cli_carries_the_no_judgement_switch():

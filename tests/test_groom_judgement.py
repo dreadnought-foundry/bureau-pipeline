@@ -18,6 +18,20 @@ a judgement no test can assert:
     classifier's rule (DRE-3029). A prompt restated in this module is a second
     copy, and the copy is what drifts.
 
+And the one call is SIZED, and says when it was cut (DRE-3259):
+
+  * **the output budget comes off the census** — eighty tokens a card plus
+    headroom, floored and ceilinged, and the wall clock comes off the budget.
+    A 226-card lane against the classifier's 1,000-token bound is an answer cut
+    after the first forty cards while the parser reads the rest as "could not
+    rank": a run that ships looking like it worked;
+  * **a census past the ceiling is not silently cut** — the oldest cards past
+    it are `unranked` BEFORE the call, with their own reason, and the call is
+    still ONE call over the cards that fit;
+  * **a truncated answer is said out loud** — what came back whole keeps its
+    call, the garbled last line is never parsed, and the count the cut cost is
+    printed and reported.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_judgement.py -v
 """
 from __future__ import annotations
@@ -36,11 +50,25 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import groom_context  # noqa: E402
 import groom_judgement  # noqa: E402
+import model_fallback  # noqa: E402
 import planning_classify  # noqa: E402
 
 NOW = "2026-09-05T12:00:00Z"
 BASE = datetime.fromisoformat(NOW.replace("Z", "+00:00"))
 PACK = groom_context.pack(now=NOW)
+
+# The output-token UPPER LIMIT the installed Claude Code CLI (2.1.263) applies
+# to each rung of the planner ladder, read out of the CLI binary's own model
+# registry (`max_output_tokens:{default,upper}`) — the number `c3()` returns as
+# `upperLimit` and `Ete()` caps `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to. A budget
+# above it runs AT it, so the ceiling is held under the smallest of them rather
+# than trusting the number we ask for. Recorded here rather than probed: the
+# fleet's runners install the CLI at run time and a test may not have one.
+CLI_OUTPUT_UPPER_LIMITS = {
+    "claude-fable-5-1": 128000,
+    "claude-opus-5": 128000,
+    "claude-sonnet-4-6": 128000,
+}
 
 
 def ago(days: float) -> str:
@@ -65,17 +93,26 @@ def card(identifier, *, repo="portico", days=1, description="", priority=0,
 
 
 class Counter:
-    """The call seam, counted. `judge` never reaches a model in a test."""
+    """The call seam, counted. `judge` never reaches a model in a test.
 
-    def __init__(self, answer="", raises=None):
+    It takes the seam's two keywords (DRE-3258) and RECORDS them, because what
+    the one call was sized with is the thing DRE-3259 is about.
+    """
+
+    def __init__(self, answer="", raises=None, truncated=False):
         self.answer, self.raises, self.calls, self.prompts = answer, raises, 0, []
+        self.truncated = truncated
+        self.budgets, self.clocks = [], []
 
-    def __call__(self, model, prompt):
+    def __call__(self, model, prompt, *, max_tokens=None, timeout_seconds=None):
         self.calls += 1
         self.prompts.append(prompt)
+        self.budgets.append(max_tokens)
+        self.clocks.append(timeout_seconds)
         if self.raises is not None:
             raise self.raises
-        return planning_classify.Answer(text=self.answer, model="test-model")
+        return planning_classify.Answer(text=self.answer, model="test-model",
+                                        truncated=self.truncated)
 
 
 def line(identifier, outcome, reason, pointer=None):
@@ -136,6 +173,223 @@ def test_the_prompt_carries_both_the_census_and_the_pack():
     prompt = call.prompts[0]
     assert "A distinctive title" in prompt
     assert "We are rebuilding the console." in prompt
+
+
+# --------------------------------------------------------------------------
+# the output budget, and the wall clock sized off it (DRE-3259)
+# --------------------------------------------------------------------------
+def test_the_output_budget_is_sized_from_the_census():
+    assert groom_judgement.TOKENS_PER_CARD == 80
+    assert groom_judgement.OUTPUT_HEADROOM == 500
+    assert groom_judgement.OUTPUT_FLOOR == 4000
+    assert groom_judgement.OUTPUT_CEILING == 32000
+    assert groom_judgement.output_budget(226) == 18580, (
+        "the 226-card lane is what this budget exists for"
+    )
+    assert groom_judgement.output_budget(1) == 4000, "the floor holds"
+    assert groom_judgement.output_budget(500) == 32000, "the ceiling holds"
+
+
+def test_the_wall_clock_is_sized_from_the_budget():
+    assert groom_judgement.wall_clock_seconds(18580) == 524.5, (
+        "about nine minutes for the 226-card lane, with the CLI path's package "
+        "fetch inside the 60"
+    )
+    assert groom_judgement.MAX_WALL_CLOCK_SECONDS == \
+        groom_judgement.wall_clock_seconds(groom_judgement.OUTPUT_CEILING), (
+            "the workflow card sizes the job's timeout off this constant, so it "
+            "is the wall clock of the largest call this module can make"
+        )
+
+
+def test_the_ceiling_is_under_every_rung_of_the_planner_ladder():
+    """The CLI clamps the budget to a per-model upper limit, so a ceiling above
+    any rung's limit is a number we ask for and never get (Q4)."""
+    ladder = model_fallback.ladder_for(groom_judgement.ROLE)
+    assert set(ladder) == set(CLI_OUTPUT_UPPER_LIMITS), (
+        "the planner ladder moved — re-read the installed CLI's own limit for "
+        "every rung before trusting the ceiling"
+    )
+    assert groom_judgement.OUTPUT_CEILING <= min(CLI_OUTPUT_UPPER_LIMITS.values())
+
+
+def test_the_one_call_is_made_with_the_budget_and_the_clock():
+    rows = groom_judgement.census([card(f"DRE-{n:03d}") for n in range(250)],
+                                  now=NOW)
+    call = Counter(answer="\n".join(
+        line(row["identifier"], "now", "it is wanted") for row in rows))
+    result = groom_judgement.run(rows, PACK, call=call, model="m")
+    assert call.calls == 1
+    assert call.budgets[0] == groom_judgement.output_budget(250)
+    assert call.budgets[0] >= groom_judgement.TOKENS_PER_CARD * 250
+    assert call.clocks[0] == groom_judgement.wall_clock_seconds(call.budgets[0])
+    assert result.output_budget == call.budgets[0]
+    assert result.truncated is False
+
+
+def test_the_default_seam_is_the_classifiers_and_it_takes_the_two_keywords():
+    """`run()` with no injected call reaches `planning_classify._call_real`, and
+    it must reach it with the budget — a seam called positionally would size
+    nothing and the cut would come back at the classifier's own bound."""
+    seen = {}
+
+    def fake(model, prompt, *, max_tokens=None, timeout_seconds=None):
+        seen.update(model=model, max_tokens=max_tokens,
+                    timeout_seconds=timeout_seconds)
+        return planning_classify.Answer(text=line("DRE-1", "now", "wanted"),
+                                        model=model)
+
+    rows = groom_judgement.census([card("DRE-1")], now=NOW)
+    real, planning_classify._call_real = planning_classify._call_real, fake
+    try:
+        result = groom_judgement.run(rows, PACK, model="m")
+    finally:
+        planning_classify._call_real = real
+    assert seen["max_tokens"] == groom_judgement.output_budget(1)
+    assert seen["timeout_seconds"] == \
+        groom_judgement.wall_clock_seconds(seen["max_tokens"])
+    assert result.output_budget == seen["max_tokens"]
+
+
+def test_a_run_that_never_made_a_call_reports_no_budget():
+    def unpickable():
+        raise RuntimeError("nothing on the ladder answered the probe")
+
+    rows = groom_judgement.census([card("DRE-1")], now=NOW)
+    call = Counter(answer="")
+    pick, planning_classify._pick_model = planning_classify._pick_model, unpickable
+    try:
+        result = groom_judgement.run(rows, PACK, call=call)
+    finally:
+        planning_classify._pick_model = pick
+    assert call.calls == 0 and result.calls == 0
+    assert result.output_budget == 0, "no call, no budget to report"
+    assert result.truncated is False
+
+
+def test_a_call_that_never_answered_still_reports_the_budget_it_asked_for():
+    """The paths that end in `problem` made the call, so they say what it was
+    sized with — a cut-then-unreadable answer that reported nothing would hide
+    the one number that explains it."""
+    rows = groom_judgement.census([card("DRE-1")], now=NOW)
+    call = Counter(raises=planning_classify.TransportError("429", "HTTP 429"))
+    result = groom_judgement.run(rows, PACK, call=call, model="m")
+    assert result.problem
+    assert result.output_budget == groom_judgement.output_budget(1)
+
+
+# --------------------------------------------------------------------------
+# a census past the ceiling is not silently cut (DRE-3259)
+# --------------------------------------------------------------------------
+def _fits() -> int:
+    return ((groom_judgement.OUTPUT_CEILING - groom_judgement.OUTPUT_HEADROOM)
+            // groom_judgement.TOKENS_PER_CARD)
+
+
+def test_the_ceiling_reason_is_its_own_sentence():
+    assert groom_judgement.CEILING_REASON == \
+        "could not rank — census over the one-call ceiling"
+    assert groom_judgement.CEILING_REASON != groom_judgement.UNRANKED_REASON, (
+        "a card nobody asked about and a card the model could not tell about "
+        "are different facts and read as different sentences"
+    )
+
+
+def test_a_census_past_the_ceiling_loses_its_oldest_before_the_call(capsys):
+    fits, over = _fits(), 7
+    # DRE-000 is a day old and each one after it a day older, so the cards that
+    # fall off are the tail of the list.
+    cards = [card(f"DRE-{n:03d}", days=n + 1) for n in range(fits + over)]
+    rows = groom_judgement.census(cards, now=NOW)
+    call = Counter(answer="\n".join(
+        line(row["identifier"], "now", "it is wanted") for row in rows[:fits]))
+    result = groom_judgement.run(rows, PACK, call=call, model="m")
+
+    assert call.calls == 1, (
+        "the cards past the ceiling change the census, never the call count"
+    )
+    assert call.budgets[0] <= groom_judgement.OUTPUT_CEILING
+    assert result.verdicts["DRE-000"].outcome == "now", "newest first is ranked"
+    for n in range(fits, fits + over):
+        cid = f"DRE-{n:03d}"
+        assert result.verdicts[cid].outcome == "unranked"
+        assert result.verdicts[cid].reason == groom_judgement.CEILING_REASON
+        assert cid not in call.prompts[0], (
+            "a card past the ceiling never reaches the call"
+        )
+    assert len(result.verdicts) == fits + over, (
+        "the population the groomer reports one outcome per card for does not "
+        "shrink because the ceiling was reached"
+    )
+    assert result.problem is None
+    assert str(over) in capsys.readouterr().err, (
+        "the run log names how many cards the ceiling cost"
+    )
+
+
+def test_a_census_inside_the_ceiling_loses_nothing():
+    cards = [card(f"DRE-{n:03d}", days=n + 1) for n in range(_fits())]
+    rows = groom_judgement.census(cards, now=NOW)
+    call = Counter(answer="\n".join(
+        line(row["identifier"], "now", "it is wanted") for row in rows))
+    result = groom_judgement.run(rows, PACK, call=call, model="m")
+    assert not [v for v in result.verdicts.values()
+                if v.reason == groom_judgement.CEILING_REASON]
+
+
+# --------------------------------------------------------------------------
+# a truncated answer is said out loud (DRE-3259)
+# --------------------------------------------------------------------------
+def test_a_cut_answer_keeps_what_it_read_and_says_what_the_cut_cost(capsys):
+    rows = groom_judgement.census(
+        [card(f"DRE-{n:03d}") for n in range(250)], now=NOW)
+    whole = [line(row["identifier"], "now", "it is wanted") for row in rows[:40]]
+    partial = f"{rows[40]['identifier']} | now | it is wa"
+    call = Counter(answer="\n".join(whole) + "\n" + partial, truncated=True)
+    result = groom_judgement.run(rows, PACK, call=call, model="m")
+
+    ranked = [cid for cid, v in result.verdicts.items() if v.outcome != "unranked"]
+    assert len(ranked) == 40, "every card whose line came back whole keeps its call"
+    assert result.verdicts[rows[40]["identifier"]].outcome == "unranked", (
+        "the last line of a cut answer is garbled by definition and is never "
+        "parsed as a call"
+    )
+    assert len(result.unranked) == 210
+    assert all(result.verdicts[cid].reason == groom_judgement.UNRANKED_REASON
+               for cid in result.unranked)
+    assert result.truncated is True
+    assert result.problem is None, (
+        "a cut is not a problem — the run ranked what it read"
+    )
+    assert "210" in capsys.readouterr().err, (
+        "the run log says how many cards the cut cost"
+    )
+
+
+def test_a_whole_answer_that_was_not_cut_keeps_its_last_line():
+    rows = groom_judgement.census(
+        [card("DRE-1"), card("DRE-2"), card("DRE-3")], now=NOW)
+    call = Counter(answer="\n".join(
+        line(row["identifier"], "now", "it is wanted") for row in rows))
+    result = groom_judgement.run(rows, PACK, call=call, model="m")
+    assert result.truncated is False
+    assert result.verdicts["DRE-3"].outcome == "now", (
+        "only a CUT answer's last line is dropped"
+    )
+
+
+def test_a_cut_answer_naming_a_card_outside_the_census_is_still_refused():
+    """The refusal reads the WHOLE lines, so a cut does not become a way for an
+    invented card to get past the check."""
+    rows = groom_judgement.census([card("DRE-1"), card("DRE-2")], now=NOW)
+    call = Counter(answer="\n".join([line("DRE-1", "now", "wanted"),
+                                     line("DRE-9999", "now", "a card nobody has"),
+                                     "DRE-2 | now | it is wa"]),
+                   truncated=True)
+    result = groom_judgement.run(rows, PACK, call=call, model="m")
+    assert all(v.outcome == "unranked" for v in result.verdicts.values())
+    assert "census" in (result.problem or "")
+    assert result.truncated is True
 
 
 # --------------------------------------------------------------------------

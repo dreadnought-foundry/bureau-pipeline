@@ -81,6 +81,13 @@ JSON. Each line is pipe-separated:
 * the fourth field is the **trigger** on `not-now` and the **evidence** on
   `likely-done`. It is required on those two and ignored on the other two.
 
+**Brevity is the contract, not a style note.** One clause per reason, never a
+paragraph. The whole answer is sized at roughly eighty tokens a card, so the
+budget you spend writing three sentences about one card is a card further down
+the census that the answer never reaches — and a card the answer never reaches
+is `unranked` and stays exactly where it was. Say the one thing that decided it
+and move to the next line.
+
 The order of your `now` lines is the order the batch is filled in, so put the
 card you would start first at the top. A card you leave out of the answer is
 `unranked` and stays exactly where it is.
