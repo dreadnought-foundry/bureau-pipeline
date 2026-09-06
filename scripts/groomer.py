@@ -36,9 +36,10 @@ that. This module is the reader that sees the set.
   5. **Assigns cycles.** Linear's own primitive — cycles are enabled and cycle
      11 is running, so "which cycle" is expressible today without inventing a
      container.
-  6. **Proposes.** The batch, its order, what is deferred to when, what is
-     recommended dead and what replaced it, and — said out loud rather than
-     discovered — which repos wait and roughly how long.
+  6. **Proposes.** The batch, its order and the WHY on every row, what is
+     deferred and what brings each one back, what is recommended dead and on
+     whose word, what could not be ranked at all, and — said out loud rather
+     than discovered — which repos wait and roughly how long (DRE-3152).
 
 ## The order, top to bottom (DRE-3096)
 
@@ -1277,6 +1278,12 @@ def render_proposal(proposal: dict) -> str:
         f"are proposed for cycle {cycles}, in the order below. Nothing moves "
         f"until you approve it.")
     add("")
+    # One line, before anything else, saying what did the ranking and what it
+    # read — including the two things a page that stayed silent would let pass
+    # for a model's opinion: a reason the guard withheld, and an answer the
+    # budget cut short (DRE-3152).
+    add(_receipt_line(proposal))
+    add("")
     add("**To approve:** comment `" + approval_comment(proposal["id"])
         + "` on this card. Anything else — including a comment that mentions "
           "the marker — leaves the batch where it is.")
@@ -1299,12 +1306,16 @@ def render_proposal(proposal: dict) -> str:
           "unit — unless a collision or a recorded blocks relation says "
           "otherwise, in which case the constraint wins.")
     add("")
-    add("| # | Card | Pri | Repo | Epic | Title |")
-    add("| -- | -- | -- | -- | -- | -- |")
+    # `Why` is the row's own `reason` — the model's one line on a judged row,
+    # the rule's on a rules-only one. Read, never recomputed: the same string
+    # is in the JSON the console and the audit read.
+    add("| # | Card | Pri | Repo | Epic | Title | Why |")
+    add("| -- | -- | -- | -- | -- | -- | -- |")
     for row in sorted(batch, key=lambda r: r["position"]):
         add(f"| {row['position']} | {row['identifier']} | "
             f"{BAND_LABELS.get(row.get('band'), '—')} | {row['repo']} | "
-            f"{row['epic'] or '—'} | {_trim(row['title'])} |")
+            f"{row['epic'] or '—'} | {_trim(row['title'])} | "
+            f"{_cell(row.get('reason'), 90)} |")
     add("")
     # Only when a judgement ran. `--no-judgement` renders exactly what it
     # rendered before this card, so the audit (DRE-3151) compares two readings
@@ -1360,22 +1371,11 @@ def render_proposal(proposal: dict) -> str:
         add("They stay in Intake, ungroomed. Nothing ages them out, cancels "
             "them or moves them.")
         add("")
+    w.extend(_render_not_now(proposal))
     add("## Recommended dead — your call, not ours")
     add("")
     if proposal["outcomes"]["dead"]:
-        for row in proposal["outcomes"]["dead"]:
-            if row.get("source") == DEAD_FROM_JUDGEMENT:
-                # The ranked read's own recommendation, with the evidence it
-                # named beside the regex's — or, when the evidence could not be
-                # shown, the fact that it could not.
-                add(f"- {row['identifier']} — "
-                    + (f"points at {row['evidence']}" if row.get("evidence")
-                       else "the evidence it named was not fit to show; it is "
-                            "in the run log")
-                    + f" · {_trim(row['title'])}")
-                continue
-            add(f"- {row['identifier']} — superseded by {row['superseded_by']} "
-                f"· {_trim(row['title'])}")
+        w.extend(_render_dead(proposal))
         add("")
         add("The groomer never cancels. Cancelling is destructive and stays "
             "yours, as a separate step.")
@@ -1388,6 +1388,7 @@ def render_proposal(proposal: dict) -> str:
             + " say they are superseded without naming what replaced them, so "
               "they are sequenced normally rather than recommended dead.")
     add("")
+    w.extend(_render_unranked(proposal))
     add("## On cycles")
     add("")
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
@@ -1410,18 +1411,20 @@ def _render_judgement(proposal: dict) -> list:
         w += [block["problem"], "",
               "Every card below is placed by the rules alone, exactly as it "
               "would have been before this read existed.", ""]
-    w += [f"One call, on {block.get('receipt')}, over the whole population.", ""]
-    w.append("| Card | Outcome | Why | Revisit when |")
-    w.append("| -- | -- | -- | -- |")
-    for row in proposal["outcomes"]["now"]:
-        w.append(f"| {row['identifier']} | now | {_trim(row['reason'], 90)} | — |")
-    for row in proposal["outcomes"]["not-now"][:20]:
-        w.append(f"| {row['identifier']} | not now | {_trim(row['reason'], 90)} "
-                 f"| {_trim(row.get('trigger') or '—', 60)} |")
-    w.append("")
-    if block.get("unranked"):
-        w.append(f"{_plural(len(block['unranked']), 'card')} could not be "
-                 f"ranked and stayed where the rules had them.")
+    # The batch's own Why is in the table above and every trigger is in "Not
+    # now — and when to come back", so what is left to say here is why the
+    # cards it did NOT batch are not in the batch: one line per card, and the
+    # only place a deferred card's reason appears.
+    later = proposal["outcomes"]["not-now"]
+    if later:
+        w += ["What it did not put in the batch, and why:", ""]
+        w.append("| Card | Why |")
+        w.append("| -- | -- |")
+        for row in later[:20]:
+            w.append(f"| {row['identifier']} | {_cell(row.get('reason'), 90)} |")
+        if len(later) > 20:
+            w.append(f"| … | and {len(later) - 20} more, each with its reason "
+                     f"in the proposal JSON |")
         w.append("")
     if block.get("withheld"):
         w.append(f"{_plural(len(block['withheld']), 'card')} had a reason "
@@ -1429,6 +1432,131 @@ def _render_judgement(proposal: dict) -> list:
                  f"than on this page — "
                  + ", ".join(block["withheld"][:20]) + ".")
         w.append("")
+    return w
+
+
+def _receipt_line(proposal: dict) -> str:
+    """What ranked this batch, over how much, against what — in one line.
+
+    The line the CEO reads before anything else, and the only place three
+    facts about the read are said at all: that there WAS one (or was not), how
+    many reasons the plain-English guard withheld, and whether the answer came
+    back cut. A page that stayed silent about a cut would show a card as one
+    the model declined to rank, when in fact the model never got to it.
+    """
+    block = proposal.get("judgement") or {}
+    if not block.get("enabled"):
+        return ("Ranked by the rules only (judgement off) — priority, "
+                "creation date, file collisions and blocker relations, and "
+                "nothing about what we are already doing.")
+    pack = block.get("pack") or {}
+    line = (f"Ranked by {block.get('receipt')} in "
+            f"{_plural(int(block.get('calls') or 0), 'call')} over "
+            f"{_plural(proposal['population'], 'card')}, against "
+            f"{_plural(int(pack.get('epics_in_progress') or 0), 'epic')} in "
+            f"flight, {_plural(int(pack.get('merged_prs') or 0), 'merged PR')}"
+            f" and {_plural(int(pack.get('closed_cards') or 0), 'closed card')}")
+    # `judgement.truncated` is the ANSWER being cut at the budget — never
+    # `pack['truncated']`, which is the list of context sections that were
+    # capped. A proposal written before DRE-3259 carries neither key, and this
+    # line then says nothing about a budget and invents no number.
+    if block.get("truncated"):
+        cut = "— the answer was cut short"
+        if block.get("output_budget"):
+            cut += f" at {block['output_budget']} tokens"
+        line += (f" {cut}; "
+                 f"{_plural(len(block.get('unranked') or []), 'card')} could "
+                 f"not be ranked for that reason")
+    line += "."
+    if block.get("withheld"):
+        line += (f" {_plural(len(block['withheld']), 'reason')} written in "
+                 f"technical terms were withheld and are in the run log.")
+    return line
+
+
+def _render_not_now(proposal: dict) -> list:
+    """Every deferred card, grouped by the thing that brings it back.
+
+    Grouped because four cards waiting on one card finishing is ONE fact, and
+    printing it four times is how a CEO learns to skim the section. A row with
+    no trigger at all is not listed here: the window receipt above already
+    reports it, and inventing a trigger for a card nothing scheduled would say
+    the groomer had made a plan for it.
+    """
+    later = proposal["outcomes"]["not-now"]
+    groups: dict = {}
+    for row in later:
+        trigger = (row.get("trigger") or "").strip()
+        if trigger:
+            groups.setdefault(trigger, []).append(row["identifier"])
+    if not groups:
+        return []
+    w = ["## Not now — and when to come back", ""]
+    w.append("Wanted, deliberately not this batch — and each one names what "
+             "brings it back. That is 'later', and it is not 'no'.")
+    w.append("")
+    for trigger, ids in sorted(groups.items(),
+                               key=lambda kv: (-len(kv[1]), kv[0])):
+        listed = ", ".join(sorted(ids, key=_card_sort_key)[:20])
+        if len(ids) > 20:
+            listed += f", and {len(ids) - 20} more"
+        w.append(f"- {trigger} — {_plural(len(ids), 'card')}: {listed}")
+    w.append("")
+    return w
+
+
+def _render_dead(proposal: dict) -> list:
+    """The dead recommendations, split by WHERE each one came from.
+
+    Two readers propose a cancellation and they are not the same claim: a
+    `Superseded by:` line is a declaration a person wrote on the card, and the
+    ranked read's is a judgement with the evidence it named beside it. The CEO
+    decides either way, so the page says which one is being read.
+    """
+    rows = proposal["outcomes"]["dead"]
+    declared = [r for r in rows if r.get("source") != DEAD_FROM_JUDGEMENT]
+    judged = [r for r in rows if r.get("source") == DEAD_FROM_JUDGEMENT]
+    w: list = []
+    if declared:
+        w += ["**Declared on the card** — its own description says so:", ""]
+        for row in declared:
+            w.append(f"- {row['identifier']} — superseded by "
+                     f"{row['superseded_by']} · {_trim(row['title'])}")
+        w.append("")
+    if judged:
+        w += ["**Judged by the ranked read** — a call, with what it points "
+              "at:", ""]
+        for row in judged:
+            w.append(f"- {row['identifier']} — likely done or obsolete — "
+                     + (f"{row['evidence']}" if row.get("evidence")
+                        else "the evidence it named was not fit to show; it "
+                             "is in the run log")
+                     + f" · {_trim(row['title'])}")
+        w.append("")
+    return w[:-1] if w else w
+
+
+def _render_unranked(proposal: dict) -> list:
+    """The cards the read could not rank, as their own section.
+
+    Never folded into "not now": a card nobody could place is not a card
+    deliberately deferred, and a refusal that renders as a deferral is a
+    refusal nobody ever reads. The rules kept each of these exactly where they
+    had them — what is owed is a person, not a cycle.
+    """
+    block = proposal.get("judgement") or {}
+    if not block.get("enabled") or not block.get("unranked"):
+        return []
+    titles = {row["identifier"]: row.get("title") or ""
+              for row in proposal["sequence"]}
+    w = ["## Could not rank — needs a person", ""]
+    w.append(f"{_plural(len(block['unranked']), 'card')} the read could not "
+             f"place. They stayed exactly where the rules had them, and each "
+             f"one wants a human answer rather than another pass.")
+    w.append("")
+    for identifier in block["unranked"]:
+        w.append(f"- {identifier} · {_trim(titles.get(identifier, ''))}")
+    w.append("")
     return w
 
 
@@ -1567,6 +1695,12 @@ def _plural(count: int, noun: str) -> str:
 def _trim(text: str, width: int = 60) -> str:
     text = " ".join((text or "").split())
     return text if len(text) <= width else text[:width - 1] + "…"
+
+
+def _cell(text: str | None, width: int = 60) -> str:
+    """One markdown table cell. A pipe inside it would end the column early and
+    silently shift every cell after it, and this text is written by a model."""
+    return _trim((text or "—").replace("|", "\\|"), width)
 
 
 # --------------------------------------------------------------------------- #

@@ -45,9 +45,12 @@ from test_groomer import CYCLES, GOLDEN, NOW, Counter, card, judged, ranked  # n
 # shows up as the wrong number rather than as a coincidence.
 PACK = groom_context.pack(
     epics=[{"identifier": f"DRE-9{n}", "title": f"epic {n}"} for n in range(3)],
-    merged_prs=[{"title": "DRE-1 does a thing", "url": "https://x/1"},
-                {"title": "DRE-2 does a thing", "url": "https://x/2"}],
-    closed_cards=[{"identifier": "DRE-3", "title": "closed"}],
+    merged_prs=[{"title": "DRE-1 does a thing", "url": "https://x/1",
+                 "merged_at": "2026-09-04T09:00:00Z"},
+                {"title": "DRE-2 does a thing", "url": "https://x/2",
+                 "merged_at": "2026-09-03T09:00:00Z"}],
+    closed_cards=[{"identifier": "DRE-3", "title": "closed",
+                   "completedAt": "2026-09-02T09:00:00Z"}],
     now=NOW)
 
 
@@ -190,11 +193,16 @@ def test_a_judged_dead_row_whose_evidence_was_withheld_says_so():
 # 'could not rank' said out loud
 # --------------------------------------------------------------------------
 def test_the_unranked_are_their_own_section_with_their_titles():
-    cards = [card("DRE-1", title="wire the alert engine"),
-             card("DRE-2", title="rename the console tab"),
-             card("DRE-3", title="ship the groomer")]
+    cards = [card("DRE-1", days=1, title="wire the alert engine"),
+             card("DRE-2", days=2, title="rename the console tab"),
+             card("DRE-3", days=3, title="ship the groomer"),
+             card("DRE-4", days=4, title="drain the backlog")]
+    answer = "\n".join([
+        ranked(["DRE-3"]),
+        "DRE-4 | not-now | the console work has to land first | when the console lands",
+    ])
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, now=NOW,
-                               judgement=with_pack(cards, ranked(["DRE-3"])))
+                               judgement=with_pack(cards, answer))
     text = groomer.render_proposal(proposal)
     body = section(text, "## Could not rank — needs a person")
     assert proposal["judgement"]["unranked"] == ["DRE-1", "DRE-2"]
@@ -206,6 +214,7 @@ def test_the_unranked_are_their_own_section_with_their_titles():
         "a card nobody could rank is not a card deliberately deferred — "
         "refusal is not a default"
     )
+    assert "DRE-4" in later, "the deliberately deferred card is still deferred"
 
 
 def test_no_unranked_section_when_every_card_was_ranked():
