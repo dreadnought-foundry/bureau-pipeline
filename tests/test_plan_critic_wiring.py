@@ -308,6 +308,15 @@ class TheBoundIsWired(unittest.TestCase):
         doc = yaml.safe_load(wf_src())
         timeout = doc["jobs"]["plan"]["timeout-minutes"]
         turns = [int(m) for m in re.findall(r"--max-turns\s+(\d+)", wf_src())]
+        # The post-approval review's ceiling is an EXPRESSION since DRE-3241
+        # (sized per plan), so the literal scan above cannot see it; its worst
+        # case is the cap, added by name so the arithmetic keeps counting it.
+        self.assertEqual(
+            len(turns), len(agent_steps()) - 1,
+            "every agent step but the post-approval review carries a literal "
+            "ceiling; a second expression would drop out of this arithmetic",
+        )
+        turns.append(pc.POST_REVIEW_TURNS_CAP)
         # 7 s/turn is the upper end measured on completed portico runs, plus
         # ~8 minutes of token minting, checkouts, context assembly and Linear
         # calls that the turn arithmetic does not model.
@@ -492,6 +501,111 @@ class TheStandard(unittest.TestCase):
     def test_the_standards_index_lists_it(self):
         index = open(os.path.join(ROOT, "standards", "README.md")).read()
         self.assertIn("plan-critic.md", index)
+
+
+# --- DRE-3241: the post-approval review's ceiling, and what a dead one leaves ---
+
+CEILING = "Second critic — turn ceiling"
+DIED = "Second critic — the review died"
+DECISION = "Second critic — decision"
+
+
+class TheReviewCeilingIsSizedFromThePlan(unittest.TestCase):
+    """The ceiling is computed from the child count on the activate route —
+    `steps.kids` only exists on the plan route — through the one formula in
+    plan_critic.py, with the fifteen-card number as the fallback so a bare
+    `--max-turns` can never reach the action (qa-review.yml's shape)."""
+
+    def test_the_ceiling_step_runs_before_the_review_on_the_activate_route(self):
+        self.assertLess(index_of(CEILING), index_of(SECOND))
+        step = step_named(CEILING)
+        self.assertIn("mode == 'activate'", str(step.get("if")))
+        run = str(step.get("run") or "")
+        self.assertIn("linear_ops.py children", run)
+        self.assertIn("plan_critic.py post-turns", run)
+        self.assertIn(f"max_turns={pc.post_review_turns(15)}", run,
+                      "the fallback must be the fifteen-card number, by value")
+
+    def test_the_review_reads_the_computed_ceiling(self):
+        args = str(step_named(SECOND)["with"]["claude_args"])
+        self.assertIn("--max-turns ${{ steps.postturns.outputs.max_turns }}", args)
+        self.assertNotRegex(args, r"--max-turns\s+\d+")
+
+    def test_fifteen_cards_get_eighty_turns_end_to_end(self):
+        """The number this card writes down, read through the same function
+        the workflow step calls."""
+        self.assertEqual(pc.post_review_turns(15), 80)
+
+
+class ADeadReviewWritesItsTombstone(unittest.TestCase):
+    """The step that failed the job on 2026-09-05 wrote nothing. Now a review
+    that dies leaves a `🪦` record on the epic, and NOTHING promotes."""
+
+    def test_the_review_is_not_continue_on_error(self):
+        """The trap: `continue-on-error` on the review would let the decision
+        step read an empty result file as NO_RESULT — "a crash is not a
+        rejection" — and ACTIVATE the epic with no review at all."""
+        self.assertFalse(step_named(SECOND).get("continue-on-error"))
+
+    def test_the_tombstone_step_runs_only_when_the_review_itself_failed(self):
+        self.assertLess(index_of(SECOND), index_of(DIED))
+        self.assertLess(index_of(DIED), index_of(DECISION))
+        gate = str(step_named(DIED).get("if") or "")
+        self.assertIn("failure()", gate)
+        self.assertIn("steps.posta.outcome == 'failure'", gate)
+        self.assertIn("mode == 'activate'", gate)
+
+    def test_the_decision_and_the_activation_stay_skipped_on_a_dead_review(self):
+        """Neither step may carry `always()`/`failure()`: on a failed review the
+        implied `success()` is what keeps the children in Backlog."""
+        for fragment in (DECISION, ACTIVATE):
+            gate = str(step_named(fragment).get("if") or "")
+            self.assertNotIn("always()", gate, fragment)
+            self.assertNotIn("failure()", gate, fragment)
+
+    def test_the_tombstone_names_the_run_and_reads_the_execution_file(self):
+        run = str(step_named(DIED).get("run") or "")
+        self.assertIn("plan_critic.py died", run)
+        self.assertIn("github.run_id", run)
+        self.assertIn("github.run_attempt", run)
+        self.assertIn("--step posta", run)
+        self.assertIn("steps.postturns.outputs.max_turns", run)
+        self.assertIn("steps.posta.outputs.execution_file", run)
+        self.assertIn("claude-execution-output.json", run,
+                      "qa-review.yml's fallback path, for an action that moved the output")
+
+    def test_the_tombstone_is_posted_alone_after_its_note(self):
+        """Two comments, the decider's shape: the record is a credential only
+        while nothing else shares its comment (`_sole_record`)."""
+        run = str(step_named(DIED).get("run") or "")
+        self.assertIn("--note-file", run)
+        self.assertIn("--record-file", run)
+        self.assertEqual(run.count("linear_ops.py comment"), 2)
+
+
+class EveryReapprovalNoticeOnTheRailNamesGreenLightFirst(unittest.TestCase):
+    """The relay's activation fires on a transition INTO In Progress. Every
+    notice that asks the CEO to approve again says the two-step move, in the
+    exact words plan_critic.py uses, so the rail and the sweep cannot drift."""
+
+    def test_the_sent_back_notices_say_green_light_then_approve(self):
+        run = str(step_named(SENT_BACK).get("run") or "")
+        self.assertEqual(run.count(pc.REAPPROVE_HOW), 2,
+                         "both the held and the parked notice name the move")
+        self.assertNotIn("by moving the epic to In Progress", run)
+        self.assertNotIn("Todo", run)
+
+    def test_the_tombstone_note_comes_from_the_module_that_owns_the_sentence(self):
+        """The dead-review note is generated by `plan_critic.py died`, so it
+        carries REAPPROVE_HOW by construction — pinned in test_plan_critic.py;
+        here only that the rail does not hand-write a rival sentence."""
+        run = str(step_named(DIED).get("run") or "")
+        self.assertNotIn("In Progress", run)
+
+    def test_the_standard_says_green_light_then_approve(self):
+        text = open(STANDARD).read()
+        self.assertIn("Green Light, then approve", text)
+        self.assertNotIn("re-approval\n  by moving it to **In Progress**", text)
 
 
 if __name__ == "__main__":

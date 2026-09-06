@@ -550,3 +550,55 @@ class TestTheRefusalSpeaksAtTheRightMoment:
                        epic_thread=_epic_thread(), held_minutes=1)
         board.promote()
         assert "second critic has not passed it" in capsys.readouterr().out
+
+
+class TestADeadReviewHoldsAndSaysSo:
+    """DRE-3241. 2026-09-05, DRE-3164: round 2 of the second critic died at its
+    turn ceiling, twice, and left no marker. Every sweep after it held DRE-3167
+    on ROUND ONE's send-back — a finding the re-plan had already answered —
+    and told the CEO to move an epic to the lane it was already in."""
+
+    ROUND_ONE = "DRE-3213/DRE-3214 rewrite the same deploy-lag file as DRE-3060"
+
+    def _thread(self):
+        return _epic_thread(
+            plan_critic.marker(plan_critic.STAGE_POST, 1,
+                               plan_critic.SEND_BACK, self.ROUND_ONE),
+            plan_critic.death_marker(
+                stage=plan_critic.STAGE_POST, run="34008698027", attempt=2,
+                step="posta", subtype="error_max_turns", turns=41, ceiling=40),
+        )
+
+    def test_a_dead_review_holds_the_children(self):
+        board = _Board(*_work_in_backlog(), green_light=APPROVED,
+                       epic_thread=self._thread())
+        assert board.promote() == 0
+        assert board.lane_of(WORK[0]) == "Backlog"
+
+    def test_the_refusal_says_died_and_not_the_previous_send_back(self, capsys):
+        board = _Board(*_work_in_backlog(), green_light=APPROVED,
+                       epic_thread=self._thread())
+        board.promote()
+        out = capsys.readouterr().out
+        assert f"promotion: {WORK[0]} is not being promoted" in out
+        assert plan_critic.POST_DIED_TAG in out
+        assert "died" in out
+        assert self.ROUND_ONE not in out
+        assert plan_critic.POST_SENT_BACK_TAG not in out
+
+    def test_a_dead_review_is_surfaced_on_the_card_at_once(self):
+        """Only the "no round at all" refusal waits out the grace window; a
+        death is a fact the run already recorded, so it speaks on the first
+        sweep — and once."""
+        assert reconcile.post_critic_hold_is_overdue(
+            plan_critic.POST_DIED_TAG, APPROVED) is True
+        board = _Board(*_work_in_backlog(), green_light=APPROVED,
+                       epic_thread=self._thread(), held_minutes=1)
+        board.promote()
+        board.promote()
+        posted = board.comments_on(WORK[0])
+        assert len(posted) == 1, posted
+        assert plan_critic.POST_DIED_TAG in posted[0]
+        assert "34008698027" in posted[0]
+        assert plan_critic.REAPPROVE_HOW in posted[0]
+        assert self.ROUND_ONE not in posted[0]
