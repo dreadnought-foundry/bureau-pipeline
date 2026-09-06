@@ -2332,9 +2332,13 @@ def _route_to_defect_lane(identifier: str) -> None:
 #: CEO's approval, and a sweep landing in that gap would stamp "the second
 #: critic has not passed it" on every child of a perfectly healthy epic, then
 #: promote them on the next sweep with the refusal left standing. Thirty
-#: minutes is comfortably longer than the route's own run (a 40-turn model
-#: call) and short enough that a genuinely stuck epic — the DRE-3058 case,
+#: minutes is longer than the route's own run (the review's ceiling is sized
+#: per plan since DRE-3241 — up to plan_critic.POST_REVIEW_TURNS_CAP, 120
+#: turns at the ~9 s/turn measured on DRE-3164, plus about two minutes of
+#: setup) and short enough that a genuinely stuck epic — the DRE-3058 case,
 #: where the route never ran at all — is named on its cards within two sweeps.
+#: A review that DIED does not wait on this window at all: it leaves a
+#: tombstone the run wrote, and `plan_critic.POST_DIED_TAG` speaks at once.
 #:
 #: This is a decision about when to SPEAK, never about what is true: the log
 #: line prints on every sweep from the first one (console-honesty rule 1).

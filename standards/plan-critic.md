@@ -141,9 +141,12 @@ What "ends" means depends on which side of the CEO the critic sits (DRE-3088):
   costs a person a read, and the CEO can still send it back.
 * **After approval**, every send-back first gets one **re-plan** with the
   critic's finding — the planner revises the children in place — and the epic
-  returns to Green Light with a receipt saying what changed, for re-approval
-  by moving it to **In Progress** (never Todo: an epic in Todo dispatches
-  nothing). Two failed rounds and the plan **parks** in Green Light with
+  returns to Green Light with a receipt saying what changed. To re-approve:
+  move the epic to Green Light, then approve it (the console's Approve, or a
+  move to **In Progress**). The relay's activation fires only on the move
+  INTO In Progress, so an epic already sitting there has to leave first, and
+  every notice says the two-step move in those words (never Todo: an epic in
+  Todo dispatches nothing). Two failed rounds and the plan **parks** in Green Light with
   `needs-human` and both findings quoted. It is never activated as it stands:
   "proceed" on this side means agents build it, and a plan the critic held
   twice is exactly the specification that would make them build the wrong
@@ -157,6 +160,25 @@ not spend the budget after it. A round the critic **passed** is not a failure,
 and a round it **crashed** on was never a decision: a critic that produced no
 result has not rejected anything and never holds a plan
 (`standards/console-honesty.md` rule 1).
+
+**A review that DIES leaves a tombstone, and holds until it is re-run.** Two
+things end without a verdict and they are not the same fact. A critic that ran
+to its decision and wrote nothing usable is `NO_RESULT`: the run records it as
+a round, says so on the epic with a ⚠️ note, and proceeds. A review that never
+reached its decision — the action died at its turn ceiling, or crashed — used
+to leave *nothing*: the job went red, and the sweep read the newest marker it
+could find, which on 2026-09-05 was a send-back the re-plan had already
+answered. So the run now writes a tombstone, in the same shape as a round —
+one line, alone in its comment, the pipeline's own:
+
+    🪦 plan-critic-died: stage=post run=34008698027 attempt=2 step=posta subtype=error_max_turns turns=41 ceiling=40
+
+It is not a round: it carries no result, spends nothing of the bound, and the
+rate ignores it. The sweep reads it as *the review died — it was not a
+rejection*, holds the children under its own tag, and names the way forward:
+move the epic to Green Light, then approve it. Its ceiling is sized from the
+plan (`plan_critic.post_review_turns`: fifteen cards get 80 turns), because the
+reading is linear in the cards and a fixed 40 had no headroom at fifteen.
 
 **The budget belongs to one planning attempt, not to the epic.** An epic sent
 back to Triage is re-planned from scratch, and the new plan gets its own
@@ -202,8 +224,9 @@ is still free.
 And the marker is what stops them, on both paths (DRE-3059). The reconcile
 sweep is the ONE promoter of an epic's children, and it releases a child only
 when the epic carries a `stage=post` round for the current planning attempt
-that let the plan through — a PASS, a crash, or the bound. Until then the child
-stays in `Backlog` and the sweep says so, naming the epic. Nothing else
+that let the plan through — a PASS, or a `NO_RESULT` crash. A send-back holds,
+the bound parks, and a tombstone holds until the review is re-run. Until then
+the child stays in `Backlog` and the sweep says so, naming the epic. Nothing else
 promotes: the activate route runs that same promoter the moment the critic
 passes, rather than promoting on its own.
 

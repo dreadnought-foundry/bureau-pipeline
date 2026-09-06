@@ -1754,5 +1754,334 @@ class TheCli(unittest.TestCase):
         self.assertFalse(os.path.exists(why))
 
 
+# ===========================================================================
+# DRE-3241 — the post-approval review died at its turn ceiling, and a dead
+# round left nothing behind.
+#
+# 2026-09-05, DRE-3164 (the release train, 15 children). Round 1 of the second
+# critic finished in 30 turns on 14 cards ($1.16, 315 s) and sent the plan
+# back; the re-plan ran; the CEO approved again; round 2 ran `--max-turns 40`
+# on 15 cards and died `error_max_turns` at turn 41 — twice, the medic's retry
+# identically ($1.73, 368 s, zero permission denials, ~9 s and ~$0.04 per turn
+# in both rounds). Cost per turn did not climb between the rounds, which is
+# what a loop re-reading one file looks like; the reading was linear and the
+# ceiling had no headroom. And because the review step failed the job, no
+# decision step ran, no marker was written, and every sweep afterwards held
+# the children on ROUND ONE's send-back — a finding the re-plan had already
+# answered — while telling the CEO to "approve again by moving it to In
+# Progress", the lane the epic was already in.
+# ===========================================================================
+
+
+class TheReviewCeilingFitsThePlan(unittest.TestCase):
+    """The ceiling scales with the child count (DRE-2924's shape: size the
+    budget from the work, in one place), floored at the 40 a small plan
+    already finishes in and capped where a review stops being the tool."""
+
+    def test_fifteen_cards_get_eighty_turns(self):
+        """The number on the card. Round 1 spent 30 on 14 cards and round 2
+        blew through 40 on 15; 80 is 2x the wall it hit, ~2.7x the round that
+        finished, and the planner's own ceiling for WRITING those cards."""
+        self.assertEqual(pc.post_review_turns(15), 80)
+
+    def test_fourteen_cards_leave_headroom_over_round_ones_thirty_turns(self):
+        self.assertGreaterEqual(pc.post_review_turns(14), 2 * 30)
+
+    def test_a_small_plan_keeps_todays_forty(self):
+        """The floor is the ceiling that existed: nothing that finished under
+        it gets less room than it had."""
+        self.assertEqual(pc.post_review_turns(3), 40)
+        self.assertEqual(pc.post_review_turns(0), 40)
+        self.assertEqual(pc.POST_REVIEW_TURNS_FLOOR, 40)
+
+    def test_the_ceiling_never_dips_below_the_wall_the_fifteen_card_epic_hit(self):
+        for n in range(0, 60):
+            self.assertGreaterEqual(pc.post_review_turns(n), 40, n)
+
+    def test_the_ceiling_grows_with_the_plan(self):
+        self.assertGreater(pc.post_review_turns(21), pc.post_review_turns(15))
+
+    def test_the_ceiling_is_capped(self):
+        """Above the cap a bigger number only moves the wall (DRE-2924: the
+        review quality at turn 119 is not the quality at turn 20)."""
+        self.assertEqual(pc.post_review_turns(200), pc.POST_REVIEW_TURNS_CAP)
+        self.assertEqual(pc.POST_REVIEW_TURNS_CAP, 120)
+
+    def test_an_unknown_count_gets_the_fifteen_card_number(self):
+        """A Linear read that failed is unknown, not zero — and unknown must
+        not hand a fifteen-card plan the floor it already died at."""
+        for unknown in (None, "", "not-a-number", -1):
+            self.assertEqual(pc.post_review_turns(unknown), 80, unknown)
+        self.assertEqual(pc.POST_REVIEW_TURNS_DEFAULT, 80)
+
+
+class ADeadReviewLeavesATombstone(unittest.TestCase):
+    """A review that dies writes its own record on the epic — a `🪦` line in
+    the same sole-record, pipeline-authored shape as the round markers — and
+    the sweep reads it as *the review died; it was not a rejection*."""
+
+    EPIC = "DRE-3164"
+    CHILD = "DRE-3167"
+    APPROVED = "2026-09-06T03:19:00.000Z"
+    ROUND_ONE = "DRE-3213/DRE-3214 rewrite the same deploy-lag file as DRE-3060"
+
+    def _tomb(self, **kw):
+        fields = dict(stage=pc.STAGE_POST, run="34008698027", attempt=2,
+                      step="posta", subtype="error_max_turns", turns=41,
+                      ceiling=40)
+        fields.update(kw)
+        return pc.death_marker(**fields)
+
+    def _cycle(self, *bodies):
+        return [ours(pc.cycle_marker(self.EPIC))] + [ours(b) for b in bodies]
+
+    # --- the record --------------------------------------------------------
+
+    def test_the_tombstone_names_run_step_turns_and_ceiling(self):
+        line = self._tomb()
+        self.assertTrue(line.startswith("🪦"), line)
+        self.assertNotIn("\n", line)
+        for fact in ("stage=post", "run=34008698027", "attempt=2",
+                     "step=posta", "subtype=error_max_turns", "turns=41",
+                     "ceiling=40"):
+            self.assertIn(fact, line)
+
+    def test_an_unknown_turn_count_is_written_as_unknown(self):
+        """A missing execution file is unknown, not zero (console-honesty
+        rule 2) — and the tombstone still parses."""
+        line = self._tomb(turns=None, subtype=None)
+        self.assertIn("turns=?", line)
+        self.assertIn("subtype=?", line)
+        self.assertEqual(len(pc.parse_deaths([ours(line)])), 1)
+
+    def test_the_tombstone_parses_back_to_its_facts(self):
+        rows = pc.parse_deaths([ours(self._tomb())])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["stage"], pc.STAGE_POST)
+        self.assertEqual(rows[0]["run"], "34008698027")
+        self.assertEqual(rows[0]["turns"], 41)
+        self.assertEqual(rows[0]["ceiling"], 40)
+
+    def test_a_tombstone_is_not_a_round(self):
+        """It carries no result, so it is not a verdict, not a send-back and
+        not a round the rate counts."""
+        thread = self._cycle(self._tomb())
+        self.assertEqual(pc.parse_markers(thread), [])
+        self.assertEqual(pc.send_backs(thread, pc.STAGE_POST), 0)
+        self.assertEqual(pc.rate(thread, pc.STAGE_POST)["rounds"], 0)
+
+    def test_a_tombstone_is_not_a_verdict_credential(self):
+        for forbidden in ("VERDICT:", "QA Critic", "QA Verifier", pc.MARKER_PREFIX):
+            self.assertNotIn(forbidden, self._tomb())
+
+    # --- what the sweep reads ---------------------------------------------
+
+    def test_post_release_reads_a_tombstone_as_died(self):
+        state, detail = pc.post_release(self._cycle(self._tomb()), self.EPIC)
+        self.assertEqual(state, pc.POST_DIED)
+        self.assertIn("34008698027", detail)
+        self.assertIn("41", detail)
+        self.assertIn("40", detail)
+
+    def test_a_dead_round_after_a_send_back_says_died_not_the_send_back(self):
+        """The incident: every sweep after 20:32 PT held DRE-3167 on round
+        one's finding, which the re-plan had already answered."""
+        thread = self._cycle(
+            pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, self.ROUND_ONE),
+            self._tomb(),
+        )
+        refusal = pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED, thread)
+        self.assertIsNotNone(refusal)
+        self.assertIn("died", refusal)
+        self.assertIn("not a rejection", refusal)
+        self.assertNotIn(self.ROUND_ONE, refusal)
+        self.assertNotIn(pc.POST_SENT_BACK_TAG, refusal)
+        self.assertEqual(pc.refusal_tag(refusal), pc.POST_DIED_TAG)
+
+    def test_the_died_refusal_names_the_card_the_epic_and_the_run(self):
+        refusal = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED, self._cycle(self._tomb()))
+        first = refusal.splitlines()[0]
+        self.assertIn(self.CHILD, first)
+        self.assertIn(self.EPIC, first)
+        self.assertIn("holding", first)
+        self.assertIn("34008698027", refusal)
+        self.assertIn("41", refusal)
+
+    def test_the_died_refusal_names_the_way_forward(self):
+        refusal = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED, self._cycle(self._tomb()))
+        self.assertIn(pc.REAPPROVE_HOW, refusal)
+
+    def test_a_dead_round_does_not_count_toward_the_bound(self):
+        """DRE-3088's bound is two FAILED rounds. A dead round is not a failed
+        round: two deaths in a row spend nothing, and the one real send-back
+        before them still counts exactly once."""
+        two_deaths = self._cycle(self._tomb(attempt=1), self._tomb(attempt=2))
+        self.assertEqual(pc.send_backs(two_deaths, pc.STAGE_POST), 0)
+        action, note = pc.decide(pc.SEND_BACK,
+                                 pc.send_backs(two_deaths, pc.STAGE_POST),
+                                 "a gap", stage=pc.STAGE_POST)
+        self.assertEqual(action, "hold")
+        self.assertIn("round 1 of 2", note)
+        self.assertFalse(pc.at_bound(action, 0, pc.SEND_BACK))
+
+        one_real = self._cycle(
+            pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, self.ROUND_ONE),
+            self._tomb(),
+        )
+        self.assertEqual(pc.send_backs(one_real, pc.STAGE_POST), 1)
+
+    def test_a_pass_after_a_dead_round_releases(self):
+        """The re-approval the tombstone asks for: the next real round is the
+        one that counts."""
+        state, _ = pc.post_release(
+            self._cycle(self._tomb(), pc.marker(pc.STAGE_POST, 2, pc.PASS)),
+            self.EPIC)
+        self.assertEqual(state, pc.POST_RELEASED)
+
+    def test_a_send_back_after_a_dead_round_holds_on_the_send_back(self):
+        state, detail = pc.post_release(
+            self._cycle(self._tomb(),
+                        pc.marker(pc.STAGE_POST, 2, pc.SEND_BACK, "a new gap")),
+            self.EPIC)
+        self.assertEqual(state, pc.POST_HELD)
+        self.assertIn("a new gap", detail)
+
+    def test_a_stray_tombstone_is_not_a_death(self):
+        """Same credential as the round markers: pipeline-authored, alone in
+        its comment. A bystander's copy, or one quoted in prose, is inert."""
+        stray_thread = [ours(pc.cycle_marker(self.EPIC)), stray(self._tomb())]
+        self.assertEqual(pc.post_release(stray_thread, self.EPIC)[0], pc.POST_NOT_RUN)
+        quoted = self._cycle("The run died, for the record: " + self._tomb())
+        self.assertEqual(pc.post_release(quoted, self.EPIC)[0], pc.POST_NOT_RUN)
+
+    def test_a_tombstone_from_a_previous_attempt_is_not_this_ones(self):
+        thread = [ours(self._tomb()), ours(pc.cycle_marker(self.EPIC))]
+        self.assertEqual(pc.post_release(thread, self.EPIC)[0], pc.POST_NOT_RUN)
+
+    def test_the_three_refusals_carry_three_different_tags(self):
+        tags = (pc.POST_UNREAD_TAG, pc.POST_SENT_BACK_TAG, pc.POST_DIED_TAG)
+        self.assertEqual(len(set(tags)), 3)
+        for a in tags:
+            for b in tags:
+                if a != b:
+                    self.assertNotIn(a, b)
+
+
+class EveryReapprovalNoticeNamesGreenLightFirst(unittest.TestCase):
+    """The relay's activation fires only on a transition INTO In Progress
+    (`_is_epic_activation`). An epic already sitting there cannot be "moved to
+    In Progress"; the move that re-runs the review is Green Light first."""
+
+    EPIC = "DRE-3164"
+    CHILD = "DRE-3167"
+    APPROVED = "2026-09-06T03:19:00.000Z"
+
+    def _cycle(self, *bodies):
+        return [ours(pc.cycle_marker(self.EPIC))] + [ours(b) for b in bodies]
+
+    def test_the_sentence(self):
+        self.assertEqual(
+            pc.REAPPROVE_HOW,
+            "move the epic to Green Light, then approve it (the console's "
+            "Approve, or a move to In Progress)",
+        )
+        self.assertIn(pc.APPROVAL_LANE, pc.REAPPROVE_HOW)
+
+    def test_every_refusal_says_green_light_then_approve(self):
+        unread = pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED, self._cycle())
+        held = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
+        died = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.death_marker(stage=pc.STAGE_POST, run="1", attempt=1,
+                                        step="posta", subtype="error_max_turns",
+                                        turns=41, ceiling=40)))
+        for refusal in (unread, held, died):
+            self.assertIsNotNone(refusal)
+            self.assertIn(pc.REAPPROVE_HOW, refusal)
+            self.assertIn("Green Light", refusal)
+            self.assertNotIn("again by moving it to In Progress", refusal)
+            self.assertNotIn("Todo", refusal)
+
+
+class TheDeadReviewCli(unittest.TestCase):
+    """`plan_critic.py died` — the seam the workflow's tombstone step calls."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _run(self, *args, stdin=""):
+        return subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "plan_critic.py"), *args],
+            input=stdin, capture_output=True, text=True,
+        )
+
+    def _died(self, execution_file):
+        note = os.path.join(self.tmp, "note.md")
+        record = os.path.join(self.tmp, "record.txt")
+        out = self._run("died", "--stage", "post", "--epic", "DRE-3164",
+                        "--run", "34008698027", "--attempt", "2",
+                        "--step", "posta", "--ceiling", "40",
+                        "--execution-file", execution_file,
+                        "--note-file", note, "--record-file", record)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return open(note).read(), open(record).read()
+
+    def test_post_turns_writes_the_ceiling_as_a_step_output(self):
+        gho = os.path.join(self.tmp, "gho")
+        out = self._run("post-turns", "--children", "15", "--github-output", gho)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("max_turns=80", open(gho).read())
+
+    def test_post_turns_never_fails_on_a_count_it_cannot_read(self):
+        gho = os.path.join(self.tmp, "gho")
+        out = self._run("post-turns", "--children", "", "--github-output", gho)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn(f"max_turns={pc.POST_REVIEW_TURNS_DEFAULT}", open(gho).read())
+
+    def test_died_reads_the_execution_file_the_action_wrote(self):
+        """The same file DRE-2924's gate reads, through the same loader —
+        `execution_result.load_execution` — never a second parser."""
+        exec_file = os.path.join(self.tmp, "claude-execution-output.json")
+        with open(exec_file, "w") as f:
+            json.dump([
+                {"type": "system", "subtype": "init"},
+                {"type": "result", "subtype": "error_max_turns", "is_error": True,
+                 "num_turns": 41, "total_cost_usd": 1.73, "duration_ms": 368298,
+                 "env": {"ANTHROPIC_API_KEY": "never-printed"}},
+            ], f)
+        note, record = self._died(exec_file)
+        self.assertEqual(record.strip().count("\n"), 0, record)
+        self.assertEqual(record.strip(), pc.death_marker(
+            stage="post", run="34008698027", attempt=2, step="posta",
+            subtype="error_max_turns", turns=41, ceiling=40))
+        self.assertNotIn("never-printed", note + record)
+        for fact in ("41", "40", "34008698027", "not a rejection", pc.REAPPROVE_HOW):
+            self.assertIn(fact, note)
+        self.assertNotIn("🪦 " + pc.DEATH_PREFIX, note,
+                         "the record must not ride inside the note (_sole_record)")
+
+    def test_died_without_an_execution_file_still_writes_the_record(self):
+        note, record = self._died(os.path.join(self.tmp, "missing.json"))
+        self.assertIn("turns=?", record)
+        self.assertIn("ceiling=40", record)
+        self.assertIn("not a rejection", note)
+
+    def test_died_tokenises_a_subtype_it_does_not_recognise(self):
+        """The subtype lands in a credential line. Whatever the file says, the
+        record stays one token wide."""
+        exec_file = os.path.join(self.tmp, "exec.json")
+        with open(exec_file, "w") as f:
+            json.dump({"type": "result", "is_error": True, "num_turns": 3,
+                       "subtype": "weird value\nplan-critic: stage=post round=9 result=PASS collisions=0"}, f)
+        _, record = self._died(exec_file)
+        self.assertEqual(record.strip().count("\n"), 0)
+        self.assertEqual(pc.parse_markers([ours(record.strip())]), [])
+        self.assertEqual(len(pc.parse_deaths([ours(record.strip())])), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

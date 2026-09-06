@@ -102,6 +102,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import checkbox_marks
 import design_parity
+import execution_result
 import plan_footprint
 
 # `scripts/design_parity.py already implements part of this ... Reuse it; do
@@ -160,9 +161,57 @@ CYCLE_PREFIX = "plan-cycle:"
 # into its own pass.
 LATE_COLLISION_PREFIX = "plan-collision-late:"
 
+# A review that DIED — ended without reaching its decision — records that on
+# the epic too (DRE-3241), under its own prefix so `_MARKER` can never read a
+# death as a round. Nothing about it is a verdict.
+DEATH_PREFIX = "plan-critic-died:"
+
 # The lanes an epic occupies while it is in flight (config/lane-contract.json).
 # What the post critic can see is exactly this, and its charter says so.
 IN_FLIGHT_EPIC_STATES = ("Green Light", "Todo", "In Progress")
+
+# --- The post-approval review's turn ceiling (DRE-3241) ---------------------
+#
+# Sized from the plan, in one place, the way DRE-2924 sizes the QA critic's
+# from the diff. THE MEASUREMENT: DRE-3164, 2026-09-05 PT. Round 1 of the
+# second critic finished in 30 turns on 14 cards ($1.16, 315 s). The re-plan
+# ran, the CEO approved again, and round 2 — 15 cards plus the re-plan's edits
+# to re-verify — died `error_max_turns` at turn 41 of a 40-turn ceiling, twice
+# (the medic's retry identically: $1.73, 368 s, zero permission denials).
+# Cost per turn was flat between the rounds (~$0.039 → ~$0.042); a loop
+# re-reading one file shows up as climbing per-turn cost from context growth,
+# and there was none. The reading was linear and the ceiling had no headroom.
+#
+# The transcript itself is hidden ("full output hidden for security", held
+# that way by tests/test_execution_failure_detail.py), so this is read off the
+# result blocks, not the turns. Base + per-card: fifteen cards get 80 — 2x the
+# wall round 2 hit, ~2.7x the round that finished, and the planner's own
+# ceiling for WRITING those cards (`--max-turns 80` on the plan step).
+POST_REVIEW_TURNS_BASE = 20        # charter, context, sight, children, thread, result
+POST_REVIEW_TURNS_PER_CARD = 4     # round 1 measured ~2.1/card; round 2 needed more
+#: Today's ceiling. Nothing that finished under it gets less room than it had.
+POST_REVIEW_TURNS_FLOOR = 40
+#: Above this a bigger number only moves the wall (DRE-2924: the review quality
+#: at turn 119 is not the quality at turn 20). The QA critic's retry ceiling.
+POST_REVIEW_TURNS_CAP = 120
+#: What an UNKNOWN child count gets — the fifteen-card number, never the floor
+#: a fifteen-card plan already died at. A Linear read that failed is unknown,
+#: not zero (standards/console-honesty.md rule 2).
+POST_REVIEW_TURNS_DEFAULT = 80
+
+
+def post_review_turns(children) -> int:
+    """`--max-turns` for the post-approval review of a plan with `children`
+    cards. Never raises: the workflow interpolates this into the action's
+    arguments, and a bare `--max-turns` is a run that never starts."""
+    try:
+        n = int(children)
+    except (TypeError, ValueError):
+        return POST_REVIEW_TURNS_DEFAULT
+    if n < 0:
+        return POST_REVIEW_TURNS_DEFAULT
+    sized = POST_REVIEW_TURNS_BASE + POST_REVIEW_TURNS_PER_CARD * n
+    return max(POST_REVIEW_TURNS_FLOOR, min(POST_REVIEW_TURNS_CAP, sized))
 
 
 _PRE_CHARTER = """\
@@ -456,6 +505,101 @@ def late_collision_marker(epic: str, other: str, detail: str) -> str:
             f" — {one_line(detail)}")
 
 
+# --- The tombstone (DRE-3241) -----------------------------------------------
+#
+# A review that DIES — the action ended without the decision step ever
+# running — used to leave nothing. On 2026-09-05 round 2 of the second critic
+# on DRE-3164 died at its turn ceiling twice, the job went red, no marker was
+# written, and every sweep afterwards read the newest trusted marker — round
+# ONE's send-back, a finding the re-plan had already answered — and told the
+# CEO to move an epic to the lane it was already in. Nothing on the epic could
+# tell "the critic rejected it" from "the critic never finished".
+#
+# So a death is recorded in the same shape as a round: one line, alone in its
+# comment, pipeline-authored — and under a DIFFERENT prefix, because it is not
+# a round. It carries no result, spends nothing of the bound, and the sweep
+# reads it as "the review died; it was not a rejection".
+
+_DEATH = re.compile(
+    rf"^🪦\s+{re.escape(DEATH_PREFIX)}\s+stage=(?P<stage>[\w-]+)\s+run=(?P<run>[\w-]+)"
+    r"\s+attempt=(?P<attempt>\d+|\?)\s+step=(?P<step>[\w-]+)"
+    r"\s+subtype=(?P<subtype>[\w-]+|\?)\s+turns=(?P<turns>\d+|\?)"
+    r"\s+ceiling=(?P<ceiling>\d+|\?)\s*$",
+    re.MULTILINE,
+)
+
+_TOKEN = re.compile(r"[\w-]+")
+
+
+def _token(value) -> str:
+    """One `[\\w-]+` token, or `?`. Every field of the tombstone lands in a
+    credential line, and a value the action's own file hands us (the subtype)
+    must not be able to carry a second line or a second record into it."""
+    m = _TOKEN.fullmatch(str(value).strip()) if value not in (None, "") else None
+    return m.group(0) if m else "?"
+
+
+def _count(value) -> str:
+    """A non-negative integer as text, or `?` — unknown is unknown, never 0."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        try:
+            value = int(str(value).strip())
+        except (TypeError, ValueError):
+            return "?"
+    return str(int(value)) if value >= 0 else "?"
+
+
+def death_marker(stage: str, run, attempt, step: str, subtype, turns,
+                 ceiling) -> str:
+    """The machine-parseable record of a review that died before deciding."""
+    return (f"🪦 {DEATH_PREFIX} stage={_token(stage)} run={_token(run)} "
+            f"attempt={_count(attempt)} step={_token(step)} "
+            f"subtype={_token(subtype)} turns={_count(turns)} "
+            f"ceiling={_count(ceiling)}")
+
+
+def parse_deaths(bodies: list) -> list[dict]:
+    """Every tombstone in a thread, oldest→newest — same credential as
+    `parse_markers`: pipeline-authored AND alone in its comment."""
+    rows = []
+    for body in trusted_bodies(bodies):
+        m = _sole_record(_DEATH, body)
+        if not m:
+            continue
+        rows.append({
+            "stage": m.group("stage"),
+            "run": m.group("run"),
+            "attempt": None if m.group("attempt") == "?" else int(m.group("attempt")),
+            "step": m.group("step"),
+            "subtype": None if m.group("subtype") == "?" else m.group("subtype"),
+            "turns": None if m.group("turns") == "?" else int(m.group("turns")),
+            "ceiling": None if m.group("ceiling") == "?" else int(m.group("ceiling")),
+        })
+    return rows
+
+
+def _death_sentence(row: dict) -> str:
+    """The death as one predicate — `ran out of turns — 41 of its 40-turn
+    ceiling in run 34008698027 (attempt 2), step \\`posta\\`` — with the
+    subject left to the caller. The sweep's detail and the note's opening
+    share it, so the two never describe the same run differently."""
+    turns = row.get("turns")
+    ceiling = row.get("ceiling")
+    subtype = row.get("subtype")
+    attempt = row.get("attempt")
+    where = f"run {row.get('run') or '?'}" + (
+        f" (attempt {attempt})" if attempt is not None else "")
+    spent = f"{turns} turns" if turns is not None else "an unknown number of turns"
+    cap = f" of its {ceiling}-turn ceiling" if ceiling is not None else ""
+    if subtype == "error_max_turns":
+        how = f"ran out of turns — {spent}{cap}"
+    elif subtype:
+        how = f"died ({subtype}) after {spent}{cap}"
+    else:
+        how = f"died after {spent}{cap}"
+    return f"{how} in {where}, step `{row.get('step') or '?'}`"
+
+
 def trusted_bodies(entries) -> list[str]:
     """The comment bodies this module may read a round record out of.
 
@@ -676,23 +820,43 @@ POST_NOT_RUN = "not-run"
 #: The critic ran and declined to release the plan — one send-back with the
 #: bound unspent, or two with it spent and the epic parked (DRE-3088).
 POST_HELD = "held"
+#: The newest post-stage record on this attempt is a tombstone: the review
+#: DIED before it decided (DRE-3241). Not a rejection, not a round, and not a
+#: release either — nothing has read the plan, so the children wait for the
+#: review to run again. Distinct from `NO_RESULT`, which is a review that RAN
+#: TO ITS DECISION and wrote nothing usable: that one proceeds inside the same
+#: run with a ⚠️ note the CEO can see; this one left a red job and no decision.
+POST_DIED = "died"
 
 #: The lane a CEO moves an epic to in order to APPROVE its plan. Approval is
 #: the In Progress entry (the relay dispatches the activation on it; an epic
 #: in Todo dispatches nothing — DRE-2725), and the contract's Green Light exit
-#: clause is written in the same terms. Every receipt that asks the CEO to
-#: approve again names THIS, so the instruction can never point at the one
-#: lane where an epic sits forever. `tests/test_plan_critic_wiring.py` pins it
-#: to a live lane in config/lane-contract.json.
+#: clause is written in the same terms. `tests/test_plan_critic_wiring.py`
+#: pins it to a live lane in config/lane-contract.json.
 APPROVAL_LANE = "In Progress"
 
-#: Idempotency tags for the two refusals, in the `dead_run.DEAD_TAG` shape the
-#: sweep already surfaces refusals under. TWO of them, deliberately: the sweep
-#: posts each refusal at most once per tag, and "nobody has read this plan" and
-#: "the critic found a gap" are different facts with different next actions —
-#: one tag would let the first silence the second forever.
+#: HOW to approve again, in every notice that asks for it (DRE-3241). The
+#: relay's `_is_epic_activation` fires on a transition INTO In Progress, so an
+#: epic already sitting there — which is where a dead review leaves it —
+#: cannot be "moved to In Progress". The move that re-runs the review is Green
+#: Light first, then the approval. One sentence, used by every refusal here
+#: and quoted verbatim by plan.yml's own notices (the wiring test pins the
+#: two copies to each other), so no receipt can point at a move that does
+#: nothing.
+REAPPROVE_HOW = (
+    f"move the epic to Green Light, then approve it (the console's Approve, "
+    f"or a move to {APPROVAL_LANE})"
+)
+
+#: Idempotency tags for the refusals, in the `dead_run.DEAD_TAG` shape the
+#: sweep already surfaces refusals under. THREE of them, deliberately: the
+#: sweep posts each refusal at most once per tag, and "nobody has read this
+#: plan", "the critic found a gap" and "the review died" are different facts
+#: with different next actions — one tag would let the first silence the
+#: others forever.
 POST_UNREAD_TAG = "plan-critic-post-unread"
 POST_SENT_BACK_TAG = "plan-critic-post-sent-back"
+POST_DIED_TAG = "plan-critic-post-died"
 
 #: Epics green-lit before this instant are NOT re-gated retroactively.
 #:
@@ -730,9 +894,36 @@ def post_release(bodies: list, epic: str | None = None) -> tuple[str, str]:
     unrecognised verdict is still the critic declining to release the plan, and
     reading an unknown result as a pass is the one direction that must never
     happen.
+
+    A TOMBSTONE newer than every round (DRE-3241) is POST_DIED: the review
+    died before it decided, so the newest ROUND is stale — it is the round the
+    re-plan already answered — and quoting it is how the sweep spent a night
+    telling the CEO the wrong thing. A tombstone OLDER than the newest round is
+    history: the re-run the tombstone asked for happened, and that round is
+    the record. Deaths never count as rounds, so the bound below is unmoved.
     """
-    rows = [r for r in parse_markers(current_cycle(bodies, epic))
-            if r["stage"] == STAGE_POST]
+    cycle = current_cycle(bodies, epic)
+    rows = [r for r in parse_markers(cycle) if r["stage"] == STAGE_POST]
+    # Order between the two record kinds is the comment order, so walk the
+    # cycle once and remember which kind came last.
+    last_kind = None
+    last_death = None
+    for body in trusted_bodies(cycle):
+        m = _sole_record(_MARKER, body)
+        if m:
+            if m.group("stage") == STAGE_POST:
+                last_kind = "round"
+            continue
+        d = _sole_record(_DEATH, body)
+        if d and d.group("stage") == STAGE_POST:
+            last_kind = "death"
+            last_death = parse_deaths([body])[0]
+    if last_kind == "death":
+        return POST_DIED, (
+            "the review " + _death_sentence(last_death) + ". It was not a "
+            "rejection: the critic decided nothing, and this round does not "
+            "count toward the bound"
+        )
     if not rows:
         return POST_NOT_RUN, ""
     last = rows[-1]
@@ -785,9 +976,21 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
             "Nothing has reviewed this plan since it was approved, so nobody "
             "has asked what an agent will get wrong with it as the "
             "specification.\n\n"
-            f"**To let it through:** approve the epic again by moving it to "
-            f"{APPROVAL_LANE}. That re-runs the post-approval review, and the "
-            "children promote on the next sweep once it passes."
+            f"**To let it through:** {REAPPROVE_HOW}. That re-runs the "
+            "post-approval review, and the children promote on the next sweep "
+            "once it passes."
+        )
+    if state == POST_DIED:
+        return (
+            f"🚨 {POST_DIED_TAG}: {identifier}'s epic {epic} was approved at "
+            f"{when} but the post-approval review died before it decided — "
+            f"holding: {one_line(detail)}.\n\n"
+            "Nothing has been found wrong with the plan and nothing has "
+            "started building; the children stay in Backlog until the review "
+            "runs again and passes.\n\n"
+            f"**To let it through:** {REAPPROVE_HOW} — the review re-runs on "
+            f"the move into {APPROVAL_LANE}, and the children promote on the "
+            "next sweep once it passes."
         )
     quoted = one_line(detail) or "no reason recorded"
     return (
@@ -795,10 +998,9 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
         f"{when} but the second critic sent the plan back — holding. The "
         f"critic's reason: {quoted}\n\n"
         "The children stay in Backlog until the gap is settled. The plan was "
-        "revised with the critic's finding; read it and approve the epic again "
-        f"by moving it to {APPROVAL_LANE} — that re-runs the review. A plan "
-        "sent back twice parks with needs-human rather than being built as it "
-        "stands."
+        f"revised with the critic's finding; read it, then {REAPPROVE_HOW} — "
+        "that re-runs the review. A plan sent back twice parks with "
+        "needs-human rather than being built as it stands."
     )
 
 
@@ -812,10 +1014,26 @@ def refusal_tag(refusal: str | None) -> str | None:
     each other.
     """
     first = ((refusal or "").splitlines() or [""])[0]
-    for tag in (POST_UNREAD_TAG, POST_SENT_BACK_TAG):
+    for tag in (POST_UNREAD_TAG, POST_SENT_BACK_TAG, POST_DIED_TAG):
         if first.startswith(f"🚨 {tag}:"):
             return tag
     return None
+
+
+def death_note(epic: str, row: dict) -> str:
+    """The HUMAN half of a dead review, for the CEO reading the epic. Carries
+    no tombstone line: `death_marker` is posted as its own comment right after
+    this one, because a record that shares a comment with prose is a record
+    any prose can forge (`_sole_record`)."""
+    return (
+        f"🪦 **The post-approval review of {epic} did not finish** — it "
+        f"{_death_sentence(row)}.\n\n"
+        "This was not a rejection: the critic decided nothing, nothing has "
+        "been found wrong with the plan, and nothing has started building — "
+        "the children stay in Backlog until the review runs again. This round "
+        f"does not count toward the {_count_word(MAX_ROUNDS)}-round bound.\n\n"
+        f"**To re-run the review:** {REAPPROVE_HOW}."
+    )
 
 
 def _ts(iso: str) -> datetime:
@@ -1342,6 +1560,44 @@ def _cmd_late_collision(args) -> int:
     return 0
 
 
+def _cmd_post_turns(args) -> int:
+    """The review's ceiling as a step output. Always 0: a sizing that failed
+    must degrade to the default, never wedge the review (pr_size_strategy's
+    rule — and the workflow carries a static fallback on top of this)."""
+    turns = post_review_turns(args.children)
+    _write_outputs(args.github_output, [("max_turns", str(turns))])
+    print(f"post-approval review ceiling: {turns} turns "
+          f"(children={args.children!r})")
+    return 0
+
+
+def _cmd_died(args) -> int:
+    """The tombstone and its note, for the workflow step that runs only when
+    the review step itself failed. Reads what the action wrote about the
+    death through the one loader both result gates use
+    (`execution_result.load_execution`) — never a second parser — and prints
+    only numbers and the action's own subtype enum from it. Always 0: this
+    step is the record of a failure, not a second one."""
+    execution = execution_result.load_execution(args.execution_file) \
+        if args.execution_file else None
+    scalars = execution_result.spend_scalars(execution)
+    subtype = execution.get("subtype") if isinstance(execution, dict) else None
+    record = death_marker(args.stage, args.run, args.attempt, args.step,
+                          subtype, scalars.get("num_turns"), args.ceiling)
+    row = parse_deaths([record])[0]
+    note = death_note(args.epic, row)
+    if args.note_file:
+        with open(args.note_file, "w", encoding="utf-8") as f:
+            f.write(note + "\n")
+    if args.record_file:
+        with open(args.record_file, "w", encoding="utf-8") as f:
+            f.write(record + "\n")
+    print(note)
+    print()
+    print(record)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1398,6 +1654,28 @@ def main(argv: list[str]) -> int:
     l.add_argument("--with", dest="with_epic", required=True)
     l.add_argument("--detail", required=True)
     l.set_defaults(fn=_cmd_late_collision)
+
+    t = sub.add_parser("post-turns",
+                       help="the post-approval review's turn ceiling, sized from the plan")
+    # A string on purpose: the workflow hands over whatever `linear_ops.py
+    # children` printed, and an empty or unreadable count must size to the
+    # default rather than fail the argument parse.
+    t.add_argument("--children", default="")
+    t.add_argument("--github-output", default=None)
+    t.set_defaults(fn=_cmd_post_turns)
+
+    g = sub.add_parser("died", help="the tombstone for a review that ended without deciding")
+    g.add_argument("--stage", required=True, choices=sorted(STAGES))
+    g.add_argument("--epic", required=True)
+    g.add_argument("--run", required=True)
+    g.add_argument("--attempt", default="")
+    g.add_argument("--step", required=True)
+    g.add_argument("--ceiling", default="")
+    g.add_argument("--execution-file", default=None)
+    g.add_argument("--note-file", default=None)
+    # The record, for its OWN comment — same reason as `decide --record-file`.
+    g.add_argument("--record-file", default=None)
+    g.set_defaults(fn=_cmd_died)
 
     args = ap.parse_args(argv)
     return args.fn(args)

@@ -111,7 +111,10 @@ jobs:
     # sums every budget in the file, and raising the ceiling is cheaper than
     # teaching a safety margin to reason about branches. Still well inside the
     # 120-minute Planning stall window, which the same test checks.
-    timeout-minutes: 65
+    # 75, not 65 (DRE-3241): the post-approval review's ceiling is now sized
+    # per plan, up to plan_critic.POST_REVIEW_TURNS_CAP, and the wiring test
+    # adds that cap to the turn arithmetic this number has to cover.
+    timeout-minutes: 75
     # Read by the `publish` job below (DRE-2720): the plan artifact is
     # rendered and published from a SEPARATE job so the document portal never
     # enters the planner agent's workspace.
@@ -1388,6 +1391,41 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of second-critic context"
 
+      # The ceiling, sized from the plan (DRE-3241) — DRE-2924's shape, read
+      # off this rail's own history: round 1 on DRE-3164 finished in 30 turns
+      # on 14 cards; round 2, on 15 cards plus the re-plan's edits, died at
+      # turn 41 of a 40-turn ceiling twice. The reading is linear in the
+      # cards, so the ceiling is too, in ONE place: scripts/plan_critic.py
+      # `post_review_turns` (fifteen cards → 80, the planner's own ceiling
+      # for writing them). Counted fresh here because `steps.kids` exists
+      # only on the plan route.
+      #
+      # The `||` fallback is load-bearing, exactly as in qa-review.yml:
+      # claude_args interpolates max_turns, so an unwritten output would hand
+      # the action a bare `--max-turns`. The script never exits non-zero; this
+      # is the belt to that pair of braces, and its number is the
+      # fifteen-card one — never the floor a fifteen-card plan died at.
+      - name: Second critic — turn ceiling
+        id: postturns
+        if: steps.route.outputs.mode == 'activate'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC") || KIDS=""
+          python3 .bureau-pipeline/scripts/plan_critic.py post-turns \
+            --children "$KIDS" --github-output "$GITHUB_OUTPUT" \
+          || {
+            echo "::warning::could not size the post-approval review — falling back to the fifteen-card ceiling"
+            echo "max_turns=80" >> "$GITHUB_OUTPUT"
+          }
+
+      # NO `continue-on-error` here, on purpose (DRE-3241). With it, a review
+      # that died would reach the decision step below, which reads an empty
+      # result file as NO_RESULT — "a crash is not a rejection" — and would
+      # ACTIVATE the epic with no review at all. Without it the job goes red,
+      # the decision and the activation stay skipped, and the tombstone step
+      # after this one is the only thing that runs.
       - name: Second critic — review (after approval)
         id: posta
         if: steps.route.outputs.mode == 'activate'
@@ -1400,7 +1438,7 @@ jobs:
           github_token: ${{ steps.app.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
-            --max-turns 40
+            --max-turns ${{ steps.postturns.outputs.max_turns }}
             --model ${{ steps.postmodel.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
@@ -1446,6 +1484,48 @@ jobs:
             the wrong thing: a card referencing something nothing creates, a
             migration with no operator step, a claim about a vendor that is not
             true, or two epics editing the same thing.
+
+      # The review DIED — the action ended without a decision (DRE-3241). On
+      # 2026-09-05 that left nothing on the epic: the job went red, every
+      # sweep read the newest trusted marker — round ONE's send-back, already
+      # answered by the re-plan — and the CEO could not tell "the critic
+      # rejected it" from "the critic never finished". So the death is
+      # recorded the way a round is: a note for the CEO, then a `🪦` line
+      # ALONE in its own comment, pipeline-authored (`plan_critic.py died`
+      # reads the run's execution file through the same loader the QA gate
+      # uses). The sweep reads it as "died — not a rejection", holds the
+      # children under its own tag, and names the move that re-runs the
+      # review. A dead round spends nothing of the two-round bound.
+      #
+      # Gated on `failure()` AND this step's own outcome: it runs only when
+      # the review itself failed, never on an earlier step's failure, and the
+      # job stays red so the medic behaves exactly as before. The decision and
+      # the activation below keep their implied `success()` and stay skipped.
+      - name: Second critic — the review died
+        if: failure() && steps.route.outputs.mode == 'activate' && steps.posta.outcome == 'failure'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          EXEC_FILE="${{ steps.posta.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          python3 .bureau-pipeline/scripts/plan_critic.py died \
+            --stage post \
+            --epic "$EPIC" \
+            --run "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --step posta \
+            --ceiling "${{ steps.postturns.outputs.max_turns }}" \
+            --execution-file "$EXEC_FILE" \
+            --note-file "${{ runner.temp }}/plan-critic-death-note.md" \
+            --record-file "${{ runner.temp }}/plan-critic-death-record.txt"
+          # The note the CEO reads, then the tombstone ALONE in its own
+          # comment — a record is only a credential while nothing else can be
+          # written in the same comment beside it.
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "$(cat "${{ runner.temp }}/plan-critic-death-note.md")"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "$(cat "${{ runner.temp }}/plan-critic-death-record.txt")"
 
       - name: Second critic — decision
         id: post1
@@ -1554,9 +1634,13 @@ jobs:
       # Held: the epic goes back to the CEO's queue with the finding and the
       # revision, and the children do NOT promote. Green Light is where a plan
       # waits on a human judgement (config/lane-contract.json). The CEO
-      # re-approves by moving it to In Progress again — NEVER Todo, where an
-      # epic dispatches nothing (DRE-2725) — which starts the next round
-      # against the markers this run just wrote.
+      # re-approves from Green Light — the console's Approve, or a move to In
+      # Progress; NEVER Todo, where an epic dispatches nothing (DRE-2725) —
+      # which starts the next round against the markers this run just wrote.
+      # Every notice says the move in plan_critic.REAPPROVE_HOW's exact words
+      # (DRE-3241: the relay's activation fires only on the move INTO In
+      # Progress, so "move it to In Progress" is a no-op on an epic already
+      # there); tests/test_plan_critic_wiring.py pins the two copies together.
       #
       # At the BOUND (`bound=true`: two failed rounds since approval) the epic
       # parks with `needs-human` instead. It is never activated as it stands:
@@ -1585,10 +1669,10 @@ jobs:
           if [ "$BOUND" = "true" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🛑 Held twice since approval — parked for you with needs-human; nothing is building and nothing will until a person settles it. The critic's finding this round: ${FINDING}. ${CHANGED} When it is settled, clear needs-human and approve it again by moving the epic to In Progress, or route it through Planning for a fresh plan."
+              "🛑 Held twice since approval — parked for you with needs-human; nothing is building and nothing will until a person settles it. The critic's finding this round: ${FINDING}. ${CHANGED} When it is settled, clear needs-human, then move the epic to Green Light, then approve it (the console's Approve, or a move to In Progress) — or route it through Planning for a fresh plan."
           else
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🛑 The post-approval review found a gap, so nothing has started building. The critic's finding: ${FINDING}. ${CHANGED} Read the revised plan, then approve it again by moving the epic to In Progress — the review runs once more; a plan sent back twice parks for you rather than being built as it stands."
+              "🛑 The post-approval review found a gap, so nothing has started building. The critic's finding: ${FINDING}. ${CHANGED} Read the revised plan, then move the epic to Green Light, then approve it (the console's Approve, or a move to In Progress) — the review runs once more; a plan sent back twice parks for you rather than being built as it stands."
           fi
 
       # Proceeding: the state change, the announcement and the event-driven
