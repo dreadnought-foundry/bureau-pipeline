@@ -163,6 +163,34 @@ def test_a_bare_linear_url_declares_the_card_it_addresses_not_its_slug():
     assert blocker_prose.blocker_ids(line) == ["DRE-3109"]
 
 
+def test_an_issue_tags_attributes_are_not_text():
+    """The card names two places an id must never be read from — "`<issue …>`
+    attributes or hrefs". A tag's attributes carry the linked card's title, so
+    they poison a line exactly as a slug does; only the label between the tags
+    is text. Stop stripping tag markup and this line declares DRE-3106 too."""
+    line = (
+        '**Blocked by:** <issue id="DRE-3109" '
+        'title="operator-confirm-the-design-contract-is-on-main-pr-2280-dre-3106">'
+        "DRE-3109</issue>"
+    )
+    assert blocker_prose.blocker_ids(line) == ["DRE-3109"]
+    assert SLUG_ONLY not in blocker_prose.blocker_ids(line)
+
+
+def test_an_issue_tag_with_a_prose_label_declares_nothing():
+    """The tag-shape twin of the prose-label link above: the attribute is the
+    only place a card id appears, and an attribute is not text."""
+    line = '**Blocked by:** <issue id="DRE-3106">the design contract</issue>'
+    assert blocker_prose.blocker_ids(line) == []
+
+
+def test_a_card_id_in_angle_brackets_is_text_not_markup():
+    """The boundary of the tag-name clause, which is why it is `[A-Za-z][A-Za-z0-9]*`
+    and not `[^>]+`: `<DRE-9>` is somebody writing a card id in angle brackets.
+    A looser clause would eat it and silently drop a real declaration."""
+    assert blocker_prose.blocker_ids("Blocked by: <DRE-9>") == ["DRE-9"]
+
+
 def test_case_insensitive_comparison_is_untouched():
     """The rule this card explicitly does NOT change: `dre-9` and `DRE-9` are
     the same declaration, and every id comes out uppercased."""
@@ -256,3 +284,16 @@ def test_the_slug_case_rides_the_shared_fixture_corpus():
     corpus = dict(blocker_prose.FIXTURES)
     assert SLUG_FIXTURE in corpus, "the link-slug case is not in the shared corpus"
     assert tuple(corpus[SLUG_FIXTURE]) == ("DRE-3109",)
+
+
+def test_the_tag_shape_rides_the_shared_fixture_corpus():
+    """Same reason as the slug case: the producer mints relations from the same
+    lines the detector judges, so the tag shape is held against all three."""
+    corpus = dict(blocker_prose.FIXTURES)
+    declaring = [
+        text for text in corpus
+        if "<issue " in text and corpus[text] == ("DRE-3109",)
+    ]
+    assert declaring, "the `<issue …>` declaring case is not in the shared corpus"
+    silent = [text for text in corpus if "<issue " in text and corpus[text] == ()]
+    assert silent, "the `<issue …>` must-not-match case is not in the shared corpus"

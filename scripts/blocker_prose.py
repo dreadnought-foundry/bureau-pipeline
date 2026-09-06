@@ -103,8 +103,11 @@ _URL = re.compile(r"<?https?://[^\s<>)\]]+>?", re.IGNORECASE)
 _ISSUE_IN_URL = re.compile(r"/issue/(DRE-\d+)", re.IGNORECASE)
 
 # Tag markup, kept and dropped in one piece so the mention's label between the
-# tags is what remains. The tag name is alphanumeric on purpose: `<DRE-3109>` is
-# somebody writing a card id in angle brackets, not markup, and stays text.
+# tags is what remains. This is the second shape the card names — "never from
+# `<issue …>` attributes or hrefs" — and a tag's attributes carry the LINKED
+# card's title, exactly as a slug does. The tag name is alphanumeric on purpose:
+# `<DRE-3109>` is somebody writing a card id in angle brackets, not markup, and
+# stays text. Both halves are fixtures below.
 _TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9]*(?:\s[^>]*)?/?>")
 
 
@@ -199,6 +202,19 @@ DECLARING: tuple[tuple[str, tuple[str, ...]], ...] = (
         "operator-confirm-the-design-contract-is-on-main-pr-2280-dre-3106",
         ("DRE-3109",),
     ),
+    # DRE-3161's other named shape: an `<issue …>` tag. Its attributes carry the
+    # linked card's title, so they poison a line exactly as a slug does — the
+    # same DRE-3109/DRE-3106 pair, in the markup form instead of the link form.
+    # The mention's LABEL between the tags is the text, and the only declaration.
+    (
+        '**Blocked by:** <issue id="DRE-3109" '
+        'title="operator-confirm-the-design-contract-is-on-main-pr-2280-dre-3106">'
+        "DRE-3109</issue>",
+        ("DRE-3109",),
+    ),
+    # An id in angle brackets is not markup. `<DRE-9>` is somebody writing a card
+    # id, and a tag-name clause loose enough to eat it would drop a declaration.
+    ("Blocked by: <DRE-9>", ("DRE-9",)),
     # A whole body: a real declaration plus prose that denies one. The anchor is
     # per line, never all-or-nothing per body.
     (
@@ -241,6 +257,9 @@ NOT_DECLARING: tuple[str, ...] = (
     # the href it points at is not a declaration either.
     "**Blocked by:** [the design contract](https://linear.app/dreadnoughtfoundry"
     "/issue/DRE-3106/one-river-the-design-contract-reaches-main)",
+    # …and the same, in the tag shape: a prose label over an `<issue …>` tag
+    # whose attribute is the only place a card id appears.
+    '**Blocked by:** <issue id="DRE-3106">the design contract</issue>',
 )
 
 FIXTURES: tuple[tuple[str, tuple[str, ...]], ...] = DECLARING + tuple(
