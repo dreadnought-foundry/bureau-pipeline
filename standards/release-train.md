@@ -20,8 +20,9 @@ IS. The script does that, and owes the six things below.
 ## What a surface script owes
 
 The train calls it as `bash <script> --surface <name>`, with `RELEASE_SHA` in
-the environment, the caller's own identity already assumed, and the repository
-checked out at `RELEASE_SHA`. In return:
+the environment — the commit the plan chose, which is the newest green one
+and not always the head — the caller's own identity already assumed, and the
+repository checked out at `RELEASE_SHA`. In return:
 
 1. **Migrations first.** Run them on the byte-identical just-built image,
    before any new code serves traffic, idempotently, and abort on failure. A
@@ -109,14 +110,31 @@ wait, never a refusal. A `push` fires BEFORE that commit's CI has started, so
 a push-triggered stub would find CI pending on every run and release only from
 the schedule; `workflow_run` on the caller's CI workflow (`workflows: ["CI"]`
 is its `name:`), `types: [completed]`, `branches: [main]` fires the moment the
-commit's checks have answered. On that event the train reads the commit from
-`github.event.workflow_run.head_sha` and proceeds only when the CI run
-concluded `success`. Only the checks that GATE A MERGE count — the merge
-gate's own set, read from one place; a fix agent, the medic, the sweep and the
-train's own run on the same SHA are ignored by verified origin, and every
-no-op and refusal names what was read and what was ignored. `checks: read` is
-the permission green-at-SHA reads `commits/{sha}/check-runs` with; `actions:
-read` is the workflow-runs record that says which of those runs gate.
+commit's checks have answered. On that event the train proceeds only when the
+CI run concluded `success`, and the commit CI ran on
+(`github.event.workflow_run.head_sha`) is one candidate. Only the checks that
+GATE A MERGE count — the merge gate's own set, read from one place; a fix
+agent, the medic, the sweep and the train's own run on the same SHA are
+ignored by verified origin, and every no-op and refusal names what was read
+and what was ignored. `checks: read` is the permission green-at-SHA reads
+`commits/{sha}/check-runs` with; `actions: read` is the workflow-runs record
+that says which of those runs gate.
+
+**Ready is a commit, not the head (DRE-3266, the CEO's amendment of the same
+day).** The train releases the newest commit on the default branch whose
+gating checks are all green and which is newer than the surface's deployed
+tag. It walks the first-parent line from the head back to the commit the
+newest tag points at, newest first: a green commit is released — that one,
+not the head; a still-checking commit is stepped past and rides the train its
+own CI completion fires; a red commit is stepped past and named, because a
+red commit is never released. The run's log names the chosen commit and every
+commit stepped past with its reason. A busy main means each train leaves with
+a slightly older, proven commit, and the next one carries the rest — nobody
+waits, nobody stops, no collision matters. The walk reads at most thirty
+commits; a surface whose newest thirty hold no green commit is refused as too
+far behind to walk, and a person releases it by hand once. The surface job
+checks out the chosen commit, and that is the `RELEASE_SHA` the script
+receives and the commit the tag lands on.
 
 **No `paths:` filter, deliberately.** YAML cannot read the data, so the stub
 fires on every CI completion on the default branch and the TRAIN does the path
@@ -142,8 +160,10 @@ through to the script's environment.
 Run the stub by hand with `surface: <name>` on a surface whose `auto` is
 false. That runs the one surface, outside its window, with a person watching.
 It bypasses nothing else: not green-at-SHA, not the spacing, and not the brake.
-If a gating check on the head is still running, the dispatch is a no-op that
-names it — dispatch again once CI has answered.
+If a gating check on the head is still running, the dispatch releases the
+newest green commit behind it and names the head as stepped past; only when
+no commit newer than the tag is green yet is the dispatch a no-op that names
+the newest still-checking one.
 
 ## The fleet-wide brake
 

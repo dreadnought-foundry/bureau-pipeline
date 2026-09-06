@@ -27,11 +27,22 @@
 #       - cron: "0 14 * * *"
 #     workflow_dispatch:         # the `surface` input, unchanged
 #
-# On that event this workflow reads the commit from
-# `github.event.workflow_run.head_sha` and proceeds only when
-# `github.event.workflow_run.conclusion` is `success`. A `push`-triggered stub
-# still works, but fires before that commit's CI has started and will find it
-# pending on every run — releasing only from the schedule.
+# On that event this workflow proceeds only when
+# `github.event.workflow_run.conclusion` is `success`; the commit CI ran on
+# (`github.event.workflow_run.head_sha`) is a candidate by construction. A
+# `push`-triggered stub still works, but fires before that commit's CI has
+# started and will find it pending on every run — releasing only from the
+# schedule.
+#
+# READY IS A COMMIT, NOT THE HEAD (DRE-3266, the CEO's amendment of the same
+# day, after run 34058913763 at 13:44 PT left with the head still checking
+# and its green parent behind it). The plan walks the default branch's
+# first-parent line from the head back to each surface's newest tag, newest
+# first, and releases the newest commit whose gating checks are all green; a
+# still-checking head is stepped past and rides the train its own CI
+# completion fires; a red one is stepped past and named. The matrix carries
+# the chosen sha per surface, the surface job checks out THAT commit, and
+# the script receives it as `RELEASE_SHA`.
 #
 # THE VENDOR PREMORTEM (standards/vendor-boundaries.md), answered here because
 # this workflow is nothing but boundary:
@@ -53,7 +64,8 @@
 #      is per surface and never cancels, so a second CI completion queues
 #      behind the first rather than racing it for the same tag — and a
 #      commit the newest tag already contains reads current, so a slow CI
-#      on an older commit never tags backwards.
+#      on an older commit never tags backwards, and a plan whose chosen
+#      commit was released by the run it queued behind is a no-op too.
 #   Q4 COMMAND LIMITS. GitHub's `schedule:` takes UTC only and has no timezone
 #      field, which is why the stub carries two cron lines and the TRAIN reads
 #      the clock in America/Los_Angeles.
@@ -99,10 +111,11 @@ on:
         required: false
 
 jobs:
-  # The commit this run is about — the SHA CI ran on for a CI-completion run,
-  # the head of the branch at the moment the run starts otherwise (the
-  # COLLAPSE rule) — and every surface's decision made against it. The brake
-  # is read HERE, so a held fleet says so once per surface and no surface job
+  # The head of the default branch at the moment the run starts (the COLLAPSE
+  # rule), every surface's decision made from it, and — for each surface
+  # that releases — the COMMIT it releases: the newest green one on the
+  # first-parent line back to the surface's tag (DRE-3266). The brake is
+  # read HERE, so a held fleet says so once per surface and no surface job
   # is ever created.
   plan:
     name: Plan the surfaces
@@ -110,20 +123,20 @@ jobs:
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
-      sha: ${{ steps.plan.outputs.sha }}
+      head: ${{ steps.plan.outputs.head }}
     steps:
       # fetch-depth: 0 on purpose — the train reads the newest tag in each
-      # surface's series and diffs the surface's paths since it. A shallow
-      # checkout has neither the tags nor the history, and would report every
-      # surface BEHIND on every trigger.
+      # surface's series, diffs the surface's paths since it, and walks the
+      # first-parent line between them. A shallow checkout has neither the
+      # tags nor the history, and would report every surface BEHIND on every
+      # trigger.
       #
-      # On a `workflow_run` event (DRE-3263) the ref is the commit CI ran on,
-      # not the default branch's head — the default for that event — so the
-      # run releases exactly the commit whose CI just concluded. Empty on
-      # every other event, which is actions/checkout's own default.
+      # No `ref:` on any event, deliberately (DRE-3266): on `workflow_run`
+      # actions/checkout's default is the default branch's head, which is
+      # where the walk starts — the commit CI just ran on is one candidate,
+      # and a newer merge already on the branch is another.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
           fetch-depth: 0
 
       - uses: actions/checkout@v7
@@ -137,9 +150,14 @@ jobs:
           python3 .bureau-pipeline/scripts/release_train.py \
             --repo "$GITHUB_REPOSITORY" schema
 
+      # Reads checks HERE now (DRE-3266) — for a surface that would release,
+      # one read per candidate walked, newest first, until the first green
+      # one; a surface with nothing to release still reads none. Hence the
+      # token: the stub's `checks: read` and `actions: read` cover it.
       - name: Decide every surface
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
           # The fleet-wide brake, in the shape of INTAKE_HOLD and read by the
           # same function. Never a literal: a value baked into the shared
           # channel would brake one repo's train for everybody.
@@ -160,19 +178,22 @@ jobs:
           if [ "$EVENT" = "workflow_run" ] && [ "$CI_CONCLUSION" != "success" ]; then
             echo "release-train: no-op $GITHUB_REPOSITORY — CI on ${CI_SHA:0:7} concluded ${CI_CONCLUSION:-nothing}; the train leaves without it"
             echo "matrix=[]" >> "$GITHUB_OUTPUT"
-            echo "sha=$CI_SHA" >> "$GITHUB_OUTPUT"
+            echo "head=$CI_SHA" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          SHA=$(git rev-parse HEAD)
-          if [ "$EVENT" = "workflow_run" ] && [ -n "$CI_SHA" ] && [ "$SHA" != "$CI_SHA" ]; then
-            echo "release-train: refuse $GITHUB_REPOSITORY — checked out $SHA but CI ran on $CI_SHA"
-            exit 1
+          # The walk starts at the branch's head. On a CI completion the
+          # commit CI ran on is a candidate by construction; it and the head
+          # legitimately differ when a newer merge has landed since.
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "$EVENT" = "workflow_run" ] && [ -n "$CI_SHA" ]; then
+            echo "release-train: CI on ${CI_SHA:0:7} concluded success; walking from the head ${HEAD_SHA:0:7}"
           fi
           python3 .bureau-pipeline/scripts/release_train.py \
             --repo "$GITHUB_REPOSITORY" plan \
-            --sha "$SHA" --surface "$SURFACE"
+            --head "$HEAD_SHA" --surface "$SURFACE"
 
-  # One job per surface that is actually releasing, each in its own lane.
+  # One job per surface that is actually releasing, each in its own lane, at
+  # the commit the plan chose for it: the matrix is `[{surface, sha}, …]`.
   release:
     name: Release ${{ matrix.surface }}
     needs: plan
@@ -182,19 +203,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        surface: ${{ fromJSON(needs.plan.outputs.matrix) }}
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     # ONE lane per surface, and it never cancels: a run that starts releases
-    # the head of the branch at that moment, and a second push waits behind it
-    # rather than racing it for the same tag.
+    # the commit its plan chose, and a second run waits behind it rather than
+    # racing it for the same tag.
     concurrency:
       group: release:${{ github.repository }}:${{ matrix.surface }}
       cancel-in-progress: false
     steps:
-      # The plan's sha, not the branch: whatever landed while this job queued
-      # is the next run's business, not this one's.
+      # The plan's chosen sha, not the branch: whatever landed while this job
+      # queued is the next run's business, not this one's — and the script
+      # runs in a checkout of exactly the commit it is handed as RELEASE_SHA.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.plan.outputs.sha }}
+          ref: ${{ matrix.sha }}
           fetch-depth: 0
 
       - uses: actions/checkout@v7
@@ -220,16 +242,16 @@ jobs:
           role-session-name: release-train-${{ matrix.surface }}
           aws-region: ${{ inputs.aws_region }}
 
-      # Reads green-at-SHA ONCE — the check runs on the commit plus the
-      # workflow-runs record that says which of them gate (DRE-3263: only the
-      # merge gate's set counts; a fix agent, the medic, the sweep and this
-      # train's own run are ignored by verified origin, and the line says
-      # what was read and what was ignored). A gating check still running is
-      # a no-op that names it — the train is never stopped; the run CI
-      # completion fires takes the commit. Then decides with the real answer,
-      # runs the surface's script, and verifies the annotated tag it cut. A
-      # no-op and a deferral exit 0; a refusal and a failed script exit
-      # non-zero.
+      # Re-reads green-at-SHA ONCE on the chosen commit, inside the lane —
+      # the check runs on it plus the workflow-runs record that says which of
+      # them gate (DRE-3263: only the merge gate's set counts; a fix agent,
+      # the medic, the sweep and this train's own run are ignored by verified
+      # origin, and the line says what was read and what was ignored). The
+      # plan chose a green commit; this is the same rule asked again with a
+      # fresh answer, the way the rules are always asked twice. Then runs the
+      # surface's script at that commit and verifies the annotated tag it
+      # cut. A no-op and a deferral exit 0; a refusal and a failed script
+      # exit non-zero.
       - name: Run the surface
         env:
           GH_TOKEN: ${{ github.token }}
@@ -238,7 +260,7 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # Through env, never interpolated into the shell line (tests.yml).
           SURFACE: ${{ matrix.surface }}
-          PLAN_SHA: ${{ needs.plan.outputs.sha }}
+          PLAN_SHA: ${{ matrix.sha }}
           DISPATCHED: ${{ inputs.surface }}
         run: |
           args=()

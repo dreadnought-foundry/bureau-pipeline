@@ -1300,7 +1300,10 @@ def _commit(repo, path="demo/app.txt", text=None, message="a change"):
 
 
 def _tag_head(repo, name="demo/v0"):
-    _git(repo, "tag", "-a", name, "-m", "released")
+    """The deployed tag, dated an hour before the tests' 10:00 PT clock so
+    the surface's spacing has elapsed and the walk is what decides."""
+    _git(repo, "tag", "-a", name, "-m", "released",
+         env={**os.environ, "GIT_COMMITTER_DATE": "2026-07-15T09:00:00-07:00"})
 
 
 def _plan(repo, reader, *, head=None, now=None, bound=None, brake=None,
@@ -1546,8 +1549,11 @@ def test_the_chosen_sha_flows_to_the_script_as_release_sha_and_the_tag_is_cut_on
     assert released.tag == "demo/v1"
     assert _git(repo, "rev-list", "-n", "1", "demo/v1") == parent
 
+    # The script cut demo/v1 on the real clock, so the next plan's clock is
+    # an hour past it — the spacing has elapsed and the walk decides.
     again = _Reader({head: _pending("Toolkit (pytest)")})
-    decision = _only(_plan(repo, again, now=pt(2026, 7, 15, 12, 0)))
+    later = datetime.now(tz=release_train.PT) + timedelta(hours=1)
+    decision = _only(_plan(repo, again, now=later))
     assert decision.act == release_train.NO_OP, decision.reason
     assert decision.code == "ci-pending"
     assert head[:7] in decision.reason
