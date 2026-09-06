@@ -248,5 +248,83 @@ class CliOriginContractTest(unittest.TestCase):
         self.assertNotIn("decision=merge", proc.stdout)
 
 
+class GatingCheckRunsTest(unittest.TestCase):
+    """DRE-3263: the gating set, read from ONE place by the gate and the
+    release train. On a PR head every run was triggered by the commit, so the
+    gate's rule is "every check minus the review suites"; on main's head the
+    same SHA also carries every `workflow_run` / `issue_comment` /
+    `workflow_dispatch` / `schedule` run in the repo (fix agents, the medic,
+    the sweep — GitHub runs them ON the default branch's head), and those are
+    not checks of the commit. `gating_check_runs` says which is which by the
+    run's EVENT, from GitHub's own record — never by name."""
+
+    def test_commit_events_are_the_ones_a_commit_itself_triggers(self):
+        self.assertTrue(
+            {"push", "pull_request", "pull_request_target"}
+            <= set(merge_gate.COMMIT_EVENTS)
+        )
+        for never in ("workflow_run", "issue_comment", "workflow_dispatch",
+                      "schedule", "repository_dispatch"):
+            self.assertNotIn(never, merge_gate.COMMIT_EVENTS)
+
+    def test_on_a_pr_head_the_classifier_counts_exactly_what_the_gate_counts(self):
+        runs = [check("build", CI_RUN["check_suite_id"]),
+                check("call / review", REVIEW_RUN["check_suite_id"],
+                      status="in_progress", conclusion=None),
+                check("review", EVIL_RUN["check_suite_id"], conclusion="failure"),
+                check("orphan", 5, conclusion="failure")]
+        listing = [CI_RUN, REVIEW_RUN, EVIL_RUN]
+        counted, ignored = merge_gate.gating_check_runs(
+            runs, listing, merge_gate.DEFAULT_REVIEW_WORKFLOWS)
+        review = merge_gate.review_suite_ids(
+            listing, merge_gate.DEFAULT_REVIEW_WORKFLOWS)
+        gate_counts = [r for r in runs
+                       if (r.get("check_suite") or {}).get("id") not in review]
+        self.assertEqual(counted, gate_counts)
+        self.assertEqual([r["name"] for r, _ in ignored], ["call / review"])
+        self.assertEqual(ignored[0][1], ".github/workflows/qa-review.yml")
+
+    def test_a_run_the_commit_did_not_trigger_is_ignored_with_its_path(self):
+        fix = {"id": 1, "name": "Agent Fix",
+               "path": ".github/workflows/agent-fix.yml",
+               "event": "workflow_dispatch", "check_suite_id": 7}
+        medic = {"id": 2, "name": "Pipeline Medic",
+                 "path": ".github/workflows/medic.yml",
+                 "event": "workflow_run", "check_suite_id": 8}
+        runs = [check("Toolkit (pytest)", CI_RUN["check_suite_id"]),
+                check("call / fix PR #2325", 7, status="in_progress",
+                      conclusion=None),
+                check("call / diagnose", 8, conclusion="skipped")]
+        counted, ignored = merge_gate.gating_check_runs(
+            runs, [dict(CI_RUN, event="push"), fix, medic])
+        self.assertEqual([r["name"] for r in counted], ["Toolkit (pytest)"])
+        self.assertEqual(
+            sorted(path for _, path in ignored),
+            [".github/workflows/agent-fix.yml", ".github/workflows/medic.yml"],
+        )
+
+    def test_an_excluded_path_is_ignored_whatever_its_event(self):
+        train = {"id": 3, "name": "Release train",
+                 "path": ".github/workflows/release-train.yml",
+                 "event": "push", "check_suite_id": 9}
+        runs = [check("call / Release console", 9, status="in_progress",
+                      conclusion=None)]
+        counted, ignored = merge_gate.gating_check_runs(
+            runs, [train],
+            merge_gate.DEFAULT_REVIEW_WORKFLOWS
+            + (".github/workflows/release-train.yml",),
+        )
+        self.assertEqual(counted, [])
+        self.assertEqual(ignored[0][1], ".github/workflows/release-train.yml")
+
+    def test_an_unattributable_check_run_is_counted_fail_closed(self):
+        runs = [check("orphan", 5, status="in_progress", conclusion=None),
+                {"name": "suiteless", "status": "completed",
+                 "conclusion": "failure"}]
+        counted, ignored = merge_gate.gating_check_runs(runs, [])
+        self.assertEqual(counted, runs)
+        self.assertEqual(ignored, [])
+
+
 if __name__ == "__main__":
     unittest.main()
