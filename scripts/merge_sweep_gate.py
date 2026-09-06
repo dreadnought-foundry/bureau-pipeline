@@ -139,6 +139,12 @@ def _dependents(card: dict) -> list[dict]:
     return out
 
 
+#: The public name for the reading above: `reconcile.merged_card_scope` scopes
+#: the merge-triggered passes to these cards (DRE-3236), and must read the
+#: relation the same way round this file does — one reading, not two.
+dependents = _dependents
+
+
 def unblocked_something(card: dict) -> bool:
     """Did this merge clear a blocker for a card that is still open?"""
     if (card.get("relations") or {}).get("pageInfo", {}).get("hasNextPage"):

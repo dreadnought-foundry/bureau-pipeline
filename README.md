@@ -333,6 +333,18 @@ when that merge cleared a blocker (promotion) or finished the card's own parent
 epic (epic-close). The `*/15` cron is unchanged and remains the backstop for
 everything the gate declines.
 
+Each pass the gate does run is **scoped to the merge** (DRE-3236): the
+workflow hands `reconcile.py` the merged card as `MERGED_CARD`, and the
+promotion pass evaluates only that card's own dependents while the epic-close
+pass evaluates only its own parent — one read of the card, one read of the
+dependents, never the whole Backlog or every active epic. Measured on a busy
+repo (260 Backlog cards, 5 active epics) one merge-sync fell from 285 Linear
+read requests to 11. The same card gave the sweep a per-pass read cache in
+`linear_ops.py`: the board reads carry every card's comments inline and every
+reader that takes an identifier is served from that read, so a full sweep on
+the same board fell from 284 read requests to 20 — a function of the epics,
+not of the cards.
+
 All three now take a `max_wip` input. To override the cap, pass it on **all
 three stubs or none** — a half-repointed stub set gives the repo two caps
 again, which is the same defect one level down:
