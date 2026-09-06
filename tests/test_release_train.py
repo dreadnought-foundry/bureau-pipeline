@@ -664,6 +664,24 @@ def test_a_surface_whose_paths_are_untouched_since_its_tag_is_a_no_op(tmp_path):
     ) == "behind"
 
 
+def test_a_surface_with_nothing_to_release_never_waits_for_a_check(tmp_path):
+    """A job that queued behind another release and now reads current must not
+    spend thirty minutes on the checks API to learn the same thing."""
+    repo = _fake_repo(tmp_path)
+    assert _release(repo).act == release_train.RELEASE
+
+    def never():
+        pytest.fail("the checks API was asked about a surface that is current")
+
+    data = release_train.load(repo / ".github" / "bureau" / "release.json")
+    decision = release_train.release(
+        release_train.surfaces(data)["demo"], repo="dreadnought-foundry/demo",
+        repo_root=repo, sha=_head(repo), now=pt(2026, 7, 15, 12, 0),
+        checks=never, brake=None,
+    )
+    assert decision.code == "current"
+
+
 def test_a_script_that_defers_is_a_no_op_with_no_tag_and_no_failure(tmp_path):
     repo = _fake_repo(tmp_path, script=DEFERRING_SCRIPT)
     decision = _release(repo)
@@ -714,6 +732,33 @@ def test_the_plan_reads_the_head_of_the_branch_at_start(tmp_path):
     _git(repo, "commit", "-qm", "a push that lands mid-run")
     assert _release(repo, sha=sha).tag == "demo/v1"
     assert _git(repo, "rev-list", "-n", "1", "demo/v1") == sha
+
+
+def test_a_checks_api_that_cannot_answer_is_a_refusal_not_a_release(tmp_path,
+                                                                    monkeypatch,
+                                                                    capsys):
+    """UNKNOWN is never clear — the rule `check_train_in_flight.py` states."""
+    repo = _fake_repo(tmp_path)
+    monkeypatch.setattr(release_train, "fetch_checks", _cannot_answer)
+    code = release_train.main([
+        "--repo", "dreadnought-foundry/demo", "--repo-root", str(repo),
+        "--file", str(repo / ".github" / "bureau" / "release.json"),
+        "release", "--sha", _head(repo), "--surface", "demo",
+    ])
+    assert code == 1
+    assert f"{release_train.TAG}: refuse" in capsys.readouterr().out
+    assert _git(repo, "tag", "-l") == ""
+
+
+def _cannot_answer(repo, sha):
+    raise RuntimeError("gh could not read the checks")
+
+
+def test_the_cli_refuses_a_malformed_file_and_names_the_field(tmp_path, capsys):
+    bad = tmp_path / "release.json"
+    bad.write_text(json.dumps({"surfaces": {"console": {"auto": True}}}))
+    assert release_train.main(["--file", str(bad), "schema"]) == 1
+    assert "console.window" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------
@@ -826,7 +871,7 @@ def test_the_render_names_every_field_of_the_schema():
 
 
 def test_the_standard_states_what_a_surface_script_owes():
-    body = STANDARD.read_text()
+    body = STANDARD.read_text().lower()
     for phrase in ("migrations", "rollout", "verify", "annotat", "non-zero",
                    "deferred:"):
         assert phrase in body, f"standards/release-train.md never says {phrase!r}"

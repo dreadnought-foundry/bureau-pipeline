@@ -19,6 +19,16 @@ Linear card → relay Lambda → repository_dispatch on the product repo
 
 CI is deliberately NOT here — `ci.yml` stays product-specific in each repo.
 
+`release-train.yml` is a NINTH reusable workflow in the same shape (DRE-3167),
+and it is not one of the eight above because no product repo consumes it yet:
+its stub and the per-repo `.github/bureau/release.json` ship with DRE-3211. It
+releases a repo's declared surfaces on the caller's own identity — the rules
+are `scripts/release_train.py`, what a surface script owes is
+`standards/release-train.md`, and the data is `docs/release-train.md`. This
+repo declares one surface of its own, `pipeline-channel`, purely so deploy-lag
+reads the `stable` channel like any other surface; the train never runs it and
+`promote-channel.yml` is unchanged.
+
 ## The lane contract (DRE-2726)
 
 `config/lane-contract.json` declares every lane's entrance condition, exit

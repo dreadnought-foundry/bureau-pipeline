@@ -1,0 +1,15 @@
+{
+  "surfaces": {
+    "pipeline-channel": {
+      "tag_series": ["stable"],
+      "paths": [],
+      "script": null,
+      "rollback": null,
+      "spacing_minutes": 0,
+      "window": "always",
+      "auto": false,
+      "identity": "promote-channel.yml",
+      "record": "channel"
+    }
+  }
+}
