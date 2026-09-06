@@ -33,6 +33,31 @@ dead recommendation nobody can check is one nobody should act on
     hallucination or an injection, and neither is something to act on — so the
     run falls back to every card `unranked` and says so.
 
+## The call is SIZED, and a cut answer is said out loud (DRE-3259)
+
+One line per card across a 226-card lane is on the order of eighteen thousand
+output tokens, and the classifier's own bound is a thousand. So the budget comes
+off the census this module just built — `OUTPUT_HEADROOM + TOKENS_PER_CARD × n`,
+floored and ceilinged — and the wall clock comes off the budget. Neither number
+is guessed at the call site: `output_budget` and `wall_clock_seconds` are here,
+in one place, because the workflow that runs this job sizes its own timeout off
+`MAX_WALL_CLOCK_SECONDS` and a second copy of the arithmetic is free to drift.
+
+Two things follow, and both of them are said rather than swallowed:
+
+  * **a census past the ceiling loses its OLDEST cards before the call.** The
+    ceiling is a real limit — the CLI clamps the budget to a per-model maximum
+    and answers AT it — so the choice is a smaller batch said out loud or a long
+    answer cut where nobody asked. The overflow is `unranked` with
+    `CEILING_REASON`, the newest cards are ranked, the count goes to the run
+    log, and it is still ONE call.
+  * **a truncated answer is used as far as it goes.** Every card whose line came
+    back whole keeps its call; the last line of a cut answer is a fragment by
+    definition and is never parsed as one; every card the answer never reached
+    is `unranked` as it always was. A cut is not a `problem` — the run ranked
+    what it read — and it is reported as `Judgement.truncated` rather than
+    inferred from a short answer.
+
 ## The transport is the classifier's (DRE-3074)
 
 Never a second one. `planning_classify._call_real` picks the Claude Code path
@@ -55,9 +80,14 @@ credential every other model step uses. No new secret, no new identity.
 Q2 secrets — `planning_classify.api_key_mode()` reads the credential, not a
 mode name, so this gets whichever transport that credential can legally reach.
 Q3 retry — ONE call, never retried inside a run, and a re-run of `propose`
-writes nothing it has not already written (`groomer.post_proposal`).
+writes nothing it has not already written (`groomer.post_proposal`). A cut
+answer is used as far as it goes and reported; it is never re-asked.
 Q4 limitations — an unreadable, empty or refused answer is a run in which every
-card is `unranked`; it is never a partial ranking presented as a whole one.
+card is `unranked`; it is never a partial ranking presented as a whole one. The
+CLI clamps the output budget to a per-model upper limit, which is why
+`OUTPUT_CEILING` is held under every rung of the planner ladder's limit rather
+than trusting the number asked for; above the ceiling the answer is a smaller
+batch said out loud, never a longer call.
 Q5 our own crash — nothing here writes anywhere. The judgement is an input to
 `groomer.propose`, so a crash leaves Intake exactly as it was.
 """
@@ -99,6 +129,63 @@ NEEDS_POINTER = ("not-now", "likely-done")
 #: The exact sentence an unranked card carries (DRE-3150's contract — the
 #: presentation and console cards render this string, so it is written once).
 UNRANKED_REASON = "could not rank — needs a person"
+
+#: And the sentence a card the CEILING dropped carries instead. A different
+#: fact from the one above and it reads as one: nobody asked the model about
+#: this card, so "the model could not tell" would be a claim about an answer
+#: that was never given.
+CEILING_REASON = "could not rank — census over the one-call ceiling"
+
+#: What one card's answer line costs, in output tokens. An id, an outcome, a
+#: one-clause reason and a trigger — eighty is that line with room in it, and
+#: it is the number `briefs/groomer.md` tells the model brevity is measured in.
+TOKENS_PER_CARD = 80
+
+#: Room for whatever the model writes around the lines it was asked for.
+OUTPUT_HEADROOM = 500
+
+#: The floor. A five-card lane is still a call worth making room in — a budget
+#: of a few hundred tokens is one the answer bumps into for no reason.
+OUTPUT_FLOOR = 4000
+
+#: The ceiling, and it is the whole of the one-call bound. Held under the
+#: SMALLEST output-token upper limit the installed Claude Code CLI applies to
+#: any rung of the planner ladder (2.1.263 reports `max_output_tokens.upper` of
+#: 128,000 for `claude-fable-5-1`, `claude-opus-5` and `claude-sonnet-4-6`),
+#: because the CLI CLAMPS the budget to that limit and answers at it — a
+#: ceiling above it would be a number we ask for and never get.
+OUTPUT_CEILING = 32000
+
+
+def output_budget(n_cards: int) -> int:
+    """How many output tokens one call over `n_cards` is given.
+
+    Sized from the census rather than fixed, because the answer is one line per
+    card and the population is what decides how many lines that is. The 226-card
+    lane this was written for lands at 18,580.
+    """
+    return min(OUTPUT_CEILING,
+               max(OUTPUT_FLOOR, OUTPUT_HEADROOM + TOKENS_PER_CARD * n_cards))
+
+
+def wall_clock_seconds(budget: int) -> float:
+    """How long that call is given, in seconds.
+
+    Sized from the budget, at roughly forty tokens a second, plus a flat minute:
+    on the Claude Code path the first invocation on a fresh runner fetches the
+    package before it makes a call, and that fetch is inside the 60.
+    """
+    return 60 + budget / 40
+
+
+#: The longest one call can take — the wall clock of a ceiling-sized budget.
+#: The workflow that runs the groom job sizes its own timeout off this, so the
+#: job's clock and the call's clock cannot drift apart.
+MAX_WALL_CLOCK_SECONDS = wall_clock_seconds(OUTPUT_CEILING)
+
+#: How many cards a ceiling-sized budget can answer for. Derived, never
+#: restated: it is the one number the ceiling and the per-card cost imply.
+CEILING_CARDS = (OUTPUT_CEILING - OUTPUT_HEADROOM) // TOKENS_PER_CARD
 
 #: And the exact sentence that replaces a reason the plain-English guard
 #: refuses. The card still gets its outcome; only the words are withheld.
@@ -162,6 +249,14 @@ class Judgement:
     #: Why this run ranked nothing, or None. Read as "the run says so" — an
     #: unreadable answer is reported, never swallowed.
     problem: str | None = None
+    #: What the one call cost (DRE-3259). `output_budget` is the `max_tokens`
+    #: it was made with — 0 when no call was made — and is reported on the
+    #: paths that end in `problem` too, because a cut-then-unreadable answer is
+    #: exactly the run whose budget explains it. `truncated` is the ANSWER
+    #: being cut at that budget, and it is not `pack["truncated"]`, which is the
+    #: list of context-pack sections that were capped.
+    output_budget: int = 0
+    truncated: bool = False
 
     @property
     def unranked(self) -> list:
@@ -380,6 +475,39 @@ def parse(answer: str, rows: list[dict]) -> dict:
     return verdicts
 
 
+def whole_lines(text: str) -> str:
+    """A cut answer, less the fragment it was cut in the middle of.
+
+    The last line of a truncated answer is garbled by definition — half an id,
+    half a reason, an outcome with nothing after it — and half a line is not a
+    weaker version of the call it was reaching for. Dropped rather than parsed,
+    so the card it named comes back `unranked` and stays where the rules had it.
+    A text that ends ON a line break lost nothing, so it keeps every line.
+    """
+    lines = (text or "").splitlines()
+    if not lines or (text or "").endswith(("\n", "\r")):
+        return text or ""
+    return "\n".join(lines[:-1])
+
+
+def within_ceiling(rows: list[dict]) -> tuple[list, list]:
+    """`(the cards one call can answer for, the cards past the ceiling)`.
+
+    Newest first, because a lane that has outgrown one call has outgrown it at
+    the old end: a card that has waited a year waits another fortnight, and a
+    card filed this week is the one the batch is about. Age unknown sorts as
+    oldest — an undated card is not evidence of being new.
+    """
+    if len(rows) <= CEILING_CARDS:
+        return list(rows), []
+    newest = sorted(range(len(rows)),
+                    key=lambda i: (rows[i].get("age_days") is None,
+                                   rows[i].get("age_days") or 0, i))
+    kept = set(newest[:CEILING_CARDS])
+    return ([row for i, row in enumerate(rows) if i in kept],
+            [row for i, row in enumerate(rows) if i not in kept])
+
+
 def _verdict(parts: list) -> Verdict:
     """One answer line, or `unranked` when it does not say enough."""
     outcome = (parts[1] if len(parts) > 1 else "").strip().lower()
@@ -413,6 +541,11 @@ def run(census_rows: list[dict], pack: dict, *, call=None,
     never answered, an answer that could not be read, an answer that named a
     card nobody put in the census — comes out as a run in which every card is
     `unranked` and `problem` says why.
+
+    The call is sized from the census (`output_budget`, `wall_clock_seconds`),
+    a census past `OUTPUT_CEILING` loses its oldest cards before the call, and
+    an answer the budget CUT is used as far as it goes and reported as
+    `truncated` — none of those three is a `problem` (DRE-3259).
     """
     rows = list(census_rows or [])
     if not rows:
@@ -420,9 +553,23 @@ def run(census_rows: list[dict], pack: dict, *, call=None,
         # model to rank nothing and bill us for the pack.
         return Judgement(verdicts={}, calls=0, pack=groom_context.summary(pack))
 
+    # The ceiling is applied BEFORE the call, so what falls off falls off with a
+    # reason rather than off the end of an answer nobody sized.
+    rows, over_ceiling = within_ceiling(rows)
+    if over_ceiling:
+        print(f"groom judgement: the census is past the one-call ceiling of "
+              f"{CEILING_CARDS} cards — the newest {len(rows)} are ranked and "
+              f"{len(over_ceiling)} older card(s) are unranked",
+              file=sys.stderr)
+    ceiling_unranked = {
+        row["identifier"]: Verdict(UNRANKED, CEILING_REASON)
+        for row in over_ceiling
+    }
+
     everything_unranked = {
         row["identifier"]: Verdict(UNRANKED, UNRANKED_REASON) for row in rows
     }
+    everything_unranked.update(ceiling_unranked)
     summary = groom_context.summary(pack)
 
     if not model:
@@ -440,31 +587,49 @@ def run(census_rows: list[dict], pack: dict, *, call=None,
                          problem=_problem("the ranking prompt could not be "
                                           "composed", e))
 
+    # Sized off the census this call is actually about, not off the population:
+    # the cards past the ceiling were already answered for, above.
+    budget = output_budget(len(rows))
     calls = 1
     try:
         answer = planning_classify._answer_of(
-            (call or planning_classify._call_real)(model, prompt))
+            (call or planning_classify._call_real)(
+                model, prompt, max_tokens=budget,
+                timeout_seconds=wall_clock_seconds(budget)))
     except Exception as e:  # noqa: BLE001 — any failed call ranks nothing
         return Judgement(verdicts=everything_unranked, calls=calls, asked=model,
-                         pack=summary,
+                         pack=summary, output_budget=budget,
                          problem=_problem("the ranking call did not answer", e))
 
     # `answer.model` is what ANSWERED; None stays None. Repeating the request
     # would make a fallback we never saw look like a clean run on the model we
     # picked (`standards/console-honesty.md` rule 2).
     answered = answer.model
+    cut = bool(answer.truncated)
     try:
-        verdicts = parse(answer.text, rows)
+        # A cut answer's last line is a fragment; the refusal below still reads
+        # every WHOLE line, so a cut is not a way past the census check.
+        verdicts = parse(whole_lines(answer.text) if cut else answer.text, rows)
     except RefusedAnswer as e:
         return Judgement(verdicts=everything_unranked, calls=calls, asked=model,
-                         answered=answered, pack=summary, problem=str(e))
-    if all(v.outcome == UNRANKED for v in verdicts.values()):
+                         answered=answered, pack=summary, output_budget=budget,
+                         truncated=cut, problem=str(e))
+    unreadable = all(v.outcome == UNRANKED for v in verdicts.values())
+    if cut:
+        lost = sum(1 for v in verdicts.values() if v.outcome == UNRANKED)
+        print(f"groom judgement: the ranking answer was cut at its "
+              f"{budget}-token budget — {lost} of {len(rows)} card(s) came back "
+              f"unranked", file=sys.stderr)
+    verdicts.update(ceiling_unranked)
+    if unreadable:
         return Judgement(verdicts=verdicts, calls=calls, asked=model,
-                         answered=answered, pack=summary,
+                         answered=answered, pack=summary, output_budget=budget,
+                         truncated=cut,
                          problem=("the ranking answer could not be read, so no "
                                   "card in this population was ranked"))
     return Judgement(verdicts=verdicts, calls=calls, asked=model,
-                     answered=answered, pack=summary)
+                     answered=answered, pack=summary, output_budget=budget,
+                     truncated=cut)
 
 
 def _problem(headline: str, error: Exception) -> str:

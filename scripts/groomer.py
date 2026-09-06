@@ -1139,6 +1139,13 @@ def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
         "unranked": unranked,
         "withheld": sorted(dict.fromkeys(withheld), key=_card_sort_key),
         "problem": getattr(judgement, "problem", None),
+        # What the one call cost (DRE-3259). `output_budget` is the `max_tokens`
+        # it was made with — 0 under `--no-judgement` and whenever no call was
+        # made — and `truncated` is the ANSWER being cut at that budget. NOT
+        # `pack["truncated"]`, which is the list of context-pack sections that
+        # were capped: two facts, two types, and neither is read for the other.
+        "output_budget": int(getattr(judgement, "output_budget", 0) or 0),
+        "truncated": bool(getattr(judgement, "truncated", False)),
     }
 
 
@@ -1601,6 +1608,15 @@ def _build(args) -> dict:
             groom_judgement.census(cards), groom_context.read_pack(linear_ops))
         if judgement.problem:
             print(f"groomer: {judgement.problem}", file=sys.stderr)
+        # Beside it, what the call was sized with — the number that explains a
+        # short answer, and the only place it is said in plain sight until
+        # DRE-3152 renders it (DRE-3259).
+        print(f"groomer: the one ranked read was made with an output budget of "
+              f"{judgement.output_budget} token(s)", file=sys.stderr)
+        if judgement.truncated:
+            print(f"groomer: the answer was cut at that budget — "
+                  f"{len(judgement.unranked)} card(s) came back unranked",
+                  file=sys.stderr)
     return propose(cards, cycles=cycles, capacity=args.capacity,
                    batch_cycles=args.batch_cycles, lane=args.lane,
                    window_days=args.window_days, judgement=judgement,
