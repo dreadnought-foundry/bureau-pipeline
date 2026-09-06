@@ -1182,6 +1182,22 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-death-note.md\")\"",
+      "step": "Second critic — the review died",
+      "kind": "undeclared-act",
+      "means": "The post-approval review died before it decided (DRE-3241) — a turn-ceiling death or a crash — so the children stay in Backlog until the CEO moves the epic to Green Light and approves it again.",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the planner's own two 🪦 death notes above: giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), not an emission change. Named here so the debt is countable rather than invisible. Its body belongs to scripts/plan_critic.py (`death_note`), and the machine-readable half is the tombstone posted alone right after it, which the sweep reads in its own grammar; a trailer here would be a second key for one death."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-death-record.txt\")\"",
+      "step": "Second critic — the review died",
+      "kind": "not-an-act",
+      "means": "The tombstone for a post-approval review that died (DRE-3241), posted alone because it is only a credential while nothing else shares its comment.",
+      "why": "A RECORD in its own grammar, the same shape and the same 'alone' rule as the round record above it: `plan_critic.parse_deaths` reads it only when the pipeline wrote it and the comment says nothing else. A second grammar in the same comment is exactly what that rule forbids, and the act-shaped half of this death is the note posted just before it."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"$(cat \"${{ runner.temp }}/one-off-note.md\")\"",
       "step": "One-off critic — decision",
       "kind": "not-an-act",

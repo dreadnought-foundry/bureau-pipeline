@@ -145,7 +145,7 @@ class CriticWalk(unittest.TestCase):
         # checkbox_marks.py: the one table of criterion marks both of those
         # read (DRE-3147) — same reason, one module further down.
         for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
-                     "checkbox_marks.py"):
+                     "checkbox_marks.py", "execution_result.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)
@@ -344,6 +344,94 @@ class CriticWalk(unittest.TestCase):
                     FINDING="no card manufactures the operator step", REPLAN_OUTCOME="failure")
         self.assertIn("state Green Light", self._log())
         self.assertIn("did not finish", self._thread()[-1])
+
+    # --- DRE-3241: the review itself dies -----------------------------------
+
+    def test_the_review_ceiling_is_sized_from_the_children(self):
+        """The activate route counts the children fresh and hands the review
+        a ceiling sized for them — fifteen cards get 80, a three-card plan
+        keeps the 40 it always had."""
+        self._shell("second critic — turn ceiling", STUB_KIDS="15")
+        self.assertEqual(self._outputs()["max_turns"], "80")
+        self._shell("second critic — turn ceiling", STUB_KIDS="3")
+        self.assertEqual(self._outputs()["max_turns"], "40")
+
+    def test_a_dead_review_leaves_a_tombstone_and_the_sweep_holds_on_it(self):
+        """2026-09-05 on DRE-3164, walked. Round 1 sends the plan back; the
+        CEO approves the revision; round 2 DIES at its ceiling. Before this
+        card the thread's newest record was round 1's send-back and every
+        sweep quoted it. Now the death is on the epic, the sweep reads it as
+        "died — not a rejection", nothing promotes, and the round the CEO's
+        re-approval buys is the one that counts."""
+        self._critic_writes("post", pc.SEND_BACK, "no card manufactures the operator step")
+        self._shell("second critic — decision")
+        self.assertEqual(pc.send_backs(self._thread(), pc.STAGE_POST), 1)
+
+        # The action's own record of the death, as claude-code-action writes
+        # it — the SAME file DRE-2924's QA gate reads.
+        exec_path = os.path.join(self.tmp, "claude-execution-output.json")
+        with open(exec_path, "w") as f:
+            json.dump([
+                {"type": "system", "subtype": "init"},
+                {"type": "result", "subtype": "error_max_turns", "is_error": True,
+                 "num_turns": 41, "total_cost_usd": 1.73, "duration_ms": 368298,
+                 "env": {"ANTHROPIC_API_KEY": "never-in-a-comment"}},
+            ], f)
+        self._shell("second critic — the review died", {
+            "${{ steps.posta.outputs.execution_file }}": exec_path,
+            "${{ steps.postturns.outputs.max_turns }}": "40",
+            "${{ github.run_id }}": "34008698027",
+            "${{ github.run_attempt }}": "2",
+        })
+
+        # Two comments: the note the CEO reads, then the tombstone alone.
+        note, record = self._thread()[-2], self._thread()[-1]
+        self.assertIn("did not finish", note)
+        self.assertIn("not a rejection", note)
+        self.assertIn(pc.REAPPROVE_HOW, note)
+        self.assertEqual(record, pc.death_marker(
+            "post", "34008698027", 2, "posta", "error_max_turns", 41, 40))
+        self.assertNotIn("never-in-a-comment", note + record)
+        # Nothing moved and nothing promoted: the job is red, the decision and
+        # the activation were never reached.
+        log = self._log()
+        self.assertNotIn("promote", log)
+        self.assertNotIn("state ", log)
+
+        # The sweep reads the same thread: died, not round 1's send-back.
+        state, detail = pc.post_release(self._thread(), EPIC)
+        self.assertEqual(state, pc.POST_DIED)
+        self.assertIn("34008698027", detail)
+        refusal = pc.promotion_refusal("DRE-9001", EPIC, "2026-09-10T12:04:00.000Z",
+                                       self._records())
+        self.assertEqual(pc.refusal_tag(refusal), pc.POST_DIED_TAG)
+        self.assertNotIn("operator step", refusal)
+        # ...and the dead round spent nothing of the bound.
+        self.assertEqual(pc.send_backs(self._thread(), pc.STAGE_POST), 1)
+
+        # The CEO moves the epic to Green Light and approves it; the review
+        # runs again and passes. It is round 2 — the death was never a round.
+        self._critic_writes("post", pc.PASS)
+        self._shell("second critic — decision")
+        out = self._outputs()
+        self.assertEqual((out["action"], out["round"]), ("proceed", "2"))
+        self.assertEqual(pc.post_release(self._thread(), EPIC)[0], pc.POST_RELEASED)
+        self.assertIsNone(pc.promotion_refusal(
+            "DRE-9001", EPIC, "2026-09-10T12:04:00.000Z", self._records()))
+
+    def test_a_dead_review_with_no_execution_file_still_leaves_a_tombstone(self):
+        """The action moved its output file once already (execution_result.py):
+        an unreadable file is unknown turns, not a second failure."""
+        self._shell("second critic — the review died", {
+            "${{ steps.posta.outputs.execution_file }}": "",
+            "${{ steps.postturns.outputs.max_turns }}": "80",
+            "${{ github.run_id }}": "1",
+            "${{ github.run_attempt }}": "1",
+        })
+        record = self._thread()[-1]
+        self.assertIn("turns=?", record)
+        self.assertIn("ceiling=80", record)
+        self.assertEqual(pc.post_release(self._thread(), EPIC)[0], pc.POST_DIED)
 
     def test_two_failed_rounds_after_approval_park_with_needs_human(self):
         """DRE-3088: the bound after approval PARKS. The old rail activated the
