@@ -67,14 +67,42 @@ on:
         type: string
         required: false
         default: ""
+      judgement:
+        description: >-
+          `on` runs the judged read (DRE-3150) — ONE model call over the whole
+          census. Anything else passes `--no-judgement` and sequences by the
+          rules alone, which is today's groomer byte-for-byte, so the two
+          readings can be compared on one population.
+        type: string
+        required: false
+        default: "on"
     secrets:
       LINEAR_API_KEY:
         required: true
+      # The judged read's credential (DRE-3153). A reusable workflow sees ONLY
+      # the secrets it declares — `secrets: inherit` on the calling stub passes
+      # nothing a block like this does not name — so without these two lines
+      # DRE-3150's one call is unreachable from the workflow that actually runs
+      # the groomer. Both OPTIONAL: `CLAUDE_AUTH_MODE` decides which of the two
+      # a repo sets, and requiring both would refuse every repo in the fleet.
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
 
 jobs:
   groom:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # READ OFF THE CALL'S OWN CEILING, not guessed (DRE-3153). DRE-3259 sizes
+    # the judged read's wall clock from the census and names the widest one as
+    # `groom_judgement.MAX_WALL_CLOCK_SECONDS` — `wall_clock_seconds(
+    # OUTPUT_CEILING)`, 860 s at the constants it fences. 20 covers that plus
+    # five minutes for the non-model work the step does (reading a 226-card
+    # lane, the context pack, the proposal comment); the 15 it replaces does
+    # not. `tests/test_groomer_wiring.py` asserts this number against that
+    # constant rather than restating either, so a card that raises the ceiling
+    # turns the build red instead of leaving the job killed mid-call.
+    timeout-minutes: 20
     concurrency:
       group: groomer
       cancel-in-progress: false
@@ -90,6 +118,19 @@ jobs:
       - name: Groom
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The judged read's credential (DRE-3153), gated on `CLAUDE_AUTH_MODE`
+          # exactly the way plan.yml's classify step gates it — one reading of
+          # which credential this run holds, and `planning_classify.api_key_mode`
+          # picks the transport off the credential rather than off a mode name,
+          # so a subscription token never reaches the raw Messages API
+          # (DRE-3074). The wiring test reads plan.yml's expression instead of
+          # restating it, so the two cannot drift apart.
+          #
+          # Wrapped in ONE extra guard: `drain` reads the approval and moves
+          # cards, it never judges, so that branch is handed no model
+          # credential at all.
+          ANTHROPIC_API_KEY: ${{ inputs.mode != 'drain' && (vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '') || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.mode != 'drain' && (vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '') || '' }}
           REPO: ${{ github.repository }}
           MODE: ${{ inputs.mode }}
           LANE: ${{ inputs.lane }}
@@ -98,6 +139,7 @@ jobs:
           PRIORITY: ${{ inputs.priority }}
           CARD: ${{ inputs.card }}
           INTAKE_HOLD: ${{ inputs.intake_hold }}
+          JUDGEMENT: ${{ inputs.judgement }}
         run: |
           set -euo pipefail
           # Every input through env, never interpolated into the shell line.
@@ -113,14 +155,50 @@ jobs:
           else
             POST=()
             if [ -n "$CARD" ]; then POST=(--post "$CARD"); fi
+            # Anything but `on` runs the rules alone — DRE-3150's own flag,
+            # unchanged, so the switch and the CLI are one contract.
+            JUDGE=()
+            if [ "$JUDGEMENT" != "on" ]; then JUDGE=(--no-judgement); fi
             python3 .bureau-pipeline/scripts/groomer.py propose \
-              "${SHAPING[@]}" "${POST[@]}" --out proposal.json | tee proposal.txt
+              "${SHAPING[@]}" "${JUDGE[@]}" "${POST[@]}" \
+              --out proposal.json | tee proposal.txt
           fi
           {
             echo "### Groomer — $MODE"
             echo
             cat proposal.txt
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The receipt (DRE-3153): which model answered, and what the one call
+      # cost. Same `🧠 model-attempt:` marker plan.yml posts for the planning
+      # classifier, so the ladder's readers find it without learning a second
+      # grammar — and composed by a Python reader over the proposal the step
+      # above already wrote, never assembled in YAML (DRE-3083: a receipt built
+      # in a shell string is a second answer to "which model answered" that
+      # nothing tests).
+      #
+      # The reader decides whether there is anything to post: no comment under
+      # `--no-judgement`, and none when no model was ever asked. It writes an
+      # EMPTY file rather than failing, so this step never turns a missing
+      # footnote into a red run over a proposal sitting on the card exactly as
+      # intended (Q5: `proposal.json` is written before anything is posted).
+      - name: Judgement receipt — the model that answered
+        if: ${{ inputs.mode != 'drain' && inputs.card != '' }}
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ inputs.card }}
+        run: |
+          set -euo pipefail
+          python3 .bureau-pipeline/scripts/groomer_receipt.py \
+            --proposal proposal.json --out receipt.txt
+          if [ -s receipt.txt ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py comment \
+              "$CARD" "$(cat receipt.txt)"
+            {
+              echo
+              cat receipt.txt
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Keep the proposal
         if: always()

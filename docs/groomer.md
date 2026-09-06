@@ -32,6 +32,35 @@ only then does anything leave Intake.
    and to when, what is recommended dead and what replaced it, and which repos
    are waiting and roughly how long.
 
+## The one ranked read
+
+Between steps 1 and 4 the run makes **one model call** over the whole census
+(`scripts/groom_judgement.py`, DRE-3150). The rules above are all facts about
+the *cards*; the call asks the one question they cannot answer — given what we
+are already doing, does this card belong in the next batch — and it asks it
+once, for the whole population, because a per-card read structurally cannot see
+the set.
+
+The switch is the workflow's `judgement` input, `on` by default. Anything else
+passes `--no-judgement` and sequences by the rules alone, which is the
+pre-DRE-3150 groomer byte-for-byte — so the two readings can be compared on one
+population.
+
+Since DRE-3153 the workflow that runs the groomer actually holds the
+credential: `groomer.yml` declares `ANTHROPIC_API_KEY` and
+`CLAUDE_CODE_OAUTH_TOKEN` and hands the Groom step whichever one
+`CLAUDE_AUTH_MODE` selects, exactly the way `plan.yml`'s classify step does. A
+reusable workflow sees only the secrets it declares, so `secrets: inherit` on
+the stub was never enough on its own. The `drain` branch is handed neither: it
+reads an approval and moves cards, and it does not judge.
+
+After a judged `propose` that had a card, the run posts one line to that card —
+the same `🧠 model-attempt:` marker the planning classifier posts, naming the
+model that answered, the call count, the output budget the call was sized with
+and whether the answer was cut short. It is composed by
+`scripts/groomer_receipt.py` over `proposal.json` and printed into the step
+summary as well.
+
 ## The order, applied top to bottom
 
 CEO decision, 2026-09-04: **14 days, creation date** (DRE-3096). The batch is
