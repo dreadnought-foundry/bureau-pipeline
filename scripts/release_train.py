@@ -9,17 +9,36 @@ rule is testable without a token, a runner or a tag push
 (`tests/test_release_train.py`).
 
 WHAT A TRAIN DOES, IN ONE PARAGRAPH. A caller's `.github/bureau/release.json`
-declares its surfaces. On every push to the default branch, on the 07:00 PT
-schedule, and on a hand dispatch, the train reads that file at the head of the
-branch at that moment — the COLLAPSE rule, stated once here because it is the
-only reason two pushes a minute apart produce one release: a run releases the
-head of the branch when it started, not the commit that triggered it, and the
-per-surface concurrency lane holds the second run behind the first. For each
-declared surface it decides, and where the decision is `release` it runs the
-surface's own script under the caller's own identity and verifies the tag the
-script cut. **The tag IS the receipt** — deploy-lag reads the newest tag in
-each surface's series and the console's Shipped-today panel reads commit
-ancestry against it, so nothing here writes a second record.
+declares its surfaces. Every time CI completes on the default branch, on the
+07:00 PT schedule, and on a hand dispatch, the train reads that file at the
+commit it was handed — the SHA CI ran on for a CI-completion run, the head of
+the branch at that moment otherwise. The COLLAPSE rule, stated once here
+because it is the only reason two pushes a minute apart produce one release:
+the per-surface concurrency lane holds the second run behind the first, and
+the second reads current if the first released a commit that already contains
+its own. For each declared surface it decides, and where the decision is
+`release` it runs the surface's own script under the caller's own identity
+and verifies the tag the script cut. **The tag IS the receipt** — deploy-lag
+reads the newest tag in each surface's series and the console's Shipped-today
+panel reads commit ancestry against it, so nothing here writes a second
+record.
+
+THE TRAIN IS NEVER STOPPED (DRE-3263, the CEO's rule of 2026-09-06). If the
+commit is ready it goes; if it is not, the train leaves without it and the
+next train picks it up. Two things follow. First, only the checks that GATE A
+MERGE are checks on the commit — the set the merge gate reads, taken from
+`merge_gate.gating_check_runs` and never restated here. A fix agent on an
+unrelated PR, the medic, the sweep and the train's own run all report check
+runs against the default branch's head because that is the ref GitHub runs
+them on; they are ignored by verified origin (the producing workflow's event
+and path, from GitHub's own record — never a name, which for every reusable
+stub is just `call / <job>`). On 2026-09-06 11:36 PT the console's first
+supervised release sat waiting on `call / fix PR #2325` and `call / fix PR
+#2328`, and that is the fixture. Second, a PENDING gating check is not waited
+for: the surface is a no-op that names it, exit 0, no tag, no alert — and the
+trigger that makes this true is CI completing on main (the stub's
+`workflow_run` on CI), because a push fires before that commit's CI has
+started and every push-run would find it pending.
 
 THE ORDER THE RULES ARE READ, and why it is not the order the card's sentence
 lists them in. The brake comes first and CI comes LAST of the gates:
@@ -32,25 +51,26 @@ lists them in. The brake comes first and CI comes LAST of the gates:
                                   newest tag, so there is nothing to release
   6. spacing                    — the newest tag in the series is too recent
   7. window                     — the PT clock is outside the surface's hours
-  8. green-at-SHA               — every check run on the head SHA is green
+  8. green-at-SHA               — every GATING check run on the SHA is green
 
 Rules 2-7 are answered from the caller's own checkout and the clock; rule 8
-costs a checks-API read and, on a run whose build has not finished, up to
-thirty minutes of waiting. Asking it first would make every push to a busy
-trunk wait half an hour to discover that nothing changed under any surface's
-paths, and would raise a REFUSAL about a release nobody was going to make.
-So the workflow asks the same `decide()` twice: once optimistically, to build
-the matrix (no surface with nothing to release ever waits for a check), and
-once for real inside the surface's own concurrency lane. One function, one set
-of rules, asked twice — never two copies of the order.
+costs two API reads (the check runs, and the workflow-runs record that says
+which of them gate). Asking it first would spend those reads on every trigger
+to discover that nothing changed under any surface's paths, and would raise a
+REFUSAL about a release nobody was going to make. So the workflow asks the
+same `decide()` twice: once optimistically, to build the matrix (no surface
+with nothing to release ever reads a check), and once for real inside the
+surface's own concurrency lane. One function, one set of rules, asked twice —
+never two copies of the order.
 
 A REFUSAL IS LOUD AND A NO-OP IS NOT. `no-op` and `held` conclude the job
-`success`: they are the train working. `refuse` exits non-zero — a red SHA, a
-check still pending after thirty minutes, a script that failed, a script that
-rolled out and cut no tag. And a script that exits 0 printing one
-`deferred: <reason>` line is a NO-OP reported verbatim, never a failure: the
-deployment is owed to a person, deploy-lag goes on reading BEHIND until they
-do it, and nothing alerts.
+`success`: they are the train working — and since DRE-3263 that includes a
+gating check still running, which is `not ready` and the next train's
+business. `refuse` exits non-zero — a red gating check, a SHA no gating
+check has reported on, a script that failed, a script that rolled out and cut
+no tag. And a script that exits 0 printing one `deferred: <reason>` line is a
+NO-OP reported verbatim, never a failure: the deployment is owed to a person,
+deploy-lag goes on reading BEHIND until they do it, and nothing alerts.
 
 THE BRAKE. `RELEASE_HOLD` is read exactly the way `INTAKE_HOLD` is read —
 through `intake_controls.hold()`, which is why the empty string is the
@@ -72,7 +92,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
@@ -95,15 +114,19 @@ TAG = "release-train"
 #: function, empty-string semantics included.
 ENV_HOLD = "RELEASE_HOLD"
 
-#: How long a still-running check is waited for before the train refuses and
-#: names it. A check that has FAILED or is ABSENT is never waited for.
-CHECK_WAIT_MINUTES = 30
-POLL_SECONDS = 30
-
 #: What "green" means, taken from the merge gate rather than restated: one
 #: name for one fact. `skipped` and `neutral` are green there because half
 #: this fleet's jobs conclude that way on purpose.
 GREEN_CONCLUSIONS = merge_gate.GREEN_CONCLUSIONS
+
+#: Which check runs on a SHA are checks OF it — the merge gate's classifier,
+#: not a copy (DRE-3263). The train adds exactly one path to the gate's
+#: excluded set: its own stub in the caller, because a train run sits on the
+#: SHA it is releasing and its own `Release <surface>` job must never read
+#: as a pending check.
+gating_check_runs = merge_gate.gating_check_runs
+TRAIN_WORKFLOW = ".github/workflows/release-train.yml"
+IGNORED_WORKFLOWS = merge_gate.DEFAULT_REVIEW_WORKFLOWS + (TRAIN_WORKFLOW,)
 
 #: Where a caller declares its surfaces, and where this repo declares its own.
 DATA_PATH = ".github/bureau/release.json"
@@ -225,14 +248,35 @@ class Decision(NamedTuple):
 
 
 class Checks(NamedTuple):
-    """Green-at-SHA, as one answer plus the detail that names the check."""
+    """Green-at-SHA, as one answer plus the detail that names the check —
+    and, since DRE-3263, what was read and what was ignored, so a run's log
+    shows why it decided what it did."""
 
     state: str   # green | red | pending | absent
     detail: str
+    read: tuple = ()      # the names of the gating check runs that counted
+    ignored: tuple = ()   # (name, producing workflow path) for each ignored
+
+    def describe(self) -> str:
+        """One clause naming the checks read and the runs ignored, grouped
+        by the workflow file that produced them — 148 names is not a line
+        anyone reads, six file names is."""
+        read = (f"read {len(self.read)} gating check runs: "
+                + ", ".join(f"`{name}`" for name in self.read)
+                if self.read else "read no gating check run")
+        if not self.ignored:
+            return f"{read}; ignored nothing"
+        by_path: dict[str, int] = {}
+        for _, path in self.ignored:
+            by_path[path or "?"] = by_path.get(path or "?", 0) + 1
+        files = ", ".join(f"{p.rsplit('/', 1)[-1]} ({n})"
+                          for p, n in sorted(by_path.items()))
+        return (f"{read}; ignored {len(self.ignored)} check runs the commit "
+                f"did not trigger, from {files}")
 
 
-#: What `plan()` assumes so that no surface with nothing to release ever waits
-#: for a check run. The surface's own job asks the checks API for real.
+#: What `plan()` assumes so that no surface with nothing to release ever reads
+#: a check run. The surface's own job asks the checks API for real.
 ASSUMED_GREEN = Checks("green", "assumed green — the surface's own job asks "
                                 "the checks API before anything runs")
 
@@ -373,61 +417,70 @@ def _window_ok(window) -> bool:
 # Green-at-SHA
 # ---------------------------------------------------------------------------
 
-def read_checks(check_runs) -> Checks:
-    """One answer from a `commits/{sha}/check-runs` payload.
+def read_checks(check_runs, workflow_runs=None) -> Checks:
+    """One answer from a `commits/{sha}/check-runs` payload and the
+    `actions/runs?head_sha=` record that says which of those runs gate.
 
-    A FAILED or ABSENT check is a refusal, never a wait (addendum item 3):
-    waiting for a check that has already answered is how a train sits for
-    thirty minutes and then says the thing it knew at the start.
+    Only the GATING check runs are checks (DRE-3263): the classifier is the
+    merge gate's, and the train excludes its own workflow on top. A FAILED
+    or ABSENT gating check is a refusal, never a wait; a PENDING one is
+    reported as pending and `decide()` makes it a no-op — nothing here ever
+    waits. With no workflow-runs record at all nothing can be attributed,
+    so nothing is ignored: fail closed, and the next train re-reads.
     """
-    runs = list(check_runs or [])
-    if not runs:
-        return Checks("absent", "no check run has reported on the head SHA")
+    counted, ignored = gating_check_runs(
+        list(check_runs or []), list(workflow_runs or []), IGNORED_WORKFLOWS)
+    read = tuple(r.get("name") for r in counted)
+    skipped = tuple((r.get("name"), path) for r, path in ignored)
+    if not counted:
+        return Checks("absent", "no gating check run has reported on the SHA",
+                      read, skipped)
 
-    failed = [r for r in runs
+    failed = [r for r in counted
               if (r.get("status") == "completed"
                   and (r.get("conclusion") or "") not in GREEN_CONCLUSIONS)]
     if failed:
         return Checks("red", ", ".join(
             f"`{r.get('name')}` concluded {r.get('conclusion') or 'nothing'}"
-            for r in failed))
+            for r in failed), read, skipped)
 
-    pending = [r for r in runs if r.get("status") != "completed"]
+    pending = [r for r in counted if r.get("status") != "completed"]
     if pending:
         return Checks("pending", ", ".join(
-            f"`{r.get('name')}` is still {r.get('status')}" for r in pending))
+            f"`{r.get('name')}` is still {r.get('status')}" for r in pending),
+            read, skipped)
 
-    return Checks("green", f"{len(runs)} check runs green at the head SHA")
-
-
-def poll_checks(fetch, *, elapsed, sleep, timeout_minutes=CHECK_WAIT_MINUTES,
-                interval_seconds=POLL_SECONDS) -> Checks:
-    """Wait out a check that is still running, and only that.
-
-    Returns as soon as the answer is settled. A still-pending answer at the
-    deadline is returned AS pending, so the refusal names the check that was
-    running rather than reporting a timeout nobody can act on.
-    """
-    while True:
-        checks = read_checks(fetch())
-        if checks.state != "pending":
-            return checks
-        if elapsed() >= timeout_minutes:
-            return checks
-        sleep(interval_seconds)
+    return Checks("green", f"{len(counted)} gating check runs green at the SHA",
+                  read, skipped)
 
 
-def fetch_checks(repo: str, sha: str) -> list:
-    """Every check run on the head SHA, from GitHub."""
+def _gh_lines(path: str, jq: str, what: str, sha: str) -> list:
+    """`gh api --paginate` streamed one JSON object per line — a bare
+    paginate concatenates whole pages into one unparseable blob."""
     out = subprocess.run(
-        ["gh", "api", "--paginate",
-         f"repos/{repo}/commits/{sha}/check-runs",
-         "--jq", ".check_runs[] | {name, status, conclusion}"],
+        ["gh", "api", "--paginate", path, "--jq", jq],
         capture_output=True, text=True,
     )
     if out.returncode != 0:
-        raise RuntimeError(f"gh could not read the checks on {sha}: {out.stderr.strip()}")
+        raise RuntimeError(f"gh could not read {what} on {sha}: {out.stderr.strip()}")
     return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
+
+
+def fetch_checks(repo: str, sha: str) -> Checks:
+    """Green-at-SHA from GitHub, read ONCE: the check runs on the SHA and the
+    workflow-runs record that ties each check suite to the workflow file and
+    event that produced it — the two payloads the merge gate reads, in the
+    same shapes. There is no loop and no wait; a pending answer is a pending
+    answer."""
+    check_runs = _gh_lines(
+        f"repos/{repo}/commits/{sha}/check-runs",
+        ".check_runs[] | {name, status, conclusion, check_suite: {id: .check_suite.id}}",
+        "the checks", sha)
+    workflow_runs = _gh_lines(
+        f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100",
+        ".workflow_runs[] | {id, name, path, event, status, conclusion, check_suite_id}",
+        "the workflow runs", sha)
+    return read_checks(check_runs, workflow_runs)
 
 
 # ---------------------------------------------------------------------------
@@ -519,26 +572,34 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
     checks = ci_green if isinstance(ci_green, Checks) else (
         Checks("green", "the caller said so") if ci_green is True
         else Checks("red", "CI at the head SHA did not conclude success"))
+    if checks.state == "pending":
+        # The train is never stopped (DRE-3263): a gating check still running
+        # is not waited for. The commit is not ready, this run leaves without
+        # it, and the run CI completion triggers picks it up.
+        return Decision(
+            NO_OP, "ci-pending",
+            f"{surface.name} is not ready — {checks.detail}; the next run "
+            f"takes it ({checks.describe()})")
     if checks.state != "green":
         return Decision(REFUSE, f"ci-{checks.state}", _ci_refusal(checks))
 
     # The checks detail rides along on purpose: the matrix pass asks with CI
     # ASSUMED green, and a plan line that claimed the checks API had answered
     # would be the one sentence in this file that is not true.
+    said = checks.detail if checks is ASSUMED_GREEN else (
+        f"{checks.detail}; {checks.describe()}")
     return Decision(
         RELEASE, "release",
         f"{surface.name} is behind and the spacing has elapsed — releasing "
-        f"({checks.detail})")
+        f"({said})")
 
 
 def _ci_refusal(checks: Checks) -> str:
     if checks.state == "absent":
-        return ("no check has run on the head SHA, and an absent check is a "
-                "refusal, never a wait — nothing proves this commit")
-    if checks.state == "pending":
-        return (f"a check on the head SHA was still pending after "
-                f"{CHECK_WAIT_MINUTES} minutes: {checks.detail}")
-    return f"CI at the head SHA is not green: {checks.detail}"
+        return ("no gating check has run on the SHA, and an absent check is a "
+                f"refusal, never a wait — no check proves this commit "
+                f"({checks.describe()})")
+    return f"CI at the SHA is not green: {checks.detail} ({checks.describe()})"
 
 
 def window_bounds(window: str):
@@ -602,9 +663,21 @@ def lag_state(repo_root, tag, sha, paths) -> str:
 
     No tag at all is BEHIND — the first release of a surface is exactly the
     case a "nothing changed" reading would silently swallow.
+
+    A SHA the newest tag already CONTAINS is current (DRE-3263): the
+    CI-completion trigger hands the train the commit CI ran on, which is
+    older than the newest tag whenever a slow CI on X finishes after Y was
+    released. `diff Y..X` is non-empty in the reverse direction and would
+    read X as behind — and tag backwards.
     """
     if not tag:
         return "behind"
+    contained = subprocess.run(
+        ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", sha, tag],
+        capture_output=True, text=True,
+    )
+    if contained.returncode == 0:
+        return "current"
     args = ["diff", "--name-only", f"{tag}..{sha}"]
     if paths:
         args += ["--", *paths]
@@ -693,7 +766,7 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
     `checks` may be a `Checks` or a callable that produces one. It is only
     called when the local rules have already said this surface would release:
     a job that queued behind another release and now reads current must not
-    spend thirty minutes waiting for a check run to tell it the same thing.
+    spend two API reads to be told the same thing.
     """
     tag, tag_at = newest_tag(repo_root, surface.tag_series)
     lag = lag_state(repo_root, tag, sha, surface.paths)
@@ -714,7 +787,7 @@ def plan(data, *, repo_root, sha, now, brake=None, dispatched_surface=None):
     """Every declared surface and what the train would do about it.
 
     Asked with CI assumed green, so a surface with nothing to release never
-    waits on a check run (see the module docstring's ordering note). A hand
+    reads a check run (see the module docstring's ordering note). A hand
     dispatch narrows the plan to the one surface it names.
     """
     out = []
@@ -794,6 +867,62 @@ def render_markdown() -> str:
         "set it and what the surface script owes."
     )
     w("")
+    w("## The trigger, and what the stub must declare")
+    w("")
+    w(
+        "**The train is never stopped** (DRE-3263, the CEO's rule of "
+        "2026-09-06). If the commit is ready it goes; if it is not, the train "
+        "leaves without it and the next train picks it up. A gating check "
+        "still running is therefore a `no-op` that names it — never a wait, "
+        "never a refusal — and the run that picks the commit up is the one "
+        "fired by CI completing on the default branch. A `push` fires BEFORE "
+        "that commit's CI has started, so a push-triggered stub would find CI "
+        "pending on every run and release only from the schedule. The stub in "
+        "every caller (`.github/workflows/release-train.yml`) must declare "
+        "exactly this:"
+    )
+    w("")
+    w("```yaml")
+    w("on:")
+    w("  workflow_run:")
+    w('    workflows: ["CI"]')
+    w("    types: [completed]")
+    w("    branches: [main]")
+    w("  schedule:")
+    w('    - cron: "0 15 * * *"')
+    w('    - cron: "0 14 * * *"')
+    w("  workflow_dispatch:")
+    w("    inputs:")
+    w("      surface:")
+    w("        type: string")
+    w("        required: false")
+    w('        default: ""')
+    w("```")
+    w("")
+    w(
+        "`workflows: [\"CI\"]` is the `name:` of the caller's CI workflow, "
+        "and `branches: [main]` is the branch that CI ran on. On that event "
+        "the reusable workflow reads the commit from "
+        "`github.event.workflow_run.head_sha` and proceeds only when "
+        "`github.event.workflow_run.conclusion` is `success`; a CI run that "
+        "concluded anything else is a `no-op` that says so, and the commit "
+        "waits for the repair the medic files. The schedule and the hand "
+        "dispatch read the head of the branch at that moment, as before."
+    )
+    w("")
+    w(
+        f"Which check runs on the commit COUNT is decided in one place — "
+        "`merge_gate.gating_check_runs`, the same classifier the merge gate's "
+        "all-green rule rests on. A check run counts when GitHub's own "
+        "workflow-runs record says the commit itself triggered it (`push`, "
+        "`pull_request`, `pull_request_target`) and it is not a review "
+        "workflow or the train's own stub; a fix agent, the medic, the sweep, "
+        "a hand dispatch and the train's own run all report against the "
+        "default branch's head without being about it, and are ignored by "
+        "that origin — never by name. Every no-op and refusal line names what "
+        "was read and what was ignored, by producing workflow file."
+    )
+    w("")
     return "\n".join(out)
 
 
@@ -813,9 +942,13 @@ _ORDER = (
                        "`spacing_minutes`"),
     ("window", NO_OP, "the America/Los_Angeles clock is outside the window; a "
                       "hand dispatch runs anyway"),
-    ("ci-red / ci-absent / ci-pending", REFUSE,
-     f"a check on the head SHA failed, never ran, or was still pending after "
-     f"{CHECK_WAIT_MINUTES} minutes — named in the refusal"),
+    ("ci-pending", NO_OP, "a gating check on the SHA is still running — the "
+                          "commit is not ready, the train leaves without it, "
+                          "and the run CI completion fires takes it (never a "
+                          "wait: the train is never stopped)"),
+    ("ci-red / ci-absent", REFUSE,
+     "a gating check on the SHA failed, or no gating check has reported on "
+     "it — named in the refusal, with what was read and what was ignored"),
     ("deferred", NO_OP, "the script exited 0 printing `deferred: …` — the "
                         "deployment is owed to a person, and that is not a "
                         "failure"),
@@ -871,16 +1004,11 @@ def _cmd_release(args) -> int:
     if entry is None:
         print(f"{TAG}: {args.file} declares no surface {args.surface!r}")
         return 1
-    started = datetime.now(tz=PT)
     try:
         decision = release(
             entry, repo=args.repo, repo_root=args.repo_root, sha=args.sha,
-            now=started, brake=brake(), dispatched=args.dispatched,
-            checks=lambda: poll_checks(
-                lambda: fetch_checks(args.repo, args.sha),
-                elapsed=lambda: (datetime.now(tz=PT) - started).total_seconds() / 60,
-                sleep=time.sleep,
-            ),
+            now=datetime.now(tz=PT), brake=brake(), dispatched=args.dispatched,
+            checks=lambda: fetch_checks(args.repo, args.sha),
         )
     except RuntimeError as err:
         # FAIL CLOSED. An unreadable answer is not a green one — the same rule

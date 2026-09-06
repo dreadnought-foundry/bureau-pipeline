@@ -8,13 +8,39 @@
 # GitHub (tests/test_release_train.py) — the promote-channel.yml shape. This
 # file only gathers GitHub's records and acts on the verdict.
 #
+# THE TRAIN IS NEVER STOPPED (DRE-3263, the CEO's rule of 2026-09-06): if the
+# commit is ready it goes; if not, the train leaves without it and the next
+# train picks it up. A gating check still running is a no-op that names it,
+# never a wait — and only the checks that GATE A MERGE are checks (a fix
+# agent, the medic, the sweep and this train's own run all report against
+# main's head; they are ignored by verified origin). The trigger that makes
+# the rule true is CI COMPLETING on the default branch, so the stub in every
+# caller must declare, in place of `push`:
+#
+#   on:
+#     workflow_run:
+#       workflows: ["CI"]        # the `name:` of the caller's CI workflow
+#       types: [completed]
+#       branches: [main]
+#     schedule:                  # the two cron lines, unchanged
+#       - cron: "0 15 * * *"
+#       - cron: "0 14 * * *"
+#     workflow_dispatch:         # the `surface` input, unchanged
+#
+# On that event this workflow reads the commit from
+# `github.event.workflow_run.head_sha` and proceeds only when
+# `github.event.workflow_run.conclusion` is `success`. A `push`-triggered stub
+# still works, but fires before that commit's CI has started and will find it
+# pending on every run — releasing only from the schedule.
+#
 # THE VENDOR PREMORTEM (standards/vendor-boundaries.md), answered here because
 # this workflow is nothing but boundary:
 #
-#   Q1 WHO INITIATES. The stub's `push` and `schedule` runs initiate as the
-#      caller repo itself; a `workflow_dispatch` initiates as whoever ran it.
-#      No actor gate is involved — this workflow admits every actor, because
-#      the gates that matter are green-at-SHA and the brake, not identity.
+#   Q1 WHO INITIATES. The stub's `workflow_run` (CI completing on main) and
+#      `schedule` runs initiate as the caller repo itself; a
+#      `workflow_dispatch` initiates as whoever ran it. No actor gate is
+#      involved — this workflow admits every actor, because the gates that
+#      matter are green-at-SHA and the brake, not identity.
 #   Q2 WHICH SECRETS STORE. The caller's. `RELEASE_ROLE_ARN` is the caller's
 #      OWN OIDC role, so a repo can only ever deploy itself; the two Linear
 #      keys are optional and pass through to the script's environment. NOTE
@@ -24,8 +50,10 @@
 #      (standards/release-train.md says so where an operator will read it).
 #   Q3 RETRY / RE-RUN. A re-run re-reads the tags: the surface it already
 #      released now reads current and is a no-op. The concurrency lane below
-#      is per surface and never cancels, so a second push queues behind the
-#      first rather than racing it for the same tag.
+#      is per surface and never cancels, so a second CI completion queues
+#      behind the first rather than racing it for the same tag — and a
+#      commit the newest tag already contains reads current, so a slow CI
+#      on an older commit never tags backwards.
 #   Q4 COMMAND LIMITS. GitHub's `schedule:` takes UTC only and has no timezone
 #      field, which is why the stub carries two cron lines and the TRAIN reads
 #      the clock in America/Los_Angeles.
@@ -71,9 +99,11 @@ on:
         required: false
 
 jobs:
-  # The head of the branch at the moment the run starts — the COLLAPSE rule —
-  # and every surface's decision made against it. The brake is read HERE, so a
-  # held fleet says so once per surface and no surface job is ever created.
+  # The commit this run is about — the SHA CI ran on for a CI-completion run,
+  # the head of the branch at the moment the run starts otherwise (the
+  # COLLAPSE rule) — and every surface's decision made against it. The brake
+  # is read HERE, so a held fleet says so once per surface and no surface job
+  # is ever created.
   plan:
     name: Plan the surfaces
     runs-on: ubuntu-latest
@@ -86,8 +116,14 @@ jobs:
       # surface's series and diffs the surface's paths since it. A shallow
       # checkout has neither the tags nor the history, and would report every
       # surface BEHIND on every trigger.
+      #
+      # On a `workflow_run` event (DRE-3263) the ref is the commit CI ran on,
+      # not the default branch's head — the default for that event — so the
+      # run releases exactly the commit whose CI just concluded. Empty on
+      # every other event, which is actions/checkout's own default.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
           fetch-depth: 0
 
       - uses: actions/checkout@v7
@@ -111,8 +147,27 @@ jobs:
           # Through env, never interpolated into the shell line — the tests.yml
           # rule: a crafted dispatch input must not become shell input.
           SURFACE: ${{ inputs.surface }}
+          # The CI-completion event (DRE-3263): the commit CI ran on and how
+          # it concluded. Both empty on the schedule and on a dispatch.
+          EVENT: ${{ github.event_name }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
+          # A CI run that concluded anything but success is a no-op that says
+          # so — in the step's own shell, not a job-level `if:`, because a
+          # skipped job says nothing and this run's log has to. The commit
+          # waits for the repair the medic files; the train is never stopped.
+          if [ "$EVENT" = "workflow_run" ] && [ "$CI_CONCLUSION" != "success" ]; then
+            echo "release-train: no-op $GITHUB_REPOSITORY — CI on ${CI_SHA:0:7} concluded ${CI_CONCLUSION:-nothing}; the train leaves without it"
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+            echo "sha=$CI_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           SHA=$(git rev-parse HEAD)
+          if [ "$EVENT" = "workflow_run" ] && [ -n "$CI_SHA" ] && [ "$SHA" != "$CI_SHA" ]; then
+            echo "release-train: refuse $GITHUB_REPOSITORY — checked out $SHA but CI ran on $CI_SHA"
+            exit 1
+          fi
           python3 .bureau-pipeline/scripts/release_train.py \
             --repo "$GITHUB_REPOSITORY" plan \
             --sha "$SHA" --surface "$SURFACE"
@@ -165,10 +220,16 @@ jobs:
           role-session-name: release-train-${{ matrix.surface }}
           aws-region: ${{ inputs.aws_region }}
 
-      # Waits out a pending check (30 minutes, then refuses naming it),
-      # decides with the real answer, runs the surface's script, and verifies
-      # the annotated tag it cut. A no-op and a deferral exit 0; a refusal and
-      # a failed script exit non-zero.
+      # Reads green-at-SHA ONCE — the check runs on the commit plus the
+      # workflow-runs record that says which of them gate (DRE-3263: only the
+      # merge gate's set counts; a fix agent, the medic, the sweep and this
+      # train's own run are ignored by verified origin, and the line says
+      # what was read and what was ignored). A gating check still running is
+      # a no-op that names it — the train is never stopped; the run CI
+      # completion fires takes the commit. Then decides with the real answer,
+      # runs the surface's script, and verifies the annotated tag it cut. A
+      # no-op and a deferral exit 0; a refusal and a failed script exit
+      # non-zero.
       - name: Run the surface
         env:
           GH_TOKEN: ${{ github.token }}

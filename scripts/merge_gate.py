@@ -239,6 +239,21 @@ DEFAULT_REVIEW_WORKFLOWS = (
     ".github/workflows/pr-review.yml",  # bureau-pipeline's own critic
 )
 
+# The events whose runs are checks OF a commit — the ones the commit itself
+# triggered (DRE-3263). On a PR head every run is one of these, so condition
+# 1 never needed to ask. On the DEFAULT branch's head the same SHA also
+# carries every `workflow_run` / `issue_comment` / `workflow_dispatch` /
+# `schedule` / `repository_dispatch` run in the repository — a fix agent on
+# an unrelated PR, the medic, the sweep — because that is the ref GitHub
+# runs them on. Those runs say nothing about the commit, and the release
+# train's green-at-SHA read them as pending: on 2026-09-06 11:36 PT the
+# console's first supervised release waited on `call / fix PR #2325` and
+# `call / fix PR #2328`. `gating_check_runs` below is the ONE classifier the
+# gate and the train share, and it reads the event from GitHub's own
+# workflow-runs record — never a check's name, which for every reusable
+# stub is just `call / <job>`.
+COMMIT_EVENTS = frozenset({"push", "pull_request", "pull_request_target"})
+
 # Green = completed with a conclusion GitHub treats as non-blocking.
 GREEN_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
 
@@ -358,6 +373,48 @@ def review_suite_ids(workflow_runs, review_workflows) -> frozenset:
         if r.get("path") in review_workflows
         and r.get("check_suite_id") is not None
     )
+
+
+def gating_check_runs(check_runs, workflow_runs,
+                      excluded_workflows=DEFAULT_REVIEW_WORKFLOWS):
+    """Split a SHA's check runs into the ones that gate and the ones that do
+    not: `(counted, ignored)`, where each ignored entry is `(check_run,
+    path)` naming the workflow FILE that produced it (DRE-3263).
+
+    A check run is IGNORED when GitHub's own workflow-runs record ties its
+    check suite to a run that either sits at an excluded path (the review
+    workflows — the critic's verdict COMMENT is its record, condition 2 —
+    and whatever the caller adds, e.g. the release train's own file) or was
+    triggered by an event outside `COMMIT_EVENTS` (a fix agent, the medic,
+    the sweep, a hand dispatch: runs that happen ON the default branch's
+    head without being ABOUT it). Everything else COUNTS, including a check
+    run with no suite or whose suite is absent from the record — the same
+    fail-closed direction `evaluate_checks` takes: an empty origin record
+    excludes nothing.
+
+    On a PR head every run's event is in `COMMIT_EVENTS`, so this reduces
+    exactly to condition 1's rule (pinned in
+    tests/test_merge_gate_check_origin.py); the gate keeps calling
+    `evaluate_checks` and the train calls this — one set, read from here.
+    """
+    excluded = frozenset(excluded_workflows)
+    by_suite = {
+        r["check_suite_id"]: r
+        for r in workflow_runs
+        if r.get("check_suite_id") is not None
+    }
+    counted, ignored = [], []
+    for run in check_runs:
+        origin = by_suite.get((run.get("check_suite") or {}).get("id"))
+        if origin is None:
+            counted.append(run)
+        elif origin.get("path") in excluded:
+            ignored.append((run, origin.get("path")))
+        elif origin.get("event") not in COMMIT_EVENTS:
+            ignored.append((run, origin.get("path")))
+        else:
+            counted.append(run)
+    return counted, ignored
 
 
 def dependabot_update_types(commits) -> list:
