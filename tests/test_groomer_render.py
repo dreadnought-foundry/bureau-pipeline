@@ -133,6 +133,16 @@ def test_the_not_now_section_groups_one_trigger_shared_by_four_cards():
     )
     for identifier in ("DRE-3", "DRE-4", "DRE-5", "DRE-6"):
         assert identifier in body, f"{identifier} is deferred and unnamed"
+    # …and EVERY trigger the rows carry is on the page with its own count, not
+    # just the one the model wrote.
+    counts: dict = {}
+    for row in proposal["outcomes"]["not-now"]:
+        counts[row["trigger"]] = counts.get(row["trigger"], 0) + 1
+    assert counts, "the fixture deferred nothing"
+    for trigger, count in counts.items():
+        assert f"{trigger} — {count} card" in body, (
+            f"the trigger {trigger!r} is not reported with its count"
+        )
 
 
 def test_the_window_receipt_still_reports_the_cards_no_trigger_reaches():
