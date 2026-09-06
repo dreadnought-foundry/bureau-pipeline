@@ -68,7 +68,9 @@ line — copy it as it stands:
 name: Release Train
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   schedule:
     - cron: "0 15 * * *"
@@ -84,6 +86,7 @@ on:
 permissions:
   id-token: write
   contents: write
+  checks: read
   actions: read
 
 jobs:
@@ -98,8 +101,25 @@ jobs:
       surface: ${{ inputs.surface }}
 ```
 
+**The train is never stopped, and that is why the trigger is CI completing —
+not the push (DRE-3263, the CEO's rule of 2026-09-06).** If the commit is
+ready it goes; if it is not, the train leaves without it and the next train
+picks it up. A gating check still running is a no-op that names it — never a
+wait, never a refusal. A `push` fires BEFORE that commit's CI has started, so
+a push-triggered stub would find CI pending on every run and release only from
+the schedule; `workflow_run` on the caller's CI workflow (`workflows: ["CI"]`
+is its `name:`), `types: [completed]`, `branches: [main]` fires the moment the
+commit's checks have answered. On that event the train reads the commit from
+`github.event.workflow_run.head_sha` and proceeds only when the CI run
+concluded `success`. Only the checks that GATE A MERGE count — the merge
+gate's own set, read from one place; a fix agent, the medic, the sweep and the
+train's own run on the same SHA are ignored by verified origin, and every
+no-op and refusal names what was read and what was ignored. `checks: read` is
+the permission green-at-SHA reads `commits/{sha}/check-runs` with; `actions:
+read` is the workflow-runs record that says which of those runs gate.
+
 **No `paths:` filter, deliberately.** YAML cannot read the data, so the stub
-fires on every push to the default branch and the TRAIN does the path
+fires on every CI completion on the default branch and the TRAIN does the path
 filtering: a surface whose declared `paths` are untouched since its newest tag
 reads current and is a no-op that says so.
 
@@ -122,6 +142,8 @@ through to the script's environment.
 Run the stub by hand with `surface: <name>` on a surface whose `auto` is
 false. That runs the one surface, outside its window, with a person watching.
 It bypasses nothing else: not green-at-SHA, not the spacing, and not the brake.
+If a gating check on the head is still running, the dispatch is a no-op that
+names it — dispatch again once CI has answered.
 
 ## The fleet-wide brake
 

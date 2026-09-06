@@ -18,12 +18,25 @@ and the 2026-09-05 addendum:
 
   * a hand dispatch runs an `auto: false` surface outside its window, and
     still refuses on a red SHA and on the brake;
-  * a pending check is waited for and refused after 30 minutes, named;
   * a script that exits 0 printing `deferred: …` is a no-op, no tag, no
     failure;
   * a surface whose `paths` are untouched since its newest tag is a no-op;
   * the two scheduled firings decide by the `America/Los_Angeles` clock — the
     06:00 PST one names the window, the 08:00 PDT one is an ordinary run.
+
+and DRE-3263, the CEO's rule of 2026-09-06 — THE TRAIN IS NEVER STOPPED:
+
+  * only the checks that gate a merge are checks on the commit — the set is
+    the merge gate's, read from one place; a fix agent, the medic, the sweep
+    and the train's own runs on the SHA are ignored by verified origin;
+  * a pending gating check is NOT waited for: the surface is a no-op that
+    names it, and the next train (CI completing on main) picks the commit
+    up. The thirty-minute wait and its refusal are gone;
+  * a RED gating check still refuses, and a SHA with no gating check at all
+    still refuses — never a wait;
+  * the no-op and refuse lines name what was read and what was ignored;
+  * the stub fires on CI completion, and the reusable workflow reads the SHA
+    from that event.
 
 The end-to-end leg builds a REAL git repository in a temp directory, with a
 real surface script that cuts a real annotated tag, and drives the train's own
@@ -359,60 +372,299 @@ def test_a_hand_dispatch_still_honours_the_spacing():
 
 
 # --------------------------------------------------------------------------
-# The addendum: pending checks are waited for, then refused, named.
+# DRE-3263: the train is never stopped. Only the checks that gate a merge
+# are checks; a pending one is not waited for — the surface is a no-op that
+# names it, and the next train picks the commit up.
 # --------------------------------------------------------------------------
 
-def _pending(name="console image build"):
-    return [
-        {"name": "ci", "status": "completed", "conclusion": "success"},
-        {"name": name, "status": "in_progress", "conclusion": None},
-    ]
+FIXTURE = ROOT / "tests" / "fixtures" / "release-train-3fd03b083-2026-09-06.json"
+
+CI_PATH = ".github/workflows/ci.yml"
+FIX_PATH = ".github/workflows/agent-fix.yml"
+TRAIN_PATH = ".github/workflows/release-train.yml"
 
 
-def test_a_pending_check_is_waited_for_and_then_green():
-    clock = iter([0, 5, 10])
-    answers = iter([_pending(), _pending(),
-                    [{"name": "ci", "status": "completed",
-                      "conclusion": "success"},
-                     {"name": "console image build", "status": "completed",
-                      "conclusion": "success"}]])
-    slept = []
-    checks = release_train.poll_checks(
-        lambda: next(answers), elapsed=lambda: next(clock), sleep=slept.append
+def _run(suite, path, event="push", **over):
+    """One entry of GET actions/runs?head_sha=…, the way GitHub records it."""
+    run = {"id": suite + 1, "name": path.rsplit("/", 1)[-1], "path": path,
+           "event": event, "status": "completed", "conclusion": "success",
+           "check_suite_id": suite}
+    run.update(over)
+    return run
+
+
+def _check(name, suite, status="completed", conclusion="success"):
+    return {"name": name, "status": status, "conclusion": conclusion,
+            "check_suite": {"id": suite}}
+
+
+def _fixture():
+    return json.loads(FIXTURE.read_text())
+
+
+def test_the_11_36_pt_fixture_releases_past_two_in_progress_fix_agents():
+    """The live record: all of CI green on main's head, two `call / fix PR #…`
+    Agent Fix runs still in progress beside it, and the console's first
+    supervised release sat in `Run the surface` waiting on them."""
+    fixture = _fixture()
+    in_progress = [c["name"] for c in fixture["check_runs"]
+                   if c["status"] != "completed"]
+    assert "call / fix PR #2325" in in_progress
+    assert "call / fix PR #2328" in in_progress
+
+    checks = release_train.read_checks(fixture["check_runs"],
+                                       fixture["workflow_runs"])
+    assert checks.state == "green", checks.detail
+    assert "Console backend (pytest)" in checks.read
+    assert not any("fix PR" in name for name in checks.read)
+    assert any("fix PR #2325" in name for name, _ in checks.ignored)
+
+    decision = release_train.decide(
+        surface(), pt(2026, 9, 6, 11, 36), None, "behind", checks, None,
+        dispatched=True,
     )
-    assert checks.state == "green"
-    assert slept, "a pending check is polled, not read once"
+    assert decision.act == release_train.RELEASE, decision.reason
 
 
-def test_a_pending_check_is_refused_after_thirty_minutes_with_the_check_named():
-    clock = iter([0, 10, 20, 30])
-    checks = release_train.poll_checks(
-        lambda: _pending(), elapsed=lambda: next(clock), sleep=lambda s: None
+def test_a_pending_gating_check_is_a_no_op_that_names_it_and_the_next_run_takes_it():
+    checks = release_train.read_checks(
+        [_check("Console backend (pytest)", 1, status="in_progress",
+                conclusion=None),
+         _check("Toolkit (pytest)", 1)],
+        [_run(1, CI_PATH)],
     )
     assert checks.state == "pending"
-    assert "console image build" in checks.detail
-    assert release_train.CHECK_WAIT_MINUTES == 30
 
+    decision = release_train.decide(
+        surface(), pt(2026, 7, 15, 10, 0), None, "behind", checks, None
+    )
+    assert decision.act == release_train.NO_OP, decision.reason
+    assert decision.code == "ci-pending"
+    assert decision.ok is True
+    assert "Console backend (pytest)" in decision.reason
+    assert "next" in decision.reason.lower()
+    assert "30" not in decision.reason, "no thirty-minute ceiling survives"
+
+
+def test_a_red_gating_check_still_refuses_even_beside_in_progress_fix_agents():
+    checks = release_train.read_checks(
+        [_check("Console backend (pytest)", 1, conclusion="failure"),
+         _check("call / fix PR #2325", 2, status="in_progress",
+                conclusion=None)],
+        [_run(1, CI_PATH), _run(2, FIX_PATH, event="workflow_dispatch")],
+    )
+    assert checks.state == "red"
     refused = release_train.decide(
         surface(), pt(2026, 7, 15, 10, 0), None, "behind", checks, None
     )
     assert refused.act == release_train.REFUSE
-    assert "console image build" in refused.reason
-    assert "30" in refused.reason
+    assert "Console backend (pytest)" in refused.reason
+
+
+def test_a_sha_whose_only_check_runs_are_ignored_ones_is_absent_and_refuses():
+    """Fix agents and the medic on a SHA prove nothing about it."""
+    checks = release_train.read_checks(
+        [_check("call / fix PR #2325", 2, status="in_progress", conclusion=None),
+         _check("call / diagnose", 3, conclusion="skipped")],
+        [_run(2, FIX_PATH, event="workflow_dispatch"),
+         _run(3, ".github/workflows/medic.yml", event="workflow_run")],
+    )
+    assert checks.state == "absent"
+    refused = release_train.decide(
+        surface(), pt(2026, 7, 15, 10, 0), None, "behind", checks, None
+    )
+    assert refused.act == release_train.REFUSE
+    assert "no gating check" in refused.reason.lower()
+
+
+def test_the_train_ignores_its_own_runs_on_the_sha():
+    """A push-triggered train run sits on the same SHA it is releasing; its
+    own in-progress `Release <surface>` job must not read as pending."""
+    checks = release_train.read_checks(
+        [_check("Toolkit (pytest)", 1),
+         _check("call / Plan the surfaces", 4),
+         _check("call / Release console", 4, status="in_progress",
+                conclusion=None)],
+        [_run(1, CI_PATH), _run(4, TRAIN_PATH, event="push")],
+    )
+    assert checks.state == "green", checks.detail
+    assert checks.read == ("Toolkit (pytest)",)
+
+
+@pytest.mark.parametrize(
+    "event", ["workflow_dispatch", "schedule", "workflow_run", "push"]
+)
+def test_the_trains_own_in_progress_check_run_on_the_sha_is_not_a_check(event):
+    """agent-bureau run 34052227934 (workflow_dispatch, surface=console)
+    refused at 2026-09-06 12:06 PT with "a check on the head SHA was still
+    pending after 30 minutes: `call / Release console` is still in_progress"
+    — the two fix runs had finished, and the last pending check run on
+    main's head was the TRAIN'S OWN job. Every train run — dispatched,
+    scheduled, CI-completion or push — attaches its own check runs to the
+    SHA it is releasing, so under the old rule it waited on itself until the
+    ceiling. Its own runs are ignored by the stub's path, whatever the event."""
+    checks = release_train.read_checks(
+        [_check("Toolkit (pytest)", 1),
+         _check("call / Plan the surfaces", 4),
+         _check("call / Release console", 4, status="in_progress",
+                conclusion=None)],
+        [_run(1, CI_PATH), _run(4, TRAIN_PATH, event=event, name="Release train",
+                                status="in_progress", conclusion=None)],
+    )
+    assert checks.state == "green", checks.detail
+    assert checks.read == ("Toolkit (pytest)",)
+    assert sorted(name for name, _ in checks.ignored) == [
+        "call / Plan the surfaces", "call / Release console"]
+    assert all(path == TRAIN_PATH for _, path in checks.ignored)
+
+    decision = release_train.decide(
+        surface(auto=False), pt(2026, 9, 6, 11, 36), None, "behind", checks,
+        None, dispatched=True,
+    )
+    assert decision.act == release_train.RELEASE, decision.reason
+
+
+def test_a_check_run_with_no_recorded_origin_is_counted_fail_closed():
+    """The merge gate's rule: an empty origin record excludes nothing."""
+    checks = release_train.read_checks(
+        [_check("Toolkit (pytest)", 1),
+         _check("something external", 99, status="in_progress",
+                conclusion=None)],
+        [_run(1, CI_PATH)],
+    )
+    assert checks.state == "pending"
+    assert "something external" in checks.detail
+
+    blind = release_train.read_checks(
+        [_check("call / fix PR #2325", 2, status="in_progress",
+                conclusion=None)],
+        [],
+    )
+    assert blind.state == "pending", "no origin record → nothing is ignored"
+
+
+def test_the_no_op_and_refuse_lines_name_what_was_read_and_what_was_ignored():
+    fixture = _fixture()
+    checks = release_train.read_checks(fixture["check_runs"],
+                                       fixture["workflow_runs"])
+    said = checks.describe()
+    assert "Console backend (pytest)" in said
+    assert "agent-fix.yml" in said and "medic.yml" in said
+    assert "ignored" in said.lower() and "read" in said.lower()
+
+    decision = release_train.decide(
+        surface(), pt(2026, 9, 6, 11, 36), None, "behind", checks, None,
+        dispatched=True,
+    )
+    assert "agent-fix.yml" in decision.reason, decision.reason
+
+    pending = release_train.read_checks(
+        [_check("Console backend (pytest)", 1, status="in_progress",
+                conclusion=None),
+         _check("call / fix PR #2325", 2, status="in_progress",
+                conclusion=None)],
+        [_run(1, CI_PATH), _run(2, FIX_PATH, event="workflow_dispatch")],
+    )
+    no_op = release_train.decide(
+        surface(), pt(2026, 7, 15, 10, 0), None, "behind", pending, None
+    )
+    assert no_op.act == release_train.NO_OP
+    assert "Console backend (pytest)" in no_op.reason
+    assert "agent-fix.yml" in no_op.reason
+
+    red = release_train.read_checks(
+        [_check("Console backend (pytest)", 1, conclusion="failure"),
+         _check("call / fix PR #2325", 2, status="in_progress",
+                conclusion=None)],
+        [_run(1, CI_PATH), _run(2, FIX_PATH, event="workflow_dispatch")],
+    )
+    refused = release_train.decide(
+        surface(), pt(2026, 7, 15, 10, 0), None, "behind", red, None
+    )
+    assert "agent-fix.yml" in refused.reason
+
+
+def test_the_gating_set_is_the_merge_gates_from_one_place():
+    import merge_gate
+
+    assert release_train.read_checks is not None
+    # The classifier is the merge gate's; the train adds only itself.
+    assert release_train.gating_check_runs is merge_gate.gating_check_runs
+    assert set(merge_gate.DEFAULT_REVIEW_WORKFLOWS) <= set(
+        release_train.IGNORED_WORKFLOWS)
+    assert TRAIN_PATH in release_train.IGNORED_WORKFLOWS
+    assert {"push", "pull_request", "pull_request_target"} <= set(
+        merge_gate.COMMIT_EVENTS)
+    for never in ("workflow_run", "issue_comment", "workflow_dispatch",
+                  "schedule", "repository_dispatch"):
+        assert never not in merge_gate.COMMIT_EVENTS
+
+
+def test_the_train_never_polls_a_check():
+    for gone in ("poll_checks", "CHECK_WAIT_MINUTES", "POLL_SECONDS"):
+        assert not hasattr(release_train, gone), gone
 
 
 def test_a_failed_check_is_never_waited_for():
-    calls = []
-
-    def fetch():
-        calls.append(1)
-        return [{"name": "ci", "status": "completed", "conclusion": "failure"}]
-
-    checks = release_train.poll_checks(
-        fetch, elapsed=lambda: 0, sleep=lambda s: pytest.fail("slept on a red check")
+    """`fetch_checks` reads GitHub once and answers; there is no loop."""
+    checks = release_train.read_checks(
+        [_check("Toolkit (pytest)", 1, conclusion="failure")], [_run(1, CI_PATH)]
     )
     assert checks.state == "red"
-    assert len(calls) == 1
+
+
+def test_fetch_checks_reads_both_records_once_through_gh(tmp_path, monkeypatch):
+    """The seam the live bug hid in: the two `gh api` reads, streamed one
+    object per line, land in `read_checks` in the shapes the classifier
+    expects — and are read exactly once each."""
+    fixture = _fixture()
+    calls = tmp_path / "calls.log"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "gh").write_text(
+        "#!/usr/bin/env bash\n"
+        f"echo \"$*\" >> {calls}\n"
+        "case \"$*\" in\n"
+        "  *check-runs*) python3 -c 'import json,sys; "
+        f"[print(json.dumps(c)) for c in json.load(open(\"{FIXTURE}\"))[\"check_runs\"]]' ;;\n"
+        "  *actions/runs*) python3 -c 'import json,sys; "
+        f"[print(json.dumps(r)) for r in json.load(open(\"{FIXTURE}\"))[\"workflow_runs\"]]' ;;\n"
+        "  *) echo unexpected >&2; exit 9 ;;\n"
+        "esac\n"
+    )
+    (fake / "gh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+
+    checks = release_train.fetch_checks("dreadnought-foundry/agent-bureau",
+                                        fixture["sha"])
+    assert checks.state == "green", checks.detail
+    assert len(checks.read) == 11
+    assert len(checks.ignored) == len(fixture["check_runs"]) - 11
+    logged = calls.read_text().splitlines()
+    assert len(logged) == 2, logged
+    assert all("--paginate" in line for line in logged)
+    assert "check_suite" in logged[0] and "head_sha=" in logged[1]
+
+
+def test_the_cli_exits_0_on_a_pending_gating_check_and_cuts_no_tag(tmp_path,
+                                                                    monkeypatch,
+                                                                    capsys):
+    repo = _fake_repo(tmp_path)
+    pending = release_train.read_checks(
+        [_check("Toolkit (pytest)", 1, status="in_progress", conclusion=None)],
+        [_run(1, CI_PATH)],
+    )
+    monkeypatch.setattr(release_train, "fetch_checks", lambda repo, sha: pending)
+    code = release_train.main([
+        "--repo", "dreadnought-foundry/demo", "--repo-root", str(repo),
+        "--file", str(repo / ".github" / "bureau" / "release.json"),
+        "release", "--sha", _head(repo), "--surface", "demo",
+    ])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert f"{release_train.TAG}: no-op" in out
+    assert "Toolkit (pytest)" in out
+    assert _git(repo, "tag", "-l") == ""
 
 
 # --------------------------------------------------------------------------
@@ -675,9 +927,28 @@ def test_a_surface_whose_paths_are_untouched_since_its_tag_is_a_no_op(tmp_path):
     ) == "behind"
 
 
+def test_a_sha_the_newest_tag_already_contains_reads_current(tmp_path):
+    """DRE-3263: the CI-completion trigger hands the train the SHA CI ran
+    on, which can be OLDER than the newest tag when a slow CI on X finishes
+    after Y was released. `diff Y..X` is non-empty in the reverse direction
+    and would read X as behind — and tag backwards."""
+    repo = _fake_repo(tmp_path)
+    older = _head(repo)
+    (repo / "demo" / "app.txt").write_text("v2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "a newer change to the surface")
+    assert _release(repo).act == release_train.RELEASE  # tags the newer head
+
+    assert release_train.lag_state(repo, "demo/v1", older, ["demo/"]) == "current"
+    late = _release(repo, sha=older, now=pt(2026, 7, 15, 12, 0))
+    assert late.act == release_train.NO_OP
+    assert late.code == "current"
+    assert _git(repo, "tag", "-l").splitlines() == ["demo/v1"]
+
+
 def test_a_surface_with_nothing_to_release_never_waits_for_a_check(tmp_path):
     """A job that queued behind another release and now reads current must not
-    spend thirty minutes on the checks API to learn the same thing."""
+    spend two API reads to learn the same thing."""
     repo = _fake_repo(tmp_path)
     assert _release(repo).act == release_train.RELEASE
 
@@ -859,15 +1130,39 @@ def test_the_stub_is_data_plus_one_uses_line():
     assert job["with"]["surface"] == "${{ inputs.surface }}"
 
 
-def test_the_stub_carries_the_two_cron_lines_and_no_paths_filter():
+def test_the_stub_fires_on_ci_completion_the_schedule_and_a_dispatch():
+    """DRE-3263: a push fires BEFORE that commit's CI starts, so under the
+    never-stopped rule every push-run would find CI pending and no-op. The
+    trigger that makes the rule true is CI completing on main."""
     on = _on(_reference_stub())
-    assert on["push"]["branches"] == ["main"]
-    assert "paths" not in on["push"], (
-        "YAML cannot read the data — path filtering is the train's job"
+    assert "push" not in on, (
+        "a push-triggered train always finds its own commit's CI pending"
     )
+    assert on["workflow_run"] == {
+        "workflows": ["CI"], "types": ["completed"], "branches": ["main"],
+    }
     crons = [entry["cron"] for entry in on["schedule"]]
     assert crons == ["0 15 * * *", "0 14 * * *"]
     assert "surface" in on["workflow_dispatch"]["inputs"]
+    assert set(on) == {"workflow_run", "schedule", "workflow_dispatch"}
+
+
+def test_the_stub_carries_no_paths_filter():
+    on = _on(_reference_stub())
+    assert "paths" not in on["workflow_run"], (
+        "YAML cannot read the data — path filtering is the train's job"
+    )
+
+
+def test_the_train_reads_the_sha_and_the_conclusion_from_the_workflow_run_event():
+    """The reusable workflow accepts the CI-completion event: it releases
+    the SHA that CI ran on, and only when CI concluded success."""
+    text = WORKFLOW.read_text()
+    assert "github.event.workflow_run.head_sha" in text
+    assert "github.event.workflow_run.conclusion" in text
+    plan = yaml.dump(_workflow()["jobs"]["plan"])
+    assert "workflow_run" in plan
+    assert "30 minutes" not in text and "thirty minutes" not in text.lower()
 
 
 def test_the_stub_grants_the_three_permissions_the_train_needs():
@@ -893,6 +1188,28 @@ def test_the_render_names_every_field_of_the_schema():
     for field in release_train.SCHEMA:
         assert f"`{field.name}`" in rendered, field.name
         assert field.means.split(".")[0][:40] in rendered, field.name
+
+
+def test_the_render_states_the_trigger_the_stub_must_declare():
+    """DRE-3263: the callers' stubs are not in this repo, so the document
+    says exactly what a stub must declare and what the train reads."""
+    rendered = release_train.render_markdown()
+    for needle in ("workflow_run", 'workflows: ["CI"]', "types: [completed]",
+                   "branches: [main]", "github.event.workflow_run.head_sha",
+                   "success"):
+        assert needle in rendered, needle
+    assert "ci-pending" in rendered
+    assert "30 minutes" not in rendered
+    # The decision table now says a pending gating check is a no-op.
+    row = next(line for line in rendered.splitlines() if "`ci-pending`" in line)
+    assert "`no-op`" in row, row
+
+
+def test_the_standard_states_what_the_stub_declares():
+    body = STANDARD.read_text()
+    assert "workflow_run" in body
+    assert "never stopped" in body.lower()
+    assert "30 minutes" not in body and "thirty minutes" not in body.lower()
 
 
 def test_the_standard_states_what_a_surface_script_owes():

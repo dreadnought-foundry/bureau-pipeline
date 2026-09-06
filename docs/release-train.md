@@ -55,8 +55,34 @@ One rule set, asked twice: once to build the matrix, and once inside each surfac
 | 5 | `current` | `no-op` | nothing under the surface's `paths` has changed since its newest tag |
 | 6 | `spacing` | `no-op` | the newest tag in the series is younger than `spacing_minutes` |
 | 7 | `window` | `no-op` | the America/Los_Angeles clock is outside the window; a hand dispatch runs anyway |
-| 8 | `ci-red / ci-absent / ci-pending` | `refuse` | a check on the head SHA failed, never ran, or was still pending after 30 minutes — named in the refusal |
-| 9 | `deferred` | `no-op` | the script exited 0 printing `deferred: …` — the deployment is owed to a person, and that is not a failure |
-| 10 | `released` | `release` | the script ran and the train verified the annotated tag it cut at the released commit |
+| 8 | `ci-pending` | `no-op` | a gating check on the SHA is still running — the commit is not ready, the train leaves without it, and the run CI completion fires takes it (never a wait: the train is never stopped) |
+| 9 | `ci-red / ci-absent` | `refuse` | a gating check on the SHA failed, or no gating check has reported on it — named in the refusal, with what was read and what was ignored |
+| 10 | `deferred` | `no-op` | the script exited 0 printing `deferred: …` — the deployment is owed to a person, and that is not a failure |
+| 11 | `released` | `release` | the script ran and the train verified the annotated tag it cut at the released commit |
 
 The brake is the repository variable `RELEASE_HOLD`, read the way `INTAKE_HOLD` is read — see `standards/release-train.md` for where to set it and what the surface script owes.
+
+## The trigger, and what the stub must declare
+
+**The train is never stopped** (DRE-3263, the CEO's rule of 2026-09-06). If the commit is ready it goes; if it is not, the train leaves without it and the next train picks it up. A gating check still running is therefore a `no-op` that names it — never a wait, never a refusal — and the run that picks the commit up is the one fired by CI completing on the default branch. A `push` fires BEFORE that commit's CI has started, so a push-triggered stub would find CI pending on every run and release only from the schedule. The stub in every caller (`.github/workflows/release-train.yml`) must declare exactly this:
+
+```yaml
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "0 15 * * *"
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      surface:
+        type: string
+        required: false
+        default: ""
+```
+
+`workflows: ["CI"]` is the `name:` of the caller's CI workflow, and `branches: [main]` is the branch that CI ran on. On that event the reusable workflow reads the commit from `github.event.workflow_run.head_sha` and proceeds only when `github.event.workflow_run.conclusion` is `success`; a CI run that concluded anything else is a `no-op` that says so, and the commit waits for the repair the medic files. The schedule and the hand dispatch read the head of the branch at that moment, as before.
+
+Which check runs on the commit COUNT is decided in one place — `merge_gate.gating_check_runs`, the same classifier the merge gate's all-green rule rests on. A check run counts when GitHub's own workflow-runs record says the commit itself triggered it (`push`, `pull_request`, `pull_request_target`) and it is not a review workflow or the train's own stub; a fix agent, the medic, the sweep, a hand dispatch and the train's own run all report against the default branch's head without being about it, and are ignored by that origin — never by name. Every no-op and refusal line names what was read and what was ignored, by producing workflow file.
