@@ -49,7 +49,7 @@ class DegradedBlockTest(unittest.TestCase):
     def test_harness_failure_is_non_fatal_note_not_a_block(self):
         block = self._degraded()
         self.assertIn("could not produce", block)
-        self.assertIn("Do NOT", block)
+        self.assertIn("do NOT raise", block)
         self.assertIn("board screenshot failed", block)
         # A degraded run must NOT instruct the critic that a mismatch is blocking
         # — there is no render to compare.
@@ -166,6 +166,35 @@ class CliTest(unittest.TestCase):
         )
         self.assertEqual(p.returncode, 0)
         self.assertIn("skipped", p.stdout)
+
+
+class WorkflowFallbackTest(unittest.TestCase):
+    """qa-review.yml's guaranteed fallback must not read green either.
+
+    The fallback fires when context generation itself produced nothing. It is
+    the one place the "did not run" wording has a second home, so it is pinned
+    against the constant rather than left to drift.
+    """
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(__file__), "..",
+                            ".github", "workflows", "qa-review.yml")
+        with open(path, encoding="utf-8") as f:
+            self.src = f.read()
+
+    def test_the_fallback_carries_the_same_line(self):
+        prefix = vqc.DEGRADED_LINE.split("{note}")[0]
+        self.assertIn(prefix, self.src)
+
+    def test_the_fallback_only_says_it_where_the_stage_was_meant_to_run(self):
+        # A SKIP is not a degrade — a PR with no design comparison to make must
+        # not get a "did not run" line.
+        self.assertIn("steps.vqplan.outputs.run", self.src)
+        self.assertIn(
+            "VISUAL QA: not available for this PR.", self.src,
+            "the skip fallback is gone — a skipped stage would now claim a "
+            "check failed",
+        )
 
 
 if __name__ == "__main__":

@@ -392,6 +392,15 @@ class ConsumerNodeTest(unittest.TestCase):
         # line would be the consumer writing this workflow's step outputs.
         self.assertEqual(len(proc.stdout.strip().splitlines()), 5)
 
+    def test_shell_metacharacters_never_survive_into_an_output(self):
+        # `source` is read back by later steps and lands in a log line. A
+        # quote or a `$` there is an expansion in whatever shell carries it.
+        _, out = self._run(self._project(
+            package='{"engines": {"node": ">=24 $(id) `id` \\"x\\" ;rm -rf /"}}'))
+        self.assertEqual(out["version"], "24")
+        for char in ("$", "`", '"', "'", ";", "(", ")"):
+            self.assertNotIn(char, out["source"], f"{char!r} survived")
+
 
 if __name__ == "__main__":
     unittest.main()

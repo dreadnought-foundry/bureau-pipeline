@@ -13,9 +13,19 @@ It encodes the SAFETY contract in the words the critic reads:
             is NORMAL — it must NOT invent a visual finding or block on it.
   * RUN, renders ok → give the critic each (design PNG, rendered screenshot)
             pair to Read and compare; a MATERIAL mismatch is a blocking finding.
-  * RUN, harness degraded → tell the critic the screenshots could not be
-            produced, that this is INFRA flakiness, and that it must NOT block
-            on the missing render — proceed on the rest of the review.
+  * RUN, harness degraded → tell the critic the comparison DID NOT HAPPEN, and
+            that it must SAY SO on the verdict, in one plain line, while still
+            not blocking on the missing render.
+
+DEGRADED MUST NEVER READ AS GREEN (DRE-3248). This block used to tell the
+critic a failed render was "infrastructure flakiness … expected and NOT a
+defect", and the critic duly wrote a verdict with nothing on it about the
+visual check. One River's Phase 2 proof pushed a red banner onto five screens,
+the render died before a single screenshot (the runner's default node was
+below what `console/web` requires), and the design-fidelity verdict came back
+a skip wearing green — the only trace was a log line nobody reads. What
+changed is the SAYING, not the blocking: a degraded stage still does not block
+a merge, it just stops being silent about not having run.
 
 CLI:
 
@@ -37,13 +47,22 @@ import sys
 SCREENS_DIR = "console/design/images/screens"
 RENDER_DIR = "console/design/images/_renders"
 
-# Wording reused across SKIP and degrade so the critic never treats a missing
-# visual signal as a reason to block.
+# SKIP wording. A skipped stage is a PR with no design comparison to make —
+# that IS expected, and the critic must not invent a finding out of it.
 _DO_NOT_BLOCK = (
     "This is expected and is NOT a defect. Do NOT raise any visual-comparison "
     "finding and do NOT block the merge on the absence of a screenshot — run "
     "the rest of your review normally."
 )
+
+# The one line a degraded stage puts on the verdict. It is what someone
+# reading the verdict sees instead of silence, so it is plain English and it
+# is the same words every time.
+DEGRADED_LINE = "Visual check did not run: {note}"
+
+# Used when the harness gave no note of its own — the line is never left
+# dangling after its colon.
+DEFAULT_DEGRADED_NOTE = "the screenshot harness produced no render"
 
 
 def _render_path(key: str, rendered: dict[str, str]) -> str:
@@ -63,12 +82,26 @@ def build_context(plan: dict, render_status: str, render_note: str,
     designs = plan.get("designs", [])
 
     if render_status != "ok":
-        note = f" ({render_note})" if render_note else ""
-        return (
-            "VISUAL QA: the screenshot harness could not produce the rendered "
-            f"screenshot(s) for this PR{note}. This is infrastructure flakiness. "
-            + _DO_NOT_BLOCK
-        )
+        note = (render_note or "").strip() or DEFAULT_DEGRADED_NOTE
+        line = DEGRADED_LINE.format(note=note)
+        return "\n".join([
+            "VISUAL QA — THE COMPARISON DID NOT HAPPEN. This PR has a "
+            "**Design:** ref and changed UI, so the affected screen(s) should "
+            "have been rendered and compared against the design — but the "
+            "screenshot harness could not produce them, so nothing was "
+            "compared.",
+            "",
+            "Your verdict Summary MUST carry this line, verbatim, on its own "
+            "line:",
+            "",
+            f"    {line}",
+            "",
+            "Then review the rest of the PR normally. You have no render, so "
+            "do NOT raise a visual-comparison finding and do NOT block the "
+            "merge on the missing screenshot. But do NOT report the design "
+            "check as done, passed, or not applicable either — it was "
+            "attempted and it failed, and the verdict has to say so.",
+        ])
 
     lines = [
         "VISUAL QA — DESIGN-FIDELITY COMPARISON (this PR has a **Design:** ref "
