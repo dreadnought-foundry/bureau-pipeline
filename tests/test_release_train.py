@@ -491,6 +491,39 @@ def test_the_train_ignores_its_own_runs_on_the_sha():
     assert checks.read == ("Toolkit (pytest)",)
 
 
+@pytest.mark.parametrize(
+    "event", ["workflow_dispatch", "schedule", "workflow_run", "push"]
+)
+def test_the_trains_own_in_progress_check_run_on_the_sha_is_not_a_check(event):
+    """agent-bureau run 34052227934 (workflow_dispatch, surface=console)
+    refused at 2026-09-06 12:06 PT with "a check on the head SHA was still
+    pending after 30 minutes: `call / Release console` is still in_progress"
+    — the two fix runs had finished, and the last pending check run on
+    main's head was the TRAIN'S OWN job. Every train run — dispatched,
+    scheduled, CI-completion or push — attaches its own check runs to the
+    SHA it is releasing, so under the old rule it waited on itself until the
+    ceiling. Its own runs are ignored by the stub's path, whatever the event."""
+    checks = release_train.read_checks(
+        [_check("Toolkit (pytest)", 1),
+         _check("call / Plan the surfaces", 4),
+         _check("call / Release console", 4, status="in_progress",
+                conclusion=None)],
+        [_run(1, CI_PATH), _run(4, TRAIN_PATH, event=event, name="Release train",
+                                status="in_progress", conclusion=None)],
+    )
+    assert checks.state == "green", checks.detail
+    assert checks.read == ("Toolkit (pytest)",)
+    assert sorted(name for name, _ in checks.ignored) == [
+        "call / Plan the surfaces", "call / Release console"]
+    assert all(path == TRAIN_PATH for _, path in checks.ignored)
+
+    decision = release_train.decide(
+        surface(auto=False), pt(2026, 9, 6, 11, 36), None, "behind", checks,
+        None, dispatched=True,
+    )
+    assert decision.act == release_train.RELEASE, decision.reason
+
+
 def test_a_check_run_with_no_recorded_origin_is_counted_fail_closed():
     """The merge gate's rule: an empty origin record excludes nothing."""
     checks = release_train.read_checks(
@@ -578,6 +611,39 @@ def test_a_failed_check_is_never_waited_for():
         [_check("Toolkit (pytest)", 1, conclusion="failure")], [_run(1, CI_PATH)]
     )
     assert checks.state == "red"
+
+
+def test_fetch_checks_reads_both_records_once_through_gh(tmp_path, monkeypatch):
+    """The seam the live bug hid in: the two `gh api` reads, streamed one
+    object per line, land in `read_checks` in the shapes the classifier
+    expects — and are read exactly once each."""
+    fixture = _fixture()
+    calls = tmp_path / "calls.log"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "gh").write_text(
+        "#!/usr/bin/env bash\n"
+        f"echo \"$*\" >> {calls}\n"
+        "case \"$*\" in\n"
+        "  *check-runs*) python3 -c 'import json,sys; "
+        f"[print(json.dumps(c)) for c in json.load(open(\"{FIXTURE}\"))[\"check_runs\"]]' ;;\n"
+        "  *actions/runs*) python3 -c 'import json,sys; "
+        f"[print(json.dumps(r)) for r in json.load(open(\"{FIXTURE}\"))[\"workflow_runs\"]]' ;;\n"
+        "  *) echo unexpected >&2; exit 9 ;;\n"
+        "esac\n"
+    )
+    (fake / "gh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+
+    checks = release_train.fetch_checks("dreadnought-foundry/agent-bureau",
+                                        fixture["sha"])
+    assert checks.state == "green", checks.detail
+    assert len(checks.read) == 11
+    assert len(checks.ignored) == len(fixture["check_runs"]) - 11
+    logged = calls.read_text().splitlines()
+    assert len(logged) == 2, logged
+    assert all("--paginate" in line for line in logged)
+    assert "check_suite" in logged[0] and "head_sha=" in logged[1]
 
 
 def test_the_cli_exits_0_on_a_pending_gating_check_and_cuts_no_tag(tmp_path,
@@ -882,7 +948,7 @@ def test_a_sha_the_newest_tag_already_contains_reads_current(tmp_path):
 
 def test_a_surface_with_nothing_to_release_never_waits_for_a_check(tmp_path):
     """A job that queued behind another release and now reads current must not
-    spend thirty minutes on the checks API to learn the same thing."""
+    spend two API reads to learn the same thing."""
     repo = _fake_repo(tmp_path)
     assert _release(repo).act == release_train.RELEASE
 
