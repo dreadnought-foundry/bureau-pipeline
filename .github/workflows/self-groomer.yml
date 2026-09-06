@@ -37,6 +37,15 @@ on:
         description: the card the proposal is posted to and approved on
         type: string
         default: ""
+      judgement:
+        description: >-
+          on = one model call ranks the census; off = the rules alone
+        type: choice
+        # QUOTED, both of them: YAML reads a bare `on`/`off` as a boolean, and
+        # an unquoted pair here parses as [true, false] — the same rule that
+        # makes every workflow's own `on:` key a surprise to a YAML reader.
+        options: ["on", "off"]
+        default: "on"
 
 permissions:
   contents: read
@@ -52,6 +61,7 @@ jobs:
       batch_cycles: ${{ inputs.batch_cycles }}
       priority: ${{ inputs.priority }}
       card: ${{ inputs.card }}
+      judgement: ${{ inputs.judgement }}
       # The pen's switch (DRE-3035), and NOT a dispatch input on purpose: a
       # hold the person dispatching the drain can waive is not a hold. It is
       # data in this file, the same value self-reconcile.yml carries — put the

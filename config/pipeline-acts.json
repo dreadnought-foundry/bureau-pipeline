@@ -1029,6 +1029,14 @@
       "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact. Its subject is the world outside the pipeline, not a piece of work the pipeline moved."
     },
     {
+      "file": ".github/workflows/groomer.yml",
+      "anchor": "\"$CARD\" \"$(cat receipt.txt)\"",
+      "step": "Judgement receipt — the model that answered",
+      "kind": "not-an-act",
+      "means": "Which model answered the groomer's one ranked read, and what the call cost — the same 🧠 model-attempt receipt plan.yml posts for the planning classifier.",
+      "why": "A model receipt is a fact about a call, not something the pipeline did on its own. Nothing was refused, recovered or held and no work moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose — the same reading the two plan.yml model-attempt heartbeats already carry. Its body is composed by scripts/groomer_receipt.py, never in YAML (DRE-3153)."
+    },
+    {
       "file": ".github/workflows/medic.yml",
       "anchor": "🔌 The code reviewer was temporarily unavailable",
       "step": "Note reviewer-down (infra) on the card — no rerun",

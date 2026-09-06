@@ -16,6 +16,12 @@ The rest is the wiring every workflow in this repo owes: the reusable threads
 lane the drain writes into declares the groomer as one of its writers, because
 the lane contract is what the harness asserts the live board against.
 
+And since DRE-3153 the judged read (DRE-3150) is REACHABLE from here: a
+reusable workflow sees only the secrets it declares, so the two model
+credentials are declared and set the way `plan.yml`'s classify step sets them,
+the `judgement` switch reaches the step, the job's clock covers the call's own
+ceiling, and none of it touches the line naming the Linear secret.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groomer_wiring.py -v
 """
 from __future__ import annotations
@@ -34,9 +40,21 @@ sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
+import groom_judgement  # noqa: E402
 import groomer  # noqa: E402
 
 PIPELINE = "dreadnought-foundry/bureau-pipeline"
+
+#: The two credentials a model call needs, and which auth mode each belongs to.
+MODEL_SECRETS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
+
+#: The step in `plan.yml` whose expressions are the ONE definition of "how this
+#: repo hands a workflow step a Claude credential". Read, never restated.
+PLAN_CLASSIFY_STEP = "Classify the card — one-off, epic or wave"
+
+#: The two steps this card's assertions are about.
+GROOM_STEP = "Groom"
+RECEIPT_STEP = "Judgement receipt — the model that answered"
 
 
 def _load(name: str) -> dict:
@@ -48,6 +66,32 @@ def _load(name: str) -> dict:
 def _on(doc: dict) -> dict:
     on = doc.get("on", doc.get(True))
     return on if isinstance(on, dict) else {}
+
+
+def _steps(doc: dict) -> list:
+    out = []
+    for job in (doc.get("jobs") or {}).values():
+        out.extend(job.get("steps") or [])
+    return out
+
+
+def _step(doc: dict, name: str) -> dict:
+    for step in _steps(doc):
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"no step named {name!r}")
+
+
+def _expression(value: str) -> str:
+    """The inside of a `${{ … }}`, whitespace-normalised.
+
+    So a comparison is against what the expression SAYS, not against where the
+    braces and spaces landed.
+    """
+    text = " ".join(str(value or "").split())
+    if text.startswith("${{") and text.endswith("}}"):
+        text = text[3:-2]
+    return text.strip()
 
 
 class OnDemandOnlyTest(unittest.TestCase):
@@ -112,6 +156,154 @@ class OnDemandOnlyTest(unittest.TestCase):
         stub_inputs = (_on(_load("self-groomer.yml"))["workflow_dispatch"]
                        .get("inputs") or {})
         self.assertEqual(stub_inputs["mode"]["default"], "propose")
+
+
+class JudgedReadReachableTest(unittest.TestCase):
+    """DRE-3153: the judged read is unreachable from the workflow that runs the
+    groomer until the reusable DECLARES the credentials it needs.
+
+    `secrets: inherit` on the stub is not enough — a reusable workflow sees
+    only the secrets named in its own `workflow_call.secrets` block, which is
+    why `groomer.yml` handed its one step `LINEAR_API_KEY` and nothing else and
+    DRE-3150's one call could never have been made from Actions.
+    """
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.groom = _step(self.doc, GROOM_STEP)
+        self.env = self.groom.get("env") or {}
+
+    def test_the_reusable_declares_both_model_secrets(self):
+        declared = (_on(self.doc)["workflow_call"].get("secrets") or {})
+        for name in MODEL_SECRETS:
+            self.assertIn(
+                name, declared,
+                f"a reusable workflow only sees the secrets it declares — "
+                f"without {name} the judged read cannot be made from Actions",
+            )
+            self.assertFalse(
+                (declared[name] or {}).get("required"),
+                f"{name} is optional: which of the two is set is decided by "
+                "CLAUDE_AUTH_MODE, so requiring both would refuse every repo",
+            )
+
+    def test_the_credentials_are_gated_the_way_plan_yml_gates_them(self):
+        """Read off `plan.yml`, never restated here. One definition of which
+        credential a run holds; a second copy is free to drift, and the drift
+        is a 429 on every call (DRE-3074)."""
+        plan = _step(_load("plan.yml"), PLAN_CLASSIFY_STEP).get("env") or {}
+        for name in MODEL_SECRETS:
+            self.assertIn(name, plan, f"plan.yml no longer sets {name}")
+            self.assertIn(
+                _expression(plan[name]), _expression(self.env.get(name)),
+                f"the Groom step's {name} expression must carry plan.yml's "
+                "own CLAUDE_AUTH_MODE gate verbatim",
+            )
+
+    def test_the_drain_branch_receives_no_model_credential(self):
+        """The drain reads and moves; it does not judge. The two branches share
+        one step, so the guard has to live in the expression."""
+        for name in MODEL_SECRETS:
+            self.assertIn(
+                "inputs.mode != 'drain'", _expression(self.env.get(name)),
+                f"{name} reaches the drain branch — a credential handed to a "
+                "step that never calls a model",
+            )
+
+    def test_the_judgement_switch_exists_on_both_files(self):
+        spec = (_on(self.doc)["workflow_call"].get("inputs") or {}).get(
+            "judgement")
+        self.assertIsNotNone(spec, "the reusable takes no judgement input")
+        self.assertEqual(spec.get("type"), "string")
+        self.assertEqual(spec.get("default"), "on")
+
+        stub = _on(_load("self-groomer.yml"))["workflow_dispatch"]
+        spec = (stub.get("inputs") or {}).get("judgement")
+        self.assertIsNotNone(spec, "the stub offers no judgement choice")
+        self.assertEqual(spec.get("type"), "choice")
+        self.assertEqual(sorted(spec.get("options") or []), ["off", "on"])
+        self.assertEqual(spec.get("default"), "on")
+
+    def test_the_stub_threads_the_switch_to_the_reusable(self):
+        job = next(iter(_load("self-groomer.yml")["jobs"].values()))
+        self.assertEqual(
+            _expression((job.get("with") or {}).get("judgement")),
+            "inputs.judgement")
+
+    def test_the_switch_reaches_the_step_and_turns_the_flag_on(self):
+        self.assertEqual(_expression(self.env.get("JUDGEMENT")),
+                         "inputs.judgement")
+        self.assertIn(
+            "--no-judgement", self.groom.get("run") or "",
+            "anything but `on` runs the rules alone — DRE-3150's flag, "
+            "unchanged",
+        )
+
+    def test_the_linear_credential_line_is_untouched(self):
+        """This card's own refusal to drift the groomer's Linear identity.
+        Moving the groomer to another identity is DRE-3168's work, under its
+        own card, and it edits this file AFTER this one."""
+        self.assertEqual(_expression(self.env.get("LINEAR_API_KEY")),
+                         "secrets.LINEAR_API_KEY")
+        self.assertNotIn("LINEAR_IDENTITY", self.env)
+        self.assertNotIn("LINEAR_IDENTITY", self.groom.get("run") or "")
+
+    def test_the_job_clock_covers_the_judged_reads_own_ceiling(self):
+        """Both numbers are READ — the YAML's and the constant's. A later card
+        that raises `OUTPUT_CEILING` turns this red rather than leaving the job
+        killed mid-call."""
+        job = self.doc["jobs"]["groom"]
+        self.assertGreaterEqual(
+            int(job["timeout-minutes"]) * 60,
+            groom_judgement.MAX_WALL_CLOCK_SECONDS + 300,
+            "the Groom job's clock must cover the widest one call plus five "
+            "minutes for the non-model work the step does",
+        )
+
+
+class JudgementReceiptWiringTest(unittest.TestCase):
+    """The one `🧠 model-attempt:` comment a judged run posts."""
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.step = _step(self.doc, RECEIPT_STEP)
+        self.run = self.step.get("run") or ""
+
+    def test_the_line_is_composed_in_python_never_in_yaml(self):
+        self.assertIn("groomer_receipt.py", self.run)
+        self.assertNotIn(
+            "model-attempt", self.run,
+            "a receipt assembled in a shell string is a second answer to "
+            "'which model answered' that nothing tests",
+        )
+
+    def test_it_posts_to_the_card_through_linear_ops(self):
+        self.assertIn("linear_ops.py comment", self.run)
+        self.assertEqual(_expression((self.step.get("env") or {}).get("CARD")),
+                         "inputs.card")
+        self.assertEqual(
+            _expression((self.step.get("env") or {}).get("LINEAR_API_KEY")),
+            "secrets.LINEAR_API_KEY")
+
+    def test_it_runs_only_after_a_propose_that_had_a_card(self):
+        condition = _expression(self.step.get("if"))
+        self.assertIn("inputs.mode != 'drain'", condition)
+        self.assertIn("inputs.card != ''", condition)
+
+    def test_the_same_line_goes_into_the_step_summary(self):
+        self.assertIn("GITHUB_STEP_SUMMARY", self.run)
+
+    def test_the_receipt_reader_is_declared_to_the_act_registry(self):
+        """`check_act_receipts.py` refuses a comment write it cannot account
+        for. A proposal receipt is not an act — nothing was refused, recovered
+        or held — so it is declared as one that posts no trailer."""
+        block = json.loads(
+            (ROOT / "config" / "pipeline-acts.json").read_text())["unconverted"]
+        self.assertTrue(
+            any(e.get("file") == ".github/workflows/groomer.yml"
+                and e.get("step") == RECEIPT_STEP for e in block),
+            "the receipt step posts a comment and the registry does not name it",
+        )
 
 
 class LaneContractTest(unittest.TestCase):
