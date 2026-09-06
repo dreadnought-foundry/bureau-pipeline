@@ -1332,3 +1332,330 @@ class TestTheReceiptSaysBoth:
             assert anchor in workflow, (
                 f"the registry declares {anchor!r}, which plan.yml no longer says"
             )
+
+
+# ===========================================================================
+# L. the call seam takes a budget and reports a cut (DRE-3258)
+# ===========================================================================
+#
+# The seam was built for the classifier — one card in, one sentence out — and
+# its bounds are hard-coded to that shape. One line per card across a 226-card
+# Intake lane is on the order of eighteen thousand output tokens, so the
+# groomer's one call is cut off after the first forty or so cards and the parser
+# reads the rest as "could not rank": the groomer ships looking like it worked.
+# This section pins the seam TAKING a budget and SAYING when the answer was cut,
+# and — every bit as load-bearing — pins the classifier's own call byte-for-byte
+# where it is, because the defaults are what keep it there.
+
+CUT_ENVELOPE = ROOT / "tests" / "fixtures" / "claude_code_output_max_envelope.json"
+
+
+def _cli_calls(monkeypatch, stdout="", returncode=0, raises=None):
+    """Stand in for the Claude Code CLI and record the WHOLE call.
+
+    `_fake_cli` above records the argv, which is where DRE-3074's bounds live.
+    The budget and the wall clock live in the KWARGS — the subprocess env and
+    the timeout — so this records those too rather than reshaping a helper six
+    existing tests read.
+    """
+    calls: list[dict] = []
+
+    def run(argv, **kwargs):
+        calls.append({"argv": list(argv), **kwargs})
+        if raises is not None:
+            raise raises
+        return _Done(returncode=returncode, stdout=stdout)
+
+    monkeypatch.setattr(planning_classify.subprocess, "run", run)
+    return calls
+
+
+def _api_calls(monkeypatch, body: dict | None = None, raises=None):
+    """Stand in for the raw `/v1/messages` POST and record the request payload
+    and the kwargs — the budget is IN the payload, the wall clock is a kwarg."""
+    import urllib.request
+
+    calls: list[dict] = []
+
+    class _Resp:
+        status = 200
+
+        def read(self):
+            return json.dumps(body or {}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def urlopen(req, *args, **kwargs):
+        calls.append({"payload": json.loads(req.data.decode()), **kwargs})
+        if raises is not None:
+            raise raises
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    return calls
+
+
+class TestTheSeamTakesABudget:
+    """`max_tokens` and `timeout_seconds`, keyword-only, `None` meaning the
+    transport's own constant."""
+
+    ASK = 18600
+    CLOCK = 525
+
+    def test_the_defaults_are_the_classifiers_call_unchanged_on_the_api_path(
+        self, monkeypatch
+    ):
+        """The whole safety of this card: pass neither keyword and the raw POST
+        is byte-for-byte what DRE-3074 shipped."""
+        _api_key_env(monkeypatch)
+        calls = _api_calls(monkeypatch, {
+            "model": MODEL, "content": [{"type": "text", "text": "hi"}],
+        })
+        planning_classify._call_api(MODEL, "the prompt")
+        assert calls[0]["payload"]["max_tokens"] == planning_classify.MAX_TOKENS
+        assert calls[0]["payload"]["max_tokens"] == 1000
+        assert calls[0]["timeout"] == planning_classify.TIMEOUT_SECONDS
+        assert calls[0]["timeout"] == 60
+
+    def test_the_defaults_are_the_classifiers_call_unchanged_on_the_cli_path(
+        self, monkeypatch
+    ):
+        """And on the path every repo in the fleet actually runs: today's wall
+        clock, and a subprocess env that carries NO output-token budget."""
+        _subscription_env(monkeypatch)
+        monkeypatch.delenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", raising=False)
+        calls = _cli_calls(monkeypatch, stdout=_envelope("hi"))
+        planning_classify._call_claude_code(MODEL, "the prompt")
+        assert calls[0]["timeout"] == planning_classify.CLI_TIMEOUT_SECONDS
+        assert calls[0]["timeout"] == 300
+        env = calls[0].get("env") or {}
+        assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" not in env, (
+            "the classifier's subprocess env is exactly today's — the variable "
+            "is set ONLY when a caller asked for a budget"
+        )
+        assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "oauth-token", (
+            "the credential the CLI authenticates with still reaches it"
+        )
+
+    def test_the_api_payload_carries_the_budget_it_was_given(self, monkeypatch):
+        _api_key_env(monkeypatch)
+        calls = _api_calls(monkeypatch, {
+            "model": MODEL, "content": [{"type": "text", "text": "hi"}],
+        })
+        planning_classify._call_api(MODEL, "the prompt", max_tokens=self.ASK)
+        assert calls[0]["payload"]["max_tokens"] == self.ASK
+
+    def test_the_cli_env_carries_the_budget_it_was_given(self, monkeypatch):
+        """`CLAUDE_CODE_MAX_OUTPUT_TOKENS` is how the CLI takes a budget. The
+        seam passes the number and does not second-guess the per-model clamp the
+        CLI applies to it (vendor-boundaries Q4)."""
+        _subscription_env(monkeypatch)
+        calls = _cli_calls(monkeypatch, stdout=_envelope("hi"))
+        planning_classify._call_claude_code(MODEL, "the prompt", max_tokens=self.ASK)
+        assert calls[0]["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(self.ASK)
+        assert calls[0]["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+
+    def test_both_transports_run_with_the_wall_clock_they_were_given(
+        self, monkeypatch
+    ):
+        _api_key_env(monkeypatch)
+        api = _api_calls(monkeypatch, {
+            "model": MODEL, "content": [{"type": "text", "text": "hi"}],
+        })
+        planning_classify._call_api(
+            MODEL, "the prompt", timeout_seconds=self.CLOCK)
+        assert api[0]["timeout"] == self.CLOCK
+
+        _subscription_env(monkeypatch)
+        cli = _cli_calls(monkeypatch, stdout=_envelope("hi"))
+        planning_classify._call_claude_code(
+            MODEL, "the prompt", timeout_seconds=self.CLOCK)
+        assert cli[0]["timeout"] == self.CLOCK
+
+    def test_the_api_timeout_error_names_the_number_actually_used(
+        self, monkeypatch
+    ):
+        """Not the constant. A run cut off at 525s that reports 60s sends
+        whoever reads the log to the wrong dial."""
+        _api_key_env(monkeypatch)
+        _api_calls(monkeypatch, raises=TimeoutError("timed out"))
+        with pytest.raises(planning_classify.TransportError) as caught:
+            planning_classify._call_api(
+                MODEL, "the prompt", timeout_seconds=self.CLOCK)
+        assert str(self.CLOCK) in str(caught.value)
+        assert str(planning_classify.TIMEOUT_SECONDS) not in str(caught.value)
+
+    def test_the_cli_timeout_error_names_the_number_actually_used(
+        self, monkeypatch
+    ):
+        import subprocess
+
+        _subscription_env(monkeypatch)
+        _cli_calls(monkeypatch, raises=subprocess.TimeoutExpired("claude", 525))
+        with pytest.raises(planning_classify.TransportError) as caught:
+            planning_classify._call_claude_code(
+                MODEL, "the prompt", timeout_seconds=self.CLOCK)
+        assert str(self.CLOCK) in str(caught.value)
+        assert str(planning_classify.CLI_TIMEOUT_SECONDS) not in str(caught.value)
+
+    def test_call_real_passes_both_through_on_whichever_transport_it_picks(
+        self, monkeypatch
+    ):
+        """`_call_real` is the seam the judged read calls, so a budget it drops
+        on the floor is a budget nothing downstream can set."""
+        _subscription_env(monkeypatch)
+        cli = _cli_calls(monkeypatch, stdout=_envelope("hi"))
+        planning_classify._call_real(
+            MODEL, "the prompt", max_tokens=self.ASK, timeout_seconds=self.CLOCK)
+        assert cli[0]["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(self.ASK)
+        assert cli[0]["timeout"] == self.CLOCK
+
+        _api_key_env(monkeypatch)
+        api = _api_calls(monkeypatch, {
+            "model": MODEL, "content": [{"type": "text", "text": "hi"}],
+        })
+        planning_classify._call_real(
+            MODEL, "the prompt", max_tokens=self.ASK, timeout_seconds=self.CLOCK)
+        assert api[0]["payload"]["max_tokens"] == self.ASK
+        assert api[0]["timeout"] == self.CLOCK
+
+    def test_the_budget_is_keyword_only(self):
+        """Positionally it would be a fourth argument to a seam whose callers
+        pass two, and the next caller would silently pass a prompt as a budget."""
+        import inspect
+
+        for fn in (planning_classify._call_real, planning_classify._call_api,
+                   planning_classify._call_claude_code):
+            params = inspect.signature(fn).parameters
+            for name in ("max_tokens", "timeout_seconds"):
+                assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, (
+                    f"{fn.__name__}({name}=) must be keyword-only"
+                )
+                assert params[name].default is None, (
+                    f"{fn.__name__}({name}=) defaults to the transport's own "
+                    "constant, so every existing caller is unchanged"
+                )
+
+    def test_the_classifier_passes_neither_keyword(self, monkeypatch):
+        """`classify()` is unchanged, which is what lets a `call` seam taking
+        exactly `(model, prompt)` keep working."""
+        _subscription_env(monkeypatch)
+        seen: list[tuple] = []
+
+        def call(model, prompt):
+            seen.append((model, prompt))
+            return _answer(shape="one-off")
+
+        decision = planning_classify.classify(
+            _card(_probe("DRE-3017")), call=call, model=MODEL)
+        assert decision.shape == "one-off"
+        assert len(seen) == 1
+
+
+class TestTheSeamReportsACut:
+    """`Answer.truncated` — the model read the prompt and answered part of it,
+    and the caller decides what to do with the part."""
+
+    def test_an_answer_is_whole_unless_something_says_otherwise(self):
+        assert planning_classify.Answer().truncated is False
+        assert planning_classify.Answer(text="x", model="m").truncated is False
+
+    def test_the_api_path_reads_the_cut_off_its_stop_reason(self, monkeypatch):
+        """`stop_reason: "max_tokens"` is the field the response has always
+        carried and this module has never read."""
+        _api_key_env(monkeypatch)
+        _api_calls(monkeypatch, {
+            "model": MODEL,
+            "stop_reason": "max_tokens",
+            "content": [{"type": "text", "text": "the first forty cards"}],
+        })
+        answer = planning_classify._call_api(MODEL, "the prompt", max_tokens=64)
+        assert answer.truncated is True
+        assert answer.text == "the first forty cards"
+        assert answer.model == MODEL
+
+    def test_an_ordinary_api_answer_is_not_cut(self, monkeypatch):
+        _api_key_env(monkeypatch)
+        _api_calls(monkeypatch, {
+            "model": MODEL,
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "all of them"}],
+        })
+        assert planning_classify._call_api(MODEL, "the prompt").truncated is False
+
+    def test_the_cli_path_reads_the_cut_off_the_captured_envelope(
+        self, monkeypatch
+    ):
+        """The fixture, and the reason it is a fixture rather than a literal.
+
+        `tests/fixtures/claude_code_output_max_envelope.json` is the envelope
+        Claude Code 2.1.263 — the version `DEFAULT_AGENT_CLI` fetches — writes
+        when the answer runs past `CLAUDE_CODE_MAX_OUTPUT_TOKENS`. The envelope
+        field set was captured from a real run of that CLI:
+
+            CLAUDE_CODE_MAX_OUTPUT_TOKENS=64 claude -p \
+              "Count from 1 to 500, one number per line, nothing else." \
+              --max-turns 1 --allowedTools "" --output-format json
+
+        The `result` line is that CLI's own message for the cut, read out of the
+        installed 2.1.263 binary rather than remembered:
+
+            grep -aoh ".\\{0,200\\}output token maximum" \
+              ~/.local/share/claude/versions/2.1.263
+
+        NOTE, and it is the half a caller has to plan for: on this path the
+        PARTIAL TEXT DOES NOT SURVIVE. The CLI emits the cut as an api-error
+        assistant message and clears the accumulated text behind it, so
+        `result` carries the message and nothing else. `is_error` is true and
+        the process exits non-zero, which is why the cut has to be read BEFORE
+        either of those is treated as a transport failure.
+        """
+        _subscription_env(monkeypatch)
+        envelope = json.loads(CUT_ENVELOPE.read_text(encoding="utf-8"))
+        _cli_calls(monkeypatch, returncode=1, stdout=json.dumps(envelope))
+
+        answer = planning_classify._call_claude_code(
+            MODEL, "the prompt", max_tokens=64)
+        assert answer.truncated is True
+        assert answer.text == envelope["result"]
+
+    def test_that_cut_envelope_is_not_a_transport_failure(self, monkeypatch):
+        """A cut answer is not a `TransportError`: the model read the prompt and
+        answered part of it. Q3 — the seam returns the part, never retries it."""
+        _subscription_env(monkeypatch)
+        _cli_calls(monkeypatch, returncode=1,
+                   stdout=CUT_ENVELOPE.read_text(encoding="utf-8"))
+        planning_classify._call_claude_code(MODEL, "the prompt", max_tokens=64)
+
+    def test_the_fixture_carries_the_cli_own_words_for_a_cut(self):
+        """Pinned so a fixture edited into something the CLI never writes stops
+        proving anything — the marker is the CLI's message, not our paraphrase."""
+        envelope = json.loads(CUT_ENVELOPE.read_text(encoding="utf-8"))
+        assert "output token maximum" in envelope["result"]
+        assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" in envelope["result"]
+        assert envelope["is_error"] is True, (
+            "the CLI reports the cut as an api error, which is why the cut is "
+            "read before the error is"
+        )
+
+    def test_an_ordinary_cli_envelope_is_not_cut(self, monkeypatch):
+        _subscription_env(monkeypatch)
+        _cli_calls(monkeypatch, stdout=_envelope("all of them", model=MODEL))
+        answer = planning_classify._call_claude_code(MODEL, "the prompt")
+        assert answer.truncated is False
+        assert answer.text == "all of them"
+
+    def test_a_real_cli_failure_is_still_a_transport_failure(self, monkeypatch):
+        """The cut read must not swallow the failures DRE-3074 pinned."""
+        _subscription_env(monkeypatch)
+        _cli_calls(monkeypatch, returncode=1, stdout=json.dumps({
+            "type": "result", "subtype": "success", "is_error": True,
+            "num_turns": 1, "modelUsage": {},
+            "result": "Not logged in · Please run /login",
+        }))
+        with pytest.raises(planning_classify.TransportError):
+            planning_classify._call_claude_code(MODEL, "the prompt")
