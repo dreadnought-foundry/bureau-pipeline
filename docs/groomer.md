@@ -28,9 +28,17 @@ only then does anything leave Intake.
 4. **Sequences.** Urgent, then High, then the last 14 days newest first —
    subject to those constraints, deterministically. The rules are below.
 5. **Assigns cycles**, using Linear's own primitive.
-6. **Proposes**, in plain English: the batch and its order, what is deferred
-   and to when, what is recommended dead and what replaced it, and which repos
-   are waiting and roughly how long.
+6. **Reads once, ranked.** One model call over the whole population and the
+   context pack — what is in flight, what merged, what closed — asking the one
+   question the cards cannot answer between them: given what we are already
+   doing, does this card belong in the next batch? The read fills the batch; it
+   never breaks it, because every rule above still constrains the order.
+   `--no-judgement` makes no call at all and is exactly the groomer that ran
+   before DRE-3150.
+7. **Proposes**, in plain English: the batch and its order with the **why** on
+   every row, what is deferred and what brings each one back, what is
+   recommended dead and on whose word, what could not be ranked at all, and
+   which repos are waiting and roughly how long.
 
 ## The one ranked read
 
@@ -98,19 +106,35 @@ newest creation among the epic and its children: one Urgent child pulls the
 whole unit into the batch. Inside a unit the order is unchanged — oldest child
 first, with collisions and blocks relations on top.
 
-## The three outcomes
+## The outcomes, and what each one owes the reader
 
-| Outcome | Means |
-| -- | -- |
-| `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. |
-| `not-now` | **Wanted, and deliberately not this batch**. Either it names the cycle it is reconsidered in, or it is older than the window and stays in Intake ungroomed. This is "later", and it is not "no". |
-| `dead` | **Recommended for cancellation, and never cancelled here**. It names the card or merged PR that superseded it; the operator decides and the operator executes. |
+Since DRE-3150 the groomer makes ONE ranked read of the whole population
+(`groom_judgement.py`) alongside the rules, so every outcome carries the words
+that put a card there. DRE-3152 puts those words in the proposal itself: one
+line per card, before anything moves.
+
+| Outcome | Means | What it must name |
+| -- | -- | -- |
+| `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "created inside the window"). |
+| `not-now` | **Wanted, and deliberately not this batch**. Either it names the cycle it is reconsidered in, or it is older than the window and stays in Intake ungroomed. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
+| `dead` (the read calls it `likely-done`) | **Recommended for cancellation, and never cancelled here**. Two readers propose one and the proposal says which: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | **evidence** — the card, merged PR or decision it points at. A recommendation nobody can check is one nobody should act on. |
+| `could not rank` | **The read could not place it.** The rules kept it exactly where they had it. | **itself** — its own section in the proposal, never folded into "not now". |
 
 `not-now` is first-class on purpose. A card can be well-formed, wanted, and
 correctly left alone for a month — without a "later", Intake is a pass/fail
-funnel and the only way to say "later" is to say "no".
+funnel and the only way to say "later" is to say "no". `could not rank` is
+first-class for the same reason from the other end: a refusal that renders as
+a deferral is a refusal nobody reads, and refusal is not a default.
 
-A `dead` recommendation always names what replaced it. A `Superseded by:` line
+A reason written in technical terms never reaches the page. It goes through
+the same plain-English guard the planner's escalation goes through, is replaced
+with one sentence saying so, and the count of withheld reasons is printed in
+the proposal's receipt line.
+
+A dead recommendation always names what replaced it, and the proposal keeps the
+two sources apart — **declared on the card** (a person wrote the line) and
+**judged by the ranked read** (a call, with what it points at) — so the CEO
+knows which of the two is being read before deciding. A `Superseded by:` line
 that names nothing checkable is reported as a gap and the card is sequenced
 normally: a recommendation nobody can check is one nobody should act on. The
 groomer never cancels — in the 2026-08-22 sweep the recommendation, the decision
@@ -182,6 +206,13 @@ remembering eventually does not happen. Revisit the cadence once the calls have
 been checked against a real batch — the first one is written up in
 [groomer-first-batch.md](groomer-first-batch.md).
 
+**The audit D5 was waiting for is DRE-3151.** It runs the two readings —
+`--no-judgement` and the ranked read — over one population and compares them
+card by card, which is the check that decides whether this ever runs on a
+schedule. Until it has, the cadence stays manual: a groomer ranking two hundred
+cards unattended before anyone has read its calls is the same mistake as
+trusting a critic's verdicts before comparing them to a held-back set.
+
 ## On cycles
 
 Assigning cards to cycles is not a return to sprint planning. The cycle is the OKR heartbeat — a reporting rhythm, not a capacity commitment — and it still reports what moved. What the groomer needs from it is a native container for an ORDER, which Linear already has and nobody has to build.
@@ -213,6 +244,23 @@ implicit:
   says B first) cannot both be honoured. The ranked order wins and every
   dropped constraint is reported, because two cards that each have to go first
   is a planning question, not an ordering one.
+
+The ranked read has its own stated limits, and they are on the page too:
+
+- **it reads a census, not the cards.** Each card travels as its id, title,
+  labels, priority, age in days and the first two lines of its description —
+  not bodies, not comments, not linked documents. The whole population goes in
+  ONE prompt, and what decides a batch is what a card is FOR, which is on its
+  first lines or is not written down anywhere;
+- **the receipt line says what it ran against** — the model that answered, the
+  number of cards, and the counts of epics in flight, merged PRs and closed
+  cards in the context pack. A pack section that was capped is named in the
+  proposal JSON;
+- **a cut answer is said out loud.** The one call is sized off the census, and
+  when the answer comes back at that ceiling the receipt line says so, names
+  the budget, and counts the cards the cut cost — they appear under "Could not
+  rank — needs a person" rather than looking like cards the model declined to
+  rank (DRE-3259).
 
 The second critic's cross-epic sight (DRE-2721, D3) catches what the groomer
 missed. That is a backstop, not a duplicate: the groomer prevents the collision
