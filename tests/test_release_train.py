@@ -246,7 +246,7 @@ def test_the_brake_is_one_line_per_surface_and_the_matrix_is_empty(tmp_path):
     repo = _fake_repo(tmp_path)
     plan = release_train.plan(
         release_train.load(repo / ".github" / "bureau" / "release.json"),
-        repo_root=repo, sha=_head(repo), now=pt(2026, 7, 15, 10, 0),
+        repo_root=repo, head=_head(repo), now=pt(2026, 7, 15, 10, 0),
         brake="2026-09-05",
     )
     assert [d.act for _, d in plan] == [release_train.HELD] * len(plan)
@@ -1016,10 +1016,11 @@ def test_the_plan_reads_the_head_of_the_branch_at_start(tmp_path):
     data = release_train.load(repo / ".github" / "bureau" / "release.json")
     sha = _head(repo)
     plan = release_train.plan(
-        data, repo_root=repo, sha=sha, now=pt(2026, 7, 15, 10, 0), brake=None
+        data, repo_root=repo, head=sha, now=pt(2026, 7, 15, 10, 0), brake=None,
+        checks_for=lambda _sha: green(),
     )
     assert [name.name for name, _ in plan] == ["demo"]
-    assert release_train.matrix(plan) == ["demo"]
+    assert release_train.matrix(plan) == [{"surface": "demo", "sha": sha}]
 
     # A later commit does not change the plan already made — the collapse rule
     # is "head of the branch at start".
@@ -1242,3 +1243,432 @@ def test_the_environment_the_script_is_handed_carries_the_release_sha(tmp_path):
     )
     assert env["RELEASE_SHA"] == "a" * 40
     assert env["RELEASE_SURFACE"] == "demo"
+
+
+# --------------------------------------------------------------------------
+# DRE-3266: ready is a COMMIT, not the head. The train releases the newest
+# commit on the default branch whose gating checks are all green and which is
+# newer than the surface's deployed tag; a still-checking head is stepped
+# past and rides the next train. The live fixture is agent-bureau run
+# 34058913763 at 13:44 PT on 2026-09-06.
+# --------------------------------------------------------------------------
+
+WALK_FIXTURE = ROOT / "tests" / "fixtures" / "release-train-43c86b4a9-2026-09-06.json"
+
+
+def _walk_fixture():
+    return json.loads(WALK_FIXTURE.read_text())
+
+
+class _Reader:
+    """`checks_for(sha)` that answers from a table and records every read —
+    the read-call bound is part of the contract."""
+
+    def __init__(self, by_sha):
+        self.by_sha = by_sha
+        self.reads = []
+
+    def __call__(self, sha):
+        self.reads.append(sha)
+        answer = self.by_sha[sha]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _pending(name="Console backend (pytest)"):
+    return release_train.read_checks(
+        [_check(name, 1, status="in_progress", conclusion=None)],
+        [_run(1, CI_PATH)],
+    )
+
+
+def _red(name="Console backend (pytest)"):
+    return release_train.read_checks(
+        [_check(name, 1, conclusion="failure")], [_run(1, CI_PATH)],
+    )
+
+
+def _commit(repo, path="demo/app.txt", text=None, message="a change"):
+    """One more commit on main touching `path`; returns its sha."""
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text or f"{message}\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", message)
+    return _head(repo)
+
+
+def _tag_head(repo, name="demo/v0"):
+    _git(repo, "tag", "-a", name, "-m", "released")
+
+
+def _plan(repo, reader, *, head=None, now=None, bound=None, brake=None,
+          dispatched_surface=None):
+    kwargs = {}
+    if bound is not None:
+        kwargs["bound"] = bound
+    return release_train.plan(
+        release_train.load(repo / ".github" / "bureau" / "release.json"),
+        repo_root=repo, head=head or _head(repo),
+        now=now or pt(2026, 7, 15, 10, 0), brake=brake,
+        dispatched_surface=dispatched_surface, checks_for=reader, **kwargs,
+    )
+
+
+def _only(plan):
+    [(entry, decision)] = plan
+    return decision
+
+
+def test_the_13_44_pt_fixture_releases_the_green_parent_behind_a_still_checking_head(
+        tmp_path, monkeypatch):
+    """The run the CEO watched: main's head 43c86b4a9 merged a minute earlier
+    with its CI still running, its first parent 6b52674d7 green since 12:31
+    PT, and the deployed tag twenty first-parent commits back. The train said
+    `not ready` and left empty. Under the amended rule it releases the
+    parent and names the head as stepped past."""
+    fixture = _walk_fixture()
+    head, parent = fixture["head"], fixture["parent"]
+    assert head.startswith("43c86b4a9") and parent.startswith("6b52674d7")
+    assert fixture["first_parent_distance"] <= release_train.WALK_BOUND, (
+        "the live case must sit inside the walk bound or the fix is theory"
+    )
+    reader = _Reader({
+        sha: release_train.read_checks(rec["check_runs"], rec["workflow_runs"])
+        for sha, rec in fixture["checks"].items()
+    })
+    assert reader.by_sha[head].state == "pending"
+    assert reader.by_sha[parent].state == "green"
+
+    # The candidate walk is the caller's git; here the real shas stand in
+    # for it so the decision names the commits the CEO watched.
+    monkeypatch.setattr(release_train, "candidates",
+                        lambda repo_root, head_, tag, bound: ([head, parent], False))
+    monkeypatch.setattr(release_train, "lag_state",
+                        lambda repo_root, tag, sha, paths: "behind")
+    repo = _fake_repo(tmp_path)
+    data = {"surfaces": {"console": _good_surface_data(auto=False)}}
+    plan = release_train.plan(
+        data, repo_root=repo, head=head, now=pt(2026, 9, 6, 13, 44),
+        brake=None, dispatched_surface="console", checks_for=reader,
+    )
+    decision = _only(plan)
+    assert decision.act == release_train.RELEASE, decision.reason
+    assert decision.sha == parent
+    assert reader.reads == [head, parent]
+    assert parent[:7] in decision.reason
+    assert head[:7] in decision.reason
+    assert "Console backend (pytest)" in decision.reason
+    assert "in_progress" in decision.reason
+    assert release_train.matrix(plan) == [{"surface": "console", "sha": parent}]
+
+
+def test_a_green_head_releases_the_head_and_reads_one_commit(tmp_path):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    older = _commit(repo, message="older, green")
+    head = _commit(repo, message="head, green")
+    reader = _Reader({head: green(), older: green()})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.RELEASE
+    assert decision.sha == head
+    assert reader.reads == [head], "the walk stops at the first green commit"
+
+
+def test_a_pending_head_is_stepped_past_and_the_green_parent_is_released(tmp_path):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    parent = _commit(repo, message="parent, green")
+    head = _commit(repo, message="head, still checking")
+    reader = _Reader({head: _pending(), parent: green()})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.RELEASE, decision.reason
+    assert decision.sha == parent
+    assert reader.reads == [head, parent]
+    assert head[:7] in decision.reason and "in_progress" in decision.reason
+
+
+def test_a_red_head_is_stepped_past_and_named(tmp_path):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    parent = _commit(repo, message="parent, green")
+    head = _commit(repo, message="head, red")
+    reader = _Reader({head: _red("Toolkit (pytest)"), parent: green()})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.RELEASE, decision.reason
+    assert decision.sha == parent
+    assert head[:7] in decision.reason
+    assert "Toolkit (pytest)" in decision.reason and "failure" in decision.reason
+
+
+def test_everything_pending_is_a_no_op_naming_the_newest(tmp_path):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    a = _commit(repo, message="a")
+    b = _commit(repo, message="b")
+    c = _commit(repo, message="c, the newest")
+    reader = _Reader({a: _pending("A"), b: _pending("B"), c: _pending("C")})
+    plan = _plan(repo, reader)
+    decision = _only(plan)
+    assert decision.act == release_train.NO_OP, decision.reason
+    assert decision.code == "ci-pending"
+    assert decision.ok is True
+    assert decision.sha is None
+    assert c[:7] in decision.reason and "`C`" in decision.reason
+    assert "next" in decision.reason.lower()
+    assert reader.reads == [c, b, a], "every candidate is read, once"
+    assert release_train.matrix(plan) == []
+
+
+def test_a_red_only_candidate_set_refuses_by_name(tmp_path):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    a = _commit(repo, message="a, red")
+    b = _commit(repo, message="b, red")
+    reader = _Reader({a: _red("A"), b: _red("B")})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.REFUSE
+    assert decision.code == "ci-red"
+    assert a[:7] in decision.reason and b[:7] in decision.reason
+    assert "`A`" in decision.reason and "`B`" in decision.reason
+
+
+def test_a_red_head_over_a_pending_parent_is_a_no_op_that_names_both(tmp_path):
+    """A red commit is never released and the line says so; a pending one
+    behind it is what the next train takes — so this is not a refusal."""
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    parent = _commit(repo, message="parent, checking")
+    head = _commit(repo, message="head, red")
+    reader = _Reader({head: _red("Toolkit (pytest)"), parent: _pending("CI")})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.NO_OP, decision.reason
+    assert decision.code == "ci-pending"
+    assert parent[:7] in decision.reason and "`CI`" in decision.reason
+    assert head[:7] in decision.reason and "failure" in decision.reason
+
+
+def test_nothing_newer_than_the_tag_is_current_and_reads_no_check(tmp_path):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    reader = _Reader({})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.NO_OP
+    assert decision.code == "current"
+    assert reader.reads == []
+
+
+def test_the_walk_bound_exceeded_refuses_by_name(tmp_path):
+    """The bound caps commits EVALUATED, newest first, not the distance to
+    the tag: a surface whose newest thirty commits hold no green one is too
+    far behind to walk, and the refusal says so by name."""
+    assert release_train.WALK_BOUND == 30
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    shas = [_commit(repo, message=f"commit {i}") for i in range(5)]
+    head = shas[-1]
+    reader = _Reader({sha: _pending("CI") for sha in shas})
+    decision = _only(_plan(repo, reader, bound=3))
+    assert decision.act == release_train.REFUSE, decision.reason
+    assert decision.code == "walk-bound"
+    assert "too far behind" in decision.reason
+    assert "3" in decision.reason and head[:7] in decision.reason
+    assert reader.reads == [shas[4], shas[3], shas[2]], "bounded, newest first"
+
+
+def test_a_green_commit_inside_the_bound_releases_however_far_back_the_tag_is(
+        tmp_path):
+    """The live tag was twenty first-parent commits back (ninety-five by
+    `compare`); what matters is that a green commit sits inside the bound."""
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    shas = [_commit(repo, message=f"commit {i}") for i in range(6)]
+    table = {sha: _pending("CI") for sha in shas}
+    table[shas[4]] = green()
+    reader = _Reader(table)
+    decision = _only(_plan(repo, reader, bound=3))
+    assert decision.act == release_train.RELEASE, decision.reason
+    assert decision.sha == shas[4]
+    assert reader.reads == [shas[5], shas[4]]
+
+
+def test_the_walk_follows_the_first_parent_line(tmp_path):
+    """A merge's branch commits are not candidates: the train releases what
+    landed on the default branch, in the order it landed."""
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    _git(repo, "checkout", "-q", "-b", "feature")
+    b1 = _commit(repo, message="branch commit 1")
+    b2 = _commit(repo, message="branch commit 2")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge feature", "feature")
+    merge = _head(repo)
+    shas, more = release_train.candidates(repo, merge, "demo/v0")
+    assert shas == [merge]
+    assert more is False
+    reader = _Reader({merge: green(), b1: green(), b2: green()})
+    decision = _only(_plan(repo, reader))
+    assert decision.sha == merge
+    assert reader.reads == [merge]
+
+
+def test_a_candidate_that_reads_current_ends_the_walk(tmp_path):
+    """Older than a commit that touches none of the surface's paths, every
+    commit reads current too — nothing below it is worth a read."""
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    untouched = _commit(repo, path="infra/notes.txt", message="not the surface")
+    head = _commit(repo, message="the surface, still checking")
+    reader = _Reader({head: _pending("CI"), untouched: green()})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.NO_OP
+    assert decision.code == "ci-pending"
+    assert head[:7] in decision.reason
+    assert reader.reads == [head]
+
+
+def test_the_chosen_sha_flows_to_the_script_as_release_sha_and_the_tag_is_cut_on_it(
+        tmp_path):
+    """End to end on the fake caller: the plan chooses the green parent, the
+    surface releases it, the tag lands on it — and the next plan compares the
+    tag against the head, finds only the still-checking head newer than it,
+    and leaves it for the train its CI completion fires."""
+    repo = _fake_repo(tmp_path)
+    parent = _head(repo)
+    head = _commit(repo, message="head, still checking")
+    reader = _Reader({head: _pending("Toolkit (pytest)"), parent: green()})
+    plan = _plan(repo, reader)
+    assert release_train.matrix(plan) == [{"surface": "demo", "sha": parent}]
+
+    released = _release(repo, sha=parent, checks=green())
+    assert released.act == release_train.RELEASE, released.reason
+    assert released.tag == "demo/v1"
+    assert _git(repo, "rev-list", "-n", "1", "demo/v1") == parent
+
+    again = _Reader({head: _pending("Toolkit (pytest)")})
+    decision = _only(_plan(repo, again, now=pt(2026, 7, 15, 12, 0)))
+    assert decision.act == release_train.NO_OP, decision.reason
+    assert decision.code == "ci-pending"
+    assert head[:7] in decision.reason
+    assert again.reads == [head], "the released parent is behind the tag now"
+
+
+def test_the_plan_reads_no_check_for_a_surface_that_would_not_release(tmp_path):
+    repo = _fake_repo(tmp_path)
+    _commit(repo, message="something newer")
+    never = _Reader({})
+    assert _only(_plan(repo, never, brake="2026-09-06")).act == release_train.HELD
+    assert never.reads == []
+    data = json.loads((repo / ".github" / "bureau" / "release.json").read_text())
+    data["surfaces"]["demo"]["auto"] = False
+    (repo / ".github" / "bureau" / "release.json").write_text(json.dumps(data))
+    assert _only(_plan(repo, never)).code == "auto-false"
+    assert never.reads == []
+
+
+def test_a_checks_api_that_cannot_answer_mid_walk_refuses_the_surface(tmp_path):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    parent = _commit(repo, message="parent")
+    head = _commit(repo, message="head")
+    reader = _Reader({head: _pending("CI"),
+                      parent: RuntimeError("gh could not read the checks")})
+    decision = _only(_plan(repo, reader))
+    assert decision.act == release_train.REFUSE
+    assert decision.code == "unreadable"
+    assert "gh could not read" in decision.reason
+
+
+def test_the_plan_cli_log_names_the_chosen_commit_and_every_skipped_one(
+        tmp_path, monkeypatch, capsys):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    chosen = _commit(repo, message="chosen, green")
+    red = _commit(repo, message="red")
+    head = _commit(repo, message="head, checking")
+    table = {head: _pending("Console backend (pytest)"),
+             red: _red("Toolkit (pytest)"), chosen: green()}
+    monkeypatch.setattr(release_train, "fetch_checks",
+                        lambda repo_, sha: table[sha])
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    code = release_train.main([
+        "--repo", "dreadnought-foundry/demo", "--repo-root", str(repo),
+        "--file", str(repo / ".github" / "bureau" / "release.json"),
+        "plan", "--head", head,
+    ])
+    out = capsys.readouterr().out
+    assert code == 0
+    line = next(l for l in out.splitlines() if f"{release_train.TAG}: release" in l)
+    assert chosen[:7] in line
+    assert head[:7] in line and "Console backend (pytest)" in line
+    assert red[:7] in line and "Toolkit (pytest)" in line and "failure" in line
+    emitted = output.read_text()
+    assert f'"sha": "{chosen}"' in emitted or f'"sha":"{chosen}"' in emitted
+    assert f"head={head}" in emitted
+
+
+def test_the_plan_cli_exits_non_zero_on_a_refusal(tmp_path, monkeypatch, capsys):
+    repo = _fake_repo(tmp_path)
+    _tag_head(repo)
+    head = _commit(repo, message="head, red")
+    monkeypatch.setattr(release_train, "fetch_checks",
+                        lambda repo_, sha: _red("Toolkit (pytest)"))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "github_output"))
+    code = release_train.main([
+        "--repo", "dreadnought-foundry/demo", "--repo-root", str(repo),
+        "--file", str(repo / ".github" / "bureau" / "release.json"),
+        "plan", "--head", head,
+    ])
+    assert code == 1
+    out = capsys.readouterr().out
+    assert f"{release_train.TAG}: refuse" in out and head[:7] in out
+    assert "matrix=[]" in (tmp_path / "github_output").read_text()
+
+
+def test_the_surface_job_checks_out_the_chosen_sha_not_the_head():
+    """The plan chooses per surface, so the matrix carries the sha and every
+    downstream reference is `matrix.sha` — the checkout the script runs in,
+    the `--sha` it is handed. The plan job reads checks now, so it carries
+    the token; the head-vs-CI-sha refusal is gone because they legitimately
+    differ."""
+    doc = _workflow()
+    text = WORKFLOW.read_text()
+    release = doc["jobs"]["release"]
+    assert release["strategy"]["matrix"] == {
+        "include": "${{ fromJSON(needs.plan.outputs.matrix) }}"
+    }
+    checkout = release["steps"][0]
+    assert checkout["with"]["ref"] == "${{ matrix.sha }}"
+    run = next(s for s in release["steps"] if s.get("name") == "Run the surface")
+    assert run["env"]["PLAN_SHA"] == "${{ matrix.sha }}"
+    assert "needs.plan.outputs.sha" not in text
+
+    plan_job = doc["jobs"]["plan"]
+    decide = next(s for s in plan_job["steps"] if s.get("id") == "plan")
+    assert decide["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "--head" in decide["run"]
+    assert "but CI ran on" not in text
+    # The plan checks out the default branch's head on every event, and the
+    # CI-completion event's sha is a candidate by construction.
+    assert "ref" not in (plan_job["steps"][0].get("with") or {})
+    assert "github.event.workflow_run.head_sha" in text
+
+
+def test_the_render_states_that_ready_is_a_commit_not_the_head():
+    rendered = release_train.render_markdown()
+    for needle in ("newest green", "first-parent", "DRE-3266", "walk-bound",
+                   "stepped past"):
+        assert needle in rendered, needle
+    row = next(line for line in rendered.splitlines() if "`walk-bound`" in line)
+    assert "`refuse`" in row, row
+    row = next(line for line in rendered.splitlines() if "`ci-pending`" in line)
+    assert "`no-op`" in row and "newest" in row, row
+
+
+def test_the_standard_says_ready_is_a_commit():
+    body = STANDARD.read_text()
+    assert "ready is a commit" in body.lower()
+    assert "DRE-3266" in body
+    assert "dispatch again once CI has answered" not in body
