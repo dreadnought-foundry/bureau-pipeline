@@ -26,8 +26,9 @@ releases a repo's declared surfaces on the caller's own identity — the rules
 are `scripts/release_train.py`, what a surface script owes is
 `standards/release-train.md`, and the data is `docs/release-train.md`. This
 repo declares one surface of its own, `pipeline-channel`, purely so deploy-lag
-reads the `stable` channel like any other surface; the train never runs it and
-`promote-channel.yml` is unchanged.
+reads the `stable` channel like any other surface; the train never runs a
+surface declared that way, and nothing about how this repo's own channel
+advances (below) changes.
 
 ## The lane contract (DRE-2726)
 

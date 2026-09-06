@@ -557,6 +557,17 @@ echo "the migration failed" >&2
 exit 3
 """
 
+LIGHTWEIGHT_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+git tag "demo/v1" "$RELEASE_SHA"
+"""
+
+ELSEWHERE_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+git commit -q --allow-empty -m "a commit the train never asked for"
+git tag -a "demo/v1" -m "at the wrong commit" HEAD
+"""
+
 
 def _fake_repo(tmp_path, script=SCRIPT, paths=("demo/",)):
     repo = tmp_path / "caller"
@@ -699,6 +710,20 @@ def test_a_script_that_cuts_no_tag_is_a_failure(tmp_path):
     assert decision.act == release_train.REFUSE
     assert decision.ok is False
     assert "tag" in decision.reason
+
+
+def test_a_lightweight_tag_is_refused__the_record_carries_the_annotation(tmp_path):
+    repo = _fake_repo(tmp_path, script=LIGHTWEIGHT_SCRIPT)
+    decision = _release(repo)
+    assert decision.act == release_train.REFUSE
+    assert decision.code == "tag-not-annotated"
+
+
+def test_a_tag_that_points_somewhere_else_is_refused(tmp_path):
+    repo = _fake_repo(tmp_path, script=ELSEWHERE_SCRIPT)
+    decision = _release(repo)
+    assert decision.act == release_train.REFUSE
+    assert decision.code == "tag-elsewhere"
 
 
 def test_a_script_that_exits_non_zero_is_a_failure_that_names_the_code(tmp_path):
