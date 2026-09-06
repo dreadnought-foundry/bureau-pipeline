@@ -34,9 +34,10 @@ anyway. A large PR is exactly the one most worth reviewing.
 
 THRESHOLDS come from the repo's own history, not round numbers:
 
-  * 50 files / 5,000 changed lines. The largest review that has ever
-    SUCCEEDED here is +4,092 across 29 files (#275); #290 ran 41 files. Both
-    stay on the one-pass path they demonstrably survive, with headroom.
+  * 10 files / 1,500 changed lines. Above every review the critic has been
+    observed to FINISH and below the smallest one it demonstrably could
+    not — the measurement is beside the constant below. Lowered from
+    50 / 5,000 by DRE-2924.
   * 200 files / 20,000 changed lines. Above #297 itself (118 / 17,537),
     deliberately: that PR must be reviewed, not refused. Also below
     GitHub's 300-file compare cap, so the refusal is never decided on
@@ -75,8 +76,34 @@ import sys
 from sanitize_untrusted import _write_output
 
 # ── thresholds (see the module docstring for where each number comes from) ──
-LARGE_FILES = 50
-LARGE_LINES = 5_000
+
+# THE ONE-PASS CEILING, AND THE MEASUREMENT THAT SET IT (DRE-2924).
+# portico, the night of 2026-08-31 — five reviews, one repo, one config:
+#
+#     #361    4 files /   507 lines   APPROVED
+#     #362    5 files /   975 lines   APPROVED
+#     #363    6 files / 1,026 lines   APPROVED
+#     #366    4 files /  ~700 lines   reviewed
+#     #364   18 files / 2,059 lines   NO VERDICT, TWICE
+#
+# Everything the critic finished was <= 6 files / ~1,030 lines. #364 — the one
+# pull request at 3x the files — is the only one it could not finish: attempt
+# one spent 62 of its 80 turns and ~$2.56 and left nothing where the verdict
+# should have been. Splitting it into #367 (11 files) and #368 (7 files)
+# resolved it within the hour.
+#
+# The defect that measurement exposes: the threshold is expressed in files and
+# lines, and the thing that actually runs out is TURNS. The previous pair,
+# 50 / 5,000, was read off an older and larger sample (#275 at +4,092 across
+# 29 files; #290 at 41 files) and it would happily route something 2.5x bigger
+# than #364 to the same one-pass review #364 died in. 10 files / 1,500 lines
+# is picked from the band between the two observations — above every completed
+# review with headroom, well below the one that failed — and NOT from the old
+# constant. Raising max_turns instead only moves the wall, and the review
+# quality at turn 119 is not the quality at turn 20; above this line the
+# file-list strategy runs, with a turn budget sized for it.
+LARGE_FILES = 10
+LARGE_LINES = 1_500
 OVERSIZED_FILES = 200
 OVERSIZED_LINES = 20_000
 

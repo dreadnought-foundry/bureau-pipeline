@@ -1292,6 +1292,26 @@ jobs:
           # gates are consulted; the retry's numbers win when both ran. Empty
           # RAN means crash, or no execution record at all — neither of which
           # we can describe as a run, so the existing wording stands.
+          # DRE-2924: what the attempts actually SPENT, on EVERY failing path.
+          # `RAN` below is a CLAIM — an attempt ended cleanly and left nothing
+          # — and it is only ever set for that one outcome. This is the bill,
+          # and the bill is what tells an agent that never started apart from
+          # one that reviewed for 62 turns: portico PR #364's first message
+          # carried the turns and the cost, and that is the only reason its
+          # cause was ever diagnosable. Numbers only, straight from the gate's
+          # own whitelist (execution_result.py) — data by construction, not by
+          # careful quoting, which is the MODEL_WHY rule documented above.
+          SPENT=""
+          if [ -n "${A1_TURNS:-}" ]; then
+            SPENT="the first attempt ran ${A1_TURNS} turns and billed about \$${A1_COST:-?}"
+          fi
+          if [ -n "${A2_TURNS:-}" ]; then
+            if [ -n "$SPENT" ]; then
+              SPENT="$SPENT, the retry ${A2_TURNS} turns and about \$${A2_COST:-?}"
+            else
+              SPENT="the retry ran ${A2_TURNS} turns and billed about \$${A2_COST:-?}"
+            fi
+          fi
           RAN=""
           if [ "${A1_OUTCOME:-}" = "completed_no_verdict" ]; then
             RAN="the first attempt ran ${A1_TURNS:-?} turns and billed about \$${A1_COST:-?}"
@@ -1365,6 +1385,27 @@ jobs:
             # gate step; it names the unevidenced claims and claims nothing
             # about credentials, because nothing here was a credential.
             cp /tmp/qa-evidence-hold.md /tmp/qa-comment.md
+          elif [ "${A1_OUTCOME:-}" = "turn_exhaustion" ] || [ "${A2_OUTCOME:-}" = "turn_exhaustion" ]; then
+            # DRE-2924: the reviewer RAN OUT OF TURNS. `error_max_turns` is
+            # is_error, so this used to fall through to the crash branch
+            # below and blame a startup/auth failure — over a run that
+            # authenticated, reviewed for 62 turns and was billed ~$2.56
+            # (portico PR #364). That misdiagnosis cost three days across two
+            # repos once already; the genuine stale-token signature is
+            # instant, one turn and $0, which is why the numbers are in this
+            # message. Ordered BEFORE the completed-no-verdict branch: when
+            # one attempt merely finished empty and the other exhausted its
+            # ceiling, exhaustion is the actionable cause and its remedy is
+            # not the other one's. Same neutral contract as every branch here
+            # — "QA Critic" so merge-gate treats it as the latest word and it
+            # supersedes a stale APPROVE, no "VERDICT:" line so the merge is
+            # held and the fix agent is not woken for findings nobody made.
+            # Deliberately NOT medic_classify's "could not run (infra error)"
+            # marker: this was not an infra failure.
+            printf '%s\n\n%s\n' \
+              "🔎 QA Critic ran out of turns before it could finish — re-review needed, this is NOT a code rejection." \
+              "The adversarial reviewer hit its turn ceiling mid-review and stopped, so there is no verdict to post — ${SPENT:-no turn count was recorded}. This is NOT an authentication or startup failure: it authenticated, did real work, and was billed for it, so no credential needs rotating on the strength of this message. A retry hits the same wall, because the budget it exhausted is the same one — the fix is a smaller change: split this pull request into independently reviewable parts, and each part gets a full review. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+              > /tmp/qa-comment.md
           elif [ -n "$RAN" ]; then
             # DRE-2465, the third branch: the reviewer RAN TO COMPLETION and
             # left no verdict this gate could read. Same neutral contract as
@@ -1388,9 +1429,15 @@ jobs:
             # the latest verdict and it supersedes any stale APPROVE) but NO
             # "VERDICT: APPROVE" line, so merge-gate holds rather than merges.
             # The job then fails loudly below → red + medic-visible.
+            # DRE-2924 appends the attempts' own numbers when the gates
+            # recorded any. On a genuine auth death that is the FINGERPRINT —
+            # instant, one turn, $0 — so it corroborates this wording; on
+            # anything that spent more than that it contradicts it out loud,
+            # which is the only way a reader ever catches this notice
+            # describing the wrong cause again.
             printf '%s\n\n%s\n' \
               "🔎 QA Critic could not run (infra error) — re-review needed, this is NOT a code rejection." \
-              "The adversarial reviewer crashed twice (startup/auth failure, no inference). No findings were produced. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+              "The adversarial reviewer crashed twice (startup/auth failure, no inference). No findings were produced.${SPENT:+ What the execution records report for those attempts: $SPENT — an instant, one-turn, \$0 run IS the stale-credential signature, and anything more than that means the reviewer did real work and this notice is naming the wrong cause (DRE-2924).} Merge is held until a critic actually reviews this PR; this is not a request for changes." \
               > /tmp/qa-comment.md
           fi
           fi
@@ -1536,8 +1583,19 @@ jobs:
         # Only when we actually tried to review — a chrome-only PR (decide
         # said skip) never runs the gates, so it must NOT fail here.
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
+        env:
+          # DRE-2924: the annotation is the first line the medic and the
+          # operator read, and it must not assert a crash over a run that
+          # spent its turns. Same two gate outputs the comment is composed
+          # from, so the red line and the comment can never disagree.
+          A1_OUTCOME: ${{ steps.gate1.outputs.outcome }}
+          A2_OUTCOME: ${{ steps.gate2.outputs.outcome }}
         run: |
-          echo "::error::QA critic crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
+          if [ "${A1_OUTCOME:-}" = "turn_exhaustion" ] || [ "${A2_OUTCOME:-}" = "turn_exhaustion" ]; then
+            echo "::error::QA critic ran out of turns before it produced a verdict — turn exhaustion, not a crash. The reviewer authenticated and did real work; no credential needs rotating. Split this pull request, or check that pr_size_strategy.py routed it to the multi-pass review."
+          else
+            echo "::error::QA critic crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
+          fi
           exit 1
 
       # Fail fast past the SECOND size threshold (DRE-2466). Ordered last for

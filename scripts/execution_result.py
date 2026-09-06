@@ -165,17 +165,27 @@ def completion_detail(execution: dict | None) -> list[str]:
     return _field_lines(execution, _COMPLETION_FIELDS)
 
 
-def completion_scalars(execution: dict | None) -> dict:
-    """The same whitelist, as NUMBERS, for a caller that must pass them on.
+def spend_scalars(execution: dict | None) -> dict:
+    """What a run SPENT, as NUMBERS, whether or not it ended in an error.
 
     qa-review.yml puts these in a PR comment, by way of a step output and a
     shell string. Strings are dropped rather than escaped: a number cannot
     carry a newline (which would write a second `$GITHUB_OUTPUT` key), a
     quote, or a command substitution, so the value is safe by construction
     instead of safe by careful quoting. bools are numbers in Python and are
-    excluded on purpose — none of these fields is ever legitimately one.
+    excluded on purpose — none of these fields is ever legitimately one. The
+    agent's own `result` prose is not on this whitelist and never was.
+
+    DRE-2924 split this out of completion_scalars, which refuses an errored
+    run. That refusal was right while the only error it described was the
+    auth death — 1 turn, $0, nothing to report. A turn-ceiling death is the
+    opposite and is also `is_error`: portico PR #364's first attempt spent 62
+    turns and ~$2.56 and was then told the pull request it had done no
+    inference. Turns and dollars are the evidence that tells those two apart,
+    so every failing path gets to publish them — including the auth death,
+    whose instant 1-turn/$0 shape IS its fingerprint.
     """
-    if not isinstance(execution, dict) or execution.get("is_error") is True:
+    if not isinstance(execution, dict):
         return {}
     scalars = {}
     for field in _COMPLETION_FIELDS:
@@ -184,6 +194,18 @@ def completion_scalars(execution: dict | None) -> dict:
             continue
         scalars[field] = value
     return scalars
+
+
+def completion_scalars(execution: dict | None) -> dict:
+    """spend_scalars, restricted to a run that ended WITHOUT an error.
+
+    The DRE-2465 caller: a `completed_no_verdict` message may only quote
+    numbers from a run that actually completed, so the emptiness on a crash
+    is the property, not an oversight.
+    """
+    if not isinstance(execution, dict) or execution.get("is_error") is True:
+        return {}
+    return spend_scalars(execution)
 
 
 def print_failure_detail(execution: dict | None, prefix: str) -> None:
