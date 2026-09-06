@@ -1,0 +1,2096 @@
+{
+ "_about": "agent-bureau run 34058913763, a hand dispatch of the console at 2026-09-06 13:44 PT (20:44Z), the run the CEO watched for DRE-3266. main's head was 43c86b4a9 (PR #2329 merged 13:43 PT), its CI had been running for a minute, and the train's Run the surface step said `not ready` naming five in-progress gating checks. Its first parent 6b52674d7 (PR #2331, CI green since 12:31 PT) was ready the whole time, and the deployed tag agent-bureau-console-v1.6.18 sat at 68ef6e605 — 20 first-parent commits behind the head (95 commits by `compare`). Both records were read from GitHub after the fact, trimmed to the shapes fetch_checks reads and to the workflow runs that existed by 20:44:55Z; on the head the five check runs the run's own log named as `still in_progress` are set back to that state, which is the one reconstruction. Everything else is as GitHub recorded it.",
+ "read_at": "2026-09-06T20:44:55Z",
+ "tag": "agent-bureau-console-v1.6.18",
+ "tag_commit": "68ef6e605",
+ "first_parent_distance": 20,
+ "head": "43c86b4a96a075c18120c39dacd0aa8fb4bf47ed",
+ "parent": "6b52674d7e8e6fd07112bede0c765b33a8e1336e",
+ "checks": {
+  "43c86b4a96a075c18120c39dacd0aa8fb4bf47ed": {
+   "check_runs": [
+    {
+     "name": "call / Release console",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274431934
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / Plan the surfaces",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274431934
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / sweep",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274325134
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274299071
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Infra CDK (jest)",
+     "status": "in_progress",
+     "conclusion": null,
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Console backend (pytest)",
+     "status": "in_progress",
+     "conclusion": null,
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Linear relay (pytest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Website (vitest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Console web (vitest) (0)",
+     "status": "in_progress",
+     "conclusion": null,
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Operator rollback harness (pytest)",
+     "status": "in_progress",
+     "conclusion": null,
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274299071
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274299071
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274299071
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274299071
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274299071
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274299071
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "TDD commit discipline",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Detect changed surfaces",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Lint · Guards",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Scaffold TS guard (node)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Build & Push → ECR",
+     "status": "in_progress",
+     "conclusion": null,
+     "check_suite": {
+      "id": 92274288420
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Toolkit (pytest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274288399
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    }
+   ],
+   "workflow_runs": [
+    {
+     "id": 34058913763,
+     "name": "Release train",
+     "path": ".github/workflows/release-train.yml",
+     "event": "workflow_dispatch",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92274431934,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058871030,
+     "name": "Reconcile",
+     "path": ".github/workflows/reconcile.yml",
+     "event": "repository_dispatch",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92274325134,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058860186,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92274299071,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058855935,
+     "name": "Console Release",
+     "path": ".github/workflows/console-release.yml",
+     "event": "push",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92274288420,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058855931,
+     "name": "CI",
+     "path": ".github/workflows/ci.yml",
+     "event": "push",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92274288399,
+     "head_branch": "main"
+    }
+   ]
+  },
+  "6b52674d7e8e6fd07112bede0c765b33a8e1336e": {
+   "check_runs": [
+    {
+     "name": "call / evaluate",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274209956
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274206314
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274206314
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274209973
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274206314
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274206314
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / fix PR #${{ (github.event.issue.number || github.event.inputs.pr_number) }}",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274198193
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274209973
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274209973
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274209973
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274209973
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274209973
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274209973
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / resolve",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92274209956
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274206314
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274206314
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274206314
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / evaluate",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274198187
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / resolve",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92274198187
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273614603
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273614603
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273614603
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273614603
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273614603
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273614603
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273614603
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273581528
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273581528
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273581528
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273581528
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273581528
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273581528
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273581528
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / evaluate",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92273516526
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273516308
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273516308
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / evaluate",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92273500296
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273516308
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273516308
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273516308
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273516308
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273516308
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / resolve",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92273516526
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / fix PR #${{ (github.event.issue.number || github.event.inputs.pr_number) }}",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273500112
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / resolve",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92273500296
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273461409
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273461409
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273461409
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273461409
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273461409
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273461409
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273461409
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / evaluate",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92273392604
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273392606
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273392606
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273392606
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273392606
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273392606
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273392606
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273392606
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / resolve",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92273392604
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273004182
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273004182
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273004182
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273004182
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273004182
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / evaluate",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92272997055
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273004182
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92273004182
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / fix PR #${{ (github.event.issue.number || github.event.inputs.pr_number) }}",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92272997057
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / resolve",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92272997055
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / sweep",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92272817090
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / sweep",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92271517031
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92270362042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92270362042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92270362042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92270362042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92270362042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92270362042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92270362042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / evaluate",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92270290042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / fix PR #2329",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92270290067
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / resolve",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92270290042
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / review",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92269356626
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / sweep",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92269267676
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / sweep",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92266972230
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265166136
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / Release ${{ matrix.surface }}",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138353
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265166136
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265166136
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265166136
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265166136
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265166136
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265166136
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138698
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138698
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138698
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138698
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138698
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / sweep",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92265142612
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / evaluate",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138804
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138698
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / resolve",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138804
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92265138698
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / Plan the surfaces",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92265138353
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264275285
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264275285
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264275285
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264275285
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264275285
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264275285
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264275285
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / sweep",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264076794
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry_declined",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264033593
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Website (vitest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Console web (vitest) (0)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Console backend (pytest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Infra CDK (jest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Operator rollback harness (pytest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Linear relay (pytest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / upstream_outage",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264033593
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / diagnose",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264033593
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / retry",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264033593
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / linear_rate_limited",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264033593
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / backoff",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264033593
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "call / classify",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264033593
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "TDD commit discipline",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Scaffold TS guard (node)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Toolkit (pytest)",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Detect changed surfaces",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    },
+    {
+     "name": "Lint · Guards",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite": {
+      "id": 92264019737
+     },
+     "app": {
+      "slug": "github-actions"
+     }
+    }
+   ],
+   "workflow_runs": [
+    {
+     "id": 34058826952,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92274209973,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058826941,
+     "name": "Merge Gate",
+     "path": ".github/workflows/merge-gate.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92274209956,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058825213,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92274206314,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058821513,
+     "name": "Agent Fix",
+     "path": ".github/workflows/agent-fix.yml",
+     "event": "issue_comment",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92274198193,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058821512,
+     "name": "Merge Gate",
+     "path": ".github/workflows/merge-gate.yml",
+     "event": "issue_comment",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92274198187,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058587829,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92273614603,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058575004,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92273581528,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058548961,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92273516308,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058549051,
+     "name": "Merge Gate",
+     "path": ".github/workflows/merge-gate.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92273516526,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058542720,
+     "name": "Merge Gate",
+     "path": ".github/workflows/merge-gate.yml",
+     "event": "issue_comment",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92273500296,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058542656,
+     "name": "Agent Fix",
+     "path": ".github/workflows/agent-fix.yml",
+     "event": "issue_comment",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92273500112,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058527368,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92273461409,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058499266,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92273392606,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058499264,
+     "name": "Merge Gate",
+     "path": ".github/workflows/merge-gate.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92273392604,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058338678,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92273004182,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058335884,
+     "name": "Merge Gate",
+     "path": ".github/workflows/merge-gate.yml",
+     "event": "issue_comment",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92272997055,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058335883,
+     "name": "Agent Fix",
+     "path": ".github/workflows/agent-fix.yml",
+     "event": "issue_comment",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92272997057,
+     "head_branch": "main"
+    },
+    {
+     "id": 34058259699,
+     "name": "Reconcile",
+     "path": ".github/workflows/reconcile.yml",
+     "event": "schedule",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92272817090,
+     "head_branch": "main"
+    },
+    {
+     "id": 34057739480,
+     "name": "Reconcile",
+     "path": ".github/workflows/reconcile.yml",
+     "event": "schedule",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92271517031,
+     "head_branch": "main"
+    },
+    {
+     "id": 34057271501,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92270362042,
+     "head_branch": "main"
+    },
+    {
+     "id": 34057242756,
+     "name": "Agent Fix",
+     "path": ".github/workflows/agent-fix.yml",
+     "event": "issue_comment",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92270290067,
+     "head_branch": "main"
+    },
+    {
+     "id": 34057242740,
+     "name": "Merge Gate",
+     "path": ".github/workflows/merge-gate.yml",
+     "event": "issue_comment",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92270290042,
+     "head_branch": "main"
+    },
+    {
+     "id": 34056860604,
+     "name": "QA Review",
+     "path": ".github/workflows/qa-review.yml",
+     "event": "workflow_dispatch",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92269356626,
+     "head_branch": "main"
+    },
+    {
+     "id": 34056824168,
+     "name": "Reconcile",
+     "path": ".github/workflows/reconcile.yml",
+     "event": "schedule",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92269267676,
+     "head_branch": "main"
+    },
+    {
+     "id": 34055921012,
+     "name": "Reconcile",
+     "path": ".github/workflows/reconcile.yml",
+     "event": "schedule",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92266972230,
+     "head_branch": "main"
+    },
+    {
+     "id": 34055185410,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92265166136,
+     "head_branch": "main"
+    },
+    {
+     "id": 34055176040,
+     "name": "Reconcile",
+     "path": ".github/workflows/reconcile.yml",
+     "event": "schedule",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92265142612,
+     "head_branch": "main"
+    },
+    {
+     "id": 34055174370,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92265138698,
+     "head_branch": "main"
+    },
+    {
+     "id": 34055174407,
+     "name": "Merge Gate",
+     "path": ".github/workflows/merge-gate.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92265138804,
+     "head_branch": "main"
+    },
+    {
+     "id": 34055174223,
+     "name": "Release train",
+     "path": ".github/workflows/release-train.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92265138353,
+     "head_branch": "main"
+    },
+    {
+     "id": 34054826990,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92264275285,
+     "head_branch": "main"
+    },
+    {
+     "id": 34054745353,
+     "name": "Reconcile",
+     "path": ".github/workflows/reconcile.yml",
+     "event": "repository_dispatch",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92264076794,
+     "head_branch": "main"
+    },
+    {
+     "id": 34054727618,
+     "name": "Pipeline Medic",
+     "path": ".github/workflows/medic.yml",
+     "event": "workflow_run",
+     "status": "completed",
+     "conclusion": "skipped",
+     "check_suite_id": 92264033593,
+     "head_branch": "main"
+    },
+    {
+     "id": 34054721907,
+     "name": "CI",
+     "path": ".github/workflows/ci.yml",
+     "event": "push",
+     "status": "completed",
+     "conclusion": "success",
+     "check_suite_id": 92264019737,
+     "head_branch": "main"
+    }
+   ]
+  }
+ }
+}

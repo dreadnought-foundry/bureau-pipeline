@@ -46,6 +46,8 @@ Every repo the train serves declares its surfaces in `.github/bureau/release.jso
 
 One rule set, asked twice: once to build the matrix, and once inside each surface's own concurrency lane. `no-op` and `held` conclude the job green — they are the train working; only `refuse` is red.
 
+**Ready is a commit, not the head** (DRE-3266, the CEO's amendment of 2026-09-06). The train releases the newest green commit on the default branch that is newer than the surface's deployed tag: the candidates are the first-parent line from the head back to the commit the newest tag points at, read newest first and at most 30 of them. A green candidate is released — that commit, not the head; a still-checking one is stepped past; a red one is stepped past and named, because a red commit is never released. The run's log names the chosen commit and every commit stepped past with its reason. The head that was stepped past rides the train its own CI completion fires. Two reads per candidate (the check runs and the workflow-runs record that says which of them gate), so a walk that exhausts the bound costs at most 60 reads.
+
 | Order | Decision | Act | Says |
 | --- | --- | --- | --- |
 | 1 | `held` | `held` | `RELEASE_HOLD` is set: every surface exits held, once each, before any surface job exists |
@@ -55,10 +57,11 @@ One rule set, asked twice: once to build the matrix, and once inside each surfac
 | 5 | `current` | `no-op` | nothing under the surface's `paths` has changed since its newest tag |
 | 6 | `spacing` | `no-op` | the newest tag in the series is younger than `spacing_minutes` |
 | 7 | `window` | `no-op` | the America/Los_Angeles clock is outside the window; a hand dispatch runs anyway |
-| 8 | `ci-pending` | `no-op` | a gating check on the SHA is still running — the commit is not ready, the train leaves without it, and the run CI completion fires takes it (never a wait: the train is never stopped) |
-| 9 | `ci-red / ci-absent` | `refuse` | a gating check on the SHA failed, or no gating check has reported on it — named in the refusal, with what was read and what was ignored |
-| 10 | `deferred` | `no-op` | the script exited 0 printing `deferred: …` — the deployment is owed to a person, and that is not a failure |
-| 11 | `released` | `release` | the script ran and the train verified the annotated tag it cut at the released commit |
+| 8 | `ci-pending` | `no-op` | no candidate is green yet — the newest still checking is named, the train leaves without it, and the run its CI completion fires takes it (never a wait: the train is never stopped) |
+| 9 | `ci-red / ci-absent` | `refuse` | every candidate is red, or no gating check has reported on it — each named in the refusal, with what was read and what was ignored; a red commit is never released |
+| 10 | `walk-bound` | `refuse` | 30 candidates read newest-first and none green, with more behind them — the surface is too far behind to walk; release it by hand, or raise the bound |
+| 11 | `deferred` | `no-op` | the script exited 0 printing `deferred: …` — the deployment is owed to a person, and that is not a failure |
+| 12 | `released` | `release` | the script ran and the train verified the annotated tag it cut at the released commit |
 
 The brake is the repository variable `RELEASE_HOLD`, read the way `INTAKE_HOLD` is read — see `standards/release-train.md` for where to set it and what the surface script owes.
 

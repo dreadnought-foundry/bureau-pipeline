@@ -11,17 +11,37 @@ rule is testable without a token, a runner or a tag push
 WHAT A TRAIN DOES, IN ONE PARAGRAPH. A caller's `.github/bureau/release.json`
 declares its surfaces. Every time CI completes on the default branch, on the
 07:00 PT schedule, and on a hand dispatch, the train reads that file at the
-commit it was handed — the SHA CI ran on for a CI-completion run, the head of
-the branch at that moment otherwise. The COLLAPSE rule, stated once here
-because it is the only reason two pushes a minute apart produce one release:
-the per-surface concurrency lane holds the second run behind the first, and
-the second reads current if the first released a commit that already contains
-its own. For each declared surface it decides, and where the decision is
+head of the default branch at that moment. The COLLAPSE rule, stated once
+here because it is the only reason two pushes a minute apart produce one
+release: the per-surface concurrency lane holds the second run behind the
+first, and the second reads current if the first released a commit that
+already contains its own. For each declared surface it decides — choosing
+the COMMIT it releases, see the next paragraph — and where the decision is
 `release` it runs the surface's own script under the caller's own identity
-and verifies the tag the script cut. **The tag IS the receipt** — deploy-lag
-reads the newest tag in each surface's series and the console's Shipped-today
-panel reads commit ancestry against it, so nothing here writes a second
-record.
+at that commit and verifies the tag the script cut. **The tag IS the
+receipt** — deploy-lag reads the newest tag in each surface's series and the
+console's Shipped-today panel reads commit ancestry against it, so nothing
+here writes a second record.
+
+READY IS A COMMIT, NOT THE HEAD (DRE-3266, the CEO's amendment of 2026-09-06
+13:55 PT, after watching run 34058913763). The train releases the newest
+commit on the default branch whose gating checks are all green and which is
+newer than the surface's deployed tag. The candidates are the first-parent
+line from the head back to (and excluding) the commit the surface's newest
+tag points at — the caller's own git, `candidates()`, no API call — and they
+are read newest first, at most `WALK_BOUND` of them: green releases THAT
+commit; pending is stepped past; red (or absent) is stepped past and NAMED,
+because a red commit is never released and the line says which was skipped
+and why. No green among them is a no-op naming the newest pending one, or a
+refusal when every candidate is red; `WALK_BOUND` commits read without a
+green one is a refusal saying the surface is too far behind to walk. The
+13:44 PT run is the fixture: head 43c86b4a9 merged a minute earlier with
+five gating checks still in progress, its parent 6b52674d7 green since 12:31
+PT, the deployed tag twenty first-parent commits back — and the train said
+`not ready` and left empty. *"Why didn't it just take what was committed?"*
+Now it does: a busy main means each train leaves with a slightly older,
+proven commit, the head rides the train its own CI completion fires, and no
+collision matters.
 
 THE TRAIN IS NEVER STOPPED (DRE-3263, the CEO's rule of 2026-09-06). If the
 commit is ready it goes; if it is not, the train leaves without it and the
@@ -54,14 +74,18 @@ lists them in. The brake comes first and CI comes LAST of the gates:
   8. green-at-SHA               — every GATING check run on the SHA is green
 
 Rules 2-7 are answered from the caller's own checkout and the clock; rule 8
-costs two API reads (the check runs, and the workflow-runs record that says
-which of them gate). Asking it first would spend those reads on every trigger
-to discover that nothing changed under any surface's paths, and would raise a
-REFUSAL about a release nobody was going to make. So the workflow asks the
-same `decide()` twice: once optimistically, to build the matrix (no surface
-with nothing to release ever reads a check), and once for real inside the
-surface's own concurrency lane. One function, one set of rules, asked twice —
-never two copies of the order.
+costs two API reads PER CANDIDATE (the check runs, and the workflow-runs
+record that says which of them gate). Asking it first would spend those
+reads on every trigger to discover that nothing changed under any surface's
+paths, and would raise a REFUSAL about a release nobody was going to make.
+So the plan asks `decide()` optimistically at the head first — a surface
+with nothing to release never reads a check — and only then walks the
+candidates to choose the commit, reading each until the first green one; the
+surface's own job asks the same `decide()` once more, for real, on the
+chosen commit inside its own concurrency lane. One function, one set of
+rules — never two copies of the order. The read bound: at most two reads per
+candidate, so a walk that exhausts `WALK_BOUND` costs at most sixty, plus
+the two the surface job spends re-reading the commit it was handed.
 
 A REFUSAL IS LOUD AND A NO-OP IS NOT. `no-op` and `held` conclude the job
 `success`: they are the train working — and since DRE-3263 that includes a
@@ -127,6 +151,12 @@ GREEN_CONCLUSIONS = merge_gate.GREEN_CONCLUSIONS
 gating_check_runs = merge_gate.gating_check_runs
 TRAIN_WORKFLOW = ".github/workflows/release-train.yml"
 IGNORED_WORKFLOWS = merge_gate.DEFAULT_REVIEW_WORKFLOWS + (TRAIN_WORKFLOW,)
+
+#: How many candidates a walk READS, newest first, before the surface is
+#: too far behind to walk (DRE-3266). It caps commits evaluated, not the
+#: distance to the tag: a surface ninety commits behind whose head's parent
+#: is green costs two reads. Thirty is ~2x the live fixture's twenty.
+WALK_BOUND = 30
 
 #: Where a caller declares its surfaces, and where this repo declares its own.
 DATA_PATH = ".github/bureau/release.json"
@@ -229,6 +259,9 @@ class Decision(NamedTuple):
     code: str
     reason: str
     tag: str | None = None
+    #: The commit a `release` decision chose (DRE-3266) — the plan's, which
+    #: the surface job checks out and hands the script as `RELEASE_SHA`.
+    sha: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -472,8 +505,10 @@ def fetch_checks(repo: str, sha: str) -> Checks:
     event that produced it — the two payloads the merge gate reads, in the
     same shapes. There is no loop and no wait; a pending answer is a pending
     answer."""
+    # per_page=100 on both: the default page of check runs is 30, and main's
+    # head carries ~150, so the one logical read is two pages, not five.
     check_runs = _gh_lines(
-        f"repos/{repo}/commits/{sha}/check-runs",
+        f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
         ".check_runs[] | {name, status, conclusion, check_suite: {id: .check_suite.id}}",
         "the checks", sha)
     workflow_runs = _gh_lines(
@@ -693,6 +728,134 @@ def tag_target(repo_root, tag) -> str:
 
 
 # ---------------------------------------------------------------------------
+# The walk — ready is a commit, not the head (DRE-3266)
+# ---------------------------------------------------------------------------
+
+class Skipped(NamedTuple):
+    """One candidate the walk stepped past, and why."""
+
+    sha: str
+    state: str    # pending | red | absent
+    detail: str
+
+    def describe(self) -> str:
+        return f"{self.sha[:7]} ({self.detail})"
+
+
+class Walk(NamedTuple):
+    """What the walk found: the commit it chose (or none), its checks, every
+    commit it stepped past in order, and whether it ran out of candidates
+    (`exhausted`) or out of bound."""
+
+    chosen: str | None
+    checks: Checks | None
+    skipped: tuple
+    read: int
+    exhausted: bool
+
+    @property
+    def pending(self) -> list:
+        return [s for s in self.skipped if s.state == "pending"]
+
+    @property
+    def failed(self) -> list:
+        return [s for s in self.skipped if s.state != "pending"]
+
+
+def candidates(repo_root, head, tag, bound=WALK_BOUND):
+    """The first-parent line from `head` back to (and excluding) the commit
+    `tag` points at, newest first, at most `bound` of them — and whether
+    more remain beyond the bound.
+
+    The caller's own git, not the commits API: the checkout is fetch-depth
+    0, `--first-parent` is exact (a merge's branch commits are not commits
+    ON the default branch), and `tag..head` excludes the tag's ancestry —
+    none of which `GET commits?sha=` can do. No tag means every first-parent
+    commit is a candidate, bounded the same way.
+    """
+    rev = f"{tag}..{head}" if tag else head
+    listing = _git(repo_root, "rev-list", "--first-parent",
+                   f"--max-count={bound + 1}", rev)
+    shas = listing.split()
+    return shas[:bound], len(shas) > bound
+
+
+def walk(surface, *, repo_root, head, tag, checks_for, bound=WALK_BOUND) -> Walk:
+    """Read the candidates newest first until the first green one.
+
+    Per candidate: `lag_state` first, because a commit that touches none of
+    the surface's paths since the tag reads current, and so does everything
+    older than it on a first-parent line — the walk ends there, nothing
+    below is worth a read. Otherwise its gating checks: green chooses it;
+    pending is stepped past; red or absent is stepped past and named. A
+    `RuntimeError` from the reader propagates — UNKNOWN is never clear, and
+    `plan()` turns it into a refusal for the surface.
+    """
+    shas, more = candidates(repo_root, head, tag, bound)
+    skipped: list[Skipped] = []
+    read = 0
+    for sha in shas:
+        if lag_state(repo_root, tag, sha, surface.paths) == "current":
+            return Walk(None, None, tuple(skipped), read, True)
+        checks = checks_for(sha)
+        read += 1
+        if checks.state == "green":
+            return Walk(sha, checks, tuple(skipped), read, True)
+        skipped.append(Skipped(sha, checks.state, checks.detail))
+    return Walk(None, None, tuple(skipped), read, not more)
+
+
+def walk_decision(surface, found: Walk, *, head: str, tag, bound=WALK_BOUND) -> Decision:
+    """The walk's answer as one decision whose sentence names the chosen
+    commit and every skipped one with its reason."""
+    stepped = ("; stepped past " + ", ".join(s.describe() for s in found.skipped)
+               if found.skipped else "")
+    behind = f"newer than {tag}" if tag else "on the default branch"
+
+    if found.chosen:
+        return Decision(
+            RELEASE, "release",
+            f"{surface.name} releases {found.chosen[:7]}, the newest green "
+            f"commit {behind} ({found.checks.detail}; "
+            f"{found.checks.describe()}){stepped}",
+            sha=found.chosen)
+
+    if not found.exhausted:
+        return Decision(
+            REFUSE, "walk-bound",
+            f"{surface.name} is too far behind to walk: {found.read} commits "
+            f"read back from {head[:7]} and none green, with more {behind} "
+            f"beyond the bound of {bound}{stepped} — release it by hand, or "
+            f"raise the bound")
+
+    if found.pending:
+        newest = found.pending[0]
+        named_red = (" — " + ", ".join(s.describe() for s in found.failed)
+                     + " is never released" if found.failed else "")
+        return Decision(
+            NO_OP, "ci-pending",
+            f"{surface.name} is not ready — no commit {behind} is green yet; "
+            f"the newest still checking is {newest.describe()} and the next "
+            f"run takes it{named_red}")
+
+    if found.failed:
+        states = {s.state for s in found.failed}
+        code = "ci-red" if "red" in states else "ci-absent"
+        return Decision(
+            REFUSE, code,
+            f"no commit {behind} is green and none is still checking: "
+            + ", ".join(s.describe() for s in found.failed)
+            + " — a red commit is never released")
+
+    # Every candidate read current before any check was read.
+    where = ", ".join(surface.paths) or "the whole repository"
+    return Decision(
+        NO_OP, "current",
+        f"{surface.name} reads current: nothing under {where} has changed "
+        f"since its newest tag")
+
+
+# ---------------------------------------------------------------------------
 # Running a surface
 # ---------------------------------------------------------------------------
 
@@ -783,28 +946,47 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
     return decision
 
 
-def plan(data, *, repo_root, sha, now, brake=None, dispatched_surface=None):
-    """Every declared surface and what the train would do about it.
+def plan(data, *, repo_root, head, now, brake=None, dispatched_surface=None,
+         checks_for=None, repo="", bound=WALK_BOUND):
+    """Every declared surface, what the train does about it, and — for each
+    that releases — WHICH commit (`Decision.sha`).
 
-    Asked with CI assumed green, so a surface with nothing to release never
-    reads a check run (see the module docstring's ordering note). A hand
+    Asked optimistically at the head first, with CI assumed green, so a
+    surface with nothing to release never reads a check run (see the module
+    docstring's ordering note). Only a surface that would release is walked:
+    `checks_for(sha)` — `fetch_checks` against `repo` unless a test hands in
+    its own — is read once per candidate until the first green one. A hand
     dispatch narrows the plan to the one surface it names.
     """
+    if checks_for is None:
+        checks_for = lambda sha: fetch_checks(repo, sha)  # noqa: E731
     out = []
     for name, entry in surfaces(data).items():
         if dispatched_surface and name != dispatched_surface:
             continue
         tag, tag_at = newest_tag(repo_root, entry.tag_series)
-        lag = lag_state(repo_root, tag, sha, entry.paths)
-        out.append((entry, decide(
-            entry, now, tag_at, lag, ASSUMED_GREEN, brake,
-            dispatched=bool(dispatched_surface))))
+        lag = lag_state(repo_root, tag, head, entry.paths)
+        decision = decide(entry, now, tag_at, lag, ASSUMED_GREEN, brake,
+                          dispatched=bool(dispatched_surface))
+        if decision.releases:
+            try:
+                found = walk(entry, repo_root=repo_root, head=head, tag=tag,
+                             checks_for=checks_for, bound=bound)
+            except RuntimeError as err:
+                # FAIL CLOSED: an unreadable answer is not a green one.
+                decision = Decision(REFUSE, "unreadable", str(err))
+            else:
+                decision = walk_decision(entry, found, head=head, tag=tag,
+                                         bound=bound)
+        out.append((entry, decision))
     return out
 
 
 def matrix(planned) -> list:
-    """The surfaces that get a job — one lane each, and nothing else runs."""
-    return [entry.name for entry, decision in planned if decision.releases]
+    """The surfaces that get a job — one lane each, at the commit the plan
+    chose for it, and nothing else runs."""
+    return [{"surface": entry.name, "sha": decision.sha}
+            for entry, decision in planned if decision.releases]
 
 
 # ---------------------------------------------------------------------------
@@ -854,6 +1036,22 @@ def render_markdown() -> str:
         "One rule set, asked twice: once to build the matrix, and once inside "
         "each surface's own concurrency lane. `no-op` and `held` conclude the "
         "job green — they are the train working; only `refuse` is red."
+    )
+    w("")
+    w(
+        "**Ready is a commit, not the head** (DRE-3266, the CEO's amendment "
+        "of 2026-09-06). The train releases the newest green commit on the "
+        "default branch that is newer than the surface's deployed tag: the "
+        "candidates are the first-parent line from the head back to the "
+        "commit the newest tag points at, read newest first and at most "
+        f"{WALK_BOUND} of them. A green candidate is released — that commit, "
+        "not the head; a still-checking one is stepped past; a red one is "
+        "stepped past and named, because a red commit is never released. The "
+        "run's log names the chosen commit and every commit stepped past with "
+        "its reason. The head that was stepped past rides the train its own "
+        "CI completion fires. Two reads per candidate (the check runs and the "
+        "workflow-runs record that says which of them gate), so a walk that "
+        f"exhausts the bound costs at most {2 * WALK_BOUND} reads."
     )
     w("")
     w("| Order | Decision | Act | Says |")
@@ -942,13 +1140,18 @@ _ORDER = (
                        "`spacing_minutes`"),
     ("window", NO_OP, "the America/Los_Angeles clock is outside the window; a "
                       "hand dispatch runs anyway"),
-    ("ci-pending", NO_OP, "a gating check on the SHA is still running — the "
-                          "commit is not ready, the train leaves without it, "
-                          "and the run CI completion fires takes it (never a "
-                          "wait: the train is never stopped)"),
+    ("ci-pending", NO_OP, "no candidate is green yet — the newest still "
+                          "checking is named, the train leaves without it, "
+                          "and the run its CI completion fires takes it "
+                          "(never a wait: the train is never stopped)"),
     ("ci-red / ci-absent", REFUSE,
-     "a gating check on the SHA failed, or no gating check has reported on "
-     "it — named in the refusal, with what was read and what was ignored"),
+     "every candidate is red, or no gating check has reported on it — each "
+     "named in the refusal, with what was read and what was ignored; a red "
+     "commit is never released"),
+    ("walk-bound", REFUSE,
+     f"{WALK_BOUND} candidates read newest-first and none green, with more "
+     "behind them — the surface is too far behind to walk; release it by "
+     "hand, or raise the bound"),
     ("deferred", NO_OP, "the script exited 0 printing `deferred: …` — the "
                         "deployment is owed to a person, and that is not a "
                         "failure"),
@@ -988,14 +1191,16 @@ def _cmd_plan(args) -> int:
         for problem in problems:
             print(f"  {problem}")
         return 1
-    planned = plan(data, repo_root=args.repo_root, sha=args.sha,
+    planned = plan(data, repo_root=args.repo_root, head=args.head,
                    now=datetime.now(tz=PT), brake=brake(),
-                   dispatched_surface=args.surface or None)
+                   dispatched_surface=args.surface or None, repo=args.repo)
     for entry, decision in planned:
-        print(decision.receipt(args.repo, entry.name, args.sha))
+        print(decision.receipt(args.repo, entry.name, decision.sha))
     _emit_output("matrix", json.dumps(matrix(planned)))
-    _emit_output("sha", args.sha)
-    return 0
+    _emit_output("head", args.head)
+    # A refusal is loud here too — a red-only or too-far-behind surface
+    # fails the plan, the way it would fail the surface job.
+    return 0 if all(decision.ok for _, decision in planned) else 1
 
 
 def _cmd_release(args) -> int:
@@ -1039,7 +1244,8 @@ def main(argv=None) -> int:
     sub.add_parser("schema", help="check a release.json and name every problem")
 
     planner = sub.add_parser("plan", help="decide every surface; emit the matrix")
-    planner.add_argument("--sha", required=True)
+    planner.add_argument("--head", required=True,
+                         help="the default branch's head — the walk starts here")
     planner.add_argument("--surface", default="",
                          help="a hand dispatch: plan only this surface")
 
