@@ -388,6 +388,68 @@ jobs:
           echo "run=$RUN" >> "$GITHUB_OUTPUT"
           echo "plan: $(cat /tmp/vqa/plan.json)"
 
+      # THE CONSUMER'S NODE, BEFORE ITS npm (DRE-3248). The render below runs
+      # the consumer's own screenshot harness in its `console/web`, and that
+      # project declares which node it needs. There used to be no setup-node
+      # in front of it at all, so it ran on whatever the hosted runner
+      # shipped: when the runner default fell to v22 under a project
+      # requiring `>=24 <25`, `npm ci` died at EBADENGINE before a single
+      # screenshot, the stage degraded, and the design-fidelity verdict was a
+      # skip wearing green. One River's Phase 2 proof (DRE-3066) painted five
+      # screens red and every one of them went uncompared.
+      #
+      # The version is READ FROM THE CONSUMER, never written here — a second
+      # copy of the number is the same defect one release later.
+      - name: Resolve the consumer's node version
+        id: vqnode
+        if: steps.decide.outputs.review == 'true' && steps.vqplan.outputs.run == 'True'
+        continue-on-error: true
+        env:
+          # The shared node plumbing (DRE-2550) comes out of the pipeline
+          # checkout, which already threads pipeline_ref — so a caller pinned
+          # to a channel gets that channel's action. A release cut before the
+          # action existed carries no action.yml, and a `uses:` of a path that
+          # is not there is a step failure with nothing to read; the setup step
+          # is gated on this file so that degrades like every other branch of
+          # this stage instead.
+          NODE_ACTION: .bureau-pipeline/.github/actions/setup-node-cached/action.yml
+        run: |
+          set +e
+          python3 .bureau-pipeline/scripts/consumer_node.py console/web \
+            > /tmp/vqa/node.txt 2> /tmp/vqa/node.err
+          RC=$?
+          cat /tmp/vqa/node.txt
+          cat /tmp/vqa/node.err
+          if [ "$RC" -ne 0 ]; then
+            echo "setup=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ ! -f "$NODE_ACTION" ]; then
+            echo "setup=false" >> "$GITHUB_OUTPUT"
+            echo "the pipeline checkout at this ref carries no shared node action"
+            exit 0
+          fi
+          # Only the keys the script declares reach the step outputs — a
+          # consumer file cannot add a line of its own choosing here.
+          grep -E '^(setup|version|source|node-version|node-version-file)=' \
+            /tmp/vqa/node.txt >> "$GITHUB_OUTPUT"
+
+      - name: Set up the consumer's node
+        id: vqsetup
+        if: steps.decide.outputs.review == 'true' && steps.vqnode.outputs.setup == 'true'
+        # Best-effort like the rest of this stage: a node that cannot be set
+        # up degrades the visual check (and now says so on the verdict), it
+        # never wedges the gate.
+        continue-on-error: true
+        # DRE-2550's shared node plumbing, from the pinned pipeline checkout.
+        # It also does the `npm ci` — keyed on the lockfile AND the node
+        # identity, and skipped outright on a cache hit.
+        uses: ./.bureau-pipeline/.github/actions/setup-node-cached
+        with:
+          working-directory: console/web
+          node-version: ${{ steps.vqnode.outputs.node-version }}
+          node-version-file: ${{ steps.vqnode.outputs.node-version-file }}
+
       - name: Render affected screens
         id: vqshots
         # Only when the planner said run; best-effort, never fails the job.
@@ -396,15 +458,33 @@ jobs:
         env:
           # Force the harness to dodge live network even if a screen route would.
           CI: "true"
+          # Through env, never interpolated into the shell line — these are
+          # derived from files in the CONSUMER's repository.
+          NODE_READY: ${{ steps.vqnode.outputs.setup }}
+          NODE_SETUP: ${{ steps.vqsetup.outcome }}
+          NODE_DECLARED: ${{ steps.vqnode.outputs.version }}
+          NODE_SOURCE: ${{ steps.vqnode.outputs.source }}
         run: |
           set +e
           SCREENS=$(python3 -c "import json;print(','.join(json.load(open('/tmp/vqa/plan.json')).get('screens',[])))")
           echo "rendering screens: $SCREENS"
+          # The node this actually renders on, next to the version the
+          # consumer asked for. A silent mismatch here is the whole defect.
+          echo "[vqnode] runner node: $(node --version 2>/dev/null || echo none)" \
+               "· consumer declares: ${NODE_DECLARED:-none} (${NODE_SOURCE:-no declaration})"
           STATUS=degraded
           NOTE="harness did not run"
-          if [ -n "$SCREENS" ]; then
+          # NOTE reaches the verdict, so it stays pipeline-authored: consumer
+          # text belongs in the log line above, not in a string this workflow
+          # later re-expands.
+          if [ "$NODE_READY" != "true" ]; then
+            STATUS=degraded
+            NOTE="the consumer's node version could not be read from console/web (see logs)"
+          elif [ "$NODE_SETUP" != "success" ]; then
+            STATUS=degraded
+            NOTE="the consumer's node could not be set up, so nothing was rendered (see logs)"
+          elif [ -n "$SCREENS" ]; then
             ( cd console/web \
-              && npm ci --no-audit --no-fund \
               && npx playwright install --with-deps chromium \
               && npm run shots -- "$SCREENS" ) > /tmp/vqa/shots.log 2>&1
             RC=$?
@@ -446,9 +526,21 @@ jobs:
             --render-status "$STATUS" \
             --render-note "$NOTE" \
             --rendered $RENDERED > /tmp/vqa/context.txt 2>/dev/null
-          # Guaranteed fallback: if context generation failed, emit a no-block note.
+          # Guaranteed fallback: if context generation failed, emit a no-block
+          # note. It is still not allowed to read green (DRE-3248) — a PR whose
+          # planner said RUN and whose harness did not deliver gets the same
+          # "did not run" line the context block would have carried.
           if [ ! -s /tmp/vqa/context.txt ]; then
-            echo "VISUAL QA: not available for this PR. Do NOT raise any visual-comparison finding and do NOT block on it." > /tmp/vqa/context.txt
+            if [ "${{ steps.vqplan.outputs.run }}" = "True" ] && [ "$STATUS" != "ok" ]; then
+              printf '%s\n' \
+                "VISUAL QA — THE COMPARISON DID NOT HAPPEN, and its context could not be built." \
+                "Your verdict Summary MUST carry this line, verbatim, on its own line:" \
+                "    Visual check did not run: the screenshot harness produced no render" \
+                "Do NOT raise a visual-comparison finding and do NOT block on it — but do NOT report the design check as done or not applicable either." \
+                > /tmp/vqa/context.txt
+            else
+              echo "VISUAL QA: not available for this PR. Do NOT raise any visual-comparison finding and do NOT block on it." > /tmp/vqa/context.txt
+            fi
           fi
           # Expose as a multiline output for the prompt blocks below.
           {

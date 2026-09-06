@@ -59,6 +59,14 @@ and it never means a machine compared two images. When you need the comparison
 to have happened, look for it in the critic's verdict rather than assuming the
 stage decided.
 
+**A stage that could not render now says so on the verdict (DRE-3248).** It
+used to tell the critic a failed render was infrastructure flakiness and to
+raise nothing, so a gate that never ran read exactly like a gate that passed —
+five deliberately-broken screens produced no visual finding at all. A degraded
+stage still does not block a merge; it now puts one plain line on the verdict,
+`Visual check did not run: <reason>`. The absence of that line is what tells
+you the comparison actually happened.
+
 ## Critic/verifier lens — shipped surface vs design ref (blocking)
 For any `**Design:**`-bearing PR, compare the shipped surface against the
 design ref AND the card's acceptance criteria:
