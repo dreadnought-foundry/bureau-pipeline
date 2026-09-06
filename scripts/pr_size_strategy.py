@@ -281,11 +281,18 @@ def strategy_context(strategy: str, m: dict, pr: str) -> str:
         )
     first, _ = turn_budget("large")
     return (
-        f"LARGE-PULL-REQUEST REVIEW (this PR measures {size} — several "
-        "times larger than any change reviewed here in one pass). Do NOT "
-        f"attempt a single exhaustive `gh pr diff {n}` pass: at this size "
-        "that is what made four previous reviews finish early and produce "
-        "no verdict at all. Work from the FILE LIST instead:\n"
+        # The size claim has to hold at the BOTTOM of this band as well as
+        # the top: DRE-2924 lowered the entry threshold to 10 files / 1,500
+        # lines, and "several times larger than anything reviewed here" is
+        # false of a 12-file pull request. What is true at every size above
+        # the line is that one exhaustive pass has not been observed to
+        # finish there.
+        f"LARGE-PULL-REQUEST REVIEW (this PR measures {size} — past the "
+        "size a single exhaustive pass has been observed to finish here). "
+        f"Do NOT attempt a single exhaustive `gh pr diff {n}` pass: at this "
+        "size that is what made previous reviews finish early, or run out "
+        "of turns, and produce no verdict at all. Work from the FILE LIST "
+        "instead:\n"
         f"  1. `gh pr diff {n} --name-only > /tmp/qa-files.txt` — the "
         "changed-file list. Read it. This is your review plan.\n"
         f"  2. `gh pr diff {n} > /tmp/qa-full.diff` — keep the diff ON DISK. "

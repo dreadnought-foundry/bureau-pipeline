@@ -303,6 +303,36 @@ class SizeRouterTest(unittest.TestCase):
         self.assertEqual(pss.turn_budget("standard"), (80, 120))
 
 
+class TheLargeBlockIsHonestAtTheBottomOfItsBandTest(unittest.TestCase):
+    """The strategy block the critic reads makes a claim about the PR's size,
+    and lowering the entry threshold moved the bottom of the band under it.
+
+    It used to open "several times larger than any change reviewed here in
+    one pass" — true of #297 at 118 files, false of the 11-file pull request
+    that now takes this path. The prompt is what the reviewer believes about
+    the diff in front of it; a false premise there is not a cosmetic one.
+    """
+
+    def block_for(self, files, lines) -> str:
+        m = pss.measure(compare(spread(files, lines)), None)
+        self.assertEqual(pss.choose(m), "large")
+        return pss.strategy_context("large", m, "364")
+
+    def test_a_pull_request_just_over_the_line_is_not_called_several_times_larger(self):
+        block = self.block_for(pss.LARGE_FILES + 1, pss.LARGE_LINES + 100)
+        self.assertNotIn("several times larger", block)
+
+    def test_it_still_forbids_the_single_exhaustive_pass(self):
+        block = self.block_for(pss.LARGE_FILES + 1, pss.LARGE_LINES + 100)
+        self.assertRegex(block, r"(?i)do not.*single.*pass")
+        self.assertIn("--name-only", block)
+
+    def test_it_names_running_out_of_turns_as_a_way_the_one_pass_fails(self):
+        """#297 finished early; #364 ran out of turns. Both end in no
+        verdict and the reviewer is being told to avoid both."""
+        self.assertRegex(self.block_for(18, 2_059).lower(), r"out of turns")
+
+
 class ThresholdCarriesItsEvidenceTest(unittest.TestCase):
     """Criterion 2. The number that was wrong here was wrong *and*
     untraceable — nothing beside it said which reviews it was derived from.
