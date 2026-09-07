@@ -655,12 +655,24 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
         self.assertEqual(env.get("GH_TOKEN"), "${{ steps.app.outputs.token }}")
 
     def test_a_failed_dispatch_is_said_and_never_claimed_as_started(self):
-        """`plan_run.fire`'s rc rule: no receipt on an unconfirmed dispatch."""
+        """`plan_run.fire`'s rc rule: no receipt on an unconfirmed dispatch.
+
+        Both receipts hang off the dispatch's EXIT STATUS, so neither sentence
+        is reachable before the vendor call has answered. The first cut of this
+        step posted "the review is being run again" ahead of the dispatch and
+        corrected it underneath on a 403 — the retraction lands, but the false
+        claim stays in the thread above it forever."""
         run = str(step_named(DIED).get("run") or "")
-        after = run.split("review_rerun.py dispatch")[1]
-        self.assertIn("||", after.split("\n\n")[0],
-                      "a non-zero dispatch must reach a line of its own")
-        self.assertIn("could NOT", after)
+        retry = run.split('"retry"')[1].split('"park"')[0]
+        head, _, tail = retry.partition("review_rerun.py dispatch")
+        self.assertNotIn("linear_ops.py comment", head,
+                         "a retry receipt written before the dispatch is attempted")
+        self.assertRegex(retry, r"if\s+python3\s+\S*review_rerun\.py dispatch",
+                         "the receipts must branch on the dispatch's rc")
+        self.assertIn("🔁", tail)
+        self.assertIn("could NOT", tail)
+        self.assertLess(tail.index("🔁"), tail.index("could NOT"),
+                        "the success claim belongs on the then-branch")
 
     def test_a_second_death_parks_for_an_operator(self):
         run = str(step_named(DIED).get("run") or "")

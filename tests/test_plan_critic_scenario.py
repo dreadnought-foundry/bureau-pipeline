@@ -553,6 +553,13 @@ class CriticWalk(unittest.TestCase):
         self.assertNotIn("promote", log)
         self.assertIn("higher", self._thread()[-1])
 
+        # ...and that receipt was written AFTER the dispatch landed, not ahead
+        # of it. "The review is being run again" is a claim about something
+        # that has already happened (DRE-2034).
+        order = [line.split(" ")[0] for line in log.splitlines()
+                 if line.startswith("dispatch ") or line.startswith("comment 🔁")]
+        self.assertEqual(order, ["dispatch", "comment"], log)
+
         # The retry run sizes itself from the thread the dead one left.
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
         self.assertEqual(self._outputs()["max_turns"], "120",
@@ -585,11 +592,17 @@ class CriticWalk(unittest.TestCase):
 
     def test_a_failed_dispatch_is_said_and_never_claimed_as_started(self):
         """DRE-2034's rule at this seam: a 403'd dispatch must not leave the
-        epic reading as though a run were on its way."""
+        epic reading as though a run were on its way — not as the last comment,
+        and not ANYWHERE above it either. A retraction underneath a false claim
+        does not unwrite the claim: the thread is the record a person reads
+        back, and it would say "it is being run again" forever."""
         self._died_at("80", "444", STUB_GH_RC="1")
         self.assertEqual(self._dispatches(), [])
         self.assertIn("could NOT", self._thread()[-1])
         self.assertNotIn("state ", self._log())
+        for body in self._thread():
+            self.assertNotIn("🔁", body, self._thread())
+            self.assertNotIn("being run again", body, self._thread())
 
     def test_two_failed_rounds_after_approval_park_with_needs_human(self):
         """DRE-3088: the bound after approval PARKS. The old rail activated the
