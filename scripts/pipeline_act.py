@@ -123,6 +123,7 @@ had been composed.
 from __future__ import annotations
 
 import argparse
+import copy
 import glob
 import json
 import os
@@ -208,8 +209,27 @@ def _records(doc: dict | None = None) -> tuple:
 
 
 def acts(doc: dict | None = None) -> tuple:
-    """The act names, in the file's own order."""
+    """The act NAMES, in the file's own order.
+
+    Names, not rows: every caller here and in `check_act_receipts.py` builds a
+    set or joins a string out of this, so widening it would leave a dozen
+    readers working and wrong. `rows()` is the row-shaped read.
+    """
     return tuple(entry["name"] for entry in _records(doc))
+
+
+def rows(doc: dict | None = None) -> tuple:
+    """Every act's WHOLE row, in the file's own order.
+
+    For a consumer that mirrors this file — the console's reader (DRE-3091) —
+    so the cadence arrives on the same row as the tag, the kind and the state,
+    off one parse instead of a second one written beside it.
+
+    A deep copy on purpose: the registry is cached per path and read per card
+    by the sweep, so a caller that edited a row it was handed would be editing
+    every later reader's copy of it.
+    """
+    return tuple(copy.deepcopy(entry) for entry in _records(doc))
 
 
 def record(name: str, doc: dict | None = None) -> dict:
