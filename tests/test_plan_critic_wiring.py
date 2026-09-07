@@ -54,6 +54,12 @@ import review_rerun as rr  # noqa: E402
 
 ACTION = "anthropics/claude-code-action"
 
+# The wording DRE-3292 retired — the two-lane dance the notices asked a person
+# for before the relay learned the re-run act. Assembled, never written out:
+# the sweep below reads this file too, and a pin spelled in full would be the
+# one hit it could never clear.
+RETIRED_MOVE = " ".join(("Green", "Light,", "then", "approve"))
+
 
 def wf_src() -> str:
     return open(WF).read()
@@ -804,26 +810,31 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
             self.assertNotIn("failure()", gate, fragment)
 
 
-class EveryReapprovalNoticeOnTheRailNamesGreenLightFirst(unittest.TestCase):
-    """The relay's activation fires on a transition INTO In Progress. Every
-    notice that asks the CEO to approve again says the two-step move, in the
-    exact words plan_critic.py uses, so the rail and the sweep cannot drift."""
+class EveryNoticeThatAsksForAReRunNamesTheAct(unittest.TestCase):
+    """The relay has two triggers and the notices name them (DRE-3292).
+
+    A transition INTO In Progress activates an epic, and a comment whose whole
+    body is `review_rerun.RERUN_REVIEW_ACT` asks for the review directly. Every
+    notice on this rail that asks for a re-run says it in the exact words
+    `plan_critic.REAPPROVE_HOW` uses — so the rail and the sweep cannot drift —
+    and none of them asks for a lane move the epic cannot make."""
 
     def test_the_sent_back_notices_ask_only_for_the_move_that_is_left(self):
         """DRE-3291 split this three ways, and each branch asks for a different
         thing — or for nothing.
 
-        The BOUND still says the two-step move in `REAPPROVE_HOW`'s exact
-        words: the epic is parked, and clearing needs-human then re-approving
-        is a person's job. The CHANGED branch has just moved the epic to Green
-        Light itself, so the two-step sentence would name a move that is
-        already made — it asks for the single one that is left. The SAME-CARDS
-        branch asks for nothing at all, because nothing there is the CEO's."""
+        The BOUND still asks for the re-run in `REAPPROVE_HOW`'s exact words:
+        the epic is parked, and clearing needs-human then asking for the review
+        again is a person's job. The CHANGED branch has just moved the epic to
+        Green Light itself and the plan there is genuinely his to read, so it
+        asks for the single move that is left. The SAME-CARDS branch asks for
+        nothing at all, because nothing there is the CEO's."""
         run = str(step_named(SENT_BACK).get("run") or "")
         bound, changed, same = sent_back_branches()
         self.assertEqual(run.count(pc.REAPPROVE_HOW), 1,
-                         "only the parked notice names the two-step move")
+                         "only the parked notice names the re-run act")
         self.assertIn(pc.REAPPROVE_HOW, bound)
+        self.assertIn(rr.RERUN_REVIEW_ACT, bound)
 
         self.assertNotIn(pc.REAPPROVE_HOW, changed)
         self.assertIn("Green Light", changed)
@@ -848,10 +859,36 @@ class EveryReapprovalNoticeOnTheRailNamesGreenLightFirst(unittest.TestCase):
         self.assertNotIn("In Progress", run)
         self.assertNotIn(pc.REAPPROVE_HOW, run)
 
-    def test_the_standard_says_green_light_then_approve(self):
+    def test_the_standard_names_the_act_and_both_relay_triggers(self):
         text = open(STANDARD).read()
-        self.assertIn("Green Light, then approve", text)
+        self.assertIn(rr.RERUN_REVIEW_ACT, text, "the act itself")
+        self.assertIn("INTO In Progress", text, "the other trigger")
+        self.assertNotIn(RETIRED_MOVE, text)
         self.assertNotIn("re-approval\n  by moving it to **In Progress**", text)
+
+    def test_no_file_in_the_repo_still_asks_for_the_two_lane_move(self):
+        """The sweep the card asked for, as a test rather than a one-off grep:
+        the retired sentence is retired everywhere, or the next notice someone
+        writes is copied from the copy that was left behind.
+
+        `.git` is history and `.bureau-pipeline` is a checkout of another ref
+        of this same repo that the run assembles its context from — neither is
+        a file this repo ships."""
+        hits = []
+        for base, dirs, names in os.walk(ROOT):
+            dirs[:] = [d for d in dirs
+                       if d not in (".git", ".bureau-pipeline", "__pycache__")]
+            for name in names:
+                if not name.endswith((".py", ".md", ".yml")):
+                    continue
+                path = os.path.join(base, name)
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        if RETIRED_MOVE in f.read():
+                            hits.append(os.path.relpath(path, ROOT))
+                except (OSError, UnicodeDecodeError):
+                    continue
+        self.assertEqual(hits, [], f"the retired wording still lives in {hits}")
 
 
 if __name__ == "__main__":
