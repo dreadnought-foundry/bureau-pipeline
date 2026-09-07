@@ -50,6 +50,7 @@ sys.path.insert(0, SCRIPTS)
 
 import assemble_context as ac  # noqa: E402
 import plan_critic as pc  # noqa: E402
+import review_rerun as rr  # noqa: E402
 
 ACTION = "anthropics/claude-code-action"
 
@@ -311,12 +312,16 @@ class TheBoundIsWired(unittest.TestCase):
         # The post-approval review's ceiling is an EXPRESSION since DRE-3241
         # (sized per plan), so the literal scan above cannot see it; its worst
         # case is the cap, added by name so the arithmetic keeps counting it.
+        # Since DRE-3289 that worst case is the RETRY cap, not the first-run
+        # one: a review that died is re-run in a job of its own at
+        # `retry_ceiling` turns, and the arithmetic has to cover the longest
+        # run this workflow can start.
         self.assertEqual(
             len(turns), len(agent_steps()) - 1,
             "every agent step but the post-approval review carries a literal "
             "ceiling; a second expression would drop out of this arithmetic",
         )
-        turns.append(pc.POST_REVIEW_TURNS_CAP)
+        turns.append(rr.POST_REVIEW_RETRY_CAP)
         # 7 s/turn is the upper end measured on completed portico runs, plus
         # ~8 minutes of token minting, checkouts, context assembly and Linear
         # calls that the turn arithmetic does not model.
@@ -511,9 +516,10 @@ DECISION = "Second critic — decision"
 
 
 class TheReviewCeilingIsSizedFromThePlan(unittest.TestCase):
-    """The ceiling is computed from the child count on the activate route —
-    `steps.kids` only exists on the plan route — through the one formula in
-    plan_critic.py, with the fifteen-card number as the fallback so a bare
+    """The ceiling is computed on the activate route — `steps.kids` only
+    exists on the plan route — through the one sizer in review_rerun.py, which
+    reads the plan for a first run and the epic's own thread for a retry
+    (DRE-3289), with the fifteen-card number as the fallback so a bare
     `--max-turns` can never reach the action (qa-review.yml's shape)."""
 
     def test_the_ceiling_step_runs_before_the_review_on_the_activate_route(self):
@@ -522,9 +528,29 @@ class TheReviewCeilingIsSizedFromThePlan(unittest.TestCase):
         self.assertIn("mode == 'activate'", str(step.get("if")))
         run = str(step.get("run") or "")
         self.assertIn("linear_ops.py children", run)
-        self.assertIn("plan_critic.py post-turns", run)
+        self.assertIn("review_rerun.py ceiling", run)
+        self.assertNotIn("plan_critic.py post-turns", run,
+                         "the sizer that cannot see a tombstone was replaced")
         self.assertIn(f"max_turns={pc.post_review_turns(15)}", run,
                       "the fallback must be the fifteen-card number, by value")
+
+    def test_the_ceiling_is_sized_against_the_epics_own_thread(self):
+        """A retry is only readable from the thread, and only when the thread
+        is read with authors — a tombstone anyone could post is not a death
+        (`plan_critic.trusted_bodies`)."""
+        run = str(step_named(CEILING).get("run") or "")
+        self.assertIn("dump-comments", run)
+        self.assertIn("--with-authors", run)
+        self.assertIn("--thread-file", run)
+        self.assertIn("plan-critic-thread.json", run,
+                      "the same thread file the decision step dumps")
+
+    def test_a_retry_gets_the_dead_runs_ceiling_with_headroom(self):
+        """The numbers this card writes down, read through the same function
+        the workflow step calls: 80 → 120, 120 → 180, and never above the cap."""
+        self.assertEqual(rr.retry_ceiling(80), 120)
+        self.assertEqual(rr.retry_ceiling(120), 180)
+        self.assertEqual(rr.retry_ceiling(180), rr.POST_REVIEW_RETRY_CAP)
 
     def test_the_review_reads_the_computed_ceiling(self):
         args = str(step_named(SECOND)["with"]["claude_args"])
@@ -576,11 +602,85 @@ class ADeadReviewWritesItsTombstone(unittest.TestCase):
 
     def test_the_tombstone_is_posted_alone_after_its_note(self):
         """Two comments, the decider's shape: the record is a credential only
-        while nothing else shares its comment (`_sole_record`)."""
+        while nothing else shares its comment (`_sole_record`). Everything
+        DRE-3289 added comes AFTER both of them, so a crash between the record
+        and the retry still leaves an honest record (premortem Q5)."""
         run = str(step_named(DIED).get("run") or "")
         self.assertIn("--note-file", run)
         self.assertIn("--record-file", run)
-        self.assertEqual(run.count("linear_ops.py comment"), 2)
+        head = run.split("review_rerun.py after-death")[0]
+        self.assertEqual(head.count("linear_ops.py comment"), 2,
+                         "the note and the tombstone, and nothing else, "
+                         "before anything decides what to do about the death")
+        self.assertLess(run.index("plan_critic.py died"),
+                        run.index("review_rerun.py after-death"))
+
+
+class ADeadReviewRetriesItselfOnce(unittest.TestCase):
+    """DRE-3289. A dead post-approval review used to leave the epic In
+    Progress with nothing scheduled, and the only way to run the review again
+    was a person moving it Green Light → In Progress. Now the same step that
+    writes the tombstone asks `review_rerun.py` what to do about it: retry
+    once at a higher ceiling, park on the second death, or leave a non-turn
+    death to the medic."""
+
+    def test_the_death_is_decided_against_the_thread_it_just_wrote(self):
+        run = str(step_named(DIED).get("run") or "")
+        self.assertIn("review_rerun.py after-death", run)
+        self.assertIn("--with-authors", run)
+        self.assertIn("--subtype", run)
+        self.assertIn("--note-file", run)
+        # The tombstone is on the epic before the thread is read back, or the
+        # death being decided is not in it.
+        self.assertLess(run.rindex("linear_ops.py comment",
+                                   0, run.index("review_rerun.py after-death")),
+                        run.index("dump-comments"))
+
+    def test_a_retry_dispatches_the_activate_route_and_moves_no_lane(self):
+        run = str(step_named(DIED).get("run") or "")
+        self.assertIn("review_rerun.py dispatch", run)
+        self.assertIn(f"--reason {rr.REASON_REVIEW_RETRY}", run)
+        self.assertIn('--repo "$GITHUB_REPOSITORY"', run)
+        retry = run.split('"retry"')[1].split('"park"')[0]
+        self.assertNotIn("linear_ops.py state", retry,
+                         "a retry never writes the epic's lane")
+        self.assertNotIn("add-label", retry)
+
+    def test_the_dispatch_runs_under_the_app_token(self):
+        """Q1/Q2: `repos/.../dispatches` needs contents:write, which the App
+        token holds and the stub's own token does not (`plan_run`'s docstring),
+        and the run it starts initiates as the App bot — already in every
+        `allowed_bots` list on the reachable workflows."""
+        env = step_named(DIED).get("env") or {}
+        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.app.outputs.token }}")
+
+    def test_a_failed_dispatch_is_said_and_never_claimed_as_started(self):
+        """`plan_run.fire`'s rc rule: no receipt on an unconfirmed dispatch."""
+        run = str(step_named(DIED).get("run") or "")
+        after = run.split("review_rerun.py dispatch")[1]
+        self.assertIn("||", after.split("\n\n")[0],
+                      "a non-zero dispatch must reach a line of its own")
+        self.assertIn("could NOT", after)
+
+    def test_a_second_death_parks_for_an_operator(self):
+        run = str(step_named(DIED).get("run") or "")
+        park = run.split('"park"')[1]
+        self.assertIn("add-label", park)
+        self.assertIn("needs-human", park)
+        self.assertIn('state "$EPIC" "Green Light"', park)
+        self.assertIn("plan-critic-death-park.md", park,
+                      "the note after-death wrote, not a rival sentence")
+
+    def test_the_review_step_still_has_no_continue_on_error(self):
+        """The DRE-3241 trap, re-pinned here because this card is the one that
+        makes a dead review recoverable: with `continue-on-error` the decision
+        step would read the empty result file as NO_RESULT and activate the
+        epic with no review at all."""
+        self.assertFalse(step_named(SECOND).get("continue-on-error"))
+        for fragment in (DECISION, ACTIVATE):
+            gate = str(step_named(fragment).get("if") or "")
+            self.assertNotIn("always()", gate, fragment)
+            self.assertNotIn("failure()", gate, fragment)
 
 
 class EveryReapprovalNoticeOnTheRailNamesGreenLightFirst(unittest.TestCase):
@@ -596,11 +696,14 @@ class EveryReapprovalNoticeOnTheRailNamesGreenLightFirst(unittest.TestCase):
         self.assertNotIn("Todo", run)
 
     def test_the_tombstone_note_comes_from_the_module_that_owns_the_sentence(self):
-        """The dead-review note is generated by `plan_critic.py died`, so it
-        carries REAPPROVE_HOW by construction — pinned in test_plan_critic.py;
-        here only that the rail does not hand-write a rival sentence."""
+        """The dead-review note is generated by `plan_critic.py died` and the
+        park note by `review_rerun.py after-death` — pinned in
+        test_plan_critic.py and test_review_rerun.py; here only that the rail
+        hand-writes no rival sentence, and asks for no approval move of its own
+        (DRE-3289: the review re-runs itself, so there is nothing to approve)."""
         run = str(step_named(DIED).get("run") or "")
         self.assertNotIn("In Progress", run)
+        self.assertNotIn(pc.REAPPROVE_HOW, run)
 
     def test_the_standard_says_green_light_then_approve(self):
         text = open(STANDARD).read()
