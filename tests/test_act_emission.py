@@ -365,6 +365,20 @@ def _drive_retry_declined_turns(mp):
     }))
 
 
+@site("proof-observation-pending", "proof-observation-pending")
+def _drive_proof_waiting(mp):
+    """The proof hold (DRE-3275). The only capture here whose wording was not
+    read off code that already existed: the line is a grammar agreed with the
+    console card that parses it, so it is frozen from the contract instead of
+    from history — and freezing it is what stops the two repos drifting."""
+    _card_recorder(mp)
+    reconcile.linear_ops.cmd_proof_waiting(
+        "DRE-1",
+        "a failing agent PR in a console repo",
+        "one open agent/* PR with a red check",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 1. the body survives byte-identical, and the trailer is appended             #
 # --------------------------------------------------------------------------- #

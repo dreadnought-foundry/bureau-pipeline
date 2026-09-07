@@ -42,6 +42,48 @@ console learning a tag the pipeline has not declared yet costs nothing — no
 receipt carries it, so nothing reads it. The pipeline declaring a tag the
 console has not learned costs **every open pull request in agent-bureau**.
 
+## The rows, and what a row is not — `🔬 proof-waiting` (DRE-3275)
+
+The newest row is the clearest example of the distinction the registry keeps,
+so it is written out here rather than only in the JSON:
+
+| Field | Value |
+| -- | -- |
+| tag | `proof-waiting` |
+| act name | `proof-observation-pending` |
+| kind · state · next actor | `hold` · `held` · `operator` |
+| discharges | nothing — a hold starts an obligation, it does not end one |
+| emitted by | `scripts/linear_ops.py`, `proof_waiting_line()` |
+
+A proof card answers *did it work* — the mechanism observed against real state
+— and some proofs cannot start: DRE-3135 needed a failing agent pull request in
+a console repo to EXIST before anyone could watch the pipeline handle one. That
+hold was typed by hand on 2026-09-06 as ordinary prose, and nothing read it.
+Now it is one command, composed through the one receipt writer so the `📎`
+trailer rides along and the console renders `Waiting for proof — <reason>`:
+
+    python3 scripts/linear_ops.py proof-waiting DRE-N \
+      "a failing agent PR in a console repo" \
+      "one open agent/* PR with a red check"
+    python3 scripts/linear_ops.py proof-observed DRE-N \
+      "the fix loop picked it up at 09:20 PT"
+
+The grammar, verbatim, is
+`🔬 proof-waiting: <what is still to be observed> — needs <what would let it be
+observed>` and `🔬 proof-observed: <what was observed, with PT time>`.
+
+**`🔬 proof-observed` is deliberately NOT a row.** It is the discharge record —
+a plain comment, the same shape a critic verdict has against a re-dispatch. The
+only trailer it could carry is the hold's own live key, so composing it would
+leave the next reader finding a fresh hold exactly where the observation is; it
+is declared `not-an-act` in the registry's `unconverted` block instead, with
+that reason, where the debt is countable.
+
+Both commands refuse an empty half, and refuse a text containing `budget
+exhausted` or `holding for a human` — the console's `enrich.HOLD_MARKERS` reads
+either phrase as a fix-budget hold, and the card would render as the wrong kind
+of stuck on a surface nobody would think to check.
+
 ## Why this exists
 
 The console has always checked this. Its

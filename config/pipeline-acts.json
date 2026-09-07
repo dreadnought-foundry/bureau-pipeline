@@ -390,6 +390,22 @@
         "file": "scripts/medic_retry.py",
         "anchor": "not retried — {decision.detail}"
       }
+    },
+    {
+      "name": "proof-observation-pending",
+      "tag": "proof-waiting",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A proof card is waiting on an observation nobody can make yet — the thing it exists to watch has not happened — so it names what is still to be observed and what would let it be observed.",
+      "state": "held",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "why": "DRE-3275. A proof answers 'did it work', observed against real state (standards/card-quality.md), and some proofs cannot start: DRE-3135 needed a failing agent pull request in a console repo to EXIST before anyone could watch the pipeline handle it. That hold was typed by hand on 2026-09-06 as ordinary prose, so nothing read it — the card looked silent, and a silent card is what every backstop here is built to notice. With the row, `linear_ops.py proof-waiting` composes the line through the one receipt writer and the console's receipts.py renders `Waiting for proof — <reason>`. It discharges NOTHING: a hold is the start of an obligation, not the end of one. What ends it is `🔬 proof-observed: <what was observed>` — a plain comment, deliberately NOT a row of its own, the way a critic verdict ends a re-dispatch without being an act. Giving the discharge a row would put this act's live key on the comment that discharges it, and the next reader would find a fresh hold where the observation is; it is declared in `unconverted` as the record it is. The subscriber is the sweep, which is what reads a hold on a card and leaves it alone; the reader that renders it is the console, and resolving subscribers against real workflows is DRE-2827. The two halves are refused when they carry `budget exhausted` or `holding for a human`, because the console's enrich.HOLD_MARKERS reads either phrase as a fix-budget hold and would render this card as the wrong kind of stuck.",
+      "emits": {
+        "file": "scripts/linear_ops.py",
+        "anchor": "def proof_waiting_line("
+      }
     }
   ],
   "console": {
@@ -601,6 +617,13 @@
       "kind": "not-an-act",
       "means": "The merge→Done seam's confirmation that the PR merged and the card closed with it.",
       "why": "It reports an outcome of the work — the gate merged, or a human did — rather than a refusal, a recovery or a hold the pipeline chose for itself. Its only reader is a person looking at the card."
+    },
+    {
+      "file": "scripts/linear_ops.py",
+      "anchor": "proof_observed_line(text)",
+      "kind": "not-an-act",
+      "means": "The observation a person finally made, recorded on the card — what discharges a 🔬 proof-waiting hold.",
+      "why": "A RECORD, and the counterpart of the one act this file's `proof-observation-pending` row declares. It creates no obligation, hands the work to nobody and answers nothing the pipeline decided on its own — a person looked, and this is what they saw. It also must NOT compose: the only trailer it could carry is the hold's, and `proof-waiting` is a live key the console reads, so stamping it on the comment that ENDS the hold would make the next reader find a fresh hold where the discharge is. The registry says the same thing from the other side — `proof-observed` is named in that row's reasoning rather than given a row, exactly as a critic verdict discharges a re-dispatch without being an act."
     },
     {
       "file": "scripts/linear_ops.py",
