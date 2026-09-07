@@ -40,8 +40,8 @@ because it has already been spent.
 | Reviews | A moving document | A frozen specification |
 | Question | Is this fit to take the CEO's time? | Given this is now the specification, what is missing? |
 | Cross-epic scope | This epic only | This epic plus every epic in Green Light / Todo / In Progress, named one by one |
-| A send-back means | One revision round with the planner | One revision round with the planner, then the epic returns to Green Light with a receipt saying what changed; nothing promotes (DRE-3088) |
-| At the bound (two failed rounds) | The plan proceeds to the CEO regardless, reason attached | The epic PARKS in Green Light with `needs-human` and both findings; it is never activated as it stands (DRE-3088) |
+| A send-back means | One revision round with the planner | One re-plan with the planner, then the route branches on whether it changed the card SET: same cards, the run re-reviews itself with no lane move; a card added or removed, the epic returns to Green Light naming it. Nothing promotes either way (DRE-3088, DRE-3291) |
+| At the bound (two failed rounds) | The plan proceeds to the CEO regardless, reason attached | The epic PARKS in Green Light with `needs-human` and both findings, whatever the card set did; it is never activated as it stands (DRE-3088) |
 
 **Both loops are bounded at two failed rounds, and what the bound does depends
 on which side of the CEO the critic sits (amended by DRE-3088, 2026-09-04).**
@@ -51,13 +51,27 @@ read. After approval, "proceed" means agents build it, so the second failed
 round **parks** the epic in Green Light with `needs-human` and both findings,
 and the sweep's own gate (`plan_critic.post_release`) reads the bound the same
 way, so no cron sweep promotes the children either. Every post-approval
-send-back first gets one re-plan with the critic's finding, so the CEO
-re-approves a revised plan, never the same one; on DRE-3060 (2026-09-04) the
+send-back first gets one re-plan with the critic's finding, so the CEO is never
+asked to re-approve the plan he already read; on DRE-3060 (2026-09-04) the
 original rule sent the identical plan back three times and then activated it.
 Nothing circles a third time on either side — an unbounded loop is how 17
 cards sat in a lane for 27 days, and Green Light with the hold label is a
 watched queue, not that lane. A round the critic passed is not a failure and
 a round it crashed on was never a decision, so neither spends the budget.
+
+**What that re-plan costs the CEO turns on whether it changed the card SET
+(amended by DRE-3291, 2026-09-07).** The card set is the only part of a revised
+plan he has not already approved, so the run snapshots the children either side
+of the re-plan and branches on the answer. **Same cards** — no lane move at all:
+the run asks for the review itself (`repository_dispatch`, ACTIVATE route,
+`reason: re-review`) and says so on the epic, because nothing there is his to
+decide. **A card added or removed**, or a re-plan that did not finish — Green
+Light, with the added or removed cards named, for the one approval that is
+genuinely his; a snapshot the run could not take reads as *changed*, the
+direction that puts the plan in front of a person. The bound is unmoved: two
+failed rounds park in Green Light whatever the card set did. Sending every
+send-back back to him was the original rule, and it collected five approvals for
+plans whose cards had not changed (DRE-3164).
 
 **The bound is scoped to one planning attempt.** An epic sent back to Triage is
 re-planned from scratch, and the new plan gets its own rounds; the plan route
