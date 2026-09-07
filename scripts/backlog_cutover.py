@@ -35,11 +35,23 @@ So the exemption is replaced by an ORDERING, not removed and forgotten:
 
 ## Grandfathering is not an exemption
 
-A card with an OPEN pull request, or a run receipt whose clock is still
-running, is justified in its lane by evidence and finishes under the old rules.
-That distinction is drawn on the evidence, never on a list of ids —
-`card_ids_in_code()` and its test exist so that stays true. If such a card comes
-back for rework it goes to Intake like anything else.
+A card with an OPEN pull request, a run receipt whose clock is still running, or
+an EPIC THE CEO HAS ALREADY MOVED TO `In Progress`, is justified in its lane by
+evidence and finishes under the old rules. That distinction is drawn on the
+evidence, never on a list of ids — `card_ids_in_code()` and its test exist so
+that stays true. If such a card comes back for rework it goes to Intake like
+anything else.
+
+The third evidence was added on 2026-09-07 (DRE-3297), off the dry run. It
+reported 280 in Backlog and 279 moving, and 36 of the 279 were children of 11
+epics that were In Progress at that moment — DRE-2840, the card this run records
+itself on, among them. Sweeping those would have stalled eleven epics the CEO
+had already approved, each child having to earn its way back through Intake and
+the groomer, in order to enforce a line whose purpose was that cards nobody ever
+classified must not move without classification. An approval already given IS a
+classification, so the children it was given for finish under the old rules.
+`Green Light` is deliberately not enough — that is the lane an epic waits in to
+BE approved — and neither is any other state.
 
 An unreadable pull-request lookup is NOT "no pull request" (DRE-2034): the run
 refuses rather than yanking a card out from under an open PR.
@@ -114,6 +126,23 @@ REHEARSAL_HEADLINE = f"{MARK} {CUTOVER_TAG}: a REHEARSAL ran — NOT the cutover
 #: promoter's rule changes, that test fails instead of this script quietly
 #: disagreeing with the promoter it is named after.
 EPIC_ACTIVE_STATES = ("Todo", "In Progress")
+
+#: The epic lane that IS the CEO's approval, and the only one (DRE-3297). A card
+#: whose parent sits here is in flight by inheritance: the approval already
+#: happened, so the card finishes under the old rules.
+#:
+#: Deliberately NARROWER than EPIC_ACTIVE_STATES, because the two answer
+#: different questions. `EPIC_ACTIVE_STATES` is what the PROMOTER looks at, and
+#: it includes `Todo` — an epic nobody has started. `Green Light` is the lane an
+#: epic waits in to BE approved, which is the opposite of evidence that it was.
+#: Collapsing the two would exempt every child of every unstarted epic on the
+#: board, which is the second population DRE-2728 exists to prevent.
+EPIC_APPROVED_STATE = "In Progress"
+
+#: The words the inheritance reason is written in. ONE definition, because the
+#: occupancy record counts these cards in their own line by reading the reason
+#: back — a phrase restated in two places disagrees with itself within a month.
+INHERITED_EVIDENCE = "the CEO's approval of that epic is the evidence"
 
 #: Proof-of-life prefixes — the receipts an agent run posts. Mirrors
 #: `reconcile._LIFE_PREFIXES`, pinned by the same test. The sweep's own 🪦/🧹/🚨
@@ -315,6 +344,11 @@ def in_flight_reason(
 ) -> str | None:
     """Why this card is in flight, or None. Evidence only.
 
+    Three evidences, each read off live state: an open pull request on the
+    card's own branch, a run receipt still ticking, and an epic the CEO has
+    already moved to `In Progress`. The last is the only INDIRECT one, so it is
+    asked last — a card that has both gets told the more specific reason.
+
     An in-flight card finishes and closes normally under the old rules. If it
     comes BACK for rework it goes to Intake like anything else — which is a
     property of where it re-enters, not of an exemption recorded here.
@@ -339,6 +373,13 @@ def in_flight_reason(
                 f"a run receipt {age:.0f} minutes old — a run is still going, "
                 "and its receipt justifies the lane by evidence"
             )
+    parent = card.get("parent") or {}
+    if (parent.get("state") or {}).get("name") == EPIC_APPROVED_STATE:
+        epic = parent.get("identifier") or "its parent epic"
+        return (
+            f"its epic {epic} is already {EPIC_APPROVED_STATE} — "
+            f"{INHERITED_EVIDENCE}, so this card finishes under the old rules"
+        )
     return None
 
 
@@ -500,13 +541,26 @@ def _lane_table(before: dict, after: dict) -> list:
     return lines
 
 
+def _inherited(result: dict) -> list:
+    """The held cards an approved epic is carrying, read back off the reason.
+
+    The reason is the record, so it is also the classification — one phrase,
+    `INHERITED_EVIDENCE`, rather than a second flag that can disagree with the
+    sentence the CEO actually reads.
+    """
+    return [
+        row
+        for row in result.get("in_flight") or ()
+        if INHERITED_EVIDENCE in (row.get("why") or "")
+    ]
+
+
 def _left_alone(result: dict) -> str:
+    held = result["in_flight"]
     return (
-        "**Left alone, on evidence:** "
+        f"**Left alone, on evidence ({len(held)}):** "
         + (
-            "; ".join(
-                f"{row['identifier']} — {row['why']}" for row in result["in_flight"]
-            )
+            "; ".join(f"{row['identifier']} — {row['why']}" for row in held)
             or "none"
         )
         + "."
@@ -524,19 +578,41 @@ def record_note(before: dict, after: dict, result: dict) -> str:
     """
     if result.get("only"):
         return _rehearsal_note(before, after, result)
+    moved = len(result["moved"])
+    held = result["in_flight"]
+    inherited = _inherited(result)
+    # The remainder is stated, not implied. A run that leaves 37 cards behind
+    # and closes with "Backlog is empty" is a record that reads as wrong a week
+    # later, which is the one job this note has.
+    remainder = (
+        f"{CUTOVER_FROM} is empty rather than nearly empty. Empty."
+        if not held
+        else f"{CUTOVER_FROM} now holds nothing but the {len(held)} card(s) "
+        "left alone on evidence above, each of which finishes and closes "
+        "normally where it stands."
+    )
     lines = [CUTOVER_HEADLINE, ""]
     lines += _lane_table(before, after)
     lines += [
         "",
-        f"**Moved:** {len(result['moved'])} card(s).",
+        f"**Moved:** {moved} card(s).",
+        f"**Left alone because their epic is already {EPIC_APPROVED_STATE}:** "
+        f"{len(inherited)} card(s) — the CEO approved those epics, so their "
+        "children finish under the old rules instead of starting again at "
+        f"{CUTOVER_TO}.",
+        "**Left alone on their own evidence (an open pull request, or a run "
+        f"receipt still ticking):** {len(held) - len(inherited)} card(s).",
+        f"**Accounted for:** {moved} moved + {len(held)} left alone = "
+        f"{moved + len(held)}, out of {before.get(CUTOVER_FROM, '—')} in "
+        f"{CUTOVER_FROM} before the run.",
         f"**Batch one (inside the promoter's reach, classified first):** "
         f"{', '.join(result['batch_one']) or 'none'}.",
         "",
         _left_alone(result),
         "",
-        "Backlog is empty rather than nearly empty, and it refills only with "
-        "verdict-carrying cards at the rate Planning produces them. Expect the "
-        "board to look alarming for about a week.",
+        f"{remainder} It refills only with verdict-carrying cards at the rate "
+        "Planning produces them. Expect the board to look alarming for about a "
+        "week.",
     ]
     return "\n".join(lines)
 
@@ -589,7 +665,9 @@ def _render(plan_: dict) -> str:
         f"population: {plan_['population']} card(s) in {CUTOVER_FROM}",
         f"moving:     {len(plan_['move'])}",
         f"batch one:  {', '.join(plan_['batch_one']) or 'none'}",
-        f"in flight:  {len(plan_['in_flight'])}",
+        f"in flight:  {len(plan_['in_flight'])} "
+        f"({len(_inherited(plan_))} carried by an epic already "
+        f"{EPIC_APPROVED_STATE})",
     ]
     for identifier in plan_.get("not_in_backlog") or ():
         lines.append(f"  - {identifier}: not in {CUTOVER_FROM} — skipped")
