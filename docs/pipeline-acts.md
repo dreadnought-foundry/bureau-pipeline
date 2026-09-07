@@ -2,10 +2,11 @@
 
 `config/pipeline-acts.json` declares every autonomous act the pipeline can
 take: a refusal, a recovery or a hold, and per act its tag, its kind, the
-state it leaves the work in, the next actor, what it discharges and the
-workflow expected to act on it. It is read and written through one module,
-`scripts/pipeline_act.py`. That much is DRE-2825, and `config/README.md`
-carries the shape.
+state it leaves the work in, the next actor, what it discharges, the
+workflow expected to act on it, and its cadence — how long its work may go
+quiet before it reads as stuck (DRE-3298). It is read and written through one
+module, `scripts/pipeline_act.py`. That much is DRE-2825, and
+`config/README.md` carries the shape.
 
 This page is about the one thing the registry does not say about itself: it
 has a reader in **another repository**, and adding a row here changes that
