@@ -600,5 +600,8 @@ class TestADeadReviewHoldsAndSaysSo:
         assert len(posted) == 1, posted
         assert plan_critic.POST_DIED_TAG in posted[0]
         assert "34008698027" in posted[0]
-        assert plan_critic.REAPPROVE_HOW in posted[0]
+        # DRE-3289: the sweep names the run it is waiting on rather than asking
+        # the CEO for a move — the review re-runs itself once.
+        assert plan_critic.REAPPROVE_HOW not in posted[0]
+        assert "yours to decide" in posted[0]
         assert self.ROUND_ONE not in posted[0]

@@ -1400,6 +1400,17 @@ jobs:
       # for writing them). Counted fresh here because `steps.kids` exists
       # only on the plan route.
       #
+      # ...unless this run IS the retry (DRE-3289). `review_rerun.py ceiling`
+      # asks the epic's own thread first: when the newest post-stage record is
+      # a tombstone the review is being re-run, and it gets the dead run's
+      # ceiling with headroom (80 → 120, 120 → 180, capped) instead of the
+      # number the plan sizes to — which is the number it just died at. A
+      # first run is sized exactly as before, through the same
+      # `post_review_turns`. The thread is dumped WITH AUTHORS because a
+      # tombstone anyone with comment access could post is not a death
+      # (`plan_critic.trusted_bodies`), and to the same file the decision step
+      # writes so the two reads of one thread cannot drift.
+      #
       # The `||` fallback is load-bearing, exactly as in qa-review.yml:
       # claude_args interpolates max_turns, so an unwritten output would hand
       # the action a bare `--max-turns`. The script never exits non-zero; this
@@ -1412,9 +1423,13 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
+          THREAD="${{ runner.temp }}/plan-critic-thread.json"
           KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC") || KIDS=""
-          python3 .bureau-pipeline/scripts/plan_critic.py post-turns \
-            --children "$KIDS" --github-output "$GITHUB_OUTPUT" \
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
+            --with-authors > "$THREAD" || echo "[]" > "$THREAD"
+          python3 .bureau-pipeline/scripts/review_rerun.py ceiling \
+            --epic "$EPIC" --children "$KIDS" --thread-file "$THREAD" \
+            --github-output "$GITHUB_OUTPUT" \
           || {
             echo "::warning::could not size the post-approval review — falling back to the fifteen-card ceiling"
             echo "max_turns=80" >> "$GITHUB_OUTPUT"
@@ -1501,14 +1516,48 @@ jobs:
       # the review itself failed, never on an earlier step's failure, and the
       # job stays red so the medic behaves exactly as before. The decision and
       # the activation below keep their implied `success()` and stay skipped.
+      # ...and then it asks for the review again, ITSELF (DRE-3289). Until this
+      # card a death left the epic In Progress with nothing scheduled, and the
+      # only way to run the review a second time was Green Light → In Progress
+      # by a person — for a plan nobody had found anything wrong with. The
+      # decision is `review_rerun.py after-death`'s and only three answers
+      # exist:
+      #
+      #   retry — the FIRST turn-cap death since the last round. One
+      #     repository_dispatch on the ACTIVATE route at `retry_ceiling`'s
+      #     headroom, and NO lane write: the epic is already In Progress and
+      #     moving it would ask the CEO for something he has nothing to decide
+      #     about.
+      #   park  — the second. `needs-human` + Green Light + the note
+      #     `after-death` wrote, which names BOTH dead runs: two turn-cap
+      #     deaths on one card is the operator's split signal, not a queue
+      #     position (standards/card-quality.md).
+      #   leave — every other subtype. That death is the medic's, which retries
+      #     it once already; two automatic retries of one run is the DRE-2937
+      #     failure at ~$16 a go.
+      #
+      # ORDER IS LOAD-BEARING (premortem Q5): the tombstone is on the epic
+      # before anything reads the thread back, so a crash between the record
+      # and the dispatch leaves an honest record and the sweep's POST_DIED
+      # refusal still names what happens next.
+      #
+      # Q1/Q2: the dispatch needs `contents:write`, which the App token minted
+      # by `Mint bot token` holds and the stub's own `github.token` does not
+      # (`plan_run.py`'s docstring) — the same path reconcile.redispatch uses,
+      # initiating as a bot already in every reachable `allowed_bots` list. The
+      # retry run reads the product repo's normal secrets, as every relay
+      # dispatch does, and queues behind this one on the stub's `agent-<id>`
+      # concurrency group.
       - name: Second critic — the review died
         if: failure() && steps.route.outputs.mode == 'activate' && steps.posta.outcome == 'failure'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           EXEC_FILE="${{ steps.posta.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          RECORD="${{ runner.temp }}/plan-critic-death-record.txt"
           python3 .bureau-pipeline/scripts/plan_critic.py died \
             --stage post \
             --epic "$EPIC" \
@@ -1518,14 +1567,53 @@ jobs:
             --ceiling "${{ steps.postturns.outputs.max_turns }}" \
             --execution-file "$EXEC_FILE" \
             --note-file "${{ runner.temp }}/plan-critic-death-note.md" \
-            --record-file "${{ runner.temp }}/plan-critic-death-record.txt"
+            --record-file "$RECORD"
           # The note the CEO reads, then the tombstone ALONE in its own
           # comment — a record is only a credential while nothing else can be
           # written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-death-note.md")"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-death-record.txt")"
+            "$(cat "$RECORD")"
+          # What the action said it died OF, read back off the record `died`
+          # just wrote from the execution file — one token by construction
+          # (`plan_critic._token`), so the file is parsed once, by the one
+          # loader, and never a second time here. An unknown subtype reads as
+          # `?`, which is not the turn cap, so it stays the medic's.
+          SUBTYPE=$(sed -n 's/.*[[:space:]]subtype=\([^[:space:]]*\).*/\1/p' "$RECORD")
+          THREAD="${{ runner.temp }}/plan-critic-death-thread.json"
+          PARK_NOTE="${{ runner.temp }}/plan-critic-death-park.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
+            --with-authors > "$THREAD"
+          python3 .bureau-pipeline/scripts/review_rerun.py after-death \
+            --epic "$EPIC" \
+            --thread-file "$THREAD" \
+            --subtype "$SUBTYPE" \
+            --github-output "$GITHUB_OUTPUT" \
+            --note-file "$PARK_NOTE"
+          ACTION=$(sed -n 's/^action=//p' "$GITHUB_OUTPUT" | tail -1)
+          if [ "$ACTION" = "retry" ]; then
+            # The receipt is written FROM the dispatch's rc, never ahead of it
+            # (`plan_run.fire`'s rc rule, DRE-2034). Posting "it is running"
+            # first and correcting it after leaves the epic reading as though a
+            # run were on its way for as long as the vendor call takes, and
+            # leaves that false line standing in the thread forever after.
+            if python3 .bureau-pipeline/scripts/review_rerun.py dispatch \
+                 --epic "$EPIC" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --reason review-retry; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "🔁 The review is being run again by the pipeline, with a higher turn ceiling — nothing here is yours to decide, and the epic stays where it is. If it runs out of turns a second time the epic parks with needs-human for an operator."
+            else
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "🚨 The review could NOT be started again — the dispatch did not go through, so nothing is running and nothing is building. This run is red, so the medic picks it up; nothing here is yours to do."
+            fi
+          elif [ "$ACTION" = "park" ]; then
+            python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+              "$(cat "$PARK_NOTE")"
+          fi
 
       - name: Second critic — decision
         id: post1

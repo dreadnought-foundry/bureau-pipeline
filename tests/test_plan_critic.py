@@ -1909,9 +1909,18 @@ class ADeadReviewLeavesATombstone(unittest.TestCase):
         self.assertIn("41", refusal)
 
     def test_the_died_refusal_names_the_way_forward(self):
+        """DRE-3289: the way forward stopped being a move the CEO makes. The
+        review is re-run by the pipeline, once, at a higher ceiling — so the
+        refusal says what is happening and names the run it is waiting on,
+        and asks the CEO for nothing."""
         refusal = pc.promotion_refusal(
             self.CHILD, self.EPIC, self.APPROVED, self._cycle(self._tomb()))
-        self.assertIn(pc.REAPPROVE_HOW, refusal)
+        self.assertNotIn(pc.REAPPROVE_HOW, refusal)
+        self.assertNotIn("Green Light", refusal)
+        self.assertIn("34008698027", refusal, "the run it is waiting on")
+        self.assertIn("yours to decide", refusal)
+        self.assertIn("needs-human", refusal,
+                      "and what a SECOND death does instead")
 
     def test_a_dead_round_does_not_count_toward_the_bound(self):
         """DRE-3088's bound is two FAILED rounds. A dead round is not a failed
@@ -1989,22 +1998,31 @@ class EveryReapprovalNoticeNamesGreenLightFirst(unittest.TestCase):
         )
         self.assertIn(pc.APPROVAL_LANE, pc.REAPPROVE_HOW)
 
-    def test_every_refusal_says_green_light_then_approve(self):
+    def test_every_refusal_that_asks_for_a_move_says_green_light_then_approve(self):
+        """The two refusals that still ask the CEO for something. The dead
+        review no longer does (DRE-3289) — it re-runs itself — so it is pinned
+        the other way, below."""
         unread = pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED, self._cycle())
         held = pc.promotion_refusal(
             self.CHILD, self.EPIC, self.APPROVED,
             self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
-        died = pc.promotion_refusal(
-            self.CHILD, self.EPIC, self.APPROVED,
-            self._cycle(pc.death_marker(stage=pc.STAGE_POST, run="1", attempt=1,
-                                        step="posta", subtype="error_max_turns",
-                                        turns=41, ceiling=40)))
-        for refusal in (unread, held, died):
+        for refusal in (unread, held):
             self.assertIsNotNone(refusal)
             self.assertIn(pc.REAPPROVE_HOW, refusal)
             self.assertIn("Green Light", refusal)
             self.assertNotIn("again by moving it to In Progress", refusal)
             self.assertNotIn("Todo", refusal)
+
+    def test_the_dead_review_asks_the_ceo_for_nothing(self):
+        died = pc.promotion_refusal(
+            self.CHILD, self.EPIC, self.APPROVED,
+            self._cycle(pc.death_marker(stage=pc.STAGE_POST, run="1", attempt=1,
+                                        step="posta", subtype="error_max_turns",
+                                        turns=41, ceiling=40)))
+        self.assertIsNotNone(died)
+        self.assertNotIn(pc.REAPPROVE_HOW, died)
+        self.assertNotIn("Green Light", died)
+        self.assertNotIn("Todo", died)
 
 
 class TheDeadReviewCli(unittest.TestCase):
@@ -2059,10 +2077,22 @@ class TheDeadReviewCli(unittest.TestCase):
             stage="post", run="34008698027", attempt=2, step="posta",
             subtype="error_max_turns", turns=41, ceiling=40))
         self.assertNotIn("never-printed", note + record)
-        for fact in ("41", "40", "34008698027", "not a rejection", pc.REAPPROVE_HOW):
+        for fact in ("41", "40", "34008698027", "not a rejection"):
             self.assertIn(fact, note)
         self.assertNotIn("🪦 " + pc.DEATH_PREFIX, note,
                          "the record must not ride inside the note (_sole_record)")
+
+    def test_the_death_note_says_the_review_re_runs_itself(self):
+        """DRE-3289: the note used to end "**To re-run the review:** move the
+        epic to Green Light, then approve it" — an ask made of a CEO who has
+        nothing to decide here. The workflow re-runs the review on its own,
+        once, with more room, and only a second death asks for a person."""
+        note, _record = self._died(os.path.join(self.tmp, "missing.json"))
+        self.assertNotIn(pc.REAPPROVE_HOW, note)
+        self.assertNotIn("Green Light", note)
+        self.assertIn("yours to decide", note)
+        self.assertIn("higher", note, "the retry gets more room, not the same wall")
+        self.assertIn("needs-human", note, "what a SECOND death does")
 
     def test_died_without_an_execution_file_still_writes_the_record(self):
         note, record = self._died(os.path.join(self.tmp, "missing.json"))

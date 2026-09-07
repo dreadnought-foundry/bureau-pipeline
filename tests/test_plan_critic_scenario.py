@@ -30,6 +30,9 @@ The walk, one method per observable the card asks for:
      its plan write-up to this same thread with this same key; a marker or a
      boundary quoted INSIDE that prose records nothing, because the run writes
      every record as a comment of its own and reads back nothing else.
+ 10. A post-approval review that DIES re-runs itself once, at a higher
+     ceiling, with no lane move — and only a SECOND death parks the epic for
+     an operator, naming both dead runs (DRE-3289).
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_critic_scenario.py -v
 """
@@ -73,54 +76,100 @@ EPICS_IN_FLIGHT = [
 # the rail reads: the stub's own writes are the pipeline's, and a comment any
 # other person on the epic left is not. `dump-comments` serves bodies or
 # records depending on the flag, exactly like the real client.
+#
+# It is also IMPORTED, not only executed: `review_rerun.py dispatch` reads the
+# epic through `linear_ops.gql` before it asks for the run (DRE-3289), so the
+# stub has to survive `import linear_ops` — which means the command switch sits
+# behind `__main__` and `gql` answers `plan_run.CARD_QUERY` the way Linear does.
 LINEAR_STUB = '''#!/usr/bin/env python3
 import json, os, sys
 
-cmd, *args = sys.argv[1:]
-thread_path = os.environ["STUB_THREAD"]
-log_path = os.environ["STUB_LOG"]
+EPIC = "DRE-2721"
 
 
 def thread():
     try:
-        with open(thread_path) as f:
+        with open(os.environ["STUB_THREAD"]) as f:
             return json.load(f)
     except (OSError, ValueError):
         return []
 
 
 def log(line):
-    with open(log_path, "a") as f:
+    with open(os.environ["STUB_LOG"], "a") as f:
         f.write(line + "\\n")
 
 
-if cmd == "dump-comments":
-    records = thread()
-    if "--with-authors" in args:
-        print(json.dumps(records))
+def gql(query, variables=None):
+    """The one read `plan_run.CARD_QUERY` makes — an epic, with the planner
+    label that decides the dispatch event."""
+    log("gql " + json.dumps(variables or {}, sort_keys=True))
+    return {"issue": {
+        "id": "uuid-" + EPIC,
+        "identifier": EPIC,
+        "title": "Two critics",
+        "description": "the approved plan",
+        "labels": {"nodes": [{"name": "agent:planner"}, {"name": "repo:bureau-pipeline"}]},
+        "children": {"nodes": [{"identifier": "DRE-9001"}]},
+    }}
+
+
+def main():
+    cmd, *args = sys.argv[1:]
+    if cmd == "dump-comments":
+        records = thread()
+        if "--with-authors" in args:
+            print(json.dumps(records))
+        else:
+            print(json.dumps([r["body"] for r in records]))
+    elif cmd == "comment":
+        records = thread() + [{"body": args[1], "authored_by_pipeline": True}]
+        with open(os.environ["STUB_THREAD"], "w") as f:
+            json.dump(records, f)
+        log("comment " + args[1].replace("\\n", " | "))
+    elif cmd == "state":
+        log("state " + " ".join(args[1:]))
+    elif cmd == "add-label":
+        log("add-label " + args[1])
+    elif cmd == "children":
+        print(os.environ.get("STUB_KIDS", "4"))
+    elif cmd == "epics-in-flight":
+        print(os.environ.get("STUB_EPICS", "[]"))
     else:
-        print(json.dumps([r["body"] for r in records]))
-elif cmd == "comment":
-    records = thread() + [{"body": args[1], "authored_by_pipeline": True}]
-    with open(thread_path, "w") as f:
-        json.dump(records, f)
-    log("comment " + args[1].replace("\\n", " | "))
-elif cmd == "state":
-    log("state " + " ".join(args[1:]))
-elif cmd == "add-label":
-    log("add-label " + args[1])
-elif cmd == "children":
-    print(os.environ.get("STUB_KIDS", "4"))
-elif cmd == "epics-in-flight":
-    print(os.environ.get("STUB_EPICS", "[]"))
-else:
-    sys.exit("stub linear_ops: unhandled command " + cmd)
+        sys.exit("stub linear_ops: unhandled command " + cmd)
+
+
+if __name__ == "__main__":
+    main()
 '''
 
 RECONCILE_STUB = '''#!/usr/bin/env python3
 import os, sys
 with open(os.environ["STUB_LOG"], "a") as f:
     f.write("promote " + " ".join(sys.argv[1:]) + "\\n")
+'''
+
+# `gh`, on PATH, for the ONE vendor call this walk makes: the
+# `repos/<owner>/<name>/dispatches` POST `plan_run.fire` shells out to. It
+# records the payload verbatim so the walk can read the two keys the ACTIVATE
+# route turns on, and honours STUB_GH_RC so a 403'd dispatch is walkable too.
+GH_STUB = '''#!/usr/bin/env python3
+import os, sys
+
+args = sys.argv[1:]
+payload = ""
+if "--input" in args:
+    with open(args[args.index("--input") + 1]) as f:
+        payload = f.read()
+rc = int(os.environ.get("STUB_GH_RC", "0"))
+with open(os.environ["STUB_LOG"], "a") as f:
+    f.write("gh " + " ".join(a for a in args if not a.startswith("/")) + "\\n")
+    # Only an rc=0 call is a dispatch that happened. A 403 leaves the attempt
+    # in the log and nothing the walk can read as a run on its way.
+    f.write(("dispatch " if rc == 0 else "dispatch-failed ") + payload + "\\n")
+if rc:
+    sys.stderr.write("HTTP 403: Resource not accessible by integration\\n")
+sys.exit(rc)
 '''
 
 
@@ -144,12 +193,23 @@ class CriticWalk(unittest.TestCase):
         # dependency beside it.
         # checkbox_marks.py: the one table of criterion marks both of those
         # read (DRE-3147) — same reason, one module further down.
+        # review_rerun.py / plan_run.py: the retry contract the dead-review
+        # step now runs (DRE-3286, wired by DRE-3289) and the dispatcher it
+        # fires through — real modules, because what this walk is checking is
+        # the two payload keys they send.
         for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
-                     "checkbox_marks.py", "execution_result.py"):
+                     "checkbox_marks.py", "execution_result.py",
+                     "review_rerun.py", "plan_run.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)
         self._stub("reconcile.py", RECONCILE_STUB)
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        gh = os.path.join(self.bin, "gh")
+        with open(gh, "w") as f:
+            f.write(GH_STUB)
+        os.chmod(gh, 0o755)
         self.thread_path = os.path.join(self.tmp, "thread.json")
         self.log_path = os.path.join(self.tmp, "log.txt")
         self.gho = os.path.join(self.tmp, "step-output")
@@ -177,6 +237,7 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(leftover, [], f"unmodelled expressions in {fragment!r}")
         env = dict(
             os.environ,
+            PATH=self.bin + os.pathsep + os.environ["PATH"],
             STUB_THREAD=self.thread_path,
             STUB_LOG=self.log_path,
             STUB_EPICS=json.dumps(EPICS_IN_FLIGHT),
@@ -384,11 +445,14 @@ class CriticWalk(unittest.TestCase):
             "${{ github.run_attempt }}": "2",
         })
 
-        # Two comments: the note the CEO reads, then the tombstone alone.
-        note, record = self._thread()[-2], self._thread()[-1]
+        # Two comments: the note the CEO reads, then the tombstone alone. The
+        # retry line DRE-3289 adds lands after both of them, so the pair is
+        # still the last two things written before anything acts on the death.
+        note, record = self._thread()[-3], self._thread()[-2]
         self.assertIn("did not finish", note)
         self.assertIn("not a rejection", note)
-        self.assertIn(pc.REAPPROVE_HOW, note)
+        self.assertNotIn(pc.REAPPROVE_HOW, note,
+                         "the review re-runs itself; the CEO is asked nothing")
         self.assertEqual(record, pc.death_marker(
             "post", "34008698027", 2, "posta", "error_max_turns", 41, 40))
         self.assertNotIn("never-in-a-comment", note + record)
@@ -432,6 +496,113 @@ class CriticWalk(unittest.TestCase):
         self.assertIn("turns=?", record)
         self.assertIn("ceiling=80", record)
         self.assertEqual(pc.post_release(self._thread(), EPIC)[0], pc.POST_DIED)
+
+    # --- DRE-3289: the review re-runs itself once, then parks ---------------
+
+    def _died_at(self, ceiling: str, run: str,
+                 subtype: str = "error_max_turns", **env_extra):
+        """The dead-review step, walked for a death at `ceiling` in run `run`.
+
+        The execution file is the one claude-code-action writes and the one
+        DRE-2924's QA gate reads — the subtype in it is the whole of what
+        decides retry-or-leave."""
+        exec_path = os.path.join(self.tmp, f"execution-{run}.json")
+        with open(exec_path, "w") as f:
+            json.dump([
+                {"type": "system", "subtype": "init"},
+                {"type": "result", "subtype": subtype, "is_error": True,
+                 "num_turns": int(ceiling) + 1, "total_cost_usd": 2.10,
+                 "duration_ms": 900000},
+            ], f)
+        return self._shell("second critic — the review died", {
+            "${{ steps.posta.outputs.execution_file }}": exec_path,
+            "${{ steps.postturns.outputs.max_turns }}": ceiling,
+            "${{ github.run_id }}": run,
+            "${{ github.run_attempt }}": "1",
+        }, **env_extra)
+
+    def _dispatches(self) -> list[dict]:
+        """Every `repository_dispatch` payload GitHub actually accepted."""
+        return [json.loads(line[len("dispatch "):])
+                for line in self._log().splitlines()
+                if line.startswith("dispatch ")]
+
+    def test_a_dead_review_re_runs_itself_once_and_a_second_death_parks(self):
+        """The whole of DRE-3289, walked. A fifteen-card plan's review dies at
+        80; the run re-dispatches ITSELF at the higher ceiling with no lane
+        move, the next run reads 120 off the thread, and when that one dies too
+        the epic parks with needs-human and a note naming both runs."""
+        self._shell("second critic — turn ceiling", STUB_KIDS="15")
+        self.assertEqual(self._outputs()["max_turns"], "80")
+
+        self._died_at("80", "111")
+
+        # ONE dispatch, on the ACTIVATE route, saying why it was asked for.
+        sent = self._dispatches()
+        self.assertEqual(len(sent), 1, self._log())
+        payload = sent[0]["client_payload"]
+        self.assertEqual(payload["trigger_state"], "in progress")
+        self.assertEqual(payload["reason"], "review-retry")
+        self.assertEqual(payload["identifier"], EPIC)
+
+        # ...and the epic's lane is not written. The epic is already In
+        # Progress and stays there; nothing is asked of the CEO.
+        log = self._log()
+        self.assertNotIn("state ", log)
+        self.assertNotIn("add-label", log)
+        self.assertNotIn("promote", log)
+        self.assertIn("higher", self._thread()[-1])
+
+        # ...and that receipt was written AFTER the dispatch landed, not ahead
+        # of it. "The review is being run again" is a claim about something
+        # that has already happened (DRE-2034).
+        order = [line.split(" ")[0] for line in log.splitlines()
+                 if line.startswith("dispatch ") or line.startswith("comment 🔁")]
+        self.assertEqual(order, ["dispatch", "comment"], log)
+
+        # The retry run sizes itself from the thread the dead one left.
+        self._shell("second critic — turn ceiling", STUB_KIDS="15")
+        self.assertEqual(self._outputs()["max_turns"], "120",
+                         "the retry ran into the same wall it just died at")
+
+        # And it dies too. Two deaths is the bound: park for an operator.
+        self._died_at("120", "222")
+        self.assertEqual(len(self._dispatches()), 1,
+                         "a second death must not buy a third attempt")
+        log = self._log()
+        self.assertIn("add-label needs-human", log)
+        self.assertIn("state Green Light", log)
+        park = self._thread()[-1]
+        self.assertIn("111", park)
+        self.assertIn("222", park)
+        self.assertIn("120", park, "the ceiling the second one still could not finish under")
+
+    def test_a_non_turn_death_dispatches_nothing_and_writes_no_lane(self):
+        """The medic owns every other death and retries it once already
+        (`medic_retry.RULE_TURN_EXHAUSTION` is the only one it refuses). Two
+        automatic retries of one run is the DRE-2937 failure, at ~$16 a go."""
+        self._died_at("80", "333", subtype="error_during_execution")
+        self.assertEqual(self._dispatches(), [])
+        log = self._log()
+        self.assertNotIn("state ", log)
+        self.assertNotIn("add-label", log)
+        # Still exactly the two comments a death always wrote.
+        self.assertEqual(log.count("comment "), 2, log)
+        self.assertEqual(pc.post_release(self._thread(), EPIC)[0], pc.POST_DIED)
+
+    def test_a_failed_dispatch_is_said_and_never_claimed_as_started(self):
+        """DRE-2034's rule at this seam: a 403'd dispatch must not leave the
+        epic reading as though a run were on its way — not as the last comment,
+        and not ANYWHERE above it either. A retraction underneath a false claim
+        does not unwrite the claim: the thread is the record a person reads
+        back, and it would say "it is being run again" forever."""
+        self._died_at("80", "444", STUB_GH_RC="1")
+        self.assertEqual(self._dispatches(), [])
+        self.assertIn("could NOT", self._thread()[-1])
+        self.assertNotIn("state ", self._log())
+        for body in self._thread():
+            self.assertNotIn("🔁", body, self._thread())
+            self.assertNotIn("being run again", body, self._thread())
 
     def test_two_failed_rounds_after_approval_park_with_needs_human(self):
         """DRE-3088: the bound after approval PARKS. The old rail activated the

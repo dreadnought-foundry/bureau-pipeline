@@ -1216,16 +1216,40 @@
       "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-death-note.md\")\"",
       "step": "Second critic — the review died",
       "kind": "undeclared-act",
-      "means": "The post-approval review died before it decided (DRE-3241) — a turn-ceiling death or a crash — so the children stay in Backlog until the CEO moves the epic to Green Light and approves it again.",
+      "means": "The post-approval review died before it decided (DRE-3241) — a turn-ceiling death or a crash — so the children stay in Backlog; the review is re-run by the pipeline itself, once, at a higher ceiling, and only a second death parks the epic (DRE-3289).",
       "why": "Act-shaped, and the registry has no row for it — the same debt as the planner's own two 🪦 death notes above: giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), not an emission change. Named here so the debt is countable rather than invisible. Its body belongs to scripts/plan_critic.py (`death_note`), and the machine-readable half is the tombstone posted alone right after it, which the sweep reads in its own grammar; a trailer here would be a second key for one death."
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-death-record.txt\")\"",
+      "anchor": "\"$(cat \"$RECORD\")\"",
       "step": "Second critic — the review died",
       "kind": "not-an-act",
       "means": "The tombstone for a post-approval review that died (DRE-3241), posted alone because it is only a credential while nothing else shares its comment.",
       "why": "A RECORD in its own grammar, the same shape and the same 'alone' rule as the round record above it: `plan_critic.parse_deaths` reads it only when the pipeline wrote it and the comment says nothing else. A second grammar in the same comment is exactly what that rule forbids, and the act-shaped half of this death is the note posted just before it."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The review is being run again by the pipeline",
+      "step": "Second critic — the review died",
+      "kind": "undeclared-act",
+      "means": "The dead post-approval review is being re-run by the pipeline itself, once, at a higher turn ceiling — the epic does not move and the CEO has nothing to decide (DRE-3289).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the dead-review note above it: giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), not an emission change. Named here so the debt is countable rather than invisible. The machine-readable half of this death is the tombstone posted alone before it, which the sweep reads in its own grammar; a trailer here would be a second key for one death."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The review could NOT be started again",
+      "step": "Second critic — the review died",
+      "kind": "undeclared-act",
+      "means": "The re-run of a dead post-approval review could not be dispatched, so nothing is running — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the dead-review note above it: giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), not an emission change. Named here so the debt is countable rather than invisible. The machine-readable half of this death is the tombstone posted alone before it, which the sweep reads in its own grammar; a trailer here would be a second key for one death."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$PARK_NOTE\")\"",
+      "step": "Second critic — the review died",
+      "kind": "undeclared-act",
+      "means": "The post-approval review died a SECOND time, so the epic parks in Green Light with needs-human and a note naming both dead runs, for an operator to read why it cannot finish at either ceiling (DRE-3289).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as the dead-review note above it. Its body belongs to scripts/review_rerun.py (`park_note`), which quotes `plan_critic.post_release` so the park and the sweep never describe one dead run differently; a trailer composed here would be a second voice for the same fact."
     },
     {
       "file": ".github/workflows/plan.yml",

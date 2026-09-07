@@ -848,6 +848,30 @@ REAPPROVE_HOW = (
     f"or a move to {APPROVAL_LANE})"
 )
 
+#: What happens after a review DIES, in every notice about one (DRE-3289).
+#:
+#: Deliberately NOT `REAPPROVE_HOW`: a dead review used to end with an ask made
+#: of a CEO who has nothing to decide about it — the plan was never read, so
+#: there is no judgement to make — and the epic sat In Progress with nothing
+#: scheduled until a person made the two-step move by hand. The workflow now
+#: asks for the run itself, once, with the headroom `review_rerun.retry_ceiling`
+#: sizes, and only a SECOND death puts it in front of a person. One sentence,
+#: used by the note the run posts and by the sweep's own refusal, so the two
+#: never describe one dead run differently.
+#:
+#: True of every death, not only a turn cap: `review_rerun.after_death` leaves
+#: any other subtype to the medic, which retries it once already
+#: (`medic_retry.RULE_TURN_EXHAUSTION` is the one death it refuses). Either way
+#: the review is started again by the pipeline, once, and the second death is
+#: the one that asks for a person.
+DEAD_REVIEW_NEXT = (
+    "The review is started again by the pipeline, on its own, once — a run "
+    "that ran out of turns gets a higher ceiling, because the same run at the "
+    "same ceiling hits the same wall. A second death parks the epic with "
+    "needs-human for an operator to read: a plan no review can finish needs a "
+    "person, not a third attempt."
+)
+
 #: Idempotency tags for the refusals, in the `dead_run.DEAD_TAG` shape the
 #: sweep already surfaces refusals under. THREE of them, deliberately: the
 #: sweep posts each refusal at most once per tag, and "nobody has read this
@@ -981,6 +1005,8 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
             "once it passes."
         )
     if state == POST_DIED:
+        deaths = parse_deaths(current_cycle(bodies, epic))
+        ran = (deaths[-1].get("run") if deaths else None) or "?"
         return (
             f"🚨 {POST_DIED_TAG}: {identifier}'s epic {epic} was approved at "
             f"{when} but the post-approval review died before it decided — "
@@ -988,9 +1014,8 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
             "Nothing has been found wrong with the plan and nothing has "
             "started building; the children stay in Backlog until the review "
             "runs again and passes.\n\n"
-            f"**To let it through:** {REAPPROVE_HOW} — the review re-runs on "
-            f"the move into {APPROVAL_LANE}, and the children promote on the "
-            "next sweep once it passes."
+            f"**Nothing here is yours to decide.** {DEAD_REVIEW_NEXT} This is "
+            f"waiting on the re-run of run {ran}."
         )
     quoted = one_line(detail) or "no reason recorded"
     return (
@@ -1032,7 +1057,7 @@ def death_note(epic: str, row: dict) -> str:
         "been found wrong with the plan, and nothing has started building — "
         "the children stay in Backlog until the review runs again. This round "
         f"does not count toward the {_count_word(MAX_ROUNDS)}-round bound.\n\n"
-        f"**To re-run the review:** {REAPPROVE_HOW}."
+        f"**Nothing here is yours to decide.** {DEAD_REVIEW_NEXT}"
     )
 
 
