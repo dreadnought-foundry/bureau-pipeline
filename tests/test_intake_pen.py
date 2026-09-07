@@ -446,7 +446,7 @@ def test_the_guard_would_notice_a_hardcoded_knob():
     assert [value for _w, value in found] == ["20160"]
 
 
-def test_this_repos_own_stubs_carry_the_switch_as_data():
+def test_this_repos_own_stubs_take_the_switch_from_the_repository_variable():
     """The pen is one switch per repo, and both of this repo's readers pass it.
     A stub that cannot pass it is a repo whose intake cannot be held.
 
@@ -455,14 +455,23 @@ def test_this_repos_own_stubs_carry_the_switch_as_data():
     value committed into the file. Same shape as before — the stub is
     boilerplate, the per-repo value is data — but the data lives where the
     operator can change it with one command instead of a pull request, which is
-    what a hold thrown on cutover morning needs. This test stays deliberately
-    about PRESENCE: whether the value is a variable or a literal is the fleet
-    check's question, and asserting the expression here would fail this repo the
-    day somebody legitimately pins a date."""
+    what a hold thrown on cutover morning needs.
+
+    So the EXPRESSION is what this pins, not merely the input's presence. A
+    literal back in that field is not an operator pinning a date any more — it
+    is the pre-DRE-3285 mechanism silently restored, and the hold it buys costs
+    a pull request, a critic round and the merge gate on the morning somebody
+    needs the pen shut within the hour. Same treatment the sibling fleet brake
+    already gets in `test_the_brake_is_read_before_any_surface_runs`."""
     for stub in ("self-reconcile.yml", "self-groomer.yml"):
         with_block = ((_doc(stub).get("jobs") or {}).get("call") or {}).get("with") or {}
         assert "intake_hold" in with_block, (
             f"{stub} passes no intake_hold — this repo's own intake cannot be held"
+        )
+        assert str(with_block["intake_hold"]).strip() == "${{ vars.INTAKE_HOLD }}", (
+            f"{stub} sets intake_hold to {with_block['intake_hold']!r} — the "
+            f"repository variable is the only value it may carry, or the pen "
+            f"takes a pull request to close again"
         )
 
 
