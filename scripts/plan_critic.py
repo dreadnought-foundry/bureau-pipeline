@@ -835,6 +835,7 @@ POST_DIED = "died"
 #: pins it to a live lane in config/lane-contract.json.
 APPROVAL_LANE = "In Progress"
 
+
 def reapprove_how() -> str:
     """HOW to ask for the review again, in every notice that asks for it.
 
@@ -889,6 +890,7 @@ def __getattr__(name: str) -> str:
     if name == "REAPPROVE_HOW":
         return reapprove_how()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 #: What happens after a review DIES, in every notice about one (DRE-3289).
 #:
