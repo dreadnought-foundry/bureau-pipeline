@@ -63,8 +63,16 @@ jobs:
       card: ${{ inputs.card }}
       judgement: ${{ inputs.judgement }}
       # The pen's switch (DRE-3035), and NOT a dispatch input on purpose: a
-      # hold the person dispatching the drain can waive is not a hold. It is
-      # data in this file, the same value self-reconcile.yml carries — put the
-      # date here to close the pen, clear it to open it.
-      intake_hold: ""
+      # hold the person dispatching the drain can waive is not a hold.
+      #
+      # Since DRE-3285 it is a repository VARIABLE rather than a value in this
+      # file — the SAME variable self-reconcile.yml reads, because the drain
+      # and the age-out are the two things that move a card out of Intake and
+      # a switch only one of them sees is a pen with a hole in it. Unset
+      # renders empty, which is open.
+      #
+      #   gh variable set INTAKE_HOLD \
+      #     --repo dreadnought-foundry/bureau-pipeline --body 2026-09-08
+      #   gh variable delete INTAKE_HOLD --repo dreadnought-foundry/bureau-pipeline
+      intake_hold: ${{ vars.INTAKE_HOLD }}
     secrets: inherit
