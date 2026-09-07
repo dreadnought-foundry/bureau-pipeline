@@ -68,6 +68,33 @@ trailer, and a row in it must match exactly one real site — by file, anchor,
 and the workflow step when a file posts the same command from several — or the
 check fails on the row itself.
 
+## Cadence — how often each act is expected to speak (DRE-3298)
+
+Every row carries `cadence_s`, the longest silence in seconds after which that
+act's work should be read as stuck, and `cadence_why`, one sentence saying
+where the number came from. Together with a recent act they are the two inputs
+`deriveLiveness` (DRE-2852) turns into the One River row's pulse and its
+journey-bar sweep; the pipeline supplied neither, so every row read `unknown`.
+
+The rule is mechanical and the numbers are read off what already runs. An act
+whose `state` is `dispatched` has a run coming back, and its cadence is that
+run's own job timeout — `qa-review.yml`'s 65 minutes, `agent-fix.yml`'s 120.
+Every other act has handed the work to a person, no workflow declares how long
+a person takes, and the cadence is `null`.
+
+`null` is a DECLARATION, not an omission — the console renders it as "parked",
+never as "overdue" — so a row that leaves the field out fails `check`, and so
+does a `cadence_s` that is neither a positive integer nor null, and a
+`cadence_why` that says nothing. **There is no default**: a defaulted cadence
+is a number nobody chose being rendered as a claim about a specific act. The
+cadence is data the pipeline declares about itself, which is why it lives here
+and not in the console (`liveness.guard.test.ts` fails any component that types
+one as a number).
+
+The trailer grammar is UNCHANGED by all of it. The cadence is read off the
+registry by whoever needs it; putting it on a receipt would move every receipt
+body this pipeline has ever posted, which is the DRE-2825 warning above.
+
 ## What this module does NOT do
 
 The refusal signal, the discharge sweep and the console read are each their own
@@ -229,6 +256,27 @@ def subscriber(name: str, doc: dict | None = None) -> str:
     return record(name, doc)["subscriber"]
 
 
+def cadence_s(name: str, doc: dict | None = None) -> int | None:
+    """The longest silence, in seconds, after which this act's work reads as
+    stuck — or None when nothing is expected to follow.
+
+    None is a DECLARATION, not an omission: the console renders it as "parked"
+    and never as "overdue". `problems()` refuses a row that leaves the field
+    out, so absence here is always a deliberate `null` somebody wrote down.
+    """
+    return record(name, doc)["cadence_s"]
+
+
+def cadence_why(name: str, doc: dict | None = None) -> str:
+    """Where the number came from, in one sentence — a workflow's own job
+    timeout, a sweep's interval, the script that declines to act.
+
+    A number nobody can explain is a guess wearing a data type, so this is
+    required for a `null` exactly as it is for a number.
+    """
+    return record(name, doc)["cadence_why"]
+
+
 def kinds(doc: dict | None = None) -> tuple:
     return _vocabulary("kinds", doc)
 
@@ -346,7 +394,12 @@ def problems(doc: dict | None = None) -> list:
         the code emits that nothing declares fails;
       * the trailer stays additive — no act's name may contain any act's tag,
         and no tag may be a substring of another, because `tag in body` is how
-        every one of these is counted.
+        every one of these is counted;
+      * every act says how often it is expected to speak — a positive whole
+        number of seconds or an explicit `null`, and a sentence saying where
+        that came from (DRE-3298). There is no default: a cadence nobody chose
+        would have the console calling work overdue on an interval this
+        pipeline never declared.
     """
     doc = doc if doc is not None else load()
     out: list[str] = []
@@ -396,6 +449,7 @@ def _entry_problems(entry, doc, writers, known_kinds, known_states, names) -> li
             f"act {name!r} does not say whether its tag is ADOPTED (an existing "
             "idempotency key that may never be reworded) or newly declared"
         )
+    out.extend(_cadence_problems(entry, name))
     for key in ("name", "tag"):
         value = entry.get(key) or ""
         if value and not _SLUG.match(value):
@@ -427,6 +481,53 @@ def _entry_problems(entry, doc, writers, known_kinds, known_states, names) -> li
         out.append(f"act {name!r} discharges itself")
 
     out.extend(_emitter_problems(entry))
+    return out
+
+
+def _cadence_problems(entry, name) -> list:
+    """Does the act say how often it is expected to speak (DRE-3298)?
+
+    `deriveLiveness` (DRE-2852) turns a recent act plus this number into the One
+    River row's pulse and its journey-bar sweep. It has two inputs and the
+    pipeline supplies neither yet; this is the first. Without it every row reads
+    `unknown`, so the console cannot tell a card that is working from a card
+    that died forty minutes ago.
+
+    THERE IS NO DEFAULT, on purpose. A defaulted cadence is a number nobody
+    chose being rendered as a claim about a specific act — the console would
+    call work overdue on an interval this pipeline never declared. So a missing
+    field is a problem, and `null` is how an act says "nothing is expected to
+    follow" out loud.
+    """
+    out: list[str] = []
+
+    if "cadence_s" not in entry:
+        out.append(
+            f"act {name!r} does not declare a cadence_s — the silence after "
+            "which its work reads as stuck. An act that expects nothing to "
+            "follow says so with null, never by omission, because the console "
+            "renders null as parked and an absent field as unknown"
+        )
+    else:
+        value = entry["cadence_s"]
+        if value is not None and not (
+            isinstance(value, int) and not isinstance(value, bool) and value > 0
+        ):
+            # `isinstance(True, int)` is True in Python, so a bool would slip
+            # through the int test and be read as a one-second cadence — every
+            # act overdue the moment it is announced.
+            out.append(
+                f"act {name!r} declares a cadence_s of {value!r}, which is "
+                "neither a positive whole number of seconds nor null — a "
+                "silence that has already elapsed reads every act as stuck"
+            )
+
+    if not (entry.get("cadence_why") or "").strip():
+        out.append(
+            f"act {name!r} says nothing for 'cadence_why' — a number nobody can "
+            "explain is a guess wearing a data type, and a null with no reason "
+            "cannot be told apart from a field somebody skipped"
+        )
     return out
 
 
@@ -592,6 +693,11 @@ def main(argv=None) -> int:
                 "next_actor": next_actor(name),
                 "discharges": discharges(name),
                 "subscriber": subscriber(name),
+                # With the rest of the row (DRE-3298), so the console's mirror
+                # carries the cadence off the same read that gets it the tag —
+                # a second parser for two fields is how the two answers drift.
+                "cadence_s": cadence_s(name),
+                "cadence_why": cadence_why(name),
                 "trailer": trailer(name),
             }
             for name in acts()

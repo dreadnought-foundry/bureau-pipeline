@@ -33,8 +33,15 @@ of it is ever a runtime lookup.
   no shape is refused rather than defaulted.
 - **`pipeline-acts.json`** — every autonomous act the pipeline can take
   (DRE-2825): a refusal, a recovery or a hold, and per act its tag, the state
-  it leaves the work in, the next actor, what it discharges and the workflow
-  expected to act on it. Read and written through `scripts/pipeline_act.py`,
+  it leaves the work in, the next actor, what it discharges, the workflow
+  expected to act on it, and its **cadence** — `cadence_s`, the longest
+  silence in seconds after which that act's work reads as stuck, with
+  `cadence_why` saying where the number came from (DRE-3298). A `dispatched`
+  act takes the run's own job timeout; every other act has handed the work to
+  a person and declares `null`, which the console renders as "parked" and
+  never as "overdue". There is no default — a missing field, a `cadence_s`
+  that is neither a positive integer nor `null`, and an empty `cadence_why`
+  each fail the check. Read and written through `scripts/pipeline_act.py`,
   which reproduces each existing receipt body **byte-identically** and only
   appends a trailer — the tags are live idempotency keys and per-sha budget
   counters, so rewording one makes every in-flight PR's receipts invisible.
