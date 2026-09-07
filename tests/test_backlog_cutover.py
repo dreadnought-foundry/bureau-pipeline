@@ -15,10 +15,19 @@ one — and the run records which they were. Then newest-first through the rest
 (D2, approved 2026-08-23: the newest cards are fresh enough in the operator's
 memory that a wrong verdict is spotted instantly).
 
-GRANDFATHERING IS NOT AN EXEMPTION. A card with a run receipt still ticking or
-an open pull request is justified in its lane BY EVIDENCE and is left to
-finish. The distinction is drawn on that evidence, never on a list of ids —
-these tests fail if it is ever drawn on ids.
+GRANDFATHERING IS NOT AN EXEMPTION. A card with a run receipt still ticking, an
+open pull request, or an epic the CEO has already moved to In Progress is
+justified in its lane BY EVIDENCE and is left to finish. The distinction is
+drawn on that evidence, never on a list of ids — these tests fail if it is ever
+drawn on ids.
+
+THE THIRD EVIDENCE WAS ADDED ON 2026-09-07 (DRE-3297), from the dry run: 279 of
+280 Backlog cards were moving, and 36 of them were children of 11 epics that are
+In Progress right now — including the cutover's own proof card. The CEO's
+approval of an epic is evidence about its children, so they finish under the old
+rules. `Green Light` is an epic still WAITING to be approved and `Todo` /
+`Backlog` are epics nobody has started; neither is evidence of anything, and
+both still move.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_backlog_cutover.py -v
 """
@@ -26,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -119,10 +129,15 @@ def _one_of_every_historically_exempt_class() -> list[dict]:
 
     Every one of them must be a candidate now: the CEO withdrew the exemption
     on 2026-08-26 and the guard would have bounced all of them anyway.
+
+    The reach card's epic is `Todo`, not `In Progress`, since DRE-3297: the
+    promoter looks at both, but only `In Progress` means the CEO approved it,
+    and a child of an APPROVED epic is now held on evidence. That is the one
+    thing this fixture is NOT about — it is tested on its own below.
     """
     return [
         # inside promote_ready()'s reach: a child of an active epic
-        _card("DRE-2101", parent="DRE-2100", parent_state="In Progress"),
+        _card("DRE-2101", parent="DRE-2100", parent_state="Todo"),
         # held by the phantom-blocker defect / needs-human
         _card("DRE-2102", labels=("repo:portico", "agent:engineer", "needs-human")),
         # an operator card
@@ -169,7 +184,9 @@ def test_the_scan_would_catch_a_planted_allowlist():
 # 2: the promoter-reach cards go FIRST, and reach is read from live state
 # --------------------------------------------------------------------------
 def test_promoter_reach_cards_are_batch_one_and_are_recorded():
-    reach = _card("DRE-2201", parent="DRE-2200", parent_state="In Progress",
+    # `Todo`, so this is about the ORDERING and not about DRE-3297's evidence
+    # clause: a child of an `In Progress` epic never reaches the move list.
+    reach = _card("DRE-2201", parent="DRE-2200", parent_state="Todo",
                   created_minutes_ago=99_000)  # the OLDEST card in the set
     others = [_card(f"DRE-23{i:02d}", created_minutes_ago=1000 - i) for i in range(4)]
     result = cutover.plan([*others, reach])
@@ -297,6 +314,188 @@ def test_open_pr_refs_reads_only_open_pull_requests():
     assert refs == {"agent/DRE-2501-a-thing"}
     assert "--state" in seen[0] and "open" in seen[0]
     assert "dreadnought-foundry/portico" in seen[0]
+
+
+# --------------------------------------------------------------------------
+# 3b: an approved epic is evidence about its children (DRE-3297)
+# --------------------------------------------------------------------------
+# Found by the dry run on 2026-09-07 and decided by the CEO the same minute:
+# 279 of 280 Backlog cards were moving, and 36 of them were children of 11
+# epics the CEO has already moved to In Progress — including the cutover's own
+# proof card. The approval already happened; that IS the evidence, and the card
+# finishes under the old rules. The rule is read off the parent's live state,
+# like every other clause here, and never off a list of ids.
+
+
+def test_a_card_whose_epic_is_in_progress_is_left_alone():
+    """The card's test: the CEO approved the epic, so its children are in
+    flight by inheritance and do not start again at Intake."""
+    card = _card("DRE-2901", parent="DRE-2900", parent_state="In Progress")
+    result = cutover.plan([card])
+    assert result["move"] == []
+    assert result["in_flight"][0]["identifier"] == "DRE-2901"
+    why = result["in_flight"][0]["why"]
+    assert "DRE-2900" in why, "the record says WHICH epic carried the card"
+    assert cutover.INHERITED_EVIDENCE in why
+
+
+def test_an_epic_awaiting_approval_is_not_evidence():
+    """`Green Light` is the lane an epic sits in WAITING for the CEO. The
+    approval has not happened, so there is nothing to inherit."""
+    card = _card("DRE-2902", parent="DRE-2900", parent_state="Green Light")
+    result = cutover.plan([card])
+    assert [c["identifier"] for c in result["move"]] == ["DRE-2902"]
+    assert result["in_flight"] == []
+
+
+def test_a_dormant_epic_is_not_evidence():
+    card = _card("DRE-2903", parent="DRE-2900", parent_state="Backlog")
+    assert [c["identifier"] for c in cutover.plan([card])["move"]] == ["DRE-2903"]
+
+
+def test_an_unstarted_epic_is_not_evidence_even_though_the_promoter_looks():
+    """The two questions are not the same one. The promoter looks at a `Todo`
+    epic's children, but nobody has started it and the CEO has not moved it —
+    so the child is in batch one and it still moves."""
+    card = _card("DRE-2904", parent="DRE-2900", parent_state="Todo")
+    result = cutover.plan([card])
+    assert [c["identifier"] for c in result["move"]] == ["DRE-2904"]
+    assert result["batch_one"] == ["DRE-2904"]
+
+
+def test_a_parentless_card_is_unaffected():
+    """The common legacy case, and the one the whole cutover exists for: a
+    card with no epic at all is untouched by the inheritance clause."""
+    card = _card("DRE-2905")
+    assert card["parent"] is None
+    result = cutover.plan([card])
+    assert [c["identifier"] for c in result["move"]] == ["DRE-2905"]
+    assert result["in_flight"] == []
+
+
+def test_the_approval_state_is_narrower_than_the_promoters_reach():
+    """One fact, one source, and the two facts are DIFFERENT: `EPIC_ACTIVE_STATES`
+    is what the promoter looks at, `EPIC_APPROVED_STATE` is what the CEO has
+    approved. Collapsing them would exempt every child of an unstarted epic."""
+    assert cutover.EPIC_APPROVED_STATE == "In Progress"
+    assert cutover.EPIC_APPROVED_STATE in cutover.EPIC_ACTIVE_STATES
+    assert "Todo" in cutover.EPIC_ACTIVE_STATES
+    assert cutover.EPIC_APPROVED_STATE != "Todo"
+
+
+def test_the_other_two_evidences_are_unchanged_by_a_parent():
+    """Guard the guard: the new clause is ADDED, and a card with a dormant epic
+    is still held by its own pull request or its own live run receipt."""
+    pr_card = _card("DRE-2906", parent="DRE-2900", parent_state="Backlog")
+    held = cutover.plan([pr_card], open_pr_refs=("agent/DRE-2906-a-thing",))
+    assert held["move"] == []
+    assert "pull request" in held["in_flight"][0]["why"]
+
+    run_card = _card(
+        "DRE-2907", parent="DRE-2900", parent_state="Green Light",
+        comments=(("⏳ 2/5 failing tests written", 5),),
+    )
+    still_held = cutover.plan([run_card])
+    assert still_held["move"] == []
+    assert "receipt" in still_held["in_flight"][0]["why"]
+
+
+# --- what the record says about them ---------------------------------------
+_PR_REF = "agent/DRE-2919-a-thing"
+
+
+def _one_of_each_evidence() -> list[dict]:
+    """Seven cards: two carried by an approved epic, one on a live run receipt,
+    one on an open pull request, and three that simply move."""
+    return [
+        _card("DRE-2911", parent="DRE-2910", parent_state="In Progress"),
+        _card("DRE-2912", parent="DRE-2910", parent_state="In Progress"),
+        _card("DRE-2913", comments=(("⏳ 2/5 failing tests written", 5),)),
+        _card("DRE-2919"),
+        _card("DRE-2914"),
+        _card("DRE-2915", parent="DRE-2916", parent_state="Green Light"),
+        _card("DRE-2917", parent="DRE-2918", parent_state="Backlog"),
+    ]
+
+
+def _recorded() -> tuple[str, dict, dict]:
+    cards = _one_of_each_evidence()
+    lops = _Lops(cards)
+    plan = cutover.plan(cards, open_pr_refs=(_PR_REF,))
+    result = cutover.run(lops, plan, apply=True)
+    before = {"Backlog": plan["population"], "Intake": 0}
+    after = {"Backlog": len(plan["in_flight"]), "Intake": len(result["moved"])}
+    return cutover.record_note(before, after, result), plan, result
+
+
+def test_the_record_counts_the_inherited_cards_in_their_own_line():
+    """The amended criterion: the after-occupancy is not silently smaller than
+    the before. The cards an approved epic carried are counted where the CEO
+    can see them, not buried in one total."""
+    note, plan, _result = _recorded()
+    line = next(
+        line for line in note.splitlines()
+        if line.startswith("**Left alone because their epic")
+    )
+    assert "2 card(s)" in line
+    assert cutover.EPIC_APPROVED_STATE in line
+    assert len(plan["in_flight"]) == 4
+
+
+def test_the_records_counts_add_up():
+    """moved + left alone = the population that was in Backlog before."""
+    note, plan, result = _recorded()
+    line = next(
+        line for line in note.splitlines()
+        if line.startswith("**Accounted for:**")
+    )
+    moved, held, total, before_n = [int(n) for n in re.findall(r"\d+", line)]
+    assert (moved, held) == (len(result["moved"]), len(plan["in_flight"]))
+    assert (moved, held) == (3, 4)
+    assert moved + held == total == before_n == plan["population"] == 7
+
+
+def test_the_left_alone_line_names_them_beside_the_pull_requests():
+    """Same line, same voice: the record says why each card stayed, whatever
+    the evidence was."""
+    note, _plan, _result = _recorded()
+    line = next(
+        line for line in note.splitlines()
+        if line.startswith("**Left alone, on evidence")
+    )
+    assert "DRE-2911" in line and cutover.INHERITED_EVIDENCE in line
+    assert "DRE-2919" in line and "pull request" in line
+    assert "DRE-2913" in line and "receipt" in line
+
+
+def test_the_record_does_not_claim_backlog_is_empty_when_it_is_not():
+    """The closing paragraph is read by the CEO a week later. With cards left
+    alone on evidence, Backlog is NOT empty, and the record must not say it
+    is."""
+    note, plan, _result = _recorded()
+    assert "empty" not in note.lower()
+    assert f"{len(plan['in_flight'])} card(s)" in note
+
+
+def test_the_record_still_says_empty_when_nothing_was_left_alone():
+    """The other half: with no evidence anywhere, Backlog really is empty and
+    the sentence that has always warned about it survives."""
+    note = cutover.record_note(
+        {"Backlog": 220, "Intake": 0},
+        {"Backlog": 0, "Intake": 220},
+        {"moved": [{"identifier": "DRE-2106"}], "batch_one": [], "in_flight": []},
+    )
+    assert "empty" in note.lower()
+
+
+def test_the_plan_output_breaks_out_the_inherited_cards():
+    """The number the operator checks before running it: the plan says how many
+    of the in-flight cards an approved epic is carrying."""
+    cards = _one_of_each_evidence()
+    plan = cutover.plan(cards, open_pr_refs=(_PR_REF,))
+    rendered = cutover._render(plan)
+    assert "in flight:  4" in rendered
+    assert "2" in rendered and cutover.EPIC_APPROVED_STATE in rendered
 
 
 # --------------------------------------------------------------------------
