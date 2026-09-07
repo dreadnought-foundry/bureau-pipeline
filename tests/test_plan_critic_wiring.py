@@ -668,8 +668,10 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
         self.assertIn("add-label", park)
         self.assertIn("needs-human", park)
         self.assertIn('state "$EPIC" "Green Light"', park)
-        self.assertIn("plan-critic-death-park.md", park,
+        self.assertIn('cat "$PARK_NOTE"', park,
                       "the note after-death wrote, not a rival sentence")
+        self.assertIn('--note-file "$PARK_NOTE"', run,
+                      "...and that is the file after-death was told to write")
 
     def test_the_review_step_still_has_no_continue_on_error(self):
         """The DRE-3241 trap, re-pinned here because this card is the one that

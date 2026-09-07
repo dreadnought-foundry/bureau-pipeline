@@ -175,10 +175,37 @@ one line, alone in its comment, the pipeline's own:
 
 It is not a round: it carries no result, spends nothing of the bound, and the
 rate ignores it. The sweep reads it as *the review died — it was not a
-rejection*, holds the children under its own tag, and names the way forward:
-move the epic to Green Light, then approve it. Its ceiling is sized from the
-plan (`plan_critic.post_review_turns`: fifteen cards get 80 turns), because the
-reading is linear in the cards and a fixed 40 had no headroom at fifteen.
+rejection* and holds the children under its own tag. Its ceiling is sized from
+the plan (`plan_critic.post_review_turns`: fifteen cards get 80 turns), because
+the reading is linear in the cards and a fixed 40 had no headroom at fifteen.
+
+**And the review re-runs ITSELF, once, at a higher ceiling** (DRE-3289). The
+way forward used to be a move only a person could make — Green Light, then
+approve — for a plan nobody had found anything wrong with, so a death left the
+epic In Progress with nothing scheduled until someone noticed. The run that
+writes the tombstone now asks `review_rerun.after_death` what to do about it,
+and there are exactly three answers:
+
+* **retry** — the first turn-cap death since the last round. The run asks for
+  its own re-run (`repository_dispatch`, `trigger_state: in progress`,
+  `reason: review-retry`) and the next run reads the tombstone off the thread
+  and sizes itself at `ceil(ceiling × 1.5)`, capped at 180 — 80 → 120,
+  120 → 180. **The epic's lane is never written**: it is already In Progress,
+  and moving it would ask the CEO for a decision he does not have to make.
+* **park** — the second death. `needs-human`, Green Light, and a note naming
+  BOTH dead runs. Two turn-cap deaths on one card is the operator's signal to
+  split, not a queue position (`standards/card-quality.md`), and what an
+  operator needs to see is why the review cannot finish at either ceiling.
+* **leave** — any other subtype. That death belongs to the medic, which
+  retries a non-turn death once already and refuses a turn-cap one outright
+  (`medic_retry.RULE_TURN_EXHAUSTION`). This rail retries ONLY
+  `error_max_turns`, so the two never both act on one death.
+
+The job still goes red on a death — no `continue-on-error` on the review, and
+the decision and activation steps keep their implied `success()` — so the
+tombstone step is the only thing that runs, and the tombstone lands before the
+dispatch: a crash between them leaves an honest record and the sweep's refusal
+still names what happens next.
 
 **The budget belongs to one planning attempt, not to the epic.** An epic sent
 back to Triage is re-planned from scratch, and the new plan gets its own
