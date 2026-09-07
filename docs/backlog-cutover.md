@@ -141,9 +141,12 @@ he sets, and nothing else:
    approving that exact batch (`docs/groomer.md`).
 2. **PARKED** — the per-card "stay still", described above.
 3. **The sweep's three inputs**, below. They are **`workflow_call` inputs on the
-   repo's `reconcile.yml` stub** — set them there, in the file, where the repo's
-   other per-repo values live and where `make check-channel-fleet` reads them.
-   There is no env var to edit and no pipeline release to cut.
+   repo's `reconcile.yml` stub**, and `make check-channel-fleet` reads them
+   there. There is no env var to edit and no pipeline release to cut.
+   `intake_hold` is threaded from a **repository variable** (DRE-3285) rather
+   than committed into the stub — see below; the other two are stub data,
+   because widening the window is a considered change and a pull request is the
+   right price for it.
 
 | Input | What it does | Empty means |
 | -- | -- | -- |
@@ -153,26 +156,42 @@ he sets, and nothing else:
 
 `intake_hold` belongs on **both** stubs — `reconcile.yml` and `groomer.yml` —
 because the age-out and the drain are the two things that move a card out of
-Intake. It is stub data rather than a dispatch input on purpose: a hold the
-person running the drain can waive is not a hold.
+Intake, and both read the same variable. It is never a dispatch input: a hold
+the person running the drain can waive is not a hold.
+
+**It comes from a repository variable, not from the file (DRE-3285).** Every
+stub passes `intake_hold: ${{ vars.INTAKE_HOLD }}`, so an unset variable renders
+empty and the pen is open — the fleet's normal state. Closing and re-opening it
+is one command per repo:
+
+```
+gh variable set INTAKE_HOLD --repo <owner>/<repo> --body 2026-09-08
+gh variable delete INTAKE_HOLD --repo <owner>/<repo>
+```
+
+A value committed into the stub is reachable too, and only through a pull
+request, a critic round and the merge gate — on the one day somebody needs the
+pen shut within the hour, and per repo, as each queue drains at its own pace.
+`make check-channel-fleet` in agent-bureau lists which stubs pass the variable;
+one it reports as outstanding cannot be held without a PR.
 
 **Plan the cutover and the first groomer batch together.** Every card moved on
 cutover day gets 48 hours of grace and then starts trickling into Green Light —
 which is the pressure working as designed, and it is still pressure the CEO
-feels. **Set `intake_hold` to the cutover date before the run and clear it when
-the front door is proven**; if the drain will genuinely take longer than the
-window, widen `intake_max_age_minutes` for the cutover instead of letting the
-queue fill. Either is a deliberate operator act with an end date, not an edit to
-the rule.
+feels. **Set `INTAKE_HOLD` on every repo to the cutover date before the run, and clear
+it repo by repo as the groomer catches up with each queue**; if the drain will
+genuinely take longer than the window, widen `intake_max_age_minutes` for the
+cutover instead of letting the queue fill. Either is a deliberate operator act
+with an end date, not an edit to the rule.
 
 ```yaml
-# .github/workflows/reconcile.yml in the product repo — the pen, held
+# .github/workflows/reconcile.yml in the product repo — the pen, wired
 jobs:
   call:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@stable
     with:
       pipeline_ref: stable
-      intake_hold: "2026-09-08"       # clear this when the front door is proven
-      intake_max_age_minutes: "20160" # 14 days, for the cutover window only
+      intake_hold: ${{ vars.INTAKE_HOLD }} # unset = open; set it to hold
+      intake_max_age_minutes: "20160"      # 14 days, for the cutover window only
     secrets: inherit
 ```

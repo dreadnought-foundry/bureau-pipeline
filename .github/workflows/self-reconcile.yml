@@ -26,14 +26,28 @@ jobs:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@main
     with:
       pipeline_ref: main
-      # The pen's switch (DRE-3035). Empty = open: the age-out runs and an
-      # Intake card past the lane contract's 48-hour window is moved to Green
-      # Light. To hold this repo's intake — before a cutover run, or any week
-      # the answer is "not this week" — put the DATE here, commit, and every
-      # sweep prints one line saying the pen is closed and how much is behind
-      # it. Clear it to resume. Set it on self-groomer.yml too: the drain is
-      # the other thing that moves a card out of Intake.
-      intake_hold: ""
+      # The pen's switch (DRE-3035), read from a repository VARIABLE since
+      # DRE-3285 rather than committed here. Unset renders EMPTY, which is
+      # open: the age-out runs and an Intake card past the lane contract's
+      # 48-hour window is moved to Green Light.
+      #
+      # To hold this repo's intake — before a cutover run, or any week the
+      # answer is "not this week" — set the variable to the DATE you set it,
+      # and every sweep prints one line saying the pen is closed and how much
+      # is behind it. Delete it to resume. The point of the variable is that
+      # both of those are one command rather than a pull request through the
+      # critic and the merge gate, on the one day somebody needs the pen shut
+      # within the hour.
+      #
+      #   gh variable set INTAKE_HOLD \
+      #     --repo dreadnought-foundry/bureau-pipeline --body 2026-09-08
+      #   gh variable delete INTAKE_HOLD --repo dreadnought-foundry/bureau-pipeline
+      #
+      # ONE variable, read by BOTH halves: self-groomer.yml takes the same
+      # expression, because the age-out and the drain are the two things that
+      # move a card out of Intake and a switch only one of them reads is a pen
+      # with a hole in it.
+      intake_hold: ${{ vars.INTAKE_HOLD }}
       # intake_max_age_minutes / intake_escalation_cap are left empty on
       # purpose — empty means the lane contract's own window and the script's
       # own cap, which are correct on their own. Widening the window is an

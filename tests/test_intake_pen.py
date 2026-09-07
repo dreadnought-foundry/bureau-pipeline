@@ -447,10 +447,18 @@ def test_the_guard_would_notice_a_hardcoded_knob():
 
 
 def test_this_repos_own_stubs_carry_the_switch_as_data():
-    """The pen is one switch per repo, and the operator sets it where the repo's
-    own values live — the DRE-2692 canonical-guard shape: the stub is generated,
-    the per-repo value is data. A stub that cannot pass it is a repo whose
-    intake cannot be held."""
+    """The pen is one switch per repo, and both of this repo's readers pass it.
+    A stub that cannot pass it is a repo whose intake cannot be held.
+
+    WHERE the value comes from changed in DRE-3285: every stub in the fleet now
+    threads `${{ vars.INTAKE_HOLD }}`, a repository variable, rather than a
+    value committed into the file. Same shape as before — the stub is
+    boilerplate, the per-repo value is data — but the data lives where the
+    operator can change it with one command instead of a pull request, which is
+    what a hold thrown on cutover morning needs. This test stays deliberately
+    about PRESENCE: whether the value is a variable or a literal is the fleet
+    check's question, and asserting the expression here would fail this repo the
+    day somebody legitimately pins a date."""
     for stub in ("self-reconcile.yml", "self-groomer.yml"):
         with_block = ((_doc(stub).get("jobs") or {}).get("call") or {}).get("with") or {}
         assert "intake_hold" in with_block, (
