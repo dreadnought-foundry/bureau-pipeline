@@ -33,6 +33,11 @@ The walk, one method per observable the card asks for:
  10. A post-approval review that DIES re-runs itself once, at a higher
      ceiling, with no lane move — and only a SECOND death parks the epic for
      an operator, naming both dead runs (DRE-3289).
+ 11. A post-approval SEND-BACK whose re-plan changed no card SET re-runs the
+     review itself too; only a re-plan that ADDED or REMOVED a card parks in
+     Green Light, naming the card (DRE-3291) — and the whole DRE-3257 shape
+     (send-back → re-plan → death → retry → pass) reaches activation without
+     one human lane move after the first approval.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_critic_scenario.py -v
 """
@@ -133,6 +138,13 @@ def main():
         log("add-label " + args[1])
     elif cmd == "children":
         print(os.environ.get("STUB_KIDS", "4"))
+    elif cmd == "children-json":
+        # The identifier set the card-set diff is computed over. STUB_CARDS is
+        # a comma-separated list so a walk can add or remove one card between
+        # the before- and after-snapshots the re-plan sits between.
+        cards = os.environ.get("STUB_CARDS", "DRE-9001,DRE-9002").split(",")
+        print(json.dumps([{"identifier": c, "body": "", "labels": [],
+                           "parent": EPIC} for c in cards if c]))
     elif cmd == "epics-in-flight":
         print(os.environ.get("STUB_EPICS", "[]"))
     else:
@@ -225,8 +237,13 @@ class CriticWalk(unittest.TestCase):
 
     # --- the seams --------------------------------------------------------
 
-    def _shell(self, fragment: str, subs: dict | None = None, **env_extra):
-        """Run a plan.yml step's shell with the run's expressions resolved."""
+    def _shell(self, fragment: str, subs: dict | None = None, expect_rc: int = 0,
+               **env_extra):
+        """Run a plan.yml step's shell with the run's expressions resolved.
+
+        `expect_rc` for the one branch that is SUPPOSED to leave the step red:
+        a re-review dispatch that did not go through hands the run to the medic
+        rather than leaving the epic with nothing scheduled (DRE-3291)."""
         script = step(fragment)["run"]
         script = script.replace("${{ runner.temp }}", self.tmp)
         script = script.replace("${{ github.event.client_payload.identifier }}", EPIC)
@@ -249,7 +266,7 @@ class CriticWalk(unittest.TestCase):
         env.update(env_extra)
         out = subprocess.run(["bash", "-e", "-c", script], cwd=self.tmp,
                              capture_output=True, text=True, env=env)
-        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertEqual(out.returncode, expect_rc, out.stdout + out.stderr)
         return out
 
     def _critic_writes(self, stage: str, result: str, reason: str = "", extra: str = ""):
@@ -405,6 +422,207 @@ class CriticWalk(unittest.TestCase):
                     FINDING="no card manufactures the operator step", REPLAN_OUTCOME="failure")
         self.assertIn("state Green Light", self._log())
         self.assertIn("did not finish", self._thread()[-1])
+
+    # --- DRE-3291: a re-plan that changed no card set re-reviews itself -----
+
+    def _replan(self, before: str, after: str) -> dict:
+        """The two snapshots the re-plan sits between, and the diff over them.
+
+        `before` and `after` are the child identifier sets, comma-separated —
+        the only thing this branch turns on."""
+        self._shell("children before the re-plan", STUB_CARDS=before)
+        self._shell("re-plan — did the card set change?", STUB_CARDS=after)
+        return self._outputs()
+
+    def _sent_back(self, cards: dict, expect_rc: int = 0, **env_extra):
+        """The park/re-review step, fed the outputs the two steps above wrote."""
+        env = dict(BOUND="false", REPLAN_OUTCOME="success",
+                   SET_CHANGED=cards.get("changed", ""),
+                   ADDED=cards.get("added", ""),
+                   REMOVED=cards.get("removed", ""))
+        env.update(env_extra)
+        return self._shell("second critic sent the plan back",
+                           expect_rc=expect_rc, **env)
+
+    def _hold(self, reason: str) -> dict:
+        self._critic_writes("post", pc.SEND_BACK, reason)
+        self._shell("second critic — decision")
+        out = self._outputs()
+        self.assertEqual(out["action"], "hold")
+        return out
+
+    def _summary(self, text: str):
+        with open(os.path.join(self.tmp, "post-replan-summary.md"), "w") as f:
+            f.write(text)
+
+    def test_a_re_plan_that_kept_the_card_set_re_runs_the_review_itself(self):
+        """The whole point of DRE-3291. The re-plan rewrote a card the CEO has
+        already read; there is no new shape and no decision, so the epic does
+        not move and the run asks for the review itself."""
+        out = self._hold("DRE-9002 migrates a table but no card manufactures "
+                         "the operator step")
+        cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002")
+        self.assertEqual(cards["changed"], "false")
+        self._summary("Rewrote DRE-9002 so it names who runs the migration.")
+        self._sent_back(cards, FINDING=out["reason"])
+
+        log = self._log()
+        self.assertNotIn("state ", log, "the CEO was asked to approve again")
+        self.assertNotIn("add-label", log)
+        self.assertNotIn("promote", log)
+
+        sent = self._dispatches()
+        self.assertEqual(len(sent), 1, log)
+        payload = sent[0]["client_payload"]
+        self.assertEqual(payload["trigger_state"], "in progress")
+        self.assertEqual(payload["reason"], "re-review")
+        self.assertEqual(payload["identifier"], EPIC)
+
+        notice = self._thread()[-1]
+        self.assertIn("round 2 of 2", notice)
+        self.assertIn("names who runs the migration", notice)
+        self.assertIn("no card manufactures the operator step", notice)
+        self.assertNotIn(pc.REAPPROVE_HOW, notice)
+        self.assertNotIn(pc.APPROVAL_LANE, notice,
+                         "nothing here is the CEO's to move")
+
+    def test_a_re_plan_that_added_a_card_parks_in_green_light_naming_it(self):
+        out = self._hold("no card manufactures the operator step")
+        cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002,DRE-9004")
+        self.assertEqual(cards["changed"], "true")
+        self.assertEqual(cards["added"], "DRE-9004")
+        self.assertEqual(cards["removed"], "")
+        self._summary("Added DRE-9004, the operator step for the migration.")
+        self._sent_back(cards, FINDING=out["reason"])
+
+        log = self._log()
+        self.assertIn("state Green Light", log)
+        self.assertNotIn("add-label", log, "round 1 is a revision, not a park")
+        self.assertEqual(self._dispatches(), [],
+                         "a shape the CEO has not seen is his to read")
+        notice = self._thread()[-1]
+        self.assertIn("DRE-9004", notice)
+        self.assertIn("yours to decide", notice)
+        self.assertIn(pc.APPROVAL_LANE, notice)
+        self.assertNotIn("Todo", notice)
+
+    def test_a_re_plan_that_removed_a_card_parks_in_green_light_naming_it(self):
+        out = self._hold("DRE-9002 duplicates work DRE-9001 already does")
+        cards = self._replan("DRE-9001,DRE-9002", "DRE-9001")
+        self.assertEqual(cards["changed"], "true")
+        self.assertEqual(cards["removed"], "DRE-9002")
+        self.assertEqual(cards["added"], "")
+        self._summary("Dropped DRE-9002 — DRE-9001 already covers it.")
+        self._sent_back(cards, FINDING=out["reason"])
+
+        self.assertIn("state Green Light", self._log())
+        self.assertEqual(self._dispatches(), [])
+        notice = self._thread()[-1]
+        self.assertIn("DRE-9002", notice)
+        self.assertIn("removed", notice)
+
+    def test_a_missing_snapshot_reads_as_changed_and_parks(self):
+        """Unknown is unknown (console-honesty rule 2). The before-snapshot is
+        best-effort, and a re-plan whose shape we cannot report is one the CEO
+        reads rather than one the pipeline re-reviews behind him."""
+        out = self._hold("no card manufactures the operator step")
+        # No `children before the re-plan` step ran at all.
+        self._shell("re-plan — did the card set change?",
+                    STUB_CARDS="DRE-9001,DRE-9002")
+        cards = self._outputs()
+        self.assertEqual(cards["changed"], "true")
+        self._sent_back(cards, FINDING=out["reason"])
+        self.assertIn("state Green Light", self._log())
+        self.assertEqual(self._dispatches(), [])
+
+    def test_a_re_plan_that_did_not_finish_still_parks_in_green_light(self):
+        """The lane move never depends on the re-plan finishing — even when
+        the card set is unchanged BECAUSE the re-plan never edited anything."""
+        out = self._hold("no card manufactures the operator step")
+        cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002")
+        self.assertEqual(cards["changed"], "false")
+        self._sent_back(cards, FINDING=out["reason"], REPLAN_OUTCOME="failure")
+        self.assertIn("state Green Light", self._log())
+        self.assertEqual(self._dispatches(), [],
+                         "a plan nothing revised must not be re-reviewed as revised")
+        self.assertIn("did not finish", self._thread()[-1])
+
+    def test_a_failed_re_review_dispatch_is_said_and_leaves_the_run_red(self):
+        """DRE-2034 at this seam. A 403'd dispatch must not leave the epic
+        reading as though a run were on its way — and because no lane was
+        written, the step goes red so the medic picks the run up rather than
+        the epic sitting In Progress with nothing scheduled."""
+        out = self._hold("no card manufactures the operator step")
+        cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002")
+        self._sent_back(cards, FINDING=out["reason"], expect_rc=1,
+                        STUB_GH_RC="1")
+        self.assertEqual(self._dispatches(), [])
+        self.assertIn("could NOT", self._thread()[-1])
+        self.assertNotIn("state ", self._log())
+        for body in self._thread():
+            self.assertNotIn("🔁", body, self._thread())
+            self.assertNotIn("being run again", body, self._thread())
+
+    def test_the_bound_parks_even_when_the_card_set_is_unchanged(self):
+        """The bound is read FIRST. Two real send-backs park for a person
+        whatever the re-plan did to the cards — "the bound still parks" is out
+        of this card's scope and must stay true."""
+        for reason in ("no card manufactures the operator step",
+                       "still no card manufactures the operator step"):
+            self._critic_writes("post", pc.SEND_BACK, reason)
+            self._shell("second critic — decision")
+        self.assertEqual(self._outputs()["bound"], "true")
+        cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002")
+        self.assertEqual(cards["changed"], "false")
+        self._sent_back(cards, BOUND="true", FINDING="still no card")
+        log = self._log()
+        self.assertIn("state Green Light", log)
+        self.assertIn("add-label needs-human", log)
+        self.assertEqual(self._dispatches(), [],
+                         "the bound bought a third review")
+
+    def test_the_dre_3257_walk_reaches_activation_with_no_human_move(self):
+        """The shape DRE-3257 actually had, walked end to end: approval →
+        SEND_BACK → a re-plan that changed no card set → the review re-runs
+        itself → THAT review dies → the retry at 120 → PASS → activation.
+
+        The CEO does nothing after the first approval, and not one
+        `state Green Light` is written anywhere in the walk."""
+        out = self._hold("DRE-9002 migrates a table but no card manufactures "
+                         "the operator step")
+        self.assertEqual(out["round"], "1")
+
+        cards = self._replan("DRE-9001,DRE-9002", "DRE-9001,DRE-9002")
+        self.assertEqual(cards["changed"], "false")
+        self._summary("Rewrote DRE-9002 to name the operator who runs it.")
+        self._sent_back(cards, FINDING=out["reason"])
+        self.assertEqual([p["client_payload"]["reason"] for p in self._dispatches()],
+                         ["re-review"])
+
+        # The re-review run sizes itself off the thread, and DIES at 80.
+        self._shell("second critic — turn ceiling", STUB_KIDS="15")
+        self.assertEqual(self._outputs()["max_turns"], "80")
+        self._died_at("80", "111")
+        self.assertEqual([p["client_payload"]["reason"] for p in self._dispatches()],
+                         ["re-review", "review-retry"])
+
+        # The retry reads the tombstone and runs with headroom.
+        self._shell("second critic — turn ceiling", STUB_KIDS="15")
+        self.assertEqual(self._outputs()["max_turns"], "120")
+
+        # ...and passes. Round 2 of 2 — the death was never a round.
+        self._critic_writes("post", pc.PASS)
+        self._shell("second critic — decision")
+        final = self._outputs()
+        self.assertEqual((final["action"], final["round"]), ("proceed", "2"))
+        self._shell("Activate the approved epic")
+
+        log = self._log()
+        self.assertIn("state In Progress", log)
+        self.assertIn("promote --promote-only", log)
+        self.assertNotIn("state Green Light", log,
+                         "the CEO was asked to approve again inside the walk")
+        self.assertNotIn("add-label", log)
 
     # --- DRE-3241: the review itself dies -----------------------------------
 

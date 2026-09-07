@@ -1022,10 +1022,14 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
         f"🚨 {POST_SENT_BACK_TAG}: {identifier}'s epic {epic} was approved at "
         f"{when} but the second critic sent the plan back — holding. The "
         f"critic's reason: {quoted}\n\n"
-        "The children stay in Backlog until the gap is settled. The plan was "
-        f"revised with the critic's finding; read it, then {REAPPROVE_HOW} — "
-        "that re-runs the review. A plan sent back twice parks with "
-        "needs-human rather than being built as it stands."
+        "The children stay in Backlog until the gap is settled. The plan has "
+        "been revised with the critic's finding, and the review is run again "
+        "by the pipeline itself — a revision that changed no card is not a "
+        "decision anyone is waiting on.\n\n"
+        "**If the epic is sitting in Green Light**, the revision added or "
+        "removed cards, and that plan is waiting on the CEO to read it. A plan "
+        "sent back twice parks with needs-human rather than being built as it "
+        "stands."
     )
 
 

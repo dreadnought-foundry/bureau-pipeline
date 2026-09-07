@@ -1386,6 +1386,22 @@
       "why": "Act-shaped, and the registry has no row for it: it is the post-approval bound's new outcome (a park, where the DRE-2721 rail activated the epic). Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the park ships first as an undeclared act and the row follows with its console half. It carries its own idempotency in the needs-human label the sweep already honours."
     },
     {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🔁 The post-approval review found a gap and the plan has been revised",
+      "step": "Second critic sent the plan back",
+      "kind": "undeclared-act",
+      "means": "A post-approval send-back whose re-plan changed no card set is being re-reviewed by the pipeline itself — the epic does not move and the CEO has nothing to decide (DRE-3291).",
+      "why": "Act-shaped, and the registry has no row for it: it is the post-approval send-back's new outcome (the review re-run by the pipeline itself, where the DRE-3088 rail asked the CEO for another approval). Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the re-review ships first as an undeclared act and the row follows with its console half. The machine-readable half of this round is the round record posted alone by the decision step above it, which the sweep reads in its own grammar; a trailer here would be a second key for one round."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "🚨 The revised plan's review could NOT be started",
+      "step": "Second critic sent the plan back",
+      "kind": "undeclared-act",
+      "means": "The re-review of a revised plan could not be dispatched, so nothing is running — said plainly rather than claimed as started (`plan_run.fire`'s rc rule, DRE-2034), and the step is left red for the medic.",
+      "why": "Act-shaped, and the registry has no row for it: it is the post-approval send-back's new outcome (the review re-run by the pipeline itself, where the DRE-3088 rail asked the CEO for another approval). Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the re-review ships first as an undeclared act and the row follows with its console half. The machine-readable half of this round is the round record posted alone by the decision step above it, which the sweep reads in its own grammar; a trailer here would be a second key for one round."
+    },
+    {
       "file": "scripts/limit_recovery.py",
       "anchor": "recovery_receipt(marker, why, what)",
       "kind": "undeclared-act",
