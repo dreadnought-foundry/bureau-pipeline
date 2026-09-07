@@ -1156,19 +1156,33 @@ class ThePostMarkerReleasesTheChildren(unittest.TestCase):
         self.assertIn("DRE-9003 migrates a table but no card runs it", refusal)
         self.assertIn(self.EPIC, refusal.splitlines()[0])
 
-    def test_every_refusal_names_the_approval_lane_and_never_todo(self):
-        """DRE-3088: an epic in Todo dispatches nothing (DRE-2725). Both
-        refusals used to tell the CEO to "move the epic to Todo again", which
+    def test_the_unread_refusal_names_the_approval_lane_and_never_todo(self):
+        """DRE-3088: an epic in Todo dispatches nothing (DRE-2725). This
+        refusal used to tell the CEO to "move the epic to Todo again", which
         is the one instruction that strands it forever."""
         missing = pc.promotion_refusal(
             self.CHILD, self.EPIC, self.APPROVED, self._cycle())
+        self.assertIn(pc.APPROVAL_LANE, missing)
+        self.assertNotIn("Todo", missing)
+        self.assertEqual(pc.APPROVAL_LANE, "In Progress")
+
+    def test_the_sent_back_refusal_says_the_review_re_runs_itself(self):
+        """DRE-3291: a send-back is answered by a re-plan, and a re-plan that
+        changed no card SET is re-reviewed by the pipeline itself. So this
+        refusal stopped asking the CEO for the approval move — it says what
+        the machinery is doing, and names the one case that IS his: an epic
+        sitting in Green Light, where the re-plan added or removed cards."""
         held = pc.promotion_refusal(
             self.CHILD, self.EPIC, self.APPROVED,
             self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
-        for refusal in (missing, held):
-            self.assertIn(pc.APPROVAL_LANE, refusal)
-            self.assertNotIn("Todo", refusal)
-        self.assertEqual(pc.APPROVAL_LANE, "In Progress")
+        self.assertIsNotNone(held)
+        self.assertIn("a gap", held)
+        self.assertNotIn(pc.REAPPROVE_HOW, held)
+        self.assertNotIn(pc.APPROVAL_LANE, held)
+        self.assertNotIn("Todo", held)
+        self.assertIn("run again", held)
+        self.assertIn("Green Light", held, "the one case that is the CEO's")
+        self.assertIn("needs-human", held, "and what a second send-back does")
 
     def test_the_bound_refusal_says_parked_not_released(self):
         parked = pc.promotion_refusal(
@@ -1998,20 +2012,25 @@ class EveryReapprovalNoticeNamesGreenLightFirst(unittest.TestCase):
         )
         self.assertIn(pc.APPROVAL_LANE, pc.REAPPROVE_HOW)
 
-    def test_every_refusal_that_asks_for_a_move_says_green_light_then_approve(self):
-        """The two refusals that still ask the CEO for something. The dead
-        review no longer does (DRE-3289) — it re-runs itself — so it is pinned
-        the other way, below."""
+    def test_the_one_refusal_that_asks_for_a_move_says_green_light_then_approve(self):
+        """The only refusal left that asks the CEO for something: nobody has
+        reviewed this plan since he approved it. A dead review (DRE-3289) and a
+        send-back (DRE-3291) both re-run themselves, so both are pinned the
+        other way, below."""
         unread = pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED, self._cycle())
+        self.assertIsNotNone(unread)
+        self.assertIn(pc.REAPPROVE_HOW, unread)
+        self.assertIn("Green Light", unread)
+        self.assertNotIn("again by moving it to In Progress", unread)
+        self.assertNotIn("Todo", unread)
+
+    def test_the_sent_back_review_asks_the_ceo_for_no_move_either(self):
         held = pc.promotion_refusal(
             self.CHILD, self.EPIC, self.APPROVED,
             self._cycle(pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "a gap")))
-        for refusal in (unread, held):
-            self.assertIsNotNone(refusal)
-            self.assertIn(pc.REAPPROVE_HOW, refusal)
-            self.assertIn("Green Light", refusal)
-            self.assertNotIn("again by moving it to In Progress", refusal)
-            self.assertNotIn("Todo", refusal)
+        self.assertIsNotNone(held)
+        self.assertNotIn(pc.REAPPROVE_HOW, held)
+        self.assertNotIn("Todo", held)
 
     def test_the_dead_review_asks_the_ceo_for_nothing(self):
         died = pc.promotion_refusal(

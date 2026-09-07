@@ -123,6 +123,24 @@ class TheFirstCriticRunsBeforeTheCeo(unittest.TestCase):
 
 POST_REPLAN = "Re-plan after the second critic sent it back"
 SENT_BACK = "Second critic sent the plan back"
+SNAPSHOT = "Children before the re-plan"
+CARD_SET = "Re-plan — did the card set change?"
+
+# The three branches of the sent-back step, each opened by a comment of its
+# own so a test can read one branch without guessing at shell indentation.
+BOUND_BRANCH = "# THE BOUND"
+CHANGED_BRANCH = "# THE CARD SET CHANGED"
+SAME_BRANCH = "# THE SAME CARDS"
+
+
+def sent_back_branches() -> tuple[str, str, str]:
+    """`(bound, changed, same)` — the three bodies, in the order they branch."""
+    run = str(step_named(SENT_BACK).get("run") or "")
+    for marker in (BOUND_BRANCH, CHANGED_BRANCH, SAME_BRANCH):
+        assert marker in run, f"{marker!r} is not in the sent-back step"
+    bound, rest = run.split(BOUND_BRANCH, 1)[1].split(CHANGED_BRANCH, 1)
+    changed, same = rest.split(SAME_BRANCH, 1)
+    return bound, changed, same
 
 
 class ASendBackAfterApprovalRevisesThenParks(unittest.TestCase):
@@ -146,9 +164,10 @@ class ASendBackAfterApprovalRevisesThenParks(unittest.TestCase):
     def test_the_park_reads_the_bound_and_stamps_needs_human(self):
         run = str(step_named(SENT_BACK).get("run") or "")
         self.assertIn('"$BOUND" = "true"', run)
-        self.assertIn("add-label", run)
-        self.assertIn("needs-human", run)
-        self.assertIn("Green Light", run)
+        bound, _changed, _same = sent_back_branches()
+        self.assertIn("add-label", bound)
+        self.assertIn("needs-human", bound)
+        self.assertIn("Green Light", bound)
 
     def test_no_receipt_on_the_activate_route_names_todo(self):
         for fragment in (SENT_BACK,):
@@ -170,6 +189,94 @@ class ASendBackAfterApprovalRevisesThenParks(unittest.TestCase):
         self.assertIn("two failed rounds", text.lower())
         self.assertIn("needs-human", text)
         self.assertIn("never Todo", text)
+
+
+class OnlyAnAddedOrRemovedCardParksAfterASendBack(unittest.TestCase):
+    """DRE-3291, read off the rail. A re-plan that changed no card SET is not a
+    decision the CEO has to make — he approved those cards already — so the run
+    re-reviews the plan itself instead of asking him for a fifth approval."""
+
+    def test_the_snapshots_bracket_the_re_plan(self):
+        self.assertLess(index_of(SNAPSHOT), index_of(POST_REPLAN))
+        self.assertLess(index_of(POST_REPLAN), index_of(CARD_SET))
+        self.assertLess(index_of(CARD_SET), index_of(SENT_BACK))
+
+    def test_neither_snapshot_can_strand_a_held_epic(self):
+        """Both are gated exactly like the re-plan and both are best-effort:
+        the park below must never depend on either of them running."""
+        for fragment in (SNAPSHOT, CARD_SET):
+            s = step_named(fragment)
+            self.assertIn("action == 'hold'", str(s.get("if")), fragment)
+            self.assertIn("mode == 'activate'", str(s.get("if")), fragment)
+            self.assertTrue(s.get("continue-on-error"), fragment)
+
+    def test_the_before_snapshot_is_taken_from_the_live_children(self):
+        run = str(step_named(SNAPSHOT).get("run") or "")
+        self.assertIn("children-json", run)
+        self.assertIn("children-before.json", run)
+
+    def test_the_diff_is_the_shared_contract_and_unknown_reads_as_changed(self):
+        """`review_rerun.py card-set` owns the answer (DRE-3286), and a
+        snapshot that is missing or empty is CHANGED — unknown is unknown, and
+        the CEO reads it (standards/console-honesty.md rule 2)."""
+        s = step_named(CARD_SET)
+        self.assertEqual(s.get("id"), "cardset")
+        run = str(s.get("run") or "")
+        self.assertIn("review_rerun.py card-set", run)
+        self.assertIn("--before", run)
+        self.assertIn("--after", run)
+        self.assertIn("children-after.json", run)
+        self.assertIn("changed=true", run)
+
+    def test_the_bound_is_read_before_the_card_set(self):
+        """"Two REAL send-backs still park" is out of this card's scope, so the
+        bound branch is first and nothing below it can reach a parked plan."""
+        run = str(step_named(SENT_BACK).get("run") or "")
+        self.assertLess(run.index('"$BOUND" = "true"'), run.index("$SET_CHANGED"))
+        bound, _changed, _same = sent_back_branches()
+        self.assertNotIn("review_rerun.py dispatch", bound)
+
+    def test_a_changed_card_set_parks_and_names_the_cards(self):
+        _bound, changed, _same = sent_back_branches()
+        self.assertIn('state "$EPIC" "Green Light"', changed)
+        self.assertIn("$ADDED", changed)
+        self.assertIn("$REMOVED", changed)
+        self.assertNotIn("review_rerun.py dispatch", changed,
+                         "a shape the CEO has not seen is not re-reviewed behind him")
+
+    def test_a_re_plan_that_did_not_finish_takes_the_same_branch(self):
+        run = str(step_named(SENT_BACK).get("run") or "")
+        self.assertIn('"$REPLAN_OUTCOME" != "success"', run)
+
+    def test_the_same_card_set_dispatches_a_re_review_and_moves_no_lane(self):
+        _bound, _changed, same = sent_back_branches()
+        self.assertIn("review_rerun.py dispatch", same)
+        self.assertIn(f"--reason {rr.REASON_RE_REVIEW}", same)
+        self.assertIn('--repo "$GITHUB_REPOSITORY"', same)
+        self.assertNotIn("linear_ops.py state", same,
+                         "a re-review never writes the epic's lane")
+        self.assertNotIn("add-label", same)
+
+    def test_the_dispatch_runs_under_the_app_token(self):
+        """Q1/Q2: `repos/.../dispatches` needs contents:write, which the App
+        token holds and the stub's own `github.token` does not."""
+        env = step_named(SENT_BACK).get("env") or {}
+        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.app.outputs.token }}")
+
+    def test_a_failed_re_review_dispatch_is_said_and_never_claimed_as_started(self):
+        """DRE-2034: no receipt on an unconfirmed dispatch. Both receipts hang
+        off the dispatch's exit status, and the failure leaves the step red so
+        the medic picks the run up — nothing else would, because no lane was
+        written."""
+        _bound, _changed, same = sent_back_branches()
+        head, _, tail = same.partition("review_rerun.py dispatch")
+        self.assertNotIn("linear_ops.py comment", head,
+                         "a re-review receipt written before the dispatch is attempted")
+        self.assertRegex(same, r"if\s+python3\s+\S*review_rerun\.py dispatch")
+        self.assertIn("🔁", tail)
+        self.assertIn("could NOT", tail)
+        self.assertLess(tail.index("🔁"), tail.index("could NOT"))
+        self.assertIn("exit 1", tail)
 
 
 class TheSecondCriticRunsAfterApproval(unittest.TestCase):
@@ -702,10 +809,32 @@ class EveryReapprovalNoticeOnTheRailNamesGreenLightFirst(unittest.TestCase):
     notice that asks the CEO to approve again says the two-step move, in the
     exact words plan_critic.py uses, so the rail and the sweep cannot drift."""
 
-    def test_the_sent_back_notices_say_green_light_then_approve(self):
+    def test_the_sent_back_notices_ask_only_for_the_move_that_is_left(self):
+        """DRE-3291 split this three ways, and each branch asks for a different
+        thing — or for nothing.
+
+        The BOUND still says the two-step move in `REAPPROVE_HOW`'s exact
+        words: the epic is parked, and clearing needs-human then re-approving
+        is a person's job. The CHANGED branch has just moved the epic to Green
+        Light itself, so the two-step sentence would name a move that is
+        already made — it asks for the single one that is left. The SAME-CARDS
+        branch asks for nothing at all, because nothing there is the CEO's."""
         run = str(step_named(SENT_BACK).get("run") or "")
-        self.assertEqual(run.count(pc.REAPPROVE_HOW), 2,
-                         "both the held and the parked notice name the move")
+        bound, changed, same = sent_back_branches()
+        self.assertEqual(run.count(pc.REAPPROVE_HOW), 1,
+                         "only the parked notice names the two-step move")
+        self.assertIn(pc.REAPPROVE_HOW, bound)
+
+        self.assertNotIn(pc.REAPPROVE_HOW, changed)
+        self.assertIn("Green Light", changed)
+        self.assertIn(pc.APPROVAL_LANE, changed,
+                      "the changed-set notice still names the approval move")
+
+        self.assertNotIn(pc.REAPPROVE_HOW, same)
+        self.assertNotIn(pc.APPROVAL_LANE, same,
+                         "an unchanged card set asks the CEO for no move at all")
+        self.assertNotIn("Approve", same)
+
         self.assertNotIn("by moving the epic to In Progress", run)
         self.assertNotIn("Todo", run)
 
