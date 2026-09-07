@@ -57,12 +57,20 @@ sys.path.insert(0, SCRIPTS)
 import design_parity  # noqa: E402
 import plan_critic as pc  # noqa: E402
 import plan_footprint  # noqa: E402
+import review_rerun as rr  # noqa: E402
 
 # The labels `linear_ops.subissue` inherits onto every planner-created child.
 # Since DRE-3040 the repo check reads the LABEL the standard requires, so the
 # fixtures carry one — a body stamp is the deprecated legacy form and the
 # planner brief tells the planner not to write it.
 CHILD_LABELS = ["repo:bureau-pipeline", "initiative:bureau", "agent:engineer"]
+
+# The wording DRE-3292 retired: the two-lane dance every re-approval notice
+# used to ask a person for, before the relay learned the re-run act. Assembled
+# rather than written out, because the sweep that keeps it out of the repo
+# (`tests/test_plan_critic_wiring.py`) reads these files too — a pin spelled
+# in full would be the one hit it could never clear.
+RETIRED_MOVE = " ".join(("Green", "Light,", "then", "approve"))
 
 
 def _cards(*pairs, labels=None):
@@ -1992,10 +2000,14 @@ class ADeadReviewLeavesATombstone(unittest.TestCase):
                     self.assertNotIn(a, b)
 
 
-class EveryReapprovalNoticeNamesGreenLightFirst(unittest.TestCase):
-    """The relay's activation fires only on a transition INTO In Progress
-    (`_is_epic_activation`). An epic already sitting there cannot be "moved to
-    In Progress"; the move that re-runs the review is Green Light first."""
+class EveryReapprovalNoticeNamesTheReRunAct(unittest.TestCase):
+    """The relay has TWO triggers, and the sentence names both (DRE-3292).
+
+    A transition INTO In Progress activates an epic (`_is_epic_activation`), so
+    an epic already sitting there cannot be "moved to In Progress" — that was
+    DRE-3241's edge, and the answer used to be a two-lane dance the CEO made by
+    hand. Since DRE-3287 a comment whose whole body is `RERUN_REVIEW_ACT` asks
+    for the review directly, from any lane, so that is what the notices say."""
 
     EPIC = "DRE-3164"
     CHILD = "DRE-3167"
@@ -2005,14 +2017,31 @@ class EveryReapprovalNoticeNamesGreenLightFirst(unittest.TestCase):
         return [ours(pc.cycle_marker(self.EPIC))] + [ours(b) for b in bodies]
 
     def test_the_sentence(self):
-        self.assertEqual(
-            pc.REAPPROVE_HOW,
-            "move the epic to Green Light, then approve it (the console's "
-            "Approve, or a move to In Progress)",
-        )
+        self.assertIn(rr.RERUN_REVIEW_ACT, pc.REAPPROVE_HOW)
         self.assertIn(pc.APPROVAL_LANE, pc.REAPPROVE_HOW)
+        self.assertIn("Green Light", pc.REAPPROVE_HOW,
+                      "the epic that is parked there approves instead")
+        self.assertNotIn(RETIRED_MOVE, pc.REAPPROVE_HOW)
 
-    def test_the_one_refusal_that_asks_for_a_move_says_green_light_then_approve(self):
+    def test_the_sentence_embeds_the_act_and_so_can_never_BE_it(self):
+        """DRE-3286's rule, re-pinned from the other side: the relay matches
+        the WHOLE comment body, so a notice that quoted the act alone would
+        re-run the review every time the pipeline posted it."""
+        self.assertFalse(rr.is_rerun_act(pc.REAPPROVE_HOW))
+        self.assertFalse(rr.is_rerun_act(
+            pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED,
+                                 self._cycle())))
+
+    def test_the_act_is_read_from_its_owner_never_copied(self):
+        """One literal, in `review_rerun` — the relay and the console mirror
+        that string byte for byte, and a second copy here is how the notice
+        comes to name an act nothing dispatches on."""
+        source = open(os.path.join(SCRIPTS, "plan_critic.py"),
+                      encoding="utf-8").read()
+        self.assertIn("review_rerun.RERUN_REVIEW_ACT", source)
+        self.assertNotIn("▶️", source, "the act's own literal, copied")
+
+    def test_the_one_refusal_that_asks_for_something_names_the_act(self):
         """The only refusal left that asks the CEO for something: nobody has
         reviewed this plan since he approved it. A dead review (DRE-3289) and a
         send-back (DRE-3291) both re-run themselves, so both are pinned the
@@ -2020,7 +2049,8 @@ class EveryReapprovalNoticeNamesGreenLightFirst(unittest.TestCase):
         unread = pc.promotion_refusal(self.CHILD, self.EPIC, self.APPROVED, self._cycle())
         self.assertIsNotNone(unread)
         self.assertIn(pc.REAPPROVE_HOW, unread)
-        self.assertIn("Green Light", unread)
+        self.assertIn(rr.RERUN_REVIEW_ACT, unread)
+        self.assertNotIn(RETIRED_MOVE, unread)
         self.assertNotIn("again by moving it to In Progress", unread)
         self.assertNotIn("Todo", unread)
 
@@ -2102,10 +2132,10 @@ class TheDeadReviewCli(unittest.TestCase):
                          "the record must not ride inside the note (_sole_record)")
 
     def test_the_death_note_says_the_review_re_runs_itself(self):
-        """DRE-3289: the note used to end "**To re-run the review:** move the
-        epic to Green Light, then approve it" — an ask made of a CEO who has
-        nothing to decide here. The workflow re-runs the review on its own,
-        once, with more room, and only a second death asks for a person."""
+        """DRE-3289: the note used to end by asking the CEO for the approval
+        move himself — an ask made of someone who has nothing to decide here.
+        The workflow re-runs the review on its own, once, with more room, and
+        only a second death asks for a person."""
         note, _record = self._died(os.path.join(self.tmp, "missing.json"))
         self.assertNotIn(pc.REAPPROVE_HOW, note)
         self.assertNotIn("Green Light", note)

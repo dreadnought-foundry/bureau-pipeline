@@ -835,18 +835,62 @@ POST_DIED = "died"
 #: pins it to a live lane in config/lane-contract.json.
 APPROVAL_LANE = "In Progress"
 
-#: HOW to approve again, in every notice that asks for it (DRE-3241). The
-#: relay's `_is_epic_activation` fires on a transition INTO In Progress, so an
-#: epic already sitting there — which is where a dead review leaves it —
-#: cannot be "moved to In Progress". The move that re-runs the review is Green
-#: Light first, then the approval. One sentence, used by every refusal here
-#: and quoted verbatim by plan.yml's own notices (the wiring test pins the
-#: two copies to each other), so no receipt can point at a move that does
-#: nothing.
-REAPPROVE_HOW = (
-    f"move the epic to Green Light, then approve it (the console's Approve, "
-    f"or a move to {APPROVAL_LANE})"
-)
+
+def reapprove_how() -> str:
+    """HOW to ask for the review again, in every notice that asks for it.
+
+    The relay has TWO triggers and this names both (DRE-3292):
+
+      * a transition INTO In Progress, which is how a plan is approved
+        (`_is_epic_activation`). DRE-3241's edge is that an epic ALREADY
+        sitting there — which is where a dead or unread review leaves it —
+        cannot make that move, so this trigger reaches only an epic parked in
+        Green Light.
+      * a comment whose whole body is `review_rerun.RERUN_REVIEW_ACT`
+        (DRE-3287). That one asks for the review directly, from whichever lane
+        the epic is in, and it is what the console's Approve posts for an epic
+        already In Progress.
+
+    Until the relay learned the act, the only way to ask was to move the epic
+    out to Green Light and approve it back in — a two-lane dance asked of a
+    person for a review nothing else would start. Now the act is the ask, and
+    the approval is the second half for the epic that is parked.
+
+    One sentence, used by every refusal here and quoted verbatim by plan.yml's
+    own notices (the wiring test pins the two copies to each other), so no
+    receipt can point at a move that does nothing.
+
+    Because the act is embedded in prose, no notice built from this sentence
+    can BE the act: the relay matches the whole comment body (`is_rerun_act`),
+    so a notice that quoted it alone would re-run the review every time the
+    pipeline posted it (DRE-3286).
+
+    A function, not a constant, for one reason: the act belongs to
+    `review_rerun`, which imports THIS module. A top-level import here would
+    read a half-built module whenever `review_rerun` is the one imported
+    first, and the sentence would lose the act silently. Deferred, both orders
+    work — the same shape `linear_ops.cmd_epics_in_flight` uses to read
+    `IN_FLIGHT_EPIC_STATES` from here.
+    """
+    import review_rerun
+
+    return (
+        f"post a comment on the epic that says exactly "
+        f"{review_rerun.RERUN_REVIEW_ACT} — the console's Approve does this "
+        f"for an epic already {APPROVAL_LANE} — or, for an epic sitting in "
+        f"Green Light, approve it (the console's Approve, or a move to "
+        f"{APPROVAL_LANE})"
+    )
+
+
+def __getattr__(name: str) -> str:
+    """`plan_critic.REAPPROVE_HOW` — the constant every caller has always
+    read (PEP 562), built on first read so `reapprove_how`'s deferred import
+    can happen. Anything else is the AttributeError it would have been."""
+    if name == "REAPPROVE_HOW":
+        return reapprove_how()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 #: What happens after a review DIES, in every notice about one (DRE-3289).
 #:
@@ -1000,7 +1044,7 @@ def promotion_refusal(identifier: str, epic: str, green_lit_at: str | None,
             "Nothing has reviewed this plan since it was approved, so nobody "
             "has asked what an agent will get wrong with it as the "
             "specification.\n\n"
-            f"**To let it through:** {REAPPROVE_HOW}. That re-runs the "
+            f"**To let it through:** {reapprove_how()}. That re-runs the "
             "post-approval review, and the children promote on the next sweep "
             "once it passes."
         )

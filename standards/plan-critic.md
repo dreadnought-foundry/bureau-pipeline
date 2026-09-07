@@ -158,8 +158,9 @@ What "ends" means depends on which side of the CEO the critic sits (DRE-3088):
     Light, with the added/removed cards named by identifier. That shape is one
     he has not seen, and the ask is the single move that is left: Approve from
     Green Light (the console's Approve, or a move to **In Progress**), which
-    runs the review once more. Not the two-step sentence — the epic IS in
-    Green Light by then.
+    runs the review once more. Not the re-run act — here the plan itself is
+    what wants reading, and asking for the review without that read is the
+    thing this branch exists to avoid.
   * **Two failed rounds** — the plan **parks** in Green Light with
     `needs-human` and both findings quoted, whatever the card set did. It is
     never activated as it stands: "proceed" on this side means agents build it,
@@ -167,12 +168,30 @@ What "ends" means depends on which side of the CEO the critic sits (DRE-3088):
     make them build the wrong thing. Green Light with the hold label is a
     watched queue, not the unread lane the 27-day failure lived in — and the
     sweep's own gate (`plan_critic.post_release`) reads the bound the same way,
-    so no cron sweep promotes the children of a parked epic either. To
-    re-approve after settling it: move the epic to Green Light, then approve it
-    (the console's Approve, or a move to **In Progress**). The relay's
-    activation fires only on the move INTO In Progress, so an epic already
-    sitting there has to leave first, and that notice says the two-step move in
-    those words (never Todo: an epic in Todo dispatches nothing).
+    so no cron sweep promotes the children of a parked epic either. To ask for
+    the review again after settling it: clear `needs-human`, then post a
+    comment on the epic that says exactly `▶️ re-run the review` — or, since a
+    parked epic sits in Green Light, approve it (the console's Approve, or a
+    move to **In Progress**). That sentence is `plan_critic.REAPPROVE_HOW`,
+    and the notice says it in those words.
+
+**The relay has two triggers, and every notice that asks for a re-run names
+both** (DRE-3292). One is the move **INTO In Progress** — the approval itself,
+which is why it reaches only an epic waiting in Green Light: an epic already
+sitting In Progress cannot make that move, and that is where a dead or unread
+review leaves it (DRE-3241; never Todo either — an epic in Todo dispatches
+nothing). The other is a comment whose **whole body** is `▶️ re-run the review`
+(DRE-3287), which asks for the review directly from whichever lane the epic is
+in; the console's Approve posts it for an epic already In Progress. Until the
+relay learned the act the only way to ask was to move the epic out to Green
+Light and approve it back in — a two-lane dance asked of a person for a review
+nothing else would start.
+
+The string lives once, in `review_rerun.RERUN_REVIEW_ACT`, and the relay and
+the console mirror it byte for byte. Because every notice embeds it in prose, no
+notice can BE the act: the relay matches the whole comment body, so a notice
+quoting it alone would re-run the review each time the pipeline posted it
+(DRE-3286) — and the act quoted on this page is inert for the same reason.
 
 The two stages count their rounds separately — a send-back before approval does
 not spend the budget after it. A round the critic **passed** is not a failure,
@@ -199,11 +218,11 @@ the plan (`plan_critic.post_review_turns`: fifteen cards get 80 turns), because
 the reading is linear in the cards and a fixed 40 had no headroom at fifteen.
 
 **And the review re-runs ITSELF, once, at a higher ceiling** (DRE-3289). The
-way forward used to be a move only a person could make — Green Light, then
-approve — for a plan nobody had found anything wrong with, so a death left the
-epic In Progress with nothing scheduled until someone noticed. The run that
-writes the tombstone now asks `review_rerun.after_death` what to do about it,
-and there are exactly three answers:
+way forward used to be a move only a person could make, for a plan nobody had
+found anything wrong with, so a death left the epic In Progress with nothing
+scheduled until someone noticed. The run that writes the tombstone now asks
+`review_rerun.after_death` what to do about it, and there are exactly three
+answers:
 
 * **retry** — the first turn-cap death since the last round. The run asks for
   its own re-run (`repository_dispatch`, `trigger_state: in progress`,

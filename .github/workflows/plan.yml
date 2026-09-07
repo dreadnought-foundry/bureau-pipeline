@@ -1785,9 +1785,10 @@ jobs:
       #     as before, because the re-plan added or removed cards and that is a
       #     shape the CEO has not read. The notice names them by identifier and
       #     asks for the ONE move that is left: Approve from Green Light. Not
-      #     `plan_critic.REAPPROVE_HOW` — that sentence exists for an epic
-      #     sitting In Progress, and this one is being put in Green Light by
-      #     the line above it.
+      #     `plan_critic.REAPPROVE_HOW` — that sentence offers the re-run act
+      #     as well, and here the plan itself is what wants reading: asking for
+      #     the review without the read is the thing this branch exists to
+      #     avoid.
       #   THE SAME CARDS — no lane move at all, and the run asks for the review
       #     ITSELF (`repository_dispatch`, ACTIVATE route, `reason: re-review`).
       #     Until this card the workflow moved the epic to Green Light and asked
@@ -1831,7 +1832,7 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🛑 Held twice since approval — parked for you with needs-human; nothing is building and nothing will until a person settles it. The critic's finding this round: ${FINDING}. ${CHANGED} When it is settled, clear needs-human, then move the epic to Green Light, then approve it (the console's Approve, or a move to In Progress) — or route it through Planning for a fresh plan."
+              "🛑 Held twice since approval — parked for you with needs-human; nothing is building and nothing will until a person settles it. The critic's finding this round: ${FINDING}. ${CHANGED} When it is settled, clear needs-human, then post a comment on the epic that says exactly ▶️ re-run the review — the console's Approve does this for an epic already In Progress — or, for an epic sitting in Green Light, approve it (the console's Approve, or a move to In Progress) — or route it through Planning for a fresh plan."
           elif [ "$SET_CHANGED" != "false" ] || [ "$REPLAN_OUTCOME" != "success" ]; then
             # THE CARD SET CHANGED: cards you have not read, or a re-plan that
             # never finished. Either way the plan is yours to look at.

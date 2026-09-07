@@ -239,8 +239,8 @@ def park_note(bodies: list, epic: str) -> str:
         "building. A review that keeps running out of turns is a plan that is "
         "too big to read in one pass, so this needs a person rather than a "
         "third attempt.\n\n"
-        f"**What to do:** split the plan into smaller epics, or "
-        f"{plan_critic.REAPPROVE_HOW} once it is smaller."
+        f"**What to do:** split the plan into smaller epics — then, once it "
+        f"is smaller, {plan_critic.REAPPROVE_HOW}."
     )
 
 
