@@ -236,6 +236,27 @@ class TestTheCadenceRidesWithTheRow:
             assert pipeline_act.cadence_s(name) == entry["cadence_s"]
             assert pipeline_act.cadence_why(name) == entry["cadence_why"]
 
+    def test_rows_carries_the_two_fields_with_the_rest_of_the_row(self):
+        """The row-shaped read, for the console's mirror (DRE-3091): the cadence
+        arrives on the same row as the tag, the kind and the state, off one
+        parse. `acts()` keeps returning NAMES — a dozen call sites here and in
+        `check_act_receipts.py` build sets and join strings out of it — so the
+        row shape is its own function rather than a change of meaning under
+        readers that would go on working and be wrong."""
+        rows = pipeline_act.rows()
+        assert [r["name"] for r in rows] == list(pipeline_act.acts())
+        for row in rows:
+            entry = pipeline_act.record(row["name"])
+            assert row == entry
+            assert "cadence_s" in row and "cadence_why" in row
+            assert row["tag"] and row["kind"] and row["state"]
+
+    def test_rows_hands_back_a_copy_nobody_can_corrupt(self):
+        """The registry is cached per path and read per card by the sweep. A
+        caller that mutated a row would be editing every later reader's copy."""
+        pipeline_act.rows()[0]["cadence_s"] = 1
+        assert pipeline_act.cadence_s(pipeline_act.acts()[0]) != 1
+
     def test_list_carries_the_two_fields_with_the_rest_of_the_row(self):
         """The console's mirror (DRE-3091) reads a row, not a second parser: the
         cadence arrives in the same row as the tag, the kind and the state."""
