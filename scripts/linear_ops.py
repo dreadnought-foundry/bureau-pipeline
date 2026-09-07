@@ -24,6 +24,19 @@ Subcommands:
                                        every build agent to post this at the end
                                        of its run; the run URL is added from the
                                        ambient Actions env when there is one.
+  proof-waiting <DRE-N> "<still to be observed>" "<what would let it be observed>"
+                                       hold a proof card on an observation that
+                                       cannot be made yet (DRE-3275). Composes
+                                       `🔬 proof-waiting: <a> — needs <b>` as the
+                                       proof-observation-pending act's receipt,
+                                       so the console renders `Waiting for proof`
+  proof-observed <DRE-N> "<what was observed, with PT time>"
+                                       the discharge record for the hold above:
+                                       `🔬 proof-observed: <text>`, a PLAIN
+                                       comment — the hold's trailer here would
+                                       read back as a fresh hold. Both refuse an
+                                       empty half and a text carrying the
+                                       console's fix-budget hold markers
   card-done <DRE-N> <pr-url>           linear-sync's merge→Done seam: move the
                                        card whose OWN agent branch merged to
                                        Done and comment the PR link — UNLESS
@@ -901,6 +914,110 @@ def cmd_actor(identifier: str, role: str) -> None:
     within a month, and nothing downstream can parse the set.
     """
     cmd_comment(identifier, agent_marker.actor_line(role))
+
+
+# --- 🔬 the proof hold, and the observation that discharges it (DRE-3275) ------
+#
+# A proof card answers "did it work" — the mechanism observed running against
+# real state (standards/card-quality.md) — and some proofs cannot START. DRE-3135
+# needed a FAILING agent pull request in a console repo to exist before anyone
+# could watch the pipeline handle one, and on 2026-09-06 the hold was typed by
+# hand as ordinary prose. Nothing read it: the card looked silent, and silence is
+# what every backstop in this pipeline is built to notice rather than to explain.
+#
+# So the wait is an ACT (`proof-observation-pending`, tag `proof-waiting`), and
+# `proof-waiting` composes it through the one receipt writer so the trailer rides
+# along and the console renders `Waiting for proof — <reason>`.
+#
+# `proof-observed` is NOT a second act. It is the DISCHARGE RECORD, and it posts
+# a plain comment on purpose: the only trailer it could carry is the hold's own
+# live key, so a composed discharge would leave the next reader finding a fresh
+# hold exactly where the observation is. That is the same shape a critic verdict
+# has against a re-dispatch, and `config/pipeline-acts.json` declares it in the
+# `unconverted` block as the record it is.
+
+# The act's idempotency key, ADOPTED by the registry off this line — the string
+# lives in the code that emits it, never invented by the JSON. Read back by the
+# console, so it may not be reworded without the console moving first
+# (docs/pipeline-acts.md: console-first).
+PROOF_WAITING_TAG = "proof-waiting"
+
+# Deliberately not a `*_TAG` constant: it is not an act and the registry does
+# not declare it, and `pipeline_act.problems()` reads every `*_TAG = "…"` in an
+# emitting file as a tag that must have a row.
+PROOF_OBSERVED_MARK = "proof-observed"
+
+PROOF_MARK = "🔬"
+
+# What the console's `enrich.HOLD_MARKERS` reads as a FIX-BUDGET hold. A proof
+# hold whose reason happens to contain either sentence renders as the wrong kind
+# of stuck card, on a surface nobody would think to check — so it is refused
+# here, where it costs the caller one reword, rather than discovered there.
+CONSOLE_HOLD_MARKERS = ("budget exhausted", "holding for a human")
+
+
+def proof_text_refusal(text: str, what: str) -> str | None:
+    """Why this half of a proof line may not be posted, or None.
+
+    One predicate for both commands: an empty half and a borrowed hold marker
+    are the same class of defect — a line the reader downstream cannot act on —
+    and two copies of the rule is how the two commands drift apart.
+    """
+    if not (text or "").strip():
+        return (
+            f"proof: {what} is empty. A hold that does not say what it waits "
+            "for, or an observation that does not say what was seen, is a "
+            "comment nobody can act on."
+        )
+    for marker in CONSOLE_HOLD_MARKERS:
+        if marker in text.lower():
+            return (
+                f"proof: {what} contains {marker!r}, which the console reads as "
+                "a fix-budget hold — the card would render as the wrong kind of "
+                "stuck. Say the same thing in other words."
+            )
+    return None
+
+
+def proof_waiting_line(observed: str, needs: str) -> str:
+    """`🔬 proof-waiting: <still to be observed> — needs <what would let it be>`.
+
+    The grammar is the contract shared with the console card that parses it, so
+    it is composed in exactly one place and nowhere else spells it out.
+    """
+    return f"{PROOF_MARK} {PROOF_WAITING_TAG}: {observed.strip()} — needs {needs.strip()}"
+
+
+def proof_observed_line(text: str) -> str:
+    """`🔬 proof-observed: <what was observed, with PT time>`."""
+    return f"{PROOF_MARK} {PROOF_OBSERVED_MARK}: {text.strip()}"
+
+
+def cmd_proof_waiting(identifier: str, observed: str, needs: str) -> None:
+    """Hold a card on an observation that cannot be made yet."""
+    for text, what in ((observed, "what is still to be observed"),
+                       (needs, "what would let it be observed")):
+        refusal = proof_text_refusal(text, what)
+        if refusal:
+            raise LinearError(refusal)
+    # Composed BEFORE the post and through the one writer: the trailer is what
+    # the console reads, and a hold with no trailer is the prose this replaces.
+    # The act name is a LITERAL rather than a constant so `check_act_receipts.py`
+    # can read which act this site composes — through a name it reads
+    # `<computed>` and a typo would die at the write in a live run instead.
+    body = pipeline_act.receipt(
+        "proof-observation-pending", proof_waiting_line(observed, needs)
+    )
+    cmd_comment(identifier, body)
+
+
+def cmd_proof_observed(identifier: str, text: str) -> None:
+    """Record the observation that discharges the hold above — plain, no
+    trailer (see the note at the top of this section)."""
+    refusal = proof_text_refusal(text, "what was observed")
+    if refusal:
+        raise LinearError(refusal)
+    cmd_comment(identifier, proof_observed_line(text))
 
 
 # --- Auto-Done guard: operator cards, demo cards and epics ---------------------
@@ -2381,6 +2498,8 @@ if __name__ == "__main__":
             "advance": cmd_advance,
             "comment": cmd_comment,
             "actor": cmd_actor,
+            "proof-waiting": cmd_proof_waiting,
+            "proof-observed": cmd_proof_observed,
             "card-done": cmd_card_done,
             "set-description": set_description,
             "subissue": cmd_subissue,
