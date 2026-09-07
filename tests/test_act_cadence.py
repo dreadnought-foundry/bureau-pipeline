@@ -55,7 +55,10 @@ import pipeline_act  # noqa: E402
 # A repo-relative path as a sentence would spell one. Deliberately narrow: the
 # point is to catch a `cadence_why` that gestures at "the workflow timeout"
 # without naming which, so a reader can go and check the number themselves.
-_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:yml|yaml|py|json|md)")
+# The leading dot is admitted on purpose — every workflow this repo declares
+# lives under `.github/`, and a class that excluded it would silently match
+# `github/workflows/qa-review.yml`, which is not a path that exists.
+_PATH = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_./-]*\.(?:yml|yaml|py|json|md)")
 
 # The state that means a run was dispatched and is expected to report back —
 # the one state for which any bound exists at all.
