@@ -332,6 +332,18 @@ class AfterADeath(unittest.TestCase):
         for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
             self.assertNotIn(forbidden, note)
 
+    def test_the_park_note_ends_on_the_ask_not_on_a_dangling_condition(self):
+        """`plan_critic.REAPPROVE_HOW` is a sentence with its own clauses
+        (DRE-3292), so the condition it is asked under goes BEFORE it — a
+        trailing "once it is smaller" reads as a condition on the last clause
+        of the quoted sentence rather than on the ask."""
+        note = rr.park_note(_pipeline(pc.cycle_marker(EPIC), _death(run="1")),
+                            EPIC)
+        self.assertIn(pc.REAPPROVE_HOW, note)
+        self.assertTrue(note.rstrip().endswith(pc.REAPPROVE_HOW + "."), note[-200:])
+        self.assertLess(note.index("once it is smaller"),
+                        note.index(pc.REAPPROVE_HOW))
+
 
 # --- 6. Which cards changed --------------------------------------------------
 
