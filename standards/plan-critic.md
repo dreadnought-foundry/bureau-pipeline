@@ -172,8 +172,8 @@ What "ends" means depends on which side of the CEO the critic sits (DRE-3088):
     the review again after settling it: clear `needs-human`, then post a
     comment on the epic that says exactly `▶️ re-run the review` — or, since a
     parked epic sits in Green Light, approve it (the console's Approve, or a
-    move to **In Progress**). That sentence is
-    `plan_critic.REAPPROVE_HOW`, and the notice says it in those words.
+    move to **In Progress**). That sentence is `plan_critic.REAPPROVE_HOW`,
+    and the notice says it in those words.
 
 **The relay has two triggers, and every notice that asks for a re-run names
 both** (DRE-3292). One is the move **INTO In Progress** — the approval itself,
@@ -191,7 +191,7 @@ The string lives once, in `review_rerun.RERUN_REVIEW_ACT`, and the relay and
 the console mirror it byte for byte. Because every notice embeds it in prose, no
 notice can BE the act: the relay matches the whole comment body, so a notice
 quoting it alone would re-run the review each time the pipeline posted it
-(DRE-3286). Quoting this page, likewise, is inert.
+(DRE-3286) — and the act quoted on this page is inert for the same reason.
 
 The two stages count their rounds separately — a send-back before approval does
 not spend the budget after it. A round the critic **passed** is not a failure,
@@ -220,9 +220,9 @@ the reading is linear in the cards and a fixed 40 had no headroom at fifteen.
 **And the review re-runs ITSELF, once, at a higher ceiling** (DRE-3289). The
 way forward used to be a move only a person could make, for a plan nobody had
 found anything wrong with, so a death left the epic In Progress with nothing
-scheduled until someone noticed. The run that
-writes the tombstone now asks `review_rerun.after_death` what to do about it,
-and there are exactly three answers:
+scheduled until someone noticed. The run that writes the tombstone now asks
+`review_rerun.after_death` what to do about it, and there are exactly three
+answers:
 
 * **retry** — the first turn-cap death since the last round. The run asks for
   its own re-run (`repository_dispatch`, `trigger_state: in progress`,
