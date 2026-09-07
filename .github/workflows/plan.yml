@@ -1643,6 +1643,26 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
 
+      # The card set BEFORE the re-plan touches it (DRE-3291). The question the
+      # step after the re-plan answers — did this revision change what the CEO
+      # approved, or only what a card says — needs both sides of the edit, and
+      # only this run can take the first one.
+      #
+      # `continue-on-error` and gated exactly like the re-plan below: a
+      # snapshot that could not be taken must never stop the epic from
+      # reaching the CEO. A missing file is read as "the set changed", which is
+      # the direction that puts the plan in front of a person (unknown is
+      # unknown — standards/console-honesty.md rule 2).
+      - name: Children before the re-plan
+        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" \
+            > "${{ runner.temp }}/children-before.json"
+
       # Held: the plan gets ONE revision with the critic's finding before it
       # goes back to the CEO (DRE-3088). Until this step existed, a send-back
       # parked the identical plan in Green Light, the CEO's only move was to
@@ -1719,34 +1739,86 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
-      # Held: the epic goes back to the CEO's queue with the finding and the
-      # revision, and the children do NOT promote. Green Light is where a plan
-      # waits on a human judgement (config/lane-contract.json). The CEO
-      # re-approves from Green Light — the console's Approve, or a move to In
-      # Progress; NEVER Todo, where an epic dispatches nothing (DRE-2725) —
-      # which starts the next round against the markers this run just wrote.
-      # Every notice says the move in plan_critic.REAPPROVE_HOW's exact words
-      # (DRE-3241: the relay's activation fires only on the move INTO In
-      # Progress, so "move it to In Progress" is a no-op on an epic already
-      # there); tests/test_plan_critic_wiring.py pins the two copies together.
+      # Did the re-plan change what the CEO APPROVED, or only what a card says
+      # (DRE-3291)? That is the whole of the branch below. A re-plan that
+      # rewrote one paragraph of a card he has already read is not a decision —
+      # DRE-3164 collected five approvals that way — and a re-plan that ADDED
+      # or REMOVED a card is a shape he has not seen.
       #
-      # At the BOUND (`bound=true`: two failed rounds since approval) the epic
-      # parks with `needs-human` instead. It is never activated as it stands:
-      # on this side of the CEO "proceed" means agents build it, and a plan the
-      # critic held twice is the specification that makes them build the wrong
-      # thing. The sweep's gate (`plan_critic.post_release`) reads the bound the
-      # same way, so no cron sweep promotes the children either (DRE-3088).
+      # `continue-on-error` for the same reason as the snapshot: this answer
+      # must never be the thing that strands a held epic. The branch reads
+      # anything but a literal `false` as changed, so a step that could not run
+      # at all still puts the plan in front of a person.
+      - name: Re-plan — did the card set change?
+        id: cardset
+        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          BEFORE="${{ runner.temp }}/children-before.json"
+          AFTER="${{ runner.temp }}/children-after.json"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" \
+            > "$AFTER" || : > "$AFTER"
+          if [ -s "$BEFORE" ] && [ -s "$AFTER" ]; then
+            python3 .bureau-pipeline/scripts/review_rerun.py card-set \
+              --before "$BEFORE" --after "$AFTER" \
+              --github-output "$GITHUB_OUTPUT" \
+            || echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::a children snapshot is missing — reading the card set as changed"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Held — and the three things that can be true of a held plan, in this
+      # order (DRE-3291). The children never promote in any of them.
+      #
+      #   THE BOUND (`bound=true`: two failed rounds since approval) — parks
+      #     with `needs-human` in Green Light, exactly as before. It is never
+      #     activated as it stands: on this side of the CEO "proceed" means
+      #     agents build it, and a plan the critic held twice is the
+      #     specification that makes them build the wrong thing. The sweep's
+      #     gate (`plan_critic.post_release`) reads the bound the same way, so
+      #     no cron sweep promotes the children either (DRE-3088).
+      #   THE CARD SET CHANGED (or the re-plan did not finish) — Green Light,
+      #     as before, because the re-plan added or removed cards and that is a
+      #     shape the CEO has not read. The notice names them by identifier and
+      #     asks for the ONE move that is left: Approve from Green Light. Not
+      #     `plan_critic.REAPPROVE_HOW` — that sentence exists for an epic
+      #     sitting In Progress, and this one is being put in Green Light by
+      #     the line above it.
+      #   THE SAME CARDS — no lane move at all, and the run asks for the review
+      #     ITSELF (`repository_dispatch`, ACTIVATE route, `reason: re-review`).
+      #     Until this card the workflow moved the epic to Green Light and asked
+      #     the CEO to approve a plan whose cards he had already approved;
+      #     DRE-3164 collected five approvals that way. Nothing here is his to
+      #     decide, so nothing is asked of him — and if the re-review sends the
+      #     plan back again that is the bound, which parks for him.
+      #
+      # Q1/Q2 (standards/vendor-boundaries.md): the dispatch is the same seam
+      # the dead-review step uses — the App token minted by `Mint bot token`,
+      # which holds the `contents:write` the stub's own `github.token` does
+      # not, initiating as a bot already in every reachable `allowed_bots`
+      # list. Q5: the receipt is written FROM the dispatch's rc and never ahead
+      # of it (DRE-2034), and a dispatch that did not go through leaves the
+      # step RED, so the medic picks the run up rather than the epic sitting
+      # silently with nothing scheduled.
       - name: Second critic sent the plan back
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           BOUND: ${{ steps.post1.outputs.bound }}
           FINDING: ${{ steps.post1.outputs.reason }}
+          ROUND: ${{ steps.post1.outputs.round }}
           REPLAN_OUTCOME: ${{ steps.postreplan.outcome }}
+          SET_CHANGED: ${{ steps.cardset.outputs.changed }}
+          ADDED: ${{ steps.cardset.outputs.added }}
+          REMOVED: ${{ steps.cardset.outputs.removed }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           SUMMARY="${{ runner.temp }}/post-replan-summary.md"
-          python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
           if [ -s "$SUMMARY" ]; then
             CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
           elif [ "$REPLAN_OUTCOME" = "success" ]; then
@@ -1755,12 +1827,40 @@ jobs:
             CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
           fi
           if [ "$BOUND" = "true" ]; then
+            # THE BOUND: two REAL send-backs since approval still park.
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
             python3 .bureau-pipeline/scripts/linear_ops.py add-label "$EPIC" needs-human
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "🛑 Held twice since approval — parked for you with needs-human; nothing is building and nothing will until a person settles it. The critic's finding this round: ${FINDING}. ${CHANGED} When it is settled, clear needs-human, then move the epic to Green Light, then approve it (the console's Approve, or a move to In Progress) — or route it through Planning for a fresh plan."
-          else
+          elif [ "$SET_CHANGED" != "false" ] || [ "$REPLAN_OUTCOME" != "success" ]; then
+            # THE CARD SET CHANGED: cards you have not read, or a re-plan that
+            # never finished. Either way the plan is yours to look at.
+            python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
+            if [ -n "${ADDED}${REMOVED}" ]; then
+              YOURS="What is yours to decide: the re-plan added ${ADDED:-no cards} and removed ${REMOVED:-no cards} — cards you have not read."
+            elif [ "$REPLAN_OUTCOME" = "success" ]; then
+              YOURS="What is yours to decide: whether the revised plan is right — we could not tell which cards it added or removed, so it is not being re-reviewed on its own."
+            else
+              YOURS="What is yours to decide: the re-plan did not finish, so the plan is as the critic saw it."
+            fi
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🛑 The post-approval review found a gap, so nothing has started building. The critic's finding: ${FINDING}. ${CHANGED} Read the revised plan, then move the epic to Green Light, then approve it (the console's Approve, or a move to In Progress) — the review runs once more; a plan sent back twice parks for you rather than being built as it stands."
+              "🛑 The post-approval review found a gap, so nothing has started building. The critic's finding: ${FINDING}. ${CHANGED} ${YOURS} Approve it from here (the console's Approve, or a move to In Progress) and the review runs once more; a plan sent back twice parks for you rather than being built as it stands."
+          else
+            # THE SAME CARDS: the review re-runs itself, and the epic does not
+            # move. The receipt hangs off the dispatch's exit status.
+            case "$ROUND" in ''|*[!0-9]*) ROUND=1;; esac
+            NEXT=$((ROUND + 1))
+            if python3 .bureau-pipeline/scripts/review_rerun.py dispatch \
+                 --epic "$EPIC" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --reason re-review; then
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "🔁 The post-approval review found a gap and the plan has been revised to answer it — the same cards you approved, none added and none removed. The critic's finding: ${FINDING}. ${CHANGED} The review is being run again by the pipeline, on its own, as round ${NEXT} of 2 — nothing here is yours to decide. If it sends the plan back a second time the epic parks in Green Light with needs-human for you."
+            else
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+                "🚨 The revised plan's review could NOT be started — the dispatch did not go through, so nothing is running and nothing is building. The critic's finding: ${FINDING}. ${CHANGED} This run is red, so the medic picks it up; nothing here is yours to do."
+              exit 1
+            fi
           fi
 
       # Proceeding: the state change, the announcement and the event-driven

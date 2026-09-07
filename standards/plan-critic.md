@@ -140,20 +140,39 @@ What "ends" means depends on which side of the CEO the critic sits (DRE-3088):
 * **Before approval**, the plan reaches the CEO regardless. Proceeding here
   costs a person a read, and the CEO can still send it back.
 * **After approval**, every send-back first gets one **re-plan** with the
-  critic's finding — the planner revises the children in place — and the epic
-  returns to Green Light with a receipt saying what changed. To re-approve:
-  move the epic to Green Light, then approve it (the console's Approve, or a
-  move to **In Progress**). The relay's activation fires only on the move
-  INTO In Progress, so an epic already sitting there has to leave first, and
-  every notice says the two-step move in those words (never Todo: an epic in
-  Todo dispatches nothing). Two failed rounds and the plan **parks** in Green Light with
-  `needs-human` and both findings quoted. It is never activated as it stands:
-  "proceed" on this side means agents build it, and a plan the critic held
-  twice is exactly the specification that would make them build the wrong
-  thing. Green Light with the hold label is a watched queue, not the unread
-  lane the 27-day failure lived in — and the sweep's own gate
-  (`plan_critic.post_release`) reads the bound the same way, so no cron sweep
-  promotes the children of a parked epic either.
+  critic's finding — the planner revises the children in place — and what
+  happens next turns on **whether that revision changed the card SET**
+  (DRE-3291), because that is the only part of it the CEO has not already
+  approved. The run snapshots the children either side of the re-plan and asks
+  `review_rerun.py card-set`; a snapshot it could not take reads as *changed*,
+  which is the direction that puts the plan in front of a person.
+
+  * **Same cards** — no lane move at all. The run asks for the review ITSELF
+    (`repository_dispatch`, ACTIVATE route, `reason: re-review`) and says so on
+    the epic: the finding, what the re-plan changed in plain English, and that
+    the review is re-running as round N+1 of 2. Nothing is the CEO's to decide,
+    so nothing is asked of him. Until this the workflow moved the epic to Green
+    Light and asked him to approve a plan whose cards he had already read —
+    DRE-3164 collected five approvals that way.
+  * **A card added or removed** (or a re-plan that did not finish) — Green
+    Light, with the added/removed cards named by identifier. That shape is one
+    he has not seen, and the ask is the single move that is left: Approve from
+    Green Light (the console's Approve, or a move to **In Progress**), which
+    runs the review once more. Not the two-step sentence — the epic IS in
+    Green Light by then.
+  * **Two failed rounds** — the plan **parks** in Green Light with
+    `needs-human` and both findings quoted, whatever the card set did. It is
+    never activated as it stands: "proceed" on this side means agents build it,
+    and a plan the critic held twice is exactly the specification that would
+    make them build the wrong thing. Green Light with the hold label is a
+    watched queue, not the unread lane the 27-day failure lived in — and the
+    sweep's own gate (`plan_critic.post_release`) reads the bound the same way,
+    so no cron sweep promotes the children of a parked epic either. To
+    re-approve after settling it: move the epic to Green Light, then approve it
+    (the console's Approve, or a move to **In Progress**). The relay's
+    activation fires only on the move INTO In Progress, so an epic already
+    sitting there has to leave first, and that notice says the two-step move in
+    those words (never Todo: an epic in Todo dispatches nothing).
 
 The two stages count their rounds separately — a send-back before approval does
 not spend the budget after it. A round the critic **passed** is not a failure,

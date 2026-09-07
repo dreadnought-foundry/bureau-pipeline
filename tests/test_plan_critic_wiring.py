@@ -239,8 +239,8 @@ class OnlyAnAddedOrRemovedCardParksAfterASendBack(unittest.TestCase):
     def test_a_changed_card_set_parks_and_names_the_cards(self):
         _bound, changed, _same = sent_back_branches()
         self.assertIn('state "$EPIC" "Green Light"', changed)
-        self.assertIn("$ADDED", changed)
-        self.assertIn("$REMOVED", changed)
+        self.assertIn("${ADDED", changed)
+        self.assertIn("${REMOVED", changed)
         self.assertNotIn("review_rerun.py dispatch", changed,
                          "a shape the CEO has not seen is not re-reviewed behind him")
 
