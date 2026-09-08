@@ -27,6 +27,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
@@ -65,6 +67,32 @@ def closed(identifier, *, days=1, state="Done", description=""):
             "completedAt": ago(days)}
 
 
+class StubLops:
+    """Just enough of `linear_ops` for `read_pack`: the Linear sources answer,
+    so a run against it has exactly one broken source — `gh`."""
+
+    def gql_paged(self, query, variables=None):
+        if "completedAt" in query:
+            return [closed("DRE-9")]
+        return [{"identifier": "DRE-90", "title": "[EPIC] DRE-90",
+                 "description": "Ship the console.",
+                 "children": {"nodes": [{"id": "child"}]}}]
+
+    def gql(self, query, variables=None):
+        return {"initiatives": {"nodes": [{"name": "Console",
+                                           "description": "Ship the pilot."}]}}
+
+    def comment_bodies(self, identifier):
+        return []
+
+
+def failing_gh(args):
+    """What `_gh_json` does when `gh search prs` exits non-zero — the failure
+    run 34183475867 actually hit."""
+    raise groom_context.ContextError(
+        f"gh {' '.join(args)} failed rc=1: HTTP 503")
+
+
 # --------------------------------------------------------------------------
 # the builder is pure
 # --------------------------------------------------------------------------
@@ -91,7 +119,7 @@ def test_every_section_the_proposal_names_is_a_key_of_the_pack():
     for name in groom_context.SECTIONS:
         assert name in got, f"the pack has no {name!r} section"
     assert set(groom_context.summary(got)) == set(groom_context.SECTIONS) | {
-        "truncated"
+        "truncated", "unread"
     }
 
 
@@ -220,3 +248,41 @@ def test_the_pack_renders_without_a_section_it_could_not_read():
     rendered = groom_context.render(got)
     assert "merged_prs" in got["unread"]
     assert "could not be read" in rendered
+
+
+def test_a_section_that_could_not_be_read_has_no_count_in_the_summary():
+    """`summary()` is what the proposal's receipt line reports, and a section
+    nobody could read has NO count — the number it would otherwise default to
+    is `0`, and "0 merged PRs" on a night the fleet merged several is
+    indistinguishable from a real answer (DRE-3329).
+    """
+    got = groom_context.pack(now=NOW, closed_cards=[], unread=["merged_prs"])
+    out = groom_context.summary(got)
+    assert out["merged_prs"] is None, (
+        "an unreadable section must carry no count at all"
+    )
+    assert out["unread"] == ["merged_prs"]
+    assert out["closed_cards"] == 0, (
+        "a section that WAS read and held nothing is a real zero"
+    )
+
+
+def test_a_failing_gh_search_leaves_the_merges_unread_and_uncounted():
+    """End to end from the failure the card names: `gh search prs` exits
+    non-zero, the section is named unread, and nothing downstream is handed a
+    number for it."""
+    got = groom_context.read_pack(StubLops(), now=NOW, run=failing_gh)
+    assert got["unread"] == ["merged_prs"], "the other three sources read fine"
+    assert groom_context.summary(got)["merged_prs"] is None
+    assert "could not be read" in groom_context.render(got)
+    assert groom_context.summary(got)["closed_cards"] == 1
+
+
+def test_a_non_zero_gh_exit_is_raised_rather_than_read_as_no_merges():
+    class Done:
+        returncode, stdout, stderr = 1, "", "HTTP 503"
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(groom_context.subprocess, "run", lambda *a, **k: Done())
+        with pytest.raises(groom_context.ContextError):
+            groom_context.read_merged_prs(now=NOW)

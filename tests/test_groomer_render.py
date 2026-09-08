@@ -22,6 +22,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_groomer_render.py -v
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
@@ -38,6 +39,7 @@ import groom_context  # noqa: E402
 import groom_judgement  # noqa: E402
 import groomer  # noqa: E402
 
+from test_groom_context import StubLops, failing_gh  # noqa: E402
 from test_groomer import CYCLES, GOLDEN, NOW, Counter, card, judged, ranked  # noqa: E402
 
 # The pack the receipt line reports on: three epics in flight, two merged pull
@@ -295,6 +297,80 @@ def test_a_cut_answer_is_named_in_the_receipt_and_lands_in_could_not_rank():
     body = section(text, "## Could not rank — needs a person")
     for identifier in block["unranked"]:
         assert identifier in body, f"{identifier} was cut and is not reported"
+
+
+# --------------------------------------------------------------------------
+# a context signal nobody could read (DRE-3329)
+# --------------------------------------------------------------------------
+def unread_pack(*, run=None):
+    """The pack of a run whose `gh search prs` failed — the shape run
+    34183475867 produced, built through the real reader so the failure travels
+    the whole way to the page."""
+    return groom_context.read_pack(StubLops(), now=NOW, run=run or failing_gh)
+
+
+def test_a_context_signal_that_could_not_be_read_renders_as_unknown():
+    """`0 merged PRs` on a night the fleet merged several is the exact failure
+    console-honesty rule 2 exists to prevent: a plausible default is
+    indistinguishable from a real answer. The count could not be read, so the
+    page says UNKNOWN and no number at all (DRE-3329)."""
+    cards = [card(f"DRE-{n}", days=n) for n in range(1, 4)]
+    proposal = groomer.propose(
+        cards, cycles=CYCLES, capacity=5, now=NOW,
+        judgement=with_pack(cards, ranked(["DRE-1", "DRE-2", "DRE-3"]),
+                            pack=unread_pack()))
+    text = groomer.render_proposal(proposal)
+    receipt = next(l for l in text.splitlines() if l.startswith("Ranked by"))
+    assert "UNKNOWN merged PRs" in receipt
+    assert "0 merged PR" not in text, "the unreadable count was published as 0"
+    # Every other count on this line is real and non-zero, so a `0` anywhere in
+    # it can only be the unreadable section defaulting.
+    assert "0" not in receipt, f"a failing gh search put a 0 on the page: {receipt}"
+    assert proposal["judgement"]["pack"]["merged_prs"] is None
+    assert proposal["judgement"]["pack"]["unread"] == ["merged_prs"]
+
+
+def test_a_run_that_read_no_pack_at_all_reports_unknown_not_zeros():
+    """The same lie one step further out: a run holding no pack knows nothing
+    about what is in flight, and zeros would say it knew."""
+    cards = [card("DRE-1")]
+    judgement = dataclasses.replace(with_pack(cards, ranked(["DRE-1"])), pack={})
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, now=NOW,
+                               judgement=judgement)
+    block = proposal["judgement"]
+    assert all(block["pack"][name] is None for name in groom_context.SECTIONS)
+    assert block["pack"]["unread"] == sorted(groom_context.SECTIONS)
+    receipt = next(l for l in groomer.render_proposal(proposal).splitlines()
+                   if l.startswith("Ranked by"))
+    assert "UNKNOWN epics" in receipt and "0 epic" not in receipt
+
+
+def test_the_ranking_prompt_is_told_the_difference_between_zero_and_unread():
+    """The pack feeds the ranking as well as the page, so the model must not
+    read a source nobody could reach as a fortnight with nothing in it."""
+    rows = groom_judgement.census([card("DRE-1")], now=NOW)
+    broken = groom_judgement.prompt_for(rows, unread_pack())
+    read = groom_judgement.prompt_for(rows, groom_context.pack(now=NOW))
+    assert "could not be read this run (merged_prs)" in broken
+    assert "treat it as unknown rather than as empty" in broken
+    assert "could not be read" not in read, (
+        "a section that was read and held nothing says Nothing, not unknown"
+    )
+    assert "Nothing." in read
+
+
+def test_a_section_that_was_read_and_held_nothing_is_still_a_real_zero():
+    """The other half of rule 2: "nothing merged" and "we could not ask" get
+    visibly different renderings, so UNKNOWN never swallows a true zero."""
+    cards = [card("DRE-1")]
+    empty = groom_context.pack(now=NOW)
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, now=NOW,
+                               judgement=with_pack(cards, ranked(["DRE-1"]),
+                                                   pack=empty))
+    receipt = next(l for l in groomer.render_proposal(proposal).splitlines()
+                   if l.startswith("Ranked by"))
+    assert "0 merged PRs" in receipt
+    assert "UNKNOWN" not in receipt
 
 
 def test_a_proposal_written_before_the_budget_keys_invents_no_number():
