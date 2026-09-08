@@ -1,16 +1,20 @@
 """DRE-1626: the gate derives its routing knowledge from the canonical snapshot.
 
-`validate_card.VALID_SLUGS` and `_PROJECT_PREFIX_TO_SLUG` used to be hand-edited
-literals that had to be kept byte-aligned with the relay's routing map by hand —
-onboarding a customer was a two-file code edit and a silent-drift hazard. They
-are now DERIVED from the bundled routing snapshot `config/repo-map.json` (the
-in-repo mirror of the relay's SSM map `/bureau/relay/repo-map`, seeded from
-agent-bureau's canonical `config/repo-map.json`).
+`validate_card.VALID_SLUGS` used to be a hand-edited literal that had to be kept
+byte-aligned with the relay's routing map by hand — onboarding a customer was a
+two-file code edit and a silent-drift hazard. It is now DERIVED from the bundled
+routing snapshot `config/repo-map.json` (the in-repo mirror of the relay's SSM
+map `/bureau/relay/repo-map`, seeded from agent-bureau's canonical
+`config/repo-map.json`).
+
+A `_PROJECT_PREFIX_TO_SLUG` map was derived the same way, until DRE-2874 deleted
+the fallback that read it: a product's identity is not a substring of a Linear
+project's display name, and seven of twenty projects had a prefix that routed
+nowhere. Its absence is pinned below.
 
 These tests make the relay↔gate lockstep STRUCTURAL:
 
-  * the DERIVE works — VALID_SLUGS is the snapshot's keys, the prefix map is
-    identity-over-slugs plus the documented product nicknames; and
+  * the DERIVE works — VALID_SLUGS is the snapshot's keys; and
   * the DIVERGENCE guard — the in-module last-known-good fallback literal must
     equal the on-disk snapshot, so a hand-edit to one that forgets the other
     fails CI here rather than routing one way and validating another.
@@ -82,11 +86,11 @@ class RepoMapSnapshotTest(unittest.TestCase):
         # the Todo gate's validation, AND the slug is routable — `slug in
         # VALID_SLUGS` is the exact check reconcile's stranded watchdog uses to
         # flag NO ROUTE and the gate's bounce guard uses to reject an inferred
-        # slug. A Portico-project card must also INFER to the routable slug
-        # (identity prefix), not bounce as unknown.
+        # slug. A `initiative:portico` card must also INFER to the routable slug
+        # (identity), not bounce as unknown.
         self.assertEqual(
             validate_card.missing("", ["repo:portico", "agent:engineer"]), [])
-        slug, source = validate_card.infer_repo([], "Portico: Docs")
+        slug, _ = validate_card.infer_repo(["initiative:portico"])
         self.assertEqual(slug, "portico")
         self.assertIn(slug, validate_card.VALID_SLUGS)
 
@@ -105,20 +109,17 @@ class RepoMapSnapshotTest(unittest.TestCase):
         # snapshot makes it a valid slug with no edit to validate_card.py.
         self.assertEqual(validate_card.VALID_SLUGS, set(_snapshot()))
 
-    def test_prefix_map_is_identity_over_slugs_plus_aliases(self):
-        # The prefix map is derived exactly the way the relay's _infer_slug does:
-        # identity over every routable slug, plus the documented product
-        # nicknames (the only non-derivable entries).
-        expected = {slug: slug for slug in _snapshot()}
-        expected.update(validate_card._PROJECT_PREFIX_ALIAS)
-        self.assertEqual(validate_card._PROJECT_PREFIX_TO_SLUG, expected)
+    def test_no_project_prefix_map_is_derived_at_all(self):
+        # DRE-2874 deleted the fallback that read it. The map goes with it — a
+        # derived map nothing reads is an invitation to wire it back up, and it
+        # would drift silently in the meantime.
+        self.assertFalse(hasattr(validate_card, "_PROJECT_PREFIX_TO_SLUG"))
+        self.assertFalse(hasattr(validate_card, "_PROJECT_PREFIX_ALIAS"))
 
     def test_documented_alias_targets_are_real_repos(self):
         # Every nickname must point at a slug that is actually in the snapshot,
         # or the gate could infer a slug it then rejects as unknown.
         snap_keys = set(_snapshot())
-        for prefix, slug in validate_card._PROJECT_PREFIX_ALIAS.items():
-            self.assertIn(slug, snap_keys, f"alias {prefix}->{slug} not a real repo")
         for label, slug in validate_card._INITIATIVE_ALIAS.items():
             self.assertIn(slug, snap_keys, f"initiative alias {label}->{slug} not a real repo")
 

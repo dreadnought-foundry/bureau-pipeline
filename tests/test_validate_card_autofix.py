@@ -12,12 +12,15 @@ Two layers are pinned here:
 Inference rules (mirrors the relay's REPO_MAP convention — see validate_card):
   agent label: title has [EPIC] OR card has children → agent:planner; else
                agent:engineer.
-  repo:        initiative:<x> label (2a) wins over project-name prefix (2b);
-               candidate slug = identity except the documented alias
-               bureau→agent-bureau; the candidate must be a real repo
-               (VALID_SLUGS) or the card is bounced (never a wrong-repo guess).
+  repo:        the `initiative:<x>` label, and nothing else (DRE-2874 deleted the
+               project-name-prefix fallback: a product's identity is not a
+               substring of a display name anyone can rename). Candidate slug =
+               identity except the documented alias bureau→agent-bureau; the
+               candidate must be a real repo (VALID_SLUGS) or the card is
+               bounced (never a wrong-repo guess).
 """
 
+import inspect
 import os
 import sys
 import unittest
@@ -61,47 +64,40 @@ class InferAgentLabelTest(unittest.TestCase):
 class InferRepoTest(unittest.TestCase):
     def test_initiative_label_bureau_maps_to_agent_bureau(self):
         # The label slug `bureau` is NOT the repo slug — it aliases to agent-bureau.
-        slug, source = validate_card.infer_repo(["initiative:bureau"], None)
+        slug, source = validate_card.infer_repo(["initiative:bureau"])
         self.assertEqual(slug, "agent-bureau")
         self.assertIn("initiative", source)
 
     def test_initiative_label_atlas_maps_to_atlas(self):
-        slug, _ = validate_card.infer_repo(["initiative:atlas"], None)
+        slug, _ = validate_card.infer_repo(["initiative:atlas"])
         self.assertEqual(slug, "atlas")
 
-    def test_project_name_prefix_bureau_console(self):
-        slug, source = validate_card.infer_repo([], "Bureau: Console")
-        self.assertEqual(slug, "agent-bureau")
-        self.assertIn("project", source)
+    def test_infer_repo_takes_labels_and_nothing_else(self):
+        # DRE-2874: the project-name-prefix fallback is gone, and with it the
+        # only reason infer_repo ever saw a project name. The signature is the
+        # proof that no caller can reintroduce it by passing one.
+        self.assertEqual(
+            list(inspect.signature(validate_card.infer_repo).parameters), ["labels"]
+        )
 
-    def test_project_name_prefix_atlas(self):
-        slug, _ = validate_card.infer_repo([], "Atlas: Allergen Pivot")
-        self.assertEqual(slug, "atlas")
+    def test_no_project_prefix_map_survives(self):
+        # The map itself is gone, not merely unread — a live map is an
+        # invitation to wire it back up.
+        self.assertFalse(hasattr(validate_card, "_PROJECT_PREFIX_TO_SLUG"))
+        self.assertFalse(hasattr(validate_card, "_PROJECT_PREFIX_ALIAS"))
 
-    def test_project_name_prefix_deltasolv(self):
-        slug, _ = validate_card.infer_repo([], "DeltaSolv: Phase 6 — QA, Demo & Launch")
-        self.assertEqual(slug, "deltasolv")
-
-    def test_initiative_wins_over_project(self):
-        # 2a (initiative) takes precedence over 2b (project).
-        slug, source = validate_card.infer_repo(["initiative:atlas"], "Bureau: Console")
-        self.assertEqual(slug, "atlas")
-        self.assertIn("initiative", source)
-
-    def test_unknown_project_prefix_returns_none(self):
-        # Dev Sandbox / Foundry / unknown — no recognized product repo.
-        self.assertEqual(validate_card.infer_repo([], "Dev Sandbox"), (None, None))
-        self.assertEqual(validate_card.infer_repo([], "Foundry: WS3 Playbook"), (None, None))
-        self.assertEqual(validate_card.infer_repo([], "Some Random Project"), (None, None))
-
-    def test_no_initiative_no_project_returns_none(self):
-        self.assertEqual(validate_card.infer_repo([], None), (None, None))
+    def test_no_initiative_label_returns_none(self):
+        # The one route to a repo is the initiative label. Without it there is
+        # nothing to infer from — the card is bounced, never guessed at.
+        self.assertEqual(validate_card.infer_repo([]), (None, None))
+        self.assertEqual(validate_card.infer_repo(["agent:engineer"]), (None, None))
+        self.assertEqual(validate_card.infer_repo(["initiative:"]), (None, None))
 
     def test_initiative_foundry_resolves_to_unmapped_slug(self):
         # Rule 5 reachability: an initiative whose slug is a REAL candidate but
         # NOT a real repo (Dreadnought Foundry spans no single product repo).
         # infer_repo returns the concrete slug; the gate must reject it.
-        slug, _ = validate_card.infer_repo(["initiative:foundry"], None)
+        slug, _ = validate_card.infer_repo(["initiative:foundry"])
         self.assertEqual(slug, "foundry")
         self.assertNotIn(slug, validate_card.VALID_SLUGS)
 
@@ -202,15 +198,29 @@ class GateFixFirstTest(unittest.TestCase):
         self.assertEqual(fake.descriptions, [])
         self.assertEqual(fake.states, [])
 
-    def test_missing_repo_project_console_infers_agent_bureau(self):
+    def test_project_name_no_longer_infers_a_repo(self):
+        # DRE-2874: "Bureau: Console" used to auto-repair to repo:agent-bureau
+        # off its project's display name. A product's identity is not a
+        # substring of a name anyone can rename, so the card is bounced instead
+        # and no repo label is written.
         fake = FakeLinear(
             "Todo", "Do the thing.", ["agent:engineer"], project="Bureau: Console"
         )
-        self.assertFalse(self._run(fake))
-        self.assertIn(("DRE-999", "repo:agent-bureau"), fake.added_labels)
-        # DRE-1699: label only, no stamp written to the description.
+        self.assertTrue(self._run(fake))
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
+        self.assertFalse(any(l[1].startswith("repo:") for l in fake.added_labels))
         self.assertEqual(fake.descriptions, [])
-        self.assertEqual(fake.states, [])
+
+    def test_bounce_names_the_repo_label_the_card_needs(self):
+        # The bounce has to be actionable: it names the label to add, in the
+        # words the CEO sees on the card.
+        fake = FakeLinear(
+            "Todo", "Do the thing.", ["agent:engineer"], project="Bureau: Console"
+        )
+        self.assertTrue(self._run(fake))
+        body = "\n".join(b for _, b in fake.comments)
+        self.assertIn(validate_card.WANT_REPO, body)
+        self.assertIn("repo:", body)
 
     def test_missing_repo_no_initiative_unknown_project_bounces(self):
         fake = FakeLinear(
@@ -239,9 +249,10 @@ class GateFixFirstTest(unittest.TestCase):
 
     def test_retired_vericorr_project_bounces(self):
         # DRE-2672: vericorr left the fleet. A card still filed under a
-        # "VeriCorr: …" project must NOT be routed — the prefix no longer
-        # resolves, so the gate bounces it to Planning and writes no repo
-        # label. Fails if vericorr ever returns to VALID_SLUGS.
+        # "VeriCorr: …" project must NOT be routed. Since DRE-2874 no project
+        # name routes at all, so this holds for the stronger reason — the gate
+        # bounces it to Planning and writes no repo label. Fails if vericorr
+        # ever returns to VALID_SLUGS.
         fake = FakeLinear(
             "Todo", "Do the thing.", ["agent:engineer"], project="VeriCorr: Forms"
         )
@@ -287,14 +298,26 @@ class GateFixFirstTest(unittest.TestCase):
         self.assertIn("repo:atlas", fixes[0][1])
 
     def test_missing_repo_but_no_agent_label_both_handled(self):
-        # repo inferable from project, agent label inferred from normal title.
+        # repo inferable from the initiative label, agent label inferred from a
+        # normal title.
         fake = FakeLinear(
-            "Todo", "Do it.", [], title="Plain card", project="DeltaSolv: Forms"
+            "Todo", "Do it.", ["initiative:deltasolv"], title="Plain card"
         )
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
         self.assertIn(("DRE-999", "repo:deltasolv"), fake.added_labels)
         self.assertEqual(fake.states, [])
+
+    def test_uninferable_repo_bounces_before_any_label_is_written(self):
+        # Fix-first decides the FULL repair before mutating: a card whose only
+        # inferable gap is the role label must be bounced CLEAN, never left
+        # half-repaired. The project name used to supply the missing half.
+        fake = FakeLinear(
+            "Todo", "Do it.", [], title="Plain card", project="DeltaSolv: Forms"
+        )
+        self.assertTrue(self._run(fake))
+        self.assertEqual(fake.states, [("DRE-999", "Planning")])
+        self.assertEqual(fake.added_labels, [])
 
 
 if __name__ == "__main__":

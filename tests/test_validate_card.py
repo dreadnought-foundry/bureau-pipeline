@@ -7,13 +7,14 @@ OR a `repo:<slug>` label) and an agent-role label (any `agent:*`). These tests
 pin the no-I/O core; YAML wiring is pinned in test_validate_card_wiring.py.
 """
 
+import inspect
 import os
 import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from validate_card import missing  # noqa: E402
+from validate_card import WANT_AGENT, WANT_REPO, missing  # noqa: E402
 
 
 class MissingTest(unittest.TestCase):
@@ -91,37 +92,34 @@ class MissingTest(unittest.TestCase):
     def test_case_insensitive_labels(self):
         self.assertEqual(missing("**Repo:** atlas", ["Agent:Engineer"]), [])
 
-    # --- DRE-1722: initiative is OPT-IN (default off keeps the Todo gate same) -
+    # --- DRE-2874: an initiative label is never required ----------------------
 
-    def test_initiative_not_required_by_default(self):
-        # The Todo-entry gate calls missing() with the default; a clean card with
-        # repo + role but NO initiative is still clean — unchanged behavior.
+    def test_initiative_is_never_required(self):
+        # Every caller now asks the same question. A card with repo + role is
+        # clean whether or not it carries an `initiative:<x>` label, so nothing
+        # reports the label as a gap.
         self.assertEqual(missing("**Repo:** atlas", ["agent:engineer"]), [])
-
-    def test_require_initiative_flags_when_absent(self):
-        out = missing("**Repo:** atlas", ["agent:engineer"], require_initiative=True)
-        self.assertEqual(len(out), 1)
-        self.assertIn("initiative:", out[0])
-
-    def test_require_initiative_clean_when_present(self):
         self.assertEqual(
-            missing(
-                "**Repo:** atlas",
-                ["agent:engineer", "initiative:bureau"],
-                require_initiative=True,
-            ),
-            [],
+            missing("**Repo:** atlas", ["agent:engineer", "initiative:bureau"]), []
         )
+        self.assertEqual(missing("no repo here", []), [WANT_REPO, WANT_AGENT])
 
-    def test_require_initiative_bare_label_does_not_count(self):
-        # A bare "initiative:" with no slug does not satisfy the requirement.
-        out = missing("**Repo:** atlas", ["agent:engineer", "initiative:"], require_initiative=True)
-        self.assertEqual(len(out), 1)
-        self.assertIn("initiative:", out[0])
+    def test_missing_has_no_require_initiative_switch(self):
+        # DRE-2874: the kwarg is GONE, not defaulted off. A caller asking for the
+        # old behaviour must fail loudly rather than be silently ignored.
+        self.assertNotIn(
+            "require_initiative", inspect.signature(missing).parameters
+        )
+        with self.assertRaises(TypeError):
+            missing("**Repo:** atlas", ["agent:engineer"], require_initiative=True)
 
-    def test_require_initiative_lists_all_three_gaps(self):
-        out = missing("no repo here", [], require_initiative=True)
-        self.assertEqual(len(out), 3)
+    def test_no_initiative_vocabulary_survives_in_the_gate(self):
+        # The words only ever existed to name that gap. Nothing reports it now,
+        # so nothing may still carry the vocabulary for it.
+        import validate_card
+
+        self.assertFalse(hasattr(validate_card, "WANT_INITIATIVE"))
+        self.assertFalse(hasattr(validate_card, "_has_initiative_label"))
 
 
 if __name__ == "__main__":

@@ -111,8 +111,10 @@ class TestParentInheritedLabels:
     # --- DRE-1722: the parent's initiative:* label is inherited too -----------
 
     def test_inherits_initiative_alongside_repo_and_role(self):
-        # The load-bearing fix: a child gets repo + initiative + role, so the
-        # reconcile dependency-gate (scoped to the initiative) can promote it.
+        # A child gets repo + initiative + role. Promotion never read the
+        # initiative label — reconcile's gate reads the card's blockedBy
+        # relations, its repo: label and its parent epic's state — but repo
+        # inference does, as its one route to a repo (DRE-2874).
         assert linear_ops.parent_inherited_labels(
             ["repo:agent-bureau", "initiative:bureau", "agent:planner"]
         ) == ["repo:agent-bureau", "initiative:bureau", "agent:engineer"]
@@ -325,18 +327,34 @@ def test_child_failing_validate_card_is_rejected(tmp_path):
     assert fake.created is None
 
 
-def test_child_missing_initiative_is_rejected(tmp_path):
-    # DRE-1722: a parent epic with repo + role but NO initiative:* label means
-    # the child can't inherit one → it would never auto-promote, so the create
-    # seam rejects it through the SAME gate rather than creating a stalled child.
+def test_child_with_no_initiative_label_is_created(tmp_path):
+    # DRE-2874: the create seam no longer refuses a child for want of an
+    # `initiative:*` label. A parent epic with repo + role but no initiative
+    # yields a CREATED child carrying what there was to inherit.
+    #
+    # This is the path that would have taken the planner's whole output down:
+    # `cmd_subissue` raised LinearError here, so deleting the `initiative:*`
+    # labels while this stood would have failed every child create, telling the
+    # operator to add a label that no longer exists.
     fake = FakeLinear(parent_labels=["repo:atlas", "agent:planner"])  # no initiative
     body = "**Repo:** atlas\n\n# A card\nBuild it."
-    with patch.object(linear_ops, "gql", side_effect=fake.gql):
-        with pytest.raises(linear_ops.LinearError) as exc:
-            _run_subissue(fake, tmp_path, body)
-    assert "validate_card" in str(exc.value)
-    assert "initiative:" in str(exc.value)
-    assert fake.created is None
+    out = _run_subissue(fake, tmp_path, body)
+    assert fake.created is not None
+    assert set(fake.label_create_names) == {"repo:atlas", "agent:engineer"}
+    assert fake.created["labelIds"] == ["lbl-repo:atlas", "lbl-agent:engineer"]
+    assert "DRE-200" in out
+
+
+def test_child_created_when_no_label_anywhere_is_an_initiative(tmp_path):
+    # The label set the fleet is left with after the cull: not one entry starts
+    # with `initiative:`, on the parent or the child, and the create still
+    # succeeds.
+    fake = FakeLinear(parent_labels=["repo:atlas", "agent:planner"])
+    body = "**Repo:** atlas\n\n# A card\nBuild it."
+    _run_subissue(fake, tmp_path, body, "--label", "size:s")
+    assert fake.created is not None
+    attached = fake.label_create_names
+    assert not any(n.startswith("initiative:") for n in attached), attached
 
 
 # --- (d) the post-plan sweep reuses validate_card over every child -----------
@@ -358,15 +376,16 @@ class TestCheckChildren:
         assert any("agent:" in p for p in probs)
         assert any("PATH" in p for p in probs)
 
-    def test_child_problems_flags_missing_initiative(self):
-        # DRE-1722: a child with repo + role but NO initiative is flagged by the
-        # sweep — the reconcile dependency-gate would never promote it.
+    def test_child_problems_does_not_flag_a_missing_initiative(self):
+        # DRE-2874: a child with repo + role and NO initiative is complete. The
+        # sweep asks the same question the create seam does, so it must not
+        # report a gap the create seam no longer refuses.
         import validate_card
 
         probs = validate_card.child_problems(
             "A card", "**Repo:** atlas\n\n# Card\n- [ ] do", ["repo:atlas", "agent:engineer"]
         )
-        assert any("initiative:" in p for p in probs)
+        assert probs == []
 
     def test_check_children_passes_when_all_valid(self):
         import validate_card
@@ -406,9 +425,9 @@ class TestCheckChildren:
                 validate_card.cmd_check_children("DRE-EPIC")
         assert exc.value.code == 1
 
-    def test_check_children_fails_on_child_missing_only_initiative(self):
-        # A child that is otherwise complete but lacks initiative:* fails the
-        # sweep (DRE-1722) — same backstop as the repo/role check.
+    def test_check_children_passes_on_child_with_no_initiative(self):
+        # DRE-2874: a child that is otherwise complete but lacks initiative:* is
+        # complete. The post-plan sweep used to fail the whole plan over it.
         import linear_ops as _lo
         import validate_card
 
@@ -422,9 +441,10 @@ class TestCheckChildren:
             ]}}
         }
         with patch.object(_lo, "gql", return_value=payload):
-            with pytest.raises(SystemExit) as exc:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
                 validate_card.cmd_check_children("DRE-EPIC")
-        assert exc.value.code == 1
+        assert "all 1 child" in buf.getvalue()
 
 
 def test_child_uses_existing_validate_card_gate(tmp_path):
