@@ -2,7 +2,8 @@
 
 THE RECOVERY TRAP (found in production, 2026-08-09). The dead-run hold cap
 (`REQUEUE_CAP = 2`, DRE-1403) is counted by substring-counting Linear comments:
-`linear_ops.count_comments(<card>, "dead-run-requeue")` over `comments(last: 50)`.
+`linear_ops.count_comments(<card>, "dead-run-requeue")` over a fifty-comment
+window.
 NOTHING ever resets that count, and the HOLD comment itself
 ("🚨 held-for-human (dead-run-requeue cap reached)…") contains the tag, so it
 counts too.
@@ -56,7 +57,10 @@ import reconcile  # noqa: E402
 
 
 def _comments_payload(bodies):
-    return {"issue": {"comments": {"nodes": [{"body": b} for b in bodies]}}}
+    """A comment window as Linear answers one: NEWEST FIRST (DRE-3250).
+    `bodies` is written oldest→newest, the order the card reads in."""
+    return {"issue": {"comments": {
+        "nodes": [{"body": b} for b in reversed(list(bodies))]}}}
 
 
 def _death(n: int = 1) -> str:
@@ -187,8 +191,9 @@ def test_generic_counting_is_untouched_by_the_since_argument():
         assert linear_ops.count_comments("DRE-1", "x") == 2
 
 
-def test_the_last_50_window_is_unchanged():
-    """The reset changes WHICH comments count, never HOW MANY are fetched."""
+def test_the_fifty_comment_window_is_unchanged():
+    """The reset changes WHICH comments count, never HOW MANY are fetched —
+    the window is the fifty NEWEST either way (DRE-3250)."""
     seen = []
 
     def _spy(query, variables=None):
@@ -200,7 +205,7 @@ def test_the_last_50_window_is_unchanged():
         linear_ops.count_comments("DRE-1", dead_run.DEAD_TAG, since=dead_run.RESET_TAG)
     assert len(seen) == 2
     for query in seen:
-        assert "comments(last: 50)" in query
+        assert linear_ops.COMMENT_WINDOW_GQL in " ".join(query.split())
 
 
 def test_full_recovery_restores_the_whole_budget():

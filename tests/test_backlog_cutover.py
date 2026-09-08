@@ -51,6 +51,7 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import backlog_cutover as cutover  # noqa: E402
+import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
@@ -84,9 +85,12 @@ def _card(
         "parent": (
             {"identifier": parent, "state": {"name": parent_state}} if parent else None
         ),
+        # NEWEST FIRST, the order Linear answers a comment window in
+        # (DRE-3250); `comments` is written oldest→newest.
         "comments": {
             "nodes": [
-                {"body": b, "createdAt": _iso(age)} for b, age in comments
+                {"body": b, "createdAt": _iso(age)}
+                for b, age in reversed(list(comments))
             ]
         },
     }
@@ -100,6 +104,11 @@ class _Lops:
         self._occupancy = occupancy or {}
         self.advanced: list[tuple] = []
         self.comments: list[tuple] = []
+
+    #: Not a seam — the pure window-ordering helper the module reads through
+    #: `linear_ops` (DRE-3250). A double that stands in for the whole module
+    #: has to carry it, or the reader it serves cannot run.
+    window_nodes = staticmethod(linear_ops.window_nodes)
 
     def gql_paged(self, query, variables=None):
         lane = (variables or {}).get("lane")

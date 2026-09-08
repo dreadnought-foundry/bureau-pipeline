@@ -88,7 +88,9 @@ def card(ident="DRE-3062", lane="In Progress", bodies=(), labels=("repo:agent-bu
         "updatedAt": "2026-09-05T10:00:00Z",
         "state": {"name": lane},
         "labels": {"nodes": [{"name": name} for name in labels]},
-        "comments": {"nodes": [{"body": b} for b in bodies]},
+        # NEWEST FIRST, the order Linear answers a comment window in
+        # (DRE-3250); `bodies` is written oldest→newest, as the card reads.
+        "comments": {"nodes": [{"body": b} for b in reversed(list(bodies))]},
     }
 
 

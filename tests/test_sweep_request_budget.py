@@ -11,7 +11,7 @@ filter at all, so every repo's sweep paid one request for every Planning card
 on the whole board, including repos with no candidates.
 
 WHAT IS UNDER TEST:
-  * `active_cards` selects `comments(last: 50)` inline — the shape
+  * `active_cards` selects the fifty-comment window inline — the shape
     `backlog_children` already uses — so one paged read replaces every per-card
     comment fetch in both watchdogs.
   * `flag_stalled_planning` filters by repo, the way `flag_stranded` does: a
@@ -48,6 +48,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import validate_card  # noqa: E402
 
@@ -116,7 +117,9 @@ def _card(
         "updatedAt": _iso(minutes_stale),
         "state": {"name": state},
         "labels": {"nodes": [{"name": n} for n in labels]},
-        "comments": {"nodes": [{"body": b} for b in bodies]},
+        # NEWEST FIRST, the order Linear answers a comment window in
+        # (DRE-3250); `bodies` is written oldest→newest.
+        "comments": {"nodes": [{"body": b} for b in reversed(list(bodies))]},
     }
 
 
@@ -199,13 +202,13 @@ def _linear(fake):
 # 1: the board read carries the comments
 # --------------------------------------------------------------------------
 def test_active_cards_selects_the_cards_comments_inline():
-    """The shape `backlog_children` already uses (`comments(last: 50)`), so the
-    watchdogs read bodies off the card they were handed."""
+    """The shape `backlog_children` already uses (`linear_ops.COMMENT_WINDOW_GQL`),
+    so the watchdogs read bodies off the card they were handed."""
     fake = FakeLinear()
     with _linear(fake):
         reconcile.active_cards(reconcile.WATCHDOG_LANES)
     assert fake.board_reads == 1
-    assert "comments(last: 50)" in fake.queries[0], (
+    assert linear_ops.COMMENT_WINDOW_GQL in " ".join(fake.queries[0].split()), (
         "active_cards must select the card's comments inline — without them "
         "every watchdog pays one request per card"
     )

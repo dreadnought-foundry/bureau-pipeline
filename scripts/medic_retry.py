@@ -418,6 +418,14 @@ def card_for_run(branch: str, log_text: str = "") -> str | None:
 def card_facts(identifier: str) -> dict:
     """`{"state", "labels", "comments"}` for a card — one read, both rules.
 
+    The comment window is `linear_ops.COMMENT_WINDOW_GQL` and the order is
+    `linear_ops.window_nodes`'s: the card's fifty NEWEST comments, oldest→
+    newest (DRE-3250). Both rules below read the NEWEST receipt carrying a
+    marker — this run's park, this run's turn-cap witness — so a window taken
+    from the other end of a busy card's thread would answer with a park from a
+    previous life of the card, or with nothing at all, and the medic would
+    retry a card the pipeline had just parked.
+
     Imported locally so the decision core above stays importable (and testable)
     with no Linear key and no network.
     """
@@ -426,7 +434,7 @@ def card_facts(identifier: str) -> dict:
     data = linear_ops.gql(
         """query($id: String!) { issue(id: $id) {
              state { name } labels { nodes { name } }
-             comments(last: 50) { nodes { body createdAt } } } }""",
+             %s } }""" % linear_ops.COMMENT_WINDOW_GQL,
         {"id": identifier},
     )["issue"] or {}
     return {
@@ -437,7 +445,7 @@ def card_facts(identifier: str) -> dict:
         ],
         "comments": [
             {"body": node.get("body") or "", "created_at": node.get("createdAt") or ""}
-            for node in (data.get("comments") or {}).get("nodes") or []
+            for node in linear_ops.window_nodes(data.get("comments"))
         ],
     }
 

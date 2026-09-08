@@ -57,7 +57,9 @@ def _candidate(comments):
         "description": "**Repo:** agent-bureau\nwork",
         "parent": {"identifier": "DRE-1268", "state": {"name": "In Progress"}},
         "labels": {"nodes": [{"name": "size:M"}]},
-        "comments": {"nodes": [{"body": b} for b in comments]},
+        # Served NEWEST FIRST, the order Linear answers a comment window in
+        # (DRE-3250); `comments` is written oldest→newest above.
+        "comments": {"nodes": [{"body": b} for b in reversed(list(comments))]},
         "inverseRelations": {"nodes": []},
     }
 

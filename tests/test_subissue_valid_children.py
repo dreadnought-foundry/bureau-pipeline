@@ -194,10 +194,13 @@ class FakeLinear:
         # _issue_label_names (parent labels)
         if "issue(id: $id) { labels { nodes { name } } }" in q:
             return {"issue": {"labels": {"nodes": [{"name": n} for n in self.parent_labels]}}}
-        # comment_bodies — the parent's planning shape stamp (DRE-3038)
-        if "comments(last: 50)" in q:
+        # comment_bodies — the parent's planning shape stamp (DRE-3038).
+        # Served NEWEST FIRST, the way Linear orders a card's comments
+        # (DRE-3250): `parent_comments` reads oldest→newest, as a person reads
+        # the card, and the reader reverses the window once.
+        if "comments(first:" in q:
             return {"issue": {"comments": {
-                "nodes": [{"body": b} for b in self.parent_comments]}}}
+                "nodes": [{"body": b} for b in reversed(self.parent_comments)]}}}
         # _issue_has_children — the fallback when nothing has stamped a shape
         if "children { nodes { id } }" in q:
             return {"issue": {"children": {"nodes": []}}}

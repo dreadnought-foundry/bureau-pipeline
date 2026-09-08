@@ -1806,10 +1806,10 @@ def cmd_children(identifier: str) -> None:
 
 
 # ── The pass's read cache (DRE-3236, absorbing DRE-3175) ─────────────────────
-# A reconcile pass reads the whole board once — `comments(last: 50)` inline on
-# every card (DRE-2929) — and then, wherever a helper took an IDENTIFIER rather
-# than the card, went back to Linear for the same comments: one request per
-# refused Backlog card (`_surface_once` → count_comments), one per escalated
+# A reconcile pass reads the whole board once — the comment window below inline
+# on every card (DRE-2929) — and then, wherever a helper took an IDENTIFIER
+# rather than the card, went back to Linear for the same comments: one request
+# per refused Backlog card (`_surface_once` → count_comments), one per escalated
 # Intake card, one per epic thread, one per liveness check. On the card's
 # fixture that was 265 of a 284-request sweep, and the sweep was the fleet's
 # biggest single spender of its 2,500-an-hour quota (DRE-3202's table).
@@ -1828,7 +1828,7 @@ def cmd_children(identifier: str) -> None:
 #     authorship. The board reads select all three (COMMENT_FIELDS); a read
 #     that selected less misses, and the miss buys the thread rather than a
 #     wrong answer.
-#   * An inline window that is FULL (Linear says `hasPreviousPage`, or — from
+#   * An inline window that is PARTIAL (Linear says `hasNextPage`, or — from
 #     a read that did not ask — COMMENT_WINDOW nodes) is not the thread. It is
 #     not cached from the board read; the first reader that asks pays ONE
 #     paged read of the whole thread, oldest first, and that is cached for the
@@ -1837,16 +1837,23 @@ def cmd_children(identifier: str) -> None:
 #     wants: a receipt outside the window still counts as posted, and "the
 #     oldest comment carrying X" really is the oldest.
 #
-# WHICH FIFTY THE WINDOW IS, measured (2026-09-06, DRE-3060, 47 comments):
-# Linear orders a card's comments NEWEST FIRST. `first: 3` answered 09-06,
-# 09-05, 09-04; `last: 3` answered the three OLDEST, ascending; `before:` a
-# `last:` window's endCursor pages toward the newest, ascending, with no gap
-# and no repeat. So `comments(last: 50)` is the fifty oldest, not the fifty
-# newest — for every reader in this file, and it has never mattered because no
-# card has crossed fifty yet (DRE-3060 is the nearest, at 47). Inside a pass
-# the walk below reads the rest, so a sweep is the one consumer that sees a
-# busy card whole; every other reader of the window is a separate defect,
-# recorded on the card that shipped this and not fixed here.
+# WHICH FIFTY THE WINDOW IS, and WHICH WAY ROUND (DRE-3250) ───────────────────
+# Measured against the live API on 2026-09-06 (DRE-3060, 47 comments) and again
+# on 2026-09-08: Linear orders a card's comments NEWEST FIRST. `first: 3`
+# answered 09-06, 09-05, 09-04; `last: 3` answered the three OLDEST, ascending.
+#
+# So the window asks `first:` — the fifty NEWEST — and `window_nodes()` below
+# reverses them ONCE, into the oldest→newest order every reader in this repo
+# documents and is written against. The window used to ask `last:`, which on a
+# newest-first connection is the fifty OLDEST: every "latest" read in the
+# pipeline — the newest routing verdict, the newest critic marker, the newest
+# run receipt, the medic's park receipt, the watchdogs' proof-of-life — would
+# have gone stale on the first card to cross fifty comments, silently, and
+# answered with a fact from a spent cycle rather than with nothing.
+#
+# `hasNextPage` is the right way round for THIS direction: on a newest-first
+# window it means OLDER comments lie beyond it. (On the old `last:` window that
+# fact was `hasPreviousPage`, and the pages walked `before:` toward the newest.)
 #
 # A write invalidates: `cmd_comment` drops the card's cached thread, so a
 # receipt this pass posts is on the card when this pass next counts receipts.
@@ -1854,6 +1861,41 @@ COMMENT_WINDOW = 50
 #: The ONE comment selection every reader here shares. The board reads in
 #: reconcile.py select it inline; the miss path below selects it per card.
 COMMENT_FIELDS = "body createdAt user { id }"
+#: The ONE comment window, and the ONE place its DIRECTION is decided. Every
+#: read of a card's comments in this repo interpolates this string — the board
+#: reads, the per-card thread read, the medic's park read, the cutover's
+#: population read — so the direction cannot drift between them, and a reader
+#: cannot quietly re-derive which fifty it is looking at.
+COMMENT_WINDOW_GQL = (
+    "comments(first: %d) { pageInfo { hasNextPage endCursor } nodes { %s } }"
+    % (COMMENT_WINDOW, COMMENT_FIELDS)
+)
+
+
+def window_nodes(comments: dict | None) -> list[dict]:
+    """One inline comment window's nodes, OLDEST→NEWEST.
+
+    THE one place the API's newest-first order becomes the order every reader
+    in this repo is written against — `count_comments`'s "the last marker in
+    the list is the most recent reset", `first_comment_at`'s "the oldest
+    comment carrying X", `agent_run_alive`'s walk back from the newest receipt.
+    Reverse it anywhere else too and a reader gets its own private ordering.
+    """
+    return list(reversed(list((comments or {}).get("nodes") or [])))
+
+
+def window_is_partial(comments: dict | None) -> bool:
+    """Does the card hold comments this window does not?
+
+    `hasNextPage` on a `first:` (newest-first) window means OLDER comments lie
+    beyond it — the right way round for the direction COMMENT_WINDOW_GQL asks
+    in. A read that did not select pageInfo falls back to the older test: a
+    window filled to COMMENT_WINDOW is not provably the whole thread.
+    """
+    info = (comments or {}).get("pageInfo")
+    if info is not None and "hasNextPage" in info:
+        return bool(info.get("hasNextPage"))
+    return len(list((comments or {}).get("nodes") or [])) >= COMMENT_WINDOW
 
 _pass: dict = {"open": False, "threads": {}, "viewer": None, "viewer_read": False}
 
@@ -1869,25 +1911,18 @@ def reset_pass_cache() -> None:
 
 
 def remember_comments(identifier: str, comments: dict | None) -> None:
-    """Cache one card's inline comment window off a board read.
+    """Cache one card's inline comment window off a board read, oldest→newest.
 
-    A window Linear reports as incomplete (`pageInfo.hasPreviousPage`) — or,
-    when the read did not select pageInfo, one that fills COMMENT_WINDOW — is
-    not remembered: the first reader that asks pays one paged read instead.
+    A window Linear reports as partial (`window_is_partial`) is not
+    remembered: the first reader that asks pays one paged read instead.
     Inert outside a pass.
     """
     if not _pass["open"] or not identifier or comments is None:
         return
-    nodes = list(comments.get("nodes") or [])
-    info = comments.get("pageInfo")
-    if info is not None and "hasPreviousPage" in info:
-        exhausted = bool(info.get("hasPreviousPage"))
-    else:
-        exhausted = len(nodes) >= COMMENT_WINDOW
-    if exhausted:
+    if window_is_partial(comments):
         _pass["threads"].pop(identifier, None)
         return
-    _pass["threads"][identifier] = nodes
+    _pass["threads"][identifier] = window_nodes(comments)
 
 
 def _cached_thread(identifier: str, needs: tuple[str, ...]) -> list[dict] | None:
@@ -1901,14 +1936,13 @@ def _cached_thread(identifier: str, needs: tuple[str, ...]) -> list[dict] | None
 
 
 _THREAD_QUERY = """query($id: String!) { viewer { id } issue(id: $id) {
-     comments(last: 50) { pageInfo { hasPreviousPage endCursor }
-       nodes { %s } } } }""" % COMMENT_FIELDS
-# The rest of a busy card's thread, in pages of 100 toward the newest: `last:`
-# with `before:` the previous page's endCursor, which is the direction Linear's
-# newest-first ordering makes "the next hundred after these" (see the block
+     %s } }""" % COMMENT_WINDOW_GQL
+# The rest of a busy card's thread, in pages of 100 toward the OLDEST: `first:`
+# with `after:` the previous page's endCursor, which is the direction Linear's
+# newest-first ordering makes "the next hundred beyond these" (see the block
 # comment above — measured, not assumed).
-_NEWER_PAGE_QUERY = """query($id: String!, $before: String!) { issue(id: $id) {
-     comments(last: 100, before: $before) { pageInfo { hasPreviousPage endCursor }
+_OLDER_PAGE_QUERY = """query($id: String!, $after: String!) { issue(id: $id) {
+     comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor }
        nodes { %s } } } }""" % COMMENT_FIELDS
 
 
@@ -1916,33 +1950,35 @@ def _fetch_thread(identifier: str) -> tuple[list[dict], str | None]:
     """`(nodes, viewer_id)`: the card's comments oldest→newest, and who this
     key is.
 
-    The COMMENT_WINDOW window always — the read every caller made before. The
-    pages beyond it only inside a pass, and only when Linear says there are
-    some (`hasPreviousPage` on a `last:` window means newer comments exist):
-    walked toward the newest, terminating on a missing or repeated cursor the
-    way gql_paged does. Outside a pass the window is what it always was.
+    The COMMENT_WINDOW window always — the fifty NEWEST, which is the read
+    every caller outside a pass gets and all it gets. The pages beyond it only
+    inside a pass, and only when Linear says there are some (`hasNextPage` on a
+    `first:` window means older comments exist): walked toward the oldest,
+    terminating on a missing or repeated cursor the way gql_paged does. Both
+    the window and the pages arrive newest-first, so the whole lot is reversed
+    once, at the end, into the order every reader documents.
     """
     data = gql(_THREAD_QUERY, {"id": identifier})
     me = (data.get("viewer") or {}).get("id")
     conn = ((data.get("issue") or {}).get("comments")) or {}
-    nodes = list(conn.get("nodes") or [])
+    nodes = list(conn.get("nodes") or [])  # newest → oldest, as Linear orders
     info = conn.get("pageInfo") or {}
     seen: set[str] = set()
-    while _pass["open"] and info.get("hasPreviousPage"):
-        before = info.get("endCursor")
-        if not before or before in seen:
+    while _pass["open"] and info.get("hasNextPage"):
+        after = info.get("endCursor")
+        if not after or after in seen:
             print(
                 f"comments: {identifier} claims another page with cursor "
-                f"{before!r} — stopping at {len(nodes)} comment(s)",
+                f"{after!r} — stopping at {len(nodes)} comment(s)",
                 file=sys.stderr,
             )
             break
-        seen.add(before)
-        newer = gql(_NEWER_PAGE_QUERY, {"id": identifier, "before": before})
-        conn = ((newer.get("issue") or {}).get("comments")) or {}
+        seen.add(after)
+        older = gql(_OLDER_PAGE_QUERY, {"id": identifier, "after": after})
+        conn = ((older.get("issue") or {}).get("comments")) or {}
         nodes = nodes + list(conn.get("nodes") or [])
         info = conn.get("pageInfo") or {}
-    return nodes, me
+    return list(reversed(nodes)), me
 
 
 def _thread(identifier: str, *needs: str) -> list[dict]:
@@ -2019,11 +2055,16 @@ def count_comments(identifier: str, needle: str, *, since: str | None = None) ->
     Substring counting means the two markers must never contain one another —
     see dead_run.RESET_TAG's note and the tests that pin both directions.
 
-    The fetch window (`comments(last: 50)`) is unchanged: `since` changes WHICH
-    of those comments count, never HOW MANY are read. With `since=None` (the
-    generic uses: MERGED_NOT_CLOSED_MARKER, the bad-blocker tag) the behaviour is
-    byte-identical to before. Inside a sweep the bodies come off the pass's
-    board read (DRE-3236) — see the cache above.
+    `since` changes WHICH of the fetched comments count, never HOW MANY are
+    read. With `since=None` (the generic uses: MERGED_NOT_CLOSED_MARKER, the
+    bad-blocker tag) the behaviour is byte-identical to before.
+
+    The fetch is the COMMENT_WINDOW window — the fifty NEWEST comments,
+    oldest→newest (DRE-3250), which is what "the LAST marker in the list is the
+    most recent reset" below needs: a reset outside the window is a reset this
+    counter cannot honour, and the newest fifty are where a live one is. Inside
+    a sweep the bodies come off the pass's board read, and a card past the
+    window is read whole (DRE-3236) — see the cache above.
     """
     bodies = [(c.get("body") or "") for c in _thread(identifier, "body")]
     if since:
@@ -2059,9 +2100,16 @@ def first_comment_at(identifier: str, needle: str) -> str | None:
     agree today — but if a reset ever re-arms the notice, "since it was first
     said" is the age that means what the caller thinks it means.
 
-    Same `comments(last: 50)` window every other reader here uses. None when no
-    comment carries the marker, which callers must treat as UNKNOWN rather than
-    as zero: nothing has been ignored if nothing was ever said.
+    Same window every other reader here uses: the fifty NEWEST comments,
+    oldest→newest (DRE-3250). On a thread longer than the window, and outside a
+    sweep's pass, "the oldest carrying the marker" is therefore the oldest one
+    IN THE WINDOW — an age that can only read younger than the truth, never
+    older, so the notice is re-surfaced sooner rather than suppressed longer.
+    Inside a pass the paged read reaches the true oldest (DRE-3236).
+
+    None when no comment carries the marker, which callers must treat as
+    UNKNOWN rather than as zero: nothing has been ignored if nothing was ever
+    said.
     """
     for node in _thread(identifier, "body", "createdAt"):  # oldest -> newest
         if needle in (node.get("body") or ""):
@@ -2070,9 +2118,11 @@ def first_comment_at(identifier: str, needle: str) -> str | None:
 
 
 def comment_bodies(identifier: str) -> list[str]:
-    """All comment bodies on the card, oldest→newest. Used by the model-fallback
-    selector (DRE-1354) to read which model each prior attempt used / died on.
-    Inside a sweep, served from the pass's board read (DRE-3236)."""
+    """All comment bodies on the card, oldest→newest — the fifty NEWEST on a
+    thread longer than the window (DRE-3250), which is the half every caller
+    here wants. Used by the model-fallback selector (DRE-1354) to read which
+    model each prior attempt used / died on. Inside a sweep, served from the
+    pass's board read, and a busy card is read whole (DRE-3236)."""
     return [c.get("body") or "" for c in _thread(identifier, "body")]
 
 
