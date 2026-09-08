@@ -5970,10 +5970,16 @@ def run(argv: list[str]) -> None:
     except linear_ops.LinearRateLimited as e:
         print(f"reconcile: {e}", file=sys.stderr)
         print(
-            "reconcile: the workspace API quota is exhausted — this is a "
-            "transient, self-healing condition, NOT a defect in the estate. "
-            "Nothing to retry: the quota refills on its own and the next "
-            "scheduled sweep reconciles the board.",
+            # WHICH user (DRE-3321). "The workspace API quota" was the right
+            # noun for one Linear user and the wrong one since DRE-3172 made
+            # two: the limit is PER USER, so a dry bucket belongs to one of
+            # them and the reader's next question is which. The run declares
+            # it in LINEAR_IDENTITY; an undeclared run says so rather than
+            # guessing.
+            f"reconcile: the {linear_ops.declared_identity()} user's Linear "
+            "quota is exhausted — this is a transient, self-healing condition, "
+            "NOT a defect in the estate. Nothing to retry: the quota refills "
+            "on its own and the next scheduled sweep reconciles the board.",
             file=sys.stderr,
         )
         raise SystemExit(RATE_LIMITED_EXIT) from e

@@ -219,6 +219,56 @@ class LinearRateLimitClassifierTest(unittest.TestCase):
         self.assertNotIn("RATELIMITED", message)  # the cut really did land there
         self.assertTrue(medic_classify.is_linear_rate_limited(message + "\n"))
 
+    def test_the_refusal_naming_the_budget_owner_still_classifies(self):
+        """DRE-3321 appends `; budget: <identity>` to the refusal. The host and
+        the `rate limited:` fingerprint stay on THAT line — the classifier
+        requires both there — so the exact new shape is pinned here, composed
+        by the REAL client, and this goes red the day either moves off it.
+        """
+        body = (
+            b'{"errors":[{"message":"Rate limit exceeded. Only 2500 requests are '
+            b'allowed per 1 hour and you have made 2500 requests in the last '
+            b'hour.","extensions":{"type":"ratelimited","code":"RATELIMITED",'
+            b'"statusCode":429,"userError":true}}]}'
+        )
+
+        def _boom(*_a, **_k):
+            # 2026-09-05 23:32:00 UTC → 16:32 PT, the clock the card names.
+            raise urllib.error.HTTPError(
+                linear_ops.API,
+                400,
+                "Bad Request",
+                {"x-ratelimit-requests-reset": "1788651120000"},
+                io.BytesIO(body),
+            )
+
+        with mock.patch.dict(os.environ, {"LINEAR_IDENTITY": "fleet"}):
+            with mock.patch.object(linear_ops.urllib.request, "urlopen", _boom):
+                with self.assertRaises(linear_ops.LinearRateLimited):
+                    linear_ops.gql("query { issues { nodes { id } } }")
+                with self.assertRaises(linear_ops.LinearRateLimited) as refused:
+                    linear_ops.gql("query { issues { nodes { id } } }")
+        line = str(refused.exception)
+        # ONE line: the host, the fingerprint and the budget owner together.
+        self.assertNotIn("\n", line)
+        self.assertEqual(
+            line,
+            f"linear error from {linear_ops.API}: rate limited: 2500 "
+            "requests/hour exhausted — refused after 1 calls, no request sent; "
+            "window resets 16:32 PT; budget: fleet",
+        )
+        self.assertTrue(medic_classify.is_linear_rate_limited(line + "\n"))
+        self.assertEqual(
+            medic_classify.classify("Reconcile (reusable)", line + "\n"),
+            "linear_ratelimited",
+        )
+        # And the pin has teeth: move either half off the line and it stops
+        # classifying — which is the DRE-1921 retry-into-an-exhausted-quota loop.
+        host, _, rest = line.partition(": rate limited")
+        self.assertFalse(
+            medic_classify.is_linear_rate_limited(f"{host}\nrate limited{rest}\n")
+        )
+
     # ── the negative: prose quoting the payload is NOT a rate limit ─────────
     def test_quoted_ratelimited_body_in_a_card_is_not_a_rate_limit(self):
         log = _fixture(QUOTED_LOG)

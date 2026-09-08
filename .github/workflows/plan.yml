@@ -115,6 +115,13 @@ jobs:
     # per plan, up to plan_critic.POST_REVIEW_TURNS_CAP, and the wiring test
     # adds that cap to the turn arithmetic this number has to cover.
     timeout-minutes: 75
+    # Whose Linear hour the planner spends (DRE-3321) — see reconcile.yml's
+    # sweep for the why. Job level, beside the job that reads
+    # secrets.LINEAR_API_KEY: this job has thirty-odd steps that read the key,
+    # and a per-step declaration is thirty places for the next one to be added
+    # without it.
+    env:
+      LINEAR_IDENTITY: fleet
     # Read by the `publish` job below (DRE-2720): the plan artifact is
     # rendered and published from a SEPARATE job so the document portal never
     # enters the planner agent's workspace.
@@ -2209,6 +2216,9 @@ jobs:
     if: needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0'
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
+    # Same declaration, same reason (DRE-3321): this job reads the fleet key too.
+    env:
+      LINEAR_IDENTITY: fleet
     steps:
       - name: Mint bot token
         id: app

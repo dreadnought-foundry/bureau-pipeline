@@ -77,6 +77,16 @@ jobs:
     concurrency:
       group: reconcile
       cancel-in-progress: false
+    # Whose Linear hour this sweep spends (DRE-3321). Linear's 2,500/hour
+    # limit is PER USER and there are two non-human users (DRE-3172), so a
+    # rate-limited run has to name the bucket that ran dry. Job level, beside
+    # the job that reads secrets.LINEAR_API_KEY: every step inherits it and no
+    # step has to be edited — including the next one somebody adds. DECLARED,
+    # not verified: the label cannot be checked against Linear from inside a
+    # run without spending a request from the budget in question
+    # (check_linear_identities.py is the live proof the key is who this says).
+    env:
+      LINEAR_IDENTITY: fleet
     steps:
       - name: Mint bot token
         id: app

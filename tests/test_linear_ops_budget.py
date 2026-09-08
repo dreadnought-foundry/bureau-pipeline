@@ -12,7 +12,13 @@ answers every call with two headers that say exactly where the budget stands:
 So the seam remembers the FIRST and LAST `remaining` it saw, counts the
 requests it sent, and on exit prints ONE line:
 
-    linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT)
+    linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT; budget: <identity>)
+
+The last part names WHOSE hour was spent (DRE-3321): since DRE-3172 there are
+two non-human Linear users on two separate 2,500/hour budgets, so "the quota
+is exhausted" is not a fact about the workspace — it names one of two buckets,
+and a reader has to know which. The run declares it in `LINEAR_IDENTITY`; a run
+that declares nothing says `undeclared`, never a guess.
 
 Once a process is rate-limited it stops asking: every later call raises
 `LinearRateLimited` at once, with no request sent — asking again spends the
@@ -63,6 +69,11 @@ RATELIMIT_BODY = json.dumps(
 # rather than derived, so the test checks the conversion instead of mirroring it.
 RESET_MS = 1788645600000
 RESET_PT = "15:00"
+
+# 2026-09-05 23:32:00 UTC → 16:32 PT. The clock DRE-3321's acceptance criterion
+# names, written here as the criterion writes it.
+RESET_MS_1632 = 1788651120000
+RESET_PT_1632 = "16:32"
 
 
 def _headers(remaining: int | None, reset_ms: int | None = RESET_MS) -> dict:
@@ -121,6 +132,10 @@ def _ratelimited_400(headers: dict | None = None):
 def transport(monkeypatch):
     monkeypatch.setattr(linear_ops.time, "sleep", lambda _s: None)
     monkeypatch.setenv("LINEAR_API_KEY", "test-key")
+    # A run that declares nothing is the default here (DRE-3321), so the
+    # ambient environment of whoever runs the suite cannot decide what these
+    # lines say. Tests that want a declaration set one themselves.
+    monkeypatch.delenv(linear_ops.IDENTITY_ENV, raising=False)
 
     def _install(*outcomes):
         t = _Transport(*outcomes)
@@ -141,7 +156,8 @@ def test_budget_line_reports_first_last_spent_and_reset_in_pt(transport):
     linear_ops.gql(QUERY)
     linear_ops.gql(QUERY)
     assert linear_ops.budget_line() == (
-        f"linear-budget: 2400 → 2397 (spent 3 this run; window resets {RESET_PT} PT)"
+        f"linear-budget: 2400 → 2397 (spent 3 this run; "
+        f"window resets {RESET_PT} PT; budget: undeclared)"
     )
 
 
@@ -182,7 +198,8 @@ def test_a_moving_reset_epoch_alone_is_not_a_roll(transport):
     linear_ops.gql(QUERY)
     linear_ops.gql(QUERY)
     assert linear_ops.budget_line() == (
-        f"linear-budget: 2400 → 2398 (spent 2 this run; window resets {RESET_PT} PT)"
+        f"linear-budget: 2400 → 2398 (spent 2 this run; "
+        f"window resets {RESET_PT} PT; budget: undeclared)"
     )
 
 
@@ -245,7 +262,7 @@ def test_no_headers_reports_unknown(transport):
     transport(_Resp())
     linear_ops.gql(QUERY)
     assert linear_ops.budget_line() == (
-        "linear-budget: unknown (no rate-limit headers seen)"
+        "linear-budget: unknown (no rate-limit headers seen; budget: undeclared)"
     )
 
 
@@ -351,7 +368,7 @@ def test_a_mid_run_refill_that_still_ends_lower_says_so_after_the_number(transpo
     reset_pt = linear_ops._reset_clock()
     assert linear_ops.budget_line() == (
         f"linear-budget: 1675 → 1605 (spent 70 this run (refilled mid-run); "
-        f"window resets {reset_pt} PT)"
+        f"window resets {reset_pt} PT; budget: undeclared)"
     )
 
 
@@ -366,3 +383,127 @@ def test_a_genuine_roll_that_ends_above_the_start_still_reports_window_rolled(tr
     line = linear_ops.budget_line()
     assert line.startswith("linear-budget: 5 → 2497 (window rolled;")
     assert "spent" not in line and "refilled" not in line
+
+
+# ── DRE-3321: the lines name WHOSE budget is spent ──────────────────────────
+# Since DRE-3172 there are two non-human Linear users and the 2,500/hour limit
+# is PER USER, so a rate-limited run that says only "the quota is exhausted"
+# names one of two buckets without saying which. The run DECLARES which key it
+# holds in `LINEAR_IDENTITY` — the label cannot be verified from inside a run
+# without spending a request — and the word rides both lines as a final
+# `; budget: <identity>` part. Absent means `undeclared`: never a guess, and
+# never a default to `fleet` (DRE-3172's contract).
+def test_the_refusal_ends_with_the_declared_identity(transport, monkeypatch):
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "operator-tools")
+    t = transport(_ratelimited_400(_headers(0, RESET_MS_1632)))
+    with pytest.raises(linear_ops.LinearRateLimited):
+        linear_ops.gql(QUERY)
+    with pytest.raises(linear_ops.LinearRateLimited) as refused:
+        linear_ops.gql(QUERY)
+    assert t.calls == 1, "a refusal sends no request, whatever it says"
+    assert str(refused.value).endswith(
+        f"window resets {RESET_PT_1632} PT; budget: operator-tools"
+    )
+
+
+def test_the_budget_line_ends_with_the_declared_identity(transport, monkeypatch):
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "operator-tools")
+    transport(
+        _Resp(headers=_headers(2400, RESET_MS_1632)),
+        _Resp(headers=_headers(2399, RESET_MS_1632)),
+    )
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert linear_ops.budget_line() == (
+        f"linear-budget: 2400 → 2399 (spent 1 this run; "
+        f"window resets {RESET_PT_1632} PT; budget: operator-tools)"
+    )
+
+
+def test_with_the_variable_unset_both_lines_say_undeclared(transport):
+    t = transport(_ratelimited_400(_headers(0, RESET_MS_1632)))
+    with pytest.raises(linear_ops.LinearRateLimited):
+        linear_ops.gql(QUERY)
+    with pytest.raises(linear_ops.LinearRateLimited) as refused:
+        linear_ops.gql(QUERY)
+    assert t.calls == 1
+    assert str(refused.value).endswith(
+        f"window resets {RESET_PT_1632} PT; budget: undeclared"
+    )
+    assert linear_ops.budget_line().endswith("; budget: undeclared)")
+
+
+def test_the_first_ratelimited_names_the_identity_too(transport, monkeypatch):
+    """The message that ESCAPES a sweep is usually this one — the refusal only
+    exists for the calls after it — so it carries the name as well."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    transport(_ratelimited_400(_headers(0, RESET_MS_1632)))
+    with pytest.raises(linear_ops.LinearRateLimited) as first:
+        linear_ops.gql(QUERY)
+    assert str(first.value).endswith("; budget: fleet")
+
+
+def test_a_200_with_a_ratelimited_payload_names_the_identity_too(
+    transport, monkeypatch
+):
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    transport(_Resp(RATELIMIT_BODY, _headers(0, RESET_MS_1632)))
+    with pytest.raises(linear_ops.LinearRateLimited) as first:
+        linear_ops.gql(QUERY)
+    assert str(first.value).endswith("; budget: fleet")
+
+
+def test_refused_after_n_calls_keeps_its_place_before_the_budget_part(transport,
+                                                                     monkeypatch):
+    """The new part is the LAST one. `refused after N calls` does not move —
+    check_linear_budget.py and every reader of these logs keep their grammar."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    transport(
+        _Resp(headers=_headers(2, RESET_MS_1632)),
+        _ratelimited_400(_headers(0, RESET_MS_1632)),
+    )
+    linear_ops.gql(QUERY)
+    with pytest.raises(linear_ops.LinearRateLimited):
+        linear_ops.gql(QUERY)
+    assert linear_ops.budget_line() == (
+        f"linear-budget: 2 → 0 (spent 2 this run; window resets {RESET_PT_1632} PT; "
+        f"refused after 2 calls; budget: fleet)"
+    )
+
+
+def test_every_name_the_declaration_carries_is_accepted(transport, monkeypatch):
+    """The vocabulary is `config/linear-identities.json`, not a list restated
+    here: a third identity declared there is a word this seam may print."""
+    declared = linear_ops.declared_identity_names()
+    assert "fleet" in declared and "operator-tools" in declared
+    for name in declared:
+        monkeypatch.setenv(linear_ops.IDENTITY_ENV, name)
+        assert linear_ops.declared_identity() == name
+
+
+def test_a_name_the_declaration_does_not_carry_is_not_a_declaration(
+    transport, monkeypatch
+):
+    """`undeclared`, never the raw value: a typo is not a bucket, and an
+    unvalidated string would ride into a line the medic and the budget reader
+    parse a line at a time."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleeet")
+    assert linear_ops.declared_identity() == "undeclared"
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "")
+    assert linear_ops.declared_identity() == "undeclared"
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet\nlinear-budget: 1 → 0")
+    assert linear_ops.declared_identity() == "undeclared"
+
+
+def test_the_refusal_carries_no_key_and_no_url_but_the_api_host(transport,
+                                                                monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "lin_api_SECRETVALUE")
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    transport(_ratelimited_400(_headers(0, RESET_MS_1632)))
+    with pytest.raises(linear_ops.LinearRateLimited):
+        linear_ops.gql(QUERY)
+    with pytest.raises(linear_ops.LinearRateLimited) as refused:
+        linear_ops.gql(QUERY)
+    message = str(refused.value)
+    assert "SECRETVALUE" not in message
+    assert message.count("http") == 1 and linear_ops.API in message

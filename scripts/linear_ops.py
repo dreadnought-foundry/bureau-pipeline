@@ -201,6 +201,69 @@ def rate_limit_condition(body: str) -> str | None:
     return "rate limited: workspace request quota exhausted"
 
 
+# ── Whose budget is it? (DRE-3321) ──────────────────────────────────────────
+# Since DRE-3172 the workspace has TWO non-human Linear users and the
+# 2,500-requests-per-hour limit is PER USER, so "the quota is exhausted" is no
+# longer a fact about the workspace: it names one of two buckets, and a reader
+# has to know WHICH. The run says so itself — the label cannot be verified
+# against Linear from inside a run without spending a request from the very
+# budget in question (`standards/vendor-boundaries.md` Q4), so it is DECLARED
+# and `scripts/check_linear_identities.py check` stays the live proof that the
+# keys are who the labels say.
+IDENTITY_ENV = "LINEAR_IDENTITY"
+
+#: The word for a run that declared nothing. Never a guess and never a default
+#: to `fleet`: a confident wrong name sends the reader to the wrong bucket,
+#: which is worse than saying nothing (DRE-3172's contract).
+UNDECLARED = "undeclared"
+
+_IDENTITIES_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config",
+    "linear-identities.json",
+)
+
+
+def declared_identity_names() -> tuple[str, ...]:
+    """The identity names `config/linear-identities.json` declares.
+
+    Read from the file rather than restated here, so a third identity added to
+    the declaration is a word this seam may print without a code change. Read
+    on every call: this runs at most twice in a process (one refusal, one exit
+    line) and a cache would only add a way for a test's file to go stale.
+
+    Fail-soft — an unreadable declaration yields no names, so every value
+    reports `undeclared` rather than failing a call over telemetry. The loader
+    is local by necessity, not preference: `check_linear_identities` imports
+    THIS module, so reusing its reader would be a circular import.
+    """
+    try:
+        with open(_IDENTITIES_PATH, encoding="utf-8") as fh:
+            rows = json.load(fh)["identities"]
+        return tuple(row["name"] for row in rows)
+    except (OSError, ValueError, KeyError, TypeError):  # pragma: no cover
+        return ()
+
+
+def declared_identity() -> str:
+    """Which Linear user's budget this process is spending, as declared in
+    `LINEAR_IDENTITY` — or `undeclared`.
+
+    A value the declaration does not carry is NOT a declaration: a typo is not
+    a bucket, and echoing an unvalidated environment string would put arbitrary
+    text (a newline included) into two lines that are parsed ONE LINE AT A TIME
+    by `medic_classify.is_linear_rate_limited` and `check_linear_budget.py`.
+    """
+    value = (os.environ.get(IDENTITY_ENV) or "").strip()
+    return value if value in declared_identity_names() else UNDECLARED
+
+
+def _budget_part() -> str:
+    """The one part both rate-limit lines end with, composed in ONE place so
+    the refusal and the budget line can never disagree about the owner."""
+    return f"budget: {declared_identity()}"
+
+
 def _api_error(code: int | str, body: str) -> LinearError:
     """The ONE shape a Linear API failure is reported in: the status, the
     ENDPOINT, and the response BODY (truncated) — plus, for a quota
@@ -210,7 +273,9 @@ def _api_error(code: int | str, body: str) -> LinearError:
     condition = rate_limit_condition(body)
     if condition:
         _arm_rate_limit_stop(condition)
-        return LinearRateLimited(f"{detail}: {condition} — body: {body[:BODY_CHARS]!r}")
+        return LinearRateLimited(
+            f"{detail}: {condition} — body: {body[:BODY_CHARS]!r}; {_budget_part()}"
+        )
     return LinearError(f"{detail}: {body[:BODY_CHARS]!r}")
 
 
@@ -307,28 +372,38 @@ def _arm_rate_limit_stop(condition: str) -> None:
 def _refusal() -> LinearRateLimited:
     """The no-request refusal. Keeps the endpoint and the named condition on
     ONE line: medic_classify.is_linear_rate_limited() needs both there to file
-    the run as a back-off instead of retrying into the exhausted quota."""
+    the run as a back-off instead of retrying into the exhausted quota.
+
+    It ends by naming WHOSE budget was spent (DRE-3321) — appended after the
+    clock, so the host and the fingerprint stay exactly where the medic reads
+    them."""
     return LinearRateLimited(
         f"linear error from {API}: {_budget['condition']} — refused after "
         f"{_budget['refused_after']} calls, no request sent; window resets "
-        f"{_reset_clock()} PT"
+        f"{_reset_clock()} PT; {_budget_part()}"
     )
 
 
 def budget_line() -> str:
-    """The one line that says what this process spent of the fleet's hour:
+    """The one line that says what this process spent of WHOSE Linear hour:
 
-        linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT)
+        linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT; budget: <identity>)
 
     N is first − last, never negative. A run that ENDS above where it started
     (last > first) says `window rolled` instead of a number — that and
     nothing else is a roll (DRE-3224). A run in which `remaining` rose at
     some point but still ended lower reports the number, an honest lower
     bound, with `(refilled mid-run)` appended. After a RATELIMITED it also
-    carries `refused after <N> calls`. Never a key, never a URL."""
+    carries `refused after <N> calls`. Never a key, never a URL.
+
+    The budget owner is the LAST part and it is on every one of these lines,
+    the headerless one included (DRE-3321): two non-human users mean two
+    hourly budgets, and a spend nobody can attribute is the thing this line
+    exists to end. Everything before it keeps its place, so
+    `check_linear_budget.py` reads `spent N` / `window rolled` unchanged."""
     first, last = _budget["first"], _budget["last"]
     if first is None or last is None:
-        return "linear-budget: unknown (no rate-limit headers seen)"
+        return f"linear-budget: unknown (no rate-limit headers seen; {_budget_part()})"
     if last > first:
         spent = "window rolled"
     else:
@@ -338,6 +413,9 @@ def budget_line() -> str:
     parts = [spent, f"window resets {_reset_clock()} PT"]
     if _budget["refused_after"] is not None:
         parts.append(f"refused after {_budget['refused_after']} calls")
+    # LAST, always: every other part keeps the place it has always had, so the
+    # readers that parse this line (check_linear_budget.py) are untouched.
+    parts.append(_budget_part())
     return f"linear-budget: {first} → {last} ({'; '.join(parts)})"
 
 
@@ -469,7 +547,8 @@ def gql(query: str, variables: dict | None = None) -> dict:
             # the DRE-1921 loop this card exists to stop.
             _arm_rate_limit_stop(condition)
             raise LinearRateLimited(
-                f"linear error from {API}: {condition} — {errors[:BODY_CHARS]}"
+                f"linear error from {API}: {condition} — "
+                f"{errors[:BODY_CHARS]}; {_budget_part()}"
             )
         raise LinearError(f"linear error from {API}: {out['errors']}")
     return out["data"]

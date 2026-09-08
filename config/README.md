@@ -106,7 +106,13 @@ of it is ever a runtime lookup.
   silently stops being true when a key lands on an admin or both keys land on
   one user. **No ids in the file**: an id pinned in a file is what goes stale
   on rotation; the check prints the id it resolved. Read by
-  `scripts/check_linear_identities.py`; not read by any workflow — CI holds
+  `scripts/check_linear_identities.py`, and by `scripts/linear_ops.py` for the
+  one thing it needs from it: the set of names a run may DECLARE in
+  `LINEAR_IDENTITY` (DRE-3321), which the seam prints as the last part of its
+  rate-limit refusal and its `linear-budget:` line so a dry bucket names its
+  owner. `reconcile.yml`, `linear-sync.yml` and `plan.yml` declare
+  `LINEAR_IDENTITY: fleet` at job level; a run that declares nothing prints
+  `undeclared`, never a guess. No workflow reads the file itself — CI holds
   only the fleet key, as `secrets.LINEAR_API_KEY`, which is the name the
   operator-tools key wears on the operator's machine. The operator runs, with
   `LINEAR_API_KEY_FLEET` and `LINEAR_API_KEY` in the environment:
