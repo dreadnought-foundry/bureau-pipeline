@@ -159,15 +159,17 @@ class TestOneOffIsGatedByTheSameChecks:
         assert "agent:" in str(exc.value)
         assert fake.created is None
 
-    def test_a_card_with_no_initiative_label_is_rejected(self, tmp_path):
-        # Same as a planned child: without initiative:* the reconcile
-        # dependency gate never promotes it (DRE-1722).
+    def test_a_card_with_no_initiative_label_is_created(self, tmp_path):
+        # DRE-2874: same as a planned child. The label never gated promotion —
+        # reconcile reads the card's blockedBy relations, its repo: label and
+        # its parent epic's state — so a repo + role card is complete without
+        # one and the seam creates it rather than raising.
         fake = FakeLinear()
-        with pytest.raises(linear_ops.LinearError) as exc:
-            _run_oneoff(fake, tmp_path, GOOD_BODY, "--label", "repo:atlas",
-                        "--label", "agent:engineer")
-        assert "initiative" in str(exc.value).lower()
-        assert fake.created is None
+        out = _run_oneoff(fake, tmp_path, GOOD_BODY, "--label", "repo:atlas",
+                          "--label", "agent:engineer")
+        assert fake.created is not None
+        assert fake.created["labelIds"] == ["lbl-repo:atlas", "lbl-agent:engineer"]
+        assert "labels=repo:atlas,agent:engineer" in out
 
 
 class TestOneOffIsReachable:
