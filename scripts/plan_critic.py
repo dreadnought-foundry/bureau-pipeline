@@ -75,7 +75,11 @@ CLI:
                                      child whose declared footprint lands on a
                                      row that died, or that carries a tell the
                                      ledger has watched kill cards, is a
-                                     finding citing the row.
+                                     finding citing the row. Since DRE-3243 it
+                                     also prints every card's STATE and names a
+                                     DELIVERED child as a non-finding, so a
+                                     Done card's work already being on `main`
+                                     cannot be re-raised as a gap.
   decide --stage S --result-file F [--epic E] [--github-output F]
          [--note-file F] [--record-file F] [--escalation-file F]
                                      comment thread (JSON array) on stdin,

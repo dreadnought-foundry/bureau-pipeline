@@ -1335,9 +1335,30 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
     def test_the_note_says_that_is_not_a_collision_either(self):
         """"…so the model cannot re-raise it as a collision." A non-finding the
         note names under one heading and the model rebrands under another is
-        the same false hold wearing a different word."""
+        the same false hold wearing a different word.
+
+        Read off the delivered-child sentence itself, not off the note: the
+        note has always said "which is what the collision check reads" a few
+        lines up, and a search of the whole text would pass against a note
+        that never mentioned a delivered card at all."""
         note = pc.findings_note(self.done, pc.mechanical_findings(self.done))
-        self.assertIn("collision", note.lower())
+        sentence = [line for line in note.splitlines()
+                    if "delivered child" in line.lower()]
+        self.assertEqual(len(sentence), 1, note)
+        self.assertIn("collision", sentence[0].lower())
+
+    def test_the_state_block_is_input_and_never_a_finding_of_its_own(self):
+        """It is INPUT to the critic's judgement. A Done child must be named in
+        the note and absent from the findings — a card excused from a finding
+        in the act of becoming one is no better off."""
+        self.assertTrue(
+            any("DRE-3210" in line and "delivered child" in line.lower()
+                for line in pc.findings_note(
+                    self.done, pc.mechanical_findings(self.done)).splitlines()))
+        self.assertEqual(
+            [f for f in pc.mechanical_findings(self.done) if "DRE-3210" in f],
+            [],
+        )
 
     def test_the_backlog_child_gets_no_such_line(self):
         note = pc.findings_note(self.backlog, pc.mechanical_findings(self.backlog))
@@ -1351,14 +1372,6 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         stateless = _cards(("DRE-9003", SHIPPED_CARD))
         note = pc.findings_note(stateless, pc.mechanical_findings(stateless))
         self.assertIn("no child carried a state", note.lower())
-
-    def test_the_state_block_is_not_a_finding_of_its_own(self):
-        """It is INPUT to the critic's judgement. A Done child must not become
-        a finding in the act of being excused from one."""
-        self.assertEqual(
-            [f for f in pc.mechanical_findings(self.done) if "DRE-3210" in f],
-            [],
-        )
 
     # -- Both charters say what a state means ---------------------------------
 
