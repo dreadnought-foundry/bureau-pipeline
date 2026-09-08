@@ -43,7 +43,7 @@ def test_rolled_and_unknown_lines_count_as_seen_but_unknowable():
     assert clb.spent_from_log(log) == [None, None, 3, 70]
 
 
-def test_the_budget_owner_part_does_not_hide_the_spend(monkeypatch):
+def test_the_budget_owner_part_does_not_hide_the_spend():
     """DRE-3321 appends `; budget: <identity>` to every budget line. The reader
     keeps reading `spent N` and `window rolled` out of it — that part is added
     at the END and nothing else on the line moves."""
