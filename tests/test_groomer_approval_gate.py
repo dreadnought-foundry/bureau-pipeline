@@ -407,3 +407,45 @@ def test_a_cycle_linear_does_not_carry_is_never_written():
     assert ops.state_writes == []
     assert ops.mutations == []
     assert "12" in str(exc.value), "the refusal must name the cycle it wanted"
+
+
+def test_a_batch_spanning_two_cycles_is_never_drained():
+    """The behaviour DRE-3338 narrowed deliberately. The batch table says which
+    cards are in the batch and in what order, and nothing else — it does not say
+    which card belongs to which cycle. A proposal built with `--batch-cycles 2`
+    therefore cannot be drained without guessing, so the drain refuses the whole
+    batch rather than filing half of it into the wrong cycle."""
+    cards = [card(f"DRE-{n:03d}") for n in range(6)]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, batch_cycles=2)
+    assert proposal["batch"]["cycles"] == [12, 13], (
+        "the fixture must actually span two cycles for this to prove anything"
+    )
+    ops = FakeOps(comments=_thread(proposal))
+    with pytest.raises(ValueError) as exc:
+        groomer.drain(ops, card=PROPOSAL_CARD)
+    assert ops.state_writes == []
+    assert ops.mutations == []
+    assert "12, 13" in str(exc.value), (
+        "the refusal must name the cycles the batch spans"
+    )
+
+
+def test_a_record_naming_no_cycle_is_never_drained():
+    """A record that names a batch but no cycle to put it in. The drain has
+    nothing to assign to, and assigning nothing is a silent half-move — so it
+    refuses before it writes a single lane."""
+    proposal = _proposal()
+    body = groomer.proposal_comment(proposal)
+    heading = next(l for l in body.splitlines() if l.startswith("# Groom "))
+    cycleless = body.replace(heading, heading.rsplit(" ", 1)[0] + " none")
+    record = groomer.parse_proposal_comment(cycleless)
+    assert record["cycles"] == [] and record["batch"], (
+        "the fixture must carry a batch and no cycle for this to prove anything"
+    )
+    ops = FakeOps(comments=[{"body": cycleless, "authored_by_pipeline": True},
+                            _approval(proposal)])
+    with pytest.raises(ValueError) as exc:
+        groomer.drain(ops, card=PROPOSAL_CARD)
+    assert ops.state_writes == []
+    assert ops.mutations == []
+    assert "names no cycle" in str(exc.value)
