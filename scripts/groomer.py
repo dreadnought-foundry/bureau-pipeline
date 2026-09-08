@@ -81,13 +81,24 @@ because it was working from an explicit list rather than its own judgement.
 that one at most once: it reads the card first and skips a proposal already
 there, so a retried run adds no duplicate (vendor boundary Q3).
 
-`drain` moves the approved batch out of Intake and into
-Planning, and refuses unless the CEO has approved THIS batch: the proposal
-id is derived from the batch's own contents, so a population that moved
-produces a different id and the old approval stops applying — the same
-sha-binding idea the merge gate uses for a verdict. An approval written by the
-pipeline's own Linear identity is refused: a gate the proposer can pass by
-itself is not a gate.
+`drain` moves the approved batch out of Intake and into Planning, and it moves
+**the batch that was APPROVED, read from the record** (DRE-3338): the approval
+names a proposal id, the proposal comment carrying that id is the record, and
+the cards in its batch table are the cards that move, in that order. An
+approval written by the pipeline's own Linear identity is refused: a gate the
+proposer can pass by itself is not a gate.
+
+It used to rebuild the proposal from live state and refuse when the id it
+re-derived differed from the approved one. That is a real safety property —
+"the batch on the page is not the batch the drain would move" — said the wrong
+way round, and it made the drain fail on two ordinary events: a card entering
+Intake between propose and drain (DRE-3337 was filed five minutes after
+proposal `f673bfefa340` was read), and the model answering the same census
+slightly differently, which a 260-card judgement does. Each failure cost
+another ~$6 model call, another eight minutes and another CEO approval, and
+threw away an approval for a reason that had nothing to do with the batch. The
+property is kept where it belongs: the drain reads the list the CEO saw, and
+refuses if any card on it has moved since.
 
 The cadence is D5, approved 2026-08-23: **on demand, until the groomer's
 judgement has been audited.** The cost is stated rather than hidden — on demand
@@ -103,7 +114,7 @@ CLI:
                                        [--window-days 14] [--no-judgement]
                                        [--out proposal.json] [--post DRE-N]
                                        [--keep-answer judgement-answer.txt]
-    python3 scripts/groomer.py drain   --card DRE-N [same shaping flags]
+    python3 scripts/groomer.py drain   --card DRE-N [--lane Intake]
 
 `--keep-answer` writes the ranked read's raw answer — every piece of a
 continued one, joined — beside the proposal, for the run artifact (DRE-3331).
@@ -112,8 +123,9 @@ again before anyone could see that 204 of its 260 lines had been read off the
 wrong field. Written only when a call answered; the artifact step ignores
 absence. It is model output over card text: an artifact, never a comment.
 
-`drain` re-derives the proposal from live state and acts only if the approval
-on the card names the batch it just derived.
+`drain` takes no shaping flags beyond the lane: the batch it moves is READ off
+the approved proposal record, so there is nothing left for a flag to shape.
+It makes no model call — a drain is a move, not a judgement.
 
 ## The ranked read (DRE-3150)
 
@@ -206,6 +218,11 @@ NEVER_WRITES = ("Canceled", "Duplicate", "Done")
 MARK = "🧺"
 PROPOSAL_TAG = "groom-proposal"
 APPROVAL_TAG = "groom-approved"
+# What the drain wrote down afterwards, per card (DRE-3326, landed by DRE-3338).
+# A batch that moved and left no per-card record is a batch nobody can undo: the
+# operator is left diffing lanes to work out which cards this drain took and
+# which proposal authorised each one.
+DRAIN_TAG = "groom-drain"
 
 # Said in the proposal AND in docs/groomer.md, from one string, because
 # somebody will otherwise read cycle assignment as a return to sprint planning.
@@ -271,13 +288,25 @@ INTAKE_HOLD = intake_controls.hold()
 
 class IntakeHeld(RuntimeError):
     """`INTAKE_HOLD` is set, so nothing leaves Intake. Raised BEFORE any write
-    and before the approval is even read: an operator who closed the pen has
+    and ahead of the approval's own verdict: an operator who closed the pen has
     said "not this week" about every batch, including one approved last week."""
 
 
 class NotApproved(RuntimeError):
     """The batch has no CEO approval, so nothing leaves Intake. Raised BEFORE
     any write: a gate that refuses after moving three cards is not a gate."""
+
+
+class NoProposalRecord(RuntimeError):
+    """The approval names a proposal id the card carries no proposal for, so
+    there is no list to move (DRE-3338). Raised BEFORE any write: the drain
+    moves a written-down batch and never a reconstructed one."""
+
+
+class NotInLane(RuntimeError):
+    """A card in the approved batch is no longer in the lane it was approved
+    out of — somebody moved it by hand since. Raised BEFORE any write, for the
+    WHOLE batch: an approved order half-executed is an order nobody gave."""
 
 
 class WillNotCancel(RuntimeError):
@@ -338,6 +367,31 @@ def read_cycles(lops, *, now: str | None = None) -> list[dict]:
         out.append({"number": node["number"], "id": node["id"],
                     "startsAt": node.get("startsAt"), "endsAt": node.get("endsAt")})
     return sorted(out, key=lambda c: c["number"])
+
+
+def cycle_ids(lops) -> dict:
+    """`{cycle number: id}` for every cycle Linear still carries.
+
+    The DRAIN's reading of the cycles, and deliberately NOT `read_cycles`: that
+    one excludes the running cycle because a PROPOSAL must not schedule work
+    into a period already half over. A drain is not scheduling — it writes a
+    cycle number the CEO already approved, days after the proposal was read,
+    and by then the cycle it names has often opened. Filtering it out here
+    would refuse every batch that took a weekend to approve.
+
+    A completed cycle is still excluded: writing work into a period that is
+    over reports it as having been done then, which is the same lie from the
+    other end.
+    """
+    out = {}
+    for node in (lops.gql(CYCLES_QUERY)["cycles"]["nodes"] or []):
+        if node.get("completedAt"):
+            continue
+        try:
+            out[int(node["number"])] = node["id"]
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
 
 
 def repo_of(card: dict) -> str:
@@ -1607,68 +1661,258 @@ def _render_unranked(proposal: dict) -> list:
 _APPROVAL_LINE = re.compile(rf"^\s*(?:{MARK}\s*)?{APPROVAL_TAG}\s*:\s*([0-9a-f]{{6,}})")
 
 
-def approval_problem(proposal: dict, records: list[dict]) -> str | None:
-    """Why this batch is not approved, or None if it is."""
-    pid = proposal_id(proposal)
-    named = []
+def approved_id(records: list[dict]) -> tuple[str | None, str | None]:
+    """The proposal id the CEO approved on this card, or why there isn't one.
+
+    `(id, None)` or `(None, problem)`. The LAST approval a human wrote wins —
+    a thread can carry several as batches are re-proposed, and the newest one
+    is the decision that is current.
+    """
+    human, by_pipeline = [], []
     for record in records:
         match = _APPROVAL_LINE.match((record.get("body") or "").strip())
         if not match:
             continue
-        if match.group(1) != pid:
-            named.append(match.group(1))
-            continue
-        if record.get("authored_by_pipeline"):
-            return ("the only approval of this batch was written by the "
-                    "pipeline's own Linear identity — the proposer cannot "
-                    "approve its own proposal")
-        return None
-    if named:
-        return (f"the approvals on this card name batch(es) {', '.join(named)}; "
-                f"this batch is {pid} — the population moved since it was read, "
-                f"so it needs a fresh look")
-    return (f"no comment on this card opens with `{approval_comment(pid)}` — "
-            f"nothing leaves Intake without the CEO approving this batch")
+        (by_pipeline if record.get("authored_by_pipeline") else human).append(
+            match.group(1))
+    if human:
+        return human[-1], None
+    if by_pipeline:
+        return None, ("the only approval on this card was written by the "
+                      "pipeline's own Linear identity — the proposer cannot "
+                      "approve its own proposal")
+    return None, (f"no comment on this card opens with "
+                  f"`{MARK} {APPROVAL_TAG}: <proposal id>` — nothing leaves "
+                  f"Intake without the CEO approving a batch")
 
 
-def drain(lops, proposal: dict, *, card: str, to: str = DRAIN_TO) -> dict:
-    """Move the APPROVED batch out of Intake, in the proposed order.
+# The proposal's own heading, and the one line that names the lane. Both are
+# written by `render_proposal` a few dozen lines up, and read back here: the
+# render and this parser are two halves of ONE contract, so the round trip is
+# asserted in tests/test_groomer_approval_gate.py rather than assumed.
+_PROPOSAL_HEADING = re.compile(
+    r"^#\s+Groom proposal\s+`([0-9a-f]{6,})`\s+—\s+cycle\s+(.*)$", re.M)
+_LANE_LINE = re.compile(
+    r"^\d+\s+cards?\s+of\s+\d+\s+in\s+(.+?)\s+are proposed for cycle\b", re.M)
+_BATCH_HEADING = "## The batch, in order"
+_BATCH_ROW = re.compile(r"^\|\s*(\d+)\s*\|\s*(DRE-\d+)\s*\|")
 
-    Refuses — before any write — a closed pen, a terminal destination, a
-    missing or foreign approval, and a cycle Linear does not carry.
+
+def parse_proposal_comment(body: str | None) -> dict | None:
+    """A posted proposal comment, read back as the record the drain moves.
+
+    `{"id", "lane", "cycles", "batch": [{"identifier", "position", …}]}`, or
+    None when the comment is not a proposal. The marker must OPEN the comment,
+    the same anchoring `already_proposed` uses and for the same reason: a
+    comment that mentions the marker mid-sentence is prose ABOUT a proposal.
+
+    Only the first two cells of a batch row are load-bearing — the position and
+    the card. The rest are read defensively, because a card title carrying a
+    pipe would shift every column after it and the drain must not move a
+    different card because somebody wrote a `|` in a title.
     """
-    if INTAKE_HOLD is not None:
-        # First, and ahead of the approval: the hold is the operator's answer
-        # about the lane, not about this batch. Said out loud once per pass so
-        # a held drain reads as refused rather than as a run that moved nothing.
-        raise IntakeHeld(intake_controls.notice(
-            INTAKE_HOLD,
-            proposal.get("population", 0),
-            f"{len(proposal['outcomes']['now'])} in the approved batch"))
+    text = body or ""
+    marker = _PROPOSAL_LINE.match(text.strip())
+    if not marker:
+        return None
+    heading = _PROPOSAL_HEADING.search(text)
+    lane = _LANE_LINE.search(text)
+    batch = []
+    inside = False
+    for line in text.splitlines():
+        if line.strip() == _BATCH_HEADING:
+            inside = True
+            continue
+        if inside and line.startswith("## "):
+            break
+        if not inside:
+            continue
+        row = _BATCH_ROW.match(line.strip())
+        if not row:
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        batch.append({
+            "position": int(row.group(1)),
+            "identifier": row.group(2),
+            "repo": cells[3] if len(cells) > 3 else "",
+            "epic": cells[4] if len(cells) > 4 else "",
+            "title": cells[5] if len(cells) > 5 else "",
+        })
+    return {
+        "id": marker.group(1),
+        "lane": lane.group(1).strip() if lane else None,
+        "cycles": [int(n) for n in re.findall(r"\d+", heading.group(2))]
+                  if heading else [],
+        "batch": sorted(batch, key=lambda r: r["position"]),
+    }
+
+
+def proposal_record(pid: str, records: list[dict]) -> dict | None:
+    """The proposal comment on this card carrying `pid`, parsed — or None.
+
+    The comment and not the run artifact, deliberately. Three reasons, and the
+    first is the whole point: the comment is the thing the CEO actually READ
+    before approving, and the approval is a reply to it in the same thread, so
+    the record and the consent to it are one object read with one credential.
+    The artifact is a by-product of a run — it expires (30 days), it needs a
+    second credential into GitHub Actions, and finding the right one means
+    searching runs for the id, which is a re-derivation of a different kind.
+    """
+    for record in records:
+        parsed = parse_proposal_comment(record.get("body"))
+        if parsed and parsed["id"] == pid:
+            return parsed
+    return None
+
+
+def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
+    """Move the APPROVED batch onward, in the order the record carries.
+
+    The batch is READ, never re-derived (DRE-3338): the approval names an id,
+    the proposal comment carrying that id is the record, and the cards in its
+    batch table are the cards that move. No model is called and the population
+    is never re-read — a drain is a move, not a judgement.
+
+    Refuses, before any card moves: a closed pen, a terminal destination, a
+    missing or pipeline-written approval, an approval whose proposal is not on
+    the card, a cycle Linear does not carry, and any card in the list that is
+    no longer in the lane it was approved out of.
+    """
     if to in NEVER_WRITES:
         raise WillNotCancel(
             f"the drain will not write {to!r}: the groomer recommends and never "
             f"cancels, and cancelling stays the operator's own step")
-    problem = approval_problem(proposal, lops.comment_records(card))
+
+    # Reads only, and they decide nothing yet: the hold below has to be able to
+    # say how big the batch behind the pen is, and the only place that number
+    # exists now is the record itself.
+    records = lops.comment_records(card)
+    pid, problem = approved_id(records)
+    record = proposal_record(pid, records) if pid else None
+
+    if INTAKE_HOLD is not None:
+        # Ahead of the approval's verdict: the hold is the operator's answer
+        # about the LANE, not about this batch. Said out loud once per pass so
+        # a held drain reads as refused rather than as a run that moved nothing.
+        raise IntakeHeld(intake_controls.notice(
+            INTAKE_HOLD,
+            len(record["batch"]) if record else 0,
+            f"the batch approved on {card}" if record
+            else f"no approved batch on {card}"))
     if problem:
         raise NotApproved(problem)
+    if record is None:
+        raise NoProposalRecord(
+            f"the approval on {card} names batch {pid}, and no proposal comment "
+            f"on this card carries that id — the drain moves the batch that was "
+            f"written down, so re-post the proposal (it may have scrolled out of "
+            f"the comments this reads) and approve it again")
 
-    rows = sorted(proposal["outcomes"]["now"], key=lambda r: r["position"])
-    missing = [r["identifier"] for r in rows if not r.get("cycle_id")]
-    if missing:
-        raise ValueError(
-            f"{len(missing)} card(s) are assigned to a projected cycle Linear "
-            f"does not carry ({', '.join(missing[:5])}…) — create the cycle "
-            f"first; the groomer will not invent one")
+    lane = record["lane"] or lane
+    rows = record["batch"]
+    cycle = _approved_cycle(lops, record)
 
-    moved = []
+    # Every card's CURRENT lane, before anything moves. A card somebody moved by
+    # hand since the approval is not the card the CEO approved a move for, and
+    # the answer is to refuse the whole batch rather than to move the part that
+    # still fits: an approved order half-executed is an order nobody gave.
+    issues, refused = {}, []
     for row in rows:
-        issue = lops.get_issue(row["identifier"])
-        lops.gql(SET_CYCLE, {"id": issue["id"],
-                             "input": {"cycleId": row["cycle_id"]}})
+        issues[row["identifier"]] = issue = lops.get_issue(row["identifier"])
+        now = ((issue or {}).get("state") or {}).get("name")
+        if now != lane:
+            refused.append({**row, "lane": now,
+                            "why": (f"no longer in {lane} — it is in "
+                                    f"{now or 'a lane this run could not read'} "
+                                    f"now")})
+    moved, written = [], []
+    for row in ([] if refused else rows):        # all or nothing, decided above
+        lops.gql(SET_CYCLE, {"id": issues[row["identifier"]]["id"],
+                             "input": {"cycleId": cycle[1]}})
         lops.cmd_state(row["identifier"], to)
         moved.append(row["identifier"])
-    return {"moved": moved, "to": to, "proposal": proposal_id(proposal)}
+        written.append({**row, "to": to})
+
+    # ONE record, both outcomes, one call site: what moved and what was refused
+    # are the same question asked of the same batch, and a reader of the card
+    # should not have to know which of two comment shapes to look for.
+    result = {"moved": moved, "rows": written, "refused": refused, "to": to,
+              "from": lane, "cycle": cycle[0], "proposal": record["id"]}
+    lops.cmd_comment(card, drain_record(result))
+    if refused:
+        named = ", ".join(f"{r['identifier']} ({r['lane'] or 'unknown'})"
+                          for r in refused[:5])
+        raise NotInLane(
+            f"{_plural(len(refused), 'card')} in the approved batch "
+            f"{record['id']} left {lane} after it was approved — {named} — so "
+            f"nothing moved; re-propose and get the new batch approved")
+    return result
+
+
+def _approved_cycle(lops, record: dict) -> tuple[int | None, str | None]:
+    """The cycle the approved batch names, and Linear's id for it.
+
+    The record carries the NUMBER, which is what a person reads; the id is a
+    uuid that appears nowhere on the page, so it is resolved live. That is the
+    one live read a drain makes about the batch, and it can only ever change
+    which container the approved cards land in — never which cards they are.
+    """
+    if not record["batch"]:
+        return None, None
+    numbers = record["cycles"]
+    if not numbers:
+        raise ValueError(
+            f"proposal {record['id']} names no cycle, so the drain has nothing "
+            f"to assign its batch to")
+    if len(numbers) > 1:
+        raise ValueError(
+            f"proposal {record['id']} spans cycles "
+            f"{', '.join(str(n) for n in numbers)} and its batch table does not "
+            f"say which card belongs to which — re-propose with --batch-cycles 1 "
+            f"so the record answers the question the drain has to ask")
+    known = cycle_ids(lops)
+    if numbers[0] not in known:
+        raise ValueError(
+            f"the approved batch names cycle {numbers[0]} and Linear carries no "
+            f"open cycle with that number — create it first; the groomer will "
+            f"not invent one")
+    return numbers[0], known[numbers[0]]
+
+
+def drain_record(result: dict) -> str:
+    """What the drain did, per card, on the proposal card (DRE-3326).
+
+    Every card it moved with its position and the proposal that authorised it,
+    and every card it refused with the reason — because undoing a bad batch
+    means knowing which cards THIS drain took, and a run log is not on the
+    card. The refusal half is posted too: a drain that refuses the batch and
+    says so only in a workflow log is a stall with an alibi.
+    """
+    pid = result["proposal"]
+    w = [f"{MARK} {DRAIN_TAG}: {pid}", ""]
+    if result["moved"]:
+        w.append(f"Moved {_plural(len(result['moved']), 'card')} out of "
+                 f"{result['from']} into {result['to']}, in the order proposal "
+                 f"`{pid}` was approved in"
+                 + (f" (cycle {result['cycle']})." if result["cycle"] else "."))
+        w += ["", "| # | Card | From | To | Proposal |", "| -- | -- | -- | -- | -- |"]
+        for row in result["rows"]:
+            w.append(f"| {row['position']} | {row['identifier']} | "
+                     f"{result['from']} | {row['to']} | {pid} |")
+        w.append("")
+    elif result["refused"]:
+        w += [f"Moved nothing. The batch approved as `{pid}` is no longer the "
+              f"batch on the board, so none of it moved.", ""]
+    else:
+        w += [f"Moved nothing: proposal `{pid}` carries no cards in its batch.",
+              ""]
+    if result["refused"]:
+        w += ["Refused:", ""]
+        for row in result["refused"]:
+            w.append(f"- {row['identifier']} (position {row['position']}) — "
+                     f"{row['why']}.")
+        w.append("")
+    return "\n".join(w).rstrip() + "\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -1765,11 +2009,13 @@ def _shaping(parser: argparse.ArgumentParser) -> None:
 def _build(args) -> dict:
     """Read the lane and propose. ONE model call unless `--no-judgement`.
 
-    `drain` builds through here too, so the batch it moves is derived the same
-    way the batch the CEO approved was. A read that answers differently
-    produces a different `proposal_id` and the approval gate refuses — which is
-    the gate doing its job, not a bug: the batch on the page is not the batch
-    the drain would move.
+    `propose` only, since DRE-3338. The drain used to build through here so
+    that the batch it moved was derived the same way the approved one was, and
+    a read that answered differently produced a different `proposal_id` and a
+    refusal — which cost a model call and a CEO approval every time a card
+    joined Intake or the model phrased a 260-card census slightly differently.
+    The drain reads the approved record instead, and never reaches this
+    function or the model call inside it.
     """
     cards = read_population(linear_ops, args.lane)
     cycles = read_cycles(linear_ops)
@@ -1821,12 +2067,29 @@ def main(argv=None) -> int:
                                 "the run artifact — only when a call answered "
                                 "(DRE-3331)")
 
+    # NO shaping flags (DRE-3338). The batch a drain moves is read off the
+    # approved proposal record, so there is nothing left for a flag to shape —
+    # and a flag that no longer shapes anything is a flag somebody will pass a
+    # different value to and expect a different batch. `--lane` survives only as
+    # the fallback for a record whose own lane line could not be read.
     p_drain = sub.add_parser("drain", help="move the APPROVED batch onward")
-    _shaping(p_drain)
     p_drain.add_argument("--card", required=True,
                          help="the card the proposal and its approval live on")
+    p_drain.add_argument("--lane", default="Intake",
+                         help="the lane the batch is moved out of, when the "
+                              "record does not name one (default %(default)s)")
 
     args = parser.parse_args(argv)
+
+    if args.command == "drain":
+        try:
+            result = drain(linear_ops, card=args.card, lane=args.lane)
+        except (IntakeHeld, NotApproved, NoProposalRecord, NotInLane,
+                WillNotCancel, ValueError) as e:
+            print(f"groomer: refused — {e}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
 
     if args.command == "census":
         cards = read_population(linear_ops, args.lane)
@@ -1835,23 +2098,13 @@ def main(argv=None) -> int:
         return 0
 
     proposal = _build(args)
-
-    if args.command == "propose":
-        if args.out:
-            with open(args.out, "w", encoding="utf-8") as fh:
-                json.dump(proposal, fh, indent=2)
-            print(f"wrote {args.out} ({proposal['id']})")
-        if args.post:
-            post_proposal(linear_ops, args.post, proposal)
-        print(render_proposal(proposal))
-        return 0
-
-    try:
-        result = drain(linear_ops, proposal, card=args.card)
-    except (IntakeHeld, NotApproved, WillNotCancel, ValueError) as e:
-        print(f"groomer: refused — {e}", file=sys.stderr)
-        return 2
-    print(json.dumps(result, indent=2))
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(proposal, fh, indent=2)
+        print(f"wrote {args.out} ({proposal['id']})")
+    if args.post:
+        post_proposal(linear_ops, args.post, proposal)
+    print(render_proposal(proposal))
     return 0
 
 
