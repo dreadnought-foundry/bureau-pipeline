@@ -1604,13 +1604,12 @@ def _write_block_output(path: str | None, name: str, value: str) -> None:
     """
     if not path or not value:
         return
-    # Late, and only on the path that needs it: everything else this module
-    # does stays importable with nothing beside it but its parsers.
-    from sanitize_untrusted import _write_output
-
     try:
         with open(path, "a", encoding="utf-8") as f:
             if "\n" in value:
+                # Late, and only on the branch that needs it: everything else
+                # this module does stays importable beside its parsers alone.
+                from sanitize_untrusted import _write_output
                 _write_output(f, name, value)
             else:
                 f.write(f"{name}={one_line(value)}\n")

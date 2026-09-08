@@ -38,6 +38,9 @@ The walk, one method per observable the card asks for:
      Green Light, naming the card (DRE-3291) — and the whole DRE-3257 shape
      (send-back → re-plan → death → retry → pass) reaches activation without
      one human lane move after the first approval.
+ 12. A round that found THREE things reports all three in one pass (DRE-3251):
+     one marker carrying the first line, a note carrying every finding with
+     its cards, and a step output the re-plan's prompt reads as a list.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_critic_scenario.py -v
 """
@@ -209,9 +212,10 @@ class CriticWalk(unittest.TestCase):
         # step now runs (DRE-3286, wired by DRE-3289) and the dispatcher it
         # fires through — real modules, because what this walk is checking is
         # the two payload keys they send.
-        # sanitize_untrusted.py: the heredoc writer the findings list goes out
-        # through when a round reports more than one (DRE-3251) — imported
-        # late, so only a walk that writes a multi-line list reaches it.
+        # sanitize_untrusted.py: the heredoc writer a multi-finding round's
+        # list goes out through (DRE-3251) — imported late, so only walk 12
+        # reaches it, and it reaches the REAL one because what that walk
+        # checks is the block GitHub would have to parse.
         for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
                      "checkbox_marks.py", "execution_result.py",
                      "review_rerun.py", "plan_run.py", "sanitize_untrusted.py"):
@@ -1113,6 +1117,53 @@ class CriticWalk(unittest.TestCase):
         ]
         self.assertEqual(pc.collision_counts(late),
                          {"caught_at_review": 1, "found_later": 1})
+
+    # --- 12: one round, every finding (DRE-3251) --------------------------
+
+    def test_a_round_with_three_findings_reports_all_three_in_one_pass(self):
+        """The whole of DRE-3251, walked through plan.yml's own shell.
+
+        DRE-3164 spent four rounds, three parks and four CEO approvals on four
+        findings the critic had all seen in round 1. Here the critic writes
+        three in one result file, and the run must produce ONE marker carrying
+        the first line, a note carrying all three, and a step output the
+        re-plan's prompt can interpolate as a list.
+        """
+        self._critic_writes(
+            "post", pc.SEND_BACK,
+            "the deploy-lag cards collide with One River's DRE-3116/3117",
+            extra=("1. DRE-3210 is already shipped — a Done child read as work\n"
+                   "2. three cards cite a 07:00 PT precedent that does not exist "
+                   "(DRE-3212, DRE-3214)\n"),
+        )
+        self._shell("second critic — decision")
+
+        # The record is one line and carries the FIRST finding only — the
+        # marker, the bound and the sweep all read that line and nothing else.
+        self.assertEqual(len(self._record().strip().splitlines()), 1)
+        self.assertEqual(pc.parse_markers([self._record()])[0]["reason"],
+                         "the deploy-lag cards collide with One River's DRE-3116/3117")
+        self.assertNotIn("DRE-3210", self._record())
+
+        # The note beside it carries every one of them, with their cards.
+        note = self._note()
+        for card in ("DRE-3116/3117", "DRE-3210", "DRE-3212", "DRE-3214"):
+            self.assertIn(card, note)
+
+        # ...and so does the step output the re-plan's prompt reads. It is the
+        # ONE multi-line output here, so it travels as a heredoc block — read
+        # the raw file, because `_outputs` only models `key=value` lines.
+        raw = open(self.gho).read()
+        self.assertIn("findings_count=3", raw)
+        self.assertRegex(raw, r"(?m)^findings<<EOF-[0-9a-f]{32}$")
+        for finding in ("1. the deploy-lag cards collide",
+                        "2. DRE-3210 is already shipped",
+                        "3. three cards cite a 07:00 PT precedent"):
+            self.assertIn(finding, raw)
+        # The delimiter closes the block and nothing else is defined after it.
+        delim = re.search(r"(?m)^findings<<(EOF-[0-9a-f]{32})$", raw).group(1)
+        self.assertEqual(raw.count(delim), 2)
+        self.assertTrue(raw.rstrip().endswith(delim))
 
     # --- fail-soft --------------------------------------------------------
 
