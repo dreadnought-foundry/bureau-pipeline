@@ -53,7 +53,7 @@ import lane_contract  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
-from test_groomer_approval_gate import FakeOps, PROPOSAL_CARD, _approval, _proposal  # noqa: E402
+from test_groomer_approval_gate import FakeOps, PROPOSAL_CARD, _proposal, _thread  # noqa: E402
 from test_intake_escalation import _aged_batch, _card, _run  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -281,36 +281,48 @@ def test_an_unparked_intake_card_still_ages_out():
 # 5: the groomer's drain honours the same switch
 # --------------------------------------------------------------------------
 def test_a_held_drain_moves_nothing_even_with_a_valid_approval(monkeypatch):
-    """The hold is checked BEFORE the approval, and before any write: an
-    operator who closed the pen has said "not this week" about every batch,
-    including one the CEO approved last week."""
+    """The hold outranks the approval, and lands before any write: an operator
+    who closed the pen has said "not this week" about every batch, including
+    one the CEO approved last week."""
     monkeypatch.setattr(groomer, "INTAKE_HOLD", HOLD_SINCE)
     proposal = _proposal()
-    ops = FakeOps(comments=[_approval(proposal)])
+    ops = FakeOps(comments=_thread(proposal))
     with pytest.raises(groomer.IntakeHeld) as exc:
-        groomer.drain(ops, proposal, card=PROPOSAL_CARD)
+        groomer.drain(ops, card=PROPOSAL_CARD)
     assert ops.state_writes == [], "cards left Intake through a closed pen"
     assert ops.mutations == [], "cycles were assigned through a closed pen"
+    assert ops.written == [], "a held drain wrote a record of a move it refused"
     assert HOLD_SINCE in str(exc.value)
     assert intake_controls.ENV_HOLD in str(exc.value), (
         "the refusal must name the switch that would unblock it"
     )
 
 
+def test_a_held_drain_still_refuses_an_unapproved_batch_as_held(monkeypatch):
+    """The hold is the operator's answer about the LANE, so it is read before
+    the approval verdict is acted on — a drain against a closed pen reports the
+    pen, whatever the thread says about approval."""
+    monkeypatch.setattr(groomer, "INTAKE_HOLD", HOLD_SINCE)
+    ops = FakeOps(comments=[{"body": "nice", "authored_by_pipeline": False}])
+    with pytest.raises(groomer.IntakeHeld):
+        groomer.drain(ops, card=PROPOSAL_CARD)
+    assert ops.state_writes == []
+
+
 def test_a_bare_switch_holds_the_drain_just_as_hard(monkeypatch):
     monkeypatch.setattr(groomer, "INTAKE_HOLD", "")
     proposal = _proposal()
-    ops = FakeOps(comments=[_approval(proposal)])
+    ops = FakeOps(comments=_thread(proposal))
     with pytest.raises(groomer.IntakeHeld):
-        groomer.drain(ops, proposal, card=PROPOSAL_CARD)
+        groomer.drain(ops, card=PROPOSAL_CARD)
     assert ops.state_writes == []
 
 
 def test_clearing_the_hold_lets_the_approved_batch_drain(monkeypatch):
     monkeypatch.setattr(groomer, "INTAKE_HOLD", None)
     proposal = _proposal()
-    ops = FakeOps(comments=[_approval(proposal)])
-    result = groomer.drain(ops, proposal, card=PROPOSAL_CARD)
+    ops = FakeOps(comments=_thread(proposal))
+    result = groomer.drain(ops, card=PROPOSAL_CARD)
     assert result["moved"], "the pen is open and the approved batch stayed put"
 
 
@@ -319,8 +331,7 @@ def test_a_held_drain_exits_refused_rather_than_silently_doing_nothing(monkeypat
     pen must report as refused, not as a successful run that moved zero cards."""
     monkeypatch.setattr(groomer, "INTAKE_HOLD", HOLD_SINCE)
     proposal = _proposal()
-    ops = FakeOps(comments=[_approval(proposal)])
-    monkeypatch.setattr(groomer, "_build", lambda args: proposal)
+    ops = FakeOps(comments=_thread(proposal))
     # The whole write layer is the fake, so a regression that walks past the
     # hold fails as an assertion here rather than as a live Linear call.
     monkeypatch.setattr(groomer, "linear_ops", ops)
