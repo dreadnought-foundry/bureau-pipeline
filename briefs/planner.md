@@ -555,7 +555,10 @@ it before it prints a finding. **When you are RE-planning, some children are
 already Done** — delivered, merged, closed. Leave them alone: a Done card
 describes the work it delivered, that is the normal shape of every Done card,
 and neither critic may treat its work already existing on `main` as a gap
-(DRE-3243). Revise the cards that are still to build.
+(DRE-3243). A Done child is out of the collision check too, so a new card may
+declare a file a delivered sibling also names — the disjoint-files rule is
+about two OPEN pull requests, and a merged one races nobody. Revise the cards
+that are still to build.
 
 A **second** critic reads the plan AFTER the CEO approves it, asking what is
 missing now the text is the specification agents build from — and it can see

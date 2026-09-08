@@ -1484,8 +1484,19 @@ def shared_files(cards: list[dict]) -> dict[str, list[str]]:
     bodies with a path regex that required a `/`, which read every path
     mentioned in an acceptance criterion as a footprint and could not see
     `README.md` at all.
+
+    DELIVERED CHILDREN ARE NOT IN THE INPUT (DRE-3243). The rule is about two
+    OPEN pull requests racing for one file; a Done, Canceled or Duplicate card
+    has already merged its half or dropped it, so it cannot conflict with a
+    sibling. Leaving it in produced a note that said "it is not a collision
+    with a sibling over a file it has already merged either" and then listed
+    exactly that collision under `Findings` two paragraphs below — the same
+    contradictory signal about a Done card that DRE-3243 exists to remove,
+    relocated rather than fixed. `shipped_work_is_a_finding()` is the one
+    definition of "delivered", shared with the state block that says so.
     """
-    return plan_footprint.collisions(cards)
+    return plan_footprint.collisions(
+        [c for c in cards or [] if shipped_work_is_a_finding(c)])
 
 
 # --- A footprint that has died before (DRE-3079) -----------------------------

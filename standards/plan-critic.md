@@ -60,7 +60,8 @@ re-derived here.
 `briefs/planner.md` calls "the INPUT to the ordering" — parsed once in
 `scripts/plan_footprint.py` and consumed by nothing else. Root-level files are
 files; a card that declares no footprint is a finding, never a silent empty
-set. **The repo check reads the `repo:<slug>` LABEL**, which is what the
+set; and a **delivered child is not in the input at all** (see the state
+section below). **The repo check reads the `repo:<slug>` LABEL**, which is what the
 contract requires (`standards/card-quality.md`); the body stamp it replaced is
 deprecated and the planner brief forbids writing it.
 
@@ -105,8 +106,11 @@ card before it prints a finding.
 * **Done, Canceled, Duplicate — a delivered child.** Delivered or dropped,
   never to-build. *"Its deliverable already exists on `main`"* is **not a
   finding** against it, and neither is a collision with a sibling over a file
-  it has already merged. The mechanical note says so by name, so the
-  observation cannot be re-raised under another heading.
+  it has already merged — the disjoint-files rule is about two OPEN pull
+  requests, and a merged one races nobody. The mechanical note names the
+  delivered child so the observation cannot be re-raised under another
+  heading, and the collision check **drops that card from its input** so the
+  note cannot say "not a collision" and then list one two paragraphs below.
 * **In Progress, In Review.** A run or a pull request is in flight. Judge the
   card on what it will land, not on whether its files are in the tree yet.
 * **Backlog, Todo, Triage — still to build**, and every finding stands,

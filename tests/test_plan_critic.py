@@ -1347,6 +1347,36 @@ class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
         self.assertEqual(len(sentence), 1, note)
         self.assertIn("collision", sentence[0].lower())
 
+    def test_a_delivered_child_is_not_a_collision_in_the_findings_either(self):
+        """The sentence above has to be TRUE, not just present. A Done card and
+        an active sibling declaring the same file is a card that has already
+        merged that file — the "siblings must own disjoint files" rule is about
+        two OPEN pull requests, and a merged one cannot conflict with anything.
+
+        Read off the collision line specifically: `mechanical_findings()` has
+        other things to say about these two cards, and asserting the whole list
+        is empty would pass for reasons that have nothing to do with the
+        collision check."""
+        cards = _cards(("DRE-3210", SHIPPED_CARD), state="Done") + _cards(
+            ("DRE-9999", SHIPPED_CARD), state="Backlog")
+        findings = pc.mechanical_findings(cards)
+        self.assertEqual(
+            [f for f in findings if "disjoint files" in f], [], findings)
+        self.assertEqual(pc.shared_files(cards), {})
+        note = pc.findings_note(cards, findings)
+        self.assertNotIn("disjoint files", note)
+
+    def test_two_active_children_over_one_file_are_still_a_collision(self):
+        """The half that keeps the filter honest: drop the state and the same
+        two cards collide exactly as they always did."""
+        cards = _cards(("DRE-3210", SHIPPED_CARD), state="In Review") + _cards(
+            ("DRE-9999", SHIPPED_CARD), state="Backlog")
+        self.assertEqual(
+            sorted(pc.shared_files(cards)),
+            ["scripts/plan_critic.py", "tests/test_plan_critic.py"])
+        self.assertTrue(
+            [f for f in pc.mechanical_findings(cards) if "disjoint files" in f])
+
     def test_the_state_block_is_input_and_never_a_finding_of_its_own(self):
         """It is INPUT to the critic's judgement. A Done child must be named in
         the note and absent from the findings — a card excused from a finding
