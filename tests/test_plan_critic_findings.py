@@ -185,7 +185,7 @@ class TheNoteListsAllOfThem(unittest.TestCase):
         self.assertIn("🛑", note)
         for finding in pc.all_findings(fixture()):
             self.assertIn(finding, note)
-        for card in ("DRE-3210", "DRE-3221", "DRE-3212"):
+        for card in ("DRE-3208", "DRE-3210", "DRE-3212", "DRE-3216"):
             self.assertIn(card, note)
 
     def test_the_note_says_the_next_round_checks_the_fixes(self):

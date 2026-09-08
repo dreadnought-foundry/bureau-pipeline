@@ -209,9 +209,12 @@ class CriticWalk(unittest.TestCase):
         # step now runs (DRE-3286, wired by DRE-3289) and the dispatcher it
         # fires through — real modules, because what this walk is checking is
         # the two payload keys they send.
+        # sanitize_untrusted.py: the heredoc writer the findings list goes out
+        # through when a round reports more than one (DRE-3251) — imported
+        # late, so only a walk that writes a multi-line list reaches it.
         for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
                      "checkbox_marks.py", "execution_result.py",
-                     "review_rerun.py", "plan_run.py"):
+                     "review_rerun.py", "plan_run.py", "sanitize_untrusted.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)

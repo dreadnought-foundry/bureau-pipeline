@@ -129,6 +129,44 @@ answering a question; the expensive one is a build nobody asked for.
 **The reason lands on the card either way** — pass or send-back — so the
 planner scorer can grade critic against classifier against outcome.
 
+## A critic names everything it sees, in the round it sees it
+
+**One round, every finding.** Whatever a critic has found by the time it writes
+its result goes into that result — ranked, with the card each one lives on.
+A second round exists to check the fixes, not to find what you already saw.
+
+The result file's first line is unchanged and still carries the WORST gap in
+one sentence, because that line is what the marker records and what the CEO
+reads first. Under it goes a numbered list of every further finding, one line
+each:
+
+    PLAN-CRITIC: SEND_BACK — <one line naming the worst gap>
+    1. DRE-1234: <what is wrong>
+    2. DRE-1235, DRE-1236: <what is wrong>
+
+The revision answers the whole list — its summary says of each finding that it
+is fixed, or explicitly that it is left and why — and the round that follows
+checks those fixes.
+
+**The record does not change shape.** The marker is still one line, still alone
+in its comment, and still carries the first line and nothing else, so
+`parse_markers`, `trusted_bodies` and the bound below are untouched. The list
+rides in the human note beside it — the 🛑 comment — which is prose and records
+nothing.
+
+**What it cost to learn.** On 2026-09-06 the post-approval critic sent
+DRE-3164's plan back four times in a row, each round with ONE finding, each one
+real, each one different, and each already true of the plan round 1 read. Four
+rounds, four re-plans, three parks with `needs-human`, four CEO approvals and
+roughly forty minutes of the CEO's attention — for findings that could all have
+been made, and fixed, in one pass. The critic READ the whole plan every round;
+it only REPORTED one of it, because the grammar asked for one line and the
+re-plan was told to fix exactly that line. Reporting, not reading, was the
+defect.
+
+The bound is unchanged and does not need to change: with every finding named,
+two rounds is enough.
+
 ## Both plan loops are bounded
 
 **Two failed rounds at either critic and the loop ends**, with the critic's
