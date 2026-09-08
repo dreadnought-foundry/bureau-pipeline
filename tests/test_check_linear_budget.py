@@ -43,6 +43,35 @@ def test_rolled_and_unknown_lines_count_as_seen_but_unknowable():
     assert clb.spent_from_log(log) == [None, None, 3, 70]
 
 
+def test_the_budget_owner_part_does_not_hide_the_spend(monkeypatch):
+    """DRE-3321 appends `; budget: <identity>` to every budget line. The reader
+    keeps reading `spent N` and `window rolled` out of it — that part is added
+    at the END and nothing else on the line moves."""
+    log = _log(
+        "linear-budget: 1862 → 1784 (spent 78 this run; window resets 16:04 PT; budget: fleet)",
+        "linear-budget: 5 → 2499 (window rolled; window resets 16:00 PT; budget: operator-tools)",
+        "linear-budget: 100 → 97 (spent 3 this run; window resets 16:00 PT; "
+        "refused after 4 calls; budget: undeclared)",
+        "linear-budget: unknown (no rate-limit headers seen; budget: fleet)",
+    )
+    assert clb.spent_from_log(log) == [78, None, 3, None]
+
+
+def test_producer_and_consumer_still_agree_with_the_owner_named(monkeypatch):
+    """The same producer-composed check as above, with a declared identity —
+    the reader is pinned against the line the seam actually writes, never a
+    restatement of it."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
+    linear_ops._reset_budget_state()
+    linear_ops._note_response_headers(
+        {"x-ratelimit-requests-remaining": "1862", "x-ratelimit-requests-reset": "1788645600000"}
+    )
+    linear_ops._note_response_headers({"x-ratelimit-requests-remaining": "1784"})
+    line = linear_ops.budget_line()
+    assert line.endswith("; budget: fleet)")
+    assert clb.spent_from_log(_log(line)) == [78]
+
+
 def test_aggregate_sums_per_repo_and_workflow_sorted_by_total_desc():
     rows = clb.aggregate(
         [
