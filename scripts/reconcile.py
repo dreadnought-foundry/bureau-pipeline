@@ -3264,15 +3264,157 @@ def _refresh_one_merge_ref(pr: dict, decision) -> None:
         linear_ops.cmd_comment(card, body)
 
 
+#: The re-push's commit message — the string the loop's own commits carry, so
+#: the cap below can count them at the head. One definition: the message is
+#: the marker, and a second copy is how a counter comes to miss its own work.
+RETRIGGER_MESSAGE = "chore: retrigger CI + review (push event was lost)"
+
+#: Consecutive re-pushes allowed at one head (DRE-2767). Every re-push RESETS
+#: the head's age, so a PR the backstop misdiagnoses re-qualifies 15 minutes
+#: later, forever — bp #191 took one empty commit and agent-bureau #2143 two,
+#: none of which produced a single check run. The mergeability guard below is
+#: the fix; this is the bound, so any FUTURE misdiagnosis costs three commits
+#: and a loud line instead of a stream nobody can explain. Three matches
+#: STALE_MERGE_REFRESH_CAP for the same reason: a head re-pushed three times
+#: with nothing arriving is not waiting on a lost event, it is waiting on a
+#: person, and flag_no_checks_prs is the surface that says so.
+RETRIGGER_CAP = int(os.environ.get("RETRIGGER_CAP", "3"))
+
+
+def merge_ref_built(number: int) -> bool | None:
+    """Whether GitHub currently holds a test-merge commit for PR `number` —
+    True (the ref exists), False (404: it could not build one), None (the
+    read failed for any other reason).
+
+    A DIRECT OBSERVATION rather than a cached opinion, which is why it is
+    worth a request (DRE-2767). `mergeStateStatus` is computed lazily and
+    answers UNKNOWN for long stretches; `git/ref/pull/{n}/merge` answers 404
+    exactly when GitHub could not build the merge commit, which is the
+    unambiguous statement that the PR is conflicted. On bp #191 the two
+    disagreed live: UNKNOWN at 15:52 PT while the ref 404'd.
+
+    Read LOUDLY (gh_read) so a 403/blip is distinguishable from a 404 — an
+    unreadable answer is None and every caller must treat it as "not proved
+    mergeable", never as a licence to act (DRE-2034). "404"/"Not Found" is
+    matched in gh's own message shape (`gh: Not Found (HTTP 404)`) and not
+    as a bare substring, so PR #404 does not report itself conflicted.
+    """
+    try:
+        raw = gh_read("api", f"repos/{REPO}/git/ref/pull/{number}/merge")
+    except ReconcileReadError as e:
+        text = str(e)
+        if "(HTTP 404)" in text or "Not Found" in text:
+            return False
+        return None
+    return True if raw else None
+
+
+def _repush_refusal(pr: dict, commit: dict) -> str | None:
+    """Why the lost-event backstop must NOT re-push this head, or None when
+    GitHub has told us — definitely — that it can build the merge commit and
+    the head is not already carrying a stack of re-pushes.
+
+    THE RULE (DRE-2767): never act on an indefinite mergeability. It is the
+    rule `unstick_conflicts` has held since DRE-2121, stated one function up
+    and unreachable from here: GitHub computes mergeability lazily, so
+    UNKNOWN means "not yet computed", never "not conflicted". The old guard
+    compared against DIRTY alone, so a genuinely conflicted PR reading
+    UNKNOWN fell straight through it — and a conflicted PR emits NO events,
+    so the re-push produced nothing, reset the head's age, and re-qualified
+    the PR every 15 minutes (bp #191, agent-bureau #2143, 2026-08-26).
+
+    Reading a PR is what forces GitHub's recompute, so an indefinite answer
+    is re-read once — without a sleep, unlike unstick_conflicts: this sweep
+    runs every ~15 minutes and IS the poll interval, and the next pass asks
+    again. Then the merge ref is consulted as the second, independent check.
+    """
+    number = pr["number"]
+    status = pr.get("mergeStateStatus")
+    if status in (None, "", "UNKNOWN"):
+        fresh = json.loads(gh(
+            "pr", "view", str(number), "--repo", REPO,
+            "--json", "number,headRefName,mergeStateStatus",
+        ) or "{}")
+        status = fresh.get("mergeStateStatus")
+        if status in (None, "", "UNKNOWN"):
+            return (
+                "mergeability is still UNKNOWN after a re-read — GitHub has "
+                "not computed it, and UNKNOWN is not 'not conflicted'"
+            )
+    if status == "DIRTY":
+        return (
+            "the re-read says DIRTY — a conflicted PR emits no events at all, "
+            "so a re-push adds a commit and fires nothing (unstick_conflicts "
+            "owns it)"
+        )
+    built = merge_ref_built(number)
+    if built is None:
+        return (
+            f"refs/pull/{number}/merge was unreadable — unreadable is never "
+            "'nothing wrong here'"
+        )
+    if not built:
+        return (
+            f"GitHub holds no refs/pull/{number}/merge — it could not build "
+            f"the test-merge commit, which is conflict however "
+            f"mergeStateStatus reads ({status})"
+        )
+    depth = _repush_depth(commit)
+    if depth >= RETRIGGER_CAP:
+        return (
+            f"the head already carries {depth} re-push(es), the cap "
+            f"(RETRIGGER_CAP={RETRIGGER_CAP}) — nothing is arriving and "
+            "another empty commit will not change that"
+        )
+    return None
+
+
+def _repush_depth(commit: dict) -> int:
+    """How many of this backstop's own re-pushes sit at the head, walking
+    first parents while the message is ours (DRE-2767).
+
+    Counted from the commits themselves rather than from a receipt ledger:
+    the empty commits ARE the record, and they are what the cap bounds. The
+    walk stops at the cap — the caller only needs to know whether it has been
+    reached — and at a merge, an unreadable parent or a foreign message, each
+    of which ends the run of re-pushes by definition.
+    """
+    depth, node = 0, commit
+    while depth < RETRIGGER_CAP and (node.get("message") or "") == RETRIGGER_MESSAGE:
+        depth += 1
+        parents = node.get("parents") or []
+        if len(parents) != 1:
+            break
+        node = json.loads(
+            gh("api", f"repos/{REPO}/git/commits/{parents[0]['sha']}") or "{}"
+        )
+    return depth
+
+
 def retrigger_dead_heads() -> None:
     """Lost-event backstop: an open agent PR whose head commit is >15 min
-    old with ZERO check-runs means GitHub dropped the push event (or
-    swallowed it while the PR was conflicted) — CI and review will never
-    run on that commit, so no downstream trigger can ever fire. Re-push
-    the same tree as an empty commit via the git data API: a real push
-    event that restarts the whole chain. Signature-based, so it acts
-    within one 15-min sweep instead of waiting out a staleness timer.
-    (Origin: PR #25 — two pushes fired nothing while it was conflicted.)"""
+    old with ZERO check-runs means GitHub dropped the push event — CI and
+    review will never run on that commit, so no downstream trigger can ever
+    fire. Re-push the same tree as an empty commit via the git data API: a
+    real push event that restarts the whole chain. Signature-based, so it
+    acts within one 15-min sweep instead of waiting out a staleness timer.
+    (Origin: PR #25 — two pushes fired nothing.)
+
+    That signature has TWO causes and this backstop repairs only one of them.
+    The other is a conflicted PR, which emits no events because GitHub cannot
+    build its test-merge commit — there, a re-push fires nothing and resets
+    the head's clock, so the PR re-qualifies next sweep forever. The
+    mergeability guard is therefore load-bearing and it is `_repush_refusal`,
+    which never acts on an indefinite answer (DRE-2767): the listing's DIRTY
+    is skipped free, and every remaining candidate must prove it is mergeable
+    before a commit is written. A refused PR is left to `unstick_conflicts`
+    and, at 30 minutes, reported by `flag_no_checks_prs` — surfacing the
+    stall instead of masking it with a commit that looks like progress.
+
+    The proof costs a request or two per candidate, and it is paid LAST, after
+    the check-run and commit reads have already established that the PR is a
+    candidate at all — the common case (a PR with checks) spends nothing.
+    """
     prs = json.loads(gh(
         "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
         "--json", "number,headRefName,mergeStateStatus,headRefOid",
@@ -3288,13 +3430,21 @@ def retrigger_dead_heads() -> None:
         when = (commit.get("committer") or {}).get("date")
         if not when or age_minutes(when) < 15:
             continue  # fresh push — give GitHub a minute to spin up checks
+        refusal = _repush_refusal(pr, commit)
+        if refusal:
+            print(
+                f"dead head: PR #{pr['number']} {sha[:8]} has no check-runs "
+                f"after {age_minutes(when):.0f}m, but NOT re-pushing — "
+                f"{refusal}"
+            )
+            continue
         print(
             f"dead head: PR #{pr['number']} {sha[:8]} has no check-runs after "
             f"{age_minutes(when):.0f}m — re-pushing as empty commit"
         )
         new = gh(
             "api", "-X", "POST", f"repos/{REPO}/git/commits",
-            "-f", "message=chore: retrigger CI + review (push event was lost)",
+            "-f", f"message={RETRIGGER_MESSAGE}",
             "-f", f"tree={commit['tree']['sha']}",
             "-f", f"parents[]={sha}",
             "--jq", ".sha",
@@ -3502,11 +3652,15 @@ def flag_no_checks_prs() -> None:
 
     Checks merely queued/in progress mean the pipeline CAN see the PR — only
     a head commit with zero check runs at all counts. Unreadable check-run /
-    commit reads skip the PR (DRE-2034: a 403 is not "zero checks"). The
-    non-DIRTY zero-checks class normally never reaches the threshold —
-    retrigger_dead_heads re-pushes at 15 minutes, which resets the head
+    commit reads skip the PR (DRE-2034: a 403 is not "zero checks"). A
+    genuinely event-starved head normally never reaches the threshold —
+    retrigger_dead_heads re-pushes it at 15 minutes, which resets the head
     commit's clock here — so this fires exactly when every repair path has
-    silently failed or been stood down.
+    silently failed or been stood down. Since DRE-2767 that includes the
+    class this alert is FOR: a PR whose mergeability GitHub will not commit
+    to (UNKNOWN, or a 404 on its merge ref) is refused the re-push, so its
+    head keeps ageing and this watchdog reports it at 30 minutes — instead
+    of a stream of empty commits resetting the clock and hiding it.
 
     A watchdog must never take the sweep down with it: any unexpected
     per-PR (or listing) failure is recorded on the fail-loudly rail — red
