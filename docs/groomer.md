@@ -163,26 +163,57 @@ To approve, the CEO comments on that card, with the marker opening the comment:
 Then:
 
 ```
-python3 scripts/groomer.py drain --card DRE-2683 --lane Intake --capacity 20
+python3 scripts/groomer.py drain --card DRE-2683
 ```
 
-`drain` re-derives the proposal from live state and acts only if the approval
-names the batch it just derived. The proposal id is a digest of the batch's own
-contents, so an approval binds to a batch the way a critic verdict binds to a
-head sha: once the population moves, the id changes and the old approval stops
-authorising anything. Pass `drain` the same shaping flags the proposal was built
-with, or it will derive a different batch and refuse.
+`drain` **reads the approved batch off the proposal comment on that card** and
+moves exactly those cards, in that order (DRE-3338). The approval names a
+proposal id; the proposal comment carrying that id is the record; the rows of
+its batch table are the batch. It makes **no model call** and never re-reads the
+population — a drain is a move, not a judgement — so it takes no shaping flags
+at all beyond `--lane`, which is only the fallback for a record whose own lane
+line cannot be read.
 
-Five refusals, all of them before any write:
+**Why the comment and not the run artifact.** `proposal.json` is uploaded as the
+`groom-proposal` artifact and carries the same batch, but the comment is the
+thing the CEO actually read before approving, and the approval is a reply to it
+in the same thread — the record and the consent to it are one object, read with
+one credential. The artifact expires after 30 days, needs a second credential
+into GitHub Actions, and finding the right run means searching runs for the id,
+which is a re-derivation of a different kind.
+
+**What this replaced, and why.** The drain used to rebuild the proposal from
+live state and refuse when the id it re-derived differed from the approved one.
+That is a real safety property — *the batch on the page is not the batch the
+drain would move* — said the wrong way round. It made the drain fail on two
+ordinary events: a card entering Intake between propose and drain (DRE-3337 was
+filed five minutes after proposal `f673bfefa340` was read), and the model
+answering the same census slightly differently, which a 260-card judgement does.
+Each failure cost another model call (~$6, ~8 minutes) and another CEO approval,
+and threw the CEO's existing approval away for a reason that had nothing to do
+with the batch. The property is kept where it belongs: the drain moves the list
+the CEO saw, and refuses outright if any card on that list has moved since.
+
+Seven refusals, all of them before any card moves:
 
 - **the pen is held** — `intake_hold` is set on the stub, so the operator has
   said "not this week" about the whole lane, and that answer outranks any
   batch's approval. The refusal prints the date the pen was closed and how big
-  the batch was (DRE-3035, `docs/backlog-cutover.md`);
+  the approved batch behind it was (DRE-3035, `docs/backlog-cutover.md`);
 - **no approval** — nothing leaves Intake;
 - **an approval written by the pipeline's own Linear identity** — the proposer
   cannot approve its own proposal;
-- **an approval naming another batch** — the population moved;
+- **an approval naming a batch with no record** — the id it names is on no
+  proposal comment on that card, so there is no written-down list to move and
+  the drain will not reconstruct one;
+- **a card in the batch is no longer in the lane** — somebody moved it by hand
+  since the approval. The refusal names the card and the lane it is in now, and
+  the WHOLE batch stays put: an approved order half-executed is an order nobody
+  gave;
+- **a cycle Linear does not carry** — the record names a cycle number with no
+  open cycle behind it. Create the cycle; the groomer will not invent one. (A
+  cycle that has since STARTED is fine: the drain resolves the number the CEO
+  approved, unlike `propose`, which will not schedule into a period half over.)
 - **a terminal destination** — the drain moves cards to `Planning` and refuses
   `Canceled`, `Duplicate` and `Done` outright.
 
@@ -191,6 +222,20 @@ pen still wants a batch prepared for the day it opens.
 
 An approved batch is moved to `Planning`, which is where the classification
 happens (DRE-2719), and each card is assigned its cycle.
+
+### What the drain wrote down
+
+Afterwards the drain posts one comment to the proposal card, opening with
+`🧺 groom-drain: <proposal id>` — every card it moved with its position and the
+proposal that authorised it, and every card it refused with the reason
+(DRE-3326). Undoing a bad batch means knowing which cards *this* drain took, and
+a run log is not on the card. The refusal half is posted too: a drain that
+refuses a batch and says so only in a workflow log is a stall with an alibi.
+
+A proposal built with `--batch-cycles 2` or more is not drainable — its batch
+table records one position per card and not which of the several cycles each
+belongs to, so the drain refuses rather than guessing. Propose one cycle at a
+time (the default, and what the workflow passes).
 
 ## The cadence, and its stated cost
 

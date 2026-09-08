@@ -152,8 +152,12 @@ jobs:
               echo "drain needs the card the approval lives on" >&2
               exit 1
             fi
+            # NO shaping flags (DRE-3338): the batch a drain moves is READ off
+            # the approved proposal comment on the card, so there is nothing
+            # for --capacity/--batch-cycles/--priority to shape. `--lane` is
+            # only the fallback for a record whose own lane line is unreadable.
             python3 .bureau-pipeline/scripts/groomer.py drain \
-              --card "$CARD" "${SHAPING[@]}" | tee proposal.txt
+              --card "$CARD" --lane "$LANE" | tee proposal.txt
           else
             POST=()
             if [ -n "$CARD" ]; then POST=(--post "$CARD"); fi
