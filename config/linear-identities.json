@@ -1,6 +1,8 @@
 {
   "_readme": [
-    "THE NON-HUMAN LINEAR IDENTITIES (DRE-3172). One file, read by the check.",
+    "THE NON-HUMAN LINEAR IDENTITIES (DRE-3172). One file, read by the check —",
+    "and, since DRE-3321, by scripts/linear_ops.py for the set of names a run",
+    "may declare in LINEAR_IDENTITY when it says whose budget it just spent.",
     "",
     "Since 2026-09-05 the workspace has three Linear users, and two of them are",
     "not people. The FLEET user is the one every sweep, planner, merge-sync,",
