@@ -104,7 +104,8 @@ def write_exec(path: str, body: str) -> None:
 
 
 def run_announce(td: str, mode: str, card: str = CARD, linear_exit: int = 0,
-                 rearmed: str = "false"):
+                 rearmed: str = "false", fresh_eyes: str = "false",
+                 nonconverging: str = "0"):
     """Execute the real 'Announce fix attempt' run block. Returns (proc, calls),
     where calls is the list of linear_ops.py argv lists it made."""
     os.makedirs(os.path.join(td, ".bureau-pipeline", "scripts"), exist_ok=True)
@@ -126,6 +127,14 @@ def run_announce(td: str, mode: str, card: str = CARD, linear_exit: int = 0,
             # DRE-2813: an attempt re-armed by an operator decision announces
             # itself as that rather than as "attempt 4/3".
             "steps.pr.outputs.rearmed": rearmed,
+            # DRE-2817: the announcement names the budget actually being
+            # spent — consecutive rounds without progress — and the
+            # fresh-eyes framing now rides that rather than the attempt
+            # number, because on a converging loop attempt 3 is just the
+            # third new finding.
+            "steps.pr.outputs.fresh_eyes": fresh_eyes,
+            "steps.pr.outputs.nonconverging": nonconverging,
+            "steps.pr.outputs.stop": "2",
         },
     )
     script = os.path.join(td, "announce.sh")

@@ -143,9 +143,11 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
 - **Repair never watches itself.** The trigger is the product repo's CI on
   the default branch only — a repair run's own failure routes through the
   existing medic, and a repair PR's review rejections route through the
-  existing agent-fix loop with its existing budgets (3 review-fix attempts,
-  5 conflict rounds, then human hold). No new retry loop is introduced
-  anywhere.
+  existing agent-fix loop with its existing budgets (the review loop's
+  convergence budget — two consecutive rounds without progress, six attempts
+  ceiling, DRE-2817, which replaced the flat 3 attempts this ADR was written
+  against; 5 conflict rounds; then human hold). No new retry loop is
+  introduced anywhere.
 
 ## Guardrail 3 — concurrency lock
 

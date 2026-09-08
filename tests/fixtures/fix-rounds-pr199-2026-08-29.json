@@ -1,0 +1,38 @@
+[
+  {
+    "_note": "PR #199 (DRE-2721 — the two-critics card), the round sequence the fix budget killed on 2026-08-29. Four critic rounds, three fix attempts. Every round found something NEW, every earlier fix was verified as still holding, and round 4 confirmed no scope creep. The attempt counter could not see any of that and stopped the loop at three. Rounds 2-4 carry the machine-readable line DRE-2817 added; round 1 is a first review and carries none. Verdict bodies are abridged to the header, the convergence line and the sentences the card quotes.",
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-08-29T01:12:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @1111111111111111111111111111111111111111 content:aaaa\n\n## Summary\nThe review-tracking record can be edited after the fact, so an approval could be made to say something it never said.\n\n## For the fixing agent\nRound 1: the record is writable by anyone who can comment."
+  },
+  {
+    "user": {"login": "agent-bureau-bot[bot]", "type": "Bot"},
+    "created_at": "2026-08-29T01:41:00Z",
+    "body": "🔧 Fix attempt 1 pushed — CI and critic review re-running."
+  },
+  {
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-08-29T02:20:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @2222222222222222222222222222222222222222 content:bbbb\n\nconvergence: new-finding prior-fixes-held in-scope\n\n## Summary\nRound 1's fix holds and is proven by a test. A different way of tampering with the same record is still open.\n\n## For the fixing agent\nRound 2: a second, distinct trust-boundary hole. Round 1's fix is verified."
+  },
+  {
+    "user": {"login": "agent-bureau-bot[bot]", "type": "Bot"},
+    "created_at": "2026-08-29T03:17:00Z",
+    "body": "🔧 Fix attempt 2 pushed — CI and critic review re-running."
+  },
+  {
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-08-29T03:26:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @3333333333333333333333333333333333333333 content:cccc\n\nconvergence: new-finding prior-fixes-held in-scope\n\n## Summary\nBoth earlier fixes hold. A third, different way of tampering with the record is open.\n\n## For the fixing agent\nRound 3: a third distinct hole. Rounds 1 and 2 are verified and tested."
+  },
+  {
+    "user": {"login": "agent-bureau-bot[bot]", "type": "Bot"},
+    "created_at": "2026-08-29T03:52:00Z",
+    "body": "🔧 Fix attempt 3 pushed — CI and critic review re-running."
+  },
+  {
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-08-29T04:15:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @4444444444444444444444444444444444444444 content:dddd\n\nconvergence: new-finding prior-fixes-held in-scope\n\n## Summary\nThis is the fourth round of review on this change. The three earlier rounds each found a real way the review-tracking record could be tampered with, and each time the team fixed it and added tests proving the fix holds. Those three fixes are solid and verified. The part I am blocking on is new to this round.\n\n## For the fixing agent\nRound 4: a fourth distinct hole, introduced by nothing earlier. No scope creep beyond DRE-2721 and its three review rounds."
+  }
+]

@@ -1,0 +1,28 @@
+[
+  {
+    "_note": "The opposite case, and the one the attempt counter is right about: three review rounds on the same defect. Round 1 names it, rounds 2 and 3 re-find it after fixes that did not land it. Under the retired 3-attempt counter this bought a third fix attempt; under the convergence budget the second consecutive non-converging round spends the stop budget, so the loop stops having made TWO attempts.",
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-01T09:00:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @1111111111111111111111111111111111111111 content:aaaa\n\n## Summary\nThe new setting is saved but never read back, so changing it does nothing.\n\n## For the fixing agent\nRound 1: the value is written and never read."
+  },
+  {
+    "user": {"login": "agent-bureau-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-01T09:25:00Z",
+    "body": "🔧 Fix attempt 1 pushed — CI and critic review re-running."
+  },
+  {
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-01T09:44:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @2222222222222222222222222222222222222222 content:bbbb\n\nconvergence: repeat-finding prior-fixes-held in-scope\n\n## Summary\nSame problem as last round: the setting still does nothing when you change it.\n\n## For the fixing agent\nRound 2: this is round 1's finding again. The read path was not added."
+  },
+  {
+    "user": {"login": "agent-bureau-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-01T10:10:00Z",
+    "body": "🔧 Fix attempt 2 pushed — CI and critic review re-running."
+  },
+  {
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-01T10:31:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @3333333333333333333333333333333333333333 content:cccc\n\nconvergence: repeat-finding prior-fixes-held in-scope\n\n## Summary\nStill the same problem, a third time.\n\n## For the fixing agent\nRound 3: round 1's finding for the third time."
+  }
+]

@@ -929,6 +929,31 @@ jobs:
             only if (a) the latest changes introduced it, or (b) it is
             data-loss/security severity.
 
+            AND SAY IT MACHINE-READABLY (DRE-2817). On a RE-review that
+            blocks, put ONE line of its own immediately after the VERDICT
+            line — exactly three tokens, in this order, nothing else on the
+            line:
+
+                convergence: <new-finding|repeat-finding> <prior-fixes-held|prior-fix-regressed> <in-scope|scope-creep>
+
+            - `new-finding` — the thing you are blocking on is not one any
+              earlier round on this PR named. `repeat-finding` — it is.
+            - `prior-fixes-held` — every earlier round's fix is still there
+              and still works. `prior-fix-regressed` — one of them came
+              undone.
+            - `in-scope` — the change is still what the card asked for.
+              `scope-creep` — it has grown past it.
+
+            This line IS the fix budget. `new-finding prior-fixes-held
+            in-scope` says the loop is closing in and buys it another round;
+            anything else says it is circling and spends a stop budget of
+            two rounds. Write it from what you VERIFIED yourself, never from
+            what the fixing agent claims — that claim is the thing you exist
+            to check, and a fix loop was killed mid-convergence for four
+            rounds because nothing here was written down. Omit the line on a
+            first review (nothing earlier to repeat) and on an APPROVE
+            (nothing is blocking).
+
             WRITE THE VERDICT FILE FIRST (DRE-2466). Before you read any
             code, Write /tmp/qa-verdict.md with exactly this stub:
 
@@ -1232,6 +1257,31 @@ jobs:
             resolved, review what changed since, and raise a NEW finding
             only if (a) the latest changes introduced it, or (b) it is
             data-loss/security severity.
+
+            AND SAY IT MACHINE-READABLY (DRE-2817). On a RE-review that
+            blocks, put ONE line of its own immediately after the VERDICT
+            line — exactly three tokens, in this order, nothing else on the
+            line:
+
+                convergence: <new-finding|repeat-finding> <prior-fixes-held|prior-fix-regressed> <in-scope|scope-creep>
+
+            - `new-finding` — the thing you are blocking on is not one any
+              earlier round on this PR named. `repeat-finding` — it is.
+            - `prior-fixes-held` — every earlier round's fix is still there
+              and still works. `prior-fix-regressed` — one of them came
+              undone.
+            - `in-scope` — the change is still what the card asked for.
+              `scope-creep` — it has grown past it.
+
+            This line IS the fix budget. `new-finding prior-fixes-held
+            in-scope` says the loop is closing in and buys it another round;
+            anything else says it is circling and spends a stop budget of
+            two rounds. Write it from what you VERIFIED yourself, never from
+            what the fixing agent claims — that claim is the thing you exist
+            to check, and a fix loop was killed mid-convergence for four
+            rounds because nothing here was written down. Omit the line on a
+            first review (nothing earlier to repeat) and on an APPROVE
+            (nothing is blocking).
 
             WRITE THE VERDICT FILE FIRST (DRE-2466). Before you read any
             code, Write /tmp/qa-verdict.md with exactly this stub:
