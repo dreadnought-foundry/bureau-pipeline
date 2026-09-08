@@ -1102,6 +1102,35 @@ jobs:
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Read,Glob,Grep,Write"
           prompt: |
+            THIS IS THE RETRY (DRE-3304). A first attempt already reviewed
+            this exact commit, finished cleanly, and left no verdict anyone
+            could read. That — and only that — is why you are running.
+            What the gate found in place of its verdict:
+            ${{ steps.gate1.outputs.cause_text }}
+
+            A second identical pass produces a second identical nothing. Run
+            34170941436 is the case: both attempts ended cleanly, 52 turns
+            and then 29, and both left the unreplaced stub, because the
+            reviewer had parked itself waiting on a CI job that outlived its
+            own session — a job the very commit under review had just given a
+            longer timeout. So the one thing you must do differently is
+            FINISH THE FILE:
+
+            * DO NOT WAIT on anything outside this checkout. Not a CI job,
+              not a check run, not a deploy, not another workflow. Do not
+              poll, sleep, or re-query hoping a pending result lands.
+            * If a CI result would change your verdict and you do not have
+              it, that is a FINDING, not a reason to stall: block on it in
+              writing, name the job, and finish. A verdict that says "this
+              needs job X green and X has not reported" is a completed
+              review. An unfinished stub is not — it is thrown away, and
+              this pull request gets no review at all.
+            * Decide on the code in front of you. You have the diff; that is
+              enough to reach APPROVE or REQUEST_CHANGES.
+
+            Everything below is the same review the first attempt was asked
+            for. Do it, and remove the incomplete marker when you are done.
+
             Read .bureau-pipeline/agent-context.md FIRST — the bureau
             engineering and architecture standards you review AGAINST, plus the
             comms standard that governs the VOICE of the verdict you write for
@@ -1324,6 +1353,16 @@ jobs:
           A2_OUTCOME: ${{ steps.gate2.outputs.outcome }}
           A2_TURNS: ${{ steps.gate2.outputs.turns }}
           A2_COST: ${{ steps.gate2.outputs.cost }}
+          # DRE-3304: WHICH way the verdict file was unusable, so the comment
+          # names it instead of sending its reader to the run log — where, by
+          # the time anyone looks, the runner and /tmp/qa-verdict.md are both
+          # gone. A fixed sentence from check_critic_result._NO_VERDICT_CAUSES,
+          # NOT a byte of the verdict file: the same rule as MODEL_WHY above
+          # and for the same reason, since the critic wrote that file having
+          # just read an attacker-authored diff. Empty on a crash, where the
+          # file is never consulted.
+          A1_CAUSE_TEXT: ${{ steps.gate1.outputs.cause_text }}
+          A2_CAUSE_TEXT: ${{ steps.gate2.outputs.cause_text }}
           # DRE-3005: `ok` or `defective` — did the finished verdict carry
           # the evidence for the runs it asserts? One word each, written by
           # verdict_evidence.py's own --github-output, so a hostile
@@ -1509,9 +1548,15 @@ jobs:
             # line, that rotating a credential will not fix this. What was
             # actually found in place of the verdict (existed / bytes /
             # near-miss VERDICT token) is in the run log, printed by the gate.
+            # DRE-3304: and WHAT was found there, in one clause, rather than
+            # a pointer to a log that outlives neither the runner nor the
+            # verdict file. The retry's cause wins when both attempts have
+            # one — same precedence as $RAN above, for the same reason: it is
+            # the later evidence.
+            WHY="${A2_CAUSE_TEXT:-${A1_CAUSE_TEXT:-}}"
             printf '%s\n\n%s\n' \
               "🔎 QA Critic ran but produced no verdict — re-review needed, this is NOT a code rejection." \
-              "The adversarial reviewer completed its run and then left no verdict we could read — $RAN. This is NOT an authentication or startup failure: it authenticated, did real work, and was billed for it, so no credential needs rotating on the strength of this message. The job's run log records what was found where the verdict should have been. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+              "The adversarial reviewer completed its run and then left no verdict we could read — $RAN.${WHY:+ What was found in its place: $WHY.} This is NOT an authentication or startup failure: it authenticated, did real work, and was billed for it, so no credential needs rotating on the strength of this message. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
               > /tmp/qa-comment.md
           else
             # The critic CRASHED on both attempts (is_error / no verdict). Do
@@ -1672,6 +1717,7 @@ jobs:
       # infra failure is visibly red and the medic picks it up. A genuine
       # review (real verdict) ends green regardless of APPROVE/REQUEST_CHANGES.
       - name: Fail if critic never really ran
+        id: critic_fail
         # Only when we actually tried to review — a chrome-only PR (decide
         # said skip) never runs the gates, so it must NOT fail here.
         if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true' && steps.gate2.outputs.real != 'true'
@@ -1682,9 +1728,69 @@ jobs:
           # from, so the red line and the comment can never disagree.
           A1_OUTCOME: ${{ steps.gate1.outputs.outcome }}
           A2_OUTCOME: ${{ steps.gate2.outputs.outcome }}
+          # DRE-3304: and WHICH way each attempt came back empty. The gate
+          # computed this and logged it two steps ago; without it here the
+          # `else` below turned "the reviewer finished and wrote nothing"
+          # into "crashed on both attempts" — over run 34170941436, whose
+          # attempts ended subtype=success at 52 and 29 turns.
+          A1_CAUSE: ${{ steps.gate1.outputs.cause }}
+          A1_CAUSE_TEXT: ${{ steps.gate1.outputs.cause_text }}
+          A2_CAUSE: ${{ steps.gate2.outputs.cause }}
+          A2_CAUSE_TEXT: ${{ steps.gate2.outputs.cause_text }}
+          # Named, because "both attempts" is only findable if the reader
+          # knows which run held them, and a run log outlives nothing else.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Byte-identical to check_critic_result.UNKNOWN_CAUSE_TEXT, held
+          # there by tests/test_critic_no_verdict_cause.py. An admission, not
+          # a guess: the defect this step is fixing was a line that asserted
+          # more than the run supported, and a different assertion is not the
+          # remedy for that.
+          UNKNOWN_CAUSE="the gate could not tell which way the verdict file was unusable, so this line will not guess — the job log is where the answer still is"
+
+          # One attempt, described as what it actually did.
+          attempt_line() {
+            case "$2" in
+              completed_no_verdict)
+                if [ -n "${3:-}" ]; then WHY="$4"; else WHY="$UNKNOWN_CAUSE"; fi
+                printf 'attempt %s finished cleanly and wrote no verdict (%s)' "$1" "$WHY" ;;
+              turn_exhaustion)
+                printf 'attempt %s ran out of turns' "$1" ;;
+              crash)
+                printf 'attempt %s crashed' "$1" ;;
+              *)
+                printf 'attempt %s left no execution record' "$1" ;;
+            esac
+          }
+
           if [ "${A1_OUTCOME:-}" = "turn_exhaustion" ] || [ "${A2_OUTCOME:-}" = "turn_exhaustion" ]; then
             echo "::error::QA critic ran out of turns before it produced a verdict — turn exhaustion, not a crash. The reviewer authenticated and did real work; no credential needs rotating. Split this pull request, or check that pr_size_strategy.py routed it to the multi-pass review."
+          elif [ "${A1_OUTCOME:-}" = "completed_no_verdict" ] || [ "${A2_OUTCOME:-}" = "completed_no_verdict" ]; then
+            # DRE-3304. The reviewer authenticated, reviewed, exited cleanly
+            # and left nothing the gate could read. Ordered AFTER turn
+            # exhaustion for DRE-2924's reason — exhaustion is the actionable
+            # cause and its remedy is not this one's — and BEFORE the crash
+            # wording, which may only describe an attempt that actually died.
+            if [ "${A1_OUTCOME:-}" = "${A2_OUTCOME:-}" ] && [ "${A1_CAUSE:-}" = "${A2_CAUSE:-}" ]; then
+              # Both the same, which is the case worth noticing: the retry
+              # changed nothing. Say it once and say it landed twice, rather
+              # than printing the same sentence twice and burying that.
+              if [ -n "${A1_CAUSE:-}" ]; then WHY="$A1_CAUSE_TEXT"; else WHY="$UNKNOWN_CAUSE"; fi
+              DESC="attempt 1 and attempt 2 both finished cleanly and wrote no verdict ($WHY)"
+            else
+              DESC="$(attempt_line 1 "${A1_OUTCOME:-}" "${A1_CAUSE:-}" "${A1_CAUSE_TEXT:-}")"
+              DESC="$DESC; $(attempt_line 2 "${A2_OUTCOME:-}" "${A2_CAUSE:-}" "${A2_CAUSE_TEXT:-}")"
+            fi
+            # The no-credential claim is made about the attempts it is TRUE
+            # of. When one attempt genuinely died and the other merely
+            # finished empty, the reviewer did not "exit cleanly" and this
+            # line does not say it did — asserting one attempt's story over
+            # both is the fault being fixed here, pointed the other way.
+            CLEAN=""
+            if [ "${A1_OUTCOME:-}" = "completed_no_verdict" ] && [ "${A2_OUTCOME:-}" = "completed_no_verdict" ]; then
+              CLEAN=" The reviewer authenticated, did real work and exited cleanly both times, so no credential needs rotating on the strength of this line."
+            fi
+            echo "::error::QA critic finished without writing a verdict.${CLEAN} ${DESC}. Run: ${RUN_URL:-unknown}. Posted neutral status; failing job for medic visibility."
           else
             echo "::error::QA critic crashed on both attempts — no real verdict. Posted neutral status; failing job for medic visibility."
           fi

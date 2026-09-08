@@ -282,13 +282,30 @@ class QaReviewWiringTest(unittest.TestCase):
         self.assertLess(ids.index("cardctx"), ids.index("critic"))
         self.assertLess(ids.index("cardctx"), ids.index("critic_retry"))
 
-    def test_critic_prompts_are_identical(self):
+    def test_critic_prompts_are_identical_below_the_retry_briefing(self):
         # The workflow NOTE demands the duplicated blocks stay in sync;
         # drift between attempt 1 and the retry is a silent review skew.
-        self.assertEqual(
-            _step("critic")["with"]["prompt"],
-            _step("critic_retry")["with"]["prompt"],
-        )
+        #
+        # DRE-3304 gave the retry ONE intended difference, on the same terms
+        # `--max-turns` already has in test_critic_turn_budget.py: a briefing
+        # PREFIXED to the prompt, telling it that attempt 1 finished and left
+        # no verdict and why. Run 34170941436 is what a retry that cannot
+        # differ buys — two clean attempts, 52 turns then 29, both parked
+        # behind the same unfinished CI job, both leaving the same stub.
+        #
+        # Asserted as an exact suffix match rather than a relaxed one: below
+        # the briefing the retry must still be attempt 1's prompt BYTE FOR
+        # BYTE, so every word of the original protection survives and only
+        # the prefix is licensed.
+        first = _step("critic")["with"]["prompt"]
+        retry = _step("critic_retry")["with"]["prompt"]
+        marker = "Read .bureau-pipeline/agent-context.md FIRST"
+        self.assertTrue(first.startswith(marker), "attempt 1's prompt moved")
+        self.assertIn(marker, retry, "the retry lost the review prompt")
+        self.assertEqual(first, retry[retry.index(marker):],
+                         "the two critic prompts have drifted apart below "
+                         "the retry briefing")
+        self.assertIn("THIS IS THE RETRY", retry[:retry.index(marker)])
 
     def test_linear_bookkeeping_stays_guarded_on_card_presence(self):
         # The verdict's Linear comment must no-op cleanly for a cardless PR.
