@@ -79,6 +79,12 @@ of it is ever a runtime lookup.
   and the planner cannot leave the workflow without the answer; the exclusion
   names that gate in `enforced_by` and `planner_score.py check` fails if the
   workflow stops running it. `docs/planner-audit.md` records the first run.
+  The `split-rate` dimension (DRE-3079) is the one that reads a FILE rather
+  than a receipt — `split-ledger.json` below — so it names it in `ledger`,
+  and `ledger_injected_at` is the date that ledger reached the planner. `null`
+  there is an answer, not a gap: DRE-3078 has not shipped, so every month is
+  BEFORE and the after half is UNKNOWN rather than an empty bucket that would
+  read as an improvement.
 - **`split-ledger.json`** — every card that did not fit one run (DRE-3077),
   derived by `python3 scripts/split_ledger.py derive` from Linear and the run
   receipts: the turn-cap deaths and what they cost, the splits and the pieces

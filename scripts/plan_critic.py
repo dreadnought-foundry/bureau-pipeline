@@ -70,7 +70,12 @@ CLI:
   mechanical [--plan-comment-file F] [--surfaces-dir D] [--note-file F]
                                      cards on stdin (`children-json`); the note
                                      is the list posted to the epic BEFORE the
-                                     critic reads it
+                                     critic reads it. Since DRE-3079 that list
+                                     includes the SPLIT LEDGER's answer: a
+                                     child whose declared footprint lands on a
+                                     row that died, or that carries a tell the
+                                     ledger has watched kill cards, is a
+                                     finding citing the row.
   decide --stage S --result-file F [--epic E] [--github-output F]
          [--note-file F] [--record-file F] [--escalation-file F]
                                      comment thread (JSON array) on stdin,
@@ -883,12 +888,20 @@ def reapprove_how() -> str:
     )
 
 
-def __getattr__(name: str) -> str:
+def __getattr__(name: str):
     """`plan_critic.REAPPROVE_HOW` — the constant every caller has always
     read (PEP 562), built on first read so `reapprove_how`'s deferred import
-    can happen. Anything else is the AttributeError it would have been."""
+    can happen. Anything else is the AttributeError it would have been.
+
+    `card_tells` rides the same seam for the same reason (DRE-3079): it IS
+    `split_ledger.tells` — the ledger's own reader for DRE-2893's four tells,
+    bound rather than re-spelled — and `split_ledger` imports this module
+    through `planner_score`, so it cannot be imported at module scope here.
+    """
     if name == "REAPPROVE_HOW":
         return reapprove_how()
+    if name == "card_tells":
+        return _split_ledger().tells
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -1379,8 +1392,208 @@ def shared_files(cards: list[dict]) -> dict[str, list[str]]:
     return plan_footprint.collisions(cards)
 
 
+# --- A footprint that has died before (DRE-3079) -----------------------------
+#
+# `config/split-ledger.json` (DRE-3077) is the record of every card that did
+# not fit one run: what it declared, what its split pieces actually touched,
+# how many turn-cap deaths it cost and which of DRE-2893's tells applied in
+# hindsight. Piece 2 injects it into the planner; this is the OTHER reader —
+# the mechanical half of the first critic, checking a plan the planner has
+# already written against the deaths the ledger already holds.
+
+#: Where the ledger lives, for the finding to cite. Named here rather than
+#: imported at module scope: `split_ledger` imports `planner_score`, which
+#: imports THIS module, so the import is deferred to the one function that
+#: needs it (see `_ledger`).
+LEDGER_FILE = "config/split-ledger.json"
+
+#: How many files a child must share with a ledger row before the overlap is
+#: worth a finding. ONE shared file is the ordinary state of this repo —
+#: almost every card touches a file some dead card also touched — and a check
+#: that fires on every card is a label rather than a measurement. DRE-3040
+#: measured what that costs: five false "names no repo" findings, and a critic
+#: that learns to skip the list skips the real finding next.
+LEDGER_MIN_OVERLAP = 2
+
+#: What a caller passes for `ledger` when the file could not be read, and what
+#: `_ledger` returns when its own read fails. A sentinel rather than `None`,
+#: because `None` is "nothing passed, go and load it" and this is "the load
+#: already failed" — a crash is not a clean sheet
+#: (standards/console-honesty.md rule 1).
+LEDGER_UNREADABLE = "LEDGER_UNREADABLE"
+
+#: The reasons a ledger row records the card DYING rather than merely being
+#: named. Read off `split_ledger`'s own constants at call time.
+_LEDGER_DEATH_REASONS = ("turn-cap-death", "split", "handed-back")
+
+
+def _split_ledger():
+    """The `split_ledger` module, imported late.
+
+    `split_ledger` → `planner_score` → `plan_critic`, so importing it at module
+    scope would close a cycle through this file. The same deferred-import
+    pattern the live seams in this repo already use.
+    """
+    import split_ledger  # noqa: PLC0415 - deferred to break an import cycle
+
+    return split_ledger
+
+
+def _ledger(ledger=None):
+    """The ledger to check against: what the caller passed, or the shipped
+    file, or `LEDGER_UNREADABLE` when it could not be read."""
+    if ledger is LEDGER_UNREADABLE:
+        return LEDGER_UNREADABLE
+    if ledger is not None:
+        return ledger
+    try:
+        return _split_ledger().load()
+    except Exception:                               # noqa: BLE001 - see below
+        # Reported, never swallowed: `ledger_findings` turns this into a
+        # finding of its own so an unread ledger is visible on the epic.
+        return LEDGER_UNREADABLE
+
+
+def _row_footprint(row: dict) -> tuple[set, str]:
+    """A ledger row's footprint and where it came from.
+
+    Two answers, in order. The row's DECLARED files are the card's own claim,
+    and most rows carry none — those cards predate the `Files:` line — so the
+    fallback is what the split pieces actually touched, which is the only
+    footprint the ledger has for them. Every finding says which of the two it
+    matched on, because a declaration and a reconstruction are different
+    evidence and the reader weighs them differently.
+    """
+    for field, name in (("declared_files", "declared"), ("piece_files", "pieces")):
+        value = row.get(field)
+        # UNKNOWN is the ledger's literal for a field it could not read, and it
+        # is a string — a list is the only shape that is an answer.
+        if isinstance(value, list) and value:
+            return {str(path) for path in value}, name
+    return set(), ""
+
+
+def ledger_death_rows(ledger=None) -> list[dict]:
+    """The rows that record a card DYING — a turn-cap death, a split, or a
+    hand-back.
+
+    The ledger's population is wider than its deaths: a seed row that was named
+    and then survived says nothing about a footprint, and reporting it would
+    make the check fire on work that went fine.
+    """
+    doc = _ledger(ledger)
+    if doc is LEDGER_UNREADABLE:
+        return []
+    rows = []
+    for row in doc.get("rows") or ():
+        deaths = row.get("deaths")
+        died = isinstance(deaths, int) and deaths > 0
+        if died or any(r in _LEDGER_DEATH_REASONS for r in row.get("reasons") or ()):
+            rows.append(row)
+    return rows
+
+
+def ledger_footprint_matches(cards: list[dict], ledger=None) -> list[dict]:
+    """Children whose declared footprint lands on a row that died.
+
+    One entry per (card, row) pair, carrying the files they share and which of
+    the row's two footprints matched. A card that declares no footprint is not
+    matched here at all — it already has its own finding, and a match derived
+    from an empty set would be invented.
+    """
+    declared = plan_footprint.footprints(cards)
+    missing = set(plan_footprint.cards_without_footprint(cards))
+    rows = ledger_death_rows(ledger)
+    matches = []
+    for card in cards or ():
+        identifier = card.get("identifier")
+        if identifier in missing:
+            continue
+        files = set(declared.get(identifier) or ())
+        if not files:
+            continue
+        for row in rows:
+            footprint, on = _row_footprint(row)
+            shared = sorted(files & footprint)
+            if len(shared) < LEDGER_MIN_OVERLAP:
+                continue
+            matches.append({
+                "card": identifier,
+                "row": row.get("card"),
+                "on": on,
+                "shared": shared,
+                "deaths": row.get("deaths"),
+                "reasons": list(row.get("reasons") or ()),
+            })
+    return matches
+
+
+def ledger_tell_matches(cards: list[dict], ledger=None) -> list[dict]:
+    """Children carrying a tell the ledger has watched kill cards.
+
+    The rate is the ledger's own sentence (`rates.by_tell`), quoted rather than
+    recomputed. A tell whose population never died is not reported: a rate of
+    zero is evidence FOR the card, and printing it would pad the list the
+    critic reads.
+    """
+    doc = _ledger(ledger)
+    if doc is LEDGER_UNREADABLE:
+        return []
+    rates = {band.get("tell"): band
+             for band in ((doc.get("rates") or {}).get("by_tell") or ())
+             if isinstance(band.get("died"), int) and band["died"] > 0}
+    ledger_module = _split_ledger()
+    matches = []
+    for card in cards or ():
+        body = card.get("body") or ""
+        evidence = ledger_module.tell_evidence(body)
+        for tell in ledger_module.tells(body):
+            band = rates.get(tell)
+            if band:
+                matches.append({"card": card.get("identifier"), "tell": tell,
+                                "evidence": evidence.get(tell) or "",
+                                "sentence": band.get("sentence") or ""})
+    return matches
+
+
+def ledger_findings(cards: list[dict], ledger=None) -> list[str]:
+    """The split-ledger half of the mechanical checks, as finding lines.
+
+    An unreadable ledger is its OWN finding and never an empty list: "checked
+    against the ledger and found nothing" and "never read the ledger" are
+    different facts, and only one of them clears a plan
+    (standards/console-honesty.md rule 1).
+    """
+    if _ledger(ledger) is LEDGER_UNREADABLE:
+        return [f"the split ledger ({LEDGER_FILE}) could not be read, so no "
+                "card in this plan was checked against a footprint that has "
+                "died before"]
+    findings = []
+    for match in ledger_footprint_matches(cards, ledger):
+        deaths = match["deaths"] if isinstance(match["deaths"], int) else "an unread number of"
+        where = ("the files it declared" if match["on"] == "declared"
+                 else "the files its split pieces touched")
+        findings.append(
+            f"{match['card']}: shares {len(match['shared'])} file(s) with "
+            f"{match['row']}, which the split ledger records dying {deaths} "
+            f"time(s) — {', '.join(match['shared'])} (matched against {where}; "
+            f"the row is in {LEDGER_FILE})"
+        )
+    for match in ledger_tell_matches(cards, ledger):
+        # The EVIDENCE travels with the tell, because the tell reader
+        # under-reports by design and a critic that cannot see why one fired
+        # cannot weigh it — nor see that the rate behind it is 2 of 2.
+        because = f" ({match['evidence']})" if match["evidence"] else ""
+        findings.append(
+            f"{match['card']}: carries the {match['tell']} tell{because} — the "
+            f"split ledger says {match['sentence']} ({LEDGER_FILE})"
+        )
+    return findings
+
+
 def mechanical_findings(cards: list[dict], plan_comment: str = "",
-                        surfaces: list[str] | None = None) -> list[str]:
+                        surfaces: list[str] | None = None,
+                        ledger=None) -> list[str]:
     """The structural defects the first critic never has to think about.
 
     Cheap, deterministic, and run BEFORE the critic spends a turn: a card with
@@ -1407,10 +1620,27 @@ def mechanical_findings(cards: list[dict], plan_comment: str = "",
         findings.append(
             f"{surface}: designed but no card carries it and the plan does not defer it"
         )
+    # DRE-3079: the same list, against the deaths already on the board.
+    findings += ledger_findings(cards, ledger)
     return findings
 
 
-def findings_note(cards: list[dict], findings: list[str]) -> str:
+def _ledger_line(ledger=None) -> str:
+    """One line saying what the ledger check had to read, for the note.
+
+    Rule 2 again: "checked against 7 death rows and matched none" and "never
+    opened the ledger" are different facts, and the count is the only thing
+    that tells them apart.
+    """
+    if _ledger(ledger) is LEDGER_UNREADABLE:
+        return (f"The split ledger (`{LEDGER_FILE}`) **could not be read**, so "
+                "no footprint here was checked against a card that has died.")
+    rows = ledger_death_rows(ledger)
+    return (f"Checked against the split ledger (`{LEDGER_FILE}`): "
+            f"{len(rows)} death row(s).")
+
+
+def findings_note(cards: list[dict], findings: list[str], ledger=None) -> str:
     """The mechanical half's own comment, posted to the epic BEFORE the critic
     reads it (DRE-3040).
 
@@ -1443,6 +1673,8 @@ def findings_note(cards: list[dict], findings: list[str]) -> str:
             files = sorted(declared.get(ident) or [])
             lines.append(f"- {ident}: " + (", ".join(files) if files
                                            else "declares no files"))
+    lines.append("")
+    lines.append(_ledger_line(ledger))
     lines.append("")
     if findings:
         lines.append(f"Findings ({len(findings)}):")
@@ -1499,11 +1731,15 @@ def _cmd_mechanical(args) -> int:
         for root, _dirs, files in os.walk(args.surfaces_dir):
             surfaces += [os.path.join(root, f) for f in files
                          if f.lower().endswith(".png")]
-    findings = mechanical_findings(cards, _read(args.plan_comment_file), sorted(surfaces))
+    # Read ONCE and handed to both, so the list in the log and the list on the
+    # epic cannot be checked against two different ledgers.
+    ledger = _ledger()
+    findings = mechanical_findings(cards, _read(args.plan_comment_file),
+                                   sorted(surfaces), ledger=ledger)
     if args.note_file:
         # The comment the rail posts to the epic before the critic reads it.
         with open(args.note_file, "w", encoding="utf-8") as f:
-            f.write(findings_note(cards, findings) + "\n")
+            f.write(findings_note(cards, findings, ledger=ledger) + "\n")
     if not findings:
         print("no structural findings — "
               f"{len(cards)} card(s), {len(surfaces)} designed surface(s) in scope")
