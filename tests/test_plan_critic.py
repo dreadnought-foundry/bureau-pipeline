@@ -39,6 +39,11 @@ One section per acceptance criterion:
       carrying a tell the ledger has watched kill cards is another. A ledger
       that could not be read says so — it never reads as "no matches".
 
+  S (DRE-3243). A critic reads each child's STATE, not only its text and the
+      tree. A child in Done, Canceled or Duplicate is delivered or dropped and
+      never to-build, so "its deliverable already exists on `main`" is not a
+      finding against it; the same card in Backlog it still is.
+
 Plus the two rules the pipeline has paid for before: a crash is not a rejection
 (standards/console-honesty.md rule 1), and nothing here may emit a string that
 the merge gate reads as a QA verdict (standards/untrusted-content.md).
@@ -80,13 +85,14 @@ CHILD_LABELS = ["repo:bureau-pipeline", "initiative:bureau", "agent:engineer"]
 RETIRED_MOVE = " ".join(("Green", "Light,", "then", "approve"))
 
 
-def _cards(*pairs, labels=None):
+def _cards(*pairs, labels=None, state=None):
     return [
         {
             "identifier": i,
             "body": b,
             "labels": list(CHILD_LABELS if labels is None else labels),
             "parent": "DRE-2721",
+            **({} if state is None else {"state": state}),
         }
         for i, b in pairs
     ]
@@ -1194,6 +1200,7 @@ class TheChildrenJsonCarriesTheLabels(unittest.TestCase):
         "parent": {"identifier": "DRE-3019"},
         "labels": {"nodes": [{"name": "repo:agent-bureau-demo"},
                              {"name": "agent:engineer"}]},
+        "state": {"name": "Backlog"},
     }]
 
     def test_the_record_carries_the_labels_and_the_parent(self):
@@ -1204,6 +1211,7 @@ class TheChildrenJsonCarriesTheLabels(unittest.TestCase):
             "body": "**Files: **`README.md`\n",
             "labels": ["repo:agent-bureau-demo", "agent:engineer"],
             "parent": "DRE-3019",
+            "state": "Backlog",
         }])
 
     def test_the_record_degrades_quietly(self):
@@ -1213,6 +1221,7 @@ class TheChildrenJsonCarriesTheLabels(unittest.TestCase):
 
         self.assertEqual(linear_ops.child_json_records([{"identifier": "DRE-1"}]), [{
             "identifier": "DRE-1", "body": "", "labels": [], "parent": "",
+            "state": "",
         }])
 
     def test_the_repo_check_reads_that_record(self):
@@ -1220,6 +1229,172 @@ class TheChildrenJsonCarriesTheLabels(unittest.TestCase):
 
         self.assertEqual(pc.cards_without_repo(
             linear_ops.child_json_records(self.NODES)), [])
+
+
+#: A child whose declared deliverable ALREADY EXISTS in the tree — the shape
+#: DRE-3210 had on the evening of 2026-09-06: built, reviewed, merged and Done,
+#: with its files sitting on `main` where anyone could go and look at them.
+SHIPPED_CARD = (
+    "Add the round record the next round reads.\n"
+    "**Files:** `scripts/plan_critic.py`, `tests/test_plan_critic.py`\n"
+    "## Acceptance criteria\n"
+    "- [ ] the marker parses back out of a comment thread\n"
+)
+
+
+class ACriticReadsTheChildsStateAndNotOnlyItsText(unittest.TestCase):
+    """DRE-3243. The post critic's round 2 on DRE-3164 sent a plan back for
+    "DRE-3210's entire deliverable already exists, fully implemented, on main —
+    the card asks an agent to build already-shipped work". DRE-3210 was **Done**
+    — merged the evening before — and a Done card describing the work it
+    delivered is the normal shape of every Done card.
+
+    The critic read the card's TEXT as an instruction and the TREE as evidence,
+    and never read the card's STATE. That send-back was the second of two, so a
+    sound plan hit the bound and parked with `needs-human` on a finding that was
+    not a gap. Both critics read children through the same block, so both had
+    the blind spot."""
+
+    def setUp(self):
+        # The premise of the whole fixture: these files are on `main` right
+        # now. A test that asserted "delivered work is not a finding" against
+        # paths that do not exist would prove nothing about the case.
+        for path in ("scripts/plan_critic.py", "tests/test_plan_critic.py"):
+            self.assertTrue(os.path.exists(os.path.join(ROOT, path)),
+                            f"{path} must exist for this fixture to mean anything")
+        self.done = _cards(("DRE-3210", SHIPPED_CARD), state="Done")
+        self.backlog = _cards(("DRE-3210", SHIPPED_CARD), state="Backlog")
+
+    # -- The block both critics read carries the state ------------------------
+
+    def test_the_children_record_carries_the_state(self):
+        import linear_ops
+
+        self.assertEqual(
+            linear_ops.child_json_records([{
+                "identifier": "DRE-3210",
+                "description": SHIPPED_CARD,
+                "parent": {"identifier": "DRE-3164"},
+                "labels": {"nodes": [{"name": "repo:agent-bureau"}]},
+                "state": {"name": "Done"},
+            }])[0]["state"],
+            "Done",
+        )
+
+    def test_the_query_asks_the_board_for_it(self):
+        """A record field with nothing feeding it reads as "no state" on every
+        card — the same "checked and found nothing" rule 1 keeps out of these
+        readers."""
+        import inspect
+
+        import linear_ops
+
+        self.assertIn("state", inspect.getsource(linear_ops.cmd_children_json))
+
+    def test_a_stateless_record_still_degrades_quietly(self):
+        import linear_ops
+
+        self.assertEqual(
+            linear_ops.child_json_records([{"identifier": "DRE-1"}])[0]["state"], "")
+
+    # -- What a state means ---------------------------------------------------
+
+    def test_a_done_child_is_delivered_never_to_build(self):
+        self.assertFalse(pc.shipped_work_is_a_finding(self.done[0]))
+        self.assertEqual(pc.delivered_children(self.done), [("DRE-3210", "Done")])
+
+    def test_canceled_and_duplicate_are_dropped_the_same_way(self):
+        for state in ("Canceled", "Duplicate"):
+            card = _cards(("DRE-9001", SHIPPED_CARD), state=state)[0]
+            self.assertFalse(pc.shipped_work_is_a_finding(card), state)
+
+    def test_an_in_flight_child_is_judged_on_what_it_will_land(self):
+        """In Progress / In Review has a run or a PR out. Its files not being
+        in the tree yet is the normal shape of it, and so is a sibling's file
+        that is — neither is a delivered card."""
+        for state in ("In Progress", "In Review"):
+            card = _cards(("DRE-9002", SHIPPED_CARD), state=state)[0]
+            self.assertTrue(pc.shipped_work_is_a_finding(card), state)
+            self.assertEqual(pc.in_flight_children([card]), [("DRE-9002", state)])
+
+    def test_the_same_files_under_a_backlog_child_are_still_a_finding(self):
+        """The other half, and the half that keeps the check honest: identical
+        text, identical files on `main`, a card still to build — "this is
+        already implemented" stands."""
+        self.assertTrue(pc.shipped_work_is_a_finding(self.backlog[0]))
+        self.assertEqual(pc.delivered_children(self.backlog), [])
+
+    # -- The mechanical pass says so, in its output ---------------------------
+
+    def test_the_note_names_the_delivered_child_as_a_non_finding(self):
+        note = pc.findings_note(self.done, pc.mechanical_findings(self.done))
+        self.assertIn("delivered child", note.lower())
+        self.assertIn("DRE-3210", note)
+        self.assertIn("Done", note)
+
+    def test_the_note_says_that_is_not_a_collision_either(self):
+        """"…so the model cannot re-raise it as a collision." A non-finding the
+        note names under one heading and the model rebrands under another is
+        the same false hold wearing a different word."""
+        note = pc.findings_note(self.done, pc.mechanical_findings(self.done))
+        self.assertIn("collision", note.lower())
+
+    def test_the_backlog_child_gets_no_such_line(self):
+        note = pc.findings_note(self.backlog, pc.mechanical_findings(self.backlog))
+        self.assertNotIn("delivered child", note.lower())
+        self.assertIn("Backlog", note)
+
+    def test_a_children_read_with_no_state_says_so_rather_than_none(self):
+        """"No child is delivered" and "nothing told us" are different facts
+        (standards/console-honesty.md rule 2), and only the first clears a
+        card the critic is about to call already-shipped."""
+        stateless = _cards(("DRE-9003", SHIPPED_CARD))
+        note = pc.findings_note(stateless, pc.mechanical_findings(stateless))
+        self.assertIn("no child carried a state", note.lower())
+
+    def test_the_state_block_is_not_a_finding_of_its_own(self):
+        """It is INPUT to the critic's judgement. A Done child must not become
+        a finding in the act of being excused from one."""
+        self.assertEqual(
+            [f for f in pc.mechanical_findings(self.done) if "DRE-3210" in f],
+            [],
+        )
+
+    # -- Both charters say what a state means ---------------------------------
+
+    def test_both_charters_tell_the_critic_what_a_done_child_is(self):
+        for stage in (pc.STAGE_PRE, pc.STAGE_POST):
+            text = pc.charter(stage)
+            for word in ("Done", "Canceled", "Duplicate", "In Review"):
+                self.assertIn(word, text, f"{stage} charter never names {word}")
+            self.assertIn("not a finding", text.lower(),
+                          f"{stage} charter does not say a delivered child is not one")
+
+    def test_the_standard_says_what_a_delivered_child_means(self):
+        with open(os.path.join(ROOT, "standards", "plan-critic.md"),
+                  encoding="utf-8") as f:
+            standard = f.read()
+        self.assertIn("delivered child", standard.lower())
+        for word in ("Done", "Canceled", "Duplicate"):
+            self.assertIn(word, standard)
+
+    # -- The rail hands both critics the state --------------------------------
+
+    def test_every_critic_prompt_points_at_the_state(self):
+        steps = _plan_yml_steps()
+        prompts = {
+            (s.get("name") or ""): ((s.get("with") or {}).get("prompt") or "")
+            for s in steps
+            if (s.get("name") or "").startswith(("First critic — round",
+                                                 "Second critic — review"))
+            and ((s.get("with") or {}).get("prompt") or "")
+        }
+        self.assertEqual(len(prompts), 3, sorted(prompts))
+        for name, prompt in prompts.items():
+            self.assertIn("state", prompt.lower(),
+                          f"{name} never tells the critic the records carry a state")
+            self.assertIn("Done", prompt,
+                          f"{name} never says what a Done child means")
 
 
 class ThePostMarkerReleasesTheChildren(unittest.TestCase):
