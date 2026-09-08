@@ -23,6 +23,9 @@ the plan was right about it, and none of it needs a human to re-read a card:
     return receipt;
   * the **routing verdict**, against what the card turned out to need — an
     escalation from a FLEET card is a mis-route;
+  * whether the card **survived as one card**, against the split ledger's own
+    population (DRE-3079) — and month by month, that is the split rate DRE-3022
+    asked to be measured by;
   * a **proof card and a demo card** exist;
   * the plan was **approved as written**, against the plan critic's send-backs
     and the mid-epic amendment markers.
@@ -76,8 +79,21 @@ CLI:
 
     python3 scripts/planner_score.py check                     # the reference
     python3 scripts/planner_score.py score --epic DRE-N [--out J] [--report M]
+    python3 scripts/planner_score.py collect-month --month 2026-09
+    python3 scripts/planner_score.py split-rate [--month 2026-09] [--report M]
     python3 scripts/planner_score.py replay-card --epic DRE-N --n 1 [--out J]
     python3 scripts/planner_score.py leak-check --plan P --context C
+
+## The split rate (DRE-3079)
+
+DRE-3022 asked to be measured by one number: how often a planner-created child
+has to be split, month by month, before and after the split ledger reached the
+planner. `split-rate` is that reader. Its population is the LEDGER's own —
+`split_ledger.reasons`, so "did not fit one run" is decided once — and a month
+whose cards have not finished reports UNKNOWN rather than a rate flattered by
+work that has not been put to the test. With no injection date declared
+(DRE-3078 has not shipped) every month is BEFORE and the after half is UNKNOWN,
+never an empty bucket printed as zero.
 """
 
 from __future__ import annotations
@@ -116,8 +132,23 @@ DIMENSIONS = (
     "readiness",
     "routing",
     "approval",
+    "split-rate",
     CONTAMINATED_DIMENSION,
 )
+
+#: The dimension DRE-3022 asked to be measured by, added in DRE-3079: how often
+#: a planner-created child had to be split. Its population is the split
+#: ledger's own — a turn-cap death, a split, or a hand-back — which is WIDER
+#: than `size`, whose only reading is the turn-cap receipt. A card handed back
+#: to Planning as an epic never hit the cap and is a size agreement; it is the
+#: clearest possible split.
+SPLIT_DIMENSION = "split-rate"
+
+#: The literal every unreadable field carries here, and in the ledger. Never
+#: `0`, never "clean": "the record could not be read" and "nothing went wrong"
+#: are different facts, and only one of them is evidence of a good plan.
+#: `tests/test_planner_score.py` pins it to `split_ledger.UNKNOWN`.
+UNKNOWN = "UNKNOWN"
 
 #: Every value each dimension's readers can produce. Checked against the
 #: declared vocabulary for DRE-2685's reason: a value the reference cannot hold
@@ -129,6 +160,7 @@ EMITTED_VALUES = {
     "readiness": ("build-ready", "bounced"),
     "routing": ("dispatchable", "needs-a-person"),
     "approval": ("as-written", "revised"),
+    "split-rate": ("one-card", "split"),
     CONTAMINATED_DIMENSION: ("both-present", "missing"),
 }
 
@@ -318,6 +350,44 @@ def reference_problems(doc: dict | None = None) -> list:
                 "number"
             )
 
+    # The split-rate dimension is the one that reads a FILE rather than a
+    # receipt, so the file is checked the same way the contaminated dimension's
+    # gate is: an audit that names a ledger nobody wrote reports a rate it
+    # computed from nothing (DRE-3079).
+    split = declared.get(SPLIT_DIMENSION) or {}
+    if split:
+        path = (split.get("ledger") or "").strip()
+        if not path:
+            problems.append(
+                f"dimension {SPLIT_DIMENSION!r} names no ledger — the rate has "
+                "no population to be read from"
+            )
+        elif not os.path.exists(os.path.join(ROOT, path)):
+            problems.append(
+                f"dimension {SPLIT_DIMENSION!r} reads {path}, which is not in "
+                "this repo — a rate computed from a file nobody wrote is a "
+                "number with no denominator"
+            )
+        if "ledger_injected_at" not in split:
+            problems.append(
+                f"dimension {SPLIT_DIMENSION!r} does not say when the ledger "
+                "reached the planner — the before/after comparison DRE-3022 "
+                "asks for has no boundary, and a missing key is not the same "
+                "as an explicit 'not yet'"
+            )
+        injected = split.get("ledger_injected_at")
+        if injected is not None and month_of(injected) is None:
+            problems.append(
+                f"dimension {SPLIT_DIMENSION!r} dates the injection "
+                f"{injected!r}, which is not a date the months can be split on"
+            )
+        if injected is None and not (split.get("ledger_injected_why") or "").strip():
+            problems.append(
+                f"dimension {SPLIT_DIMENSION!r} reports no injection date and "
+                "does not say why — an absent boundary nobody explained is "
+                "indistinguishable from one somebody forgot"
+            )
+
     if CONTAMINATED_DIMENSION in declared and is_scored(CONTAMINATED_DIMENSION, doc):
         problems.append(
             f"{CONTAMINATED_DIMENSION!r} is scored — plan.yml bounces the epic "
@@ -461,6 +531,220 @@ def shipped(child: dict) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# the split rate (DRE-3079)                                                    #
+# --------------------------------------------------------------------------- #
+#
+# DRE-3022's "measured by" clause is one number: how often does a
+# planner-created child have to be split, month by month, before and after the
+# split ledger reached the planner. The ledger (DRE-3077) already decides what
+# "did not fit one run" means; this reads it rather than deciding again.
+
+_MONTH = re.compile(r"^(\d{4}-\d{2})")
+
+
+def _split_ledger():
+    """The `split_ledger` module, imported late — it imports THIS module, so a
+    module-scope import here would close the cycle."""
+    import split_ledger  # noqa: PLC0415 - deferred to break an import cycle
+
+    return split_ledger
+
+
+def _split_reasons() -> tuple:
+    """The reasons a split-ledger row records a card not having fitted one run,
+    read off `split_ledger.DEATH_REASONS` at call time.
+
+    `split_ledger.REASON_SEED` is deliberately absent from that tuple — a card
+    that was NAMED as a seed and then survived was never split. Read rather
+    than copied: a hand-typed copy would keep matching the old spellings after
+    a rename and quietly shrink the split population, which is the one number
+    DRE-3022 is measured by.
+    """
+    return _split_ledger().DEATH_REASONS
+
+
+def split_ledger_cards(ledger=None) -> dict:
+    """Card identifier → the ledger row, for every card the ledger records as
+    not having fitted one run.
+
+    A ledger that cannot be read returns `{}` — and every child then falls
+    through to its OWN receipts, which are the ledger's inputs anyway. It is
+    not a silent zero: `split_rate` names the read in its `unreadable` list.
+    """
+    doc = ledger
+    if doc is None:
+        try:
+            doc = _split_ledger().load()
+        except Exception:                           # noqa: BLE001 - live seam
+            return {}
+    split_reasons = _split_reasons()
+    return {row["card"]: row for row in doc.get("rows") or ()
+            if any(r in split_reasons for r in row.get("reasons") or ())
+            and row.get("card")}
+
+
+def split_outcome(child: dict, ledger_cards: dict | None = None) -> str:
+    """Did this card's work fit one run? `split` · `one-card` · `pending` ·
+    `unknown`.
+
+    Four answers, not two, and the last two are the load-bearing ones:
+
+      * `pending` — the card has not finished and nothing says it was cut up.
+        The question was never PUT to it. Counting it as `one-card` would make
+        the rate improve every time the board grows.
+      * `unknown` — its own record could not be read. Never `one-card`
+        (standards/console-honesty.md rule 1).
+
+    The split signals are the ledger's, read through `split_ledger.reasons` so
+    the population here and the population in `config/split-ledger.json` cannot
+    drift apart — plus the ledger's own rows, for a card it has already read.
+    """
+    identifier = child.get("identifier")
+    if identifier and identifier in (ledger_cards or {}):
+        return "split"
+    comments = child.get("comments")
+    if comments is None:
+        return "unknown"
+    if _split_ledger().reasons({
+        "comments": list(comments),
+        "state_type": child.get("state_type") or "",
+        "successors": child.get("successors"),
+    }):
+        return "split"
+    if shipped(child) or (child.get("state_type") or "") == "completed":
+        return "one-card"
+    return "pending"
+
+
+def month_of(created_at) -> str | None:
+    """The `YYYY-MM` a card was created in, or None when it did not say."""
+    match = _MONTH.match(str(created_at or ""))
+    return match.group(1) if match else None
+
+
+def ledger_injected_at(doc: dict | None = None):
+    """When the split ledger reached the planner, or None.
+
+    Declared data (`config/planner-audit.json`), not a constant here: the
+    injection is DRE-3078's to make, and the date it lands is the boundary this
+    comparison is drawn at. None means it has not happened — which is a fact
+    about the pipeline, not a missing value.
+    """
+    return dimensions(doc).get(SPLIT_DIMENSION, {}).get("ledger_injected_at")
+
+
+def _bucket(outcomes: list) -> dict:
+    """Counts and a rate over one population, with UNKNOWN for an empty
+    denominator."""
+    counts = {name: outcomes.count(name)
+              for name in ("split", "one-card", "pending", "unknown")}
+    answered = counts["split"] + counts["one-card"]
+    return {
+        "cards": len(outcomes),
+        "split": counts["split"],
+        "one_card": counts["one-card"],
+        "pending": counts["pending"],
+        "unknown": counts["unknown"],
+        "answered": answered,
+        "rate": round(counts["split"] / answered, 4) if answered else UNKNOWN,
+    }
+
+
+def _sentence(month: str, bucket: dict) -> str:
+    if bucket["rate"] is UNKNOWN:
+        return (f"{month}: UNKNOWN — none of the {bucket['cards']} "
+                "planner-created child(ren) has finished or been cut up, so "
+                "nothing here has been put to the test")
+    return (f"{month}: {bucket['split']} of {bucket['answered']} "
+            f"planner-created children were split "
+            f"({bucket['rate'] * 100:.1f}%)")
+
+
+def split_rate(children: list, *, injected_at=None, ledger=None) -> dict:
+    """The split rate, month by month, with a before/after either side of the
+    date the ledger reached the planner.
+
+    With no injection date the AFTER half is UNKNOWN, never an empty bucket
+    reported as zero: "nothing has happened after" and "nothing happened after"
+    are different facts, and until DRE-3078 lands only the first one is true.
+    """
+    ledger_cards = split_ledger_cards(ledger)
+    unreadable: list[str] = []
+    by_month: dict = {}
+    for child in children or ():
+        month = month_of(child.get("created_at"))
+        if month is None:
+            unreadable.append(
+                f"{child.get('identifier')}: no creation date, so it belongs "
+                "to no month — named rather than bucketed")
+            continue
+        by_month.setdefault(month, []).append(split_outcome(child, ledger_cards))
+
+    boundary = month_of(injected_at)
+    if boundary is None:
+        unreadable.append(
+            "the reference names no date for the ledger reaching the planner "
+            "(DRE-3078 injects it), so every month here is BEFORE and the "
+            "after half is UNKNOWN rather than empty")
+
+    months = []
+    for month in sorted(by_month):
+        bucket = _bucket(by_month[month])
+        side = "before" if boundary is None or month < boundary else "after"
+        months.append({"month": month, "side": side,
+                       "sentence": _sentence(month, bucket), **bucket})
+
+    def _side(name):
+        outcomes = [o for month, os_ in by_month.items() for o in os_
+                    if (boundary is not None and
+                        ("before" if month < boundary else "after") == name)]
+        return _bucket(outcomes)
+
+    return {
+        "injected_at": injected_at,
+        "months": months,
+        "before": _bucket([o for os_ in by_month.values() for o in os_])
+        if boundary is None else _side("before"),
+        "after": UNKNOWN if boundary is None else _side("after"),
+        "unreadable": unreadable,
+    }
+
+
+def render_split_rate(result: dict) -> str:
+    """The one number DRE-3022 asked for, as a comment a non-technical reader
+    can act on."""
+    out = ["**Split rate of planner-created children, month by month.** A child "
+           "counts as split when the pipeline's own record says one run of it "
+           "was not enough — a turn-cap death, a cancel with pieces citing it, "
+           "or a hand-back to Planning. That is the split ledger's own "
+           "population (`config/split-ledger.json`), not a second definition.",
+           ""]
+    if result.get("injected_at"):
+        out.append(f"The ledger reached the planner on {result['injected_at']}; "
+                   "months are marked before and after it.")
+    else:
+        out.append("The ledger has NOT reached the planner yet, so every month "
+                   "below is *before* and the after half is **UNKNOWN** — not "
+                   "zero, and not an improvement.")
+    out += ["", "| Month | Split | Answered | Not yet run | Unreadable | Rate | Side |",
+            "| -- | -- | -- | -- | -- | -- | -- |"]
+    for row in result["months"]:
+        rate = (row["rate"] if row["rate"] is UNKNOWN
+                else f"{row['rate'] * 100:.1f}%")
+        out.append(f"| {row['month']} | {row['split']} | {row['answered']} | "
+                   f"{row['pending']} | {row['unknown']} | {rate} | {row['side']} |")
+    out.append("")
+    for row in result["months"]:
+        out.append(f"- {row['sentence']}")
+    out.append("")
+    after = result["after"]
+    out.append(f"**After the ledger:** {after if after is UNKNOWN else _sentence('after', after)}")
+    if result["unreadable"]:
+        out += ["", "Not read:"] + [f"- {line}" for line in result["unreadable"]]
+    return "\n".join(out) + "\n"
+
+
+# --------------------------------------------------------------------------- #
 # the rows                                                                     #
 # --------------------------------------------------------------------------- #
 
@@ -586,6 +870,43 @@ def _size_rows(children) -> list:
             identifier, "size", "one-pr", "one-pr",
             "it merged as one pull request without hitting the turn cap",
         ))
+    return rows
+
+
+def _split_rows(children, ledger=None) -> list:
+    """One row per child: did the plan's card survive as one card?
+
+    Not `size` written twice. `size` reads the turn-cap receipt and nothing
+    else, so a card handed back to Planning as an epic — the clearest split
+    there is — agrees with it. This reads the split ledger's whole population.
+    """
+    ledger_cards = split_ledger_cards(ledger)
+    rows = []
+    for child in children:
+        identifier = child["identifier"]
+        outcome = split_outcome(child, ledger_cards)
+        if outcome == "split":
+            rows.append(_compare(
+                identifier, SPLIT_DIMENSION, "one-card", "split",
+                "the pipeline's own record says one run of this card was not "
+                "enough — a turn-cap death, a cancel with pieces citing it, or "
+                "a hand-back to Planning (config/split-ledger.json)",
+            ))
+        elif outcome == "one-card":
+            rows.append(_compare(
+                identifier, SPLIT_DIMENSION, "one-card", "one-card",
+                "it finished as the one card the plan cut, with nothing on the "
+                "board saying its work had to be re-cut",
+            ))
+        else:
+            rows.append(_row(
+                identifier, SPLIT_DIMENSION, "one-card", None, "unknown",
+                "the card has not finished and nothing says it was cut up, so "
+                "whether it was one card's worth was never put to the test"
+                if outcome == "pending"
+                else "this card's own record could not be read, so whether it "
+                     "was split is unknown — reported rather than scored clean",
+            ))
     return rows
 
 
@@ -716,7 +1037,7 @@ def score(epic: dict, children: list, *, doc: dict | None = None,
     rows = (_footprint_rows(children) + _collision_rows(children)
             + _size_rows(children) + _readiness_rows(children)
             + _routing_rows(children) + _approval_rows(epic, children)
-            + _proof_and_demo_rows(epic, children))
+            + _split_rows(children) + _proof_and_demo_rows(epic, children))
 
     declared = dimensions(doc)
     final: list[dict] = []
@@ -1223,10 +1544,108 @@ def collect(epic_identifier: str, lops=None, finder=None, readable=None) -> dict
             "labels": record.get("labels") or [],
             "blocked_by": record.get("blocked_by") or [],
             "comments": lops.comment_bodies(identifier),
+            # DRE-3079: the month the split rate buckets this card into.
+            "created_at": record.get("created_at") or "",
             "pr": pr,
             "pr_unreadable": unreadable,
         })
     return {"epic": epic, "children": children}
+
+
+#: The month's planner-created children — every card with a PARENT created in
+#: the window. "Planner-created child" is operationally exactly that: the
+#: planner's one writer files sub-issues, and nothing else on this board gives
+#: a card a parent.
+_MONTH_QUERY = """query($after: String, $filter: IssueFilter) {
+  issues(first: 100, after: $after, filter: $filter) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      identifier title description createdAt
+      state { name type }
+      labels { nodes { name } }
+    }
+  }
+}"""
+
+
+def _month_window(month: str) -> tuple[str, str]:
+    """`2026-09` → the ISO instants that bound it."""
+    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", str(month or "")):
+        raise AuditError(f"{month!r} is not a month — write it as YYYY-MM")
+    year, mon = (int(part) for part in month.split("-"))
+    nxt = f"{year + 1}-01" if mon == 12 else f"{year}-{mon + 1:02d}"
+    return f"{month}-01T00:00:00Z", f"{nxt}-01T00:00:00Z"
+
+
+def collect_month(month: str, lops=None) -> dict:
+    """Every planner-created child created in `month`, with what says whether
+    it was split.
+
+    Deliberately CHEAPER than `collect`: no pull requests and no repo probes,
+    because the split signals are receipts on the card, not files in a diff.
+    The successor search — the one read that answers "was this cancelled card
+    cut into pieces" — runs only for the cards whose state could carry that
+    answer at all (`split_ledger.SPLIT_STATE_TYPES`), so a month of two
+    hundred Done cards costs two hundred comment reads and no searches.
+
+    Reads are SERIAL through the one `LINEAR_API_KEY`, the same bound `collect`
+    takes.
+    """
+    if lops is None:
+        import linear_ops as lops                   # noqa: PLC0415 - live seam
+    since, until = _month_window(month)
+    ledger = _split_ledger()
+
+    nodes, after = [], None
+    while True:
+        page = ((lops.gql(_MONTH_QUERY, {
+            "after": after,
+            "filter": {"createdAt": {"gte": since, "lt": until},
+                       "parent": {"null": False}},
+        }) or {}).get("issues")) or {}
+        nodes += page.get("nodes") or []
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            break
+        after = info.get("endCursor")
+
+    children = []
+    for node in nodes:
+        identifier = node.get("identifier")
+        state = (node.get("state") or {})
+        state_type = state.get("type") or ""
+        try:
+            comments = lops.comment_bodies(identifier)
+        except Exception:                           # noqa: BLE001 - live seam
+            comments = None                         # → UNKNOWN, never []
+        successors = None
+        if state_type in ledger.SPLIT_STATE_TYPES:
+            try:
+                found = ((lops.gql(ledger._SUCCESSOR_QUERY,
+                                   {"needle": identifier}) or {})
+                         .get("issues")) or {}
+                successors = [
+                    {"identifier": other["identifier"]}
+                    for other in found.get("nodes") or []
+                    if other.get("identifier") != identifier
+                    and ledger.cites(other.get("description") or "", identifier)
+                ]
+            except Exception:                       # noqa: BLE001 - live seam
+                successors = None
+        children.append({
+            "identifier": identifier,
+            "title": node.get("title") or "",
+            "body": node.get("description") or "",
+            "labels": [(l or {}).get("name") or ""
+                       for l in ((node.get("labels") or {}).get("nodes")) or []],
+            "comments": comments,
+            "created_at": node.get("createdAt") or "",
+            "state": state.get("name") or UNKNOWN,
+            "state_type": state_type,
+            "successors": successors,
+            "pr": None,
+        })
+    return {"month": month, "children": children}
 
 
 # --------------------------------------------------------------------------- #
@@ -1255,6 +1674,19 @@ def main(argv=None) -> int:
     scoring.add_argument("--epic", required=True)
     scoring.add_argument("--out", help="write the result as JSON")
     scoring.add_argument("--report", help="write the markdown report")
+
+    monthly = sub.add_parser(
+        "collect-month",
+        help="every planner-created child created in a month, as JSON")
+    monthly.add_argument("--month", required=True, help="YYYY-MM")
+
+    rate = sub.add_parser(
+        "split-rate",
+        help="the split rate month by month; children arrive on stdin "
+             "(collect / collect-month output), or --month reads them live")
+    rate.add_argument("--month", help="read the month live instead of stdin")
+    rate.add_argument("--out", help="write the result as JSON")
+    rate.add_argument("--report", help="write the markdown report")
 
     card = sub.add_parser("replay-card",
                           help="build and CHECK the throwaway replay epic")
@@ -1308,6 +1740,26 @@ def main(argv=None) -> int:
             with open(args.out, "w", encoding="utf-8") as fh:
                 json.dump(result, fh, indent=2)
         report = render_report(result)
+        if args.report:
+            with open(args.report, "w", encoding="utf-8") as fh:
+                fh.write(report)
+        print(report)
+        return 0
+
+    if command == "collect-month":
+        print(json.dumps(collect_month(args.month), indent=2))
+        return 0
+
+    if command == "split-rate":
+        payload = (collect_month(args.month) if args.month
+                   else _stdin_json({}))
+        children = (payload.get("children") if isinstance(payload, dict)
+                    else payload) or []
+        result = split_rate(children, injected_at=ledger_injected_at())
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                json.dump(result, fh, indent=2)
+        report = render_split_rate(result)
         if args.report:
             with open(args.report, "w", encoding="utf-8") as fh:
                 fh.write(report)

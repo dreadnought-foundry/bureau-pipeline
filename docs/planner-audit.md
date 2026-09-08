@@ -26,7 +26,39 @@ of it existed when the plan was written.
 | the card was build-ready at creation | the readiness guard's own return receipt |
 | the routing verdict | an escalation or hand-back — a FLEET card that needed a person |
 | the plan was approved as written | the plan critic's send-backs, the mid-epic amendment markers |
+| the card survives as one card | the split ledger's own population — a turn-cap death, a cancel with pieces citing it, a hand-back |
 | a proof card and a demo card exist | **excluded — see below** |
+
+## The split rate (DRE-3079)
+
+DRE-3022 asked to be measured by one number, and this is the reader that
+answers it:
+
+```
+python3 scripts/planner_score.py split-rate --month 2026-09
+```
+
+**How often did a planner-created child have to be split, month by month?** A
+child counts as split when the pipeline's own record says one run of it was not
+enough. That population is `config/split-ledger.json`'s, read through
+`split_ledger.reasons` — not a second definition, so the ledger and the rate
+can never disagree about what "did not fit one run" means. It is WIDER than the
+`size` row above, which reads the turn-cap receipt and nothing else: a card
+handed back to Planning as an epic never hit the cap and agrees on `size`,
+while being the clearest split there is.
+
+Four answers per card, and the last two are the load-bearing ones: `split`,
+`one-card`, `pending` (the card has not finished, so the question was never put
+to it) and `unknown` (its record could not be read). Only the first two are in
+the denominator. Counting `pending` as `one-card` would make the rate improve
+every time the board grows.
+
+**The before/after has no boundary yet, and says so.** The ledger reaches the
+planner in DRE-3078, which has not shipped, so `ledger_injected_at` in
+`config/planner-audit.json` is `null`: every month reports as *before* and the
+after half reports **UNKNOWN**, never an empty bucket printed as zero — which
+would read as an improvement the pipeline has not made. Set that date when the
+injection merges and the same command draws the comparison.
 
 ## The `proof-and-demo` exclusion, and why it stays
 

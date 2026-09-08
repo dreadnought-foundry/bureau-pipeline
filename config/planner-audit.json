@@ -96,6 +96,18 @@
       ],
       "why": "A plan-critic round whose result is SEND_BACK, or a `mid-epic-amendment` marker on the epic, is the record that the plan did not survive as written. Read through plan_critic.parse_markers, so a marker quoted in prose does not count."
     },
+    "split-rate": {
+      "question": "How often did a planner-created child have to be split?",
+      "scored": true,
+      "values": [
+        "one-card",
+        "split"
+      ],
+      "why": "The split ledger's own population (config/split-ledger.json, DRE-3077), read through scripts/split_ledger.py `reasons`: a turn-cap death, a cancel with pieces citing it, or a hand-back to Planning. WIDER than `size`, which reads the turn-cap receipt and nothing else — a card handed back to Planning as an epic never hit the cap and is a `size` agreement, and it is the clearest split there is. Every card the planner creates is one-PR-scoped by standards/card-quality.md, so the claim is fixed and history is the variable.",
+      "ledger": "config/split-ledger.json",
+      "ledger_injected_at": null,
+      "ledger_injected_why": "DRE-3078 is the piece that puts the ledger in front of the planner, and it has not shipped. Until it does there is no 'after', so `planner_score.py split-rate` reports every month as BEFORE and the after half as UNKNOWN — never an empty bucket printed as zero, which would read as an improvement the pipeline has not made. Set this to the date the injection merges and the same command draws the comparison DRE-3022 asked for."
+    },
     "proof-and-demo": {
       "question": "Did the epic end with a proof card and a demo card?",
       "scored": false,
