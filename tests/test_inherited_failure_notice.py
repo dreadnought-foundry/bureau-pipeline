@@ -236,7 +236,7 @@ class FixLoopWiringTest(unittest.TestCase):
     def test_it_runs_before_the_fix_agent(self):
         self.assertLess(
             self.src.index("inherited_failures.py"),
-            self.src.index("uses: anthropics/claude-code-action@v1"),
+            self.src.index("uses: anthropics/claude-code-action@"),
             "the notice must exist before the agent reads its context",
         )
 

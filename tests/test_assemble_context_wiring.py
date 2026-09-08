@@ -69,7 +69,7 @@ class InjectionWiringTest(unittest.TestCase):
         for wf, _ in WIRED:
             body = src(wf)
             assemble_pos = body.index("assemble_context.py assemble")
-            action_pos = body.index("anthropics/claude-code-action@v1")
+            action_pos = body.index("anthropics/claude-code-action@")
             self.assertLess(
                 assemble_pos, action_pos,
                 f"{wf}: Assemble step must precede the agent step",
