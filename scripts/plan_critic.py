@@ -75,7 +75,11 @@ CLI:
                                      child whose declared footprint lands on a
                                      row that died, or that carries a tell the
                                      ledger has watched kill cards, is a
-                                     finding citing the row.
+                                     finding citing the row. Since DRE-3243 it
+                                     also prints every card's STATE and names a
+                                     DELIVERED child as a non-finding, so a
+                                     Done card's work already being on `main`
+                                     cannot be re-raised as a gap.
   decide --stage S --result-file F [--epic E] [--github-output F]
          [--note-file F] [--record-file F] [--escalation-file F]
                                      comment thread (JSON array) on stdin,
@@ -175,6 +179,64 @@ DEATH_PREFIX = "plan-critic-died:"
 # What the post critic can see is exactly this, and its charter says so.
 IN_FLIGHT_EPIC_STATES = ("Green Light", "Todo", "In Progress")
 
+# --- What a CHILD's lane means to a critic (DRE-3243) -----------------------
+#
+# A critic is handed each child's text and the repository, and with nothing
+# else it reads the text as an instruction and the tree as evidence. DRE-3164's
+# round 2 sent a sound plan back for "DRE-3210's entire deliverable already
+# exists, fully implemented, on main — the card asks an agent to build
+# already-shipped work". DRE-3210 was DONE: built, reviewed, merged (#2308) and
+# closed by that merge the evening before. A Done card describing the work it
+# delivered is the normal shape of every Done card. That send-back was the
+# second of two, so the epic hit the bound and parked with `needs-human` on a
+# finding that was not a gap.
+#
+# Matched case-insensitively on the lane's own name, so a board that renders
+# "done" or "DONE" reads the same. `cancelled` is here beside `canceled`
+# because the terminal lane is spelled one way on this board and the other in
+# half the English-speaking world, and a spelling is not a reason to re-raise a
+# false finding.
+
+#: A child in one of these lanes is DELIVERED or DROPPED — never to-build.
+DELIVERED_CHILD_STATES = ("done", "canceled", "cancelled", "duplicate")
+
+#: A child in one of these has a run or a pull request in flight: it is judged
+#: on what it will LAND, not on whether its files are in the tree yet.
+IN_FLIGHT_CHILD_STATES = ("in progress", "in review")
+
+
+def child_state(card: dict) -> str:
+    """The card's lane as the board spells it, or `""` when the record carries
+    none. Empty is UNKNOWN, never "to build" — the two are told apart by every
+    reader below (standards/console-honesty.md rule 2)."""
+    return str((card or {}).get("state") or "").strip()
+
+
+def shipped_work_is_a_finding(card: dict) -> bool:
+    """Whether *"its deliverable already exists on `main`"* stands as a finding
+    against this card.
+
+    False for a delivered or dropped child and true for everything else,
+    UNKNOWN included: a record with no state is a card nothing has excused, and
+    excusing it would suppress the real finding the critic exists to make.
+    """
+    return child_state(card).lower() not in DELIVERED_CHILD_STATES
+
+
+def _in_states(cards: list[dict], states) -> list[tuple[str, str]]:
+    return [(c.get("identifier"), child_state(c)) for c in cards or []
+            if child_state(c).lower() in states]
+
+
+def delivered_children(cards: list[dict]) -> list[tuple[str, str]]:
+    """`(identifier, state)` for every child that is delivered or dropped."""
+    return _in_states(cards, DELIVERED_CHILD_STATES)
+
+
+def in_flight_children(cards: list[dict]) -> list[tuple[str, str]]:
+    """`(identifier, state)` for every child with a run or a PR out."""
+    return _in_states(cards, IN_FLIGHT_CHILD_STATES)
+
 # --- The post-approval review's turn ceiling (DRE-3241) ---------------------
 #
 # Sized from the plan, in one place, the way DRE-2924 sizes the QA critic's
@@ -219,6 +281,30 @@ def post_review_turns(children) -> int:
     return max(POST_REVIEW_TURNS_FLOOR, min(POST_REVIEW_TURNS_CAP, sized))
 
 
+# Handed to BOTH critics (DRE-3243) and to neither's substitute: the one-off
+# stage reads a single card that has no children, so there is no state block to
+# give it. Interpolated rather than repeated, so the two readings of a lane
+# cannot drift into two answers.
+_CHILD_STATE_BLOCK = """\
+READ EACH CHILD'S STATE, NOT ONLY ITS TEXT. Every child record carries a
+`state` — the lane the card is in right now — and it is what says whether the
+card is to-build at all.
+
+  - **Done, Canceled or Duplicate: delivered or dropped, never to-build.** A
+    Done card DESCRIBES the work it delivered; that is the normal shape of
+    every Done card, not a card asking an agent to build shipped work. So
+    "its deliverable already exists on `main`" is NOT a finding against it,
+    and neither is a collision with a sibling over a file it has already
+    merged.
+  - **In Progress or In Review: a run or a pull request is in flight.** Judge
+    it on what it will LAND, not on whether its files are in the tree yet.
+  - **Anything else — Backlog, Todo, Triage — is still to build**, and every
+    finding you would normally make stands, this one included.
+
+A card's text and the repository cannot tell you which of those it is. Read the
+state before you report that work already exists: on DRE-3164 that reading cost
+a sound plan its second round and parked it at the bound."""
+
 _PRE_CHARTER = """\
 YOU ARE THE FIRST CRITIC. You review a plan that is still a MOVING DOCUMENT,
 before the CEO has spent any attention on it.
@@ -242,6 +328,8 @@ WHAT YOU CHECK:
     two different ways?
   - Do two cards touch the same file? Siblings that edit one file conflict on
     every merge.
+
+{child_state}
 
 WHAT YOU DO NOT DO: you do not redesign the plan, you do not rank the work,
 and you do not judge whether the epic is worth doing. That is the CEO's call
@@ -278,6 +366,8 @@ WHAT YOU CHECK:
     field, route or file. You are the cheapest place to catch one: you are
     already reading a full plan with fresh eyes, and a planner working inside
     one epic cannot see the other.
+
+{child_state}
 
 SENDING IT BACK SHOULD BE RARE. How often you send a plan back is the honest
 measure of how good the first critic is — so when you do, the reason has to be
@@ -383,12 +473,18 @@ def charter(stage: str, sight: str = "") -> str:
     `sight` is the cross-epic scope block and reaches the POST stage only: the
     other two charters state they have no cross-epic sight, and handing one to
     them would be the same critic twice.
+
+    `child_state` is passed to every stage and referenced by the two that read
+    CHILDREN. `str.format` ignores a keyword no template names, so the one-off
+    charter — one card, no children — is unchanged by it.
     """
     spec = STAGES[stage]
     if stage != STAGE_POST:
-        return spec["template"].format(question=spec["question"])
+        return spec["template"].format(question=spec["question"],
+                                       child_state=_CHILD_STATE_BLOCK)
     return spec["template"].format(
         question=spec["question"],
+        child_state=_CHILD_STATE_BLOCK,
         sight=("\n" + sight.rstrip("\n") + "\n") if sight.strip() else "",
     )
 
@@ -1491,8 +1587,19 @@ def shared_files(cards: list[dict]) -> dict[str, list[str]]:
     bodies with a path regex that required a `/`, which read every path
     mentioned in an acceptance criterion as a footprint and could not see
     `README.md` at all.
+
+    DELIVERED CHILDREN ARE NOT IN THE INPUT (DRE-3243). The rule is about two
+    OPEN pull requests racing for one file; a Done, Canceled or Duplicate card
+    has already merged its half or dropped it, so it cannot conflict with a
+    sibling. Leaving it in produced a note that said "it is not a collision
+    with a sibling over a file it has already merged either" and then listed
+    exactly that collision under `Findings` two paragraphs below — the same
+    contradictory signal about a Done card that DRE-3243 exists to remove,
+    relocated rather than fixed. `shipped_work_is_a_finding()` is the one
+    definition of "delivered", shared with the state block that says so.
     """
-    return plan_footprint.collisions(cards)
+    return plan_footprint.collisions(
+        [c for c in cards or [] if shipped_work_is_a_finding(c)])
 
 
 # --- A footprint that has died before (DRE-3079) -----------------------------
@@ -1751,6 +1858,49 @@ def _ledger_line(ledger=None) -> str:
             f"{len(rows)} death row(s).")
 
 
+def _state_block(cards: list[dict]) -> list[str]:
+    """The children's lanes, and what a delivered one means, for the note.
+
+    A NON-FINDING said out loud (DRE-3243). The findings below it are things
+    the plan has to fix; this says which cards cannot be one, so a model that
+    reads "already implemented on `main`" off the tree does not re-raise it —
+    under that name or as a collision.
+    """
+    lines = ["Each card's STATE, which is what says whether it is to-build at "
+             "all:"]
+    if not any(child_state(c) for c in cards or []):
+        # Rule 2 again: "no child is delivered" and "nothing told us" are
+        # different facts, and only the first excuses nothing.
+        lines.append("- **no child carried a state** — the children were read "
+                     "without one, so nothing here distinguishes a delivered "
+                     "card from one still to build")
+        return lines
+    for card in cards or []:
+        state = child_state(card) or "unknown"
+        lines.append(f"- {card.get('identifier')}: {state}")
+    delivered = delivered_children(cards)
+    if delivered:
+        named = ", ".join(f"{i} ({s})" for i, s in delivered)
+        lines += [
+            "",
+            f"**Not a finding — delivered child:** {named}. A child in Done, "
+            "Canceled or Duplicate is delivered or dropped, never to-build. A "
+            "Done card describes the work it delivered, so its deliverable "
+            "already existing on `main` is not a gap in this plan — and it is "
+            "not a collision with a sibling over a file it has already merged "
+            "either.",
+        ]
+    in_flight = in_flight_children(cards)
+    if in_flight:
+        named = ", ".join(f"{i} ({s})" for i, s in in_flight)
+        lines += [
+            "",
+            f"In flight: {named}. Judge these on what they will land, not on "
+            "whether their files are in the tree yet.",
+        ]
+    return lines
+
+
 def findings_note(cards: list[dict], findings: list[str], ledger=None) -> str:
     """The mechanical half's own comment, posted to the epic BEFORE the critic
     reads it (DRE-3040).
@@ -1784,6 +1934,8 @@ def findings_note(cards: list[dict], findings: list[str], ledger=None) -> str:
             files = sorted(declared.get(ident) or [])
             lines.append(f"- {ident}: " + (", ".join(files) if files
                                            else "declares no files"))
+    lines.append("")
+    lines += _state_block(cards)
     lines.append("")
     lines.append(_ledger_line(ledger))
     lines.append("")
