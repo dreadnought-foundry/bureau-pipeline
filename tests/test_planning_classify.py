@@ -872,7 +872,10 @@ class TestTheTransport:
         assert argv[argv.index("--allowedTools") + 1] == "", (
             "a classification reads one card and answers — it needs no tools"
         )
-        assert "--output-format" in argv and "json" in argv
+        # `stream-json`, not `json` (DRE-3331): the plain envelope's `result`
+        # is the LAST assistant message alone, and a continued answer is more
+        # than one — see test_planning_classify_continuation.py.
+        assert argv[argv.index("--output-format") + 1] == "stream-json"
 
     def test_the_api_key_mode_keeps_the_raw_call_as_the_fast_path(self, monkeypatch):
         """Where the run holds a real API key the raw call still works and is
@@ -1741,7 +1744,7 @@ class TestThePromptDoesNotTransitArgv:
         assert argv[argv.index("--max-turns") + 1] == planning_classify.MAX_TURNS
         assert argv[argv.index("--model") + 1] == MODEL
         assert argv[argv.index("--allowedTools") + 1] == ""
-        assert "--output-format" in argv and "json" in argv
+        assert argv[argv.index("--output-format") + 1] == "stream-json"  # DRE-3331
         # Nothing card-shaped can be in there: the argv is a fixed handful of
         # flags whose size does not move with the population.
         assert max(len(word) for word in argv) < 256

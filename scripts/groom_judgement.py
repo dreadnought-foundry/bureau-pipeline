@@ -139,7 +139,18 @@ CEILING_REASON = "could not rank — census over the one-call ceiling"
 #: What one card's answer line costs, in output tokens. An id, an outcome, a
 #: one-clause reason and a trigger — eighty is that line with room in it, and
 #: it is the number `briefs/groomer.md` tells the model brevity is measured in.
+#: (Measured 2026-09-07: about forty a line. The eighty stays: it is the number
+#: the brief quotes, and the room in it is deliberate.)
 TOKENS_PER_CARD = 80
+
+#: What the model THINKS before it writes that line, in output tokens
+#: (DRE-3331). `CLAUDE_CODE_MAX_OUTPUT_TOKENS` bounds the whole response,
+#: thinking included: the 263-card reproduction on 2026-09-07 spent 36,402 of
+#: its 46,640 output tokens thinking — about 140 a card — and the first of
+#: that call's three API requests wrote no text at all because the budget was
+#: gone before a line was. A budget sized for the text alone is one the model
+#: has spent before it starts answering.
+THINKING_PER_CARD = 140
 
 #: Room for whatever the model writes around the lines it was asked for.
 OUTPUT_HEADROOM = 500
@@ -148,24 +159,35 @@ OUTPUT_HEADROOM = 500
 #: of a few hundred tokens is one the answer bumps into for no reason.
 OUTPUT_FLOOR = 4000
 
-#: The ceiling, and it is the whole of the one-call bound. Held under the
-#: SMALLEST output-token upper limit the installed Claude Code CLI applies to
-#: any rung of the planner ladder (2.1.263 reports `max_output_tokens.upper` of
-#: 128,000 for `claude-fable-5-1`, `claude-opus-5` and `claude-sonnet-4-6`),
-#: because the CLI CLAMPS the budget to that limit and answers at it — a
-#: ceiling above it would be a number we ask for and never get.
-OUTPUT_CEILING = 32000
+#: The ceiling, and it is the whole of the one-request bound. Held under the
+#: SMALLEST per-model output maximum the installed Claude Code CLI reports for
+#: any rung of the planner ladder — 2.1.263 reports `max_output_tokens.upper`
+#: of 128,000 for `claude-fable-5-1`, `claude-opus-5` and `claude-sonnet-4-6`,
+#: and a per-model output maximum of 64,000 for `claude-fable-5-1` in the
+#: usage ledger of a real run — because the CLI CLAMPS the budget to that
+#: limit and answers at it. A
+#: ceiling above it would be a number we ask for and never get. 64,000 holds
+#: 288 cards of text and thinking, which is the 263-card lane with room.
+OUTPUT_CEILING = 64000
 
 
 def output_budget(n_cards: int) -> int:
     """How many output tokens one call over `n_cards` is given.
 
     Sized from the census rather than fixed, because the answer is one line per
-    card and the population is what decides how many lines that is. The 226-card
-    lane this was written for lands at 18,580.
+    card, and the thinking behind each line is billed against the same budget
+    as the line. The 226-card lane this was written for lands at 50,220.
+
+    What happens past it is the CLI's, and it is known (DRE-3331): a response
+    that runs past the budget is CONTINUED in a fresh API request, up to three
+    times, and the seam reads every piece. So the budget decides how many
+    requests the one call takes and what a run costs, not whether the answer
+    comes back whole — until the fourth cut, where the CLI gives up and the
+    answer is reported `truncated`.
     """
     return min(OUTPUT_CEILING,
-               max(OUTPUT_FLOOR, OUTPUT_HEADROOM + TOKENS_PER_CARD * n_cards))
+               max(OUTPUT_FLOOR,
+                   OUTPUT_HEADROOM + (TOKENS_PER_CARD + THINKING_PER_CARD) * n_cards))
 
 
 def wall_clock_seconds(budget: int) -> float:
@@ -185,7 +207,16 @@ MAX_WALL_CLOCK_SECONDS = wall_clock_seconds(OUTPUT_CEILING)
 
 #: How many cards a ceiling-sized budget can answer for. Derived, never
 #: restated: it is the one number the ceiling and the per-card cost imply.
-CEILING_CARDS = (OUTPUT_CEILING - OUTPUT_HEADROOM) // TOKENS_PER_CARD
+CEILING_CARDS = ((OUTPUT_CEILING - OUTPUT_HEADROOM)
+                 // (TOKENS_PER_CARD + THINKING_PER_CARD))
+
+#: The four ways a card ends up `unranked`, counted apart (DRE-3331). The
+#: card's REASON reads the same in all four — that is DRE-3150's contract with
+#: the page — but "the model said it could not tell", "the answer never
+#: reached the card", "the line was garbled" and "nobody asked" are four facts
+#: about the RUN, and a run that reports one number for all of them is the run
+#: that said `ranked … in 1 call over 260 cards` about 56.
+ACCOUNTING_KEYS = ("ranked", "declined", "garbled", "omitted", "ceiling")
 
 #: And the exact sentence that replaces a reason the plain-English guard
 #: refuses. The card still gets its outcome; only the words are withheld.
@@ -257,10 +288,27 @@ class Judgement:
     #: list of context-pack sections that were capped.
     output_budget: int = 0
     truncated: bool = False
+    #: The answer as the transport returned it — every piece of a continued
+    #: one, joined — or None when no call answered (DRE-3331). Kept so the run
+    #: can write it beside the proposal; the run that found the continuation
+    #: kept nothing, and the answer had to be bought again to be read.
+    answer: str | None = None
+    #: How many times the CLI continued the answer in a fresh request. 0 is
+    #: one request; more is an answer that came back in pieces and was joined.
+    continuations: int = 0
+    #: One count per `ACCOUNTING_KEYS` — what the model did with every card,
+    #: as opposed to what the page says about it.
+    accounting: dict = field(default_factory=dict)
 
     @property
     def unranked(self) -> list:
         return [cid for cid, v in self.verdicts.items() if v.outcome == UNRANKED]
+
+    @property
+    def ranked(self) -> int:
+        """How many cards the read actually ranked — the number that cannot be
+        left off a receipt that says `answered`."""
+        return sum(1 for v in self.verdicts.values() if v.outcome != UNRANKED)
 
     @property
     def receipt(self) -> str:
@@ -447,9 +495,23 @@ def parse(answer: str, rows: list[dict]) -> dict:
     carry, a missing reason, a `not-now` with no trigger, a `likely-done` with
     no evidence, a card the answer never mentioned.
     """
+    return parse_accounted(answer, rows)[0]
+
+
+def parse_accounted(answer: str, rows: list[dict]) -> tuple:
+    """`parse`, and the accounting beside it (DRE-3331).
+
+    `(verdicts, {"ranked", "declined", "garbled", "omitted"})`: how many cards
+    the answer ranked, how many the model SAID `unranked` for, how many it
+    named on a line that could not be read, and how many it never reached. The
+    verdicts do not tell them apart — a card's reason is DRE-3150's one
+    sentence in all three unranked cases — and that is the point of counting
+    them here: 56 ranked of 260 is a fact about the run, not about any card.
+    """
     known = [row["identifier"] for row in rows]
     remaining = set(known)
     verdicts: dict = {}
+    accounting = {"ranked": 0, "declined": 0, "garbled": 0, "omitted": 0}
 
     for raw in (answer or "").splitlines():
         line = raw.strip()
@@ -468,11 +530,18 @@ def parse(answer: str, rows: list[dict]) -> dict:
                 f"{len(known)} card(s) — the census is the population")
         remaining.discard(identifier)
         verdicts[identifier] = _verdict(parts)
+        if verdicts[identifier].outcome != UNRANKED:
+            accounting["ranked"] += 1
+        elif (parts[1] if len(parts) > 1 else "").strip().lower() == UNRANKED:
+            accounting["declined"] += 1
+        else:
+            accounting["garbled"] += 1
 
     for identifier in known:
         if identifier not in verdicts:
             verdicts[identifier] = Verdict(UNRANKED, UNRANKED_REASON)
-    return verdicts
+            accounting["omitted"] += 1
+    return verdicts, accounting
 
 
 def whole_lines(text: str) -> str:
@@ -577,7 +646,9 @@ def run(census_rows: list[dict], pack: dict, *, call=None,
             model = planning_classify._pick_model()
         except Exception as e:  # noqa: BLE001 — an unpicked model ranks nothing
             return Judgement(verdicts=everything_unranked, calls=0, pack=summary,
-                             problem=_problem("no model could be chosen", e))
+                             problem=_problem("no model could be chosen", e),
+                             accounting=_accounting(omitted=len(rows),
+                                                    ceiling=len(over_ceiling)))
 
     try:
         prompt = prompt_for(rows, pack)
@@ -585,7 +656,9 @@ def run(census_rows: list[dict], pack: dict, *, call=None,
         return Judgement(verdicts=everything_unranked, calls=0, asked=model,
                          pack=summary,
                          problem=_problem("the ranking prompt could not be "
-                                          "composed", e))
+                                          "composed", e),
+                         accounting=_accounting(omitted=len(rows),
+                                                ceiling=len(over_ceiling)))
 
     # Sized off the census this call is actually about, not off the population:
     # the cards past the ceiling were already answered for, above.
@@ -599,37 +672,71 @@ def run(census_rows: list[dict], pack: dict, *, call=None,
     except Exception as e:  # noqa: BLE001 — any failed call ranks nothing
         return Judgement(verdicts=everything_unranked, calls=calls, asked=model,
                          pack=summary, output_budget=budget,
-                         problem=_problem("the ranking call did not answer", e))
+                         problem=_problem("the ranking call did not answer", e),
+                         accounting=_accounting(omitted=len(rows),
+                                                ceiling=len(over_ceiling)))
 
     # `answer.model` is what ANSWERED; None stays None. Repeating the request
     # would make a fallback we never saw look like a clean run on the model we
     # picked (`standards/console-honesty.md` rule 2).
     answered = answer.model
     cut = bool(answer.truncated)
+    continued = int(getattr(answer, "continuations", 0) or 0)
+    raw = answer.text
+    if continued:
+        # Said, not swallowed (DRE-3331): the CLI continued the answer in a
+        # fresh request after one ran past the budget, and the seam joined the
+        # pieces. A whole answer either way — but one that cost more requests
+        # than it was sized for, which is the budget's business to know.
+        print(f"groom judgement: the ranking answer came back in "
+              f"{continued + 1} pieces — the {budget}-token budget was passed "
+              f"{continued} time(s) and the pieces were joined", file=sys.stderr)
     try:
         # A cut answer's last line is a fragment; the refusal below still reads
         # every WHOLE line, so a cut is not a way past the census check.
-        verdicts = parse(whole_lines(answer.text) if cut else answer.text, rows)
+        verdicts, accounting = parse_accounted(
+            whole_lines(raw) if cut else raw, rows)
     except RefusedAnswer as e:
         return Judgement(verdicts=everything_unranked, calls=calls, asked=model,
                          answered=answered, pack=summary, output_budget=budget,
-                         truncated=cut, problem=str(e))
+                         truncated=cut, problem=str(e), answer=raw,
+                         continuations=continued,
+                         accounting=_accounting(omitted=len(rows),
+                                                ceiling=len(over_ceiling)))
+    accounting["ceiling"] = len(over_ceiling)
     unreadable = all(v.outcome == UNRANKED for v in verdicts.values())
     if cut:
         lost = sum(1 for v in verdicts.values() if v.outcome == UNRANKED)
         print(f"groom judgement: the ranking answer was cut at its "
               f"{budget}-token budget — {lost} of {len(rows)} card(s) came back "
               f"unranked", file=sys.stderr)
+    # The count that cannot be left off a run that says `answered`: what the
+    # read did with every card, and why the rest are unranked.
+    print(f"groom judgement: ranked {accounting['ranked']} of {len(rows)} "
+          f"card(s) — {accounting['declined']} declined by the model, "
+          f"{accounting['omitted']} never reached, {accounting['garbled']} "
+          f"garbled" + (f", {len(over_ceiling)} over the ceiling"
+                        if over_ceiling else ""), file=sys.stderr)
     verdicts.update(ceiling_unranked)
     if unreadable:
         return Judgement(verdicts=verdicts, calls=calls, asked=model,
                          answered=answered, pack=summary, output_budget=budget,
-                         truncated=cut,
+                         truncated=cut, answer=raw, continuations=continued,
+                         accounting=accounting,
                          problem=("the ranking answer could not be read, so no "
                                   "card in this population was ranked"))
     return Judgement(verdicts=verdicts, calls=calls, asked=model,
                      answered=answered, pack=summary, output_budget=budget,
-                     truncated=cut)
+                     truncated=cut, answer=raw, continuations=continued,
+                     accounting=accounting)
+
+
+def _accounting(**counts) -> dict:
+    """Every `ACCOUNTING_KEYS` entry, zero unless given — so a run that never
+    parsed an answer still reports the same keys as one that did."""
+    out = {key: 0 for key in ACCOUNTING_KEYS}
+    out.update(counts)
+    return out
 
 
 def _problem(headline: str, error: Exception) -> str:
