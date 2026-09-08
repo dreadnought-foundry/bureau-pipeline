@@ -420,8 +420,11 @@ run that stayed inside the first page both record that they proved nothing, in
 those words.
 
 The `initiative:<x>` label does **not** gate promotion. `reconcile.py` never
-reads it; what breaks without it is `validate_card.infer_repo` step 2a and the
-create seam, which refuses a child that lacks it.
+reads it — promotion gates on the card's `blockedBy` relations, its `repo:`
+label and its parent epic's state. Since DRE-2874 the create seam does not
+refuse a child that lacks it either, so exactly one thing breaks without it:
+`validate_card.infer_repo` loses its only route to a repo for a card carrying
+no `repo:` label.
 
 ## The plan artifact (DRE-2720)
 
