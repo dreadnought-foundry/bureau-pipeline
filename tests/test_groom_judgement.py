@@ -179,21 +179,25 @@ def test_the_prompt_carries_both_the_census_and_the_pack():
 # the output budget, and the wall clock sized off it (DRE-3259)
 # --------------------------------------------------------------------------
 def test_the_output_budget_is_sized_from_the_census():
+    """The per-card cost is the text line AND the thinking behind it
+    (DRE-3331): `CLAUDE_CODE_MAX_OUTPUT_TOKENS` bounds both, and the 263-card
+    reproduction spent 36,402 of 46,640 output tokens thinking."""
     assert groom_judgement.TOKENS_PER_CARD == 80
+    assert groom_judgement.THINKING_PER_CARD == 140
     assert groom_judgement.OUTPUT_HEADROOM == 500
     assert groom_judgement.OUTPUT_FLOOR == 4000
-    assert groom_judgement.OUTPUT_CEILING == 32000
-    assert groom_judgement.output_budget(226) == 18580, (
+    assert groom_judgement.OUTPUT_CEILING == 64000
+    assert groom_judgement.output_budget(226) == 50220, (
         "the 226-card lane is what this budget exists for"
     )
     assert groom_judgement.output_budget(1) == 4000, "the floor holds"
-    assert groom_judgement.output_budget(500) == 32000, "the ceiling holds"
+    assert groom_judgement.output_budget(500) == 64000, "the ceiling holds"
 
 
 def test_the_wall_clock_is_sized_from_the_budget():
-    assert groom_judgement.wall_clock_seconds(18580) == 524.5, (
-        "about nine minutes for the 226-card lane, with the CLI path's package "
-        "fetch inside the 60"
+    assert groom_judgement.wall_clock_seconds(50220) == 1315.5, (
+        "about twenty-two minutes for the 226-card lane, with the CLI path's "
+        "package fetch inside the 60"
     )
     assert groom_judgement.MAX_WALL_CLOCK_SECONDS == \
         groom_judgement.wall_clock_seconds(groom_judgement.OUTPUT_CEILING), (
@@ -282,8 +286,11 @@ def test_a_call_that_never_answered_still_reports_the_budget_it_asked_for():
 # a census past the ceiling is not silently cut (DRE-3259)
 # --------------------------------------------------------------------------
 def _fits() -> int:
-    return ((groom_judgement.OUTPUT_CEILING - groom_judgement.OUTPUT_HEADROOM)
-            // groom_judgement.TOKENS_PER_CARD)
+    # The module's own number, not a restatement of its arithmetic: this
+    # helper used to divide by the text cost alone and drifted the day the
+    # budget learned about thinking (DRE-3331) — the very drift the module
+    # docstring warns a second copy is free to do.
+    return groom_judgement.CEILING_CARDS
 
 
 def test_the_ceiling_reason_is_its_own_sentence():
