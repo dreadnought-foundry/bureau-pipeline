@@ -1223,10 +1223,15 @@ def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
 
 
 def _EMPTY_PACK() -> dict:
-    """The pack summary of a run that read no pack — zeros, not absence, so the
-    sibling cards read the same keys on both paths."""
-    out = {name: 0 for name in groom_context.SECTIONS}
+    """The pack summary of a run that read no pack — the same keys on both
+    paths, so the sibling cards parse one shape, and every section UNKNOWN.
+
+    Not zeros: a run holding no pack knows nothing about what is in flight, and
+    a zero would say it asked and found nothing (DRE-3329).
+    """
+    out = {name: None for name in groom_context.SECTIONS}
     out["truncated"] = []
+    out["unread"] = sorted(groom_context.SECTIONS)
     return out
 
 
@@ -1507,6 +1512,23 @@ def _render_judgement(proposal: dict) -> list:
     return w
 
 
+def _pack_count(pack: dict, name: str, noun: str) -> str:
+    """One context section as the CEO reads it: a count, or UNKNOWN.
+
+    A section the run could not read has no count, and the number it would
+    otherwise default to is `0` — which reads as "the fleet shipped nothing
+    this fortnight" on a night it merged several pull requests. That is the
+    failure `standards/console-honesty.md` rule 2 exists to prevent: a
+    plausible-looking default is indistinguishable from a real answer, and it
+    also fed the ranking as if it were one (DRE-3329). A section that WAS read
+    and held nothing still says `0` — the two facts get visibly different
+    renderings.
+    """
+    if name in set(pack.get("unread") or ()) or pack.get(name) is None:
+        return f"UNKNOWN {noun}s (could not be read this run)"
+    return _plural(int(pack.get(name) or 0), noun)
+
+
 def _receipt_line(proposal: dict) -> str:
     """What ranked this batch, over how much, against what — in one line.
 
@@ -1525,9 +1547,9 @@ def _receipt_line(proposal: dict) -> str:
     line = (f"Ranked by {block.get('receipt')} in "
             f"{_plural(int(block.get('calls') or 0), 'call')} over "
             f"{_plural(proposal['population'], 'card')}, against "
-            f"{_plural(int(pack.get('epics_in_progress') or 0), 'epic')} in "
-            f"flight, {_plural(int(pack.get('merged_prs') or 0), 'merged PR')}"
-            f" and {_plural(int(pack.get('closed_cards') or 0), 'closed card')}")
+            f"{_pack_count(pack, 'epics_in_progress', 'epic')} in "
+            f"flight, {_pack_count(pack, 'merged_prs', 'merged PR')}"
+            f" and {_pack_count(pack, 'closed_cards', 'closed card')}")
     # `judgement.truncated` is the ANSWER being cut at the budget — never
     # `pack['truncated']`, which is the list of context sections that were
     # capped. A proposal written before DRE-3259 carries neither key, and this

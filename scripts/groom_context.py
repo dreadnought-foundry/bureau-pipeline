@@ -337,11 +337,24 @@ def pack(*, epics=(), initiatives=(), merged_prs=(), closed_cards=(),
 
 
 def summary(built: dict) -> dict:
-    """The pack as the proposal records it: a count per section, and what was
-    cut. The proposal is a comment the CEO reads and an artifact the sibling
-    cards parse — neither wants the pack's whole text a second time."""
-    out = {name: len(built.get(name) or ()) for name in SECTIONS}
+    """The pack as the proposal records it: a count per section, what was cut,
+    and what could not be read. The proposal is a comment the CEO reads and an
+    artifact the sibling cards parse — neither wants the pack's whole text a
+    second time.
+
+    A section in `unread` carries **None**, never a count. It is the same rule
+    the prompt already follows one layer down (`render`), and it is here
+    because the count was the layer that broke it: a run whose `gh search prs`
+    failed published "0 merged PRs" to the CEO on a night the fleet merged
+    several, and a plausible-looking default is indistinguishable from a real
+    answer (DRE-3329, `standards/console-honesty.md` rule 2). `0` stays what
+    it has always meant — we asked, and there was nothing.
+    """
+    unread = sorted(built.get("unread") or ())
+    out = {name: (None if name in unread else len(built.get(name) or ()))
+           for name in SECTIONS}
     out["truncated"] = sorted(built.get("truncated") or {})
+    out["unread"] = unread
     return out
 
 

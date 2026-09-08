@@ -301,6 +301,14 @@ The ranked read has its own stated limits, and they are on the page too:
   number of cards, and the counts of epics in flight, merged PRs and closed
   cards in the context pack. A pack section that was capped is named in the
   proposal JSON;
+- **a context signal nobody could read is UNKNOWN, never a number** (DRE-3329).
+  A source that fails — `gh search prs` returning non-zero, say — is named
+  unread in the pack, carries no count in the proposal JSON, and reads on the
+  page as `UNKNOWN merged PRs (could not be read this run)`. The prompt says
+  the same thing to the model, so an unreadable signal never becomes a real
+  input with a wrong value. A section that WAS read and held nothing is still
+  `0`: "nothing merged" and "we could not ask" are different facts and get
+  different renderings (`standards/console-honesty.md` rule 2);
 - **a cut answer is said out loud.** The one call is sized off the census, and
   when the answer comes back at that ceiling the receipt line says so, names
   the budget, and counts the cards the cut cost — they appear under "Could not
