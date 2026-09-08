@@ -65,11 +65,24 @@ its own outcome now, and the turns/cost ride on every failing outcome rather
 than only on the one that ended cleanly, because those two numbers are the
 whole difference between the two deaths.
 
+DRE-3304: and a run that finished EMPTY says WHICH way it was empty. All four
+verdict-file failures shared the one word `completed_no_verdict`, and
+qa-review.yml's fail step printed "QA critic crashed on both attempts" for
+anything that was not turn exhaustion — over run 34170941436, whose two
+attempts both ended `subtype: success` (52 turns/$1.56 and 29/$0.93) having
+written the DRE-2466 stub and never replaced it. The gate had already computed
+and logged that. `cause`/`cause_text` are it, leaving as step outputs so the
+red line can say it too, and deliberately EMPTY on a crash — where the verdict
+file is never consulted, so naming a cause for it would be the same error in a
+new direction.
+
 Exit 0 when a real verdict exists (post it). Exit 1 on crash/no-verdict
 (retry, then neutral + loud fail). With --github-output, appends
-`outcome=ok|turn_exhaustion|crash|completed_no_verdict|unknown` plus `turns=`
-and `cost=` (numbers only, whenever the execution record carries them) to
-that file. The flag is optional: verify.yml calls this same gate without it.
+`outcome=ok|turn_exhaustion|crash|completed_no_verdict|unknown`, `cause=` /
+`cause_text=` (only when the verdict FILE is why there is nothing) plus
+`turns=` and `cost=` (numbers only, whenever the execution record carries
+them) to that file. The flag is optional: verify.yml calls this gate without
+it.
 """
 
 from __future__ import annotations
@@ -320,8 +333,93 @@ def outcome(execution: dict | None, real: bool) -> str:
     return "completed_no_verdict"
 
 
-def write_step_outputs(path: str, execution: dict | None, real: bool) -> None:
-    """Append `outcome`/`turns`/`cost` to a $GITHUB_OUTPUT file.
+#: WHICH of the four ways the verdict file was unusable, and the sentence the
+#: workflow prints for each (DRE-3304). One table, so the enum and the English
+#: cannot drift into disagreeing about the same run.
+#:
+#: The gate has always COMPUTED all four — verdict_file_report and
+#: _print_unfinished_verdict print them to the log — and then thrown them away:
+#: `outcome()` returns the single word `completed_no_verdict` for all of them.
+#: Run 34170941436 was the unfinished stub, and its red line said "crashed".
+#:
+#: Every value here is a fixed string written in this file. NONE of it comes
+#: from the verdict file, which is written by an agent that has just read a
+#: pull request authored by anyone — same discipline as verdict_file_report,
+#: which reports booleans and a byte count and never content.
+_NO_VERDICT_CAUSES = {
+    "unfinished_stub": (
+        "the reviewer wrote its in-progress stub and never replaced it, so the "
+        "file still declares the review unfinished — it stopped part-way "
+        "through rather than reaching a decision"
+    ),
+    "verdict_absent": "no verdict file was written at all",
+    "verdict_empty": "the verdict file was written and left empty",
+    "no_verdict_line": (
+        "the verdict file has content but no line begins with 'VERDICT:', so "
+        "the gate could not read a decision out of it"
+    ),
+    "verdict_incomplete": (
+        "the verdict file declares a decision but is missing the mandated "
+        "'## Summary' section, so the review had not finished"
+    ),
+}
+
+#: What the workflow says when no cause was recorded. Deliberately an
+#: admission: the failure this card exists for is a message that asserted more
+#: than the run supported, and the fix for that is not a different assertion.
+#: qa-review.yml carries this string too, as the fallback in its fail step,
+#: and tests/test_critic_no_verdict_cause.py holds the two byte-identical.
+UNKNOWN_CAUSE_TEXT = (
+    "the gate could not tell which way the verdict file was unusable, so this "
+    "line will not guess — the job log is where the answer still is"
+)
+
+
+def no_verdict_cause(execution: dict | None, verdict_path: str) -> str:
+    """WHICH way the verdict file was unusable, or "" when that is not the ask.
+
+    Empty on three paths, each for the same reason — the file was not why we
+    have nothing, so naming a file cause would invent one:
+
+    * a real verdict (nothing to explain);
+    * a crash that may not keep its verdict, where `verdict_is_real` returns
+      before reading the file at all;
+    * anything this function cannot classify.
+
+    Returns a bare `[a-z_]` token from _NO_VERDICT_CAUSES. $GITHUB_OUTPUT is
+    line-oriented, so a value that could carry a newline could write a step
+    output of its own — `real=true` among them. A token from a fixed table
+    cannot.
+    """
+    crashed = execution is not None and execution.get("is_error") is True
+    if crashed and not _crash_may_keep_its_verdict(execution):
+        return ""
+    raw = _read_verdict(verdict_path)
+    if raw is None:
+        return "verdict_absent"
+    text = raw.decode("utf-8", "replace")
+    if not text.strip():
+        return "verdict_empty"
+    if verdict_is_unfinished(text):
+        return "unfinished_stub"
+    if not _verdict_line_present(text):
+        return "no_verdict_line"
+    if crashed and not _verdict_is_complete(text):
+        # The max-turns keep-the-verdict path (DRE-2422), refused: a decision
+        # is declared but the review had not finished writing it.
+        return "verdict_incomplete"
+    return ""
+
+
+def cause_text(cause: str) -> str:
+    """The one-line English for a cause token, from the same table."""
+    return _NO_VERDICT_CAUSES.get(cause, UNKNOWN_CAUSE_TEXT)
+
+
+def write_step_outputs(
+    path: str, execution: dict | None, real: bool, verdict_path: str = ""
+) -> None:
+    """Append `outcome`/`cause`/`cause_text`/`turns`/`cost` to $GITHUB_OUTPUT.
 
     Numbers only, straight from spend_scalars' whitelist: $GITHUB_OUTPUT is
     line-oriented, so a value carrying a newline would write a step output of
@@ -332,8 +430,20 @@ def write_step_outputs(path: str, execution: dict | None, real: bool) -> None:
     indistinguishable from an agent that never started, and the numbers are
     the only thing that tells them apart — the auth death's own 1-turn/$0
     shape included.
+
+    DRE-3304: and `cause`/`cause_text` carry WHICH way the verdict file was
+    unusable, so the job's red line can name it instead of the workflow
+    inferring "crash" from the absence of any other word. Both come from
+    _NO_VERDICT_CAUSES — a fixed table in this file, never the verdict file's
+    own bytes — and the newline strip below is belt and braces over that: a
+    constant cannot carry one, and a table someone later edits carelessly
+    still cannot write a second step output.
     """
     lines = [f"outcome={outcome(execution, real)}"]
+    cause = no_verdict_cause(execution, verdict_path) if not real else ""
+    if cause:
+        lines.append(f"cause={cause}")
+        lines.append(f"cause_text={cause_text(cause).replace(chr(10), ' ')}")
     scalars = spend_scalars(execution)
     turns = scalars.get("num_turns")
     cost = scalars.get("total_cost_usd")
@@ -365,7 +475,7 @@ def main(argv: list[str]) -> int:
     crashed = execution is not None and execution.get("is_error") is True
     real = verdict_is_real(execution, verdict_path)
     if output_path:
-        write_step_outputs(output_path, execution, real)
+        write_step_outputs(output_path, execution, real, verdict_path)
     if real:
         if crashed:
             # Say so out loud: the run is red in the Actions UI but its

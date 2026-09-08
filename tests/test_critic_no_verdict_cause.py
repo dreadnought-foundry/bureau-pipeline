@@ -294,6 +294,23 @@ class TheAnnotationSaysWhatHappenedTest(unittest.TestCase):
         """One clean-and-empty attempt is enough to disprove "crashed twice"."""
         line = annotation(self.crash, self.no_verdict).lower()
         self.assertIn("no verdict", line)
+        self.assertIn("attempt 1 crashed", line)
+
+    def test_a_mixed_pair_does_not_claim_both_attempts_exited_cleanly(self):
+        """The fault being fixed here, pointed the other way.
+
+        One attempt died and one finished empty. Saying "the reviewer exited
+        cleanly" over that pair asserts of both what was true of one — which
+        is precisely how "crashed on both attempts" came to be printed over
+        two runs that did not crash.
+        """
+        line = annotation(self.crash, self.no_verdict).lower()
+        self.assertNotIn("exited cleanly", line)
+        self.assertNotIn("no credential needs rotating", line)
+
+    def test_two_clean_attempts_do_say_no_credential_needs_rotating(self):
+        line = annotation(self.no_verdict, self.no_verdict).lower()
+        self.assertIn("no credential needs rotating", line)
 
 
 class TheOtherTwoOutcomesStillReadAsThemselvesTest(unittest.TestCase):
@@ -374,6 +391,99 @@ class TheRetryIsNotACoinFlipTest(unittest.TestCase):
             len(stripped), 0.8 * len(self.first),
             "the retry must still be the same review, plus the briefing",
         )
+
+
+class TheFallbackSentenceHasOneSourceTest(unittest.TestCase):
+    """The workflow's fallback and the gate's constant are the same sentence.
+
+    Two spellings of "we could not tell" is how the gate and the red line
+    quietly stop agreeing about the same run — the class of drift the
+    duplicated attempt-1/attempt-2 gate blocks in this workflow already carry
+    a warning about.
+    """
+
+    def test_the_workflow_fallback_is_the_gates_own_constant(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import check_critic_result
+
+        self.assertIn(check_critic_result.UNKNOWN_CAUSE_TEXT,
+                      _step("critic_fail")["run"])
+
+    def test_every_cause_sentence_is_a_single_line(self):
+        """A newline in a step output writes a step output of its own."""
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import check_critic_result
+
+        sentences = list(check_critic_result._NO_VERDICT_CAUSES.values())
+        sentences.append(check_critic_result.UNKNOWN_CAUSE_TEXT)
+        for sentence in sentences:
+            self.assertNotIn("\n", sentence)
+
+
+class TheCommentNamesTheCauseTooTest(unittest.TestCase):
+    """The CEO-facing half of the same fact.
+
+    The neutral comment told its reader the run log "records what was found
+    where the verdict should have been". By the time anyone reads it the
+    runner is destroyed and /tmp/qa-verdict.md with it, so that sentence was
+    an instruction to go and look at nothing.
+    """
+
+    def _comment(self, execution, verdict_text=None) -> str:
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            gate = gate_outputs(td, execution, verdict_text)
+            step = _step("post")
+            run = re.sub(
+                r"\$\{\{\s*github\.repository\s*\}\}",
+                "dreadnought-foundry/agent-bureau", step["run"])
+            run = re.sub(r"\$\{\{\s*github\.run_id\s*\}\}", "34170941436", run)
+            assert "${{" not in run, "an unresolved expression reached the shell"
+            run = run.replace("/tmp/", str(td) + "/")
+            bin_dir = td / "bin"
+            bin_dir.mkdir(exist_ok=True)
+            gh = bin_dir / "gh"
+            gh.write_text("#!/usr/bin/env bash\nexit 0\n")
+            gh.chmod(0o755)
+            script = td / "post.sh"
+            script.write_text("set -euo pipefail\n" + run)
+            env = dict(os.environ)
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            # Always set on a runner; the local shell is the only place it is
+            # not, which is why the sibling suites fail here and pass in CI.
+            env.setdefault("GITHUB_REPOSITORY", "dreadnought-foundry/agent-bureau")
+            env.update({
+                "CARD": "", "REAL": "false", "PR": "2344",
+                "REVIEWED_SHA": "d5e40993f" + "0" * 31, "CONTENT_ID": "",
+                "MODEL_ID": "claude-sonnet-5", "MODEL_WHY": "advisory ladder top",
+                "A1_OUTCOME": gate.get("outcome", ""),
+                "A1_TURNS": gate.get("turns", ""),
+                "A1_COST": gate.get("cost", ""),
+                "A1_CAUSE_TEXT": gate.get("cause_text", ""),
+                "A2_OUTCOME": gate.get("outcome", ""),
+                "A2_TURNS": gate.get("turns", ""),
+                "A2_COST": gate.get("cost", ""),
+                "A2_CAUSE_TEXT": gate.get("cause_text", ""),
+            })
+            proc = subprocess.run(["bash", str(script)], cwd=td, env=env,
+                                  capture_output=True, text=True)
+            assert proc.returncode == 0, proc.stderr
+            return (td / "qa-comment.md").read_text()
+
+    def test_the_unfinished_stub_is_named_in_the_comment(self):
+        body = self._comment(RAN_CLEAN, UNFINISHED_STUB)
+        self.assertIn("stub", body.lower())
+
+    def test_the_comment_still_holds_the_merge(self):
+        """Unchanged contract: merge-gate's marker in, an approval out."""
+        body = self._comment(RAN_CLEAN, UNFINISHED_STUB)
+        self.assertIn("QA Critic", body)
+        self.assertNotIn("VERDICT: APPROVE", body)
+        self.assertIn("not a request for changes", body.lower())
+
+    def test_a_crash_comment_names_no_cause(self):
+        body = self._comment(AUTH_DEATH)
+        self.assertNotIn("What was found in its place", body)
 
 
 if __name__ == "__main__":
