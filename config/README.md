@@ -238,8 +238,8 @@ membership is the spend decision, and it is made here.
 `repo-map.json` is the bureau pipeline's bundled copy of the **canonical routing
 snapshot** — `slug → "owner/repo"` — that the Linear→GitHub relay routes on. It
 is the read path the Todo-entry card-validation gate (`scripts/validate_card.py`)
-uses to derive what a *valid* repo slug is and how a Linear project name maps to
-a repo, so onboarding a customer is a **data edit**, not a two-file code change.
+uses to derive what a *valid* repo slug is, so onboarding a customer is a **data
+edit**, not a two-file code change.
 
 ## Why a copy lives here
 
@@ -251,21 +251,24 @@ The gate runs inside each product repo's GitHub Actions with **no AWS
 credentials** and **no token to read agent-bureau's private contents** —
 `bureau-pipeline` is checked out as a public repo with no auth. So the gate
 cannot read SSM or the private canonical file at runtime. Instead it reads this
-**bundled, published JSON** and derives:
+**bundled, published JSON** and derives `VALID_SLUGS` = the snapshot's keys.
 
-- `VALID_SLUGS` = the snapshot's keys, and
-- `_PROJECT_PREFIX_TO_SLUG` = identity over those slugs + the documented product
-  nicknames (`bureau→agent-bureau`, `demo→agent-bureau-demo`).
-
-This mirrors exactly what the relay does (`_infer_slug` in
+This mirrors what the relay does (`_infer_slug` in
 `agent-bureau/cloud/relay/lambda_function.py`), so the relay and the gate stay
 byte-aligned by reading the same shape.
+
+A second structure — `_PROJECT_PREFIX_TO_SLUG`, identity over those slugs plus
+the product nicknames `bureau→agent-bureau` and `demo→agent-bureau-demo` — was
+derived here too, until **DRE-2874** deleted the inference route that read it. A
+Linear project's display name is not a product's identity, and seven of twenty
+projects carried a prefix that resolved to no repo. The relay's byte-aligned
+twin is deleted in DRE-2875, in agent-bureau.
 
 ## Lockstep is enforced, not hoped for
 
 `tests/test_repo_map_snapshot.py` fails CI if:
 
-- `VALID_SLUGS` / the prefix map drift from this snapshot, or
+- `VALID_SLUGS` drifts from this snapshot, or
 - the last-known-good fallback literal baked into `validate_card.py` disagrees
   with this file (its two copies of the routing map must agree on an SSM-read
   failure).

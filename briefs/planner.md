@@ -402,8 +402,9 @@ markdown, and refuses to create that broken card. It also:
   - inherits the `repo:<slug>` + `initiative:<x>` + role label from this epic, so
     the child is never label-less (you do not need to add labels by hand). The
     `initiative:<x>` label does not gate promotion — reconcile never reads it —
-    but the create seam REFUSES a child without one, and repo inference uses it
-    as its first route to a repo (DRE-2681);
+    and since DRE-2874 the create seam does not refuse a child without one
+    either. It is inherited because repo inference uses it as its one route to a
+    repo for a card carrying no `repo:` label (DRE-2681);
   - turns any `**Blocked by:** DRE-N, DRE-M` body line into real Linear
     `blockedBy` relations;
   - validates the child through the same `validate_card` gate the build uses,

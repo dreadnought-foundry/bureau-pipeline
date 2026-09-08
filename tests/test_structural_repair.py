@@ -10,10 +10,12 @@ themselves Done or Canceled. "Fix the parent first" is not always available, so
 the report has to separate the two cases rather than lump them as "failed".
 
 What a missing `initiative:*` label actually costs is narrow, and this pass is
-scoped to it: `validate_card.infer_repo` step 2a uses it as the first route to a
-repo, and `missing(..., require_initiative=True)` refuses to CREATE a child
-without it. `reconcile.py` never reads the label at all — see
-tests/test_initiative_claim_matches_the_code.py.
+scoped to it: `validate_card.infer_repo` uses it as the ONLY route to a repo for
+a card carrying no `repo:` label. `reconcile.py` never reads the label at all —
+its promotion gate reads the card's `blockedBy` relations, its `repo:` label and
+its parent epic's state — see tests/test_initiative_claim_matches_the_code.py.
+Since DRE-2874 the create seam does not refuse a child that lacks the label
+either.
 
 Repair stays deterministic: labels, inheritance, slug validity. Nothing needing
 judgment is repaired (D1, approved 2026-08-23).

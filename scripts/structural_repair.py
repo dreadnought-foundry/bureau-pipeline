@@ -19,10 +19,11 @@ themselves Done or Canceled, so "fix the parent first" is not available. Those
 are different asks for whoever reads the report, so they are different lines.
 
 What a missing `initiative:*` label actually costs is narrow, and this pass is
-scoped to it: `validate_card.infer_repo` step 2a uses it as the first route to a
-repo for a card carrying no `repo:` label, and
-`missing(..., require_initiative=True)` refuses to CREATE a child without it.
-Promotion is unaffected — `reconcile.py` never reads the label.
+scoped to it: `validate_card.infer_repo` uses it as the ONLY route to a repo for
+a card carrying no `repo:` label. Nothing else reads it — since DRE-2874 the
+create seam no longer refuses a child that lacks it, and promotion never did:
+`reconcile.promote_ready` gates on the card's `blockedBy` relations, its `repo:`
+label and its parent epic's state.
 
 What it will NOT do (D1, approved 2026-08-23): repair anything needing
 judgment. An unknown `repo:<slug>` is REPORTED, never rewritten — picking the

@@ -1331,14 +1331,20 @@ def parent_inherited_labels(parent_labels: list[str]) -> list[str]:
     `repo:<slug>` label (so the child routes to the same repo), the parent's
     `initiative:<x>` label(s), and a role label.
 
-    The `initiative:*` label is load-bearing, but NOT for the reason this said
-    for a year: promotion does not read it. `reconcile.py` never mentions
-    `initiative` at all (DRE-2681 checked; test_initiative_claim_matches_the_code
-    keeps it honest). Two real things break without it — the create seam refuses
-    the child outright (`validate_card.missing(..., require_initiative=True)`,
-    enforced below in `_reject_unless_creatable`), and `validate_card.infer_repo`
-    loses step 2a, its first route to a repo for a card carrying no `repo:`
-    label. Inheriting it deterministically is what keeps both from biting.
+    The `initiative:*` label is worth inheriting, but NOT for the reason this
+    said for a year: promotion does not read it. `reconcile.py` never mentions
+    `initiative` at all — `promote_ready` gates on the child's `blockedBy`
+    relations, its `repo:` label and its parent epic's state (DRE-2681 checked;
+    test_initiative_claim_matches_the_code keeps it honest). Exactly ONE thing
+    breaks without it: `validate_card.infer_repo` loses its only route to a repo
+    for a card carrying no `repo:` label. The child inherits `repo:` here too, so
+    inheriting the initiative is belt-and-braces rather than load-bearing.
+
+    Nothing REFUSES a child for want of it (DRE-2874). The create seam below used
+    to, through an opt-in switch on `validate_card.missing` — a raise, not a
+    fallback — which would have failed every `cmd_subissue` call the day the
+    `initiative:*` labels were culled, and taken the planner's whole output path
+    with it.
 
     The role is `agent:engineer` by default, or `agent:devops` when the parent is
     an infra/pipeline epic (its slug is the shared pipeline repo, or it carries
@@ -1462,7 +1468,7 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
 
     import validate_card
 
-    gaps = validate_card.missing(description, labels, require_initiative=True)
+    gaps = validate_card.missing(description, labels)
     if gaps:
         raise LinearError(
             f"{kind} REJECTED ({title!r}): card fails validate_card — missing "
@@ -1566,9 +1572,9 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # labels are applied.
     _reject_unless_creatable(
         "subissue", title, description, child_labels,
-        "The parent epic must carry a repo:<slug> label AND an "
-        "initiative:<x> label so children inherit them (DRE-1699: the repo "
-        "LABEL is the source of truth — no **Repo:** stamp needed).",
+        "The parent epic must carry a repo:<slug> label so children inherit it "
+        "(DRE-1699: the repo LABEL is the source of truth — no **Repo:** stamp "
+        "needed).",
         blockers,
     )
 
@@ -1624,7 +1630,7 @@ def cmd_oneoff(title: str, description_file: str, *flags) -> None:
     _reject_unless_creatable(
         "oneoff", title, description, labels,
         "A one-off inherits nothing, so the PLAN must supply every label: "
-        "--label repo:<slug> --label initiative:<x> --label agent:<role>.",
+        "--label repo:<slug> --label agent:<role>.",
         blockers,
     )
 

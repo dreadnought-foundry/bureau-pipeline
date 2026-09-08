@@ -13,15 +13,22 @@ When a card enters Todo malformed, the gate REPAIRS it in place rather than
 bouncing (the original behavior). It:
   1. infers the agent role label (title `[EPIC]` or has children → agent:planner,
      else agent:engineer) and adds it;
-  2. infers the repo deterministically — from an `initiative:<x>` label (2a) or
-     the card's Linear project NAME prefix (2b), validated against the real-repo
-     set VALID_SLUGS — and adds the `repo:<slug>` LABEL (and ONLY the label,
-     DRE-1699 — it no longer prepends the deprecated `**Repo:**` stamp).
+  2. infers the repo deterministically — from an `initiative:<x>` label,
+     validated against the real-repo set VALID_SLUGS — and adds the
+     `repo:<slug>` LABEL (and ONLY the label, DRE-1699 — it no longer prepends
+     the deprecated `**Repo:**` stamp).
 On a successful repair the card PROCEEDS (no bounce) and gets a 🔧 comment.
 It is BOUNCED to Planning ONLY when the repo cannot be inferred (no initiative
-label, unknown/absent project) or the inference yields a slug that isn't a real
-repo — the one case where a fix would be a wrong-repo guess. See infer_repo /
-VALID_SLUGS for the mapping (mirrors the relay's REPO_MAP, single source).
+label) or the inference yields a slug that isn't a real repo — the one case
+where a fix would be a wrong-repo guess. See infer_repo / VALID_SLUGS for the
+mapping (mirrors the relay's REPO_MAP, single source).
+
+The initiative label is the ONE route, and there is deliberately nothing behind
+it (DRE-2874). A second route used to read the prefix of the card's Linear
+project name — "Bureau: Console" → agent-bureau — which made a product's
+identity a substring of a display name anyone can rename, and seven of twenty
+projects had a prefix that routed nowhere. A card the label cannot place is
+bounced with the label it needs named, which is a fix its author can make.
 
 One card gets past that bounce: a card carrying the operator's `break-glass`
 marker (DRE-2737). The bypass is recorded on the card and counted rather than
@@ -75,10 +82,8 @@ _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 # What's missing, in the exact words the bounce comment shows the CEO.
 _REPO_LABEL = "repo:"
 _AGENT_PREFIX = "agent:"
-_INITIATIVE_LABEL = "initiative:"
 WANT_REPO = "repo: label (or legacy **Repo:** line)"
 WANT_AGENT = "agent: role label"
-WANT_INITIATIVE = "initiative: label"
 WANT_KNOWN_REPO = "repo: label naming a known repo"
 
 
@@ -131,19 +136,10 @@ def _has_agent_label(labels: list[str]) -> bool:
     return any(l.lower().startswith(_AGENT_PREFIX) for l in labels)
 
 
-def _has_initiative_label(labels: list[str]) -> bool:
-    # A non-empty `initiative:<x>` label (a bare "initiative:" does not count).
-    return any(
-        l.lower().startswith(_INITIATIVE_LABEL) and l.split(":", 1)[1].strip()
-        for l in labels
-    )
-
-
 def missing(
     description: str,
     labels: list[str],
     *,
-    require_initiative: bool = False,
     known_slugs: set[str] | None = None,
 ) -> list[str]:
     """Return the list of missing requirements (empty list == clean card).
@@ -154,20 +150,17 @@ def missing(
     a human editing the value they already chose (DRE-2681). `known_slugs`
     overrides the routing map for one call (the stale-pin deferral seam).
 
-    `require_initiative` additionally requires a non-empty `initiative:<x>` label.
-    It is OPT-IN and OFF by default so the Todo-entry gate is unchanged: that gate
-    runs BEFORE repo inference and routinely sees clean cards that carry a
-    `repo:<slug>` label (or a legacy `**Repo:** <slug>` line) and a role label
-    but no initiative — it INFERS the repo from an initiative label only when one
-    is present, so it must not demand one. The post-plan child sweep / create
-    seam turn it ON, because THIS check is itself the consequence: a
-    planner-created child without `initiative:*` is refused at creation
-    (linear_ops._reject_unless_creatable) and fails the post-plan sweep. The
-    label's other job is `infer_repo` step 2a, the first route to a repo for a
-    card carrying no `repo:` label. Promotion is NOT affected — reconcile.py
-    never reads the label (DRE-1722 predates that being true; DRE-2681 checked).
-    Inheritance (parent_inherited_labels) makes this hold deterministically; the
-    check is the backstop that fails the plan if it ever doesn't.
+    THERE IS NO `initiative:*` REQUIREMENT, and there never was a reason for one
+    (DRE-2874). An opt-in switch used to add one for the post-plan child sweep
+    and the planner's create seam, on the belief that promotion is scoped to an
+    initiative. It is not: `reconcile.promote_ready` gates on a card's
+    `blockedBy` relations, its `repo:` label and its parent epic's state (or, for
+    a parentless card, its routing verdict) — the word `initiative` appears
+    nowhere in `reconcile.py`. What the switch actually did was RAISE at the
+    create seam and refuse the child, so it would have failed every
+    `cmd_subissue` call the day the `initiative:*` labels were culled. The label
+    is still read, in exactly one place: `infer_repo`, as the one route to a repo
+    for a card carrying no `repo:` label.
     """
     labels = labels or []
     out: list[str] = []
@@ -177,8 +170,6 @@ def missing(
         out.append(WANT_REPO)
     if not _has_agent_label(labels):
         out.append(WANT_AGENT)
-    if require_initiative and not _has_initiative_label(labels):
-        out.append(WANT_INITIATIVE)
     return out
 
 
@@ -275,19 +266,13 @@ VALID_SLUGS = set(_REPO_MAP)
 # Byte-aligned with the relay's _INITIATIVE_ALIAS.
 _INITIATIVE_ALIAS = {"bureau": "agent-bureau"}
 
-# Non-identity project-NAME-prefix aliases (the token before the first ":").
-# Projects are named "<Product>: <thing>" (e.g. "Bureau: Console", "Demo:
-# Sandbox"); their prefix is the repo slug EXCEPT these product nicknames.
-# Byte-aligned with the relay's _PROJECT_PREFIX_ALIAS — the non-derivable bits.
-_PROJECT_PREFIX_ALIAS = {"bureau": "agent-bureau", "demo": "agent-bureau-demo"}
-
-# Linear project NAME prefix (the token before the first ":") → repo slug.
-# DERIVED, mirroring the relay's _infer_slug: identity over every routable slug,
-# plus the non-derivable product nicknames in _PROJECT_PREFIX_ALIAS. A prefix we
-# don't recognize (Foundry, Dev Sandbox, …) yields no repo → bounce. Keys are
-# lowercased for case-insensitive matching.
-_PROJECT_PREFIX_TO_SLUG = {slug: slug for slug in VALID_SLUGS}
-_PROJECT_PREFIX_TO_SLUG.update(_PROJECT_PREFIX_ALIAS)
+# There is no second alias table here, and its absence is deliberate (DRE-2874).
+# A map from a Linear project's NAME prefix ("Bureau: Console" → agent-bureau)
+# used to sit beside this one and feed a second inference route. It is gone with
+# the route: routing on a display name makes a product's identity a substring of
+# something anyone can rename, and seven of twenty projects carried a prefix
+# that resolved to no repo at all. The relay's byte-aligned twin is deleted in
+# DRE-2875, in agent-bureau.
 
 _INITIATIVE_PREFIX = "initiative:"
 
@@ -343,22 +328,22 @@ def infer_agent_label(title: str, has_children: bool, labels: list[str]) -> str:
     return "agent:engineer"
 
 
-def infer_repo(labels: list[str], project_name: str | None) -> tuple[str | None, str | None]:
+def infer_repo(labels: list[str]) -> tuple[str | None, str | None]:
     """Deterministically infer a repo slug for a card lacking one.
 
     Returns (slug, source) where source describes where the slug came from for
     the auto-fix comment, or (None, None) when the repo cannot be inferred.
 
-    Precedence (rule 2 of DRE-1405):
-      2a. an `initiative:<x>` label (aliased: bureau→agent-bureau, else identity)
-      2b. else the card's Linear project NAME prefix.
+    ONE route (rule 2 of DRE-1405, narrowed by DRE-2874): an `initiative:<x>`
+    label, aliased bureau→agent-bureau and identity otherwise. The card's Linear
+    project name used to be a second route and is not read here any more — see
+    the note above `_INITIATIVE_PREFIX`. Labels, and only labels, decide.
 
     The returned candidate is NOT yet validated against VALID_SLUGS — the caller
     (cmd_gate) does that, so a candidate that is a real-looking slug but not a
     real repo (e.g. initiative:foundry → "foundry") is rejected as a wrong-repo
     guess rather than silently treated as "uninferable".
     """
-    # 2a — initiative label wins.
     for label in labels or []:
         low = label.lower()
         if low.startswith(_INITIATIVE_PREFIX):
@@ -366,12 +351,6 @@ def infer_repo(labels: list[str], project_name: str | None) -> tuple[str | None,
             if raw:
                 slug = _INITIATIVE_ALIAS.get(raw, raw)
                 return slug, f"initiative:{raw}"
-    # 2b — project name prefix.
-    if project_name:
-        prefix = project_name.split(":", 1)[0].strip().lower()
-        slug = _PROJECT_PREFIX_TO_SLUG.get(prefix)
-        if slug:
-            return slug, f"project {project_name!r}"
     return None, None
 
 
@@ -454,7 +433,7 @@ def cmd_gate(identifier: str) -> None:
         fixed.append(agent_label)
 
     if WANT_REPO in gaps:
-        slug, source = infer_repo(labels, card["project_name"])
+        slug, source = infer_repo(labels)
         # Bounce ONLY when the repo can't be inferred deterministically, OR the
         # inference yields a slug that isn't a real repo (never a wrong-repo
         # guess). This is the one path the fix-first gate still bounces.
@@ -462,7 +441,7 @@ def cmd_gate(identifier: str) -> None:
             why = (
                 f"inferred repo {slug!r} is not a known repo"
                 if slug is not None
-                else "could not infer a repo (no initiative label or known project)"
+                else "could not infer a repo (no initiative label)"
             )
             # Break glass (DRE-2737): the ONE sanctioned way past this gate at
             # 2am. An operator-applied `break-glass` marker suppresses the
@@ -590,23 +569,23 @@ def _bounce(linear_ops, identifier: str, gaps: list[str], why: str,
 
 def _fetch_card(linear_ops, identifier: str) -> dict:
     """Live card fields the gate needs: title, description, labels (lowercased),
-    whether it has children, and its project name."""
+    and whether it has children.
+
+    The card's Linear project is no longer read (DRE-2874): it was fetched for
+    the project-name-prefix fallback and nothing else."""
     data = linear_ops.gql(
         """query($id: String!) { issue(id: $id) {
              title description
              labels { nodes { name } }
-             children { nodes { id } }
-             project { name } } }""",
+             children { nodes { id } } } }""",
         {"id": identifier},
     )
     issue = data["issue"]
-    project = issue.get("project")
     return {
         "title": issue.get("title") or "",
         "description": issue.get("description") or "",
         "labels": [n["name"].lower() for n in issue["labels"]["nodes"]],
         "has_children": bool(issue.get("children", {}).get("nodes")),
-        "project_name": (project or {}).get("name"),
     }
 
 
@@ -621,17 +600,20 @@ def _fetch_card(linear_ops, identifier: str) -> dict:
 
 def child_problems(title: str, description: str, labels: list[str]) -> list[str]:
     """All reasons a created child is incomplete (empty == valid). Reuses
-    `missing(..., require_initiative=True)` for the repo/role/initiative contract
-    and linear_ops.body_problem for the path-like/empty/placeholder body — the
-    SAME checks the create seam enforces, so the sweep and the create path can
-    never disagree. A child MUST carry `initiative:*` (inherited from the parent
-    epic): without it the child is refused at creation by this very check, and
-    `infer_repo` loses step 2a, its first route to a repo. It does NOT stop
-    promotion — reconcile.py never reads the label (DRE-1722 said otherwise;
-    DRE-2681 checked)."""
+    `missing()` for the repo/role contract and linear_ops.body_problem for the
+    path-like/empty/placeholder body — the SAME checks the create seam enforces,
+    so the sweep and the create path can never disagree.
+
+    A missing `initiative:*` label is NOT one of those reasons (DRE-2874). This
+    sweep used to fail a whole plan over it, on the belief that the label gates
+    promotion; it does not — `reconcile.promote_ready` reads a child's
+    `blockedBy` relations, its `repo:` label and its parent epic's state, and
+    never the label. What the label still buys is `infer_repo`'s one route to a
+    repo for a card carrying no `repo:` label, which the child inherits from its
+    parent anyway."""
     import linear_ops  # body_problem lives with the create seam
 
-    out = list(missing(description, labels, require_initiative=True))
+    out = list(missing(description, labels))
     body = linear_ops.body_problem(description)
     if body is not None:
         out.append(body)
