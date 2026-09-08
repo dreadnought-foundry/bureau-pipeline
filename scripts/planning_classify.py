@@ -759,10 +759,24 @@ def _call_api(model: str, prompt: str, *, max_tokens: int | None = None,
     )
 
 
-def _cli_argv(model: str, prompt: str) -> list:
-    """The Claude Code invocation, as an argv list — never a shell string."""
+def _cli_argv(model: str) -> list:
+    """The Claude Code invocation, as an argv list — never a shell string, and
+    NEVER the prompt (DRE-3328).
+
+    `-p` / `--print` is a boolean flag: it selects non-interactive print mode,
+    and the prompt is either a positional argument or stdin. This seam uses
+    stdin, so what is in the argv here is a fixed handful of flags whose size
+    does not move with the population being classified.
+
+    It used to carry the prompt, and the size of the prompt therefore decided
+    whether the call could be made at all. One card fits; the groomer's 260-card
+    census does not, and on 2026-09-07 (run 34183475867) all 260 cards came back
+    "could not rank — needs a person" behind `[Errno 7] Argument list too long:
+    'npx'` — the process never started. Every kernel caps argv (macOS ~1 MiB in
+    total, Linux 128 KiB for any single argument); a pipe has no such ceiling.
+    """
     argv = list(shlex.split(os.environ.get(AGENT_CLI_ENV) or DEFAULT_AGENT_CLI))
-    argv += ["-p", prompt, "--max-turns", MAX_TURNS]
+    argv += ["-p", "--max-turns", MAX_TURNS]
     if model:
         argv += ["--model", model]
     argv += ["--allowedTools", ALLOWED_TOOLS, "--output-format", "json"]
@@ -876,6 +890,11 @@ def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
     environment exactly as `claude-code-action` hands it to them, so this adds
     no secret and no identity — the step's env is unchanged.
 
+    The PROMPT reaches it on stdin (DRE-3328), which is what `input=` is: the
+    argv is bounds only, so a population of any size can be classified. Still an
+    argv list and still `shell=False` — a pipe here is a file descriptor, not a
+    shell.
+
     `max_tokens` is how the CLI takes a budget: `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
     in the subprocess environment, set ONLY when a caller asked for one, so the
     classifier's own subprocess env is byte-for-byte the inherited one it has
@@ -895,7 +914,8 @@ def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
     wall = CLI_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     try:
         done = subprocess.run(  # nosec B603 — argv list, shell=False
-            _cli_argv(model, prompt),
+            _cli_argv(model),
+            input=prompt,
             capture_output=True, text=True, check=False,
             timeout=wall, env=env,
         )

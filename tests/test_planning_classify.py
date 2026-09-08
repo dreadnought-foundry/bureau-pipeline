@@ -66,9 +66,12 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_classify.py -v
 """
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -861,7 +864,9 @@ class TestTheTransport:
         assert len(seen) == 1, "the classification is ONE call"
         argv = seen[0]
         assert "@anthropic-ai/claude-code" in " ".join(argv)
-        assert argv[argv.index("-p") + 1] == "the prompt"
+        # `-p` is a boolean flag and the prompt rides stdin (DRE-3328), so the
+        # word after it is the next bound, not the card.
+        assert "the prompt" not in argv
         assert argv[argv.index("--max-turns") + 1] == planning_classify.MAX_TURNS
         assert argv[argv.index("--model") + 1] == MODEL
         assert argv[argv.index("--allowedTools") + 1] == "", (
@@ -1659,3 +1664,132 @@ class TestTheSeamReportsACut:
         }))
         with pytest.raises(planning_classify.TransportError):
             planning_classify._call_claude_code(MODEL, "the prompt")
+
+
+# ===========================================================================
+# M. the prompt reaches the model on STDIN, never in argv (DRE-3328)
+# ===========================================================================
+#
+# The first real groomer proposal ran 2026-09-07 20:25 PT over 260 Intake cards
+# (bureau-pipeline run 34183475867) and produced no judgement at all — all 260
+# came back "could not rank — needs a person", on:
+#
+#     the classification call could not be started:
+#     [Errno 7] Argument list too long: 'npx'
+#
+# The seam put the WHOLE prompt in the argv list, so the size of the population
+# decided whether the call could be made. One card is a few kilobytes and fits;
+# a 260-card census does not, and the process never started. The OS limit is the
+# bug, which is why every test below drives a prompt PAST it — a small fixture
+# passes on the broken code and proves nothing.
+
+# Comfortably past both limits the kernels enforce: macOS's ~1 MiB total argv
+# and Linux's 128 KiB cap on any SINGLE argument. The live census prompt was
+# smaller than this; the point of the number is that it is unambiguously over.
+_OVERSIZE_PROMPT_BYTES = 2 * 1024 * 1024
+
+# A stand-in for the Claude Code CLI that is a REAL process: it reads its prompt
+# off stdin and reports back what it received and what its own argv held. Mocking
+# `subprocess.run` here would mock away the very thing under test — the exec.
+_STUB_CLI = '''\
+import hashlib, json, sys
+
+prompt = sys.stdin.read()
+print(json.dumps({
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "modelUsage": {"claude-opus-5": {"inputTokens": 1, "outputTokens": 1}},
+    "result": json.dumps({
+        "stdin_bytes": len(prompt.encode("utf-8")),
+        "stdin_sha": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "argv": sys.argv[1:],
+    }),
+}))
+'''
+
+
+def _oversize_prompt(size: int = _OVERSIZE_PROMPT_BYTES) -> str:
+    """A census-shaped prompt: many card-sized lines, over the argv limit."""
+    line = "DRE-3328 the groomer ranks every card in the Intake lane\n"
+    return (line * (size // len(line) + 1))[:size]
+
+
+class TestThePromptDoesNotTransitArgv:
+    def test_the_os_really_refuses_a_prompt_this_size_in_argv(self):
+        """The threshold is REAL on the machine running this suite, not assumed.
+
+        Without this the two tests below could pass on a box with no limit and
+        the regression would sail through. This is the production failure in
+        miniature — same errno, same message."""
+        with pytest.raises(OSError) as caught:
+            subprocess.run(  # nosec B603 — argv list, shell=False, never execs
+                [sys.executable, "-c", "pass", _oversize_prompt()],
+                capture_output=True,
+            )
+        assert caught.value.errno == errno.E2BIG
+        assert "Argument list too long" in str(caught.value)
+
+    def test_the_argv_carries_the_bounds_and_not_the_prompt(self, monkeypatch):
+        """`-p` is a boolean flag — print mode — and the CLI reads the prompt
+        from stdin behind it. Everything DRE-3074 bounded stays in the argv."""
+        monkeypatch.delenv(planning_classify.AGENT_CLI_ENV, raising=False)
+        argv = planning_classify._cli_argv(MODEL)
+
+        assert "@anthropic-ai/claude-code" in " ".join(argv)
+        assert "-p" in argv
+        assert argv[argv.index("--max-turns") + 1] == planning_classify.MAX_TURNS
+        assert argv[argv.index("--model") + 1] == MODEL
+        assert argv[argv.index("--allowedTools") + 1] == ""
+        assert "--output-format" in argv and "json" in argv
+        # Nothing card-shaped can be in there: the argv is a fixed handful of
+        # flags whose size does not move with the population.
+        assert max(len(word) for word in argv) < 256
+
+    def test_the_cli_override_still_skips_the_npx_fetch(self, monkeypatch):
+        """`CLASSIFY_AGENT_CLI` is the seam a runner with the CLI already
+        installed uses; it survives the move."""
+        monkeypatch.setenv(planning_classify.AGENT_CLI_ENV, "/usr/local/bin/claude")
+        argv = planning_classify._cli_argv(MODEL)
+        assert argv[0] == "/usr/local/bin/claude"
+        assert "npx" not in argv
+
+    def test_a_census_sized_prompt_reaches_a_real_cli_whole_on_stdin(
+        self, monkeypatch, tmp_path
+    ):
+        """The bug, closed end to end: a prompt the OS would refuse in argv is
+        handed to a REAL child process, and every byte of it arrives."""
+        stub = tmp_path / "stub_cli.py"
+        stub.write_text(_STUB_CLI, encoding="utf-8")
+        _subscription_env(monkeypatch)
+        monkeypatch.setenv(
+            planning_classify.AGENT_CLI_ENV, f"{sys.executable} {stub}"
+        )
+
+        prompt = _oversize_prompt()
+        answer = planning_classify._call_claude_code(MODEL, prompt)
+
+        report = json.loads(answer.text)
+        assert report["stdin_bytes"] == len(prompt.encode("utf-8")), (
+            "the whole prompt reached the process — not a truncated pipe"
+        )
+        assert report["stdin_sha"] == hashlib.sha256(
+            prompt.encode("utf-8")).hexdigest()
+        assert not any(len(word) > 256 for word in report["argv"]), (
+            "the child's OWN argv is the bounds and nothing else"
+        )
+
+    def test_the_call_still_carries_its_wall_clock_and_its_env(self, monkeypatch):
+        """The timeout is deliberately longer than the API path's because a
+        fresh runner fetches the package first; moving the prompt must not
+        quietly drop it, nor the credential the CLI authenticates with."""
+        _subscription_env(monkeypatch)
+        calls = _cli_calls(monkeypatch, stdout=_envelope("hi"))
+        planning_classify._call_claude_code(MODEL, "the prompt")
+
+        assert calls[0]["timeout"] == planning_classify.CLI_TIMEOUT_SECONDS
+        assert calls[0]["input"] == "the prompt", (
+            "the prompt is the child's stdin"
+        )
+        assert calls[0]["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+        assert "shell" not in calls[0], "no shell — the argv list is the call"
