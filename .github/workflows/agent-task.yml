@@ -57,7 +57,7 @@ on:
 
 jobs:
   execute:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap. 45 murdered legitimately long builds mid-work
     # (DRE-2074: DRE-2070's profiling runs were killed at the 45-minute mark
     # 4× while in_progress with fresh ⏳ receipts, and the Report step then

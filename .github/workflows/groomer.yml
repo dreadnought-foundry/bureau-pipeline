@@ -92,7 +92,7 @@ on:
 
 jobs:
   groom:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # READ OFF THE CALL'S OWN CEILING, not guessed (DRE-3153). DRE-3259 sizes
     # the judged read's wall clock from the census and names the widest one as
     # `groom_judgement.MAX_WALL_CLOCK_SECONDS` — `wall_clock_seconds(

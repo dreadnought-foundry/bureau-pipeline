@@ -80,7 +80,7 @@ jobs:
   # the failed run's logs once and exposes `infra_crash` to gate the jobs below.
   classify:
     if: github.event.workflow_run.conclusion == 'failure'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
@@ -254,7 +254,7 @@ jobs:
       needs.classify.outputs.class != 'linear_ratelimited' &&
       needs.classify.outputs.limit != 'true' &&
       needs.classify.outputs.retry != 'false'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - name: Rerun failed jobs once
@@ -281,7 +281,7 @@ jobs:
       github.event.workflow_run.run_attempt == 1 &&
       needs.classify.outputs.retry == 'false' &&
       needs.classify.outputs.card != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -314,7 +314,7 @@ jobs:
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1 &&
       needs.classify.outputs.infra_crash == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -351,7 +351,7 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       needs.classify.outputs.class == 'upstream_5xx'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - name: Note the upstream GitHub outage — no rerun, no diagnosis
@@ -379,7 +379,7 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       needs.classify.outputs.class == 'linear_ratelimited'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - name: Note the Linear rate limit — no rerun, no diagnosis
@@ -400,7 +400,7 @@ jobs:
       needs.classify.outputs.class != 'upstream_5xx' &&
       needs.classify.outputs.class != 'linear_ratelimited' &&
       needs.classify.outputs.limit != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     steps:
       - name: Mint bot token

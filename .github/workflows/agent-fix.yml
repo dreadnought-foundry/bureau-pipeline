@@ -78,7 +78,7 @@ jobs:
       (github.event.issue.pull_request &&
        github.event.comment.user.login == 'agent-bureau-qa-bot[bot]' &&
        contains(github.event.comment.body, 'VERDICT: REQUEST_CHANGES'))
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap, raised with the turn budget below (DRE-2533). A
     # job dies at whichever cap it reaches first, so 150 turns behind a
     # 45-minute wall is a raise on paper only: the long repair this card
