@@ -93,6 +93,38 @@ it checked against for that reason.
 
 **Cross-epic scope: this epic only.**
 
+## A child's STATE is part of the plan, and both critics read it
+
+**A card's text and the repository cannot tell you whether the card is
+to-build.** Read as text alone, every Done card asks for work that is already
+on `main` — because that is what a Done card is. So the children block both
+critics are handed (`linear_ops.py children-json`) carries each child's
+**state** beside its body, and the mechanical note prints the lane of every
+card before it prints a finding.
+
+* **Done, Canceled, Duplicate — a delivered child.** Delivered or dropped,
+  never to-build. *"Its deliverable already exists on `main`"* is **not a
+  finding** against it, and neither is a collision with a sibling over a file
+  it has already merged. The mechanical note says so by name, so the
+  observation cannot be re-raised under another heading.
+* **In Progress, In Review.** A run or a pull request is in flight. Judge the
+  card on what it will land, not on whether its files are in the tree yet.
+* **Backlog, Todo, Triage — still to build**, and every finding stands,
+  "this is already implemented" included. Same card, same files, different
+  answer: the state is the whole of the difference.
+* **No state at all** is UNKNOWN, never "delivered". The note says *no child
+  carried a state* rather than reporting none, because a read that failed
+  excuses nothing (`standards/console-honesty.md` rule 1).
+
+The cost of not reading it (DRE-3243, 2026-09-06): the post-approval critic's
+round 2 on DRE-3164 sent the plan back with *"DRE-3210's entire deliverable
+already exists, fully implemented, on main — the card asks an agent to build
+already-shipped work."* DRE-3210 was **Done** — built, reviewed, merged and
+closed by that merge the evening before. It was the second of two send-backs,
+so the epic hit the bound and parked with `needs-human` on a finding that was
+not a gap. A false hold spends one of the two rounds and costs the CEO an
+approval; two of them park a sound plan.
+
 ## The second critic reviews a frozen one
 
 **Question: given this is now the specification, what is missing?**

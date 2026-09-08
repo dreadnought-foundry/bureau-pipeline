@@ -550,6 +550,13 @@ yourself before you finish:
     python3 .bureau-pipeline/scripts/linear_ops.py children-json <EPIC> \
       | python3 .bureau-pipeline/scripts/plan_critic.py mechanical
 
+Each record in that block carries the child's **state**, and the note prints
+it before it prints a finding. **When you are RE-planning, some children are
+already Done** — delivered, merged, closed. Leave them alone: a Done card
+describes the work it delivered, that is the normal shape of every Done card,
+and neither critic may treat its work already existing on `main` as a gap
+(DRE-3243). Revise the cards that are still to build.
+
 A **second** critic reads the plan AFTER the CEO approves it, asking what is
 missing now the text is the specification agents build from — and it can see
 the other epics in flight, so a card of yours that collides with another epic

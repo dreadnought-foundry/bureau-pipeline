@@ -2355,12 +2355,13 @@ def child_json_records(nodes: list) -> list:
                 for l in ((node.get("labels") or {}).get("nodes")) or []
             ],
             "parent": ((node.get("parent") or {}).get("identifier")) or "",
+            "state": ((node.get("state") or {}).get("name")) or "",
         })
     return out
 
 
 def cmd_children_json(identifier: str) -> None:
-    """Every child card as `{"identifier", "body", "labels", "parent"}`
+    """Every child card as `{"identifier", "body", "labels", "parent", "state"}`
     records, as a JSON array.
 
     `child-descriptions` concatenates the bodies, which is right for the
@@ -2378,6 +2379,15 @@ def cmd_children_json(identifier: str) -> None:
     (DRE-3040). The PARENT rides along because a card the critic is told to
     report on belongs to an epic, and a record that cannot say which one leaves
     the critic inferring it.
+
+    The STATE is here because a critic handed a card's text and the repository
+    reads the text as an instruction and the tree as evidence, and has no way
+    of knowing the card is already DELIVERED (DRE-3243). DRE-3164's round 2
+    sent a sound plan back for "DRE-3210's entire deliverable already exists,
+    fully implemented, on main" — DRE-3210 was Done, merged the evening
+    before, and a Done card describing the work it delivered is the normal
+    shape of every Done card. That send-back was the second of two, so the
+    epic hit the bound and parked on a finding that was not a gap.
     """
     data = gql(
         """query($id: String!) {
@@ -2385,6 +2395,7 @@ def cmd_children_json(identifier: str) -> None:
                identifier description
                parent { identifier }
                labels { nodes { name } }
+               state { name }
              } } }
            }""",
         {"id": identifier},
