@@ -699,6 +699,24 @@ class SplitRateTest(unittest.TestCase):
         handed = child("DRE-1", state="Done", comments=(HANDBACK,))
         self.assertEqual(split_ledger.reasons(handed), ["handed-back"])
 
+    def test_the_split_reasons_are_the_ledgers_own_and_read_at_call_time(self):
+        """A copy of the three strings in this file would keep matching the OLD
+        spellings after `split_ledger` renamed one, and shrink the split
+        population with no error at all — the one number DRE-3022 is measured
+        by, quietly wrong."""
+        import split_ledger
+        from unittest import mock
+
+        self.assertEqual(planner_score._split_reasons(),
+                         split_ledger.DEATH_REASONS)
+
+        renamed = "turn-cap-death-v2"
+        doc = {"rows": [{"card": "DRE-1", "reasons": [renamed]}]}
+        self.assertEqual(planner_score.split_ledger_cards(doc), {})
+        with mock.patch.object(split_ledger, "DEATH_REASONS", (renamed,)):
+            self.assertEqual(list(planner_score.split_ledger_cards(doc)),
+                             ["DRE-1"])
+
     # -- the report -----------------------------------------------------------
 
     def test_the_report_prints_the_month_row_and_both_sides(self):

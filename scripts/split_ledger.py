@@ -144,7 +144,14 @@ REASON_HANDBACK = "handed-back"
 #: in the ledger because DRE-3077 named it. Recorded rather than left blank: a
 #: row with no reason at all reads as a bug in the reader.
 REASON_SEED = "named-as-a-seed"
-REASONS = (REASON_TURN_CAP, REASON_SPLIT, REASON_HANDBACK, REASON_SEED)
+#: The reasons that record the card DYING rather than merely being NAMED —
+#: every reason except the seed. Defined once, here, because the readers
+#: (`plan_critic.ledger_death_rows`, `planner_score.split_ledger_cards`) select
+#: rows on it: a hand-copied tuple in each of them would go on matching the OLD
+#: strings if a reason is ever renamed or added, and report fewer rows with no
+#: error and no log line (DRE-3079 review).
+DEATH_REASONS = (REASON_TURN_CAP, REASON_SPLIT, REASON_HANDBACK)
+REASONS = DEATH_REASONS + (REASON_SEED,)
 
 # --------------------------------------------------------------------------- #
 # DRE-2893's four tells, as a deterministic read of a card body                #

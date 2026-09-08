@@ -539,17 +539,6 @@ def shipped(child: dict) -> bool:
 # split ledger reached the planner. The ledger (DRE-3077) already decides what
 # "did not fit one run" means; this reads it rather than deciding again.
 
-#: The reasons a split-ledger row records a card not having fitted one run.
-#: `split_ledger.REASON_SEED` is deliberately absent — a card that was NAMED as
-#: a seed and then survived was never split.
-_SPLIT_REASONS = ("turn-cap-death", "split", "handed-back")
-
-#: The states a card is in when it has been cut up (`split_ledger`'s own
-#: `SPLIT_STATE_TYPES`): "Cancel the original, never Done"
-#: (standards/card-quality.md), and Backlog, which is where the turn-cap hold
-#: parks a card that a human then splits.
-_SPLIT_STATE_TYPES = ("canceled", "backlog")
-
 _MONTH = re.compile(r"^(\d{4}-\d{2})")
 
 
@@ -559,6 +548,19 @@ def _split_ledger():
     import split_ledger  # noqa: PLC0415 - deferred to break an import cycle
 
     return split_ledger
+
+
+def _split_reasons() -> tuple:
+    """The reasons a split-ledger row records a card not having fitted one run,
+    read off `split_ledger.DEATH_REASONS` at call time.
+
+    `split_ledger.REASON_SEED` is deliberately absent from that tuple — a card
+    that was NAMED as a seed and then survived was never split. Read rather
+    than copied: a hand-typed copy would keep matching the old spellings after
+    a rename and quietly shrink the split population, which is the one number
+    DRE-3022 is measured by.
+    """
+    return _split_ledger().DEATH_REASONS
 
 
 def split_ledger_cards(ledger=None) -> dict:
@@ -575,8 +577,9 @@ def split_ledger_cards(ledger=None) -> dict:
             doc = _split_ledger().load()
         except Exception:                           # noqa: BLE001 - live seam
             return {}
+    split_reasons = _split_reasons()
     return {row["card"]: row for row in doc.get("rows") or ()
-            if any(r in _SPLIT_REASONS for r in row.get("reasons") or ())
+            if any(r in split_reasons for r in row.get("reasons") or ())
             and row.get("card")}
 
 
@@ -1582,8 +1585,8 @@ def collect_month(month: str, lops=None) -> dict:
     because the split signals are receipts on the card, not files in a diff.
     The successor search — the one read that answers "was this cancelled card
     cut into pieces" — runs only for the cards whose state could carry that
-    answer at all (`_SPLIT_STATE_TYPES`), so a month of two hundred Done cards
-    costs two hundred comment reads and no searches.
+    answer at all (`split_ledger.SPLIT_STATE_TYPES`), so a month of two
+    hundred Done cards costs two hundred comment reads and no searches.
 
     Reads are SERIAL through the one `LINEAR_API_KEY`, the same bound `collect`
     takes.
@@ -1616,7 +1619,7 @@ def collect_month(month: str, lops=None) -> dict:
         except Exception:                           # noqa: BLE001 - live seam
             comments = None                         # → UNKNOWN, never []
         successors = None
-        if state_type in _SPLIT_STATE_TYPES:
+        if state_type in ledger.SPLIT_STATE_TYPES:
             try:
                 found = ((lops.gql(ledger._SUCCESSOR_QUERY,
                                    {"needle": identifier}) or {})

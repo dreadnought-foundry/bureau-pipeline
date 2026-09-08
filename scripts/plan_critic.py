@@ -1422,11 +1422,6 @@ LEDGER_MIN_OVERLAP = 2
 #: (standards/console-honesty.md rule 1).
 LEDGER_UNREADABLE = "LEDGER_UNREADABLE"
 
-#: The reasons a ledger row records the card DYING rather than merely being
-#: named. Read off `split_ledger`'s own constants at call time.
-_LEDGER_DEATH_REASONS = ("turn-cap-death", "split", "handed-back")
-
-
 def _split_ledger():
     """The `split_ledger` module, imported late.
 
@@ -1437,6 +1432,18 @@ def _split_ledger():
     import split_ledger  # noqa: PLC0415 - deferred to break an import cycle
 
     return split_ledger
+
+
+def _death_reasons() -> tuple:
+    """The reasons a ledger row records the card DYING rather than merely being
+    named, read off `split_ledger.DEATH_REASONS` at call time.
+
+    A copy of the three strings here would keep matching the old spellings
+    after a rename and report fewer rows with no error at all — the "checked
+    and found nothing" that `LEDGER_UNREADABLE` exists to keep out of this
+    reader (standards/console-honesty.md rule 1).
+    """
+    return _split_ledger().DEATH_REASONS
 
 
 def _ledger(ledger=None):
@@ -1484,11 +1491,12 @@ def ledger_death_rows(ledger=None) -> list[dict]:
     doc = _ledger(ledger)
     if doc is LEDGER_UNREADABLE:
         return []
+    death_reasons = _death_reasons()
     rows = []
     for row in doc.get("rows") or ():
         deaths = row.get("deaths")
         died = isinstance(deaths, int) and deaths > 0
-        if died or any(r in _LEDGER_DEATH_REASONS for r in row.get("reasons") or ()):
+        if died or any(r in death_reasons for r in row.get("reasons") or ()):
             rows.append(row)
     return rows
 

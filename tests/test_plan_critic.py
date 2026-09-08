@@ -1002,6 +1002,23 @@ class AFootprintThatHasDiedBefore(unittest.TestCase):
             [],
         )
 
+    def test_the_death_reasons_are_the_ledgers_own_and_read_at_call_time(self):
+        """A copy of the three strings in this file would keep matching the OLD
+        spellings after `split_ledger` renamed one — no exception, no log line,
+        just a check that quietly stops finding the deaths it exists to find."""
+        from unittest import mock
+
+        self.assertEqual(pc._death_reasons(), split_ledger.DEATH_REASONS)
+        self.assertNotIn(split_ledger.REASON_SEED, split_ledger.DEATH_REASONS)
+
+        renamed = "turn-cap-death-v2"
+        row = ("DRE-3100", [renamed], 0, ["scripts/a.py", "scripts/b.py"],
+               "UNKNOWN", 0.0)
+        self.assertEqual(pc.ledger_death_rows(_ledger(row)), [])
+        with mock.patch.object(split_ledger, "DEATH_REASONS", (renamed,)):
+            self.assertEqual([r["card"] for r in pc.ledger_death_rows(_ledger(row))],
+                             ["DRE-3100"])
+
     # -- what the row's footprint IS -----------------------------------------
 
     def test_an_unreadable_declaration_falls_back_to_what_the_pieces_touched(self):
