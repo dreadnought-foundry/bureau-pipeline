@@ -530,7 +530,7 @@
       "file": ".github/workflows/agent-fix.yml",
       "anchor": "🛑 Fix budget exhausted",
       "kind": "undeclared-act",
-      "means": "Three fix attempts are spent; the PR is held for an operator decision.",
+      "means": "The review-fix loop stopped — two consecutive review rounds made no progress, or the attempt ceiling was reached (DRE-2817) — and the PR is held for an operator decision. The body names which of the two it was.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
@@ -972,7 +972,7 @@
       "anchor": "🛑 Five conflict-resolution rounds couldn't keep this PR mergeable",
       "step": "Notify hold on Linear",
       "kind": "undeclared-act",
-      "means": "The card-side half of the fix loop's budget-exhausted hold — three fix attempts or five conflict rounds are spent, and the work waits on a person.",
+      "means": "The card-side half of the fix loop's budget-exhausted hold — the review loop stopped converging (or hit its attempt ceiling), or five conflict rounds are spent, and the work waits on a person.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Its two PR-side halves are declared above (`🛑 Fix budget exhausted`, `🛑 Conflict-resolution budget exhausted`); this is the same hold, said where the CEO's queue reads it."
     },
     {

@@ -85,19 +85,26 @@ def rest(login, body):
     }
 
 
-def verdict(line=None, word="REQUEST_CHANGES", cause="defect", extra=""):
+def verdict(line=None, word="REQUEST_CHANGES", cause="defect", extra="",
+            sha="a" * 40):
     """A posted critic verdict, composed the way qa-review.yml composes it:
     the critic's own first line, then the workflow's `@sha` and content id."""
     head = f"🔎 QA Critic — VERDICT: {word}"
     if word == "REQUEST_CHANGES" and cause:
         head += f" cause:{cause}"
-    head += " @" + "a" * 40 + " content:" + "c" * 64
+    head += f" @{sha} content:" + "c" * 64
     body = head + "\n\n"
     if line:
         body += f"{EXPECTED_MARKER} {line}\n\n"
     body += "## Summary\nThe change is not right yet.\n\n"
     body += "## For the fixing agent\nfoo.py:12 — fix it." + extra
     return body
+
+
+def head(n):
+    """A distinct 40-hex head sha per round — a round is a review OF A
+    COMMIT, and the live loop pushes one between rounds."""
+    return f"{n:040x}"
 
 
 def thread(*rounds, attempts=None):
@@ -108,7 +115,7 @@ def thread(*rounds, attempts=None):
     for i, line in enumerate(rounds, start=1):
         if i > 1:
             out.append(rest(WORKER, ATTEMPT.format(n=i - 1)))
-        out.append(rest(QA, verdict(line)))
+        out.append(rest(QA, verdict(line, sha=head(i))))
     if attempts is not None:
         out = [c for c in out if "🔧 Fix attempt" not in c["body"]]
         out += [rest(WORKER, ATTEMPT.format(n=n))
@@ -275,6 +282,32 @@ class RoundsTest(unittest.TestCase):
         for login in (WORKER, HUMAN, "dependabot[bot]"):
             with self.subTest(login=login):
                 self.assertEqual(self.rounds([rest(login, verdict(CONVERGING))]), [])
+
+    def test_two_verdicts_on_one_head_are_one_round(self):
+        # A round is a review OF A COMMIT. The fix loop really does produce
+        # this pair: a refuted finding (DRE-3084) dispatches a fresh review
+        # of the same head WITHOUT spending an attempt, so counting the
+        # answer as a second round would spend budget on a round the loop
+        # was never given a chance to fix.
+        same = [rest(QA, verdict(None, sha=head(1))),
+                rest(QA, verdict("repeat-finding prior-fixes-held in-scope",
+                                 sha=head(1)))]
+        rounds = self.rounds(same)
+        self.assertEqual(len(rounds), 1)
+
+    def test_the_newest_statement_of_a_round_is_the_one_that_stands(self):
+        same = [rest(QA, verdict("repeat-finding prior-fixes-held in-scope",
+                                 sha=head(2))),
+                rest(QA, verdict(CONVERGING, sha=head(2)))]
+        rounds = self.rounds(thread(None) + same)
+        self.assertEqual(len(rounds), 2)
+        self.assertEqual(rounds[1].reason, fc.PROGRESS)
+
+    def test_a_verdict_with_no_readable_sha_is_never_folded(self):
+        # An unreadable binding is not evidence of sameness.
+        loose = [rest(QA, verdict(None).replace("@" + "a" * 40, "@unknown"))
+                 for _ in range(2)]
+        self.assertEqual(len(self.rounds(loose)), 2)
 
     def test_an_attempt_with_no_round_behind_it_is_unclassified(self):
         # More attempts than verdicts: those attempts have no verdict saying
@@ -569,14 +602,37 @@ class WorkflowWiringTest(unittest.TestCase):
     def test_the_resolve_step_asks_for_the_classification(self):
         self.assertIn("--classification-out", wf_src())
 
-    def test_the_attempt_marker_carries_the_classification(self):
-        # Recorded every round, at no extra comment: the marker the budget
-        # already counts is where it goes.
-        src = wf_src()
-        m = re.search(r'BODY="🔧 Fix attempt.*?\n(.*?)pipeline_act\.py receipt',
-                      src, re.S)
-        self.assertIsNotNone(m, "the fix-attempt report block moved")
-        self.assertIn("classification", m.group(1).lower())
+    def test_the_budget_comments_record_the_classification(self):
+        # (AC7) The two comments the BUDGET writes: the attempt marker every
+        # spent round posts, and the hold that stops the loop. Between them
+        # every round the budget acted on says what it was classified as,
+        # and "why did this stop" is answerable off the thread.
+        #
+        # It costs no extra comment on purpose — an extra worker-bot comment
+        # would consume a standing operator decision (DRE-2813).
+        #
+        # The escalation bodies (refuted, disputed, no-push) are DELIBERATELY
+        # not on this list. They stop the loop for a reason the budget did
+        # not cause and each already states it, and two of them are
+        # byte-frozen wordings (tests/fixtures/act-receipt-bodies.json, whose
+        # own README says changing an entry is a deliberate act) — spending
+        # that freeze to restate a classification nobody is reading there is
+        # not the trade this card asks for.
+        lines = wf_src().splitlines()
+        anchors = (
+            'BODY="🔧 Fix attempt',
+            '--body "🛑 Fix budget exhausted',
+        )
+        for anchor in anchors:
+            at = [i for i, line in enumerate(lines) if anchor in line]
+            with self.subTest(anchor=anchor):
+                self.assertEqual(len(at), 1,
+                                 f"{anchor!r} moved or was duplicated")
+                # Comments stripped: a note ABOUT the variable is not the
+                # variable, and this test would otherwise pass on prose.
+                window = [line for line in lines[at[0]:at[0] + 16]
+                          if not line.strip().startswith("#")]
+                self.assertIn("$CLASSIFICATION", "\n".join(window))
 
     def test_the_attempt_marker_still_opens_with_the_counted_string(self):
         # fix_budget counts on "🔧 Fix attempt" and the mode read-back keys on

@@ -2,9 +2,15 @@
 # merge gate finds a conflict), dispatch a fixing agent on the same branch.
 # The push re-triggers CI and QA Review automatically (App-token pushes fire
 # events), so the loop closes itself: fix → re-review → APPROVE → merge.
-# Two separate budgets per PR: 3 review-fix attempts (the third re-derives the
-# fix with fresh eyes), and 5 conflict-resolution rounds — conflict churn from main
-# moving must not consume the review budget. Either exhausted → human hold.
+# Two separate budgets per PR, and they measure different things. The review
+# budget stops on CONVERGENCE (DRE-2817): two consecutive review rounds that
+# get nowhere — read off the critic's own verdicts, never the fixing agent's
+# account of itself — with a six-attempt ceiling as the runaway backstop, so
+# a loop finding a new real defect every round keeps going and a circling one
+# stops sooner than the three attempts this used to allow. The conflict budget
+# is 5 rounds, counted: main moving under a branch is not a convergence
+# question, and that churn must not consume the review budget. Either
+# exhausted → human hold, and the hold says WHICH of the two stops it was.
 #
 # Reusable workflow: concurrency + permissions live in the calling stub — and
 # the stub's concurrency GROUP is load-bearing (DRE-2810). This job's own
@@ -175,8 +181,8 @@ jobs:
           fi
 
           # Two separate budgets. Review-fix attempts (critic findings or
-          # failing CI) are capped at 3, the last one a fresh-eyes
-          # re-derivation. Conflict resolutions (the branch raced main) are a
+          # failing CI) stop on consecutive non-convergence, with a ceiling
+          # (DRE-2817). Conflict resolutions (the branch raced main) are a
           # different failure class with its own counter — a burst of wave
           # merges can conflict the same PR several times in minutes, and
           # that churn must not consume the review budget (PR #13 nearly
@@ -209,8 +215,9 @@ jobs:
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-          # THE BUDGETS (DRE-2813). Both of them — 3 review-fix attempts, 5
-          # conflict rounds — and what a SPENT one may do about a standing
+          # THE BUDGETS (DRE-2813). Both of them — the review loop's
+          # convergence budget, 5 conflict rounds — and what a SPENT one may
+          # do about a standing
           # operator decision are decided by fix_budget.py. It counts only
           # worker-bot-authored markers (DRE-1995: a planted marker must never
           # burn a budget, nor free one) and it reads the answer through
@@ -253,27 +260,52 @@ jobs:
             --hand-dispatch "$HAND" --pr "$PR" \
             --env-out "$TMPD/fix-budget.env" \
             --note-out "$TMPD/fix-no-work-note.md" \
-            --summary-out "$TMPD/fix-no-work.txt"
+            --summary-out "$TMPD/fix-no-work.txt" \
+            --classification-out "$TMPD/fix-classification.txt"
           # Sourced, not eval'd on stdout: every value it writes comes from a
           # fixed vocabulary (a word or an integer), never from thread text.
+          # DRE-2817 adds four of them — STOPPED_BY (none|non-convergence|
+          # ceiling|budget), NONCONVERGING, STOP, CEILING — under the same
+          # rule, and the one line of prose it emits goes to its own file.
           . "$TMPD/fix-budget.env"
+          # The convergence receipt (DRE-2817). One line, composed by
+          # fix_budget from a fixed vocabulary and integers, carried to the
+          # Report step so the attempt marker records what this round was
+          # classified as. It is not a body from the thread: nothing here
+          # echoes a comment (DRE-1996).
+          CLASSIFICATION=$(cat "$TMPD/fix-classification.txt" 2>/dev/null || true)
+          # WHEN TO CHANGE THE FRAMING, and why it is no longer "attempt 3"
+          # (DRE-2817). The fresh-eyes re-derivation exists because
+          # same-model retries share blind spots, so it belongs on the round
+          # where the last one did NOT get anywhere — not on a number. On a
+          # converging loop attempt 3 is just the third new finding, and
+          # telling that agent to throw the previous approach away is
+          # actively wrong. This fires on the loop's last budgeted
+          # non-converging round instead.
+          FRESH_EYES=false
+          if [ "$MODE" = "fix" ] && [ "${NONCONVERGING:-0}" -ge $(( ${STOP:-2} - 1 )) ]; then
+            FRESH_EYES=true
+          fi
           {
             echo "number=$PR"; echo "branch=$BRANCH"; echo "card=$CARD"
             echo "attempt=$ATTEMPT"; echo "rearmed=$REARMED"
+            echo "stopped_by=$STOPPED_BY"; echo "classification=$CLASSIFICATION"
+            echo "fresh_eyes=$FRESH_EYES"; echo "nonconverging=$NONCONVERGING"
+            echo "stop=$STOP"; echo "ceiling=$CEILING"
           } >> "$GITHUB_OUTPUT"
 
           if [ "$MODE" = "conflict" ]; then
             {
               echo "escalation=MODE: merge-conflict resolution ONLY. The critic has not requested changes — do NOT rework the diff. Merge the default branch into this branch, resolve conflicts preserving BOTH sides' intent (renumber this branch's alembic migration to main's-head + 1 if that is the conflict). A GENERATED lockfile in conflict (package-lock.json, yarn.lock, pnpm-lock.yaml, poetry.lock, Cargo.lock) must NEVER be hand-merged — hand-merging one eats the whole turn budget: take the default branch's copy (git checkout origin/<default-branch> -- <lockfile>) and regenerate it from this branch's manifest with the package manager (e.g. npm install). Then run local checks and push. Commit message: \"merge: resolve conflicts with main (round $ATTEMPT)\". Nothing else."
             } >> "$GITHUB_OUTPUT"
-          # All three fix attempts ride the workhorse ladder. Attempt 3
-          # escalates the FRAMING, not the model — re-derive the fix from
-          # scratch instead of patching the last one, because same-model
-          # retries share blind spots. The id itself is NOT pinned here: the
-          # "Select model" step below resolves it from config/models.yaml
-          # (DRE-2316).
-          elif [ "$ATTEMPT" -eq 3 ]; then
-            echo "escalation=ESCALATION CONTEXT: Two previous fix attempts failed to satisfy the critic. Do NOT assume their approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in /tmp/fix-blocker.txt rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
+          # Every fix attempt rides the workhorse ladder. The LAST BUDGETED
+          # non-converging round escalates the FRAMING, not the model —
+          # re-derive the fix from scratch instead of patching the last one,
+          # because same-model retries share blind spots. The id itself is
+          # NOT pinned here: the "Select model" step below resolves it from
+          # config/models.yaml (DRE-2316).
+          elif [ "$FRESH_EYES" = "true" ]; then
+            echo "escalation=ESCALATION CONTEXT: the last review round did not read as progress — the reviewer re-found something an earlier round already named, reported that an earlier fix came undone, or said nothing about it either way. One more round like that stops this loop. Do NOT assume the previous attempt's approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in /tmp/fix-blocker.txt rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
           else
             echo "escalation=" >> "$GITHUB_OUTPUT"
           fi
@@ -322,8 +354,29 @@ jobs:
 
           To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
           else
+            # DRE-2817: WHICH STOP THIS WAS, because the human needs to know
+            # and the two remedies are not the same. `non-convergence` means
+            # the reviewer stopped finding new ground — the loop was
+            # circling. `ceiling` means it never stopped finding new ground
+            # and ran out of runway, which is a different conversation. The
+            # marker itself is unchanged: linear_ops.CONSOLE_HOLD_MARKERS and
+            # the act registry's `unconverted` row both key on the "🛑 Fix
+            # budget exhausted" prefix, so the reason goes after it.
+            #
+            # $WHY and $CLASSIFICATION are composed by fix_convergence.py out
+            # of a fixed vocabulary and integers and carry no backtick,
+            # dollar, quote or backslash (pinned by
+            # tests/test_fix_convergence.py), so they are safe inside this
+            # double-quoted body.
+            if [ "$STOPPED_BY" = "ceiling" ]; then
+              WHY="it reached the hard ceiling of $CEILING fix attempts. That is the runaway backstop, not a judgement that the loop stopped making progress — it kept finding new work and never finished"
+            else
+              WHY="$NONCONVERGING review rounds in a row made no progress (the stop budget is $STOP). A round that finds something new, leaves the earlier fixes working and stays in scope does not spend that budget"
+            fi
             gh pr comment "$PR" --repo ${{ github.repository }} \
-              --body "🛑 Fix budget exhausted ($ATTEMPTS attempts, including a fresh-eyes re-derivation) — holding for a human decision.
+              --body "🛑 Fix budget exhausted — $WHY. Holding for a human decision.
+
+          $CLASSIFICATION
 
           To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
           fi
@@ -341,11 +394,16 @@ jobs:
       - if: steps.pr.outputs.held == 'true' && steps.pr.outputs.card != ''
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # DRE-2817: the card says WHICH stop it was, in the CEO's terms.
+          # Through env, never interpolated into the shell line.
+          STOPPED_BY: ${{ steps.pr.outputs.stopped_by }}
         run: |
           if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
             MSG="🛑 Five conflict-resolution rounds couldn't keep this PR mergeable — main keeps moving under it. Needs a human decision."
+          elif [ "$STOPPED_BY" = "ceiling" ]; then
+            MSG="🛑 The review kept finding new, real problems on this change and the fix loop ran out of runway after several rounds. Nothing here says the work is going backwards — it just never finished. This card needs a human decision. See PR for the full review trail."
           else
-            MSG="🛑 Three fix attempts (two standard + one fresh-eyes re-derivation) couldn't satisfy the critic — this card needs a human decision. See PR for the full review trail."
+            MSG="🛑 The last few review rounds stopped making progress — the reviewer kept landing on the same ground rather than new ground — so the fix loop stopped rather than spend another round on it. This card needs a human decision. See PR for the full review trail."
           fi
           python3 .bureau-pipeline/scripts/linear_ops.py comment "${{ steps.pr.outputs.card }}" "$MSG"
 
@@ -632,9 +690,13 @@ jobs:
             MSG="🔀 Conflict-resolution agent dispatched (round ${{ steps.pr.outputs.attempt }}/5) — merging main into PR #${{ steps.pr.outputs.number }}."
             ACT_FLAG="--act=conflict-agent-dispatched"
           else
+            # DRE-2817: "attempt N/3" was a promise the loop no longer makes —
+            # what stops it is consecutive rounds that get nowhere, not a
+            # count of tries. Say the attempt, then the budget that is
+            # actually being spent.
             NOTE=""
-            [ "${{ steps.pr.outputs.attempt }}" = "3" ] && NOTE=" — fresh-eyes re-derivation"
-            MSG="🔧 Fix agent dispatched (attempt ${{ steps.pr.outputs.attempt }}/3$NOTE) — addressing critic findings on PR #${{ steps.pr.outputs.number }}."
+            [ "${{ steps.pr.outputs.fresh_eyes }}" = "true" ] && NOTE=" — fresh-eyes re-derivation"
+            MSG="🔧 Fix agent dispatched (attempt ${{ steps.pr.outputs.attempt }}, ${{ steps.pr.outputs.nonconverging }}/${{ steps.pr.outputs.stop }} rounds without progress$NOTE) — addressing critic findings on PR #${{ steps.pr.outputs.number }}."
           fi
           [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ steps.pr.outputs.card }}" "$MSG" $ACT_FLAG || true
@@ -986,6 +1048,12 @@ jobs:
           # already obeys that rule, and it is also what keeps the block
           # executable verbatim by tests/test_act_emission_scenario.py.
           DISPATCH_TOKEN: ${{ github.token }}
+          # DRE-2817: the round's convergence classification, composed by
+          # fix_convergence.py. Through env for the same reason as the line
+          # above — nothing this step interpolates into a shell body comes
+          # from anywhere but a step output, and this one rides an env var so
+          # the rule holds without exception.
+          CLASSIFICATION: ${{ steps.pr.outputs.classification }}
         run: |
           PR=${{ steps.pr.outputs.number }}
 
@@ -1245,6 +1313,19 @@ jobs:
                 BODY="🔀 Conflict resolution round ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
               else
                 BODY="🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
+                # DRE-2817 (AC7): the round's classification is recorded HERE
+                # rather than in a comment of its own — this marker already
+                # goes up every round, and an extra worker-bot comment would
+                # consume a standing operator decision (DRE-2813). The budget
+                # counts on "🔧 Fix attempt" and the fix-vs-conflict read-back
+                # keys on "pushed — CI and critic review re-running": both
+                # still open the body, so appending disturbs neither.
+                # $CLASSIFICATION comes from fix_convergence.py through this
+                # step's env — a fixed vocabulary and integers, never thread
+                # text.
+                [ -n "$CLASSIFICATION" ] && BODY="$BODY
+
+          $CLASSIFICATION"
               fi
               # DRE-2826: both wordings are the same act — the fixer pushed a
               # commit, so CI and the critic re-run. The read-back above keys on

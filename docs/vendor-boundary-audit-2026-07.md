@@ -326,6 +326,15 @@ head re-arms cleanly.
 **Q4 — command limitations.** Two separate bounded budgets: 3 review-fix
 attempts (attempt 3 escalates the model), 5 conflict rounds; exhaustion posts
 🛑 and parks for a human.
+*Amended 2026-09-08 (DRE-2817): the review-fix budget no longer counts
+attempts. It stops after two CONSECUTIVE review rounds that made no progress
+— classified off the critic's own verdict, never the fixing agent's account of
+itself — with a six-attempt ceiling as the runaway backstop, and the 🛑 names
+which of the two stops it was. A converging loop keeps going (PR #199 was
+killed at three while every round found a different real defect); a circling
+one now stops at two. The conflict budget is unchanged. The vendor answer is
+unchanged with it: both budgets are still bounded, both still count only
+comments by their legitimate authors, and neither retries into a wall.*
 *Amended 2026-08-29 (DRE-2813): the 🛑 is no longer posted unconditionally. A
 spent budget with an operator decision the loop has not acted on posts a
 tagged `dispatch-no-work` notice instead — a repeat hold outranked the answer

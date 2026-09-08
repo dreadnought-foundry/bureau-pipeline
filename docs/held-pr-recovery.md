@@ -2,11 +2,41 @@
 
 When the fix loop runs out of budget it stops and posts a 🛑 hold on the PR:
 
-> 🛑 Fix budget exhausted (3 attempts, including a fresh-eyes re-derivation) —
-> holding for a human decision.
+> 🛑 Fix budget exhausted — 2 review rounds in a row made no progress (the stop
+> budget is 2). A round that finds something new, leaves the earlier fixes
+> working and stays in scope does not spend that budget. Holding for a human
+> decision.
 
 There is **one** way out of that state, and it is the one the hold comment
 asks for.
+
+## Which stop was it? (DRE-2817)
+
+The hold names one of two stops, and they ask you for different things.
+
+| The hold says | What happened | What you are being asked |
+| -- | -- | -- |
+| *N review rounds in a row made no progress* | The reviewer kept landing on the same ground — it re-found a problem an earlier round already named, or an earlier fix came undone | Settle it. The loop is circling and another round of it will not help |
+| *it reached the hard ceiling of N fix attempts* | The reviewer kept finding **new**, real problems and the loop ran out of runway. Nothing went backwards; it just never finished | Decide whether the remaining work belongs on this PR at all, or should be split |
+
+Each round also leaves a one-line record on the PR beside the fix attempt it
+authorised:
+
+> 📊 fix-convergence: round 4 is CONVERGING — the finding is new, every earlier
+> fix still holds, and the change is still what the card asked for.
+> Non-converging rounds in a row: 0 of 2. Attempts so far: 3 of a 6-attempt
+> ceiling.
+
+So "why did this stop" is answerable from the thread without reading four
+verdicts.
+
+**The budget counts convergence, not attempts.** It used to be three attempts,
+whether the loop was closing in or going in circles — and on PR #199 it was
+closing in: four rounds, four different real defects, every earlier fix
+verified. The cap fired anyway and cost a night. The classification comes off
+the **critic's** verdict (a `convergence:` line it writes on every re-review),
+never off the fixing agent's account of its own progress. A verdict that says
+nothing counts as no progress: the claim has to come from the reviewer.
 
 ## The recovery
 
@@ -99,9 +129,11 @@ gate makes — so the sweep can never start a run that will refuse to work.
 | ⚠️ `operator-decision-near-miss` notice | Your comment did not parse — re-post it in the format above |
 | 🔁 re-dispatch receipt on a blocking verdict | Nothing. The sweep started the fix run the verdict never got. |
 
-Related: `scripts/fix_budget.py` (the decision), `scripts/fix_context.py` (the
+Related: `scripts/fix_budget.py` (the decision), `scripts/fix_convergence.py`
+(what spends the review budget), `scripts/fix_context.py` (the
 predicates), `scripts/reconcile.py::restart_answered_blockers` and
 `::redispatch_standing_verdicts` (the sweeps),
 `tests/test_hand_dispatch_no_work.py` (the live sequence, driven end to end),
 `tests/test_redispatch_standing_verdict.py` (PR #407's thread, driven the same
-way).
+way), `tests/test_fix_convergence.py` (PR #199's round sequence and its
+opposite, both as fixtures).
