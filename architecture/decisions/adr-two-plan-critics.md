@@ -51,7 +51,8 @@ read. After approval, "proceed" means agents build it, so the second failed
 round **parks** the epic in Green Light with `needs-human` and both findings,
 and the sweep's own gate (`plan_critic.post_release`) reads the bound the same
 way, so no cron sweep promotes the children either. Every post-approval
-send-back first gets one re-plan with the critic's finding, so the CEO is never
+send-back first gets one re-plan with the critic's findings — ALL of them, the
+whole ranked list it reported that round (DRE-3251) — so the CEO is never
 asked to re-approve the plan he already read; on DRE-3060 (2026-09-04) the
 original rule sent the identical plan back three times and then activated it.
 Nothing circles a third time on either side — an unbounded loop is how 17

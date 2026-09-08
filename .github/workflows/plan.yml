@@ -596,9 +596,18 @@ jobs:
             a send-back and will be read as "the critic did not run", which
             parks the card anyway — so the reason is what makes it useful.
 
+            NAME EVERY FINDING YOU HAVE, IN THE ROUND YOU SEE IT. The first
+            line is the WORST of what you found. Directly under it, write a
+            numbered list — one line each — of every further thing you found,
+            naming the card it lives on:
+              1. <what is wrong>
+              2. <what is wrong>
+            Nothing reads this card after you, so a finding you held back is a
+            finding nobody ever makes.
+
             Both lines are read by a NON-TECHNICAL person on their own card:
-            plain English, no file paths, no code, no commands. Under the first
-            line, write the working for whoever picks this up.
+            plain English, no file paths, no code, no commands. Under the list,
+            write the working for whoever picks this up.
 
             Send it back for something an unattended agent genuinely cannot
             build — above all a card that is really a decision. You are not the
@@ -1097,10 +1106,22 @@ jobs:
             WRITE YOUR RESULT to ${{ runner.temp }}/plan-critic-pre.md. The
             first line is exactly one of:
               PLAN-CRITIC: PASS
-              PLAN-CRITIC: SEND_BACK — <one line saying what is wrong>
+              PLAN-CRITIC: SEND_BACK — <one line naming the WORST gap>
             A send-back with no reason is not a send-back and will be read as
-            "the critic did not run". Under that line, write the findings in
-            plain English for the planner that has to act on them.
+            "the critic did not run".
+
+            NAME EVERY FINDING YOU HAVE, IN THE ROUND YOU SEE IT. Directly
+            under that first line, write a numbered list — one line each — of
+            every further gap you found, naming the card(s) it lives on:
+              1. DRE-1234: <what is wrong>
+              2. DRE-1235, DRE-1236: <what is wrong>
+            The revision answers the whole list, and round 2 checks those
+            fixes rather than finding what you already saw
+            (standards/plan-critic.md). A plan sent back one finding at a time
+            costs a round, a re-plan and a CEO approval per finding.
+
+            Under the list, write the findings out in plain English for the
+            planner that has to act on them.
 
             Send it back only for something that would waste the CEO's time or
             make the plan unreadable as a decision. You are not the design
@@ -1158,10 +1179,15 @@ jobs:
             the first critic SENT IT BACK. This is the one revision round the
             plan gets: after this it goes to the CEO whatever the critic says.
 
-            The critic's finding:
-            ${{ steps.pre1.outputs.reason }}
+            The critic's findings — ALL of them, ranked, worst first
+            (${{ steps.pre1.outputs.findings_count }} in total):
 
-            Fix exactly that. Update the existing sub-issues in place
+            ${{ steps.pre1.outputs.findings }}
+
+            Fix EVERY one of them and nothing else. The critic names everything
+            it sees in the round it sees it, so this list is the whole of what
+            it found — round 2 checks these fixes rather than finding them
+            again. Update the existing sub-issues in place
             (`linear_ops.py` describe/set-description) and create only the
             cards that are genuinely missing — do NOT duplicate cards, and do
             not delete work the critic did not object to. Then rewrite
@@ -1245,8 +1271,13 @@ jobs:
 
             This is the LAST round. Whatever you write, this plan goes to the
             CEO after it — so judge the plan as it stands now, not as a
-            negotiation. Your round-1 finding was:
-            ${{ steps.pre1.outputs.reason }}
+            negotiation. Your round-1 findings, all of them, were:
+
+            ${{ steps.pre1.outputs.findings }}
+
+            The re-plan was asked to answer every one of them. Your job this
+            round is to CHECK THOSE FIXES — and if you find anything new, name
+            all of it here, because there is no round after this one.
 
             The revised plan:
               Epic: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
@@ -1268,8 +1299,14 @@ jobs:
             WRITE YOUR RESULT to ${{ runner.temp }}/plan-critic-pre.md, first
             line exactly one of:
               PLAN-CRITIC: PASS
-              PLAN-CRITIC: SEND_BACK — <one line saying what is still wrong>
-            If you send it back again, that reason travels to the CEO with the
+              PLAN-CRITIC: SEND_BACK — <one line naming the worst remaining gap>
+
+            NAME EVERY FINDING YOU HAVE, IN THE ROUND YOU SEE IT. Directly
+            under that first line, the same numbered list — one line each,
+            every further gap, naming the card(s) it lives on:
+              1. DRE-1234: <what is still wrong>
+              2. DRE-1235, DRE-1236: <what is still wrong>
+            If you send it back again, that list travels to the CEO with the
             plan — write it for them, not for the planner.
 
       - name: First critic — round 2 decision
@@ -1485,7 +1522,20 @@ jobs:
             WRITE YOUR RESULT to ${{ runner.temp }}/plan-critic-post.md. The
             first line is exactly one of:
               PLAN-CRITIC: PASS
-              PLAN-CRITIC: SEND_BACK — <one line saying what is missing>
+              PLAN-CRITIC: SEND_BACK — <one line naming the WORST gap>
+
+            NAME EVERY FINDING YOU HAVE, IN THE ROUND YOU SEE IT. Directly
+            under that first line, write a numbered list — one line each — of
+            every further gap you found, naming the card(s) it lives on:
+              1. DRE-1234: <what is missing>
+              2. DRE-1235, DRE-1236: <what is missing>
+            You are reading the whole plan anyway, so report the whole of what
+            you read. On 2026-09-06 this critic sent one plan back FOUR times,
+            one finding each time, and the fourth was already true of the plan
+            the first round saw — four re-plans, three parks and four CEO
+            approvals for one pass's worth of findings (DRE-3164). The revision
+            answers your whole list, and the round after it checks those fixes.
+
             If you found collisions with another epic in flight, add a line
               collisions: <n>
             and name each one in the body. That count is recorded separately
@@ -1703,11 +1753,20 @@ jobs:
             You are the PLANNER, in RE-plan mode. The CEO approved epic
             ${{ github.event.client_payload.identifier }} and the SECOND critic —
             the one that reads an approved plan as the specification agents
-            will build from — SENT IT BACK. Its finding:
+            will build from — SENT IT BACK. Its worst finding, the one the
+            record carries:
 
             ${{ steps.post1.outputs.reason }}
 
-            Fix exactly that. Read the existing children first:
+            ...and ALL ${{ steps.post1.outputs.findings_count }} of its
+            findings, ranked, worst first:
+
+            ${{ steps.post1.outputs.findings }}
+
+            Fix EVERY one of them and nothing else. The critic names everything
+            it sees in the round it sees it, so this list is the whole of what
+            it found, and the next round checks these fixes rather than finding
+            them again. Read the existing children first:
               python3 .bureau-pipeline/scripts/linear_ops.py children-json "${{ github.event.client_payload.identifier }}"
             Update the existing sub-issues in place (`linear_ops.py`
             set-description) and create only the cards that are genuinely
@@ -1719,6 +1778,11 @@ jobs:
             were added, which were rewritten and why, in business terms, no
             file paths — to ${{ runner.temp }}/post-replan-summary.md. The CEO
             reads that file before approving the revised plan; write it for them.
+
+            ACCOUNT FOR EVERY FINDING in that summary, in the critic's order:
+            say of each one either that it is FIXED and how, or that it is
+            LEFT and why. A finding that is neither is one nobody knows the
+            state of — and the round after this one is checking exactly these.
 
       # The mechanical findings, re-run against the revision, so the next
       # round's critic — and the CEO — read checks against the plan as it now

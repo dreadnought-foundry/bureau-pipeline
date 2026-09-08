@@ -461,6 +461,109 @@ def collisions_declared(text: str) -> int:
     return int(hits[-1]) if hits else 0
 
 
+# --- Every finding, in the round it sees them (DRE-3251) --------------------
+#
+# The first line above is the WORST gap and it is all the marker and the bound
+# ever read. What was missing was everywhere else: the result grammar asked for
+# one line, the standard asked for one line, and the re-plan step was told to
+# fix "exactly that" — so a critic that had found four defects reported them
+# one per round.
+#
+# THE MEASUREMENT: DRE-3164, 2026-09-06 PT. The post-approval critic sent the
+# plan back four times in a row, each round carrying ONE finding, each real,
+# each different, and round 4's finding was already present in the plan round 1
+# read. Four rounds, four re-plans, three parks with `needs-human`, four CEO
+# approvals, ~40 minutes of the CEO's attention — for findings that could all
+# have been made, and fixed, in one pass. The critic READ the whole plan every
+# round; it only REPORTED one of it.
+#
+# So the result file grows a BODY and nothing else moves. The list rides in the
+# 🛑 note beside the record, never in it: `parse_markers`, `trusted_bodies` and
+# the two-round bound are this gate's credential and a card about reporting
+# must not touch them.
+
+#: The heading the note lists a round's findings under. Also what tells a test
+#: whether a note carries a list at all.
+FINDINGS_HEADING = "Every finding this round"
+
+#: The sentence every critic prompt spells this grammar with, in one place so
+#: the four prompts on the rail cannot drift apart from each other — the
+#: one-off stage shares the first critic's result grammar, so it shares this.
+NAME_EVERYTHING_NOW = "NAME EVERY FINDING YOU HAVE, IN THE ROUND YOU SEE IT."
+
+#: How many FURTHER findings one round may report. A bound rather than a
+#: judgement: the list reaches a step output and a prompt, and a runaway body
+#: must cost a truncated list, never a step that cannot be written.
+MAX_FINDINGS = 20
+
+# A further finding is a numbered line at COLUMN ZERO. Indentation is the whole
+# of the distinction: a nested markdown list inside the critic's working is
+# elaboration of a finding it already named, and reading those as findings of
+# their own would hand the re-plan the same gap three times.
+_FURTHER_FINDING = re.compile(r"^(?P<n>\d+)[.)]\s+(?P<text>\S.*?)\s*$")
+
+
+def further_findings(text: str) -> list[str]:
+    """The numbered body of a critic's result file, in the order it wrote them.
+
+    Read from the WHOLE body, not from the block that happens to follow the
+    header: over-reporting costs the re-plan a line it has already fixed, and
+    under-reporting costs a round, a park and a CEO approval. Each item is
+    flattened through `one_line` for the same reason the reason field is — it
+    travels to `$GITHUB_OUTPUT` and into a prompt.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in (text or "").splitlines():
+        m = _FURTHER_FINDING.match(raw)
+        if not m:
+            continue
+        item = one_line(m.group("text"))
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+        if len(out) >= MAX_FINDINGS:
+            break
+    return out
+
+
+def all_findings(text: str) -> list[str]:
+    """Every finding of one round, ranked, worst first.
+
+    The first line is the worst gap — the one the marker carries and the one
+    the CEO reads in the headline — and the numbered list under it is the rest.
+    A PASS and a crash have no findings: only a send-back is a round that found
+    something, and `read_result` is the one place that decides which is which.
+    """
+    result, reason = read_result(text)
+    if result != SEND_BACK or not reason:
+        return []
+    return [reason] + [f for f in further_findings(text) if f != reason]
+
+
+def findings_block(items: list[str]) -> str:
+    """The ranked findings as a numbered list, one per line — the form that
+    reaches the re-plan's prompt and the note."""
+    return "\n".join(f"{i}. {item}" for i, item in enumerate(items or [], 1))
+
+
+def findings_section(items: list[str]) -> str:
+    """The note's list block, or "" when the first line already said it all.
+
+    A one-item list under a headline that carries the same sentence is noise on
+    the epic the CEO reads, so a single-finding send-back keeps today's shape.
+    """
+    if len(items or []) < 2:
+        return ""
+    return "\n\n".join([
+        f"{FINDINGS_HEADING} ({len(items)}), ranked — the revision answers all "
+        "of them, and the next round checks those fixes rather than finding "
+        "these again:",
+        findings_block(items),
+    ])
+
+
 # --- The record -------------------------------------------------------------
 
 # One marker per round, on the epic. This is where the send-back RATE is read
@@ -1727,6 +1830,33 @@ def _write_outputs(path: str | None, pairs: list[tuple[str, str]]) -> None:
         print(f"plan critic: could not write step outputs: {exc}")
 
 
+def _write_block_output(path: str | None, name: str, value: str) -> None:
+    """The findings list as a step output — the one value here that may span
+    lines, because the re-plan's prompt is handed the list AS a list.
+
+    A one-line list is written as a one-line output, so the "one line per
+    output" shape every other value has is what a single-finding send-back
+    still produces. Only a genuinely multi-line list takes the heredoc, and it
+    takes the one this pipeline already uses for agent-written text: a random,
+    collision-checked delimiter (`sanitize_untrusted._write_output`, the seam
+    `pr_size_strategy` reuses), so critic text can neither close the block
+    early nor define an output of the workflow's own.
+    """
+    if not path or not value:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            if "\n" in value:
+                # Late, and only on the branch that needs it: everything else
+                # this module does stays importable beside its parsers alone.
+                from sanitize_untrusted import _write_output
+                _write_output(f, name, value)
+            else:
+                f.write(f"{name}={one_line(value)}\n")
+    except OSError as exc:
+        print(f"plan critic: could not write the findings block: {exc}")
+
+
 def _cmd_charter(args) -> int:
     print(charter(args.stage, sight=_read(args.sight_file)), end="")
     return 0
@@ -1760,8 +1890,12 @@ def _cmd_mechanical(args) -> int:
 
 def _cmd_decide(args) -> int:
     thread = _stdin_json([])
-    result, reason = read_result(_read(args.result_file))
-    collisions = collisions_declared(_read(args.result_file))
+    result_text = _read(args.result_file)
+    result, reason = read_result(result_text)
+    collisions = collisions_declared(result_text)
+    # Every finding this round has, ranked (DRE-3251). `reason` is still the
+    # first of them and still the only one the marker carries.
+    items = all_findings(result_text)
     # The budget, and the round number, belong to THIS planning attempt. A
     # re-planned epic counted against the whole thread would spend a budget it
     # never used, and say "round 3 of 2" while doing it.
@@ -1792,7 +1926,10 @@ def _cmd_decide(args) -> int:
         ("note", note),
         ("collisions", str(collisions)),
         ("bound", "true" if bound else "false"),
+        ("findings_count", str(len(items))),
     ])
+    # The list itself, for the re-plan's prompt — the ONE multi-line output.
+    _write_block_output(args.github_output, "findings", findings_block(items))
 
     title = STAGES[args.stage]["title"]
     icon = {"hold": "🛑", "proceed": "✅", ESCALATE: "🙋"}[action] \
@@ -1826,9 +1963,14 @@ def _cmd_decide(args) -> int:
     else:
         headline = f"{icon} **{title}** — round {round_n} of {MAX_ROUNDS}: {note}"
         closing = rate_text
+    # The whole list rides HERE, beside the record and never in it: the note is
+    # prose, and prose records nothing (`_sole_record`). This is the half of the
+    # round the CEO reads, so it carries everything the critic found.
+    section = findings_section(items)
     body = "\n\n".join([
         headline,
         *( [f"Reason: {reason}"] if reason and reason != note else [] ),
+        *( [section] if section else [] ),
         closing,
     ])
     record = marker(args.stage, round_n, result, reason, collisions)
