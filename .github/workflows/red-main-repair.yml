@@ -152,6 +152,12 @@ jobs:
       # DRE-1996 discipline: head_branch is on the pinned-fields list (it is
       # only trusted here BECAUSE the job `if:` proved it equals the default
       # branch) — it travels via env, never interpolated into the script.
+      # WF_NAME rides the same rail, and the classifier needs it: the
+      # integration harness's "harness blocked:" receipt means the SANDBOX
+      # died before it could judge the commit, but the unit suite carries that
+      # same string in fixtures, so only the harness saying it about itself is
+      # infra (run 34258403698 spent a repair agent on a commit the harness
+      # never judged).
       - name: Decide — classify, debounce, budget (before any agent)
         id: decide
         env:
@@ -159,12 +165,14 @@ jobs:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
         run: |
           python3 .bureau-pipeline/scripts/red_main_repair.py decide \
             --conclusion "$CONCLUSION" \
             --head-branch "$HEAD_BRANCH" \
             --default-branch "$DEFAULT_BRANCH" \
             --head-sha "$HEAD_SHA" \
+            --workflow-name "$WF_NAME" \
             --log-file /tmp/red-main-log.txt \
             --refs-file /tmp/repair-refs.json \
             --pulls-file /tmp/repair-pulls.json >> "$GITHUB_OUTPUT"
