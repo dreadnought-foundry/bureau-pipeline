@@ -17,6 +17,12 @@ planner, and it is built on the same three rules:
   * **Agreement and disagreement are equal results**, and both are printed,
     empty or not.
 
+DRE-3079 adds the seventh dimension and the one number DRE-3022 asked to be
+measured by: the **split rate of planner-created children, month by month**,
+before and after the split ledger reached the planner. Its population is the
+ledger's own (`split_ledger.reasons`) rather than a second definition of "did
+not fit one run", and a month nothing could be read for reports UNKNOWN.
+
 And the rule the replay adds: a row nobody could read reports **UNKNOWN**,
 never `0` and never "clean". A missing PR is the absence of evidence; scoring
 it as agreement is the audit lying in its own favour.
@@ -93,6 +99,17 @@ def reference(**overrides) -> dict:
                 "values": ["as-written", "revised"],
                 "why": "the plan critic's holds and the amendment markers",
             },
+            "split-rate": {
+                "question": "how often did a child have to be split?",
+                "scored": True,
+                "values": ["one-card", "split"],
+                "why": "the split ledger's own population — a turn-cap death, "
+                       "a split or a hand-back",
+                "ledger": "config/split-ledger.json",
+                "ledger_injected_at": None,
+                "ledger_injected_why": "DRE-3078 injects it; until then every "
+                                       "month is before",
+            },
             "proof-and-demo": {
                 "question": "did the epic end with a proof card and a demo card?",
                 "scored": False,
@@ -110,23 +127,36 @@ def reference(**overrides) -> dict:
 
 
 def child(identifier, *, title=None, files=("scripts/a.py",), blocked_by=(),
-          labels=(), comments=(), pr=("scripts/a.py",), verdict="FLEET"):
+          labels=(), comments=(), pr=("scripts/a.py",), verdict="FLEET",
+          created_at="2026-08-15T09:00:00Z", state=None, successors=None):
     """A planner-created child, with the plan's claim in its body and the
-    history that answers it hanging off it."""
+    history that answers it hanging off it.
+
+    `created_at` and `state` are what the split-rate row reads (DRE-3079): the
+    month the card was created, and — for a Canceled or Backlog card — whether
+    anything cites it as the card it was cut from."""
     body = f"Build the thing.\n\n**Files:** {', '.join(files)}\n"
     bodies = list(comments)
     if verdict:
         bodies.insert(0, routing_verdict.verdict_comment(verdict, "because"))
-    return {
+    record = {
         "identifier": identifier,
         "title": title if title is not None else f"{identifier} · a card",
         "body": body,
         "labels": list(labels),
         "blocked_by": list(blocked_by),
         "comments": bodies,
+        "created_at": created_at,
         "pr": None if pr is None else {"number": 1, "merged": True,
                                        "files": list(pr)},
     }
+    if state is not None:
+        record["state"] = state
+        record["state_type"] = {"Done": "completed", "Canceled": "canceled",
+                                "Backlog": "backlog"}.get(state, "started")
+    if successors is not None:
+        record["successors"] = list(successors)
+    return record
 
 
 def epic(identifier="DRE-1000", *, comments=()):
@@ -483,6 +513,219 @@ class ApprovalTest(unittest.TestCase):
         )
         row = [r for r in result["rows"] if r["dimension"] == "approval"][0]
         self.assertEqual(row["outcome"], "unknown")
+
+
+# --------------------------------------------------------------------------
+# the split rate, month by month (DRE-3079)
+# --------------------------------------------------------------------------
+def ledger(*cards):
+    """A split ledger carrying one row per named card, each of them a card the
+    ledger says did not fit one run."""
+    return {"rows": [{"card": c, "reasons": ["turn-cap-death", "split"],
+                      "deaths": 2, "declared_files": "UNKNOWN",
+                      "piece_files": "UNKNOWN", "tells": []} for c in cards],
+            "rates": {"by_tell": []}}
+
+
+HANDBACK = (planner_score.HANDBACK_RECEIPT_PREFIX
+            + " six independently shippable pieces")
+
+
+class SplitRateTest(unittest.TestCase):
+    """DRE-3079. DRE-3022 asks to be measured by one number: how often does a
+    planner-created child have to be split, month by month, before and after
+    the ledger reached the planner. This is the reader that answers it — and
+    the population it reads is the split ledger's own (`split_ledger.reasons`),
+    never a second definition of "did not fit one run"."""
+
+    def test_a_child_the_ledger_names_is_split(self):
+        self.assertEqual(
+            planner_score.split_outcome(child("DRE-1", state="Done"),
+                                        planner_score.split_ledger_cards(ledger("DRE-1"))),
+            "split")
+
+    def test_a_child_that_handed_itself_back_is_split(self):
+        """Not the same question as `size`: a hand-back leaves no turn-cap
+        receipt, so the size dimension reads it as one PR's worth."""
+        handed = child("DRE-1", state="Done", comments=(HANDBACK,))
+        self.assertEqual(planner_score.split_outcome(handed, {}), "split")
+        self.assertFalse(planner_score.died_at_the_turn_cap(handed["comments"]))
+
+    def test_a_card_cancelled_with_pieces_citing_it_is_split(self):
+        cut = child("DRE-1", state="Canceled", pr=None,
+                    successors=[{"identifier": "DRE-2"}])
+        self.assertEqual(planner_score.split_outcome(cut, {}), "split")
+
+    def test_a_card_that_finished_with_no_split_signal_is_one_card(self):
+        self.assertEqual(
+            planner_score.split_outcome(child("DRE-1", state="Done"), {}),
+            "one-card")
+
+    def test_a_card_that_never_finished_is_pending_never_one_card(self):
+        """The question was never put to it. Counting it as one-card would
+        report a rate that improves every time the board grows."""
+        self.assertEqual(
+            planner_score.split_outcome(child("DRE-1", state="Todo", pr=None), {}),
+            "pending")
+
+    def test_a_card_whose_record_could_not_be_read_is_unknown(self):
+        blind = child("DRE-1", state="Done")
+        blind["comments"] = None
+        self.assertEqual(planner_score.split_outcome(blind, {}), "unknown")
+
+    # -- the row itself -------------------------------------------------------
+
+    def test_the_rate_is_reported_for_the_month_the_cards_were_created_in(self):
+        """The acceptance criterion: a month of known fixture data reports its
+        row. Four cards created in August, one of them split."""
+        result = planner_score.split_rate(
+            [child("DRE-1", created_at="2026-08-03T09:00:00Z", state="Done"),
+             child("DRE-2", created_at="2026-08-11T09:00:00Z", state="Done"),
+             child("DRE-3", created_at="2026-08-20T09:00:00Z", state="Done"),
+             child("DRE-4", created_at="2026-08-28T09:00:00Z", state="Done",
+                   comments=(HANDBACK,))],
+            ledger=ledger(), injected_at=None)
+        row = {r["month"]: r for r in result["months"]}["2026-08"]
+        self.assertEqual((row["cards"], row["split"], row["one_card"]), (4, 1, 3))
+        self.assertEqual(row["rate"], 0.25)
+        self.assertIn("1 of 4", row["sentence"])
+
+    def test_each_month_gets_its_own_row(self):
+        result = planner_score.split_rate(
+            [child("DRE-1", created_at="2026-07-02T09:00:00Z", state="Done"),
+             child("DRE-2", created_at="2026-08-02T09:00:00Z", state="Done",
+                   comments=(HANDBACK,))],
+            ledger=ledger(), injected_at=None)
+        self.assertEqual([r["month"] for r in result["months"]],
+                         ["2026-07", "2026-08"])
+        self.assertEqual([r["rate"] for r in result["months"]], [0.0, 1.0])
+
+    def test_a_month_with_nothing_answerable_reports_unknown_never_zero(self):
+        """standards/console-honesty.md rule 2, and the ledger's own rule: an
+        unread month is not a clean one."""
+        result = planner_score.split_rate(
+            [child("DRE-1", created_at="2026-08-02T09:00:00Z", state="Todo",
+                   pr=None)],
+            ledger=ledger(), injected_at=None)
+        row = result["months"][0]
+        self.assertEqual(row["rate"], planner_score.UNKNOWN)
+        self.assertEqual(row["pending"], 1)
+
+    def test_a_card_with_no_creation_date_is_named_not_bucketed(self):
+        result = planner_score.split_rate(
+            [child("DRE-1", created_at="", state="Done")],
+            ledger=ledger(), injected_at=None)
+        self.assertEqual(result["months"], [])
+        self.assertTrue(any("DRE-1" in u for u in result["unreadable"]),
+                        result["unreadable"])
+
+    # -- before and after the ledger reached the planner ----------------------
+
+    def test_the_months_are_split_before_and_after_the_injection(self):
+        cards = [child("DRE-1", created_at="2026-08-02T09:00:00Z", state="Done",
+                       comments=(HANDBACK,)),
+                 child("DRE-2", created_at="2026-08-04T09:00:00Z", state="Done"),
+                 child("DRE-3", created_at="2026-10-02T09:00:00Z", state="Done")]
+        result = planner_score.split_rate(cards, ledger=ledger(),
+                                          injected_at="2026-09-15T00:00:00Z")
+        self.assertEqual({r["month"]: r["side"] for r in result["months"]},
+                         {"2026-08": "before", "2026-10": "after"})
+        self.assertEqual(result["before"]["split"], 1)
+        self.assertEqual(result["after"]["split"], 0)
+
+    def test_with_no_injection_date_the_after_half_is_unknown_never_zero(self):
+        """DRE-3078 has not injected anything yet. "Nothing has happened after"
+        and "nothing happened after" are different facts."""
+        result = planner_score.split_rate(
+            [child("DRE-1", created_at="2026-08-02T09:00:00Z", state="Done")],
+            ledger=ledger(), injected_at=None)
+        self.assertEqual(result["after"], planner_score.UNKNOWN)
+        self.assertEqual([r["side"] for r in result["months"]], ["before"])
+        self.assertTrue(any("inject" in u for u in result["unreadable"]),
+                        result["unreadable"])
+
+    # -- it is a dimension of the audit, and it is not the size dimension -----
+
+    def test_the_scorer_emits_a_split_rate_row_for_every_child(self):
+        result = planner_score.score(
+            epic(), [child("DRE-1", state="Done"),
+                     child("DRE-2", state="Done", comments=(HANDBACK,))],
+            doc=reference())
+        self.assertEqual(outcomes_by_card(result, "split-rate"),
+                         {"DRE-1": "agree", "DRE-2": "disagree"})
+
+    def test_a_hand_back_disagrees_on_split_rate_and_agrees_on_size(self):
+        """The two dimensions are not one dimension written twice: `size` reads
+        the turn-cap receipt, `split-rate` reads the ledger's whole
+        population."""
+        result = planner_score.score(
+            epic(), [child("DRE-2", state="Done", comments=(HANDBACK,))],
+            doc=reference())
+        self.assertEqual(outcomes_by_card(result, "size"), {"DRE-2": "agree"})
+        self.assertEqual(outcomes_by_card(result, "split-rate"), {"DRE-2": "disagree"})
+
+    def test_the_shipped_reference_declares_the_dimension(self):
+        self.assertIn("split-rate", planner_score.dimensions())
+        self.assertEqual(planner_score.reference_problems(), [])
+
+    def test_the_reference_names_the_ledger_and_when_it_was_injected(self):
+        block = planner_score.dimensions()["split-rate"]
+        self.assertEqual(block["ledger"], "config/split-ledger.json")
+        self.assertTrue((ROOT / block["ledger"]).exists())
+        self.assertIn("ledger_injected_at", block)
+
+    def test_a_reference_that_names_no_ledger_is_refused(self):
+        loose = reference()
+        loose["dimensions"]["split-rate"]["ledger"] = "config/nope.json"
+        problems = planner_score.reference_problems(loose)
+        self.assertTrue(any("nope.json" in p for p in problems), problems)
+
+    def test_an_injection_date_that_is_not_a_date_is_refused(self):
+        loose = reference()
+        loose["dimensions"]["split-rate"]["ledger_injected_at"] = "soon"
+        problems = planner_score.reference_problems(loose)
+        self.assertTrue(any("soon" in p for p in problems), problems)
+
+    def test_the_unknown_literal_is_the_one_the_ledger_uses(self):
+        import split_ledger
+
+        self.assertEqual(planner_score.UNKNOWN, split_ledger.UNKNOWN)
+
+    def test_the_population_is_the_ledgers_own_reader(self):
+        """`split_ledger.reasons` decides what "did not fit one run" means —
+        once, for the ledger and for this rate."""
+        import split_ledger
+
+        handed = child("DRE-1", state="Done", comments=(HANDBACK,))
+        self.assertEqual(split_ledger.reasons(handed), ["handed-back"])
+
+    # -- the report -----------------------------------------------------------
+
+    def test_the_report_prints_the_month_row_and_both_sides(self):
+        result = planner_score.split_rate(
+            [child("DRE-1", created_at="2026-08-02T09:00:00Z", state="Done",
+                   comments=(HANDBACK,))],
+            ledger=ledger(), injected_at=None)
+        report = planner_score.render_split_rate(result)
+        self.assertIn("2026-08", report)
+        self.assertIn("1 of 1", report)
+        self.assertIn("UNKNOWN", report)
+
+    def test_the_cli_reports_a_month_from_children_on_stdin(self):
+        import subprocess
+
+        payload = json.dumps({"children": [
+            child("DRE-1", created_at="2026-08-02T09:00:00Z", state="Done",
+                  comments=(HANDBACK,)),
+            child("DRE-2", created_at="2026-08-03T09:00:00Z", state="Done"),
+        ]})
+        out = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "planner_score.py"),
+             "split-rate"],
+            input=payload, capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertIn("2026-08", out)
+        self.assertIn("1 of 2", out)
 
 
 # --------------------------------------------------------------------------

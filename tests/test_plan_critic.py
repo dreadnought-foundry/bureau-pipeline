@@ -33,6 +33,12 @@ One section per acceptance criterion:
       with unread findings is visible instead of hidden behind "full output
       hidden for security".
 
+  L (DRE-3079). The same mechanical half reads the SPLIT LEDGER
+      (`config/split-ledger.json`, DRE-3077): a child whose declared footprint
+      lands on a row that died is a finding citing the row, and a child
+      carrying a tell the ledger has watched kill cards is another. A ledger
+      that could not be read says so — it never reads as "no matches".
+
 Plus the two rules the pipeline has paid for before: a crash is not a rejection
 (standards/console-honesty.md rule 1), and nothing here may emit a string that
 the merge gate reads as a QA verdict (standards/untrusted-content.md).
@@ -58,6 +64,7 @@ import design_parity  # noqa: E402
 import plan_critic as pc  # noqa: E402
 import plan_footprint  # noqa: E402
 import review_rerun as rr  # noqa: E402
+import split_ledger  # noqa: E402
 
 # The labels `linear_ops.subissue` inherits onto every planner-created child.
 # Since DRE-3040 the repo check reads the LABEL the standard requires, so the
@@ -888,6 +895,218 @@ class TheCriticReadsTheFootprintItIsChecking(unittest.TestCase):
         note = pc.findings_note(clean, pc.mechanical_findings(clean))
         self.assertIn("DRE-9011", note)
         self.assertIn("no structural findings", note.lower())
+
+
+def _ledger(*rows, by_tell=()):
+    """A split ledger in the shape `scripts/split_ledger.py derive` writes it.
+
+    Only the fields this check reads are filled in — the row's card, why it is
+    in the ledger, what it declared, what its pieces touched — because a
+    fixture that mirrors the whole file would pass while the reader looked at
+    nothing."""
+    return {
+        "generated_at": "2026-09-04T05:21:08Z",
+        "rows": [{"card": card, "reasons": list(reasons), "deaths": deaths,
+                  "declared_files": declared, "piece_files": pieces,
+                  "pieces": 0, "dollars": dollars, "tells": []}
+                 for card, reasons, deaths, declared, pieces, dollars in rows],
+        "rates": {"by_tell": [dict(t) for t in by_tell]},
+    }
+
+
+#: A card body that trips exactly one of the four tells — one backend file and
+#: one console file, which is `two-languages-or-tiers`.
+TIERS_CARD = """One backend defect and one console surface.
+
+**Files:** `scripts/reconcile.py`, `console/src/pages/Board.tsx`
+
+## Acceptance criteria
+
+- [ ] the sweep stops guessing
+- [ ] the board stops rendering the guess
+"""
+
+DEAD_ROW = ("DRE-2937", ["turn-cap-death", "split"], 4,
+            ["scripts/alerts.py", "console/src/Board.tsx"], "UNKNOWN", 63.9)
+LIVE_ROW = ("DRE-3029", ["named-as-a-seed"], 0,
+            ["scripts/planning_shape.py", "briefs/planner.md"], "UNKNOWN", 0.0)
+
+
+class AFootprintThatHasDiedBefore(unittest.TestCase):
+    """DRE-3079. The ledger (`config/split-ledger.json`, DRE-3077) records
+    every card that did not fit one run — what it declared, what its pieces
+    actually touched, how many turn-cap deaths it cost. Until this card the
+    only thing that could read it was the planner.
+
+    So the first critic's cheap half reads it too: a child whose declared
+    footprint lands on a row that DIED is a mechanical finding citing that row,
+    posted on the epic before the model reads the plan (the DRE-3040 shape)."""
+
+    def _cards_declaring(self, *files, identifier="DRE-9101"):
+        return _cards((identifier,
+                       "Do the thing.\n**Files:** " + ", ".join(f"`{f}`" for f in files)
+                       + "\n## Acceptance criteria\n- [ ] done\n"))
+
+    # -- the acceptance criterion --------------------------------------------
+
+    def test_a_child_whose_footprint_matches_a_death_row_is_a_finding(self):
+        findings = pc.ledger_findings(
+            self._cards_declaring("scripts/alerts.py", "console/src/Board.tsx"),
+            ledger=_ledger(DEAD_ROW),
+        )
+        self.assertTrue(any("DRE-9101" in f and "DRE-2937" in f for f in findings),
+                        findings)
+
+    def test_the_finding_names_the_row_and_the_files_it_shares(self):
+        finding = pc.ledger_findings(
+            self._cards_declaring("scripts/alerts.py", "console/src/Board.tsx"),
+            ledger=_ledger(DEAD_ROW),
+        )[0]
+        self.assertIn("scripts/alerts.py", finding)
+        self.assertIn("console/src/Board.tsx", finding)
+        self.assertIn("config/split-ledger.json", finding,
+                      "the finding must say where the row can be read")
+
+    def test_the_match_is_reported_structurally_as_well_as_in_prose(self):
+        matches = pc.ledger_footprint_matches(
+            self._cards_declaring("scripts/alerts.py", "console/src/Board.tsx"),
+            ledger=_ledger(DEAD_ROW),
+        )
+        self.assertEqual([(m["card"], m["row"], m["on"]) for m in matches],
+                         [("DRE-9101", "DRE-2937", "declared")])
+        self.assertEqual(sorted(matches[0]["shared"]),
+                         ["console/src/Board.tsx", "scripts/alerts.py"])
+
+    # -- the noise floor ------------------------------------------------------
+
+    def test_one_shared_file_is_not_a_match(self):
+        """Almost every card in this repo touches one file some dead card also
+        touched. A check that fires on all of them is a label, not a
+        measurement — and a critic learns to skip a list that is always long
+        (DRE-3040's five false 'names no repo' findings)."""
+        self.assertEqual(
+            pc.ledger_footprint_matches(self._cards_declaring("scripts/alerts.py"),
+                                        ledger=_ledger(DEAD_ROW)),
+            [],
+        )
+        self.assertEqual(pc.LEDGER_MIN_OVERLAP, 2)
+
+    def test_a_row_that_never_died_is_not_a_death_row(self):
+        """The ledger's population is wider than its deaths: a seed row that
+        was named and then survived says nothing about a footprint."""
+        self.assertEqual(
+            pc.ledger_footprint_matches(
+                self._cards_declaring("scripts/planning_shape.py", "briefs/planner.md"),
+                ledger=_ledger(LIVE_ROW),
+            ),
+            [],
+        )
+
+    # -- what the row's footprint IS -----------------------------------------
+
+    def test_an_unreadable_declaration_falls_back_to_what_the_pieces_touched(self):
+        """Most rows declare nothing — the cards predate the `Files:` line — so
+        the footprint the ledger really has for them is what their split pieces
+        touched, and the finding says which of the two it matched on."""
+        row = ("DRE-2719", ["turn-cap-death", "split"], 2, "UNKNOWN",
+               ["scripts/plan_run.py", "scripts/reconcile.py"], 42.03)
+        matches = pc.ledger_footprint_matches(
+            self._cards_declaring("scripts/plan_run.py", "scripts/reconcile.py"),
+            ledger=_ledger(row),
+        )
+        self.assertEqual([m["on"] for m in matches], ["pieces"])
+
+    def test_a_row_with_no_readable_footprint_at_all_matches_nothing(self):
+        row = ("DRE-2676", ["turn-cap-death"], 3, "UNKNOWN", "UNKNOWN", 64.38)
+        self.assertEqual(
+            pc.ledger_footprint_matches(
+                self._cards_declaring("scripts/a.py", "scripts/b.py"),
+                ledger=_ledger(row)),
+            [],
+        )
+
+    def test_a_card_that_declares_no_footprint_is_not_matched_here(self):
+        """It already has its own finding — the missing `Files:` line — and a
+        second one derived from an empty set would be an invented match."""
+        cards = _cards(("DRE-9102", "Do it.\n## Acceptance criteria\n- [ ] done\n"))
+        self.assertEqual(pc.ledger_footprint_matches(cards, ledger=_ledger(DEAD_ROW)), [])
+
+    # -- the tells ------------------------------------------------------------
+
+    def test_the_tell_reader_is_split_ledgers_own(self):
+        """One reader for the four tells, not a second spelling of them."""
+        self.assertIs(pc.card_tells, split_ledger.tells)
+
+    def test_a_child_carrying_a_tell_that_has_killed_cards_is_a_finding(self):
+        cards = _cards(("DRE-9103", TIERS_CARD))
+        findings = pc.ledger_findings(cards, ledger=_ledger(DEAD_ROW, by_tell=[
+            {"tell": "two-languages-or-tiers", "of": 6, "died": 5,
+             "sentence": "cards carrying the two-languages-or-tiers tell died "
+                         "5 of 6 times"},
+        ]))
+        self.assertTrue(
+            any("DRE-9103" in f and "two-languages-or-tiers" in f
+                and "died 5 of 6 times" in f for f in findings),
+            findings)
+
+    def test_a_tell_that_has_killed_nothing_is_not_a_finding(self):
+        cards = _cards(("DRE-9104", TIERS_CARD))
+        findings = pc.ledger_findings(cards, ledger=_ledger(by_tell=[
+            {"tell": "two-languages-or-tiers", "of": 4, "died": 0,
+             "sentence": "cards carrying the two-languages-or-tiers tell died "
+                         "0 of 4 times"},
+        ]))
+        self.assertEqual([f for f in findings if "two-languages" in f], [])
+
+    # -- it is part of the mechanical half, and it says whether it ran --------
+
+    def test_the_ledger_check_runs_inside_the_mechanical_half(self):
+        cards = self._cards_declaring("scripts/alerts.py", "console/src/Board.tsx")
+        self.assertTrue(
+            any("DRE-2937" in f for f in
+                pc.mechanical_findings(cards, ledger=_ledger(DEAD_ROW))),
+            "the ledger check is not wired into the list the epic gets",
+        )
+
+    def test_the_posted_note_says_which_ledger_it_checked_against(self):
+        """standards/console-honesty.md rule 2: "the check ran and found
+        nothing" and "the check had nothing to read" are different facts."""
+        cards = self._cards_declaring("scripts/only.py")
+        ledger = _ledger(DEAD_ROW)
+        note = pc.findings_note(cards, pc.mechanical_findings(cards, ledger=ledger),
+                                ledger=ledger)
+        self.assertIn("config/split-ledger.json", note)
+        self.assertIn("1 death row", note)
+
+    def test_an_unreadable_ledger_is_said_so_never_read_as_no_matches(self):
+        """Rule 1: a ledger that could not be read did not clear anything."""
+        findings = pc.mechanical_findings(
+            self._cards_declaring("scripts/alerts.py", "console/src/Board.tsx"),
+            ledger=pc.LEDGER_UNREADABLE,
+        )
+        self.assertTrue(any("split ledger" in f and "could not be read" in f
+                            for f in findings), findings)
+        note = pc.findings_note(self._cards_declaring("scripts/a.py"), findings,
+                                ledger=pc.LEDGER_UNREADABLE)
+        self.assertIn("could not be read", note)
+
+    # -- against the shipped ledger, not a fixture ---------------------------
+
+    def test_the_shipped_ledger_flags_this_very_cards_footprint(self):
+        """DRE-3079 declares `scripts/planner_score.py`,
+        `config/planner-audit.json` and `tests/test_planner_score.py` — three
+        of the six files DRE-3016 declared before it died at the turn cap. The
+        check is worth having only if it finds that."""
+        cards = self._cards_declaring(
+            "scripts/plan_critic.py", "scripts/planner_score.py",
+            "config/planner-audit.json", "tests/test_plan_critic.py",
+            "tests/test_planner_score.py", identifier="DRE-3079")
+        matches = pc.ledger_footprint_matches(cards)
+        self.assertIn("DRE-3016", [m["row"] for m in matches], matches)
+
+    def test_a_one_file_card_is_still_clean_against_the_shipped_ledger(self):
+        """The noise floor, against the real file rather than a fixture."""
+        self.assertEqual(pc.mechanical_findings(_cards(("DRE-9105", GOOD_CARD))), [])
 
 
 def _plan_yml_steps():
