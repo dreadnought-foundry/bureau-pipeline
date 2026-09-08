@@ -49,6 +49,40 @@ E       assert 4 == 3
 RATE_LIMIT_LOG = "gh: API rate limit exceeded for installation ID 12345"
 RUNNER_FLAKE_LOG = "The runner has received a shutdown signal."
 
+HARNESS_WORKFLOW = "Integration Harness"
+
+# Run 34258403698, verbatim shape: the harness reached no verdict at all
+# because the SANDBOX's own reconcile sweep had died on Linear's hourly quota.
+# Note what is NOT here — no medic signature matches: "rate limited" is not
+# `\brate limit\b`, and the quota belongs to Linear, not to GitHub.
+SANDBOX_BLOCKED_LOG = """
+[gate_paths] verify
+sandbox probe: harness blocked: sandbox Reconcile failure at \
+2026-09-08T17:46:51Z (linear_ratelimited): reconcile: Linear API returned 400 \
+from https://api.linear.app/graphql: rate limited: 2500 requests/hour exhausted
+
+== harness summary ==
+  bot_pr_flow: PASS
+  gate_paths: BLOCKED at verify
+
+harness BLOCKED BY SANDBOX — this commit is NOT proven and NOT disproven; \
+the next run re-proves it.
+##[error]harness blocked: sandbox Reconcile failure at 2026-09-08T17:46:51Z
+##[error]Process completed with exit code 3.
+"""
+
+# The same marker, printed by the UNIT SUITE rather than by the harness:
+# tests/test_harness_sandbox_deadline.py carries "harness blocked: …" fixtures,
+# so a genuine code failure in that file puts the string in a Pipeline Tests
+# log. That failure is a fix agent's job and must still dispatch.
+UNIT_SUITE_QUOTING_THE_MARKER_LOG = """
+=== FAILURES ===
+____ test_a_blocked_probe_ends_the_wait ____
+>       self.assertEqual(ctx.blocked, "harness blocked: sandbox is down")
+E       AssertionError: None != 'harness blocked: sandbox is down'
+=== 1 failed, 4823 passed ===
+"""
+
 
 def _decide(**overrides):
     kwargs = dict(
@@ -95,6 +129,66 @@ class ClassifyTest(unittest.TestCase):
                 "repair must reuse medic_classify's infra signatures",
             )
 
+    def test_medic_signatures_alone_do_not_see_a_sandbox_block(self):
+        # The gap this class of failure fell through, pinned so the sandbox
+        # clause below is provably load-bearing: run 34258403698's log carries
+        # no medic fingerprint. "rate limited" is not `\\brate limit\\b`, and
+        # the exhausted quota is Linear's, not GitHub's.
+        self.assertFalse(
+            any(sig.search(SANDBOX_BLOCKED_LOG)
+                for sig in red_main_repair.INFRA_SIGNATURES),
+            "if a medic signature already matched, the sandbox clause is dead code",
+        )
+
+    def test_sandbox_blocked_harness_run_is_infra(self):
+        # Run 34258403698: the harness proved NOTHING about the commit — the
+        # sandbox's Linear quota was exhausted — and said so in its own words.
+        # No diff can turn that green; the next harness run re-proves the sha.
+        self.assertTrue(
+            red_main_repair.is_infra_failure(
+                SANDBOX_BLOCKED_LOG, workflow_name=HARNESS_WORKFLOW
+            )
+        )
+
+    def test_the_marker_alone_outside_the_harness_is_not_infra(self):
+        # Scoped like medic_classify's neutral marker (_is_qa_review): the
+        # string only means "the sandbox blocked us" when the HARNESS printed
+        # it. The unit suite quotes it in fixtures, and a red unit suite is
+        # exactly the failure a fix agent exists for.
+        self.assertFalse(
+            red_main_repair.is_infra_failure(
+                UNIT_SUITE_QUOTING_THE_MARKER_LOG,
+                workflow_name="Pipeline Tests",
+            )
+        )
+
+    def test_an_unnamed_workflow_still_dispatches(self):
+        # Missing information must fall toward the CURRENT behaviour: a
+        # wrongly-dispatched agent costs one run, a wrongly-suppressed one
+        # leaves main red with nothing watching it.
+        self.assertFalse(red_main_repair.is_infra_failure(SANDBOX_BLOCKED_LOG))
+
+    def test_a_real_harness_failure_still_dispatches(self):
+        # The harness going red on its OWN assertions is a code failure and
+        # stays one — the backoff keys on the block receipt, not the workflow.
+        self.assertFalse(
+            red_main_repair.is_infra_failure(
+                "[gate_paths] FAIL at verify: expected merge by qa-bot",
+                workflow_name=HARNESS_WORKFLOW,
+            )
+        )
+
+    def test_block_marker_comes_from_promote_channel(self):
+        # Single source of truth: the harness writes this receipt through
+        # promote_channel.BLOCKED_MARKER (scripts/harness/__main__.py's
+        # write_blocked_receipt) and the channel reads the same constant.
+        import promote_channel
+
+        self.assertEqual(
+            red_main_repair.SANDBOX_BLOCKED_MARKER,
+            promote_channel.BLOCKED_MARKER,
+        )
+
 
 class DecideTest(unittest.TestCase):
     def test_fresh_failure_dispatches_attempt_1(self):
@@ -123,6 +217,25 @@ class DecideTest(unittest.TestCase):
         self.assertFalse(d["go"])
         self.assertFalse(d["escalate"])
         self.assertEqual(d["reason"], "infra-backoff")
+
+    def test_sandbox_blocked_harness_run_backs_off_no_dispatch(self):
+        # Guardrail 2 end to end: run 34258403698 spent a repair agent on a
+        # commit the harness never judged. Same shape as any other infra
+        # backoff — no agent, no branch, no triage card.
+        d = _decide(
+            log_text=SANDBOX_BLOCKED_LOG, workflow_name=HARNESS_WORKFLOW
+        )
+        self.assertFalse(d["go"])
+        self.assertFalse(d["escalate"])
+        self.assertEqual(d["reason"], "infra-backoff")
+
+    def test_a_red_unit_suite_quoting_the_marker_still_dispatches(self):
+        d = _decide(
+            log_text=UNIT_SUITE_QUOTING_THE_MARKER_LOG,
+            workflow_name="Pipeline Tests",
+        )
+        self.assertTrue(d["go"])
+        self.assertEqual(d["reason"], "dispatch")
 
     def test_open_repair_pr_anywhere_locks_the_repo(self):
         # Guardrail 3: one repair in flight per repo — even for a DIFFERENT
@@ -206,6 +319,7 @@ class CliTest(unittest.TestCase):
                     "--log-file", log,
                     "--refs-file", refs,
                     "--pulls-file", pulls,
+                    "--workflow-name", kw.get("workflow_name", ""),
                 ],
                 capture_output=True,
                 text=True,
@@ -249,6 +363,48 @@ class CliTest(unittest.TestCase):
         out = self._outputs(res.stdout)
         self.assertEqual(out["go"], "false")
         self.assertEqual(out["reason"], "records-unreadable")
+
+    def test_workflow_name_reaches_the_classifier(self):
+        # The name is what scopes the sandbox-block marker, so it has to
+        # survive the CLI boundary the workflow actually crosses.
+        res = self._run(
+            "[]", "[]",
+            log=SANDBOX_BLOCKED_LOG,
+            workflow_name=HARNESS_WORKFLOW,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = self._outputs(res.stdout)
+        self.assertEqual(out["go"], "false")
+        self.assertEqual(out["reason"], "infra-backoff")
+
+    def test_the_workflow_name_flag_is_optional(self):
+        # A caller pinned to an older reusable workflow omits the flag; that
+        # must keep working, and must keep dispatching.
+        with tempfile.TemporaryDirectory() as td:
+            log = os.path.join(td, "log.txt")
+            refs = os.path.join(td, "refs.json")
+            pulls = os.path.join(td, "pulls.json")
+            open(log, "w").write(STALE_ASSERTION_LOG)
+            open(refs, "w").write("[]")
+            open(pulls, "w").write("[]")
+            res = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(SCRIPTS, "red_main_repair.py"),
+                    "decide",
+                    "--conclusion", "failure",
+                    "--head-branch", "main",
+                    "--default-branch", "main",
+                    "--head-sha", SHA,
+                    "--log-file", log,
+                    "--refs-file", refs,
+                    "--pulls-file", pulls,
+                ],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self._outputs(res.stdout)["reason"], "dispatch")
 
 
 if __name__ == "__main__":

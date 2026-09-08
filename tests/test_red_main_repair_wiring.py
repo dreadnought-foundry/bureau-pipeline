@@ -92,6 +92,22 @@ class DecideBeforeDispatchTest(unittest.TestCase):
     def test_failed_logs_are_fetched_for_classification(self):
         self.assertIn("--log-failed", src(REUSABLE))
 
+    def test_decide_is_told_which_workflow_went_red(self):
+        # The sandbox-block marker is only infra when the HARNESS printed it
+        # (run 34258403698), so the classifier needs the workflow's name — and
+        # it travels by env like every other untrusted event field (DRE-1996).
+        body = src(REUSABLE)
+        self.assertIn("--workflow-name \"$WF_NAME\"", body)
+        step = [
+            s for s in doc(REUSABLE)["jobs"]["repair"]["steps"]
+            if "red_main_repair.py" in (s.get("run") or "")
+        ]
+        self.assertTrue(step, "no decide step runs red_main_repair.py")
+        self.assertEqual(
+            (step[0].get("env") or {}).get("WF_NAME"),
+            "${{ github.event.workflow_run.name }}",
+        )
+
     def test_agent_is_gated_on_the_decision(self):
         self.assertIn("steps.decide.outputs.go == 'true'", src(REUSABLE))
 
