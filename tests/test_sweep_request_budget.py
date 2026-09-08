@@ -11,7 +11,7 @@ filter at all, so every repo's sweep paid one request for every Planning card
 on the whole board, including repos with no candidates.
 
 WHAT IS UNDER TEST:
-  * `active_cards` selects `comments(last: 50)` inline — the shape
+  * `active_cards` selects the fifty-comment window inline — the shape
     `backlog_children` already uses — so one paged read replaces every per-card
     comment fetch in both watchdogs.
   * `flag_stalled_planning` filters by repo, the way `flag_stranded` does: a

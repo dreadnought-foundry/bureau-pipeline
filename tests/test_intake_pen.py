@@ -236,8 +236,8 @@ def test_clearing_the_hold_resumes_the_age_out(monkeypatch):
 # --------------------------------------------------------------------------
 def _parked(card: dict) -> dict:
     """The routing verdict, on the card, the way the board read returns it —
-    `active_cards` selects `comments(last: 50)` inline (DRE-2929), so this
-    costs the sweep no request at all."""
+    `active_cards` selects the fifty-comment window inline (DRE-2929), so
+    this costs the sweep no request at all."""
     body = routing_verdict.verdict_comment(
         "PARKED", "well-formed and deliberately not to be built this quarter")
     card["comments"] = {"nodes": [{"body": body}]}
