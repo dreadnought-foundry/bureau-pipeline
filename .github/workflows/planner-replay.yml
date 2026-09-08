@@ -80,7 +80,7 @@ on:
 
 jobs:
   replay:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     concurrency:
       group: planner-replay-${{ inputs.epic }}

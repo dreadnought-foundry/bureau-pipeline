@@ -90,7 +90,7 @@ jobs:
       (github.event_name != 'pull_request' || github.actor != 'dependabot[bot]') &&
       (github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.pull_request.head.ref, 'agent/'))
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # 60, raised from 45 WITH the turn budgets (DRE-2429, again DRE-2539). This
     # job runs a 120-turn attempt, a 120s backoff and a 160-turn retry; leaving
     # the clock behind would just convert an error_max_turns crash into a job

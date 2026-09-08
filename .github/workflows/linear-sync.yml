@@ -81,7 +81,7 @@ on:
 jobs:
   card-done:
     if: github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -162,7 +162,7 @@ jobs:
   # (Origin: PR #1348 / DRE-1277 waited ~1h between sibling merges.)
   conflict-sweep:
     if: github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - name: Mint bot token

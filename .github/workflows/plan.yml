@@ -59,7 +59,7 @@ jobs:
     # planner runs on the default branch, there is no card branch yet, and on
     # 2026-09-05 every planner limit death had the gate and no card to mark.
     name: "bureau-card: ${{ github.event.client_payload.identifier }}"
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # 45, raised from 30 with DRE-2721. The plan route can now run two
     # planner passes and two critic rounds in one job:
     #
@@ -2126,7 +2126,7 @@ jobs:
   publish:
     needs: plan
     if: needs.plan.outputs.mode == 'plan' && needs.plan.outputs.kids != '0'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - name: Mint bot token

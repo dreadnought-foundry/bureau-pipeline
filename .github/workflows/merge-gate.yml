@@ -103,7 +103,7 @@ jobs:
        github.event.issue.pull_request &&
        contains(github.event.comment.body, 'QA Critic') &&
        github.event.comment.user.login == 'agent-bureau-qa-bot[bot]')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     outputs:
       pr: ${{ steps.pr.outputs.pr }}
@@ -149,7 +149,7 @@ jobs:
     # number means the event pointed at nothing to gate. A custom `if`
     # replaces the implicit success() check, so it is spelled out.
     if: needs.resolve.result == 'success' && needs.resolve.outputs.pr != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # One group per PR, whatever woke the gate — the CI leg, the verdict
     # leg, and a dispatch all land here (DRE-2508). Never cancel-in-progress:
