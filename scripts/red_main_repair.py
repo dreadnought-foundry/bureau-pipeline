@@ -9,10 +9,10 @@ gathers the inputs from GitHub's own records and acts on the output:
 
   * Classify first (guardrail 2). A failure whose logs carry an infra
     fingerprint — the medic's rate-limit/auth signatures (medic_classify.py,
-    the DRE-1921 discipline) plus runner-flake shapes — is NOT a code
-    failure a fix agent can fix. The repair backs off entirely: no agent,
-    no retry (the medic already owns the retry-once; a rate-limit resets on
-    its own).
+    the DRE-1921 discipline) plus runner-flake shapes, plus the integration
+    harness's own sandbox-block receipt — is NOT a code failure a fix agent
+    can fix. The repair backs off entirely: no agent, no retry (the medic
+    already owns the retry-once; a rate-limit resets on its own).
   * Bounded attempts, keyed by the failing SHA (guardrail 2). At most 2
     repair attempts per distinct failing head SHA, tracked mechanically:
     the repair/<sha> (and repair/<sha>-2) branch + its PR ARE the attempt
@@ -33,10 +33,15 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
 
     red_main_repair.py decide \
         --conclusion <c> --head-branch <b> --default-branch <d> \
-        --head-sha <sha> --log-file <f> --refs-file <f> --pulls-file <f>
+        --head-sha <sha> --log-file <f> --refs-file <f> --pulls-file <f> \
+        [--workflow-name <name>]
 
   --refs-file  raw REST payload of GET git/matching-refs/heads/repair/
   --pulls-file raw REST payload of GET pulls?state=all&per_page=100
+  --workflow-name  which workflow went red; scopes the harness's
+                   sandbox-block receipt. Optional — absent means "not the
+                   harness", i.e. the behaviour before DRE-3076's receipt
+                   was read here.
 
 Prints go=, branch=, attempt=, escalate=, reason= lines; exit 0 on every
 decision (including the fail-closed ones). Anything genuinely unexpected
@@ -51,6 +56,7 @@ import re
 import sys
 
 import medic_classify
+import promote_channel
 
 # The full infra fingerprint set for the repair trigger: the medic's
 # rate-limit/auth signatures are the single source of truth (a signature
@@ -65,14 +71,49 @@ INFRA_SIGNATURES = medic_classify._INFRA_SIGNATURES + (
     re.compile(r"no space left on device", re.I),
 )
 
+# The harness's own "the SANDBOX blocked this run" receipt (DRE-3076), written
+# by scripts/harness/__main__.py and read by the release channel — one
+# constant, never a second copy of the string.
+SANDBOX_BLOCKED_MARKER = promote_channel.BLOCKED_MARKER
+
+# Which workflow's log may be believed when it carries that marker. Scoped the
+# way medic_classify scopes its own neutral marker (_is_qa_review), and for the
+# same reason: tests/test_harness_sandbox_deadline.py carries "harness blocked:"
+# FIXTURES, so a red unit suite quotes the string in its diff — and a red unit
+# suite is exactly the failure a fix agent exists for. Only the harness saying
+# it about itself means the sandbox was down.
+_HARNESS_WORKFLOW = re.compile(r"integration harness", re.I)
+
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def is_infra_failure(log_text: str) -> bool:
+def is_sandbox_blocked(workflow_name: str, log_text: str) -> bool:
+    """True iff the INTEGRATION HARNESS ended on its sandbox-block receipt.
+
+    A block is not a verdict: the sandbox died before the scenarios could
+    judge the commit ("NOT proven and NOT disproven; the next run re-proves
+    it"). There is no diff that turns it green — run 34258403698 was a Linear
+    quota exhausted in the sandbox, and the window resetting was the fix —
+    so dispatching a fix agent at it spends a run on an innocent commit.
+    """
+    if not _HARNESS_WORKFLOW.search(workflow_name or ""):
+        return False
+    return SANDBOX_BLOCKED_MARKER in (log_text or "")
+
+
+def is_infra_failure(log_text: str, workflow_name: str = "") -> bool:
     """True iff the failed run's logs carry an infra fingerprint — a failure
-    class where dispatching a fix agent burns quota without fixing anything."""
+    class where dispatching a fix agent burns quota without fixing anything.
+
+    `workflow_name` is optional and defaults to "not the harness": a caller
+    pinned to an older reusable workflow omits it, and missing information
+    must fall toward the CURRENT behaviour. A wrongly-dispatched agent costs
+    one run; a wrongly-suppressed one leaves main red with nothing watching.
+    """
     text = log_text or ""
     if medic_classify.CRITIC_NEUTRAL_MARKER in text:
+        return True
+    if is_sandbox_blocked(workflow_name, text):
         return True
     return any(sig.search(text) for sig in INFRA_SIGNATURES)
 
@@ -95,6 +136,7 @@ def decide(
     log_text: str,
     refs,
     pulls,
+    workflow_name: str = "",
 ) -> dict:
     """The whole trigger decision. `refs` is an iterable of existing branch
     names (plain, e.g. "repair/<sha>"); `pulls` an iterable of dicts with
@@ -112,7 +154,7 @@ def decide(
         return noop("not-default-branch")
     if not _SHA_RE.match(head_sha or ""):
         return noop("bad-head-sha")
-    if is_infra_failure(log_text):
+    if is_infra_failure(log_text, workflow_name):
         return noop("infra-backoff")
 
     record_re = _sha_record_re(head_sha)
@@ -196,6 +238,10 @@ def main(argv: list[str]) -> int:
     d.add_argument("--log-file", required=True)
     d.add_argument("--refs-file", required=True)
     d.add_argument("--pulls-file", required=True)
+    # Optional: which workflow went red, so the sandbox-block receipt is only
+    # believed from the harness. Absent ⇒ "not the harness" ⇒ today's
+    # behaviour, which is the safe direction for missing information.
+    d.add_argument("--workflow-name", default="")
     args = parser.parse_args(argv)
 
     records = _load_records(args.refs_file, args.pulls_file)
@@ -215,6 +261,7 @@ def main(argv: list[str]) -> int:
             log_text=_read_text(args.log_file),
             refs=refs,
             pulls=pulls,
+            workflow_name=args.workflow_name,
         )
         print(f"repair decide: {decision['reason']}"
               + (f" → {decision['branch']}" if decision["go"] else ""),

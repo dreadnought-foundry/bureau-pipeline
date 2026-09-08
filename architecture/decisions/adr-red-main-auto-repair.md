@@ -122,6 +122,19 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
   repair workflow **backs off** entirely (no agent, no retry — the medic
   already owns the retry-once for transient flakes; on a rate-limit, the
   window resetting is the fix).
+  - **A blocked harness is an infra fingerprint too.** The medic's signatures
+    are GitHub-shaped, and the trunk's other prover is the integration
+    harness, whose sandbox has its own quotas. When the sandbox's machinery
+    dies mid-run the driver stops and writes its block receipt
+    (`promote_channel.BLOCKED_MARKER`, DRE-3076) — *this commit is NOT proven
+    and NOT disproven; the next run re-proves it*. That is the opposite of a
+    verdict, so it dispatches nothing. Run 34258403698 predates the clause:
+    the sandbox's reconcile sweep died on Linear's hourly quota, no medic
+    signature matched (`\brate limit\b` does not match "rate limited", and
+    the quota was Linear's), and a repair agent was spent on a commit whose
+    diff was thirteen `runs-on:` lines. The receipt is believed only from the
+    harness's own run — the unit suite carries the same string in fixtures,
+    and a red unit suite is precisely what a fix agent is for.
 - **Bounded attempts, keyed by the failing SHA.** At most **2** repair
   attempts per distinct failing head SHA on `main`, tracked mechanically
   (the `repair/<failing-sha>` branch and its PR are the attempt record — no
