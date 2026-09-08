@@ -102,7 +102,9 @@ jobs:
     # not. `tests/test_groomer_wiring.py` asserts this number against that
     # constant rather than restating either, so a card that raises the ceiling
     # turns the build red instead of leaving the job killed mid-call.
-    timeout-minutes: 20
+    # 35 since DRE-3331: the ceiling doubled once the budget learned that the
+    # model's thinking is billed against it — the widest call is now 1,660s.
+    timeout-minutes: 35
     concurrency:
       group: groomer
       cancel-in-progress: false
@@ -159,8 +161,12 @@ jobs:
             # unchanged, so the switch and the CLI are one contract.
             JUDGE=()
             if [ "$JUDGEMENT" != "on" ]; then JUDGE=(--no-judgement); fi
+            # `--keep-answer` (DRE-3331): the ranked read's raw answer, kept
+            # for the artifact below. Model output over card text — an
+            # artifact, never a comment. Absent when no call answered.
             python3 .bureau-pipeline/scripts/groomer.py propose \
               "${SHAPING[@]}" "${JUDGE[@]}" "${POST[@]}" \
+              --keep-answer judgement-answer.txt \
               --out proposal.json | tee proposal.txt
           fi
           {
@@ -208,5 +214,6 @@ jobs:
           path: |
             proposal.json
             proposal.txt
+            judgement-answer.txt
           if-no-files-found: ignore
           retention-days: 30

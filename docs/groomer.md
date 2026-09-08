@@ -260,7 +260,22 @@ The ranked read has its own stated limits, and they are on the page too:
   when the answer comes back at that ceiling the receipt line says so, names
   the budget, and counts the cards the cut cost — they appear under "Could not
   rank — needs a person" rather than looking like cards the model declined to
-  rank (DRE-3259).
+  rank (DRE-3259);
+- **a run that answered says how many cards it ranked** (DRE-3331). The first
+  proposal a model ever answered read `Ranked by claude-fable-5-1 … in 1 call
+  over 260 cards` and put 204 of them under "Could not rank". Nothing in that
+  line was false: the model had answered for all 260, Claude Code had carried
+  the answer across several API requests when it ran past the output budget, and
+  the run had read only the last one — the plain `--output-format json`
+  envelope's `result` is the last message's text alone. The transport now reads
+  the stream and joins every piece; the receipt line, the proposal JSON and the
+  `🧠 model-attempt:` comment all say `N of M cards ranked` with the rest
+  accounted for (the model declined, never reached, unreadable, over the
+  ceiling); a joined answer says how many pieces it came in; and the raw answer
+  is kept as `judgement-answer.txt` in the run artifact, because the run that
+  found this kept nothing. The budget also learned that the model's thinking is
+  billed against it — 36,402 of 46,640 output tokens on the 263-card lane — so
+  it is sized for thinking and text both, and the ceiling is 64,000.
 
 The second critic's cross-epic sight (DRE-2721, D3) catches what the groomer
 missed. That is a backstop, not a duplicate: the groomer prevents the collision

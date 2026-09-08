@@ -102,7 +102,15 @@ CLI:
                                        [--batch-cycles 1] [--priority portico]
                                        [--window-days 14] [--no-judgement]
                                        [--out proposal.json] [--post DRE-N]
+                                       [--keep-answer judgement-answer.txt]
     python3 scripts/groomer.py drain   --card DRE-N [same shaping flags]
+
+`--keep-answer` writes the ranked read's raw answer — every piece of a
+continued one, joined — beside the proposal, for the run artifact (DRE-3331).
+The first run that ever answered kept nothing, and the answer had to be bought
+again before anyone could see that 204 of its 260 lines had been read off the
+wrong field. Written only when a call answered; the artifact step ignores
+absence. It is model output over card text: an artifact, never a comment.
 
 `drain` re-derives the proposal from live state and acts only if the approval
 on the card names the batch it just derived.
@@ -1147,6 +1155,16 @@ def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
         # were capped: two facts, two types, and neither is read for the other.
         "output_budget": int(getattr(judgement, "output_budget", 0) or 0),
         "truncated": bool(getattr(judgement, "truncated", False)),
+        # What the read DID with the population (DRE-3331): how many cards it
+        # ranked, and why every other one is unranked — the model said so, the
+        # answer never reached it, the line was garbled, the ceiling dropped
+        # it. `unranked` above lists the cards; this says which of those four
+        # facts each count is, because the per-card reason reads the same for
+        # all of them. `continuations` is how many times the CLI carried the
+        # answer into a fresh request; the pieces were joined before parsing.
+        "ranked": int(getattr(judgement, "ranked", 0) or 0),
+        "accounting": dict(getattr(judgement, "accounting", None) or {}),
+        "continuations": int(getattr(judgement, "continuations", 0) or 0),
     }
 
 
@@ -1467,7 +1485,26 @@ def _receipt_line(proposal: dict) -> str:
         line += (f" {cut}; "
                  f"{_plural(len(block.get('unranked') or []), 'card')} could "
                  f"not be ranked for that reason")
+    # The count (DRE-3331), read only when the proposal carries it: a run that
+    # says `answered` says how many cards that answer ranked, and where the
+    # rest went. A proposal written before this key invents no number.
+    if "ranked" in block:
+        line += (f" — {block['ranked']} of "
+                 f"{_plural(proposal['population'], 'card')} ranked")
+        counts = block.get("accounting") or {}
+        rest = [f"{counts[key]} {label}" for key, label in (
+            ("declined", "the model declined"),
+            ("omitted", "never reached"),
+            ("garbled", "unreadable"),
+            ("ceiling", "over the ceiling"),
+        ) if counts.get(key)]
+        if rest:
+            line += " (" + ", ".join(rest) + ")"
     line += "."
+    if block.get("continuations"):
+        line += (f" The answer came back in "
+                 f"{_plural(int(block['continuations']) + 1, 'piece')} and "
+                 f"was joined before it was read.")
     if block.get("withheld"):
         line += (f" {_plural(len(block['withheld']), 'reason')} written in "
                  f"technical terms were withheld and are in the run log.")
@@ -1751,6 +1788,17 @@ def _build(args) -> dict:
             print(f"groomer: the answer was cut at that budget — "
                   f"{len(judgement.unranked)} card(s) came back unranked",
                   file=sys.stderr)
+        # The number a run that says `answered` owes (DRE-3331), and the raw
+        # answer it was read off, kept where the workflow can pick it up.
+        print(f"groomer: the ranked read ranked {judgement.ranked} of "
+              f"{len(cards)} card(s)", file=sys.stderr)
+        keep = getattr(args, "keep_answer", None)
+        if keep and judgement.answer is not None:
+            with open(keep, "w", encoding="utf-8") as fh:
+                fh.write(judgement.answer)
+            print(f"groomer: kept the ranking answer at {keep} "
+                  f"({len(judgement.answer.splitlines())} line(s))",
+                  file=sys.stderr)
     return propose(cards, cycles=cycles, capacity=args.capacity,
                    batch_cycles=args.batch_cycles, lane=args.lane,
                    window_days=args.window_days, judgement=judgement,
@@ -1768,6 +1816,10 @@ def main(argv=None) -> int:
     _shaping(p_propose)
     p_propose.add_argument("--out", help="write the proposal JSON here")
     p_propose.add_argument("--post", help="post the proposal to this card")
+    p_propose.add_argument("--keep-answer", dest="keep_answer",
+                           help="write the ranked read's raw answer here, for "
+                                "the run artifact — only when a call answered "
+                                "(DRE-3331)")
 
     p_drain = sub.add_parser("drain", help="move the APPROVED batch onward")
     _shaping(p_drain)

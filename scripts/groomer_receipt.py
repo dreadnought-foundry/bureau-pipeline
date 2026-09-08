@@ -70,6 +70,12 @@ def receipt_line(proposal: dict) -> str | None:
     line = (f"{MARKER} {block.get('receipt')} — groomer judgement ranked the "
             f"census in {_plural(calls, 'call')}")
 
+    # The count (DRE-3331), read when the proposal carries it: `answered` on
+    # its own was the whole receipt of a run that ranked 56 cards of 260.
+    if "ranked" in block and proposal.get("population") is not None:
+        line += (f" — {int(block.get('ranked') or 0)} of "
+                 f"{_plural(int(proposal['population']), 'card')} ranked")
+
     # DRE-3259's two keys, read when present and never inferred from the other.
     budget = int(block.get("output_budget") or 0)
     if budget > 0:

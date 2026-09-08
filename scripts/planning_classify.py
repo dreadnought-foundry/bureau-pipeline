@@ -112,6 +112,30 @@ by a committed envelope rather than remembered
 nothing changes either: a cut answer is not a JSON object, so `parse` refuses it
 exactly as it refused it before.
 
+## The CLI continues a cut answer, and the seam reads every piece (DRE-3331)
+
+What the CLI does BEFORE it writes that cut message, captured from the
+installed 2.1.263 and pinned by
+`tests/fixtures/claude_code_continuation_stream.jsonl`: a response that runs
+past `CLAUDE_CODE_MAX_OUTPUT_TOKENS` is CONTINUED in a fresh API request, up to
+three times, inside the one turn. Each continuation is its own assistant
+message and restarts at the line the cut fell in; `num_turns` stays 1,
+`subtype` stays `success`, the exit code is 0 — and under `--output-format
+json` the envelope's `result` is the LAST message's text and nothing else. The
+groomer's first real proposal ranked exactly the last 56 rows of a 260-row
+census that way, with every receipt reading as a clean run. Only when the
+third continuation is also cut does the CLI give up and write the message
+`cut_off` reads.
+
+So `_cli_argv` asks for `stream-json` (with `--verbose`, which print mode
+requires), `assistant_chunks` reads every assistant message off the stream,
+`join_chunks` drops the fragment each chunk but the last was cut in — the next
+chunk writes that line whole — and `Answer.continuations` says how many pieces
+there were. A stdout with no stream on it (a CLI override that prints the plain
+envelope) is still read off `result`. And the budget a caller sizes is spent
+on THINKING too: the 263-card reproduction spent 36,402 of its 46,640 output
+tokens thinking, and the first of its three requests wrote no text at all.
+
 ## The vendor boundary (standards/vendor-boundaries.md)
 
 Q1 actor — the call is made by the plan job itself, with the same CLAUDE
@@ -267,6 +291,13 @@ class Answer:
     # `TransportError` means nothing read the prompt at all, which is a
     # different fact and stays a different one.
     truncated: bool = False
+    # How many times the Claude Code CLI CONTINUED the answer in a fresh API
+    # request after one ran past the output budget (DRE-3331). 0 is one request
+    # and the whole answer in it; 1 or more is an answer that came back in
+    # pieces and was joined here. Reported rather than swallowed, because the
+    # first real groomer run lost 204 of 260 lines to exactly one of these and
+    # every receipt said `success`.
+    continuations: int = 0
 
 
 @dataclass(frozen=True)
@@ -779,8 +810,110 @@ def _cli_argv(model: str) -> list:
     argv += ["-p", "--max-turns", MAX_TURNS]
     if model:
         argv += ["--model", model]
-    argv += ["--allowedTools", ALLOWED_TOOLS, "--output-format", "json"]
+    # `stream-json`, not `json` (DRE-3331): the plain envelope's `result` is the
+    # text of the LAST assistant message only, and a long answer is more than
+    # one — see `assistant_chunks`. Print mode refuses stream-json without
+    # `--verbose`; the result envelope is still the last line of the stream.
+    argv += ["--allowedTools", ALLOWED_TOOLS,
+             "--output-format", "stream-json", "--verbose"]
     return argv
+
+
+def stream_events(stdout: str) -> list:
+    """Every JSON event on a `--output-format stream-json` stdout, in order.
+
+    One event per line; anything that is not a JSON object — the package fetch
+    a cold runner prints first, a blank line — is skipped, never a failure.
+    """
+    events = []
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            found = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(found, dict):
+            events.append(found)
+    return events
+
+
+def assistant_chunks(events: list) -> list:
+    """The text of each assistant MESSAGE the CLI wrote, in order (DRE-3331).
+
+    What the CLI does when a response runs past `CLAUDE_CODE_MAX_OUTPUT_TOKENS`,
+    captured from the installed 2.1.263 and pinned by
+    `tests/fixtures/claude_code_continuation_stream.jsonl`: it does not stop.
+    It CONTINUES the same turn in a fresh API request — up to three times —
+    and each continuation is its own assistant message, restarting at the line
+    the cut fell in. `num_turns` stays 1, `subtype` stays `success`, and the
+    plain envelope's `result` is the last message's text alone. The groomer's
+    first real proposal ranked exactly the last 56 rows of a 260-row census
+    that way, with every receipt reading as a clean run.
+
+    One chunk per message id, because the stream carries each message twice —
+    once for its thinking block, once for its text — and the longest text seen
+    under an id is that message's text. A message that is the CLI's own words
+    for a cut (`cut_off`) is not a chunk: it is the CLI talking, not the model.
+    """
+    return [text for text in _assistant_messages(events).values() if text]
+
+
+def continuations(events: list) -> int:
+    """How many API requests past the first the CLI made inside the one turn.
+
+    Counted off the distinct assistant message ids, the CLI's error message for
+    a cut excluded — a request that was cut before it wrote any text (its whole
+    budget spent thinking) is still a request that was made and continued.
+    """
+    return max(0, len(_assistant_messages(events)) - 1)
+
+
+def _assistant_messages(events: list) -> dict:
+    """`{message id: its text}`, in first-appearance order, the CLI's own cut
+    message left out. An id whose events carried no text maps to ``."""
+    texts: dict = {}
+    for event in events:
+        if not isinstance(event, dict) or event.get("type") != "assistant":
+            continue
+        message = event.get("message") or {}
+        if not isinstance(message, dict):
+            continue
+        key = str(message.get("id") or event.get("uuid") or len(texts))
+        text = "".join(
+            str(block.get("text") or "")
+            for block in (message.get("content") or [])
+            if isinstance(block, dict) and block.get("type") == "text")
+        if cut_off({"result": text}):
+            continue
+        if len(text) >= len(texts.get(key, "")):
+            texts[key] = text
+    return texts
+
+
+def join_chunks(chunks: list) -> str:
+    """One answer out of the CLI's chunks (DRE-3331).
+
+    A continuation restarts at the line the previous request was cut in, so
+    every chunk but the last ends in a fragment the next chunk writes whole —
+    `44 | x⏎45` then `45 | x⏎46 | x`. Joined naively that is `4545 | x`, a line
+    no parser reads, or `45` on a line of its own, which a first-line-wins
+    parser then keeps over the whole one. So the fragment goes from every chunk
+    but the last. The LAST chunk keeps its final line whatever it looks like:
+    whether the run was cut is the seam's to say (`Answer.truncated`), and
+    `groom_judgement.whole_lines` drops that fragment only when it was.
+    """
+    if not chunks:
+        return ""
+    parts = []
+    for chunk in chunks[:-1]:
+        if chunk.endswith(("\n", "\r")):
+            parts.append(chunk.rstrip("\r\n"))
+        else:
+            parts.append("\n".join(chunk.splitlines()[:-1]))
+    parts.append(chunks[-1])
+    return "\n".join(part for part in parts if part)
 
 
 def _envelope(stdout: str) -> dict | None:
@@ -941,19 +1074,28 @@ def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
             f"answer: {stderr or stdout[:400]}",
             f"exit {done.returncode}" if done.returncode else "no answer",
         )
+    # The answer is the assistant messages on the stream, joined — NOT the
+    # envelope's `result`, which is the last message's text alone (DRE-3331,
+    # `assistant_chunks`). A stdout with no stream on it — a CLI override that
+    # prints the plain envelope — is read off `result` as before.
+    events = stream_events(stdout)
+    chunks = assistant_chunks(events)
+    text = join_chunks(chunks) if chunks else str(envelope.get("result") or "")
+    continued = continuations(events)
     # BEFORE either error check, because the CLI reports a cut as an api error:
     # `is_error` is true and the process exits non-zero (DRE-3258). A model that
     # read the prompt and answered part of it is not a transport failure, so the
     # part comes back and the caller decides what to do with it.
     #
-    # What the caller has to plan for: on this path the PARTIAL TEXT DOES NOT
-    # SURVIVE. Claude Code 2.1.263 emits the cut as an api-error assistant
-    # message and clears the accumulated text behind it, so `result` carries the
-    # message and nothing else. The cut is reported honestly; the partial answer
-    # is the CLI's to give and it does not give it under `--output-format json`.
+    # Under the plain envelope the partial text did not survive a cut: the CLI
+    # emits the cut as an api-error assistant message and `result` carries that
+    # message and nothing else. On the stream the messages written before the
+    # CLI gave up are still there, and they are what comes back — with the
+    # CLI's own sentence for the cut left out of them (`_assistant_messages`).
     if cut_off(envelope):
-        return Answer(text=str(envelope.get("result") or ""),
-                      model=answered_model(envelope, model), truncated=True)
+        return Answer(text=text if chunks else str(envelope.get("result") or ""),
+                      model=answered_model(envelope, model), truncated=True,
+                      continuations=continued)
     if envelope.get("is_error") or envelope.get("subtype") not in (None, "success"):
         raise TransportError(
             f"the classification call reported subtype "
@@ -967,8 +1109,8 @@ def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
             f"success: {stderr or stdout[:400]}",
             f"exit {done.returncode}",
         )
-    return Answer(text=str(envelope.get("result") or ""),
-                  model=answered_model(envelope, model))
+    return Answer(text=text, model=answered_model(envelope, model),
+                  continuations=continued)
 
 
 def _call_real(model: str, prompt: str, *, max_tokens: int | None = None,
