@@ -82,11 +82,15 @@ def test_the_queued_duplicate_sees_the_run_it_was_queued_behind():
     """Run 34281711446 was created at 21:38:27 while 34279893974 (21:19:00 →
     21:52:45) was still going. That overlap is the whole defect, and it is
     invisible to a liveness check at start time: 34279893974 had finished
-    five seconds before 34281711446 got a runner."""
+    five seconds before 34281711446 got a runner, at 21:52:50.
+
+    34279866400 is deliberately NOT in the answer — it ended at 21:38:06,
+    twenty-one seconds before this dispatch was created. Overlap is measured,
+    not assumed from being earlier."""
     live = dedupe_dispatch.in_flight_when_dispatched(
         DRE_3244_RUNS, "34281711446", "2026-09-08T21:38:27Z"
     )
-    assert [r["id"] for r in live] == ["34279866400", "34279893974"]
+    assert [r["id"] for r in live] == ["34279893974"]
 
 
 @pytest.mark.parametrize(
@@ -128,10 +132,14 @@ def test_a_run_created_after_this_one_is_never_in_flight_for_it():
 
 
 def test_our_own_run_never_counts():
-    """A job re-run keeps the run id; the run must not refuse on itself."""
+    """A job re-run keeps the run id; the run must not refuse on itself. Here
+    34279893974 IS its own overlapping sibling by the clock — created before
+    itself is false, but the id check is what a re-run relies on."""
+    itself = [_run("34279893974", "2026-09-08T21:19:00Z",
+                   "2026-09-08T21:52:45Z")]
     assert dedupe_dispatch.in_flight_when_dispatched(
-        DRE_3244_RUNS, "34281711446", "2026-09-08T21:38:27Z"
-    ) == [r for r in DRE_3244_RUNS if r["id"] in ("34279866400", "34279893974")]
+        itself, "34279893974", "2026-09-08T21:19:00Z"
+    ) == []
 
 
 def test_same_second_dispatches_break_the_tie_on_run_id():
@@ -294,6 +302,9 @@ def _gh_output(tmp_path, monkeypatch):
     out = tmp_path / "github_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("GITHUB_RUN_ID", "34281711446")
+    # Pinned, not inherited: this suite runs INSIDE Actions, and a re-run of
+    # the CI job would otherwise hand every test below the re-run carve-out.
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("GITHUB_REPOSITORY", "dreadnought-foundry/bureau-pipeline")
     monkeypatch.setenv("TRIGGER_STATE", "planning")
     return out
@@ -350,6 +361,32 @@ def test_cmd_plan_gate_receipt_failure_still_refuses(_gh_output):
          patch.object(dedupe_dispatch, "_current_lane", return_value="Green Light"), \
          patch.object(dedupe_dispatch.linear_ops, "cmd_comment",
                       side_effect=RuntimeError("linear 500")):
+        dedupe_dispatch.cmd_plan_gate("DRE-3244")
+    assert "skip=true" in _gh_output.read_text()
+
+
+def test_cmd_plan_gate_lets_a_rerun_through(_gh_output, monkeypatch):
+    """limit_recovery.py brings a plan-stage limit death back by RE-RUNNING
+    the original run when the card is past Planning exit. A re-run carries the
+    original dispatch's creation time and trigger lane, so both checks would
+    read a world that moved on since a dispatch nobody is making again —
+    refusing it would break the one recovery that has no other route."""
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    with patch.object(dedupe_dispatch, "_run_meta") as meta, \
+         patch.object(dedupe_dispatch, "_current_lane") as lane, \
+         patch.object(dedupe_dispatch.linear_ops, "cmd_comment") as receipt:
+        dedupe_dispatch.cmd_plan_gate("DRE-3244")
+    assert "skip=false" in _gh_output.read_text()
+    receipt.assert_not_called()
+    meta.assert_not_called()
+    lane.assert_not_called()
+
+
+def test_a_first_attempt_is_not_a_rerun(_gh_output, monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    with patch.object(dedupe_dispatch, "_run_meta", return_value={}), \
+         patch.object(dedupe_dispatch, "_current_lane", return_value="Green Light"), \
+         patch.object(dedupe_dispatch.linear_ops, "cmd_comment"):
         dedupe_dispatch.cmd_plan_gate("DRE-3244")
     assert "skip=true" in _gh_output.read_text()
 
@@ -423,7 +460,8 @@ def test_every_step_the_card_gate_guards_also_honors_the_skip():
     leaked = [
         s.get("name")
         for s in _steps()
-        if "steps.gate.outputs.bounced" in str(s.get("if", ""))
+        if s.get("id") != "dedupe"  # the guard cannot skip on its own answer
+        and "steps.gate.outputs.bounced" in str(s.get("if", ""))
         and not re.search(r"steps\.dedupe\.outputs\.skip\s*!=\s*'true'",
                           str(s.get("if", "")))
     ]
