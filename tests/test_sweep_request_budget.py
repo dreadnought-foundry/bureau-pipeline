@@ -48,6 +48,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import validate_card  # noqa: E402
 
@@ -116,7 +117,9 @@ def _card(
         "updatedAt": _iso(minutes_stale),
         "state": {"name": state},
         "labels": {"nodes": [{"name": n} for n in labels]},
-        "comments": {"nodes": [{"body": b} for b in bodies]},
+        # NEWEST FIRST, the order Linear answers a comment window in
+        # (DRE-3250); `bodies` is written oldest→newest.
+        "comments": {"nodes": [{"body": b} for b in reversed(list(bodies))]},
     }
 
 
@@ -199,13 +202,13 @@ def _linear(fake):
 # 1: the board read carries the comments
 # --------------------------------------------------------------------------
 def test_active_cards_selects_the_cards_comments_inline():
-    """The shape `backlog_children` already uses (`comments(last: 50)`), so the
-    watchdogs read bodies off the card they were handed."""
+    """The shape `backlog_children` already uses (`linear_ops.COMMENT_WINDOW_GQL`),
+    so the watchdogs read bodies off the card they were handed."""
     fake = FakeLinear()
     with _linear(fake):
         reconcile.active_cards(reconcile.WATCHDOG_LANES)
     assert fake.board_reads == 1
-    assert "comments(last: 50)" in fake.queries[0], (
+    assert linear_ops.COMMENT_WINDOW_GQL in " ".join(fake.queries[0].split()), (
         "active_cards must select the card's comments inline — without them "
         "every watchdog pays one request per card"
     )

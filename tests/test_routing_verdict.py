@@ -700,7 +700,11 @@ class TestThePromoterRoutesOnTheVerdict:
         assert board.promote() == 0
 
     def test_the_backlog_query_still_fetches_the_comments_the_verdict_lives_in(self):
-        assert "comments(last: 50)" in inspect.getsource(reconcile.backlog_children)
+        source = inspect.getsource(reconcile.backlog_children)
+        # The window is `linear_ops.COMMENT_WINDOW_GQL` — one definition, and
+        # the fifty NEWEST comments, which is where a re-planned card's live
+        # verdict is (DRE-3250).
+        assert "COMMENT_WINDOW_GQL" in source
 
 
 # ===========================================================================

@@ -68,11 +68,16 @@ RUN_URL = "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/2912
 
 
 def _comments_payload(nodes):
-    """Linear comments query payload: [(body, createdAt-minutes-ago), ...]."""
+    """Linear comments query payload: [(body, createdAt-minutes-ago), ...],
+    written oldest→newest and served NEWEST FIRST, the order Linear answers a
+    comment window in (DRE-3250)."""
     return {
         "issue": {
             "comments": {
-                "nodes": [{"body": b, "createdAt": _iso(age)} for b, age in nodes]
+                "nodes": [
+                    {"body": b, "createdAt": _iso(age)}
+                    for b, age in reversed(list(nodes))
+                ]
             }
         }
     }

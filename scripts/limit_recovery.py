@@ -99,6 +99,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dead_run  # noqa: E402 — the marker's one definition
+import linear_ops  # noqa: E402 — the comment window's one direction (DRE-3250)
 import pipeline_act  # noqa: E402 — the trailer is the one claim of pipeline authorship
 
 RECOVERY_TAG = "limit-recovery"
@@ -183,7 +184,10 @@ def _until(marker: dict) -> str:
 
 
 def _bodies(card: dict) -> list[str]:
-    return [n.get("body") or "" for n in (card.get("comments") or {}).get("nodes", [])]
+    """The card's comment window, oldest→newest — `waiting()` reads the NEWEST
+    marker and the receipts that supersede it, so the order and WHICH fifty
+    both matter (`linear_ops.window_nodes`, DRE-3250)."""
+    return [n.get("body") or "" for n in linear_ops.window_nodes(card.get("comments"))]
 
 
 def _held(card: dict) -> bool:

@@ -9,7 +9,7 @@ the medic were single digits. A quiet hour fit; a busy one — six repos
 sweeping, five merges — crossed the line, twice.
 
 WHERE THE SWEEP SPENT IT. The board reads already carried every card's
-comments inline (`comments(last: 50)`, DRE-2929), and then the pass went back
+comments inline (the fifty-comment window, DRE-2929), and then the pass went back
 to Linear for the SAME comments, one request per card, wherever a helper took
 an identifier instead of the card: `linear_ops.comment_bodies(ident)`,
 `count_comments(ident, tag)` (behind every `_surface_once` refusal — one per
@@ -143,9 +143,12 @@ def _comment(body: str, *, by: str | None = FLEET, minutes_ago: float = 60.0) ->
 
 
 def _comments(nodes=(), *, exhausted: bool = False) -> dict:
+    """One inline window as Linear answers it: NEWEST FIRST, and `hasNextPage`
+    for "there are OLDER comments beyond this window" (DRE-3250). `nodes` is
+    written oldest→newest, the order the card reads in."""
     return {
-        "pageInfo": {"hasPreviousPage": exhausted, "endCursor": "cursor-window-end"},
-        "nodes": list(nodes),
+        "pageInfo": {"hasNextPage": exhausted, "endCursor": "cursor-window-end"},
+        "nodes": list(reversed(list(nodes))),
     }
 
 
@@ -336,16 +339,16 @@ class FakeLinear:
             return {"issue": {"children": {"nodes": kids}}}
         if "comments(" in q:
             conn = card["comments"]
-            if v.get("before"):
-                # The page beyond an exhausted window. Linear orders comments
-                # newest first, so `last: 50` is the fifty OLDEST and the rest
-                # of the thread is NEWER — `before:` the window's endCursor
-                # pages toward it, ascending (measured live on DRE-3060,
-                # 2026-09-06).
-                newer = card.get("newer_comments") or []
+            if v.get("after"):
+                # The page beyond a partial window. Linear orders comments
+                # newest first, so `first: 50` is the fifty NEWEST and the rest
+                # of the thread is OLDER — `after:` the window's endCursor
+                # pages toward it, newest first (measured live on DRE-3060,
+                # 2026-09-06; DRE-3250 turned the window this way round).
+                older = card.get("older_comments") or []
                 return {"viewer": {"id": FLEET}, "issue": {"comments": {
-                    "pageInfo": {"hasPreviousPage": False, "endCursor": "cursor-newest"},
-                    "nodes": newer,
+                    "pageInfo": {"hasNextPage": False, "endCursor": "cursor-oldest"},
+                    "nodes": list(reversed(list(older))),
                 }}}
             return {"viewer": {"id": FLEET}, "issue": {"comments": conn}}
         if "history(last: 10)" in q:
@@ -512,16 +515,17 @@ def test_the_sweep_still_refuses_every_unreleased_child_out_loud():
 # --------------------------------------------------------------------------
 def test_an_exhausted_inline_window_costs_one_paged_read_per_pass():
     """A card with more comments than the inline window carries gets ONE
-    paged read — the full thread, oldest first, the window and then the
-    pages beyond it — and every later reader in the pass is served from it.
+    paged read — the full thread, oldest first, the pages beyond the window
+    and then the window — and every later reader in the pass is served from it.
 
-    Linear orders comments newest first, so a `last: 50` window is the fifty
-    OLDEST and what lies beyond it is NEWER (measured live, 2026-09-06): the
-    receipt a sweep most needs to see on a busy card is exactly the one the
-    window leaves out."""
-    window = [_comment(f"old {n}") for n in range(linear_ops.COMMENT_WINDOW)]
+    Linear orders comments newest first, so a `first: 50` window is the fifty
+    NEWEST and what lies beyond it is OLDER (measured live, 2026-09-06;
+    DRE-3250 turned the window this way round): the receipt a sweep most needs
+    to see on a busy card is in the window, and the history behind it is what
+    the page adds."""
+    window = [_comment(f"recent {n}") for n in range(linear_ops.COMMENT_WINDOW)]
     busy = _card("DRE-50", reconcile.REVIEW_LANE, comments=_comments(window, exhausted=True))
-    busy["newer_comments"] = [_comment("a newer receipt"), _comment("the newest receipt")]
+    busy["older_comments"] = [_comment("the oldest receipt"), _comment("an older receipt")]
     fake = FakeLinear([busy])
     with _linear(fake):
         linear_ops.open_pass()
@@ -529,8 +533,10 @@ def test_an_exhausted_inline_window_costs_one_paged_read_per_pass():
         first = linear_ops.comment_bodies("DRE-50")
         again = linear_ops.comment_bodies("DRE-50")
         count = linear_ops.count_comments("DRE-50", "receipt")
-    assert first[0] == "old 0", "the window leads, oldest first"
-    assert first[-2:] == ["a newer receipt", "the newest receipt"], "the newer page trails"
+    assert first[:2] == ["the oldest receipt", "an older receipt"], "the older page leads"
+    assert first[-1] == f"recent {linear_ops.COMMENT_WINDOW - 1}", (
+        "the window trails, newest last"
+    )
     assert len(first) == linear_ops.COMMENT_WINDOW + 2
     assert again == first
     assert count == 2, "a receipt beyond the window still counts"
@@ -588,9 +594,11 @@ def test_a_board_read_selects_what_every_reader_needs():
         reconcile.active_cards(reconcile.WATCHDOG_LANES)
         reconcile.backlog_children()
     for query, _ in fake.queries:
-        assert "comments(last: 50)" in query
-        assert "createdAt" in query.split("comments(last: 50)")[1]
-        assert "user { id }" in query.split("comments(last: 50)")[1]
+        flat = " ".join(query.split())
+        assert f"comments(first: {linear_ops.COMMENT_WINDOW})" in flat
+        assert linear_ops.COMMENT_WINDOW_GQL in flat
+        assert "createdAt" in flat.split("comments(first:")[1]
+        assert "user { id }" in flat.split("comments(first:")[1]
 
 
 def test_outside_a_pass_the_readers_are_unchanged():

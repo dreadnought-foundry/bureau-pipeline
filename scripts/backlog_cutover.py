@@ -180,6 +180,11 @@ class CutoverUnreadable(Exception):
 # `gql_paged` refuses one that cannot paginate. The sweep's unpaginated read
 # made its world the first 100 rows of a 226-card Backlog (DRE-2681); a cutover
 # that moves page one has moved nothing and left a second population behind.
+#
+# The comment window is `linear_ops.COMMENT_WINDOW_GQL` — the one definition,
+# the card's fifty NEWEST comments (DRE-3250) — because `in_flight_reason`
+# below asks whether a run receipt is still ticking, and the oldest fifty of a
+# busy card answer that with a receipt from a run that ended hours ago.
 POPULATION_QUERY = """query($lane: String!, $after: String) {
   issues(first: 100, after: $after, filter: {
     team: {key: {eq: "DRE"}},
@@ -190,11 +195,11 @@ POPULATION_QUERY = """query($lane: String!, $after: String) {
       state { name }
       labels { nodes { name } }
       parent { identifier state { name } }
-      comments(last: 50) { nodes { body createdAt } }
+      %s
     }
     pageInfo { hasNextPage endCursor }
   }
-}"""
+}""" % linear_ops.COMMENT_WINDOW_GQL
 
 
 def read_population(lops, lane: str = CUTOVER_FROM) -> list[dict]:
@@ -273,7 +278,9 @@ def _labels(card: dict) -> list:
 
 
 def _comments(card: dict) -> list:
-    return list((card.get("comments") or {}).get("nodes", []))
+    """The card's comment window, oldest→newest — `linear_ops.window_nodes` is
+    the one place the API's newest-first order is reversed (DRE-3250)."""
+    return linear_ops.window_nodes(card.get("comments"))
 
 
 def in_promoter_reach(card: dict) -> bool:

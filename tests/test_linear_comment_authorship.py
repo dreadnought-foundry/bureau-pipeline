@@ -1,7 +1,7 @@
 """A comment thread carries WHO wrote each comment (DRE-2721 review).
 
-`comment_bodies()` asked Linear for `comments(last: 50) { nodes { body } }` —
-bodies and nothing else. Anything reading a record out of that thread therefore
+`comment_bodies()` asked Linear for a fifty-comment window of
+`nodes { body }` — bodies and nothing else. Anything reading a record out of that thread therefore
 believed every commenter on the card equally, and `plan_critic.py` reads this
 gate's whole round history out of it: two stray comments carrying a forged
 `plan-critic: ... result=SEND_BACK` line were enough to override a real
@@ -38,12 +38,14 @@ import linear_ops  # noqa: E402
 
 ME = "user-the-pipelines-own-key"
 
+# NEWEST FIRST, the order Linear answers a comment window in (DRE-3250) — the
+# readers below reverse it once and report the thread oldest→newest.
 THREAD = {
     "viewer": {"id": ME},
     "issue": {"comments": {"nodes": [
-        {"body": "the pipeline's own round marker", "user": {"id": ME}},
-        {"body": "a teammate's note", "user": {"id": "user-somebody-else"}},
         {"body": "an integration's post", "user": None},
+        {"body": "a teammate's note", "user": {"id": "user-somebody-else"}},
+        {"body": "the pipeline's own round marker", "user": {"id": ME}},
     ]}},
 }
 

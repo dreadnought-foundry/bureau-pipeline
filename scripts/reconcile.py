@@ -952,16 +952,22 @@ def reset_sweep_cards() -> None:
 def card_comment_bodies(card: dict) -> list[str]:
     """The card's comment bodies, oldest→newest, off the query that fetched it.
 
-    The same list `linear_ops.comment_bodies` returns — same `comments(last:
-    50)` window — for zero requests, because `active_cards` and
-    `backlog_children` both select it inline. A card fetched by a query that
-    did NOT select comments reads as having none, which is why nothing here
-    falls back to a per-card fetch: a silent fallback would put back exactly
-    the request this exists to remove (DRE-2929).
+    The same list `linear_ops.comment_bodies` returns — same
+    `linear_ops.COMMENT_WINDOW_GQL` window, the card's fifty NEWEST comments —
+    for zero requests, because `active_cards` and `backlog_children` both
+    select it inline. A card fetched by a query that did NOT select comments
+    reads as having none, which is why nothing here falls back to a per-card
+    fetch: a silent fallback would put back exactly the request this exists to
+    remove (DRE-2929).
+
+    The order comes from `linear_ops.window_nodes`, the one place the API's
+    newest-first ordering is reversed (DRE-3250) — every caller below reads
+    this list as "the card's recent history, newest last", and on a card past
+    fifty comments the untouched window is the OLDEST fifty.
     """
     return [
         node.get("body") or ""
-        for node in (card.get("comments") or {}).get("nodes", [])
+        for node in linear_ops.window_nodes(card.get("comments"))
     ]
 
 
@@ -997,9 +1003,10 @@ def card_is_epic(card: dict, bodies: list[str] | None = None) -> bool:
 
 
 def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
-    """The paged board read itself. `comments(last: 50)` is inline — the shape
-    backlog_children already uses — so every reader downstream gets the bodies
-    with the card instead of buying them one request at a time (DRE-2929).
+    """The paged board read itself. `linear_ops.COMMENT_WINDOW_GQL` is inline —
+    the shape backlog_children already uses — so every reader downstream gets
+    the bodies with the card instead of buying them one request at a time
+    (DRE-2929).
 
     `children(first: 1)` is selected for the same reason `backlog_children`
     selects it (DRE-3044): `repo_epics()` and `flag_stranded()` read epic-ness
@@ -1007,11 +1014,12 @@ def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
     children, and reading a field the query never fetched would report "no
     children" for every epic on the board.
 
-    The comment window selects `linear_ops.COMMENT_FIELDS` and its pageInfo,
-    and every card's window is handed to the pass's read cache (DRE-3236): a
-    reader downstream that takes an identifier — a receipt count, a clock, an
-    epic's thread with its authors — is then served from this read instead of
-    buying the same comments again, one request per card."""
+    The comment window is `linear_ops.COMMENT_WINDOW_GQL` — the ONE definition,
+    so the direction is not re-decided here (DRE-3250) — and every card's
+    window is handed to the pass's read cache (DRE-3236): a reader downstream
+    that takes an identifier — a receipt count, a clock, an epic's thread with
+    its authors — is then served from this read instead of buying the same
+    comments again, one request per card."""
     cards = linear_ops.gql_paged(
         """query($states: [String!]!, $after: String) {
            issues(first: 100, after: $after, filter: {
@@ -1021,9 +1029,8 @@ def _fetch_active_cards(states: tuple[str, ...]) -> list[dict]:
              id identifier title description updatedAt
              state { name } labels { nodes { name } }
              children(first: 1) { nodes { id } }
-             comments(last: 50) { pageInfo { hasPreviousPage }
-               nodes { body createdAt user { id } } }
-           } pageInfo { hasNextPage endCursor } } }""",
+             %s
+           } pageInfo { hasNextPage endCursor } } }""" % linear_ops.COMMENT_WINDOW_GQL,
         {"states": list(states)},
     )
     for card in cards:
@@ -1171,8 +1178,8 @@ def flag_stranded() -> set[str]:
         routable = slug is not None and slug in validate_card.VALID_SLUGS
         if routable and slug != REPO_SLUG:
             continue  # that repo's own sweep runs the no-run check for its cards
-        # The bodies come with the card (DRE-2929) — `active_cards` selects
-        # `comments(last: 50)` inline, so this whole loop costs zero requests
+        # The bodies come with the card (DRE-2929) — `active_cards` selects the
+        # comment window inline, so this whole loop costs zero requests
         # however many cards the board holds. It used to be one Linear request
         # per card, per sweep, per repo, and on 2026-09-01 that plus its
         # siblings exhausted the workspace quota for seven hours.
@@ -2008,12 +2015,13 @@ def backlog_children(only: list[str] | None = None) -> list[dict]:
              parent { identifier state { name } }
              children(first: 1) { nodes { id } }
              labels { nodes { name } }
-             comments(last: 50) { pageInfo { hasPreviousPage }
-               nodes { body createdAt user { id } } }
+             %s
              inverseRelations(first: 20) { nodes {
                type issue { identifier state { name } }
              } }
-           } pageInfo { hasNextPage endCursor } } }""" % (declared, scope),
+           } pageInfo { hasNextPage endCursor } } }""" % (
+            declared, scope, linear_ops.COMMENT_WINDOW_GQL,
+        ),
         {"numbers": numbers} if only is not None else None,
     )
     for card in cards:
@@ -2255,8 +2263,10 @@ def has_unresolved_blocker(card: dict) -> bool:
     resolved it yet. Promoting such a card just re-dispatches the engineer into
     the identical wall (DRE-1585 / DRE-1572's five-run loop).
 
-    Reads the card's `comments` (oldest→newest), which the dependency-gate query
-    fetches inline so no extra per-card API call is needed. Detection walks them
+    Reads the card's `comments` through `linear_ops.window_nodes`
+    (oldest→newest, the card's fifty NEWEST — DRE-3250), which the
+    dependency-gate query fetches inline so no extra per-card API call is
+    needed. Detection walks them
     newest→oldest and stops at the first decisive comment — either the blocker
     marker or a HUMAN comment (any comment NOT prefixed with one of the
     pipeline's own machine markers). If that first decisive comment is the
@@ -2264,7 +2274,7 @@ def has_unresolved_blocker(card: dict) -> bool:
     moving/editing the card and commenting) flips it to resolved. A card with no
     `comments` key (e.g. a hand-built test fixture) is treated as unblocked.
     """
-    nodes = (card.get("comments") or {}).get("nodes", [])
+    nodes = linear_ops.window_nodes(card.get("comments"))
     for node in reversed(nodes):  # newest → oldest
         text = (node.get("body") or "").lstrip()
         if text.startswith(BLOCKER_MARKER):
