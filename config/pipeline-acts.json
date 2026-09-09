@@ -3,12 +3,39 @@
     "THE ACT REGISTRY (DRE-2825). One file, read by everything.",
     "",
     "An ACT is something the pipeline does on its own and then announces: a",
-    "refusal, a recovery, or a hold. Until this file existed every act",
-    "announced itself in prose and every reader scraped that prose",
+    "refusal, a recovery, a hold or a progress act. Until this file existed",
+    "every act announced itself in prose and every reader scraped that prose",
     "independently — ten tag constants scattered through scripts/reconcile.py,",
     "the console pattern-matching separate string markers, a sweep deciding",
     "'was that the bot' from an emoji prefix. The vocabulary was remembered in",
     "six places instead of declared in one.",
+    "",
+    "THE FOURTH KIND (DRE-3389). `progress` is the ordinary life of a card,",
+    "and it was the hole the first three left. A refusal, a recovery and a",
+    "hold are all things that happen when something has gone wrong, so the",
+    "seven acts carrying a cadence were every one of them a recovery, and the",
+    "console's pulse had a bound to compare against only in the hour after a",
+    "fix attempt or a sweep. The CEO's recording of production on 2026-09-08",
+    "11:20 PT shows every row still. The three acts below — a build's",
+    "heartbeat, a review run, the gate's re-check — say the ordinary work is",
+    "still moving, and a healthy card now has a bound to pulse against.",
+    "",
+    "A PROGRESS ACT HOLDS NOTHING AND REPAIRS NOTHING. It is never a hold and",
+    "never a recovery; it leaves the work `unchanged` and hands it to nobody",
+    "new. AND THE IDEMPOTENCY-KEY RULE BELOW DOES NOT APPLY TO IT — a",
+    "heartbeat repeats by design, five times a build, so its tag is not a",
+    "suppression key and nothing counts receipts that carry one. That is why",
+    "all three declare `adopted: false`: not 'a later card will emit it', but",
+    "'this tag is not, and will not become, a live key'. The check still",
+    "proves the tag is absent from the tree, which is what keeps the claim",
+    "honest.",
+    "",
+    "Their cadences are MEASURED, not read off a job timeout — nothing times",
+    "a healthy build. DRE-3388 measured all three against live Actions runs on",
+    "2026-09-08 and declared them in the console's console/backend/receipts.py",
+    "FIRST; this file copies them, and scripts/check_act_consumers.py reads",
+    "both and fails on any difference. Each row's `why` carries the",
+    "measurement, so no round number stands here without one.",
     "",
     "Per act: the TAG it is keyed on, its KIND, the STATE it leaves the work",
     "in, the NEXT ACTOR, what it DISCHARGES, its SUBSCRIBER — the workflow",
@@ -115,11 +142,14 @@
   "kinds": {
     "_readme": [
       "What the act IS, in three words the whole pipeline can share. The kind",
-      "is not severity: a hold can be routine and a refusal can be trivial."
+      "is not severity: a hold can be routine and a refusal can be trivial.",
+      "The first three are all things that happen when something has gone",
+      "wrong; `progress` (DRE-3389) is what a card does when nothing has."
     ],
     "refusal": "The pipeline declined to act, and says why. The work stays exactly where it was.",
     "recovery": "The pipeline acted to move the work on by itself — a dispatch, a re-dispatch, a restart.",
-    "hold": "The pipeline stopped and handed the work to a person. Nothing else is coming until they act."
+    "hold": "The pipeline stopped and handed the work to a person. Nothing else is coming until they act.",
+    "progress": "The ordinary work is still moving, and this is it saying so. It holds nothing and repairs nothing — the work is left exactly as it was, with the same actor still on it — and its tag is not an idempotency key, because a heartbeat repeats by design."
   },
   "states": {
     "_readme": [
@@ -475,6 +505,60 @@
         "file": "scripts/linear_ops.py",
         "anchor": "def proof_waiting_line("
       }
+    },
+    {
+      "name": "build-heartbeat",
+      "tag": "build-phase-heartbeat",
+      "adopted": false,
+      "kind": "progress",
+      "means": "The build agent posted its ⏳ n/5 phase comment — the ordinary sign that a card being built is still moving.",
+      "state": "unchanged",
+      "next_actor": "agent-task.yml",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": 6300,
+      "cadence_why": "Measured, not read off a job timeout — nothing times a healthy build. 6300 s is DRE-3388's longest observed green heartbeat gap (69.7 min across 245 gaps, 2026-09-08) plus a 50% margin; it is declared in the console's console/backend/receipts.py and this file is held equal to it by scripts/check_act_consumers.py.",
+      "why": "The build's PROGRESS act, and the reason this kind exists. Every act carrying a cadence before it was a `recovery`, so the console could compare a row against a bound only in the hour after a fix attempt or a sweep, and the CEO's recording of production on 2026-09-08 11:20 PT shows every row still. MEASURED (DRE-3388, 2026-09-08 15:10 PT, against live Actions runs on agent-bureau and bureau-pipeline): the last 50 completed agent-task runs per repo — 100 runs, of which 74 finished green and all 74 matched a card — giving 245 consecutive ⏳ n/5 gaps. Longest gap on a green run 69.7 min (4181 s), DRE-3165 run 34045232203 on 2026-09-06, `1/5 plan formed` 09:25 PT to `3/5 green` 10:35 PT on a 93-minute devops build; the next three were 60.1 min (DRE-3115), 38.6 min (DRE-3251) and 35.8 min (DRE-3113). Plus a 50% margin: 6272 s, rounded up to 6300 s. It holds nothing and repairs nothing, so it is never a hold and never a recovery, and the idempotency-key rule does not apply to it — a heartbeat repeats by design, five times a build. Nothing new is posted for it: the receipt already exists, and this row is what lets a reader compare its age against a bound.",
+      "emits": {
+        "file": ".github/workflows/agent-task.yml",
+        "anchor": "For the brief's progress heartbeats (⏳ n/5 phase comments that"
+      }
+    },
+    {
+      "name": "review-run",
+      "tag": "review-run-observed",
+      "adopted": false,
+      "kind": "progress",
+      "means": "The adversarial critic is running on this head — the ordinary sign that a card in review is still moving.",
+      "state": "unchanged",
+      "next_actor": "qa-review.yml",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": 3000,
+      "cadence_why": "Measured, not read off the review job's timeout: 3000 s is DRE-3388's longest observed GREEN review duration (32.7 min, 2026-09-08) plus a 50% margin, which is shorter than the 65-minute wall a crashed run waits out. It is declared in the console's console/backend/receipts.py and this file is held equal to it by scripts/check_act_consumers.py.",
+      "why": "A card in review is doing ordinary work, not being repaired, and until this row nothing said how long that may go quiet. MEASURED (DRE-3388, 2026-09-08 15:10 PT, against live Actions runs on agent-bureau and bureau-pipeline): the last 50 completed qa-review runs per repo — 100 runs, 90 of them green. Longest green duration 32.7 min (1960 s), agent-bureau run 34187198542, 2026-09-07 21:30 PT to 22:02 PT; the next two were 23.4 min and 19.1 min. Plus a 50% margin: 2940 s, rounded up to 3000 s. Deliberately NOT the review job's `timeout-minutes: 65`: that is how long a review may hang before the runner kills it, and this is how long a review that is working takes. The recovery acts that wait on a crashed review keep the 3900 s bound; a healthy one is expected to speak sooner. Nothing new is posted for it — the console reads the run from GitHub.",
+      "emits": {
+        "file": ".github/workflows/qa-review.yml",
+        "anchor": "- name: Publish review check on the reviewed head"
+      }
+    },
+    {
+      "name": "merge-gate-watch",
+      "tag": "merge-gate-observed",
+      "adopted": false,
+      "kind": "progress",
+      "means": "The merge gate re-checked this pull request — the ordinary sign that a card waiting at the gate is still moving.",
+      "state": "unchanged",
+      "next_actor": "merge-gate.yml",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": 3900,
+      "cadence_why": "What the row is waiting on is the review that must complete on its head, so this is fix-attempt-landed's bound unchanged: .github/workflows/qa-review.yml gives its review job timeout-minutes: 65. DRE-3388 measured the gate's own runs and declared the same 3900 s in the console's console/backend/receipts.py; scripts/check_act_consumers.py holds the two equal.",
+      "why": "The third ordinary place a card waits, and the one where the measurement says NOT to use its own number. MEASURED (DRE-3388, 2026-09-08 15:10 PT, against live Actions runs on agent-bureau and bureau-pipeline): the last 50 completed merge-gate runs per repo — 100 runs, 64 green — with a longest green duration of 1.0 min. That is how long the gate takes to RUN, not how long a pull request sitting at it may be silent: the gate re-fires on each check-run and on the 15-minute reconcile sweep, and what the row is actually waiting on is the review that must complete on its head. So it takes the same 3900 s `fix-attempt-landed` carries, and the measurement is recorded here as the reason a 60-second cadence was refused. Nothing new is posted for it — the console reads the gate's re-check from GitHub.",
+      "emits": {
+        "file": ".github/workflows/merge-gate.yml",
+        "anchor": "group: merge-gate-pr-${{ needs.resolve.outputs.pr }}"
+      }
     }
   ],
   "console": {
@@ -545,7 +629,7 @@
       "anchor": "--body-file /tmp/inherited-comment-final.md",
       "kind": "not-an-act",
       "means": "Which of this PR's failing checks were already failing on the base branch.",
-      "why": "A REPORT about the commit, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact."
+      "why": "A REPORT about the commit, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact."
     },
     {
       "file": ".github/workflows/agent-fix.yml",
@@ -692,7 +776,7 @@
       "anchor": "f\"✅ Merged: {pr_url}\"",
       "kind": "not-an-act",
       "means": "The merge→Done seam's confirmation that the PR merged and the card closed with it.",
-      "why": "It reports an outcome of the work — the gate merged, or a human did — rather than a refusal, a recovery or a hold the pipeline chose for itself. Its only reader is a person looking at the card."
+      "why": "It reports an outcome of the work — the gate merged, or a human did — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. Its only reader is a person looking at the card."
     },
     {
       "file": "scripts/linear_ops.py",
@@ -1069,7 +1153,7 @@
       "step": "Report result to Linear",
       "kind": "not-an-act",
       "means": "The card's work shipped while the run was finishing, so there is nothing to requeue.",
-      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact."
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact."
     },
     {
       "file": ".github/workflows/agent-task.yml",
@@ -1077,7 +1161,7 @@
       "step": "Report result to Linear",
       "kind": "not-an-act",
       "means": "The agent opened its pull request; CI and the critic are running.",
-      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact."
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact."
     },
     {
       "file": ".github/workflows/agent-task.yml",
@@ -1125,7 +1209,7 @@
       "step": "Raise the alarm where a human will see it",
       "kind": "not-an-act",
       "means": "A standing alarm is re-confirmed on its existing card rather than filed again.",
-      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact. Its subject is the world outside the pipeline, not a piece of work the pipeline moved."
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact. Its subject is the world outside the pipeline, not a piece of work the pipeline moved."
     },
     {
       "file": ".github/workflows/groomer.yml",
@@ -1157,7 +1241,7 @@
       "step": "Evaluate and merge",
       "kind": "not-an-act",
       "means": "The gate merged the pull request; the card says so.",
-      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery or a hold; this is a fact. It reports an outcome of the work rather than a refusal, a recovery or a hold, and its only reader is a person looking at the card."
+      "why": "A REPORT about the work, not something the pipeline did on its own. It creates no obligation, hands the work to nobody and has nothing to discharge — the three questions a trailer answers all read 'not applicable'. An act is a refusal, a recovery, a hold or a progress act; this is a fact. It reports an outcome of the work rather than a refusal, a recovery, a hold or a progress act, and its only reader is a person looking at the card."
     },
     {
       "file": ".github/workflows/plan.yml",

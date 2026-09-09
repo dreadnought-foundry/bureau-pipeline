@@ -91,6 +91,23 @@ def _doc() -> dict:
     return copy.deepcopy(pipeline_act.load())
 
 
+def _prose(path: str) -> str:
+    """A file's text with every run of whitespace collapsed to one space.
+
+    The registry's readme is a JSON array of lines and the three documents
+    beside it are hard-wrapped, so the sentence these tests look for is split
+    across a line break in all four. Collapsing first makes the assertion about
+    the WORDING, which is the thing that must not go on saying three.
+    """
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    if path.endswith(".json"):
+        # `"…announces: a",\n    "refusal, a recovery, …"` — the array's own
+        # punctuation sits between the two halves of the sentence.
+        text = " ".join(json.loads(text)["_readme"])
+    return " ".join(text.split())
+
+
 # --------------------------------------------------------------------------- #
 # 1. the fourth kind                                                           #
 # --------------------------------------------------------------------------- #
@@ -109,14 +126,18 @@ class TestTheFourthKind(unittest.TestCase):
 
     def test_the_readme_sentence_names_all_four_kinds(self):
         """`an ACT is … a refusal, a recovery, or a hold` is written in four
-        places in this repo and every one of them is now short by a kind. A
-        change that contradicts a document updates that document in the same
-        pull request (standards/engineering.md)."""
-        for path in (CONFIG, CONFIG_README, DOC, MODULE):
-            text = open(path, encoding="utf-8").read()
+        places in this repo and every one of them was short by a kind. A change
+        that contradicts a document updates that document in the same pull
+        request (standards/engineering.md).
+
+        Read as PROSE, not as bytes: the JSON's readme is an array of lines and
+        the other three are hard-wrapped, so a sentence spanning a line break is
+        the same sentence. `_prose` is what makes the match about the wording
+        rather than about where each file happens to wrap."""
+        for source in (CONFIG, CONFIG_README, DOC, MODULE):
             self.assertIn(
-                FOUR_KINDS, text,
-                f"{path} does not name all four kinds — it still says three",
+                FOUR_KINDS, _prose(source),
+                f"{source} does not name all four kinds — it still says three",
             )
 
     def test_the_readme_says_the_idempotency_key_rule_does_not_apply(self):
@@ -275,16 +296,31 @@ class TestTheConsoleCadenceReader(unittest.TestCase):
         )
         self.assertTrue(report.ok, report.text())
 
-    def test_a_console_that_declares_no_cadence_at_all_is_a_failure(self):
+    def test_a_progress_act_the_console_carries_no_number_for_is_a_failure(self):
         """Not a silent pass. A progress act whose number the console does not
         carry is the drift this card exists to catch, and it looks exactly like
-        a console that has not shipped DRE-3388 yet."""
+        a console that has not shipped DRE-3388 yet. The module below is
+        readable — the other two acts have their numbers — so "this reader could
+        not look" is not available as an excuse."""
         report = guard.cadences(
-            doc=_doc(), source='ACTS = {"build-heartbeat": "progress"}'
+            doc=_doc(),
+            source='ACTS = {"build-heartbeat": "progress", '
+                   '"review-run": 3_000_000, "merge-gate-watch": 3_900_000}',
         )
         self.assertFalse(report.skipped, report.text())
         self.assertFalse(report.ok, report.text())
         self.assertIn("build-heartbeat", report.text())
+
+    def test_a_console_with_no_numbers_anywhere_is_a_skip_not_a_verdict(self):
+        """The `console_vocabulary` argument, one field along: concluding "the
+        console declares no cadence" off a module this reader could not read
+        numbers out of would fail every act at once for a reason that is not
+        true. Unread, with the reason printed — and red in the CI job."""
+        report = guard.cadences(
+            doc=_doc(), source='ACTS = {"build-heartbeat": "progress"}'
+        )
+        self.assertTrue(report.skipped, report.text())
+        self.assertFalse(report.ok, report.text())
 
     def test_an_existing_act_the_reader_cannot_place_is_reported_not_failed(self):
         """The console owns its own literal. `fix-loop-restarted` is not this
@@ -351,6 +387,22 @@ class TestTheConsumerGuardCoversTheNewActs(unittest.TestCase):
         self.assertFalse(report.ok)
         for name in MEASURED:
             self.assertIn(name, report.unknown)
+
+    def test_the_critics_receipt_carries_the_cadence_answer_too(self):
+        """The receipt qa-review hands the critic on a registry PR reported
+        whether the console KNOWS each act. A reviewer told only that would
+        read a clean receipt as a clean registry, and the number on the row is
+        the half this card adds."""
+        text = guard.context(
+            ["config/pipeline-acts.json"], doc=_doc(), source=CONSOLE_DISAGREES
+        )
+        self.assertIn("build-heartbeat", text)
+        self.assertIn("6300", text)
+
+    def test_the_receipt_is_still_silent_for_a_pr_that_changes_nothing_here(self):
+        self.assertEqual(
+            "", guard.context(["scripts/reconcile.py"], doc=_doc(), source=CONSOLE_AGREES)
+        )
 
 
 # --------------------------------------------------------------------------- #
