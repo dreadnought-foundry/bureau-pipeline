@@ -50,6 +50,14 @@ from harness.github_api import GitHubError
 #: enters Todo. The rehearsal uses the same door on purpose.
 DISPATCH_EVENT = "agent-execute"
 
+#: What GitHub records as the run's `event` for that dispatch. The dispatch
+#: TYPE is not the trigger event: a `repository_dispatch` of any type lists
+#: under `event=repository_dispatch`, and the type survives only as the run's
+#: `display_title`. Attempt 3 on PR #332 (2026-09-09 15:20 PT) asked the API
+#: for `event=agent-execute`, read an empty page for ten minutes, and timed
+#: out with the run it had fired sitting one filter away.
+TRIGGER_EVENT = "repository_dispatch"
+
 #: The sandbox stub the operator installs by hand (the operator half of
 #: DRE-3486). Its shape matches its four siblings.
 WORKFLOW_FILE = "agent-task.yml"
@@ -87,6 +95,20 @@ def start_budget(ctx) -> float:
     """
     deadline = getattr(ctx, "wait_deadline", 0) or 0
     return float(deadline) if deadline > 0 else START_BUDGET_SECONDS
+
+
+def is_our_dispatch(run) -> bool:
+    """True for a run that a `DISPATCH_EVENT` dispatch produced.
+
+    GitHub titles a `repository_dispatch` run with its type, so that is the
+    only place the type survives on the record. A record with no title at all
+    is accepted rather than dropped: the listing is already scoped to the
+    trigger event, and a missing field is not evidence of another type.
+    """
+    if not isinstance(run, dict):
+        return False
+    title = run.get("display_title")
+    return title is None or title == DISPATCH_EVENT
 
 
 def callee_reference(referenced) -> dict | None:
@@ -136,9 +158,16 @@ class AgentTaskParses(framework.Scenario):
         )
 
     def workflow_runs(self, ctx) -> list:
+        """This workflow's runs that OUR kind of dispatch produced.
+
+        Listed by the trigger event GitHub records (`repository_dispatch`),
+        then narrowed to the dispatch type by `display_title` — the stub
+        fires on `agent-execute` only, but a run of another type would still
+        list here if the stub ever grew a second `types:` entry.
+        """
         try:
-            return ctx.gh.list_workflow_runs_for(
-                ctx.repo, WORKFLOW_FILE, event=DISPATCH_EVENT
+            runs = ctx.gh.list_workflow_runs_for(
+                ctx.repo, WORKFLOW_FILE, event=TRIGGER_EVENT
             )
         except GitHubError as e:
             if e.status == 404:
@@ -150,6 +179,7 @@ class AgentTaskParses(framework.Scenario):
                     f"parse."
                 ) from e
             raise
+        return [run for run in runs if is_our_dispatch(run)]
 
     # ── exercise: the relay's own door ───────────────────────────────────
     def exercise(self, ctx):
