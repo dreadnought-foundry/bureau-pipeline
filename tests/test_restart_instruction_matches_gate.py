@@ -14,19 +14,30 @@ the run level, silent on the PR, no fix. Receipts: agent-bureau PR #2065
 the decision, 2026-08-19), both released only by a hand
 `gh workflow run agent-fix.yml -f pr_number=<n>`.
 
-What actually restarts the loop is the 15-minute reconcile sweep
+What restarted the loop was the 15-minute reconcile sweep
 (`restart_answered_blockers`, DRE-2409): it reads the human decision and
-`workflow_dispatch`es agent-fix, which the same job-if accepts. That is the
-trigger the copy has to name.
+`workflow_dispatch`es agent-fix, which the same job-if accepts.
 
-This suite is the producer/consumer pin the card asks for — a string and a
-condition that must agree and were checked by nobody:
+**DRE-3451 opened the direct door**, and the copy moved with it. The job-if now
+also admits a **User**-authored PR comment, and a first step validates it with
+the sweep's own predicates — so the answer starts the loop within a minute and
+the sweep is the backstop rather than the only route. The two sentences this
+suite pins (`RESTART_PROMISE`, `SKIP_NOTICE`) say that, and the pin is the same
+pin: what the copy promises has to be what the gate does. Before DRE-3451 the
+copy over-promised; a copy that under-promises is the same defect wearing the
+other sign, and it is the one that sends an operator to a hand dispatch that
+cannot help (`HAND_DISPATCH_NOTICE`, DRE-2813).
+
+This suite is the producer/consumer pin the original card asks for — a string
+and a condition that must agree and were checked by nobody:
 
   * the example the instruction prints, pasted by a human exactly as printed,
-    must drive the sweep to a dispatch;
-  * that dispatch must be an event the fix gate admits, and the comment alone
-    must NOT be one — so the copy may not claim it is;
-  * the "about 15 minutes" the copy promises must be the sweep's real cadence;
+    must drive the sweep to a dispatch AND be admitted by the fix gate on its
+    own;
+  * the sweep's dispatch must still be an event the gate admits, and a
+    bot-authored copy of the same words must still be refused at both;
+  * the "about 15 minutes" the copy promises for the backstop must be the
+    sweep's real cadence;
   * every message that parks a PR or a card carries the SAME restart
     sentence, so no site can drift back to the false one.
 """
@@ -46,6 +57,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/test")
 os.environ.setdefault("GH_TOKEN", "test")
 
+import fix_concurrency  # noqa: E402
 import fix_context  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -141,24 +153,49 @@ class PrintedInstructionDrivesTheGateTest(unittest.TestCase):
         self.assertEqual(dispatches[0][:2], ("workflow", "run"))
         self.assertIn("github.event_name == 'workflow_dispatch'", fix_job_if())
 
-    def test_the_comment_alone_is_not_a_trigger_the_gate_admits(self):
-        # The premise of the whole card: the comment path is bot-gated, so a
-        # human "Operator decision" comment can only ever skip.
+    def test_the_bot_authored_door_is_unchanged(self):
+        # DRE-1988's rule, kept exactly: the qa-bot's verdict is still the one
+        # BOT comment that starts the fixer. DRE-3451 added a door beside it,
+        # it did not widen this one.
         gate = fix_job_if()
         self.assertIn(f"github.event.comment.user.login == '{QA}'", gate)
         self.assertIn("VERDICT: REQUEST_CHANGES", gate)
 
+    def test_the_printed_answer_is_itself_a_trigger_the_gate_admits(self):
+        # DRE-3451: the operator's own comment, pasted exactly as printed,
+        # now reaches the fix job. This is the assertion that used to say the
+        # opposite, and it is the reason the copy below could change.
+        self.assertTrue(fix_concurrency.reaches_fix_agent(
+            yaml.safe_load(wf_src()),
+            fix_concurrency.comment_event(2065, HUMAN, printed_answer()),
+        ))
+
+    def test_a_bot_authored_copy_of_the_answer_reaches_neither_route(self):
+        doc = yaml.safe_load(wf_src())
+        for login in (WORKER, QA, "github-actions[bot]"):
+            with self.subTest(login=login):
+                self.assertFalse(fix_concurrency.reaches_fix_agent(
+                    doc,
+                    fix_concurrency.comment_event(2065, login, printed_answer()),
+                ))
+
     def test_the_instruction_never_claims_the_comment_restarts_it(self):
+        # The retired sentence stays retired. It is TRUE now, and still not
+        # what the copy should say: it named no cadence and no failure mode,
+        # so an operator whose wording was not recognised had nothing to read.
         for phrase in BANNED:
             with self.subTest(phrase=phrase):
                 self.assertNotIn(phrase, fix_context.ANSWER_FORMAT)
 
-    def test_the_instruction_names_the_sweep_and_warns_about_the_skip(self):
+    def test_the_instruction_promises_the_direct_start_and_the_backstop(self):
         self.assertIn(fix_context.RESTART_PROMISE, fix_context.ANSWER_FORMAT)
         self.assertIn(fix_context.SKIP_NOTICE, fix_context.ANSWER_FORMAT)
         self.assertIn("skip", fix_context.SKIP_NOTICE.lower())
+        # A skip is now the UNRECOGNISED case only, so the copy may no longer
+        # tell the operator to expect one on a correct answer.
+        self.assertNotIn("that skip is expected", fix_context.SKIP_NOTICE.lower())
 
-    def test_the_promised_wait_is_the_sweeps_real_cadence(self):
+    def test_the_promised_backstop_wait_is_the_sweeps_real_cadence(self):
         # "about 15 minutes" is a claim about a cron, so read the cron. (The
         # raw text, not yaml.safe_load: YAML 1.1 parses the `on:` key as the
         # boolean True, which is a worse thing to hardcode than a regex.)

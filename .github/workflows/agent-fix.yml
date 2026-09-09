@@ -67,10 +67,10 @@ jobs:
     # nothing red. Pinned by the parser test.
     name: "fix PR #${{ github.event.issue.number || github.event.inputs.pr_number }}"
     # DRE-1988: only a comment authored by the qa-bot identity may trigger the
-    # fix agent — anyone can comment "VERDICT: REQUEST_CHANGES" on a PR, and
-    # without the author check that comment spawns a code-writing agent on the
-    # branch. workflow_dispatch stays open: it requires repo write access and
-    # is how merge-gate routes conflicts into this loop.
+    # fix agent OFF A VERDICT — anyone can comment "VERDICT: REQUEST_CHANGES"
+    # on a PR, and without the author check that comment spawns a code-writing
+    # agent on the branch. workflow_dispatch stays open: it requires repo write
+    # access and is how merge-gate routes conflicts into this loop.
     # A job-if runs before any step can mint an App token, so the qa-bot
     # login is hardcoded here (unlike the app-slug-derived checks in the
     # steps) and does NOT follow an App rename.
@@ -79,11 +79,29 @@ jobs:
     # tests/test_qa_login_literal_roster.py, in one commit — a missed site
     # sends this gate dark silently (REQUEST_CHANGES verdicts stop
     # dispatching the fix agent, no sweep covers it, PRs strand).
+    #
+    # THE THIRD CLAUSE (DRE-3451) — an operator's own answer. Until this card
+    # a human's `**Operator decision**` comment fired a run that skipped in
+    # one second and the restart waited on the 15-minute reconcile sweep
+    # (PR #2365, 2026-09-08: two answers, 25 idle minutes). The gate is now
+    # two halves and this is the cheap one: `user.type` is GitHub's own
+    # server-assigned field, so `== 'User'` admits a person and can never
+    # admit the qa-bot, this loop's own notices, github-actions or
+    # dependabot. It admits ANY User comment on a PR on purpose — the phrase
+    # rule is fix_context.is_decision_body (leading `**`/`##`/whitespace
+    # stripped, any casing, anchored at the first line) and a GitHub
+    # expression cannot express it without re-deriving it, so the "Decide a
+    # comment-triggered start" step below applies the sweep's own predicates
+    # and every later step is gated on its answer. Nothing is loosened: a
+    # comment that is not a standing, unconsumed operator decision does no
+    # work, exactly as it does none today.
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event.issue.pull_request &&
        github.event.comment.user.login == 'agent-bureau-qa-bot[bot]' &&
-       contains(github.event.comment.body, 'VERDICT: REQUEST_CHANGES'))
+       contains(github.event.comment.body, 'VERDICT: REQUEST_CHANGES')) ||
+      (github.event.issue.pull_request &&
+       github.event.comment.user.type == 'User')
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap, raised with the turn budget below (DRE-2533). A
     # job dies at whichever cap it reaches first, so 150 turns behind a
@@ -117,8 +135,86 @@ jobs:
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
 
+      # DRE-3451: the expensive half of the comment gate. The job `if` above
+      # admitted a User comment on a pull request; this decides whether that
+      # comment is an OPERATOR DECISION the loop may act on, and it decides it
+      # with fix_context.standing_decision — the exact reading reconcile's
+      # restart sweep arms on, so "the comment started the loop" and "the sweep
+      # would have started the loop" cannot disagree. Four predicates, none of
+      # them new and none of them relaxed: a non-bot author, the phrase leading
+      # the first line, newer than the latest worker-bot 🛑 blocker, not
+      # already consumed.
+      #
+      # THE THREAD IS RE-FETCHED OVER REST for the sweep's own reason
+      # (reconcile.WORKER_REST_LOGIN): REST carries `user.type`, and the
+      # GraphQL-backed `gh pr list --json comments` does not — humanity read
+      # off a login string is a guess, and this is the one gate where a wrong
+      # guess starts a code-writing agent. A comments-API blip reads as an
+      # empty thread, which SKIPS: failing closed here costs the sweep's
+      # fifteen minutes, and the sweep is exactly the backstop for it.
+      #
+      # A qa-bot REQUEST_CHANGES verdict never reaches the CLI — it is the
+      # DRE-1988 door and it is admitted unchanged.
+      - name: Decide a comment-triggered start
+        id: decision
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # The loop's own identity from THIS run's minted token (DRE-1988
+          # discipline — never a hardcoded name an App rename outdates), the
+          # same derivation the Resolve step below makes.
+          WORKER_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          COMMENT_TYPE: ${{ github.event.comment.user.type }}
+        run: |
+          set -u
+          PR=${{ github.event.issue.number }}
+          # The ONE non-User comment the job gate admits is the qa-bot's
+          # REQUEST_CHANGES verdict (DRE-1988) — that door is unchanged and
+          # this step has nothing to decide about it, so it carries on into
+          # the Resolve step exactly as it did before this card. Read off
+          # `user.type` rather than the login on purpose: the qa-bot login is
+          # already hardcoded at the job gate above and DRE-2120 rosters every
+          # site of it, so a fourth one here would be a rename hazard bought
+          # for nothing. It is also the safe default if the gate is ever
+          # widened — an admitted trigger this step does not recognise gets
+          # today's behaviour, never a decision start.
+          if [ "$COMMENT_TYPE" != "User" ]; then
+            echo "start=verdict" >> "$GITHUB_OUTPUT"
+            echo "a bot-authored trigger the job gate admitted (the qa-bot verdict door, DRE-1988) — nothing for this step to decide"
+            exit 0
+          fi
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+            > "$TMPD/decision-thread.json" 2>/dev/null \
+            || echo '[]' > "$TMPD/decision-thread.json"
+          # Stdout only — the CLI prints a verdict word and a reason slug from
+          # a fixed vocabulary and never echoes a comment body (DRE-1996).
+          REPORT=$(python3 .bureau-pipeline/scripts/fix_context.py \
+            --decision-trigger \
+            --comments-file "$TMPD/decision-thread.json" \
+            --worker-login "$WORKER_LOGIN") || {
+              echo "start=skip" >> "$GITHUB_OUTPUT"
+              echo "SKIP: the PR thread could not be read — leaving this restart to the reconcile sweep"
+              exit 0
+            }
+          printf '%s\n' "$REPORT"
+          VERDICT=$(printf '%s\n' "$REPORT" | head -1)
+          if [ "$VERDICT" = "PROCEED" ]; then
+            echo "start=decision" >> "$GITHUB_OUTPUT"
+          else
+            echo "start=skip" >> "$GITHUB_OUTPUT"
+          fi
+
+      # `start=skip` stops the whole job HERE, and it stops it by not
+      # resolving: every later step in this job is gated on `steps.pr.outputs`,
+      # so a skipped Resolve leaves them all unwritten and unrun. The
+      # comparison is `!=` on purpose — a workflow_dispatch skips the decision
+      # step entirely and its output is the empty string, which must read as
+      # "carry on" or every sweep restart and conflict repair would die here.
       - name: Resolve PR, mode, and attempt budget
         id: pr
+        if: steps.decision.outputs.start != 'skip'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           # The loop's own identity, from THIS run's minted token (DRE-1988
@@ -343,16 +439,18 @@ jobs:
           # fix_context.DECISION_EXAMPLE so the two cannot drift. DRE-2548
           # pins the two sentences after it the same way, to
           # fix_context.RESTART_PROMISE / SKIP_NOTICE: the operator is told
-          # what actually starts the loop (the 15-minute reconcile sweep),
-          # because THIS job's own gate skips the comment they were asked to
-          # write. DRE-2813 pins the last sentence to
-          # fix_context.HAND_DISPATCH_NOTICE — the message that asks for an
-          # answer is also where the other recovery has to be reconciled.
+          # what actually starts the loop, which since DRE-3451 is the comment
+          # ITSELF — this job's gate admits it and the decision step at the
+          # top validates it — with the 15-minute reconcile sweep as the
+          # backstop rather than the only route. DRE-2813 pins the last
+          # sentence to fix_context.HAND_DISPATCH_NOTICE — the message that
+          # asks for an answer is also where the other recovery has to be
+          # reconciled.
           if [ "$MODE" = "conflict" ]; then
             gh pr comment "$PR" --repo ${{ github.repository }} \
               --body "🛑 Conflict-resolution budget exhausted ($ATTEMPTS rounds) — main keeps moving under this branch; holding for a human decision.
 
-          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
+          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
           else
             # DRE-2817: WHICH STOP THIS WAS, because the human needs to know
             # and the two remedies are not the same. `non-convergence` means
@@ -378,7 +476,7 @@ jobs:
 
           $CLASSIFICATION
 
-          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Your comment does not start the run by itself — it also fires an Agent Fix run that skips within seconds. That skip is expected and does not mean your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
+          To release this PR, comment here with a first line that starts with the words Operator decision, for example: **Operator decision** — <your answer here>. Any casing works and your answer can continue on that line. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. If your wording is not recognised as a decision the run skips instead of starting the loop, and the pipeline posts a note here telling you how to re-post it. A skip means the wording was not recognised, never that your answer was rejected. Dispatching the fix workflow by hand is not a second way out: with the budget spent it cannot add an attempt, and while your answer is standing it deliberately does nothing rather than post over it."
           fi
           echo "held=true" >> "$GITHUB_OUTPUT"
 
@@ -700,6 +798,66 @@ jobs:
           fi
           [ -n "${{ steps.pr.outputs.card }}" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment \
             "${{ steps.pr.outputs.card }}" "$MSG" $ACT_FLAG || true
+
+      # DRE-3451: THE IDEMPOTENCE. A comment-started run is the restart the
+      # reconcile sweep would otherwise make fifteen minutes later, so it owes
+      # the sweep's own receipt — same act, same tag, one row in
+      # config/pipeline-acts.json, composed through the same
+      # pipeline_act.receipt() writer. fix_context.decision_consumed then sees
+      # a worker-bot comment newer than the answer and
+      # restart_answered_blockers stands down, exactly as it does after its own
+      # dispatch. Without it the sweep would dispatch a SECOND fix agent onto a
+      # branch this one is already working.
+      #
+      # POSTED HERE, not at the gate: this is the first point at which the run
+      # is actually going to do the work the receipt claims. A run that gates
+      # out earlier (a closed PR, a convergence halt, an unfixable check)
+      # leaves the answer unconsumed and the sweep still owns it — the backstop
+      # working, rather than an answer spent on a run that did nothing
+      # (DRE-2813's lesson, from the other direction).
+      #
+      # The card side is deliberately absent: the Announce step above already
+      # cleared `needs-human`, and the release out of the parked lane belongs
+      # to whichever restart the operator actually gets, which is why the next
+      # step does it rather than this one.
+      - name: Receipt the operator-decision restart
+        id: restart_receipt
+        if: >-
+          steps.decision.outputs.start == 'decision' &&
+          steps.pr.outputs.go == 'true' &&
+          steps.unfixable.outputs.escalate != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          BODY="🔓 fix-restart-on-operator-decision: your decision started the fix agent directly (DRE-3451) — no hand dispatch and no waiting for the sweep. One restart per answer; a further decision comment re-arms it."
+          python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-loop-restarted \
+            --body "$BODY" --out /tmp/act-fix-restart.md \
+            || printf '%s' "$BODY" > /tmp/act-fix-restart.md
+          gh pr comment "${{ steps.pr.outputs.number }}" \
+            --repo ${{ github.repository }} --body-file /tmp/act-fix-restart.md
+
+      # DRE-3451: and the card side of that restart. reconcile._release_card
+      # takes the card out of the human queue when the sweep picks an answer
+      # up — needs-human off, back to the review lane — and the sweep will not
+      # run for this answer any more, so this run owes the same release. The
+      # Announce step above has already removed the label; this is the lane.
+      # Idempotent and `|| true`: on a sweep-dispatched run the card is
+      # already back in the review lane, and Linear bookkeeping must never
+      # cost the fix run.
+      - name: Release the card the operator answered
+        if: >-
+          steps.decision.outputs.start == 'decision' &&
+          steps.pr.outputs.go == 'true' &&
+          steps.unfixable.outputs.escalate != 'true' &&
+          steps.pr.outputs.card != ''
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          # The sweep's own move, argument for argument
+          # (reconcile._release_card: REVIEW_LANE out of PARKED_STATE) — a
+          # card in any other lane is left exactly where it is.
+          python3 .bureau-pipeline/scripts/linear_ops.py advance \
+            "${{ steps.pr.outputs.card }}" "In Review" "Triage" || true
 
       # Assemble the fixing agent's context = the engineering standard (it
       # works to the same discipline floor as the engineer) + the comms standard
@@ -1222,7 +1380,7 @@ jobs:
             # instead of stalling invisibly in the review lane.
             if [ -n "$CARD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "🙋 The fix agent disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong. This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: the pipeline sweep sees your answer on its next pass and starts the fix loop for you, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **Todo** to have the reviewer take another look, or to **Backlog** to drop it." || true
+                "🙋 The fix agent disagrees with the reviewer's blocking finding and stopped rather than force a change it believes is wrong. This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **Todo** to have the reviewer take another look, or to **Backlog** to drop it." || true
             fi
             park_for_human
           else
