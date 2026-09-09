@@ -515,6 +515,15 @@ class TheDeliveryWorkflow(unittest.TestCase):
 # --------------------------------------------------------------------------
 # 5. THE SCENARIO — the real Report step, executed
 # --------------------------------------------------------------------------
+# The run's own execution record: 93 minutes, green, no error. The delivery is
+# the only thing that failed, which is what makes the incident's "NOT being
+# recorded as a dead agent" comment so nearly right.
+FINISHED_BUT_UNPUSHED = {
+    "type": "result", "subtype": "success", "is_error": False,
+    "num_turns": 96, "total_cost_usd": 21.7, "duration_ms": 5_580_000,
+    "result": "5/5 green, four commits, and the push was refused.",
+}
+
 GH_STUB = '''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["GH_STUB_LOG"], "a", encoding="utf-8") as fh:
@@ -531,16 +540,25 @@ def run_report(td, **kw):
     binary = report_harness._git_stub(td)
     gh_log = os.path.join(td, "gh.jsonl")
     report_harness._executable(os.path.join(binary, "gh"), GH_STUB)
+    # The artifact the step names must EXIST — `write_patch` can fail, and a
+    # run that could not write one has nothing to hand to a delivery job.
+    patch = os.path.join(td, "rescue.patch")
+    if kw.get("patch", True):
+        with open(patch, "w", encoding="utf-8") as fh:
+            fh.write("From 0000\nSubject: [PATCH] the work\n")
     proc, journal = report_harness.run_report(
         td,
-        execution=None,
+        # The DRE-3165 run's own shape: it finished cleanly after 93 minutes,
+        # so `is_error` is false and it plainly STARTED (DRE-2931) — the failure
+        # is entirely in the delivery.
+        execution=FINISHED_BUT_UNPUSHED,
         claude_outcome="success",
         local_work="true",
         env_extra=dict(
             RESCUE_PUSH_STATUS=kw.get("status", "400"),
             RESCUE_PUSHED="false",
             RESCUE_ARTIFACT=ARTIFACT,
-            RESCUE_PATCH=os.path.join(td, "rescue.patch"),
+            RESCUE_PATCH=patch,
             RESCUE_ERROR=kw.get("stderr", ""),
             GH_STUB_LOG=gh_log,
             GH_STUB_EXIT=str(kw.get("gh_exit", 0)),
@@ -603,12 +621,27 @@ class FailedDeliveryScenario(unittest.TestCase):
         _, journal, _ = self.report()
         self.assertEqual(report_harness.ops(journal, "state"), [])
 
+    def test_no_artifact_means_no_claim_and_the_dre_3043_remedy_stands(self):
+        """`write_patch` can fail, and then push_rescue says plainly that the
+        runner's disk is the only copy. Naming an artifact that does not exist
+        would send a reader — and a delivery job — after nothing, so this branch
+        stands aside and the credential-expiry requeue takes the card."""
+        _, journal, dispatches = self.report(patch=False)
+        bodies = report_harness.comments(journal)
+        for body in bodies:
+            self.assertNotIn(deliver_rescue.FAILED_TAG, body)
+        self.assertEqual(dispatches, [])
+        self.assertIn("credential", bodies[0].lower())
+        self.assertEqual(
+            [e["args"][1] for e in report_harness.ops(journal, "state")], ["Todo"]
+        )
+
     def test_a_run_that_pushed_its_own_work_says_nothing_of_the_kind(self):
         """The control: this whole branch must be invisible to every ordinary
         run, which is all of them."""
         with tempfile.TemporaryDirectory() as td:
-            _, journal = report_harness.run_report(td, execution=None,
-                                                   claude_outcome="success")
+            _, journal = report_harness.run_report(
+                td, execution=FINISHED_BUT_UNPUSHED, claude_outcome="success")
         for body in report_harness.comments(journal):
             self.assertNotIn(deliver_rescue.FAILED_TAG, body)
 

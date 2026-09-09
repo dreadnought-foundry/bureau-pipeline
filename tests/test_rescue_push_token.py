@@ -131,13 +131,27 @@ class FakeGit:
         return [c for c in self.calls if all(n in c for n in needles)]
 
     def credential_writes(self) -> list[str]:
-        """Every token the git credential was re-pointed at, in order."""
+        """Every token the git credential was re-pointed at, in order.
+
+        WRITES only: `--unset-all` clears the key and `--get-all` reads it back
+        (the DRE-3262 diagnostic that logs how many auth headers git is
+        sending), and neither re-points anything."""
         out = []
         for call in self.calls:
-            if "config" in call and push_rescue.GITHUB_EXTRAHEADER in call \
-                    and "--unset-all" not in call:
+            if _is_credential_write(call):
                 out.append(call[-1])
         return out
+
+
+def _is_credential_write(call: list[str]) -> bool:
+    """Does this git call SET the credential header? One definition, used by
+    every assertion about the re-point order."""
+    return (
+        "config" in call
+        and push_rescue.GITHUB_EXTRAHEADER in call
+        and "--unset-all" not in call
+        and "--get-all" not in call
+    )
 
 
 def _header(token: str) -> str:
@@ -312,9 +326,7 @@ class OneRefusedPushRetriesOnAFreshMint(unittest.TestCase):
         _rescue(fake)
         pushes = [i for i, c in enumerate(fake.calls) if "push" in c]
         rewrite = [
-            i for i, c in enumerate(fake.calls)
-            if "config" in c and push_rescue.GITHUB_EXTRAHEADER in c
-            and "--unset-all" not in c
+            i for i, c in enumerate(fake.calls) if _is_credential_write(c)
         ][1]
         self.assertLess(pushes[0], rewrite)
         self.assertLess(rewrite, pushes[1])

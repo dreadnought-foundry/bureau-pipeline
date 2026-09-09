@@ -258,10 +258,14 @@ def test_report_step_has_a_merged_branch_that_never_declares_a_death():
 
 
 def test_report_step_defers_when_the_pr_state_is_unreadable():
+    # The branch may carry further conditions — DRE-3262 added one, so a run
+    # that provably failed to DELIVER is not answered by a lookup that failed —
+    # but whatever guards it, this branch itself still declares no death.
     step = report_step()
     assert "UNREADABLE" in step
     unreadable = re.search(
-        r'elif \[ "\$PR_STATE" = "UNREADABLE" \]; then(.*?)\n          else', step, re.S
+        r'elif \[ "\$PR_STATE" = "UNREADABLE" \][^\n]*; then(.*?)\n          else',
+        step, re.S,
     )
     assert unreadable, "no unreadable-lookup branch in the report step"
     body = unreadable.group(1)
