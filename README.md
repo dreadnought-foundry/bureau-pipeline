@@ -163,6 +163,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  actions: write            # dispatches deliver-rescue — see DRE-3262 below
 jobs:
   call:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml@main
@@ -284,6 +285,7 @@ on:
       card_url: { required: false, type: string, default: "" }
 permissions:
   contents: read
+  actions: read
 jobs:
   call:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@main
@@ -295,6 +297,24 @@ jobs:
       pipeline_ref: main
     secrets: inherit
 ```
+
+**Two permissions carry this, and both live in a stub — neither is fixable
+from here.** The App token carries no Actions permission at all (DRE-1254:
+*"HTTP 403: Resource not accessible by integration"*), and both ends of this
+handoff are Actions API calls, so each rides its own workflow's `GITHUB_TOKEN`
+and only the calling stub can grant it:
+
+| stub | line | what it buys |
+|---|---|---|
+| `agent-task.yml` | `actions: write` | the failing run's last step can **dispatch** the delivery |
+| `deliver-rescue.yml` | `actions: read` | the delivery job can **download** the run's patch artifact |
+
+A reusable workflow has no `permissions:` of its own — the job's token scope is
+whatever the caller granted — so a `deliver-rescue.yml` stub pasted without
+`actions: read` runs, reaches `gh run download`, and fails there every time.
+That one is the sharper edge of the two: the `agent-task.yml` omission degrades
+to the 403 path described below, but a delivery job that cannot read its own
+artifact is a red run and still no pull request.
 
 Add it to that repo's **medic** `workflow_run` list too, by that exact name —
 this is the one workflow whose failure leaves somebody's only copy of finished

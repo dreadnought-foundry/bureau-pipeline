@@ -62,7 +62,9 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 AGENT_TASK = WORKFLOWS / "agent-task.yml"
 DELIVER = WORKFLOWS / "deliver-rescue.yml"
 DELIVER_STUB = WORKFLOWS / "self-deliver-rescue.yml"
+TASK_STUB = WORKFLOWS / "self-agent-task.yml"
 MEDIC_STUB = WORKFLOWS / "self-medic.yml"
+README = ROOT / "README.md"
 
 # The incident's own facts. The artifact name, the run id and the status are
 # what the card must name, so they are spelled here rather than derived.
@@ -101,6 +103,17 @@ def report_step_source() -> str:
     )
     assert m, "'Report result to Linear' step not found"
     return m.group(1)
+
+
+def readme_stub(marker: str) -> dict:
+    """The fenced YAML block in README.md whose first line names a product-repo
+    stub file. That block is the ONLY instruction a fleet repo has for building
+    the stub, so it is parsed as YAML and held to what the code needs — not
+    grepped for a string that could sit in prose beside it."""
+    for block in re.findall(r"```yaml\n(.*?)```", README.read_text(), re.S):
+        if marker in block.splitlines()[0]:
+            return yaml.safe_load(block)
+    raise AssertionError(f"README.md has no ```yaml block for {marker!r}")
 
 
 def report_code() -> str:
@@ -549,6 +562,47 @@ class TheDeliveryWorkflow(unittest.TestCase):
                 capture_output=True, text=True, cwd=ROOT,
             ).returncode, 0,
         )
+
+
+class TheFleetFacingInstructions(unittest.TestCase):
+    """This repo's own stubs are only the canary. Every OTHER product repo
+    builds its stubs from the templates in README.md, so a permission the code
+    requires but the template omits breaks the fix everywhere except here — and
+    silently, because nobody was told to change anything. The templates are
+    therefore held to the same permissions their `self-` counterparts carry."""
+
+    def permissions(self, doc: dict) -> dict:
+        return doc.get("permissions") or {}
+
+    def test_the_agent_task_template_grants_the_dispatch_its_permission(self):
+        """`actions: write` is what lets the Report step dispatch the delivery.
+        Without it the fleet gets the 403 degrade path and nothing else."""
+        self.assertEqual(
+            self.permissions(readme_stub("agent-task.yml")).get("actions"),
+            "write",
+        )
+
+    def test_the_deliver_rescue_template_can_read_the_actions_api(self):
+        """`gh run download` is an Actions API read (DRE-1254), and a reusable
+        workflow's `github.token` scope comes entirely from the calling stub."""
+        self.assertEqual(
+            self.permissions(readme_stub("deliver-rescue.yml")).get("actions"),
+            "read",
+        )
+
+    def test_the_templates_match_this_repos_own_stubs(self):
+        """The canary and the instructions are one artifact in two places. If
+        they can drift, the tested one stays right while the shipped one rots."""
+        for stub, marker in (
+            (TASK_STUB, "agent-task.yml"),
+            (DELIVER_STUB, "deliver-rescue.yml"),
+        ):
+            mine = self.permissions(yaml.safe_load(stub.read_text()))
+            theirs = self.permissions(readme_stub(marker))
+            self.assertEqual(
+                mine, theirs,
+                f"{stub.name} and the README's {marker} template disagree",
+            )
 
 
 # --------------------------------------------------------------------------
