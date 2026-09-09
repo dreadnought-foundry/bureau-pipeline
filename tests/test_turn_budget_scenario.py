@@ -397,13 +397,11 @@ class ParkReceiptScenario(unittest.TestCase):
                      "/tmp/agent-blocker.txt"):
             if os.path.exists(path):
                 os.remove(path)
-        body = substitute(step("Report result to Linear")["run"], {
-            "github.server_url": "https://github.com",
-            "github.repository": REPO,
-            "github.run_id": RUN_ID,
-            "steps.claude.outputs.execution_file": exec_file,
-            "steps.rescue.outputs.local_work": "false",
-        })
+        # DRE-3484: the Report block carries no `${{ }}` — its five values
+        # arrive as env below. The empty table is the guard, not an omission:
+        # substitute() raises on any expression it has no value for, so putting
+        # an interpolation back into that block fails here immediately.
+        body = substitute(step("Report result to Linear")["run"], {})
         proc = _bash(td, "report.sh", body, dict(
             os.environ,
             PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
@@ -419,6 +417,12 @@ class ParkReceiptScenario(unittest.TestCase):
             PRE_AGENT_LOG=os.path.join(td, "preagent.log"),
             GH_TOKEN="test",
             LINEAR_API_KEY="test-key",
+            # The five the step declares in `env:` since DRE-3484.
+            BUREAU_SERVER_URL="https://github.com",
+            BUREAU_REPOSITORY=REPO,
+            BUREAU_RUN_ID=RUN_ID,
+            CLAUDE_EXECUTION_FILE=exec_file,
+            RESCUE_LOCAL_WORK="false",
             LINEAR_STUB_LOG=log,
             LINEAR_STUB_PRIOR=prior,
             LINEAR_STUB_THREAD=_write_thread(td, thread),
@@ -473,13 +477,11 @@ class ParkReceiptScenario(unittest.TestCase):
         exec_file = os.path.join(td, "claude-execution-output.json")
         with open(exec_file, "w", encoding="utf-8") as fh:
             json.dump(TURN_CAP_DEATH, fh)
-        body = substitute(step("Report result to Linear")["run"], {
-            "github.server_url": "https://github.com",
-            "github.repository": REPO,
-            "github.run_id": RUN_ID,
-            "steps.claude.outputs.execution_file": exec_file,
-            "steps.rescue.outputs.local_work": "false",
-        })
+        # DRE-3484: the Report block carries no `${{ }}` — its five values
+        # arrive as env below. The empty table is the guard, not an omission:
+        # substitute() raises on any expression it has no value for, so putting
+        # an interpolation back into that block fails here immediately.
+        body = substitute(step("Report result to Linear")["run"], {})
         proc = _bash(td, "report.sh", body, dict(
             os.environ,
             PATH=_git_stub(td) + os.pathsep + os.environ["PATH"],
@@ -490,6 +492,12 @@ class ParkReceiptScenario(unittest.TestCase):
             INPROGRESS_OUTCOME="success",
             PRE_AGENT_LOG=os.path.join(td, "preagent.log"),
             GH_TOKEN="test", LINEAR_API_KEY="test-key",
+            # The five the step declares in `env:` since DRE-3484.
+            BUREAU_SERVER_URL="https://github.com",
+            BUREAU_REPOSITORY=REPO,
+            BUREAU_RUN_ID=RUN_ID,
+            CLAUDE_EXECUTION_FILE=exec_file,
+            RESCUE_LOCAL_WORK="false",
             LINEAR_STUB_LOG=log, LINEAR_STUB_PRIOR="1",
             LINEAR_STUB_THREAD=_write_thread(td, _thread(3, 3, 3)),
             LINEAR_STUB_FAIL="dump-comments",

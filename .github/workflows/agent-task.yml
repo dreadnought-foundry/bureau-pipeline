@@ -715,8 +715,32 @@ jobs:
           # dispatch 403s, the card still names the artifact, and the sweep
           # (whose stub does grant it) delivers on its next pass.
           GH_DISPATCH_TOKEN: ${{ github.token }}
+          # NO ${{ }} BELOW THIS LINE, AND THAT IS THE POINT (DRE-3484). A `run:`
+          # block containing an interpolation is compiled by GitHub into ONE
+          # `format()` expression whose format string is the whole script, with
+          # every literal brace doubled — and a single expression may not exceed
+          # 21,000 characters. This script is ~23,000. On 2026-09-09 that made
+          # the file unparseable and every agent-execute dispatch in the fleet
+          # was refused at 06:15 PT with no job and no log, for 3h20m. The two
+          # step outputs it used to read inline now arrive as env, the other
+          # three were already default variables, and the script itself is
+          # unchanged. With no interpolation the block is never compiled as an
+          # expression, so its length stops mattering at any size — a property,
+          # not a budget. `tests/test_workflow_expression_budget.py` holds the
+          # line for the blocks that still do interpolate.
+          # All five are declared HERE rather than read from the runner's own
+          # GITHUB_* variables, even the three the runner always sets. The step
+          # then states every value it needs in one place, and the scenario
+          # harness — which renders `env:` and executes the script, and does not
+          # simulate the runner's defaults — keeps testing the real thing. (The
+          # GITHUB_ prefix is reserved and cannot be assigned here anyway.)
+          BUREAU_SERVER_URL: ${{ github.server_url }}
+          BUREAU_REPOSITORY: ${{ github.repository }}
+          BUREAU_RUN_ID: ${{ github.run_id }}
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          RESCUE_LOCAL_WORK: ${{ steps.rescue.outputs.local_work }}
         run: |
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
           # Resolve the card's branch FIRST: an empty --head filter makes
           # `gh pr list` return the repo's most recent open PR, which once
           # attributed another card's PR to a dead run and sent it to the review lane
@@ -753,14 +777,14 @@ jobs:
           # not call it. There is exactly one is_error test in the codebase now
           # (check_agent_result.classify_death) and every caller goes through
           # it.
-          EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
+          EXEC_FILE="$CLAUDE_EXECUTION_FILE"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
           # --work-on-runner (DRE-3043): what the Push rescue step OBSERVED —
           # committed work for this card that GitHub does not have. It is the
           # difference between "the agent died with no PR" and "the run did the
           # work and its credential expired before it could deliver it", and it
           # is a fact from the disk, never a reading of the transcript.
-          LOCAL_WORK="${{ steps.rescue.outputs.local_work }}"
+          LOCAL_WORK="$RESCUE_LOCAL_WORK"
           DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" \
             --work-on-runner "$LOCAL_WORK" || echo none)
 
@@ -775,8 +799,8 @@ jobs:
           FAILED_DELIVERY=$(python3 .bureau-pipeline/scripts/check_agent_result.py delivery \
             --work-on-runner "$LOCAL_WORK" --push-status "$RESCUE_PUSH_STATUS" \
             --pushed "$RESCUE_PUSHED" || echo delivered)
-          RUN_ID="${{ github.run_id }}"
-          DELIVERY_REPO="${{ github.repository }}"
+          RUN_ID="$BUREAU_RUN_ID"
+          DELIVERY_REPO="$BUREAU_REPOSITORY"
 
           # DID THE AGENT START AT ALL? (DRE-2931.) Every class above presumes
           # a run: a run that failed BEFORE claude-code-action took no turn,
