@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # contents:write to move the ref, and — the load-bearing part — an
       # identity that is NOT the default token, so the push actually fires
@@ -76,7 +76,7 @@ jobs:
         if: >-
           github.event.workflow_run.conclusion == 'success' &&
           github.event.workflow_run.head_branch == 'main'
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}

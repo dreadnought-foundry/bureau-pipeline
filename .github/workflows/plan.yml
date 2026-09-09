@@ -148,16 +148,16 @@ jobs:
           echo "bureau-card: $CARD"
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ steps.app.outputs.token }}
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -1437,7 +1437,7 @@ jobs:
       # workspace, and the portal deliberately never enters this one.
       - name: Plan artifact — upload source
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
           path: ${{ runner.temp }}/plan-artifact.md
@@ -2244,7 +2244,7 @@ jobs:
 
       - name: Wave plan — upload build output
         if: steps.shape.outputs.route == 'wave'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wave-plan-${{ github.event.client_payload.identifier }}
           path: |
@@ -2301,19 +2301,19 @@ jobs:
     steps:
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
 
       - name: Plan artifact — fetch source
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: plan-source-${{ github.event.client_payload.identifier }}
           path: ${{ runner.temp }}
@@ -2323,7 +2323,7 @@ jobs:
       # against the new one, and the published source lives here.
       - name: Plan artifact — portal checkout
         if: vars.PLAN_PORTAL_REPO != ''
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ vars.PLAN_PORTAL_REPO }}
           token: ${{ steps.app.outputs.token }}
@@ -2357,7 +2357,7 @@ jobs:
       # when no portal is configured (console-honesty rule 2: the run says
       # where it is rather than pointing at a URL that does not resolve).
       - name: Plan artifact — upload build output
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plan-artifact-${{ github.event.client_payload.identifier }}
           path: |

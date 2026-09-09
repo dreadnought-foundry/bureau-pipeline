@@ -286,7 +286,11 @@ class LiveTreeTest(unittest.TestCase):
         release-channel doc now states how vendor actions reach the fleet."""
         doc = (ROOT / "docs" / "self-hosting.md").read_text()
         self.assertIn("check_action_pins.py", doc)
-        self.assertRegex(doc, r"Dependabot proposes, the harness proves")
+        # Whitespace-tolerant: the doc is hard-wrapped, and where the line
+        # breaks inside the sentence is not the contract.
+        self.assertRegex(
+            doc, r"Dependabot\s+proposes,\s+the\s+harness\s+proves,\s+the\s+channel\s+carries"
+        )
 
 
 class DependabotMajorIgnoreTest(unittest.TestCase):
