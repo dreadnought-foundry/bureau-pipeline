@@ -706,6 +706,15 @@ jobs:
           # which is where the cause of the DRE-3165 400 still is.
           RESCUE_PUSHED: ${{ steps.rescue.outputs.pushed }}
           RESCUE_ERROR: ${{ steps.rescue.outputs.error }}
+          # WHICH CREDENTIAL MAY DISPATCH (DRE-1254, DRE-3262). A
+          # workflow_dispatch needs `actions: write`, and the App token above
+          # carries no Actions permission at all — only the workflow's own
+          # github.token can hold it, and only the calling stub can grant it.
+          # Same variable, same mechanism as reconcile.yml's sweep. A stub that
+          # has not been updated passes a token without the permission: the
+          # dispatch 403s, the card still names the artifact, and the sweep
+          # (whose stub does grant it) delivers on its next pass.
+          GH_DISPATCH_TOKEN: ${{ github.token }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # Resolve the card's branch FIRST: an empty --head filter makes

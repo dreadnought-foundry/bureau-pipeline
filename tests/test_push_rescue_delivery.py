@@ -495,6 +495,45 @@ class TheDeliveryWorkflow(unittest.TestCase):
         )
         self.assertEqual(job.get("secrets"), "inherit")
 
+    def test_the_artifact_download_does_not_ride_the_app_token(self):
+        """Vendor-boundaries Q2 (DRE-1254): `gh run download` reads the Actions
+        API, and the App token carries no Actions permission at all. Only the
+        workflow's own GITHUB_TOKEN can, and only the stub can grant it."""
+        step = _step(DELIVER, "Download the rescued patch", "deliver")
+        self.assertEqual(step["env"]["GH_TOKEN"], "${{ github.token }}")
+        self.assertEqual(
+            (yaml.safe_load(DELIVER_STUB.read_text()).get("permissions") or {})
+            .get("actions"), "read",
+        )
+
+    def test_the_writes_still_ride_the_bot_identity(self):
+        """Author ≠ merger is enforced by identity: the branch and the pull
+        request must carry the App's, not `github-actions`."""
+        step = _step(DELIVER, "Apply the patch and open the pull request", "deliver")
+        self.assertEqual(step["env"]["GH_TOKEN"], "${{ steps.mint.outputs.token }}")
+        self.assertEqual(step["env"]["PUSH_TOKEN"], "${{ steps.mint.outputs.token }}")
+
+    def test_the_dispatch_rides_the_token_that_may_make_it(self):
+        """The same DRE-1254 boundary at the other end: a workflow_dispatch
+        needs `actions: write`, which the App token does not have and the
+        calling stub does grant."""
+        env = _step(AGENT_TASK, "Report result to Linear", "execute")["env"]
+        self.assertEqual(env["GH_DISPATCH_TOKEN"], "${{ github.token }}")
+        stub = yaml.safe_load((WORKFLOWS / "self-agent-task.yml").read_text())
+        self.assertEqual((stub.get("permissions") or {}).get("actions"), "write")
+
+    def test_the_module_swaps_that_token_in_for_the_dispatch(self):
+        os.environ["GH_DISPATCH_TOKEN"] = "dispatch-token"
+        try:
+            env = deliver_rescue.dispatch_env()
+        finally:
+            del os.environ["GH_DISPATCH_TOKEN"]
+        self.assertEqual(env["GH_TOKEN"], "dispatch-token")
+
+    def test_no_dispatch_token_inherits_rather_than_inventing_one(self):
+        os.environ.pop("GH_DISPATCH_TOKEN", None)
+        self.assertIsNone(deliver_rescue.dispatch_env())
+
     def test_the_medic_watches_it(self):
         """DRE-2036: a runnable workflow nobody watches fails silently."""
         name = yaml.safe_load(DELIVER_STUB.read_text())["name"]

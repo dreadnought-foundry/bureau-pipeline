@@ -16,9 +16,18 @@ concurrency:
   group: agent-${{ github.event.client_payload.identifier }}
   cancel-in-progress: false
 
+# `actions: write` (DRE-3262) is what lets a run whose rescue push was refused
+# dispatch the `deliver-rescue` follow-up that turns its patch artifact into a
+# pull request. The App token carries no Actions permission at all (DRE-1254:
+# "HTTP 403: Resource not accessible by integration"), so the dispatch rides
+# the workflow's own GITHUB_TOKEN and only the stub can grant it — the same
+# reason self-merge-gate.yml and the agent-fix stub carry it. A stub without it
+# degrades rather than breaks: the dispatch 403s, the card still names the
+# artifact and the run, and the reconcile sweep delivers on its next pass.
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   call:

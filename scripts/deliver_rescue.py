@@ -204,6 +204,29 @@ def dispatch_argv(repo: str, *, run_id: str, card: str, artifact: str) -> list[s
     ]
 
 
+def dispatch_env() -> dict | None:
+    """The environment the dispatch runs in, or None to inherit.
+
+    WHICH CREDENTIAL MAY REACH THIS ENDPOINT (vendor-boundaries Q2). A
+    `workflow_dispatch` needs `actions: write`, and the bureau App token — the
+    `GH_TOKEN` every other call in the Report step spends — carries no Actions
+    permission at all: *"HTTP 403: Resource not accessible by integration"*
+    (DRE-1254). Only the workflow's own `github.token` can hold it, and only the
+    calling stub can grant it, so the stub passes it in as `GH_DISPATCH_TOKEN`
+    and this swaps it in — the same mechanism, spelled the same way, as
+    `reconcile.gh_dispatch`.
+
+    A stub that has not been updated simply has no such variable: the dispatch
+    then runs under the App token, 403s, and the card says so beside the
+    artifact — and the reconcile sweep, whose own stub DOES grant it, dispatches
+    on its next pass. Degrades, never breaks.
+    """
+    token = os.environ.get("GH_DISPATCH_TOKEN", "").strip()
+    if not token:
+        return None
+    return {**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token}
+
+
 def _post_comment(card: str, body: str) -> None:
     """The card write, through the pipeline's one Linear client."""
     import linear_ops
@@ -241,7 +264,7 @@ def handoff(
                         mints=mints)
     workflow = delivery_workflow(repo)
     argv = dispatch_argv(repo, run_id=run_id, card=card, artifact=artifact)
-    code, _, err = run(argv)
+    code, _, err = run(argv, env=dispatch_env())
     detail = (redact(err).strip().splitlines() or [""])[-1][:_STDERR_LIMIT]
     dispatched = code == 0
 

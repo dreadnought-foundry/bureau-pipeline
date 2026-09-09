@@ -38,8 +38,13 @@ on:
         type: string
         default: ""
 
+# `actions: read` is what lets the delivery download the failed run's artifact:
+# that is an Actions API read, and the App token this workflow mints carries no
+# Actions permission at all (DRE-1254). Everything that writes still rides the
+# App token.
 permissions:
   contents: read
+  actions: read
 
 jobs:
   call:

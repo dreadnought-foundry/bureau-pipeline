@@ -10,10 +10,11 @@
 # it at 11:05 PT and delivered it by hand.
 #
 # Everything the failing run can still spend belongs to that run. This one is a
-# NEW run: it mints its own installation token, downloads the artifact with it,
-# replays the commits on a fresh branch and opens the pull request. Nothing here
-# reads a credential the failed run held — that is the whole point, and
-# `tests/test_push_rescue_delivery.py` pins it.
+# NEW run: it downloads the artifact with its own job's GITHUB_TOKEN (an Actions
+# API read the App token cannot make — DRE-1254), mints its own installation
+# token, replays the commits on a fresh branch and opens the pull request with
+# it. Nothing here reads a credential the failed run held — that is the whole
+# point, and `tests/test_push_rescue_delivery.py` pins it.
 #
 # Dispatched by the failing run itself (the Report step's `deliver_rescue.py
 # handoff`) and, if that never landed, by the reconcile sweep's re-check, which
@@ -107,7 +108,14 @@ jobs:
       - name: Download the rescued patch
         id: download
         env:
-          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          # NOT the App token (DRE-1254, vendor-boundaries Q2): downloading an
+          # artifact reads the Actions API, and the App token carries no Actions
+          # permission at all. The workflow's own GITHUB_TOKEN does, when the
+          # calling stub grants `actions: read` — which is why the stub declares
+          # it. Everything that WRITES below still rides the App token, so the
+          # branch and the pull request carry the bot identity the merge gate's
+          # author-≠-merger rule is built on.
+          GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.run_id }}
           CARD: ${{ inputs.card }}
           ARTIFACT: ${{ inputs.artifact }}
