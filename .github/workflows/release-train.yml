@@ -235,8 +235,19 @@ jobs:
       # The caller's OWN role, so a repo can only ever deploy itself. Assumed
       # BEFORE the script runs, because the script's contract is that its
       # identity is already there (standards/release-train.md).
+      #
+      # v6, not v4 (DRE-3265): the vendor's manifest declares the runtime, and
+      # v4.3.1's said `runs.using: node20`, so GitHub forced it onto 24 and
+      # annotated EVERY release-train run with the Node 20 deprecation notice.
+      # v6.0.0 is the first release whose manifest declares node24 (its release
+      # notes call the runtime its breaking change, and it needs runner
+      # v2.327.1+, which the hosted runners are long past); v6.2.4 is the
+      # newest. The two majors crossed change nothing we pass — v5.0.0's break
+      # was invalid BOOLEAN input handling and this step passes none, and v6's
+      # was the runtime itself. `role-to-assume`, `role-session-name` and
+      # `aws-region` are unchanged inputs at v6.2.4.
       - name: Assume the caller's release identity
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ secrets.RELEASE_ROLE_ARN }}
           role-session-name: release-train-${{ matrix.surface }}
