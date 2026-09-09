@@ -303,8 +303,17 @@ def interpolate(template: str, ctx: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def comment_event(pr_number: int, login: str, body: str = "") -> dict:
-    """The context a stub sees for `issue_comment: created` on a PR."""
+def comment_event(pr_number: int, login: str, body: str = "",
+                  user_type: str | None = None) -> dict:
+    """The context a stub sees for `issue_comment: created` on a PR.
+
+    `user.type` is GitHub's own server-assigned identity field and the fix
+    gate reads it since DRE-3451 (a User-authored comment is admitted; the
+    first step then decides whether it is an operator decision). It is
+    derived from the login by default — GitHub reserves the `[bot]` suffix,
+    so no user account can carry it — and overridable for a caller probing
+    the two apart.
+    """
     return {
         "github": {
             "event_name": "issue_comment",
@@ -315,7 +324,15 @@ def comment_event(pr_number: int, login: str, body: str = "") -> dict:
                     # clause reads its truthiness, not its contents.
                     "pull_request": {"url": f"https://api.github.com/pulls/{pr_number}"},
                 },
-                "comment": {"user": {"login": login}, "body": body},
+                "comment": {
+                    "user": {
+                        "login": login,
+                        "type": user_type or (
+                            "Bot" if login.endswith("[bot]") else "User"
+                        ),
+                    },
+                    "body": body,
+                },
             },
         },
         "inputs": {},

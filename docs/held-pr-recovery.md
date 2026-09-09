@@ -49,10 +49,25 @@ Any casing works, bold/plain/heading all work, and your answer can continue on
 that same line or below it. It has to be newer than the hold and written by a
 person, not a bot.
 
-Then stop. The reconcile sweep reads your answer on its next pass — normally
-within about fifteen minutes — and dispatches the fix loop for you
-(`restart_answered_blockers`, DRE-2409). Your answer buys exactly one restart;
-a further answer buys another.
+Then stop. **Your comment starts the fix loop by itself** (DRE-3451), normally
+within a minute: agent-fix's job gate admits a User-authored PR comment, and
+its first step validates it with `fix_context.standing_decision` — the same
+four predicates the sweep reads — before anything else in the job runs. That
+run posts the same `🔓 fix-restart-on-operator-decision` receipt the sweep
+posts, so the sweep sees the answer as consumed and does not dispatch a second
+agent onto the branch.
+
+If that run never arrives — GitHub drops the comment event, or the run is
+evicted by concurrency — the reconcile sweep is the backstop and picks the
+answer up on its next pass, normally within about fifteen minutes
+(`restart_answered_blockers`, DRE-2409). Either way your answer buys exactly
+one restart; a further answer buys another.
+
+**A skip now means the wording was not recognised**, not that the answer was
+rejected. The run prints which predicate refused — `bot-author`,
+`older-than-latest-blocker`, `mention-only`, `decision-consumed`,
+`no-blocker` — and the sweep posts the near-miss notice below for the one an
+operator can act on.
 
 ## `gh workflow run agent-fix.yml` is not a second way out
 
@@ -83,9 +98,12 @@ The run also stops reporting an unqualified `success`: it executes a step
 named **No work done (this dispatch could not act)** and writes a
 `NO WORK DONE:` line to the run's annotations and job summary.
 
-## What the sweep's own restart does
+## What the restart does, whichever route it came by
 
-The sweep's dispatch is a machine dispatch (`gh workflow run` under the
+A comment-started run and the sweep's dispatch reach the same job through the
+same budget reading, so the paragraph below is true of both. Neither is a hand
+dispatch: an `issue_comment` start is not a `workflow_dispatch` at all, and the
+sweep's dispatch is a machine dispatch (`gh workflow run` under the
 workflow's `github.token` initiates as `github-actions`, DRE-2053), and it is
 allowed to act: an operator decision re-arms **one** fix attempt, so the
 answer buys real work rather than a repeat of the hold it was written against.
@@ -122,8 +140,8 @@ gate makes — so the sweep can never start a run that will refuse to work.
 
 | You see | Do |
 | -- | -- |
-| 🛑 hold, no answer on the PR yet | Comment **Operator decision** — … and wait ~15 min |
-| 🛑 hold, your answer is on the PR | Nothing. The sweep has it. |
+| 🛑 hold, no answer on the PR yet | Comment **Operator decision** — … ; the loop starts within a minute |
+| 🛑 hold, your answer is on the PR | Nothing. The comment started it, and the sweep is the backstop. |
 | 🟡 `dispatch-no-work` notice | Nothing. Your answer is standing and still armed. |
 | 🔓 restart receipt | Nothing. The fix loop is running again. |
 | ⚠️ `operator-decision-near-miss` notice | Your comment did not parse — re-post it in the format above |

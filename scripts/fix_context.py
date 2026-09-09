@@ -52,8 +52,10 @@ Contract with agent-fix.yml:
     array-of-pages `gh api --paginate --slurp` emits), --worker-login,
     --out (the markdown file the fix prompt reads); or --answer-format
     alone, which prints ANSWER_FORMAT (the copy-pasteable instructions
-    every parking blocker comment quotes) and exits.
-  exit 0 = rendered; exit 2 = malformed input (loud, never a silent
+    every parking blocker comment quotes) and exits; or --decision-trigger
+    with --comments-file/--worker-login, which decides whether a
+    comment-triggered run may act (DRE-3451, see decision_trigger).
+  exit 0 = rendered/decided; exit 2 = malformed input (loud, never a silent
     absence — a missing thread file is exactly the deadlock this fixes).
 """
 
@@ -107,29 +109,36 @@ DECISION_EXAMPLE = "**Operator decision** — <your answer here>"
 # What actually restarts the loop, said in the message that asks for the
 # answer (DRE-2548). This paragraph used to end "the fix loop picks it up and
 # restarts itself — no dispatch needed", one sentence after requiring the
-# comment be written by a person: agent-fix's job-if admits an issue_comment
+# comment be written by a person: agent-fix's job-if admitted an issue_comment
 # start ONLY from the qa-bot, so the comment an operator was told to write
 # fired a run that completed/SKIPPED — green at the run level, nothing on the
 # PR (agent-bureau PR #2065, four skipped runs; PR #2087, skipped one second
 # after the decision, both hand-dispatched afterwards). Following the
 # instruction correctly guaranteed the failure, and the failure was silent.
 #
-# The real trigger is the 15-minute reconcile sweep
-# (reconcile.restart_answered_blockers, DRE-2409): it reads the human
-# decision and workflow_dispatches agent-fix, which the same job-if accepts.
+# DRE-2548 answered that by naming the real trigger: the 15-minute reconcile
+# sweep (reconcile.restart_answered_blockers, DRE-2409). DRE-3451 made the
+# comment a real trigger instead — the job-if now admits a User-authored PR
+# comment and decision_trigger below validates it with these same predicates
+# — so the copy names the direct start and keeps the sweep as the backstop it
+# now is. Every fix round used to wait up to fifteen minutes for nothing
+# (PR #2365, 2026-09-08: two answers, 25 idle minutes).
+#
 # Both sentences are pinned against that gate by
 # tests/test_restart_instruction_matches_gate.py, and against the workflow's
 # own inline copies of them — those bodies are written before the pipeline
 # checkout exists, so they cannot call this module and are pinned instead.
 RESTART_PROMISE = (
-    "What happens next: the pipeline sweep sees your answer on its next pass "
-    "and starts the fix loop for you, normally within about 15 minutes. You "
-    "do not need to run anything by hand."
+    "What happens next: your comment starts the fix loop on its own, normally "
+    "within a minute. If that run never arrives, the pipeline sweep picks your "
+    "answer up on its next pass, normally within about 15 minutes. You do not "
+    "need to run anything by hand."
 )
 SKIP_NOTICE = (
-    "Your comment does not start the run by itself — it also fires an Agent "
-    "Fix run that skips within seconds. That skip is expected and does not "
-    "mean your answer was rejected."
+    "If the pipeline cannot read your comment as a decision it skips instead "
+    "of starting the loop, and says so here rather than leaving you waiting. A "
+    "skip means the wording was not recognised, never that your answer was "
+    "rejected."
 )
 ANSWER_FORMAT = (
     "**How to answer this** — comment on this PR from your own account with a "
@@ -294,6 +303,119 @@ def standing_decision(comments, worker_login: str) -> Optional[dict]:
     return decision
 
 
+# ---------------------------------------------------------------------------
+# The comment-triggered start (DRE-3451)
+# ---------------------------------------------------------------------------
+#
+# agent-fix's job-level `if` admits a User-authored PR comment cheaply — a job
+# `if` is evaluated before any step can mint a token, and the phrase rule
+# (is_decision_body: leading markers stripped, any casing, anchored at the
+# first line) is a Python predicate no GitHub expression can express without
+# re-deriving it. So the gate is two halves, and this is the second: given the
+# PR's thread in REST shape, does this run get to act?
+#
+# It answers with standing_decision — the SAME reading reconcile's restart
+# sweep arms on — so the comment start and the sweep can never disagree about
+# whether an answer is live. Everything that grants the answer its authority
+# is unchanged and none of it is loosened: a non-bot human author (REST is
+# fetched precisely because it carries user.type), newer than the latest
+# worker-bot 🛑 blocker, leading its first line with the phrase, and not
+# already consumed by a worker-bot comment.
+#
+# A SKIP names the predicate that refused. Silence was the DRE-2409 failure —
+# "the operator has not answered yet" and "the pipeline did not recognise the
+# answer" look identical from the outside — and a run log that says only
+# "skipped" rebuilds it one layer over.
+TRIGGER_PROCEED = "PROCEED"
+TRIGGER_SKIP = "SKIP"
+TRIGGER_STANDING = "standing-decision"
+
+SKIP_NO_BLOCKER = "no-blocker"
+SKIP_BOT_AUTHOR = "bot-author"
+SKIP_BEFORE_BLOCKER = "older-than-latest-blocker"
+SKIP_MENTION_ONLY = "mention-only"
+SKIP_CONSUMED = "decision-consumed"
+SKIP_NO_DECISION = "no-decision"
+
+TRIGGER_REASONS = {
+    TRIGGER_STANDING: (
+        "an operator decision is standing and unconsumed — it is newer than "
+        "the latest blocker, a person wrote it, and the loop has not acted "
+        "on it yet."
+    ),
+}
+SKIP_REASONS = {
+    SKIP_NO_BLOCKER: (
+        "this PR carries no fix-loop blocker, so there is nothing for a "
+        "decision to answer (a stray decision comment steers nothing)."
+    ),
+    SKIP_BOT_AUTHOR: (
+        "the only decision-shaped comment after the latest blocker was "
+        "written by a bot — authorship decides meaning, and no bot may "
+        "release a held PR."
+    ),
+    SKIP_BEFORE_BLOCKER: (
+        "the decision is older than the latest blocker — the loop escalated "
+        "past it, so it is stale and answers nothing."
+    ),
+    SKIP_MENTION_ONLY: (
+        "a comment MENTIONS an operator decision but does not lead with the "
+        "phrase, so it does not parse as one (the sweep posts the near-miss "
+        "notice saying how to re-post it)."
+    ),
+    SKIP_CONSUMED: (
+        "the standing decision was already acted on — a worker-bot comment "
+        "is newer than it, so this answer has had its one restart."
+    ),
+    SKIP_NO_DECISION: (
+        "no operator decision follows the latest blocker; this comment is "
+        "ordinary PR conversation."
+    ),
+}
+
+
+def _skip_reason(comments, worker_login: str) -> str:
+    """WHICH predicate turned this comment away. Read newest evidence first,
+    so the answer names the thing the operator can act on."""
+    at = _latest_blocker_index(comments, worker_login)
+    if at < 0:
+        return SKIP_NO_BLOCKER
+    after = comments[at + 1:]
+    if any(is_decision_body(c.get("body")) and not _is_human(c) for c in after):
+        return SKIP_BOT_AUTHOR
+    if any(
+        is_decision_body(c.get("body")) and _is_human(c) for c in comments[:at]
+    ):
+        return SKIP_BEFORE_BLOCKER
+    if near_misses(comments, worker_login):
+        return SKIP_MENTION_ONLY
+    return SKIP_NO_DECISION
+
+
+def decision_trigger(comments, worker_login: str) -> tuple:
+    """(verdict, reason-slug) for a comment-triggered fix run (DRE-3451).
+
+    PROCEED exactly when standing_decision() finds an answer — the sweep's own
+    arming rule, read here so one dispatch cannot happen on a reading the
+    other would refuse. Every other outcome is a SKIP that names its
+    predicate."""
+    decision = operator_decision(comments, worker_login)
+    if decision is not None:
+        if decision_consumed(comments, decision, worker_login):
+            return TRIGGER_SKIP, SKIP_CONSUMED
+        return TRIGGER_PROCEED, TRIGGER_STANDING
+    return TRIGGER_SKIP, _skip_reason(comments, worker_login)
+
+
+def trigger_report(comments, worker_login: str) -> str:
+    """The three lines the workflow step prints and reads: the verdict, a
+    blank, then `<slug> — <sentence>`. Same shape as fix_dead_run.py's
+    `decide`, so the step parses it the way the others already do."""
+    verdict, slug = decision_trigger(comments, worker_login)
+    reasons = TRIGGER_REASONS if verdict == TRIGGER_PROCEED else SKIP_REASONS
+    return f"{verdict}\n\n{slug} — {reasons[slug]}"
+
+
 def near_misses(comments, worker_login: str) -> list:
     """Human comments after the latest blocker that MENTION the decision
     phrase but do not parse as one (DRE-2409).
@@ -451,11 +573,46 @@ def main(argv=None) -> int:
     # The blocker comments that park a PR quote this (DRE-2409): ONE source
     # for the answer format, read by the workflow at comment time.
     parser.add_argument("--answer-format", action="store_true")
+    # The comment-triggered start gate (DRE-3451), read by agent-fix.yml's
+    # first step. A flag rather than a subcommand: this file's CLI has never
+    # had one, and the render path's argv must not move under the workflow
+    # steps and product-repo stubs that already call it.
+    parser.add_argument("--decision-trigger", action="store_true")
     args = parser.parse_args(argv)
 
     if args.answer_format:
         print(ANSWER_FORMAT)
         return 0
+
+    if args.decision_trigger:
+        missing = [
+            flag
+            for flag, value in (
+                ("--comments-file", args.comments_file),
+                ("--worker-login", args.worker_login),
+            )
+            if not value
+        ]
+        if missing:
+            print(
+                f"fix_context: missing required argument(s): "
+                f"{', '.join(missing)}",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            comments = _load_comments(args.comments_file)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(
+                f"fix_context: malformed comments payload: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        # The verdict and its reason ONLY — never a body (DRE-1996: a run log
+        # is a publication, and every comment here is attacker-writable).
+        print(trigger_report(comments, args.worker_login))
+        return 0
+
     missing = [
         flag
         for flag, value in (
