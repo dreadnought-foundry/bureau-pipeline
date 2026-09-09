@@ -62,13 +62,19 @@ CALLEE = "dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml"
 
 
 def _run_record(run_id=771, status="in_progress", conclusion=None, sha=TESTED_SHA,
-                referenced=True):
-    """An Actions workflow-run record, REST-shaped."""
+                referenced=True, display_title="agent-execute"):
+    """An Actions workflow-run record, REST-shaped.
+
+    `event` is the TRIGGER (`repository_dispatch`), never the dispatch type;
+    GitHub keeps the type only as `display_title`. Run 34411760958 in the
+    sandbox (2026-09-09 15:20 PT) is the shape copied here.
+    """
     record = {
         "id": run_id,
         "name": "Agent Task",
         "path": ".github/workflows/agent-task.yml",
         "event": "repository_dispatch",
+        "display_title": display_title,
         "status": status,
         "conclusion": conclusion,
         "created_at": "2026-09-09T22:21:04Z",
@@ -102,6 +108,7 @@ class FakeSandbox:
         self.runs_error = runs_error
         self.dispatched = []
         self.cancelled = []
+        self.listed_events = []  # every `event=` the rehearsal asked for
         self.job_calls = 0
         self.timing_calls = 0
 
@@ -114,9 +121,18 @@ class FakeSandbox:
     def list_workflow_runs_for(self, repo, workflow_file, event=None, per_page=30):
         if self.runs_error:
             raise self.runs_error
+        self.listed_events.append(event)
         if not self.dispatched or self.appears is None:
-            return list(self.runs_before)
-        return [self.appears] + list(self.runs_before)
+            runs = list(self.runs_before)
+        else:
+            runs = [self.appears] + list(self.runs_before)
+        # GitHub's `event=` filter matches the run's TRIGGER event, exactly;
+        # `event=agent-execute` returns an empty page for a run whose event
+        # is `repository_dispatch`, which is how attempt 3 on PR #332 timed
+        # out with its own run in plain sight (2026-09-09 15:20 PT).
+        if event is not None:
+            runs = [run for run in runs if run.get("event") == event]
+        return runs
 
     def get_workflow_run(self, repo, run_id):
         if len(self.records) > 1:
@@ -176,6 +192,53 @@ def _ctx(gh, **kw):
     )
     ctx.state["elapsed"] = elapsed
     return ctx
+
+
+class FindingTheRunTest(unittest.TestCase):
+    """A `repository_dispatch` answers 204 with no run id, so the rehearsal
+    has to find its run afterwards — and attempt 3 on PR #332 (2026-09-09
+    15:20 PT) never did: it asked GitHub for `event=agent-execute`, the
+    dispatch TYPE, while the run it had fired listed under the trigger event
+    `repository_dispatch` with the type only in its title. Ten minutes of
+    empty pages, then a timeout, with the run in plain sight."""
+
+    def test_it_lists_runs_by_the_trigger_event_github_records(self):
+        started = _run_record()
+        gh = FakeSandbox(appears=started, records=[started], job_counts=[1])
+        ctx = _ctx(gh)
+        scenario = atp.SCENARIO
+        scenario.setup(ctx)
+        scenario.exercise(ctx)
+        scenario.verify(ctx)
+        self.assertEqual(ctx.state["run_id"], started["id"])
+        self.assertTrue(gh.listed_events, "the rehearsal never listed runs")
+        self.assertEqual(
+            set(gh.listed_events), {"repository_dispatch"},
+            f"the listing must ask for the trigger event GitHub records, "
+            f"never the dispatch type; asked for {sorted(map(str, gh.listed_events))}",
+        )
+
+    def test_a_dispatch_of_another_type_is_not_mistaken_for_ours(self):
+        """A run of the same workflow that a different dispatch type produced
+        (a second `types:` entry on the stub, say) lists under the same
+        trigger event; the title is what tells them apart."""
+        other = _run_record(run_id=772, display_title="agent-plan")
+        gh = FakeSandbox(appears=other, records=[other], job_counts=[1])
+        ctx = _ctx(gh)
+        scenario = atp.SCENARIO
+        scenario.setup(ctx)
+        scenario.exercise(ctx)
+        with self.assertRaises(framework.HarnessTimeout):
+            scenario.verify(ctx)
+        self.assertNotIn("run_id", ctx.state)
+
+    def test_a_record_without_a_title_is_still_ours(self):
+        """The listing is already scoped to the trigger event; a missing
+        field is not evidence of another type."""
+        self.assertTrue(atp.is_our_dispatch({"id": 1, "event": "repository_dispatch"}))
+        self.assertTrue(atp.is_our_dispatch(_run_record()))
+        self.assertFalse(atp.is_our_dispatch(_run_record(display_title="agent-plan")))
+        self.assertFalse(atp.is_our_dispatch(None))
 
 
 class RefusalTest(unittest.TestCase):
