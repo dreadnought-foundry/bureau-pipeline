@@ -365,6 +365,19 @@ def test_an_unparseable_mulch_line_is_counted_and_its_bytes_never_printed(
     assert body[0] == f"MULCH STATUS: 2 record(s) read from {path}"
 
 
+def test_last_keeps_the_final_records_in_file_order(tmp_path):
+    path = _mulch_file(tmp_path, [
+        json.dumps({"content": f"record {n}"}) for n in range(1, 6)])
+    body = ledger_context.render_mulch(path, last=2).splitlines()
+    assert [line for line in body if line.startswith("- ")] == [
+        "- record 4", "- record 5"]
+    assert "The last 2 of 5 record(s), in file order:" in body
+    # `records[-0:]` is the whole list — `last=0` must print none of them.
+    assert not [line for line in
+                ledger_context.render_mulch(path, last=0).splitlines()
+                if line.startswith("- ")]
+
+
 def test_a_missing_mulch_file_is_unknown(tmp_path, capsys):
     missing = str(tmp_path / "planning.jsonl")
     code, lines = _render(tmp_path, capsys, mulch=missing)
