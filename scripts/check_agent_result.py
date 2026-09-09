@@ -64,6 +64,22 @@ the work. The evidence is either GitHub's own refusal in the record
 committed work for this card is on the runner and GitHub does not have it,
 passed in as `--work-on-runner`.
 
+DRE-3262 — DID IT DELIVER? `is_failed_delivery()` answers a question none of
+the death classes can: a run that finished CLEANLY and whose work GitHub never
+received. On 2026-09-06 (agent-bureau run 34045232203, DRE-3165) the rescue
+push was refused with 400 on both of its own fresh mints, and the same dead
+token made the PR-state read a 401 — so the card's last word was "could not
+read this card's PR state … so this run is NOT being recorded as a dead agent"
+while 93 minutes of green work sat in a run artifact nobody was told about.
+Unreadable is not emptiness (DRE-2034) and it is not innocence either: with
+work on the runner and a push GitHub did not accept, the run IS a failed
+delivery, and the Report step reads that BEFORE it reads the PR lookup.
+
+    python3 check_agent_result.py delivery --work-on-runner true \
+        --push-status 400 --pushed false
+
+prints `failed` / `delivered`.
+
 DRE-2931 — DID THE AGENT START AT ALL. classify_death() answers "which kind of
 death", and every answer it can give presumes there WAS a run. A run that dies
 before claude-code-action is reached — a Linear write refused at `Card → In
@@ -113,6 +129,12 @@ DEATH_API = "api_death"
 # could not deliver it, because the installation token every git credential on
 # the runner is built from lives one hour.
 DEATH_CREDENTIAL_EXPIRY = "credential_expiry"
+
+# The `delivery` CLI's two answers (DRE-3262) — did this run's work reach
+# GitHub? Distinct from the death classes above: a run can finish perfectly and
+# still fail to deliver, which is exactly the DRE-3165 shape.
+DELIVERY_FAILED = "failed"
+DELIVERY_OK = "delivered"
 
 # claude-code-action's own names for hitting the turn ceiling. `subtype` is the
 # canonical one; `terminal_reason`/`stop_reason` and the human sentence in
@@ -265,6 +287,46 @@ def classify_death(execution: dict | None, *, work_on_runner: bool = False) -> s
     return DEATH_NONE
 
 
+def is_failed_delivery(
+    *,
+    work_on_runner: bool,
+    push_status: str = "",
+    pushed: bool = False,
+) -> bool:
+    """Did this run fail to DELIVER work it had (DRE-3262)?
+
+    The question `classify_death` cannot answer, because it is not about a
+    death: the run may have finished perfectly. It is about whether committed
+    work for this card is sitting on a disk GitHub never received — which on
+    2026-09-06 (agent-bureau run 34045232203, DRE-3165) was true while the
+    card's own last comment said the run was "NOT being recorded as a dead
+    agent", because the PR-state read had 401'd on the same expired token.
+
+    Read from the RUNNER'S OWN FACTS and nothing else:
+
+      * `work_on_runner` — the Push rescue step's observation that commits for
+        this card exist and GitHub does not have them;
+      * `pushed` / `push_status` — what that step's push actually did. Both are
+        needed: `local_work` is computed BEFORE the push and stays true after a
+        SUCCESSFUL rescue, so a predicate reading it alone would report a failed
+        delivery for every run the rescue saved.
+
+    An unnamed refusal still counts. `push_rescue.http_status` answers "" for a
+    message it cannot name, and "we could not name GitHub's refusal" is not
+    "the push worked" — the same rule the PR read gets in the other direction
+    (DRE-2034: unreadable is never emptiness).
+
+    Deliberately NOT a function of the PR list. That read is what failed in the
+    incident, and a fact from the disk must never be overturned by a lookup
+    that could not answer.
+    """
+    if not work_on_runner:
+        return False
+    if pushed:
+        return False
+    return str(push_status or "").strip() != "200"
+
+
 def agent_started(
     execution: dict | None,
     *,
@@ -369,6 +431,7 @@ def failure_reason(
     escalation_note: bool = False,
     ignore_is_error: bool = False,
     claude_outcome: str = "",
+    work_on_runner: bool = False,
 ) -> str | None:
     """Why this run should fail, or None if it is acceptable.
 
@@ -401,6 +464,15 @@ def failure_reason(
         and not pr_exists
         and not blocker_note
         and not escalation_note
+        # DRE-3262: committed work on the runner IS evidence, and it is the one
+        # kind this gate could not see. A refused rescue push leaves no branch
+        # and no PR BY DEFINITION — that is what "refused" means — so the
+        # DRE-3165 shape reads here as "no agent branch, no PR, no note", fails
+        # the job, and summons the medic to re-run a run that did the work and
+        # whose patch is already uploaded. The Report step owns the response
+        # (it says so on the card and dispatches the delivery); this gate's
+        # only job is not to call it a silent death.
+        and not work_on_runner
     ):
         return "no agent branch, no PR, no blocker note, and no escalation note"
     return None
@@ -426,6 +498,26 @@ def main(argv: list[str]) -> int:
             _load_execution(rest[0] if rest else ""),
             work_on_runner=work_on_runner,
         ))
+        return 0
+    # `delivery --work-on-runner X --push-status Y --pushed Z` (DRE-3262):
+    # `failed` when the run had work GitHub never took, `delivered` otherwise.
+    # Same shape and same reason as `classify` and `started` — the Report step
+    # must not re-derive it from a shell test, which is how the incident's
+    # unreadable PR read came to be the last word on a run that had plainly
+    # failed to deliver.
+    if argv and argv[0] == "delivery":
+        rest = argv[1:]
+        values = {"--work-on-runner": "", "--push-status": "", "--pushed": ""}
+        for flag in list(values):
+            if flag in rest:
+                i = rest.index(flag)
+                values[flag] = rest[i + 1] if i + 1 < len(rest) else ""
+                del rest[i : i + 2]
+        print(DELIVERY_FAILED if is_failed_delivery(
+            work_on_runner=_truthy(values["--work-on-runner"]),
+            push_status=values["--push-status"],
+            pushed=_truthy(values["--pushed"]),
+        ) else DELIVERY_OK)
         return 0
     # `started <execution-json-path> [--claude-outcome X] [--branch REF]`
     # (DRE-2931): did this run consume an attempt at the work? Same shape and
@@ -470,6 +562,15 @@ def main(argv: list[str]) -> int:
         i = argv.index("--claude-outcome")
         claude_outcome = (argv[i + 1] if i + 1 < len(argv) else "")
         del argv[i : i + 2]
+    # Optional --work-on-runner <bool> (DRE-3262): the Push rescue step's
+    # observation. A refused rescue push leaves no branch and no PR by
+    # definition, so without this the gate reads a run that FINISHED as a
+    # silent death and the medic re-runs work whose patch is already uploaded.
+    work_on_runner = False
+    if "--work-on-runner" in argv:
+        i = argv.index("--work-on-runner")
+        work_on_runner = _truthy(argv[i + 1] if i + 1 < len(argv) else "")
+        del argv[i : i + 2]
     exec_path, branch, pr_url, blocker_file = (argv + ["", "", "", ""])[:4]
 
     def _has_note(path: str) -> bool:
@@ -490,6 +591,7 @@ def main(argv: list[str]) -> int:
         escalation_note=_has_note(escalation_file),
         ignore_is_error=ignore_is_error,
         claude_outcome=claude_outcome,
+        work_on_runner=work_on_runner,
     )
     if reason:
         print(f"agent result gate: FAIL — {reason}")

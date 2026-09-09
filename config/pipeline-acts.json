@@ -1582,6 +1582,13 @@
       "kind": "undeclared-act",
       "means": "The medic marks a run that hit the Claude account's usage limit or Linear's request budget: one `🪦 limit-death:` marker on the card, no retry, no strike — the reconcile sweep re-enters the stage once the wall is down (DRE-3171).",
       "why": "Act-shaped (a refusal to retry into the wall, and the ticket back), and the registry has no row for it. Giving it a row is a REGISTRY change, and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), so the marker ships first as an undeclared act and its row follows with its console half, together with the two limit-recovery receipts scripts/limit_recovery.py posts in answer to it. The body is dead_run.limit_marker()'s, whose first line is machine-readable and pinned; its idempotency is the `run=<id>` on that line, which the step checks before posting so a re-run attempt never writes a second."
+    },
+    {
+      "file": "scripts/deliver_rescue.py",
+      "anchor": "linear_ops.cmd_comment(card, body)",
+      "kind": "undeclared-act",
+      "means": "The rescue push was refused on both of its own fresh mints, so the run says where the work is (artifact and run id) and hands the delivery to a follow-up job — and that job says when it landed.",
+      "why": "Act-shaped, and the registry has no row for it — and a row cannot be added here first. `tests/test_pipeline_acts_consumers.py` enforces console-first sequencing (DRE-3091): a tag this repo declares before agent-bureau's console knows it turns every open PR in that repo red, which is the failure that guard exists to prevent. So the receipt carries its own machine-readable grammar in the meantime, the same shape `model-attempt:` uses: `rescue-push-failed:` names the artifact and the run, `rescue-delivery-dispatched:` records the hand-off and is its own idempotency key (reconcile counts it), `rescue-delivered:` closes it. scripts/deliver_rescue.py owns all three and parses back exactly what it writes. Named here so the debt is countable rather than invisible."
     }
   ]
 }

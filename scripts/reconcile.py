@@ -123,6 +123,9 @@ import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE
 # marker from the module that writes it.
 import critic_score  # noqa: E402
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
+# DRE-3262: ONE grammar for "the rescue could not push and the work is in an
+# artifact" — written by the failing run's last step, read back here.
+import deliver_rescue  # noqa: E402
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
@@ -1976,6 +1979,78 @@ def redispatch(card: dict) -> bool:
         _write_failures.append(err)
         print(f"ERROR: {err}", file=sys.stderr)
     return ok
+
+
+def redeliver_rescued_work(identifier: str, bodies: list[str]) -> bool:
+    """Hand an undelivered rescue to the delivery workflow; True if it went.
+
+    THE RE-CHECK THE INCIDENT WAS PROMISED (DRE-3262). On 2026-09-06 the
+    DRE-3165 run's rescue was refused with 400 on both of its own fresh mints,
+    the work went into `rescue-DRE-3165.patch`, and the card's last comment said
+    the PR state could not be read "so this run is NOT being recorded as a dead
+    agent — the reconcile sweep will re-check". The sweep's re-check is the
+    In-Progress-no-PR branch in main(), and all it could see was an absent pull
+    request: it requeues, which rebuilds from nothing work that already exists
+    (~90 minutes and the run's cost again).
+
+    So it reads the ARTIFACT FACT first, off the card's own
+    `rescue-push-failed` marker — the artifact and the run holding it — and
+    dispatches the delivery instead of a fresh agent. Never off a pull-request
+    listing: that read is the one that failed, and it answered the opposite of
+    the truth.
+
+    BOUNDED, like every dispatch at a vendor boundary (DRE-1921). One attempt
+    per card: if a delivery was already dispatched and the card still has no
+    pull request, the follow-up did not work and rebuilding is the only remedy
+    left — this returns False and the caller's requeue proceeds exactly as
+    before. The `rescue-delivery-dispatched` receipt is both the record and the
+    counter, so nothing dispatches in a loop.
+
+    A refused dispatch is also False (DRE-1254: a receipt claiming a re-trigger
+    that 403'd is worse than none) and is recorded, so the sweep run goes red
+    for the medic.
+    """
+    marker = deliver_rescue.pending_delivery(bodies)
+    if marker is None:
+        return False
+    try:
+        prior = linear_ops.count_comments(identifier, deliver_rescue.DISPATCH_TAG)
+    except linear_ops.LinearError as e:
+        # Unreadable is not zero: dispatching again could be the second, third
+        # or tenth attempt. Fall through to the requeue the card would have had.
+        print(f"ERROR: could not count {identifier}'s delivery attempts: {e}",
+              file=sys.stderr)
+        return False
+    if prior:
+        print(
+            f"rescue delivery: {identifier} was already handed to "
+            f"{deliver_rescue.delivery_workflow(REPO)} and still has no pull "
+            f"request — the artifact route did not work, so the card takes the "
+            f"ordinary requeue from here"
+        )
+        return False
+    workflow = deliver_rescue.delivery_workflow(REPO)
+    try:
+        gh_dispatch(*deliver_rescue.dispatch_argv(
+            REPO, run_id=marker.run_id, card=identifier,
+            artifact=marker.artifact,
+        )[1:])
+    except ReconcileWriteError as e:
+        _write_failures.append(str(e))
+        print(f"ERROR: could not dispatch {workflow} for {identifier}: {e}",
+              file=sys.stderr)
+        return False
+    _surface_once(
+        identifier, deliver_rescue.DISPATCH_TAG,
+        f"🚚 {deliver_rescue.DISPATCH_TAG}: this card's work is in artifact "
+        f"{marker.artifact} on run {marker.run_id} and never reached GitHub, so "
+        f"the sweep dispatched `{workflow}` to download it, apply it on a fresh "
+        f"branch and open the pull request. NOT requeued: a fresh agent would "
+        f"rebuild work that already exists.",
+    )
+    print(f"rescue delivery: dispatched {workflow} for {identifier} "
+          f"(run {marker.run_id}, artifact {marker.artifact})")
+    return True
 
 
 def backlog_children(only: list[str] | None = None) -> list[dict]:
@@ -5842,6 +5917,16 @@ def main(
                 # instead of looping forever (DRE-1403).
                 if agent_run_alive(ident):
                     print(f"live: {ident} agent run still going — leaving alone")
+                    continue
+                # THE ARTIFACT FACT, BEFORE THE ABSENT PR (DRE-3262). "No pull
+                # request" is the only thing this branch could see, and on
+                # 2026-09-06 it was true of a card whose 93 minutes of green
+                # work were sitting in `rescue-DRE-3165.patch` — the rescue push
+                # was refused with 400 on both of its own fresh mints. A requeue
+                # there rebuilds from nothing what the artifact is holding. The
+                # card's own marker says where the work is; dispatch the
+                # delivery, once, and requeue only if that route is spent.
+                if redeliver_rescued_work(ident, card_comment_bodies(card)):
                     continue
                 # since=RESET_TAG: only deaths after the last un-park count.
                 dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)

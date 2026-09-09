@@ -163,6 +163,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  actions: write            # dispatches deliver-rescue — see DRE-3262 below
 jobs:
   call:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml@main
@@ -263,6 +264,69 @@ A stub without it **degrades, it does not break**: the dispatch 403s, the run
 prints a `::warning::`, the PR says so and the card parks for a human — which
 is exactly what happened before this card existed. So the fleet loses the
 automatic second look until its stub is updated, and loses nothing else.
+
+### The `deliver-rescue` stub (DRE-3262)
+
+The one stub whose absence costs a finished build. When a run outlives its
+credential and the Push rescue step's own two fresh mints are BOTH refused, the
+work is uploaded as `rescue-<CARD>.patch` and the run's last step dispatches a
+follow-up that replays it with a credential of its own. The dispatch names a
+workflow file **in the product repo**, so that repo needs one:
+
+```yaml
+# .github/workflows/deliver-rescue.yml in the product repo
+name: Deliver Rescue        # EXACT name — the medic's workflow_run list matches it
+on:
+  workflow_dispatch:
+    inputs:
+      run_id: { required: true, type: string }
+      card: { required: true, type: string }
+      artifact: { required: false, type: string, default: "" }
+      card_url: { required: false, type: string, default: "" }
+permissions:
+  contents: read
+  actions: read
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@main
+    with:
+      run_id: ${{ inputs.run_id }}
+      card: ${{ inputs.card }}
+      artifact: ${{ inputs.artifact }}
+      card_url: ${{ inputs.card_url }}
+      pipeline_ref: main
+    secrets: inherit
+```
+
+**Two permissions carry this, and both live in a stub — neither is fixable
+from here.** The App token carries no Actions permission at all (DRE-1254:
+*"HTTP 403: Resource not accessible by integration"*), and both ends of this
+handoff are Actions API calls, so each rides its own workflow's `GITHUB_TOKEN`
+and only the calling stub can grant it:
+
+| stub | line | what it buys |
+|---|---|---|
+| `agent-task.yml` | `actions: write` | the failing run's last step can **dispatch** the delivery |
+| `deliver-rescue.yml` | `actions: read` | the delivery job can **download** the run's patch artifact |
+
+A reusable workflow has no `permissions:` of its own — the job's token scope is
+whatever the caller granted — so a `deliver-rescue.yml` stub pasted without
+`actions: read` runs, reaches `gh run download`, and fails there every time.
+That one is the sharper edge of the two: the `agent-task.yml` omission degrades
+to the 403 path described below, but a delivery job that cannot read its own
+artifact is a red run and still no pull request.
+
+Add it to that repo's **medic** `workflow_run` list too, by that exact name —
+this is the one workflow whose failure leaves somebody's only copy of finished
+work undelivered, and it is safe to retry (it refuses to act when its branch
+already has a pull request).
+
+A repo without it **degrades, it does not break**: the dispatch 404s, the run
+says so on the card beside the `🚨 rescue-push-failed` line naming the artifact
+and the run id, and the reconcile sweep tries the dispatch once more before
+falling back to the requeue this card replaced. So the fleet loses the automatic
+delivery until its stub is updated — a human can still recover the work in two
+minutes from the card — and loses nothing else.
 
 What the product repo still carries:
 

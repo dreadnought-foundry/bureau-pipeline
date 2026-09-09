@@ -186,8 +186,16 @@ print("\\t")
 sys.exit(0)
 '''
 
+# Exit 3 is UNREADABLE — GitHub would not say whether a PR exists (DRE-2034),
+# the answer the DRE-3165 run got when its expired token 401'd the lookup.
+CARD_PR_UNREADABLE_STUB = '''#!/usr/bin/env python3
+import sys
+print("could not read", file=sys.stderr)
+sys.exit(3)
+'''
 
-def _checkout(td: str) -> str:
+
+def _checkout(td: str, card_pr_exit: int = 0) -> str:
     """A `.bureau-pipeline` checkout: the real classifier, the real budget and
     the real rate-limit fingerprint, with only the Linear seam and the PR
     lookup replaced."""
@@ -196,7 +204,10 @@ def _checkout(td: str) -> str:
                     ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(os.path.join(ROOT, "config"), os.path.join(base, "config"))
     _executable(os.path.join(base, "scripts", "linear_ops.py"), LINEAR_STUB)
-    _executable(os.path.join(base, "scripts", "card_pr.py"), CARD_PR_STUB)
+    _executable(
+        os.path.join(base, "scripts", "card_pr.py"),
+        CARD_PR_UNREADABLE_STUB if card_pr_exit == 3 else CARD_PR_STUB,
+    )
     return base
 
 
@@ -219,9 +230,17 @@ def run_report(
     labels="",
     fail="",
     local_work="false",
+    env_extra=None,
+    card_pr_exit=0,
 ):
-    """Execute the real Report block. Returns (proc, journal)."""
-    _checkout(td)
+    """Execute the real Report block. Returns (proc, journal).
+
+    `env_extra` and `card_pr_exit` are the seams DRE-3262 drives the failed
+    DELIVERY through (tests/test_push_rescue_delivery.py): the rescue's own
+    outputs reach the step through its `env:` block, and exit 3 from
+    `card_pr.py` is the unreadable PR lookup that used to have the last word.
+    """
+    _checkout(td, card_pr_exit=card_pr_exit)
     binary = _git_stub(td)
     log = os.path.join(td, "linear.jsonl")
     exec_file = os.path.join(td, "claude-execution-output.json")
@@ -278,6 +297,7 @@ def run_report(
             LINEAR_STUB_PRIOR=prior,
             LINEAR_STUB_LABELS=labels,
             LINEAR_STUB_FAIL=fail,
+            **(env_extra or {}),
         ),
         capture_output=True, text=True,
     )

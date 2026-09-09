@@ -31,11 +31,18 @@
 # state — the cards the first attempt moved have left Intake, so the batch id no
 # longer matches the approval and the retry refuses instead of moving anything
 # twice.
+#
+# Deliver Rescue (DRE-3262) is watched on those same terms, and it is the one
+# workflow here whose failure leaves somebody's only copy of finished work
+# undelivered: it replays the `rescue-<CARD>.patch` artifact a refused push left
+# behind. Retrying it is safe because it is idempotent by construction — it
+# checks for a pull request on its own branch before it applies anything, so a
+# second run of a delivery that already landed does nothing at all.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Groomer, Planner Replay]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Model drift, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Channel Watch, Groomer, Planner Replay, Deliver Rescue]
     types: [completed]
 
 permissions:

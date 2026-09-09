@@ -1,0 +1,185 @@
+# Delivers work a refused rescue left in a run artifact (DRE-3262).
+#
+# WHY A SEPARATE RUN EXISTS AT ALL. `agent-task.yml`'s Push rescue step is the
+# last thing that can save a build whose credential aged out (DRE-3043), and
+# since DRE-3098 it spends TWO freshly minted tokens of its own and writes the
+# branch's commits to `rescue-<CARD>.patch` when GitHub refuses both. On
+# 2026-09-06 (agent-bureau run 34045232203, card DRE-3165) it did exactly that:
+# 93 minutes of green work, four commits, `RESCUE_PUSH_STATUS: 400` on both
+# mints, and a 235 KB artifact nobody was told about until a person downloaded
+# it at 11:05 PT and delivered it by hand.
+#
+# Everything the failing run can still spend belongs to that run. This one is a
+# NEW run: it downloads the artifact with its own job's GITHUB_TOKEN (an Actions
+# API read the App token cannot make — DRE-1254), mints its own installation
+# token, replays the commits on a fresh branch and opens the pull request with
+# it. Nothing here reads a credential the failed run held — that is the whole
+# point, and `tests/test_push_rescue_delivery.py` pins it.
+#
+# Dispatched by the failing run itself (the Report step's `deliver_rescue.py
+# handoff`) and, if that never landed, by the reconcile sweep's re-check, which
+# reads the `rescue-push-failed` marker on the card rather than the pull-request
+# list that could not answer during the incident.
+#
+# IDEMPOTENT. Both dispatchers may fire for one card, and a second pull request
+# for one card is worse than the bug this fixes — so the delivery checks for an
+# existing PR on its own branch first and does nothing when there is one.
+#
+# Reusable workflow: permissions live in the calling stub.
+name: Deliver Rescue (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      run_id:
+        description: The run whose `rescue-<CARD>.patch` artifact holds the work.
+        type: string
+        required: true
+      card:
+        description: The Linear card the work belongs to (DRE-<n>).
+        type: string
+        required: true
+      artifact:
+        description: >-
+          The artifact name, normally `rescue-<CARD>.patch`. Explicit rather
+          than derived, because the dispatcher knows what it uploaded and this
+          job must not guess at a name it cannot see.
+        type: string
+        required: false
+        default: ""
+      card_url:
+        description: The card's Linear URL, for the pull request body.
+        type: string
+        required: false
+        default: ""
+      pipeline_ref:
+        description: >-
+          bureau-pipeline ref for the INTERNAL checkouts (scripts). REQUIRED
+          since DRE-2689: a caller must pass the same ref it pins in `uses:`,
+          or it runs channel workflow YAML over another ref's scripts.
+        type: string
+        required: true
+    secrets:
+      LINEAR_API_KEY:
+        required: true
+      BUREAU_APP_ID:
+        required: false
+      BUREAU_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  deliver:
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    # Whose Linear hour this job spends (DRE-3321), like every other stage.
+    env:
+      LINEAR_IDENTITY: fleet
+    steps:
+      # THIS JOB'S OWN CREDENTIAL, minted first because everything below spends
+      # it: the artifact download, the checkout git pushes with, and `gh pr
+      # create`. NOT continue-on-error, unlike the rescue's own mints — there
+      # the run had other work to finish, and here a mint that fails means the
+      # delivery cannot happen and must say so red.
+      - name: Mint delivery token
+        id: mint
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # fetch-depth: 0 — `git am -3` needs the blobs its three-way merge falls
+      # back on, and the branch starts at `origin/<default>`; a shallow clone
+      # answers "fatal: could not read" to both.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.mint.outputs.token }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      # The artifact, fetched with the token minted above. `--name` so a run
+      # carrying several artifacts cannot hand this job somebody else's work,
+      # and `if-no-files-found`'s counterpart is the guard below: an empty
+      # directory is reported, never applied.
+      - name: Download the rescued patch
+        id: download
+        env:
+          # NOT the App token (DRE-1254, vendor-boundaries Q2): downloading an
+          # artifact reads the Actions API, and the App token carries no Actions
+          # permission at all. The workflow's own GITHUB_TOKEN does, when the
+          # calling stub grants `actions: read` — which is why the stub declares
+          # it. Everything that WRITES below still rides the App token, so the
+          # branch and the pull request carry the bot identity the merge gate's
+          # author-≠-merger rule is built on.
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          CARD: ${{ inputs.card }}
+          ARTIFACT: ${{ inputs.artifact }}
+        run: |
+          set -eo pipefail
+          # The card identifier arrives from a dispatch input, which is outside
+          # the trust boundary — validated as a pattern, never sanitised into
+          # something else (push_rescue.py's rule).
+          case "$CARD" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "::error title=Unusable card reference::refusing '$CARD'"
+              exit 1 ;;
+          esac
+          [ -n "$ARTIFACT" ] || ARTIFACT="rescue-$CARD.patch"
+          case "$ARTIFACT" in
+            *[!A-Za-z0-9._-]*)
+              echo "::error title=Unusable artifact name::refusing '$ARTIFACT'"
+              exit 1 ;;
+          esac
+          DIR="${RUNNER_TEMP:-/tmp}/rescue-download"
+          mkdir -p "$DIR"
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT" --dir "$DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+          ls -la "$DIR"
+
+      # The commits are the build agent's, so the replay carries their author
+      # and message (`git am`); this identity is only the committer of a
+      # fallback commit for a patch `am` refuses.
+      - name: Apply the patch and open the pull request
+        env:
+          # PUSH_TOKEN, the same environment variable push_rescue.py reads: one
+          # credential name across both halves of this mechanism, and through
+          # the environment rather than argv, which every process on the runner
+          # can read.
+          PUSH_TOKEN: ${{ steps.mint.outputs.token }}
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ inputs.card }}
+          CARD_URL: ${{ inputs.card_url }}
+          RUN_ID: ${{ inputs.run_id }}
+          ARTIFACT: ${{ steps.download.outputs.artifact }}
+          PATCH_DIR: ${{ steps.download.outputs.dir }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eo pipefail
+          git config user.name "agent-bureau-bot"
+          git config user.email "agent-bureau-bot@users.noreply.github.com"
+          python3 .bureau-pipeline/scripts/deliver_rescue.py apply \
+            --card "$CARD" --repo "$GITHUB_REPOSITORY" --run-id "$RUN_ID" \
+            --patch-dir "$PATCH_DIR" --artifact "$ARTIFACT" \
+            --base "${BASE:-main}" --card-url "$CARD_URL"
+
+      # The card moves only when there IS a pull request, and only from the
+      # lanes a build leaves behind — the same `advance` the Report step makes
+      # for a PR the agent opened. `|| true`: the pull request is the delivery,
+      # and a Linear write that fails must not fail a job that already
+      # succeeded (the reconcile sweep re-reads the state).
+      - name: Card → In Review
+        if: success()
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ inputs.card }}
+        run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" \
+            "In Review" "In Progress,Todo" || true
