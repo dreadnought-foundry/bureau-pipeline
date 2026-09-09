@@ -33,6 +33,17 @@ itself; every other home prints as `<identity>/<home>`. Every home is
 resolved and judged, and `one_user_per_identity` says every home of an
 identity must resolve to the same user as its first.
 
+An identity's USER is the user its FIRST home resolves to, so the rules that
+judge the identity — `display_name` and `must_differ_from` — are asked of
+first homes only, and a secondary home answers to `one_user_per_identity`
+instead. That is not tidiness: this report's whole job is naming the key to
+rotate, and asking an identity's rules of one of its other homes prints the
+IDENTITY's name against a user only that HOME has (`fleet and operator-tools
+both resolve to 'bureau-tools'` when it is fleet's relay copy that does).
+`must_not_be_admin` is asked of every home — it is a fact about the key in
+front of it, the `[OK]` line claims it of every home, and an unreadable first
+home leaves `one_user_per_identity` nothing to hold the rest against.
+
 ## What the check does
 
 For each home of each declared identity it takes the key from the named
@@ -365,21 +376,43 @@ def judge(doc: dict | None, resolved: list) -> list:
     """Apply the rules to every home. Returns the same rows, statuses and
     problems filled in. Each problem lands on the HOME that broke the rule,
     so a bad relay key fails `fleet/relay` and leaves `fleet` saying what it
-    truthfully is."""
+    truthfully is.
+
+    WHICH RULES ASK WHICH HOME. An identity's USER is the user its first home
+    resolves to, so the two rules that judge the identity — the name it must
+    wear (`display_name`) and the identity it must not collide with
+    (`must_differ_from`) — are asked of first homes only. A secondary home
+    owes `one_user_per_identity` instead, which names the home itself. Asking
+    the identity's rules of a secondary home prints the IDENTITY's name
+    against a user the identity does not have: fleet's relay home on the
+    operator's user used to print `fleet and operator-tools both resolve to
+    'bureau-tools'` when fleet's own key resolved to `Agent-Bureau`, sending
+    an operator to rotate the wrong key, plus a `display_name` line restating
+    what `one_user_per_identity` had already said.
+
+    `must_not_be_admin` is the exception and is asked of EVERY home: it is a
+    fact about the key in front of it, not about the identity, the `[OK]`
+    line says "not an admin" about every home, and a first home that could
+    not be read leaves `one_user_per_identity` nothing to hold the rest
+    against.
+    """
     rows = {r["name"]: r for r in identities(doc)}
     by_identity: dict = {}
     for r in resolved:
         by_identity.setdefault(r.identity, []).append(r)
+    first_of = {identity: group[0] for identity, group in by_identity.items()}
     for r in resolved:
         if r.status == UNKNOWN:
             continue
-        declared = rows[r.identity]
         if r.admin:
             r.problems.append(
                 f"rule {RULE_ADMIN} broke: {r.env} resolves to "
                 f"{r.display_name!r} (id {r.id}), who is an admin — an "
                 "unattended actor must not be able to do anything on the board"
             )
+        if r is not first_of[r.identity]:
+            continue
+        declared = rows[r.identity]
         if r.display_name != declared["display_name"]:
             r.problems.append(
                 f"rule {RULE_NAME} broke: expected {declared['display_name']!r}, "
@@ -404,30 +437,29 @@ def judge(doc: dict | None, resolved: list) -> list:
                 "identities wearing one name"
             )
     judged_pairs: set = set()
-    for r in resolved:
+    for r in first_of.values():
         if r.status == UNKNOWN:
             continue
         for other_name in rows[r.identity]["must_differ_from"]:
             pair = tuple(sorted((r.identity, other_name)))
             if pair in judged_pairs:
                 continue
-            for other in by_identity.get(other_name, []):
-                # An UNKNOWN home already has its own line; judging the pair
-                # against a user nobody could read would invent an answer.
-                if other.status == UNKNOWN or other.id != r.id:
-                    continue
-                judged_pairs.add(pair)
-                first_env, second_env = (
-                    (r.env, other.env) if r.identity == pair[0]
-                    else (other.env, r.env)
-                )
-                r.problems.append(
-                    f"rule {RULE_DIFFER} broke: {pair[0]} and {pair[1]} both "
-                    f"resolve to {r.display_name!r} (id {r.id}) — {first_env} "
-                    f"and {second_env} are one user, so one 2,500/hour budget, "
-                    "which is what having two identities exists to prevent"
-                )
-                break
+            other = first_of.get(other_name)
+            # An UNKNOWN home already has its own line; judging the pair
+            # against a user nobody could read would invent an answer.
+            if other is None or other.status == UNKNOWN or other.id != r.id:
+                continue
+            judged_pairs.add(pair)
+            first_env, second_env = (
+                (r.env, other.env) if r.identity == pair[0]
+                else (other.env, r.env)
+            )
+            r.problems.append(
+                f"rule {RULE_DIFFER} broke: {pair[0]} and {pair[1]} both "
+                f"resolve to {r.display_name!r} (id {r.id}) — {first_env} "
+                f"and {second_env} are one user, so one 2,500/hour budget, "
+                "which is what having two identities exists to prevent"
+            )
     for r in resolved:
         if r.status != UNKNOWN and r.problems:
             r.status = FAIL

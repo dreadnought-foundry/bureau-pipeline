@@ -130,7 +130,13 @@ of it is ever a runtime lookup.
   operator's key into that secret, which would silently put every parking
   reason and escalation the relay writes on the operator's budget. Every home
   is resolved and judged, and `one_user_per_identity` says every home of an
-  identity is the same user as its first. The operator runs, with
+  identity is the same user as its first. An identity's user IS its first
+  home's user, so the two rules that judge the identity — `display_name` and
+  `must_differ_from` — are asked of first homes only and a second home
+  answers to `one_user_per_identity` instead; otherwise a bad relay copy
+  prints the fleet's name as the key that collided, which is the one key the
+  reader would then wrongly rotate. `must_not_be_admin` is asked of every
+  home: it is a fact about the key in front of it. The operator runs, with
   `LINEAR_API_KEY_FLEET`, `LINEAR_API_KEY_RELAY` and `LINEAR_API_KEY` in the
   environment: `python3 scripts/check_linear_identities.py check`. A key that
   is absent is `UNKNOWN` and exits non-zero, never OK.

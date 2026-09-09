@@ -277,8 +277,9 @@ class TheRelayHome(unittest.TestCase):
         relay_is_tools = {"id": TOOLS_ID, "name": "bureau-tools", "admin": False}
         code, text = _run(_env(), _viewer(relay=relay_is_tools))
         self.assertEqual(code, 1, text)
-        broke = [line for line in text.splitlines()
-                 if "one_user_per_identity" in line]
+        # ONE line, not three. A second rule restating the same fact under
+        # another name is noise an operator reads mid-incident.
+        broke = [line for line in text.splitlines() if "[FAIL]" in line]
         self.assertEqual(len(broke), 1, text)
         self.assertIn("[FAIL] fleet/relay", broke[0])
         self.assertIn("rule one_user_per_identity broke", broke[0])
@@ -286,6 +287,27 @@ class TheRelayHome(unittest.TestCase):
         # The two homes that ARE what they say they are still say so.
         self.assertIn("[OK] fleet:", text)
         self.assertIn("[OK] operator-tools:", text)
+
+    def test_a_relay_on_the_operators_user_never_accuses_the_fleet_key(self):
+        """Which key to rotate is the whole output. `fleet` and
+        `operator-tools` did NOT land on one user here — only fleet's RELAY
+        home did — so no line may say they did."""
+        relay_is_tools = {"id": TOOLS_ID, "name": "bureau-tools", "admin": False}
+        code, text = _run(_env(), _viewer(relay=relay_is_tools))
+        self.assertEqual(code, 1, text)
+        self.assertNotIn("must_differ_from", text)
+        self.assertNotIn("display_name", text)
+        # The fleet's own key resolves to Agent-Bureau and is reported as such.
+        self.assertIn("[OK] fleet: LINEAR_API_KEY_FLEET resolves to "
+                      "'Agent-Bureau'", text)
+        self.assertNotIn("[FAIL] fleet:", text)
+        # Every line that puts a name on the operator's user names the RELAY
+        # variable as the one that resolved to it — never the fleet's own.
+        for line in text.splitlines():
+            if "[FAIL]" in line:
+                head = line.split("resolves to")[0]
+                self.assertIn("LINEAR_API_KEY_RELAY", head, text)
+                self.assertNotIn("LINEAR_API_KEY_FLEET", head, text)
 
     def test_a_relay_key_on_an_admin_fails_must_not_be_admin(self):
         admin = {"id": FLEET_ID, "name": "Agent-Bureau", "admin": True}
@@ -295,6 +317,19 @@ class TheRelayHome(unittest.TestCase):
         self.assertEqual(len(broke), 1, text)
         self.assertIn("[FAIL] fleet/relay", broke[0])
         self.assertIn("LINEAR_API_KEY_RELAY", broke[0])
+
+    def test_a_relay_on_an_admin_is_judged_when_the_fleet_key_is_unreadable(self):
+        """`one_user_per_identity` has nothing to hold this home against when
+        the first home could not be read — so if the admin rule were asked of
+        first homes only, the line would read `[OK] … not an admin` about an
+        admin."""
+        admin = {"id": FLEET_ID, "name": "Agent-Bureau", "admin": True}
+        code, text = _run(_env(fleet=None), _viewer(relay=admin))
+        self.assertNotEqual(code, 0, text)
+        self.assertNotIn("[OK] fleet/relay", text)
+        broke = [line for line in text.splitlines() if "must_not_be_admin" in line]
+        self.assertEqual(len(broke), 1, text)
+        self.assertIn("[FAIL] fleet/relay", broke[0])
 
     def test_the_relay_variable_unset_is_unknown_and_non_zero(self):
         """The relay unread is exactly the case this card exists for, so it
