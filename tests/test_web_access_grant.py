@@ -76,6 +76,26 @@ def entry(name: str) -> dict:
     raise AssertionError(f"no {name!r} entry in agents.yaml")
 
 
+def comment_paragraphs(block: str) -> list[str]:
+    """The contiguous runs of `#` comment lines in one roster entry.
+
+    A paragraph, not a line, because that is the unit a reason is written in —
+    and not the whole block, because `maxTurns:` is itself a key containing the
+    word "turn", which would make any keyword assertion over the raw text pass
+    for free.
+    """
+    paras, current = [], []
+    for line in block.splitlines():
+        if line.strip().startswith("#"):
+            current.append(line.strip().lstrip("#").strip())
+        elif current:
+            paras.append(" ".join(current))
+            current = []
+    if current:
+        paras.append(" ".join(current))
+    return paras
+
+
 def entry_blocks() -> dict[str, str]:
     """The RAW yaml text of each roster entry, comments and all.
 
@@ -270,30 +290,39 @@ class TestTheTurnBudgetsRoseWithTheGrant:
 
 
 class TestTheReasonIsRecordedPerAgent:
-    def test_every_entry_carries_the_card_that_granted_it(self):
-        """A capability that arrived with no note is a capability nobody can
-        review later. Every entry says which card widened it."""
-        blocks = entry_blocks()
-        for a in roster():
-            assert "DRE-2785" in blocks[a["name"]], (
-                f"{a['name']}: nothing in its agents.yaml block records why "
-                f"it can now reach the web"
-            )
+    """agents.yaml is where the fleet's budgets are explained to the next
+    reader. A number that moved with no note is how the roster came to say 80
+    for a planner that had been running at 120 since that morning."""
 
-    def test_the_agents_whose_budget_did_not_move_say_why(self):
-        """The other half of "recorded per agent": an unchanged number is a
-        decision too, and the reader must not have to guess whether it was
-        considered."""
-        blocks = entry_blocks()
-        raised = set(TestTheTurnBudgetsRoseWithTheGrant.BEFORE) | {"planner"}
-        for a in roster():
-            if a["name"] in raised:
-                continue
-            assert re.search(r"(?i)budget|turn|ceiling|rung",
-                             blocks[a["name"]]), (
-                f"{a['name']}: gains the web tools and keeps its turn budget, "
-                f"with no note saying that was a decision"
-            )
+    @staticmethod
+    def notes(name: str) -> list[str]:
+        """The comment paragraphs in this entry that name the card."""
+        return [p for p in comment_paragraphs(entry_blocks()[name])
+                if "DRE-2785" in p]
+
+    @pytest.mark.parametrize("name", sorted(a["name"] for a in roster()))
+    def test_the_entry_records_the_card_that_granted_the_web(self, name):
+        """A capability that arrived with no note is a capability nobody can
+        review later."""
+        assert self.notes(name), (
+            f"{name}: no comment in its agents.yaml block records why it can "
+            f"now reach the web"
+        )
+
+    @pytest.mark.parametrize("name", sorted(a["name"] for a in roster()))
+    def test_the_entry_records_what_happened_to_its_turn_budget(self, name):
+        """Recorded PER AGENT, and an unchanged number is a decision too — the
+        reader must not have to guess whether it was considered.
+
+        Read off the comment paragraphs that name the card, never the block:
+        `maxTurns:` is a key containing the word "turn", so a keyword scan over
+        the raw entry would pass for every agent for free.
+        """
+        assert any(re.search(r"(?i)budget|turn|ceiling|rung", p)
+                   for p in self.notes(name)), (
+            f"{name}: gains the web tools and its note says nothing about the "
+            f"turn budget — raised, or deliberately left where it was"
+        )
 
 
 class TestTheStandardNamesTheWeb:
