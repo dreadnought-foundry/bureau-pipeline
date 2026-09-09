@@ -124,6 +124,26 @@ PROGRESS_KIND = "progress"
 #: open, capped so one bad row cannot bury the fixes above it in a wall.
 _VOCABULARY_SHOWN = 60
 
+
+def _undeclared(vocabulary, known, what: str) -> str:
+    """One line: what `what` carries that no act in this registry declares.
+
+    The guard's own question, asked backwards. It is printed only on a failure,
+    and only for the strings this file does NOT already account for, because
+    the interesting half of "the console does not know `review-run`" is what it
+    knows instead.
+    """
+    extra = sorted(s for s in (vocabulary or ()) if s not in known)
+    shown = extra[:_VOCABULARY_SHOWN]
+    more = f" (+{len(extra) - len(shown)} more)" if len(extra) > len(shown) else ""
+    if not shown:
+        return f"{what} carries nothing this registry does not already declare."
+    return (
+        f"{what} also carries {len(extra)} string(s) no act here declares, so "
+        f"the same act under another word is findable rather than guessed at: "
+        f"{', '.join(repr(s) for s in shown)}{more}"
+    )
+
 _TIMEOUT = 15
 
 
@@ -398,6 +418,8 @@ class CadenceReport:
     unconfirmed: tuple  # (name, tag, kind, declared_s)
     checked: int
     reason: str
+    #: Every name and tag this registry declares — subtracted by `carried()`.
+    known: frozenset = frozenset()
 
     @property
     def skipped(self) -> bool:
@@ -450,17 +472,13 @@ class CadenceReport:
         return "\n".join([f"{verdict}. {head}", *lines, self.carried()])
 
     def carried(self) -> str:
-        """Which keys the console stands a number beside — the same courtesy
-        `Report.carried()` pays, one field along. "No number could be located
-        for `review-run`" is unanswerable without it for a reader who cannot
-        open the console's file."""
-        keys = sorted(self.by_key or ())
-        shown = keys[:_VOCABULARY_SHOWN]
-        more = f" (+{len(keys) - len(shown)} more)" if len(keys) > len(shown) else ""
-        return (
-            "What the console DOES stand a number beside, so an act declared "
-            f"under another word is findable rather than guessed at: "
-            f"{', '.join(shown)}{more}"
+        """The same courtesy `Report.carried()` pays, one field along: which
+        keys the console stands a number beside that no act here declares.
+        "No number could be located for `review-run`" is unanswerable without
+        it for a reader who cannot open the console's file."""
+        return _undeclared(
+            frozenset(self.by_key or ()), self.known,
+            "the console (keys it stands a number beside)",
         )
 
 
@@ -507,7 +525,13 @@ def cadences(doc: dict | None = None, source: str | None = -1, reason: str = "",
             mismatched.append((name, tag, kind, declared, found))
 
     return CadenceReport(
-        spec, by_key, tuple(mismatched), tuple(unconfirmed), len(rows), ""
+        spec, by_key, tuple(mismatched), tuple(unconfirmed), len(rows), "",
+        known=frozenset(
+            value
+            for e in (doc.get("acts") or ())
+            for value in ((e.get("name") or "").strip(), (e.get("tag") or "").strip())
+            if value
+        ),
     )
 
 
@@ -522,6 +546,9 @@ class Report:
     checked: int
     reason: str
     unknown_rows: tuple = ()  # the same acts as (name, tag, kind)
+    #: Every name and tag this registry declares — what `carried()` subtracts
+    #: so a failure reports the console's WORDS rather than its whole file.
+    known: frozenset = frozenset()
 
     @property
     def skipped(self) -> bool:
@@ -564,21 +591,18 @@ class Report:
         ])
 
     def carried(self) -> str:
-        """What the consumer DOES know, printed whenever something is missing.
+        """The OTHER direction, printed whenever something is missing.
 
         A cross-repo failure is read by somebody who cannot open the other file
         — that is the whole reason this guard exists on the producer side — so
         "the console does not carry `review-run`" leaves them one question
-        short. Naming the vocabulary answers "did it ship under another word"
-        in the same message, without a second round trip.
+        short: did it ship under another word? Printing the whole vocabulary
+        back would bury the fixes above, so this prints only what the console
+        carries that NO act here declares. That set is short, and the answer is
+        always in it.
         """
-        vocabulary = sorted(self.vocabulary or ())
-        shown = vocabulary[:_VOCABULARY_SHOWN]
-        more = f" (+{len(vocabulary) - len(shown)} more)" if len(vocabulary) > len(shown) else ""
-        return (
-            f"What the console's {self.spec.get('symbol')} DOES carry, so the "
-            f"same act under another word is findable rather than guessed at: "
-            f"{', '.join(shown)}{more}"
+        return _undeclared(
+            self.vocabulary, self.known, f"the console's {self.spec.get('symbol')}"
         )
 
 
@@ -614,6 +638,7 @@ def check(doc: dict | None = None, source: str | None = -1, reason: str = "",
     return Report(
         spec, vocabulary, tuple(r[0] for r in missing), len(rows), "",
         unknown_rows=missing,
+        known=frozenset(r[0] for r in rows) | frozenset(r[1] for r in rows),
     )
 
 

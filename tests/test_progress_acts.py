@@ -394,8 +394,16 @@ class TestTheConsumerGuardCoversTheNewActs(unittest.TestCase):
         console does not carry `review-run`" leaves them one question short:
         did it ship under another word? Both reports answer it in the same
         message rather than costing a round trip."""
-        gap = guard.check(doc=_doc(), source='ACTS = {"reviewer-down": "hold"}')
-        self.assertIn("reviewer-down", gap.text())
+        gap = guard.check(
+            doc=_doc(),
+            source='ACTS = {"reviewer-down": "hold", "heartbeat-by-another-name": '
+                   '"progress"}',
+        )
+        self.assertIn("heartbeat-by-another-name", gap.text())
+        # …and only that. Printing the whole vocabulary back would bury the
+        # per-act fixes above it, so what the registry already declares is
+        # subtracted rather than repeated.
+        self.assertNotIn("'reviewer-down'", gap.carried())
 
         paced = guard.cadences(
             doc=_doc(),
