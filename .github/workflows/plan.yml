@@ -122,7 +122,14 @@ jobs:
     # into a JOB TIMEOUT, which is strictly worse — a timeout leaves no result
     # record for anything downstream to classify. Still well inside the
     # 120-minute Planning stall window, which the same test checks.
-    timeout-minutes: 80
+    #
+    # 90, raised from 80 with DRE-2785 (the WebSearch/WebFetch grant), which
+    # raises the epic planner 120 → 140 and both first-critic rounds 40 → 60.
+    # The same arithmetic: the literals in this file now sum to 480, plus the
+    # post-approval retry cap of 180, at 7 s/turn plus ~8 minutes of non-turn
+    # work — 85 minutes. 90 keeps a margin over that and stays under the
+    # 120-minute Planning stall window.
+    timeout-minutes: 90
     # Whose Linear hour the planner spends (DRE-3321) — see reconcile.yml's
     # sweep for the why. Job level, beside the job that reads
     # secrets.LINEAR_API_KEY: this job has thirty-odd steps that read the key,
@@ -630,7 +637,7 @@ jobs:
           claude_args: |
             --max-turns 20
             --model ${{ steps.oomodel.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
             operating context (standards/plan-critic.md is the one that
@@ -768,10 +775,16 @@ jobs:
           # only a run that would otherwise have died having already done the
           # work spends more. `tests/test_plan_turn_ceiling.py` holds it here
           # and carries the numbers; the job clock above was raised with it.
+          # 140 since DRE-2785, raised from DRE-3450's 120 in the change that
+          # gave every agent WebSearch/WebFetch. The 120 was measured on a
+          # planner that could not leave the repository; "has this changed"
+          # and "what does this vendor actually do" are now questions it
+          # ANSWERS rather than recalls, and each answer is a search and a
+          # fetch on top of the decomposition it was already doing.
           claude_args: |
-            --max-turns 120
+            --max-turns 140
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
             operating context: the shared bureau standards for the planner plus
@@ -1151,10 +1164,14 @@ jobs:
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # 60 since DRE-2785 (was 40), raised with the WebSearch/WebFetch
+          # grant: a critic that cannot check an external claim approves a
+          # plan asserting something false about a vendor, and checking one
+          # costs turns the 40 was never measured against.
           claude_args: |
-            --max-turns 40
+            --max-turns 60
             --model ${{ steps.premodel.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
             operating context (standards/plan-critic.md is the one that
@@ -1260,7 +1277,7 @@ jobs:
           claude_args: |
             --max-turns 60
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — note that it is now
             the CRITIC's context; re-read briefs/planner.md and
@@ -1346,10 +1363,14 @@ jobs:
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # 60 since DRE-2785 (was 40), raised with the WebSearch/WebFetch
+          # grant: a critic that cannot check an external claim approves a
+          # plan asserting something false about a vendor, and checking one
+          # costs turns the 40 was never measured against.
           claude_args: |
-            --max-turns 40
+            --max-turns 60
             --model ${{ steps.premodel.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
             operating context (standards/plan-critic.md governs this run).
@@ -1565,7 +1586,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
           || {
             echo "::warning::could not size the post-approval review — falling back to the fifteen-card ceiling"
-            echo "max_turns=80" >> "$GITHUB_OUTPUT"
+            echo "max_turns=90" >> "$GITHUB_OUTPUT"
           }
 
       # NO `continue-on-error` here, on purpose (DRE-3241). With it, a review
@@ -1588,7 +1609,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.postturns.outputs.max_turns }}
             --model ${{ steps.postmodel.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
             operating context (standards/plan-critic.md governs this run).
@@ -1847,7 +1868,7 @@ jobs:
           claude_args: |
             --max-turns 60
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — note that it is now
             the CRITIC's context; re-read briefs/planner.md and
@@ -2120,7 +2141,7 @@ jobs:
           claude_args: |
             --max-turns 80
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
             operating context: the shared bureau standards for the planner plus

@@ -244,11 +244,19 @@ class PlannerStaysHardenedTest(unittest.TestCase):
     reasoning for the cheap route)."""
 
     def test_the_planner_tool_list_is_unchanged(self):
+        """The artifact bought the planner nothing.
+
+        `WebSearch`/`WebFetch` are here because DRE-2785 granted them to every
+        agent in the fleet, deliberately and in one change; they are named so
+        this stays an exact list rather than a subset check, which would let
+        the next capability arrive unannounced.
+        """
         args = step_named("Plan epic")["with"]["claude_args"]
         tools = re.search(r'--allowedTools\s+"([^"]+)"', args).group(1)
         self.assertEqual(
             sorted(t.strip() for t in tools.split(",")),
-            ["Bash", "Edit", "Glob", "Grep", "Read", "Write"],
+            ["Bash", "Edit", "Glob", "Grep", "Read", "WebFetch", "WebSearch",
+             "Write"],
             "the planner gains no tool from this card — plan.html is a build "
             "output produced by the RUN, not by the agent",
         )

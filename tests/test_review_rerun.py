@@ -170,9 +170,12 @@ class TheRetryCeiling(unittest.TestCase):
     def test_an_unknown_ceiling_is_sized_from_the_default_not_from_zero(self):
         """Unknown is unknown (standards/console-honesty.md rule 2). A
         tombstone whose ceiling Linear could not report must not retry at 0."""
-        self.assertEqual(rr.retry_ceiling(None), 120)
-        self.assertEqual(rr.retry_ceiling("?"), 120)
-        self.assertEqual(rr.retry_ceiling(""), 120)
+        # 135 = ceil(1.5 x POST_REVIEW_TURNS_DEFAULT), which DRE-2785 moved
+        # 80 -> 90 with the web-tool grant. The property is the equality
+        # below; these three are it, written out by value.
+        self.assertEqual(rr.retry_ceiling(None), 135)
+        self.assertEqual(rr.retry_ceiling("?"), 135)
+        self.assertEqual(rr.retry_ceiling(""), 135)
         self.assertEqual(
             rr.retry_ceiling(None),
             rr.retry_ceiling(pc.POST_REVIEW_TURNS_DEFAULT),

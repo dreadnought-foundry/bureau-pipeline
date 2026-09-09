@@ -606,16 +606,16 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual([p["client_payload"]["reason"] for p in self._dispatches()],
                          ["re-review"])
 
-        # The re-review run sizes itself off the thread, and DIES at 80.
+        # The re-review run sizes itself off the thread, and DIES at 90.
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "80")
-        self._died_at("80", "111")
+        self.assertEqual(self._outputs()["max_turns"], "90")
+        self._died_at("90", "111")
         self.assertEqual([p["client_payload"]["reason"] for p in self._dispatches()],
                          ["re-review", "review-retry"])
 
         # The retry reads the tombstone and runs with headroom.
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "120")
+        self.assertEqual(self._outputs()["max_turns"], "135")
 
         # ...and passes. Round 2 of 2 — the death was never a round.
         self._critic_writes("post", pc.PASS)
@@ -635,12 +635,13 @@ class CriticWalk(unittest.TestCase):
 
     def test_the_review_ceiling_is_sized_from_the_children(self):
         """The activate route counts the children fresh and hands the review
-        a ceiling sized for them — fifteen cards get 80, a three-card plan
-        keeps the 40 it always had."""
+        a ceiling sized for them — fifteen cards get 90, a three-card plan
+        gets the floor of 60. Both numbers moved up with DRE-2785's web-tool
+        grant; the shape did not."""
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "80")
+        self.assertEqual(self._outputs()["max_turns"], "90")
         self._shell("second critic — turn ceiling", STUB_KIDS="3")
-        self.assertEqual(self._outputs()["max_turns"], "40")
+        self.assertEqual(self._outputs()["max_turns"], "60")
 
     def test_a_dead_review_leaves_a_tombstone_and_the_sweep_holds_on_it(self):
         """2026-09-05 on DRE-3164, walked. Round 1 sends the plan back; the
@@ -713,13 +714,13 @@ class CriticWalk(unittest.TestCase):
         an unreadable file is unknown turns, not a second failure."""
         self._shell("second critic — the review died", {
             "${{ steps.posta.outputs.execution_file }}": "",
-            "${{ steps.postturns.outputs.max_turns }}": "80",
+            "${{ steps.postturns.outputs.max_turns }}": "90",
             "${{ github.run_id }}": "1",
             "${{ github.run_attempt }}": "1",
         })
         record = self._thread()[-1]
         self.assertIn("turns=?", record)
-        self.assertIn("ceiling=80", record)
+        self.assertIn("ceiling=90", record)
         self.assertEqual(pc.post_release(self._thread(), EPIC)[0], pc.POST_DIED)
 
     # --- DRE-3289: the review re-runs itself once, then parks ---------------
@@ -754,13 +755,13 @@ class CriticWalk(unittest.TestCase):
 
     def test_a_dead_review_re_runs_itself_once_and_a_second_death_parks(self):
         """The whole of DRE-3289, walked. A fifteen-card plan's review dies at
-        80; the run re-dispatches ITSELF at the higher ceiling with no lane
-        move, the next run reads 120 off the thread, and when that one dies too
+        90; the run re-dispatches ITSELF at the higher ceiling with no lane
+        move, the next run reads 135 off the thread, and when that one dies too
         the epic parks with needs-human and a note naming both runs."""
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "80")
+        self.assertEqual(self._outputs()["max_turns"], "90")
 
-        self._died_at("80", "111")
+        self._died_at("90", "111")
 
         # ONE dispatch, on the ACTIVATE route, saying why it was asked for.
         sent = self._dispatches()
@@ -787,11 +788,11 @@ class CriticWalk(unittest.TestCase):
 
         # The retry run sizes itself from the thread the dead one left.
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "120",
+        self.assertEqual(self._outputs()["max_turns"], "135",
                          "the retry ran into the same wall it just died at")
 
         # And it dies too. Two deaths is the bound: park for an operator.
-        self._died_at("120", "222")
+        self._died_at("135", "222")
         self.assertEqual(len(self._dispatches()), 1,
                          "a second death must not buy a third attempt")
         log = self._log()
@@ -800,13 +801,13 @@ class CriticWalk(unittest.TestCase):
         park = self._thread()[-1]
         self.assertIn("111", park)
         self.assertIn("222", park)
-        self.assertIn("120", park, "the ceiling the second one still could not finish under")
+        self.assertIn("135", park, "the ceiling the second one still could not finish under")
 
     def test_a_non_turn_death_dispatches_nothing_and_writes_no_lane(self):
         """The medic owns every other death and retries it once already
         (`medic_retry.RULE_TURN_EXHAUSTION` is the only one it refuses). Two
         automatic retries of one run is the DRE-2937 failure, at ~$16 a go."""
-        self._died_at("80", "333", subtype="error_during_execution")
+        self._died_at("90", "333", subtype="error_during_execution")
         self.assertEqual(self._dispatches(), [])
         log = self._log()
         self.assertNotIn("state ", log)
@@ -821,7 +822,7 @@ class CriticWalk(unittest.TestCase):
         and not ANYWHERE above it either. A retraction underneath a false claim
         does not unwrite the claim: the thread is the record a person reads
         back, and it would say "it is being run again" forever."""
-        self._died_at("80", "444", STUB_GH_RC="1")
+        self._died_at("90", "444", STUB_GH_RC="1")
         self.assertEqual(self._dispatches(), [])
         self.assertIn("could NOT", self._thread()[-1])
         self.assertNotIn("state ", self._log())

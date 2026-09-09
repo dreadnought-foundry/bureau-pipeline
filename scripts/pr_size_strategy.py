@@ -112,8 +112,19 @@ OVERSIZED_LINES = 20_000
 #: exhausted is a second invoice, not a recovery (DRE-2422). Pinned by
 #: tests/test_critic_turn_budget.py, which now runs its whole assertion set
 #: against every entry here.
+#:
+#: `standard` went 80/120 → 100/140 with DRE-2785, which gave the critic
+#: `WebSearch`/`WebFetch`. 80 was measured on a critic that could only reason
+#: about an external claim from training data; checking one now costs a search
+#: and a fetch per claim, on top of reading the whole diff. A crashed critic
+#: writes no verdict and the pull request simply sits, so the ceiling moves
+#: WITH the capability rather than after the first death.
+#:
+#: `large` is deliberately unchanged: it already runs at 150/200 — above every
+#: build agent in the fleet — and 200 is the sane-ceiling bound
+#: tests/test_critic_turn_budget.py holds every strategy to.
 TURN_BUDGET = {
-    "standard": (80, 120),
+    "standard": (100, 140),
     "large": (150, 200),
 }
 
