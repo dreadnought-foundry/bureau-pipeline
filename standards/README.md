@@ -53,7 +53,7 @@ commit (the channel note above). The per-role mapping:
 
 | File | Covers |
 |---|---|
-| `engineering.md` | TDD, split commits, scope, migrations, blockers, heartbeats, copy-not-rebuild, operator cards. |
+| `engineering.md` | TDD, split commits, scope, migrations, blockers, heartbeats, copy-not-rebuild, the self-hosting convention (which retired the operator-card one). |
 | `design.md` | Brand-from-concept, design tokens, the `**Design:**` card convention, design-fidelity. |
 | `design-parity.md` | Cards must sum to the design — planner surfaces accounting, deferred lines, verifier shipped-vs-design lens, epic-close ledger. |
 | `comms.md` | Sid's voice for every agent→CEO message — plain English, outcomes/risk, never diffs. |
