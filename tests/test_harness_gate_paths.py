@@ -446,6 +446,26 @@ class HumanPathTest(unittest.TestCase):
         # Not "slow": nothing can ever arrive, so sitting out the verdict
         # budget only buys a timeout that names the wrong culprit.
         self.assertLess(faketime.now, _ctx(FakeGitHub()).verdict_timeout)
+        # …and this path carries the diagnosis too (DRE-3453): "on any path"
+        # means the give-up line is a property of the leg, not of the two
+        # causes that motivated it.
+        self.assertIn(gate_paths.CRITIC_CHECK_NAME.lower(), errors)
+        self.assertIn("verdict comment for", errors)
+
+    def test_an_honest_timeout_carries_the_diagnosis_too(self):
+        # No liveness probe wired (the operator's `0`, and every unit run) —
+        # so the leg reaches its budget the old way. Even then the last line
+        # says what it could see, instead of only naming the critic.
+        gh = FakeGitHub()
+        gh.on_poll = LegDriver(named="no_verdict")
+        result = framework.run_scenario(
+            gate_paths.SCENARIO, _ctx(gh, wait_deadline=0)
+        )
+        errors = "\n".join(result.errors)
+        self.assertFalse(result.ok)
+        self.assertIn("timed out after", errors)
+        self.assertIn(gate_paths.CRITIC_CHECK_NAME, errors)
+        self.assertIn("verdict comment for", errors)
 
     def test_a_verdict_quoting_the_marker_is_not_a_second_waiting_state(self):
         """The once-only count separates the gate's note from the critic's
