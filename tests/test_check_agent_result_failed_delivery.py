@@ -31,6 +31,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_check_agent_result_faile
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
@@ -243,7 +244,11 @@ def _sweep(cards, dispatch_ok=True, prior=0):
     ), mock.patch.object(
         reconcile.linear_ops, "count_comments", return_value=prior
     ), mock.patch.object(reconcile.linear_ops, "open_pass"):
-        reconcile.main()
+        # A refused dispatch is a WRITE FAILURE and the sweep exits nonzero for
+        # the medic (DRE-1254) — the exit is the point of that test, not a
+        # reason it cannot assert what the sweep did on its way out.
+        with contextlib.suppress(SystemExit):
+            reconcile.main()
     reconcile._write_failures.clear()
     return SimpleNamespace(
         cmd_state=cmd_state, cmd_comment=cmd_comment, add_label=add_label,

@@ -54,6 +54,15 @@ and PRESERVE: the branch's commits are written to `rescue-<card>.patch`, which
 the workflow uploads as a run artifact. A run whose disk is about to be
 destroyed must not be the last copy of the work (DRE-3098).
 
+AND THE ARTIFACT IS NOT THE END OF IT (DRE-3262). Preserving the work is not
+delivering it: on 2026-09-06 (agent-bureau run 34045232203, DRE-3165) both of
+the mints above were refused with 400, this module wrote the patch exactly as
+designed, and the branch never appeared — a person found the artifact by hand
+five hours later. So `push_status` and `error` are outputs, not just log lines,
+and `deliver_rescue.py` spends them: the run's last step names the artifact on
+the card and dispatches a `deliver-rescue` follow-up that replays the patch with
+a credential of its own. What is preserved here is what that job delivers.
+
 CLI (the form agent-task.yml calls; outputs on stdout, logs on stderr, so the
 whole thing can be appended to `$GITHUB_OUTPUT`):
 
@@ -180,6 +189,18 @@ def _flag(value: bool) -> str:
     return "true" if value else "false"
 
 
+def one_line(text: str, limit: int = 300) -> str:
+    """`text` as a single short line, safe for `$GITHUB_OUTPUT`.
+
+    That file is `key=value` per LINE: a multi-line value silently swallows
+    every output after it, so git's stderr is collapsed before it leaves this
+    module (DRE-3262 — until then the refusal existed only in the run's log,
+    which is where the cause of the DRE-3165 400 still is).
+    """
+    collapsed = " ".join((text or "").split())
+    return collapsed[:limit]
+
+
 def output_lines(outcome: Outcome) -> list[str]:
     """The `key=value` lines the workflow appends to `$GITHUB_OUTPUT`."""
     return [
@@ -192,6 +213,12 @@ def output_lines(outcome: Outcome) -> list[str]:
         f"push_status={outcome.push_status}",
         f"attempts={outcome.attempts}",
         f"patch={outcome.patch}",
+        # GitHub's OWN words for the refusal (DRE-3262). The status alone sends
+        # a reader to three suspects — a rejected credential, a branch
+        # protection, the multi-value extraheader trap — and this line is what
+        # tells them apart. It reaches the card, so it is collapsed to one line
+        # and truncated; the run's log keeps the rest.
+        f"error={one_line(outcome.error)}",
     ]
 
 
@@ -276,6 +303,34 @@ def repoint_git_credential(token: str, *, run, workdir: str = ".") -> None:
                         GITHUB_EXTRAHEADER, basic_auth_header(token)])
     if code != 0:
         raise RuntimeError(f"could not re-point the git credential: {err.strip()}")
+
+
+def credential_origins(*, run, workdir: str = ".") -> list[str]:
+    """WHICH CONFIG FILES still hold a GitHub auth header (DRE-3262).
+
+    Origins only, never values — the values are credentials.
+
+    This exists because the DRE-3165 400 could not be diagnosed after the fact.
+    A `git push` refused with HTTP 400 has three candidate causes and the run's
+    log distinguished none of them: a rejected credential (DRE-3098's reading),
+    a branch-protection refusal, or MORE THAN ONE `AUTHORIZATION` header on the
+    request, which GitHub answers as a malformed request rather than an
+    unauthorized one. `repoint_git_credential` unsets the LOCAL values before it
+    writes, and `--local` is the only scope it can reach — a header left in
+    `$HOME/.gitconfig`, in a worktree config or by a submodule pass is still
+    sent, and still makes two. So a failed push prints the origins it found and
+    the next occurrence is diagnosable from the log alone.
+    """
+    code, out, _ = run([
+        "git", "-C", workdir, "config", "--show-origin", "--get-all",
+        GITHUB_EXTRAHEADER,
+    ])
+    if code != 0 or not out.strip():
+        return []
+    # `--show-origin` prints `file:/path/to/config\t<value>` — the tab splits
+    # the origin from the secret, and only the origin is kept.
+    return [line.split("\t", 1)[0].strip() for line in out.splitlines()
+            if line.strip()]
 
 
 def card_branch(card: str, *, run, workdir: str = ".") -> str:
@@ -476,6 +531,13 @@ def rescue(
             log(f"push rescue: pushing {out.branch} failed — {named}, "
                 f"credential: {source} (attempt {attempt} of "
                 f"{len(credentials)}) — {out.error}")
+            # DRE-3262: the one thing the DRE-3165 log did not say. A 400 with
+            # more than one origin here is a malformed request (two
+            # AUTHORIZATION headers), not a rejected credential — and those two
+            # readings send a reader to opposite ends of the system.
+            origins = credential_origins(run=run, workdir=workdir)
+            log(f"push rescue: git is sending {len(origins)} auth header(s), "
+                f"from: {', '.join(origins) or 'no config file'}")
         if not out.pushed:
             out.patch = write_patch(out.branch, base, patch_path, run=run,
                                     workdir=workdir)

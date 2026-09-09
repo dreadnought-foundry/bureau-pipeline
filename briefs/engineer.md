@@ -101,7 +101,12 @@ the whole run. The workflow re-mints a fresh token after you finish and
 delivers your branch if you could not, so a push you never managed is still
 recoverable — but only if the work is COMMITTED. Uncommitted changes are not.
 If GitHub refuses that delivery twice (DRE-3098), the committed branch is
-uploaded to the run as `rescue-<CARD>.patch` — again, only what is committed.
+uploaded to the run as `rescue-<CARD>.patch` — again, only what is committed —
+and the run's last step says so on the card (`🚨 rescue-push-failed`, naming the
+artifact and the run) and dispatches a `deliver-rescue` follow-up that replays
+that patch on a fresh branch with a credential of its own (DRE-3262). You do not
+have to do anything about it; what you have to do is COMMIT, because the whole
+chain begins at a commit.
 
 This does not change the TDD commit order: the RED test commit still comes
 first, and a WIP checkpoint pushed after it is just the same commits, earlier.

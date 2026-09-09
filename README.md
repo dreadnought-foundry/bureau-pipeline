@@ -264,6 +264,50 @@ prints a `::warning::`, the PR says so and the card parks for a human — which
 is exactly what happened before this card existed. So the fleet loses the
 automatic second look until its stub is updated, and loses nothing else.
 
+### The `deliver-rescue` stub (DRE-3262)
+
+The one stub whose absence costs a finished build. When a run outlives its
+credential and the Push rescue step's own two fresh mints are BOTH refused, the
+work is uploaded as `rescue-<CARD>.patch` and the run's last step dispatches a
+follow-up that replays it with a credential of its own. The dispatch names a
+workflow file **in the product repo**, so that repo needs one:
+
+```yaml
+# .github/workflows/deliver-rescue.yml in the product repo
+name: Deliver Rescue        # EXACT name — the medic's workflow_run list matches it
+on:
+  workflow_dispatch:
+    inputs:
+      run_id: { required: true, type: string }
+      card: { required: true, type: string }
+      artifact: { required: false, type: string, default: "" }
+      card_url: { required: false, type: string, default: "" }
+permissions:
+  contents: read
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@main
+    with:
+      run_id: ${{ inputs.run_id }}
+      card: ${{ inputs.card }}
+      artifact: ${{ inputs.artifact }}
+      card_url: ${{ inputs.card_url }}
+      pipeline_ref: main
+    secrets: inherit
+```
+
+Add it to that repo's **medic** `workflow_run` list too, by that exact name —
+this is the one workflow whose failure leaves somebody's only copy of finished
+work undelivered, and it is safe to retry (it refuses to act when its branch
+already has a pull request).
+
+A repo without it **degrades, it does not break**: the dispatch 404s, the run
+says so on the card beside the `🚨 rescue-push-failed` line naming the artifact
+and the run id, and the reconcile sweep tries the dispatch once more before
+falling back to the requeue this card replaced. So the fleet loses the automatic
+delivery until its stub is updated — a human can still recover the work in two
+minutes from the card — and loses nothing else.
+
 What the product repo still carries:
 
 - `.github/workflows/ci.yml` (+ any other product CI) — product-specific.

@@ -366,7 +366,10 @@ class TheDelivery(unittest.TestCase):
         body = create[create.index("--body") + 1]
         self.assertIn(RUN_ID, body)
         self.assertIn(ARTIFACT, body)
-        self.assertNotIn("finished", body.lower())
+        self.assertIn("not by the agent", body)
+        # It knows a patch applied, and nothing more. The critic reads this.
+        self.assertNotIn("the card is finished", body.lower())
+        self.assertIn("asserts the card is complete", body)
 
 
 # --------------------------------------------------------------------------
@@ -402,6 +405,47 @@ class TheReportStepWiring(unittest.TestCase):
         cause of this incident's 400 still is. It leaves the step now."""
         self.assertIn("error=", "\n".join(
             push_rescue.output_lines(push_rescue.Outcome())))
+
+    def test_a_failed_push_says_how_many_auth_headers_git_is_sending(self):
+        """AC 1's diagnostic. A 400 has three candidate causes and the DRE-3165
+        log distinguished none: a rejected credential, a branch protection, or
+        MORE THAN ONE `AUTHORIZATION` header — which GitHub answers as a
+        malformed request. `repoint_git_credential` can only unset the LOCAL
+        scope, so the count and the origins are what tell them apart."""
+        logged: list[str] = []
+
+        def run(argv, **kw):
+            joined = " ".join(argv)
+            if "--show-origin" in argv:
+                return 0, ("file:/home/runner/.gitconfig\tAUTHORIZATION: basic aaa\n"
+                           "file:.git/config\tAUTHORIZATION: basic bbb\n"), ""
+            if "push" in argv:
+                return 1, "", "fatal: The requested URL returned error: 400"
+            if "ls-remote" in argv:
+                return 0, "deadbeef\trefs/heads/agent/DRE-3165-x\n", ""
+            if "for-each-ref" in argv:
+                return 0, "agent/DRE-3165-x\n", ""
+            if "rev-parse" in argv:
+                return 0, "cafe1234\n", ""
+            if "rev-list" in argv:
+                return 0, "4\n", ""
+            if "format-patch" in argv:
+                return 0, "patch\n", ""
+            return 0, "", ""
+
+        with tempfile.TemporaryDirectory() as td:
+            out = push_rescue.rescue(
+                CARD, REPO, "fresh-1", retry_token="fresh-2",
+                patch_path=os.path.join(td, ARTIFACT), base="main",
+                run=run, log=logged.append, stop_notes=(),
+            )
+        self.assertFalse(out.pushed)
+        self.assertEqual(out.push_status, "400")
+        joined = "\n".join(logged)
+        self.assertIn("2 auth header(s)", joined)
+        self.assertIn("/home/runner/.gitconfig", joined)
+        # Origins, never values: the values are credentials.
+        self.assertNotIn("basic aaa", joined)
 
     def test_the_exported_refusal_is_one_line(self):
         """`$GITHUB_OUTPUT` is key=value per line: a multi-line stderr would
@@ -482,9 +526,10 @@ sys.exit(int(os.environ.get("GH_STUB_EXIT", "0")))
 def run_report(td, **kw):
     """Drive the REAL 'Report result to Linear' block for a run whose rescue
     could not push. Extends the DRE-2931 harness rather than copying it."""
+    # The same `bin` the harness's own git stub lives in, so it is already the
+    # first thing on the step's PATH.
+    binary = report_harness._git_stub(td)
     gh_log = os.path.join(td, "gh.jsonl")
-    binary = os.path.join(td, "bin")
-    os.makedirs(binary, exist_ok=True)
     report_harness._executable(os.path.join(binary, "gh"), GH_STUB)
     proc, journal = report_harness.run_report(
         td,
@@ -499,7 +544,6 @@ def run_report(td, **kw):
             RESCUE_ERROR=kw.get("stderr", ""),
             GH_STUB_LOG=gh_log,
             GH_STUB_EXIT=str(kw.get("gh_exit", 0)),
-            PATH=binary + os.pathsep + os.environ["PATH"],
         ),
         card_pr_exit=kw.get("card_pr_exit", 3),
     )

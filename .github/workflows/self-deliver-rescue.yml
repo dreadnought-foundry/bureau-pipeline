@@ -1,0 +1,53 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo.
+# @main on purpose: this repo is the canary channel; the fleet rides tags.
+#
+# DISPATCH ONLY, and by design (DRE-3262). Nothing schedules a delivery: it
+# happens when a build run's rescue could not push, and it is dispatched twice
+# over at most — once by that run's own Report step (`deliver_rescue.py
+# handoff`) and once, if that never landed, by the reconcile sweep's re-check
+# off the card's `rescue-push-failed` marker. A person can dispatch it by hand
+# with the same three inputs when they have a run id and an artifact.
+#
+# `gh workflow run` names THIS file in bureau-pipeline and `deliver-rescue.yml`
+# in a product repo — the reusable filename here is workflow_call-only and
+# answers 422 to a dispatch. `deliver_rescue.delivery_workflow()` is the one
+# place that resolution lives, the same shape as reconcile's
+# review_workflow()/fix_workflow() family (DRE-2056).
+name: Deliver Rescue
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The run whose rescue-<CARD>.patch artifact holds the work
+        required: true
+        type: string
+      card:
+        description: The Linear card the work belongs to (DRE-<n>)
+        required: true
+        type: string
+      artifact:
+        description: The artifact name (default rescue-<CARD>.patch)
+        required: false
+        type: string
+        default: ""
+      card_url:
+        description: The card's Linear URL, for the pull request body
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/deliver-rescue.yml@main
+    with:
+      run_id: ${{ inputs.run_id }}
+      card: ${{ inputs.card }}
+      artifact: ${{ inputs.artifact }}
+      card_url: ${{ inputs.card_url }}
+      pipeline_ref: main
+    secrets: inherit

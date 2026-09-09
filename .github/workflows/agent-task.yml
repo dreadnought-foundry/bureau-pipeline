@@ -656,10 +656,17 @@ jobs:
           fi
           EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
           [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          # --work-on-runner (DRE-3262): a rescue push GitHub refused leaves no
+          # branch and no PR — that is what "refused" means — so without this
+          # the DRE-3165 shape reads here as a silent death, fails the job, and
+          # sends the medic to re-run a run that finished the card and whose
+          # patch is already an artifact. The Report step answers it; this gate's
+          # only job is not to call it a death.
           python3 .bureau-pipeline/scripts/check_agent_result.py \
             "$EXEC_FILE" "$BRANCH" "$PR_URL" /tmp/agent-blocker.txt \
             --escalation-file /tmp/agent-escalation.txt --ignore-is-error \
-            --claude-outcome "$CLAUDE_OUTCOME"
+            --claude-outcome "$CLAUDE_OUTCOME" \
+            --work-on-runner "${{ steps.rescue.outputs.local_work }}"
 
       - name: Report result to Linear
         if: always() && steps.gate.outcome == 'success' && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -692,6 +699,13 @@ jobs:
           RESCUE_PUSH_STATUS: ${{ steps.rescue.outputs.push_status }}
           RESCUE_PATCH: ${{ steps.rescue.outputs.patch }}
           RESCUE_ARTIFACT: rescue-${{ github.event.client_payload.identifier }}.patch
+          # DRE-3262: whether the rescue's push actually landed, and GitHub's
+          # own words when it did not. `local_work` alone cannot answer the
+          # first — it is computed BEFORE the push and stays true on a rescue
+          # that succeeded — and the second existed only in the run's log,
+          # which is where the cause of the DRE-3165 400 still is.
+          RESCUE_PUSHED: ${{ steps.rescue.outputs.pushed }}
+          RESCUE_ERROR: ${{ steps.rescue.outputs.error }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # Resolve the card's branch FIRST: an empty --head filter makes
@@ -740,6 +754,20 @@ jobs:
           LOCAL_WORK="${{ steps.rescue.outputs.local_work }}"
           DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" \
             --work-on-runner "$LOCAL_WORK" || echo none)
+
+          # DID IT DELIVER? (DRE-3262.) A second question about the same fact,
+          # and the one the DRE-3165 run never asked: committed work on the
+          # runner plus a push GitHub did not accept is a FAILED DELIVERY,
+          # whatever the PR lookup answers. Both inputs are needed — a rescue
+          # that pushed successfully still reports local_work=true — and the
+          # answer comes from the shared predicate, never from a shell test of
+          # its own. Fail-soft to `delivered`: an unreadable answer must leave
+          # every other branch exactly as it was.
+          FAILED_DELIVERY=$(python3 .bureau-pipeline/scripts/check_agent_result.py delivery \
+            --work-on-runner "$LOCAL_WORK" --push-status "$RESCUE_PUSH_STATUS" \
+            --pushed "$RESCUE_PUSHED" || echo delivered)
+          RUN_ID="${{ github.run_id }}"
+          DELIVERY_REPO="${{ github.repository }}"
 
           # DID THE AGENT START AT ALL? (DRE-2931.) Every class above presumes
           # a run: a run that failed BEFORE claude-code-action took no turn,
@@ -855,6 +883,42 @@ jobs:
             # DRE-1885 building-card guard would re-route this In Progress →
             # Backlog move to Todo and reintroduce that loop.
             python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
+          elif [ "$FAILED_DELIVERY" = "failed" ]; then
+            # THE RUN STILL DELIVERS (DRE-3262). The work is committed on a disk
+            # that is about to be destroyed, GitHub refused the push on both of
+            # the rescue's own fresh mints, and the patch is already uploaded as
+            # a run artifact. Two things have to happen here, in this step,
+            # because this is the last step that will ever run for this card:
+            #
+            #   1. SAY IT ON THE CARD, naming the artifact and this run. On
+            #      2026-09-06 the card instead read "the push-rescue step
+            #      delivers the branch and opens the PR" followed by "could not
+            #      read this card's PR state … NOT being recorded as a dead
+            #      agent", and a 93-minute green build sat in
+            #      `rescue-DRE-3165.patch` until a person went looking at 11:05
+            #      PT. A rescued patch only a human knows about is the DRE-3043
+            #      loss with an extra step.
+            #   2. HAND THE DELIVERY TO A JOB THAT CAN DO IT — a
+            #      `deliver-rescue` workflow_dispatch carrying the run id, which
+            #      downloads the artifact with its OWN freshly minted token,
+            #      applies it on a fresh branch and opens the pull request. The
+            #      comment goes out whether or not the dispatch is accepted (a
+            #      repo with no such stub answers 404), so the artifact fact is
+            #      on the card either way and the reconcile sweep can re-check
+            #      off it.
+            #
+            # DELIBERATELY ABOVE THE UNREADABLE BRANCH. Both branches can be
+            # true at once — it was the same expired token that refused the push
+            # and 401'd the PR read — and this one is built on a fact from the
+            # runner's disk while that one is built on a question GitHub
+            # declined to answer. The card is NOT requeued to Todo here: a
+            # requeue rebuilds from nothing the work the artifact is holding
+            # (~90 minutes and the run's cost again), and if the delivery does
+            # not land, the sweep's re-check spends the dead-run budget instead.
+            python3 .bureau-pipeline/scripts/deliver_rescue.py handoff \
+              --card "$CARD" --repo "$DELIVERY_REPO" --run-id "$RUN_ID" \
+              --artifact "$RESCUE_ARTIFACT" --status "$RESCUE_PUSH_STATUS" \
+              --stderr "$RESCUE_ERROR" || true
           elif [ "$PR_STATE" = "UNREADABLE" ]; then
             # GitHub would not tell us whether a PR exists (403, rate limit,
             # network). "Could not tell" is NOT "no PR" — parsing a failed read
