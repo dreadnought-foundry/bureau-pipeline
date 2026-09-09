@@ -1,0 +1,265 @@
+[
+  {
+    "identifier": "DRE-3165",
+    "title": "agent-bureau: the console surface joins the train — release.json, the thin stub, and release-console.sh as the one rollout implementation deploy-console.sh also calls",
+    "body": "**Rewritten 2026-09-05 14:45 PT (re-plan).** The train's rules — lanes, collapse, spacing, window, green-at-SHA, the brake — live in bureau-pipeline's reusable workflow ([DRE-3167](https://linear.app/dreadnoughtfoundry/issue/DRE-3167)). This card is the console SURFACE only: the data, the stub, the one release script, the operator caller's refusal, and the identity grant written as code. Earlier text on this card described a `rollout` job and a `CONSOLE_AUTO_ROLLOUT` repo variable inside `console-release.yml`; both are gone. The per-surface switch is `auto` in the data, and `console-release.yml` is NOT touched — it keeps building and pushing the two images on every console merge, and the release script consumes them the way `deploy-console.sh` does today.\n\n## Acceptance criteria\n- [ ] `deploy-console.sh` and the train both run `infra/release-console.sh`; the rollout steps exist once (a test greps `deploy-console.sh` for `start-deployment` and finds none)\n- [ ] `infra/test/rollback/test_release_console.py` runs the real script against the stub world and pins: a failed migration aborts before any `start-deployment` and cuts no tag; a failed rollout prints the rollback command and cuts no tag; a missing ECR image is a failure and never a build; a CDK change since the newest tag exits 0, cuts no tag and prints the `deferred:` line; a clean run rolls only the services whose digest changed, then cuts the tag\n- [ ] `scripts/test_check_train_in_flight.py` pins exit 1 with the run URL on an in-flight run, exit 0 on none, exit 2 when `gh` fails; and `bash infra/deploy-console.sh` refuses, naming the run, under a fake `gh` that reports one\n- [ ] `.github/bureau/release.json` on `main` holds the console entry exactly as stated above, `auto: false`, and no other surface\n- [ ] `.github/workflows/release-train.yml` is the stub above and `make check-channel` passes (`@stable` and `pipeline_ref: stable`)\n- [ ] The CDK synth test pins every new action to its resource ARN; nothing in this card runs `cdk deploy`, sets a variable, or flips `auto`\n- [ ] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/main HEAD` exits 0 before the push\n**Blocked by:** DRE-3167\n\n**Files:** .github/workflows/release-train.yml, .github/bureau/release.json, infra/release-console.sh, infra/deploy-console.sh, infra/test/rollback/test_release_console.py, scripts/check_train_in_flight.py, scripts/test_check_train_in_flight.py, infra/lib/release-stack.ts, infra/test/release-stack.test.ts, Makefile, infra/DEPLOY.md",
+    "labels": [
+      "repo:agent-bureau",
+      "size:M",
+      "initiative:bureau",
+      "agent:devops"
+    ],
+    "blocked_by": [
+      "DRE-3167"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3166",
+    "title": "[OPERATOR] Grant the release workflow the rollout permissions, run one supervised train release, then turn the train on",
+    "body": "**Operator-only. The fleet cannot close this card, by construction.** `needs-human` stops the sweep promoting it; `no-code` stops a merged PR closing it ([DRE-2746](https://linear.app/dreadnoughtfoundry/issue/DRE-2746)).\n\n## Acceptance criteria\n- [ ] Every item above observed by hand against the live system and recorded here with PT timestamps and run URLs\n- [ ] The flip is a merged PR to `release.json`, not a variable, and its merge time is on this card\n- [ ] Nothing in this card was closed by a merge event: the operator closes it after the last observation\n**Files:** none — nothing is committed by this card; the `auto` flip is a one-line PR the operator opens.\n**Blocked by:** DRE-3165",
+    "labels": [
+      "hand-built",
+      "needs-human",
+      "no-code",
+      "agent:ops",
+      "repo:agent-bureau",
+      "size:S",
+      "initiative:bureau"
+    ],
+    "blocked_by": [
+      "DRE-3165"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3167",
+    "title": "bureau-pipeline: the reusable release train — one workflow_call every repo's stub consumes, the release.json schema and its check, the fleet-wide brake, and the collapse / spacing / window / green-at-SHA rules with a Python harness",
+    "body": "The engine half of [DRE-3164](https://linear.app/dreadnoughtfoundry/issue/DRE-3164/epic-the-release-train-one-reusable-train-in-bureau-pipeline-a-thin). The train is the ninth reusable workflow in this repo, in the shape of the other eight ([DRE-2553](https://linear.app/dreadnoughtfoundry/issue/DRE-2553/step-4-pin-agent-bureau-and-bureau-pipeline-to-the-channel-and-fold)): consumed by a thin stub per product repo that rides `@stable` and passes `pipeline_ref: stable`. It contains no product's deploy steps.\n\n## Acceptance criteria\n- [ ] `tests/test_release_train.py` green on the six rules above; the harness is Python, never bash\n- [ ] A stub consisting of data plus one `uses:` line runs the train against a fake surface script in the harness and produces one release, one tag, one receipt line\n- [ ] The brake variable stops every surface, pinned\n- [ ] Addendum rules pinned in the harness: a hand dispatch with `surface` runs an `auto: false` surface and still refuses on a red SHA and on `RELEASE_HOLD`; a pending check is waited for and refused after 30 minutes with the check named; a script that exits 0 printing `deferred: …` is reported as a no-op with no tag and no failure; a surface whose `paths` are untouched since its newest tag is a no-op that says so; the two scheduled firings decide by the `America/Los_Angeles` clock — a 06:00 PST firing is a no-op that names the window, an 08:00 PDT firing is an ordinary run\n- [ ] This repo's own `.github/bureau/release.json` declares `pipeline-channel` with `record: channel`; the schema check accepts it and refuses a `channel` surface that names a script, and refuses `auto: true` with a null `script` or `rollback`\n- [ ] `check_tdd_commits.py origin/main HEAD` exits 0 before the push\n\n**Files:** dreadnought-foundry/bureau-pipeline/.github/workflows/release-train.yml, dreadnought-foundry/bureau-pipeline/scripts/release_train.py, dreadnought-foundry/bureau-pipeline/tests/test_release_train.py, dreadnought-foundry/bureau-pipeline/standards/release-train.md, dreadnought-foundry/bureau-pipeline/.github/bureau/release.json — every path is in bureau-pipeline, written with the repo prefix because the agent-bureau and portico cards in this epic share these file names in their own repos",
+    "labels": [
+      "repo:bureau-pipeline",
+      "size:M",
+      "initiative:bureau",
+      "agent:devops"
+    ],
+    "blocked_by": [],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3210",
+    "title": "agent-bureau: a failed train release raises a CRITICAL alert on the Alerts feed — a glob-discovered monitor reading release-train.yml runs per repo, resolving on the next clean run",
+    "body": "**Shipped — nothing left to build (re-plan 2026-09-06, after the second critic).** This card's whole deliverable is on `main`: PR #2308 on branch `agent/DRE-3210-release-train-monitor`, critic APPROVE, auto-merged by the qa-bot at **2026-09-05 20:44 PT** (`mergedAt` 2026-09-06T03:44:48Z), and Linear moved this card to Done off that merge event. The second critic, reading the approved plan on 2026-09-06 as the specification agents build from, found the card still written as a build spec for work that already existed. This rewrite turns it into the record of what shipped, so no run is ever dispatched for it again and no sibling re-files it. The card stays a child of [DRE-3164](https://linear.app/dreadnoughtfoundry/issue/DRE-3164) because the proof and demo cards (DRE-3239, DRE-3240) are blocked by it, and Done is the terminal state that clears that relation.\n\n## Acceptance criteria\nAll met on `main`, each by a named test in PR #2308; re-run by the planner on 2026-09-06 (26 passed).\n- [X] A fake runs read returning a `failure` conclusion for one repo raises exactly one CRITICAL `release_train:<slug>` alert with the run URL as its action link; a later `success` run resolves it — both pinned\n- [X] A `skipped` newest run raises nothing; a repo with no such workflow raises nothing; a read that throws changes no alert state — all three pinned\n- [X] The monitor is discovered by the runner's glob with no registry edit, and the README table carries its row\n- [X] The alert body names no diff and no file path — plain English the CEO can read on the feed\n- [X] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/main HEAD` exited 0 before the push (the critic re-ran it)\n\n**Files:** console/backend/monitors/release_train_health.py, console/backend/tests/test_release_train_health.py, console/backend/monitors/README.md, console/backend/alerts_v2.py",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:engineer",
+      "size:S",
+      "guard:returned"
+    ],
+    "blocked_by": [],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3211",
+    "title": "agent-bureau: the scaffold ships the ninth stub — release-train.yml plus an empty release.json in scaffold/customer-repo, and check-channel-fleet prints which repos carry the train",
+    "body": "The scaffold that `scripts/onboard-customer.py` pushes into every new repo ships the ninth stub, so a product is born on the train with the train OFF, and the fleet check says which existing repos do not carry it yet. The scaffold lives in THIS repo (`scaffold/customer-repo/`, DRE-1625), not in bureau-pipeline — DRE-3167 owns the reusable workflow it calls and nothing under `scaffold/`.\n\n## Acceptance criteria\n- [ ] `scaffold/tests/test_scaffold.py` counts nine stubs and every existing stub assertion (channel pin, `pipeline_ref` threaded, explicit secrets) holds for the ninth\n- [ ] The stub's `schedule:` is exactly the two cron lines in addendum item 1 — `0 15 * * *` and `0 14 * * *` — pinned in `scaffold/tests/test_scaffold.py`\n- [ ] A materialised scaffold pushed by `onboard-customer.py`'s existing copy contains the stub and the empty `release.json` with no code change to the CLI, pinned by the existing push test\n- [ ] `make check-channel` (offline) passes with the new stub in the scanned scaffold tree\n- [ ] `check_pipeline_channel.py --fleet` prints `train: installed|absent` per repo from the live workflow list, exits 0 either way, and a repo without the stub is listed under outstanding, pinned with a fake fetch\n- [ ] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/main HEAD` exits 0 before the push\n\n**Files:** scaffold/customer-repo/.github/workflows/release-train.yml, scaffold/customer-repo/.github/bureau/release.json, scaffold/customer-repo/.github/bureau/pipeline-guard.json, scaffold/tests/test_scaffold.py, scaffold/README.md, scripts/check_pipeline_channel.py, scripts/test_pipeline_channel_fleet.py\n\n**Blocked by:** DRE-3167",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:engineer",
+      "size:M"
+    ],
+    "blocked_by": [
+      "DRE-3167"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3212",
+    "title": "portico: the portals join the train through portico's own stub and data — release.json, release-portals.sh wrapping the deploy-portico-account procedure, the cut-over redirects protected, auto off",
+    "body": "Portico's portals join the train through portico's OWN stub and data, built in the portico repo by portico's own pipeline — nothing about this surface lives in agent-bureau or bureau-pipeline, and this card touches no other repo (the epic's constraint). Portico deploys today by hand, per AWS account: the Lambda@Edge stack plus the S3 publish, under the procedure the repo documents as `deploy-portico-account`. Read that procedure first; this card wraps it, it does not redesign it.\n\n## Acceptance criteria\n- [ ] The stub and the data are on portico's default branch; `auto` is `false`; portico's channel guard passes with the ninth stub listed\n- [ ] `infra/release-portals.sh` runs the documented procedure's steps once; the hand procedure's doc now says to run the script; a Python harness pins that a cut-over portal is skipped on publish and checked on verify, and that a failed publish cuts no tag\n- [ ] The rollback command exists and is named in `release.json`\n- [ ] The role grant is written as code and NOT applied; the PR body says which operator card applies it\n- [ ] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/<default> HEAD` exits 0 before the push\n\n**Files:** dreadnought-foundry/portico/.github/workflows/release-train.yml, dreadnought-foundry/portico/.github/bureau/release.json, dreadnought-foundry/portico/.github/bureau/pipeline-guard.json, dreadnought-foundry/portico/infra/release-portals.sh, and the portico infra file that defines the release role (named in the PR body) — every path above is in the portico repo, written with the repo prefix because this epic's other cards live in agent-bureau and bureau-pipeline and share these file names\n\n**Blocked by:** DRE-3167",
+    "labels": [
+      "initiative:bureau",
+      "repo:portico",
+      "agent:devops",
+      "size:M"
+    ],
+    "blocked_by": [
+      "DRE-3167"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3213",
+    "title": "agent-bureau: release.json gains the website and relay entries with auto off, and a loader plus a parity test pin the data to deploy-lag's surface table — the readers do not change yet",
+    "body": "**Rewritten 2026-09-05 20:10 PT (re-plan after the second critic).** This card used to ALSO rewrite the terminal deploy-lag report to read the data. That rewrite collides with One River ([DRE-3060](https://linear.app/dreadnoughtfoundry/issue/DRE-3060)): its capacity strip (DRE-3116) is built against the rows `make deploy-lag` and the console's `deployLag` print today, and its Phase 4 observation (DRE-3068) checks that strip against `make deploy-lag` by hand. So the two reader rewrites moved to their own cards — DRE-3238 for the terminal report, DRE-3214 for the console's copy — and both wait on those One River cards as real relations. This card is now the DATA only, so the relay (DRE-3215) and the website (DRE-3217) keep joining the train without waiting on One River.\n\n## Acceptance criteria\n- [ ] `.github/bureau/release.json` on `main` declares exactly `console`, `website`, `relay`, in that order; the console entry is byte-for-byte what DRE-3165 wrote, and the website and relay entries carry exactly the values in the contract above, with `auto: false` and `script: null`\n- [ ] `scripts/release_surfaces.py` loads the file into `Surface` records and refuses a file with no `surfaces` object, a surface missing `tag_series` or `paths`, or a `record` outside `tag` | `channel`, naming the surface and the field — each pinned by a test\n- [ ] `scripts/test_release_surfaces.py` pins the data to `check_deploy_lag.SURFACES`: same names in the same order, identical `tag_series`, every path the literal names present in the data — and fails when either side changes alone\n- [ ] `scripts/check_deploy_lag.py`, `console/backend/deploy_lag.py` and `console/backend/tests/test_deploy_lag.py` are unchanged in the PR diff, and `make deploy-lag` prints the same rows as before\n- [ ] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/main HEAD` exits 0 before the push\n\n**Files:** .github/bureau/release.json, scripts/release_surfaces.py, scripts/test_release_surfaces.py\n\n**Blocked by:** DRE-3165",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:engineer",
+      "size:S"
+    ],
+    "blocked_by": [
+      "DRE-3165"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3214",
+    "title": "agent-bureau: the console's deployLag reads the same release data — the backend twin drops its surface literal and fetches each repo's release.json over GraphQL, coverage travelling with the number",
+    "body": "**Rewritten 2026-09-05 20:10 PT (re-plan after the second critic).** This is the card that touches the GraphQL type One River's capacity strip (DRE-3116, under [DRE-3060](https://linear.app/dreadnoughtfoundry/issue/DRE-3060)) is built against, and regenerates the file that strip reads its documents from. So it waits, as real relations, for the strip to be built and for its Phase 4 observation (DRE-3068) to be made against the rows as they are today — and for DRE-3238, which moves the terminal report onto the data first. Everything the strip reads is preserved verbatim: this card is additive to the type and changes no field the `DeployLag` operation selects.\n\n## Acceptance criteria\n- [ ] `console/backend/deploy_lag.py` holds no `SURFACES` literal; the served `deployLag` query returns the same rows, in DRE-3238's order, from the fetched declarations, pinned by a fake reader that serves the fixture file\n- [ ] An unreadable declaration lowers `surfaces_read` and leaves `behind_total` null — never 0 — pinned\n- [ ] One shared fixture drives `scripts/release_surfaces.py` and this module to identical surface lists, and the test fails if either loader changes alone\n- [ ] `DeployLagRow.repo` is nullable and null for this repo's own surfaces; `schema.graphql` re-exported and `graphql.ts` regenerated in the same PR; the SDL diff adds exactly that one field; `operations.graphql` is unchanged in the PR diff\n- [ ] `console/web/src/components/oneriver/CapacityStrip.tsx`, `capacityModel.ts` and their tests are unchanged in the PR diff, and `npm test` and typecheck stay green\n- [ ] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/main HEAD` exits 0 before the push\n**Blocked by:** DRE-3238, DRE-3213, DRE-3116, DRE-3068\n\n**Files:** console/backend/deploy_lag.py, console/backend/tests/test_deploy_lag.py, console/backend/schema.py, console/web/schema.graphql, console/web/src/generated/graphql.ts",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:engineer",
+      "size:S"
+    ],
+    "blocked_by": [
+      "DRE-3238",
+      "DRE-3213"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3215",
+    "title": "agent-bureau: the relay joins the train — release-relay.sh as the one rollout implementation deploy.sh also calls, a rollback-relay command, the relay's release.json entry, and the Lambda grant written for the operator to apply",
+    "body": "The relay joins the train, second after the console. Today `cloud/relay/deploy.sh` does everything by hand: provisions the Secrets Manager entries from the operator's `.env`, ensures the role and the function URL, builds the wheel zip, `update-function-code`, stamps `DEPLOYED_SHA`/`DEPLOYED_AT` into the Lambda environment, reads the sha back off the live function, and cuts `agent-bureau-relay-v<N>` from the read-back (DRE-2789). This card splits that into the half only an operator may run and the half a release is:\n\n## Acceptance criteria\n- [ ] `deploy.sh` and the train both run `infra/release-relay.sh`; the code-update, stamp, read-back and tag steps exist once (a test greps `deploy.sh` for `update-function-code` and finds none)\n- [ ] The Python harness pins: the environment write-back keeps every pre-existing key and changes exactly `DEPLOYED_SHA`/`DEPLOYED_AT`; a failed `update-function-code` exits non-zero and cuts no tag; `ROLLBACK=1` cuts no forward tag\n- [ ] `make rollback-relay VERSION=<tag>` exists, refuses an unknown tag, and prints the sha it will stamp before touching AWS (`DRY=1`)\n- [ ] `bash cloud/relay/deploy.sh` refuses, naming the run, when a fake `gh run list` reports a release-train run in flight\n- [ ] `release.json` on `main` has the relay entry with `auto: false`; the CDK test asserts the four Lambda actions are scoped to the relay function ARN and nothing broader\n- [ ] Nothing in this card runs `cdk deploy`, sets a variable or flips `auto`\n- [ ] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/main HEAD` exits 0 before the push\n\n**Files:** infra/release-relay.sh, cloud/relay/deploy.sh, infra/rollback-relay.sh, Makefile, .github/bureau/release.json, infra/lib/release-stack.ts, infra/test/release-stack.test.ts, scripts/test_relay_deploy_record.py, infra/DEPLOY.md, infra/test/rollback/test_release_relay.py\n\n**Blocked by:** DRE-3166, DRE-3213",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:devops",
+      "size:M"
+    ],
+    "blocked_by": [
+      "DRE-3213",
+      "DRE-3166"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3216",
+    "title": "[OPERATOR] portico: grant the portals' release identity, run one supervised train release with every cut-over redirect checked, then turn portico's train on",
+    "body": "**Operator-only. The fleet cannot close this card, by construction.** `needs-human` stops the sweep promoting it; `no-code` stops a merged PR closing it.\n\n## Acceptance criteria\n- [ ] Every item above observed by hand against portico's live accounts and recorded here with PT timestamps and run URLs\n- [ ] Every cut-over portal's redirect was checked after the supervised release and the list is recorded here\n- [ ] Nothing in this card was closed by a merge event: the operator closes it after the last observation\n**Files:** none — nothing is committed by this card; the `auto` flip is a one-line PR the operator opens in portico.\n**Blocked by:** DRE-3212",
+    "labels": [
+      "initiative:bureau",
+      "repo:portico",
+      "agent:ops",
+      "needs-human",
+      "no-code",
+      "size:S"
+    ],
+    "blocked_by": [
+      "DRE-3212"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3217",
+    "title": "agent-bureau: the website joins the train — release-website.sh as the one implementation deploy-website.sh also calls, invalidation waited on and verified, the website's release.json entry, and the S3/CloudFront grant written for the operator to apply",
+    "body": "The website joins the train in the relay's shape. Today `infra/deploy-website.sh` builds `website/` with the node its `.nvmrc` declares, syncs `website/dist` to the private S3 bucket the `MarketingSiteStack` (us-east-1) owns, invalidates the CloudFront distribution, and cuts `agent-bureau-website-v<M>.<m>.<b>` (the legacy `website-v*` series is read so the counter continues). The last website release was `website-v1.0.2` on 2026-06-16; nothing has been cut since because a hand has to run it.\n\n## Acceptance criteria\n- [ ] `deploy-website.sh` and the train both run `infra/release-website.sh`; the sync, invalidate and tag steps exist once\n- [ ] The Python harness pins: a failed sync or a failed verify exits non-zero and cuts no tag; the invalidation is waited on before the verify; the tag's annotation carries sha, timestamp, bucket and distribution as today\n- [ ] `make deploy-website` refuses, naming the run, when a fake `gh run list` reports a release-train run in flight\n- [ ] `release.json` on `main` has the website entry with `auto: false`; the CDK test asserts the S3 and CloudFront actions are scoped to the context-named bucket and distribution\n- [ ] Nothing in this card runs `cdk deploy` or flips `auto`\n- [ ] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/main HEAD` exits 0 before the push\n\n**Files:** infra/release-website.sh, infra/deploy-website.sh, .github/bureau/release.json, infra/lib/release-stack.ts, infra/test/release-stack.test.ts, Makefile, infra/DEPLOY.md, infra/test/rollback/test_release_website.py\n\n**Blocked by:** DRE-3215",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:devops",
+      "size:S"
+    ],
+    "blocked_by": [
+      "DRE-3215"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3218",
+    "title": "[OPERATOR] The relay and the website join: after seven clean console days, apply each grant, run one supervised train release per surface, then flip auto for each",
+    "body": "**Operator-only. The fleet cannot close this card, by construction.** `needs-human` stops the sweep promoting it; `no-code` stops a merged PR closing it.\n\n## Acceptance criteria\n- [ ] Every item above observed by hand against the live system for BOTH surfaces and recorded here with PT timestamps and the run URLs\n- [ ] The relay's first rollback command (`make rollback-relay`) was exercised once, in `DRY=1`, and its output recorded here\n- [ ] Nothing in this card was closed by a merge event: the operator closes it after the last observation\n**Files:** none — nothing is committed by this card; the two `auto` flips are one-line PRs the operator opens.\n**Blocked by:** DRE-3215, DRE-3217",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:ops",
+      "needs-human",
+      "no-code",
+      "size:S"
+    ],
+    "blocked_by": [
+      "DRE-3215",
+      "DRE-3217"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3238",
+    "title": "agent-bureau: the terminal deploy-lag report reads its surfaces from release.json across the fleet — the CLI literal goes, after One River's capacity strip is built and observed against today's rows",
+    "body": "Split out of DRE-3213 at the 2026-09-05 20:10 PT re-plan, after the second critic found that rewriting the deploy-lag readers collides with One River ([DRE-3060](https://linear.app/dreadnoughtfoundry/issue/DRE-3060)): its capacity strip (DRE-3116) is built against the rows `make deploy-lag` and the console's `deployLag` print today, and its Phase 4 observation (DRE-3068) checks that strip against `make deploy-lag` by hand. This card waits for both, as real relations, so the rows One River builds and proves are rows this epic has not yet changed. DRE-3117 then records what DRE-3068 saw; the train's own proof (DRE-3220) makes the same side-by-side observation again after the rewrite.\n\n## Acceptance criteria\n- [ ] `scripts/check_deploy_lag.py` holds no `SURFACES` literal; on `main`, `make deploy-lag` prints the same console, website, relay and pipeline-channel rows it printed before this card, read from data, plus one coverage line naming how many repos' declarations were read\n- [ ] A repo whose `release.json` cannot be fetched (not a 404) renders its surfaces UNKNOWN with the reason and lowers the coverage count — never 0, never omitted silently — pinned by a test with a failing fake fetcher\n- [ ] A 404 is \"declares no surfaces\": no row, no failure, coverage counts the repo as read — pinned\n- [ ] A fixture declaring a surface under another repo's name renders that row after this repo's rows, naming its repo — pinned\n- [ ] `console/backend/tests/test_deploy_lag.py` still passes; its parity assertion reads this repo's file through the loader; `console/backend/deploy_lag.py` is unchanged in the PR diff\n- [ ] `python3 .bureau-pipeline/scripts/check_tdd_commits.py origin/main HEAD` exits 0 before the push\n**Blocked by:** DRE-3213, DRE-3116, DRE-3068\n\n**Files:** scripts/check_deploy_lag.py, scripts/test_check_deploy_lag.py, scripts/release_surfaces.py, scripts/test_release_surfaces.py, console/backend/tests/test_deploy_lag.py",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:engineer",
+      "size:S",
+      "guard:returned"
+    ],
+    "blocked_by": [
+      "DRE-3213"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3239",
+    "title": "PROOF: the release train observed live on the console — the unattended rollout and its receipt, the collapse, spacing, window, brake, operator-refusal and failure-alert rules, recorded in the repo",
+    "body": "**Scope after the 2026-09-06 split: the CONSOLE surface only.** This proof records the rules observed on the console's first supervised release and its first unattended one (DRE-3166): the unattended rollout and its receipt, the collapse, the spacing, the window, the green-checks rule, the stop switch, the hand-deploy refusal and the failure alert. The fleet-wide proof — one unattended rollout per joined surface, and deploy-lag reading its surface table from `release.json` — belongs to part 2, epic DRE-3245 (the eight cards moved there: DRE-3212, DRE-3213, DRE-3214, DRE-3215, DRE-3216, DRE-3217, DRE-3218, DRE-3238), and is written when that epic is planned. Re-scoped 2026-09-06 after the second critic found this card still waiting on those eight cards.\n\n## Acceptance criteria\n- [ ] The record exists on `main` with one section per rule (unattended rollout, collapse, spacing, window, brake, operator refusal, failure alert), each citing the live observation made by hand on the console, with a PT timestamp and the run URL or tag it left behind\n- [ ] The unattended-rollout section links the merged PR, the train run, the `agent-bureau-console-v*` tag it cut and the Shipped-today panel reading Pending release 0 afterwards\n- [ ] The brake section records `RELEASE_HOLD` set, the merge that did not roll out while it was set, and the rollout that followed once it was cleared\n- [ ] The operator-refusal section records `make deploy-console` refusing during an in-flight train run, with the run URL it named\n- [ ] The failure section records the CRITICAL `release_train:agent-bureau` alert as it appeared on the Alerts feed and the absence of a tag for that run\n- [ ] The record closes with a deploy-lag reading taken after the unattended release, in the same minute as the panel, showing the console current\n- [ ] The record names what it does NOT prove — the relay, the website, portico's portals, and deploy-lag reading its surfaces from `release.json` — and points at DRE-3245, where that proof is written\n**Deferred to part 2 (DRE-3245):** one section per further surface — relay, website, portico's portals — naming its first unattended release, and the section showing the console's `deployLag` and `make deploy-lag` reading the same `release.json` data. None of that work is in this epic any more, so none of it can be observed here.\n**Blocked by:** DRE-3165, DRE-3166, DRE-3167, DRE-3210, DRE-3211\n\n**Files:** architecture/audits/release-train-proof-2026-09.md",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:ops",
+      "no-code",
+      "size:S",
+      "hand-built",
+      "guard:returned"
+    ],
+    "blocked_by": [
+      "DRE-3167",
+      "DRE-3165",
+      "DRE-3211",
+      "DRE-3210",
+      "DRE-3166",
+      "DRE-3212",
+      "DRE-3216",
+      "DRE-3213",
+      "DRE-3238",
+      "DRE-3214",
+      "DRE-3215",
+      "DRE-3217",
+      "DRE-3218"
+    ],
+    "state": "Backlog"
+  },
+  {
+    "identifier": "DRE-3240",
+    "title": "DEMO: the CEO watches one merge roll itself out on the production console — Pending release 1 → 0 with no hand — and the brake hold the next one",
+    "body": "**Scope after the 2026-09-06 split: the CONSOLE surface only.** The CEO watches one console merge roll itself out on production with nobody's hand on it, and the stop switch hold the next one. \"Every joined surface reading current on the deploy-lag strip\" belongs to part 2's demo, epic DRE-3245 (the eight cards moved there: DRE-3212, DRE-3213, DRE-3214, DRE-3215, DRE-3216, DRE-3217, DRE-3218, DRE-3238). Re-scoped 2026-09-06 after the second critic found this card still waiting on those eight cards.\n\n## Acceptance criteria\n- [ ] Watched by the CEO by hand, on a date recorded on this card in PT, on the production console\n- [ ] The CEO saw `Pending release` go from 1 to 0 with no deploy command run by anyone, and saw the release's line in the Shipped-today panel\n- [ ] The CEO saw the brake hold a merge and saw it release once cleared\n- [ ] The CEO's verdict, in their own words, is a comment on this card; every decision the walk re-opened is filed as an amendment or explicitly kept, on this card\n**Deferred to part 2 (DRE-3245):** the deploy-lag strip walk — every joined surface (relay, website, portico's portals, the pipeline channel) reading current from the same data the terminal report reads, none UNKNOWN for a surface we run. Those surfaces join in part 2, so that sitting happens there.\n**Blocked by:** DRE-3165, DRE-3166, DRE-3167, DRE-3210, DRE-3211\n\n**Files:** none — nothing is committed by this card.",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:ops",
+      "no-code",
+      "size:XS",
+      "hand-built",
+      "guard:returned"
+    ],
+    "blocked_by": [
+      "DRE-3167",
+      "DRE-3165",
+      "DRE-3211",
+      "DRE-3210",
+      "DRE-3166",
+      "DRE-3212",
+      "DRE-3216",
+      "DRE-3213",
+      "DRE-3238",
+      "DRE-3214",
+      "DRE-3215",
+      "DRE-3217",
+      "DRE-3218"
+    ],
+    "state": "Backlog"
+  }
+]
