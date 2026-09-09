@@ -160,6 +160,58 @@ To approve, the CEO comments on that card, with the marker opening the comment:
 🧺 groom-approved: <proposal id>
 ```
 
+## The decision vocabulary (DRE-3370)
+
+One marker was a yes/no question, and a batch is not one. A CEO reading a
+twenty-card proposal wants to say *yes, except these two* and *yes, and this one
+as well* — and the only way to say either used to be to re-run the groomer,
+spend another ranked read (~$6, ~8 minutes) and ask for a second approval of a
+batch that was right apart from two rows.
+
+**This table is the contract the console's reader and writers mirror.**
+
+| Marker | Written by | Shape |
+| -- | -- | -- |
+| `🧺 groom-proposal: <id>` | propose | unchanged |
+| `🧺 groom-approved: <id>` | the CEO (console or by hand) | unchanged |
+| `🧺 groom-declined: <id> — <reason>` | the CEO | reason required |
+| `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card |
+| `🧺 groom-added: <id> DRE-N[ — <reason>]` | the CEO | per card |
+| `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
+| `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
+
+`<id>` is the proposal id the approval names, and a decision naming any other
+batch says nothing about the approved one.
+
+Every marker is matched the way the approval has always been matched — **anchored
+at the start of the comment**, the emoji optional, the id `[0-9a-f]{6,}` — so a
+sentence *about* excluding a card is prose and not an exclusion. The em dash
+before a reason is the em dash: `—`, not `-`.
+
+**Authorship is the gate.** A decision marker written by the pipeline's own
+Linear identity is ignored and named in the record, exactly as a self-written
+approval is refused. A marker the proposer can write is a credential the
+proposer can mint, so it decides nothing (DRE-2721).
+
+What each one does:
+
+- **declined** — the batch is not drained, and the refusal quotes the reason.
+  The reason is required: a decline without one leaves the CEO having stopped a
+  batch and nobody able to fix it, so it is read as absent and reported in the
+  record instead.
+- **excluded** — the card stays in Intake and the record lists it as `held
+  back`. An exclusion naming a card that is not in the batch holds nothing back
+  and is reported.
+- **added** — the card moves *after* the batch, on the batch's own first cycle.
+  It must be in the lane already: an addition naming a card that has left the
+  lane refuses the whole drain and names the lane it is in now.
+- A card named by both **excluded** and **added** follows the **newest
+  comment** — the same "last word wins" the approval has always used, which is
+  also how an approval that follows a decline still approves.
+
+The newest decision wins, so the CEO can change their mind by commenting again
+rather than by re-running anything.
+
 Then:
 
 ```
@@ -167,12 +219,18 @@ python3 scripts/groomer.py drain --card DRE-2683
 ```
 
 `drain` **reads the approved batch off the proposal comment on that card** and
-moves exactly those cards, in that order (DRE-3338). The approval names a
-proposal id; the proposal comment carrying that id is the record; the rows of
-its batch table are the batch. It makes **no model call** and never re-reads the
-population — a drain is a move, not a judgement — so it takes no shaping flags
-at all beyond `--lane`, which is only the fallback for a record whose own lane
-line cannot be read.
+moves exactly those cards — **minus every exclusion, plus every addition** — in
+that order (DRE-3338, DRE-3370). The approval names a proposal id; the proposal
+comment carrying that id is the record; the rows of its batch table are the
+batch. It makes **no model call** and never re-reads the population — a drain is
+a move, not a judgement — so it takes no shaping flags at all beyond `--lane`,
+which is only the fallback for a record whose own lane line cannot be read.
+
+It reads the **whole thread, paginated** — not the newest fifty. One comment per
+per-card decision means a proposal card outgrows the fifty-comment window the
+moment a CEO excludes a handful of rows, and the approval, posted first, is the
+first thing to fall out of it. A drain reading the window would refuse a batch it
+was looking at.
 
 **Why the comment and not the run artifact.** `proposal.json` is uploaded as the
 `groom-proposal` artifact and carries the same batch, but the comment is the
@@ -194,7 +252,10 @@ and threw the CEO's existing approval away for a reason that had nothing to do
 with the batch. The property is kept where it belongs: the drain moves the list
 the CEO saw, and refuses outright if any card on that list has moved since.
 
-Seven refusals, all of them before any card moves:
+Nine refusals, all of them before any card moves — and every one of them but the
+last is **written onto the proposal card** as
+`🧺 groom-drain-refused: <id> — <reason>`, then exits 2. A drain that refuses a
+batch and says so only in a workflow log is a stall with an alibi.
 
 - **the pen is held** — `intake_hold` is set on the stub, so the operator has
   said "not this week" about the whole lane, and that answer outranks any
@@ -203,13 +264,18 @@ Seven refusals, all of them before any card moves:
 - **no approval** — nothing leaves Intake;
 - **an approval written by the pipeline's own Linear identity** — the proposer
   cannot approve its own proposal;
+- **the newest decision is a decline** — `🧺 groom-declined: <id> — <reason>`,
+  and the refusal quotes the reason;
 - **an approval naming a batch with no record** — the id it names is on no
   proposal comment on that card, so there is no written-down list to move and
   the drain will not reconstruct one;
-- **a card in the batch is no longer in the lane** — somebody moved it by hand
-  since the approval. The refusal names the card and the lane it is in now, and
-  the WHOLE batch stays put: an approved order half-executed is an order nobody
-  gave;
+- **the batch has already been drained** — a `🧺 groom-drained: <id>` record
+  stands on the card, and that record is the receipt for cards that have
+  already moved, so a second dispatch moves nothing;
+- **a card the drain would move is no longer in the lane** — somebody moved it
+  by hand since the approval, or an addition names a card that has already
+  left. The refusal names the card and the lane it is in now, and the WHOLE
+  batch stays put: an approved order half-executed is an order nobody gave;
 - **a cycle Linear does not carry** — the record names a cycle number with no
   open cycle behind it. Create the cycle; the groomer will not invent one. (A
   cycle that has since STARTED is fine: the drain resolves the number the CEO
@@ -225,12 +291,35 @@ happens (DRE-2719), and each card is assigned its cycle.
 
 ### What the drain wrote down
 
-Afterwards the drain posts one comment to the proposal card, opening with
-`🧺 groom-drain: <proposal id>` — every card it moved with its position and the
-proposal that authorised it, and every card it refused with the reason
-(DRE-3326). Undoing a bad batch means knowing which cards *this* drain took, and
-a run log is not on the card. The refusal half is posted too: a drain that
-refuses a batch and says so only in a workflow log is a stall with an alibi.
+Afterwards the drain posts ONE comment to the proposal card (DRE-3326,
+DRE-3370). Undoing a bad batch means knowing which cards *this* drain took, and
+a run log is not on the card.
+
+```
+🧺 groom-drained: <proposal id>
+
+moved: 3 · held back: 2 · added: 1 · refused: 0 → Planning at 2026-09-09 16:21 PT
+
+| # | Card | Outcome | Why |
+| -- | -- | -- | -- |
+| 1 | DRE-3301 | moved | proposal `f673bfefa340` position 1 |
+| — | DRE-3302 | held back | `🧺 groom-excluded` — design is not settled |
+| 2 | DRE-3303 | moved | proposal `f673bfefa340` position 3 |
+| 3 | DRE-3350 | added | `🧺 groom-added` — Ana needs it this week |
+```
+
+The summary line's grammar is fixed, and its four counts answer four different
+questions: **moved** is the approved batch that went, **held back** is what the
+CEO excluded and is still in Intake, **added** is what the CEO reached into the
+lane for, and **refused** counts the *decisions* the drain would not honour — a
+marker the pipeline wrote, a decline with no reason, an exclusion naming a card
+that was never in the batch. `#` is the order the cards actually moved in; a card
+that did not move carries `—`. Each of the four outcomes is one of `moved`,
+`held back`, `added`, `refused`, and no card gets two rows: a refused decision
+about a card that moved anyway is named on that card's own row.
+
+A refusal is its own record, `🧺 groom-drain-refused: <id> — <reason>`, on one
+line, and it is written before the refusal exits 2.
 
 A proposal built with `--batch-cycles 2` or more is not drainable — its batch
 table records one position per card and not which of the several cycles each

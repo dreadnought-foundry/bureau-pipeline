@@ -2037,17 +2037,28 @@ _OLDER_PAGE_QUERY = """query($id: String!, $after: String!) { issue(id: $id) {
        nodes { %s } } } }""" % COMMENT_FIELDS
 
 
-def _fetch_thread(identifier: str) -> tuple[list[dict], str | None]:
+def _fetch_thread(identifier: str,
+                  *, whole: bool = False) -> tuple[list[dict], str | None]:
     """`(nodes, viewer_id)`: the card's comments oldest→newest, and who this
     key is.
 
     The COMMENT_WINDOW window always — the fifty NEWEST, which is the read
-    every caller outside a pass gets and all it gets. The pages beyond it only
-    inside a pass, and only when Linear says there are some (`hasNextPage` on a
-    `first:` window means older comments exist): walked toward the oldest,
-    terminating on a missing or repeated cursor the way gql_paged does. Both
-    the window and the pages arrive newest-first, so the whole lot is reversed
-    once, at the end, into the order every reader documents.
+    every caller outside a pass gets by default and all it gets. The pages
+    beyond it inside a pass, or when a caller asks for `whole`, and only when
+    Linear says there are some (`hasNextPage` on a `first:` window means older
+    comments exist): walked toward the oldest, terminating on a missing or
+    repeated cursor the way gql_paged does. Both the window and the pages
+    arrive newest-first, so the whole lot is reversed once, at the end, into
+    the order every reader documents.
+
+    `whole` exists for a reader whose ANSWER is wrong on a truncated thread
+    rather than merely stale (DRE-3370): the groomer's drain reads the CEO's
+    approval and one comment per per-card decision off a proposal card, and the
+    approval is the OLDEST of them — the first thing to fall out of the window
+    on a card the CEO has excluded a handful of rows from. A drain reading the
+    newest fifty would refuse a batch it was looking at. It is opt-in because
+    it costs a request per hundred comments, and every other reader here wants
+    the recent history the window is.
     """
     data = gql(_THREAD_QUERY, {"id": identifier})
     me = (data.get("viewer") or {}).get("id")
@@ -2055,7 +2066,7 @@ def _fetch_thread(identifier: str) -> tuple[list[dict], str | None]:
     nodes = list(conn.get("nodes") or [])  # newest → oldest, as Linear orders
     info = conn.get("pageInfo") or {}
     seen: set[str] = set()
-    while _pass["open"] and info.get("hasNextPage"):
+    while (whole or _pass["open"]) and info.get("hasNextPage"):
         after = info.get("endCursor")
         if not after or after in seen:
             print(
@@ -2084,13 +2095,21 @@ def _thread(identifier: str, *needs: str) -> list[dict]:
     return nodes
 
 
-def _thread_and_viewer(identifier: str, *needs: str) -> tuple[list[dict], str | None]:
+def _thread_and_viewer(identifier: str, *needs: str,
+                       whole: bool = False) -> tuple[list[dict], str | None]:
     """`_thread`, plus the viewer — off the same read on a miss, off the
-    pass's one viewer read on a hit."""
+    pass's one viewer read on a hit.
+
+    `whole` pages past the window even outside a sweep's pass. A cache HIT is
+    still served: nothing is ever cached partial (`remember_comments` drops a
+    window Linear reports as incomplete, and `_fetch_thread` inside a pass
+    already walked to the oldest), so a hit is the whole thread by
+    construction.
+    """
     cached = _cached_thread(identifier, needs)
     if cached is not None:
         return cached, viewer_id()
-    nodes, me = _fetch_thread(identifier)
+    nodes, me = _fetch_thread(identifier, whole=whole)
     _remember(identifier, nodes, me)
     return nodes, me
 
@@ -2217,7 +2236,7 @@ def comment_bodies(identifier: str) -> list[str]:
     return [c.get("body") or "" for c in _thread(identifier, "body")]
 
 
-def comment_records(identifier: str) -> list[dict]:
+def comment_records(identifier: str, *, whole_thread: bool = False) -> list[dict]:
     """Every comment on the card WITH who wrote it, oldest→newest.
 
     `[{"body": str, "authored_by_pipeline": bool}]`. The one authorship fact
@@ -2255,8 +2274,13 @@ def comment_records(identifier: str) -> list[dict]:
     `user { id }` for exactly this reader (DRE-3236), and the viewer is read
     once per pass — so the authorship fact is the same one the dedicated
     query carried, at the cost of one request per pass instead of one per epic.
+
+    `whole_thread` pages past the fifty-comment window outside a pass too, for
+    a reader whose answer a truncated thread makes WRONG rather than stale —
+    see `_fetch_thread` (DRE-3370, the groomer's drain).
     """
-    nodes, me = _thread_and_viewer(identifier, "body", "user")
+    nodes, me = _thread_and_viewer(identifier, "body", "user",
+                                   whole=whole_thread)
     rows = []
     for c in nodes:
         author = (c.get("user") or {}).get("id")

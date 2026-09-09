@@ -291,7 +291,16 @@ def test_a_held_drain_moves_nothing_even_with_a_valid_approval(monkeypatch):
         groomer.drain(ops, card=PROPOSAL_CARD)
     assert ops.state_writes == [], "cards left Intake through a closed pen"
     assert ops.mutations == [], "cycles were assigned through a closed pen"
-    assert ops.written == [], "a held drain wrote a record of a move it refused"
+    # Since DRE-3370 a held drain WRITES — one line saying it refused, on the
+    # card the CEO approved on, because a refusal said only in a workflow log
+    # is a stall with an alibi. What it must never write is a record of a move.
+    assert len(ops.written) == 1, "a held drain left no record of its refusal"
+    body = ops.written[0][1]
+    assert body.startswith(f"{groomer.MARK} {groomer.DRAIN_REFUSED_TAG}: ")
+    assert groomer.DRAINED_TAG not in body, (
+        "a held drain wrote a record of a move it refused"
+    )
+    assert HOLD_SINCE in body, "the refusal on the card does not name the hold"
     assert HOLD_SINCE in str(exc.value)
     assert intake_controls.ENV_HOLD in str(exc.value), (
         "the refusal must name the switch that would unblock it"

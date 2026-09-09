@@ -738,10 +738,17 @@
     },
     {
       "file": "scripts/groomer.py",
-      "anchor": "drain_record(result)",
+      "anchor": "drained_record(result)",
       "kind": "not-an-act",
-      "means": "What the drain did with the batch the CEO approved: every card it moved with its position and the proposal that authorised it, and every card it refused with the reason (DRE-3326, landed by DRE-3338).",
-      "why": "The pipeline did not decide this. A drain executes an approval a human wrote on the card, so the record is bookkeeping of somebody else's decision rather than something the pipeline did on its own — a trailer would name a next actor nobody chose, when the actor is the CEO who already acted. The refusal half is the same fact from the other side: the batch is unchanged and the reason is in the comment beside the cards it names, which is where an operator undoing a batch reads it. One call site on purpose, so the moved and refused halves cannot become two comment shapes a reader has to know about."
+      "means": "What the drain did with the batch the CEO approved: every card it moved, every card it held back, every card it added and every decision it would not honour, in one record (DRE-3326, landed by DRE-3338, grown to the decision vocabulary by DRE-3370).",
+      "why": "The pipeline did not decide this. A drain executes an approval and a set of per-card decisions a human wrote on the card, so the record is bookkeeping of somebody else's decisions rather than something the pipeline did on its own — a trailer would name a next actor nobody chose, when the actor is the CEO who already acted. One call site on purpose, so what a drain did cannot become several comment shapes a reader has to know about."
+    },
+    {
+      "file": "scripts/groomer.py",
+      "anchor": "drain_refused_record(refusal.batch, str(refusal))",
+      "kind": "not-an-act",
+      "means": "Why a drain refused the batch, on the proposal card the CEO approved on, in one line: the same fact the moved record carries from the other side (DRE-3370).",
+      "why": "Nothing moved and nothing was recovered, so there is no state change for a trailer to announce. The batch is exactly as the CEO left it and the reason sits in the thread beside the approval it refused, which is where the person who wrote that approval reads it. One writer at the one place every refusal passes through, so a refusal cannot arrive in a shape the console does not read."
     },
     {
       "file": "scripts/linear_ops.py",
