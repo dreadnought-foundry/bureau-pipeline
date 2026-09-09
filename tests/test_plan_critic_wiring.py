@@ -670,10 +670,11 @@ class TheReviewCeilingIsSizedFromThePlan(unittest.TestCase):
         self.assertIn("--max-turns ${{ steps.postturns.outputs.max_turns }}", args)
         self.assertNotRegex(args, r"--max-turns\s+\d+")
 
-    def test_fifteen_cards_get_eighty_turns_end_to_end(self):
+    def test_fifteen_cards_get_ninety_turns_end_to_end(self):
         """The number this card writes down, read through the same function
-        the workflow step calls."""
-        self.assertEqual(pc.post_review_turns(15), 80)
+        the workflow step calls. 80 until DRE-2785 raised the band with the
+        web-tool grant."""
+        self.assertEqual(pc.post_review_turns(15), 90)
 
 
 class ADeadReviewWritesItsTombstone(unittest.TestCase):

@@ -24,7 +24,9 @@ WHAT THIS FILE PINS
 2. Every OTHER agent step in plan.yml keeps the ceiling it had. This card
    raises exactly one number; the table below is the whole set, so a
    sibling ceiling that moves with it fails here rather than shipping
-   unnoticed.
+   unnoticed. It worked: DRE-2785 raised three of these numbers with the
+   web-tool grant and had to come here and say which, which is the whole
+   point of the table.
 
 3. A planner run that finishes UNDER the ceiling is still a success —
    `subtype: success, is_error: false` records no death of any kind. The
@@ -58,21 +60,29 @@ DRE_3419_TURNS = 85
 DRE_3419_CEILING = 80
 
 # The step that plans an epic, and the ceiling this card sets on it.
+#
+# 140 since DRE-2785, raised from DRE-3450's 120 in the change that gave every
+# agent `WebSearch`/`WebFetch`: a planner that can go and read what a vendor
+# actually does spends turns doing it, and DRE-3450's number was measured on a
+# planner that could not. The incident assertions below are unchanged — 140
+# still has to clear DRE-3419's 85-turn success with headroom.
 EPIC_STEP = "claude"
-EPIC_CEILING = 120
+EPIC_CEILING = 140
 
 # Every agent step plan.yml can run, and the ceiling each one carries.
 # `posta` is deliberately absent: its ceiling has been an EXPRESSION since
 # DRE-3241 (sized per plan) and is asserted separately below.
 #
 # This table is the "everything else is unchanged" assertion for DRE-3450.
-# Adding a step, or moving one of these numbers, is meant to fail here.
+# Adding a step, or moving one of these numbers, is meant to fail here — which
+# is what it did for DRE-2785, and the two ceilings that moved with the web
+# grant are marked. Everything unmarked still carries DRE-3450's number.
 CEILINGS = {
     "oocritic": 20,      # Pre-approval critic — the one-off exit
     EPIC_STEP: EPIC_CEILING,  # Plan epic
-    "prea": 40,          # First critic — round 1
+    "prea": 60,          # First critic — round 1        (40 → 60, DRE-2785)
     "replan": 60,        # Re-plan after send-back
-    "preb": 40,          # First critic — round 2
+    "preb": 60,          # First critic — round 2        (40 → 60, DRE-2785)
     "postreplan": 60,    # Re-plan after the second critic sent it back
     "wave": 80,          # Wave route — write the wave plan
 }
@@ -126,10 +136,11 @@ class TestEpicPlanningCeiling:
         """
         ceiling = _ceiling(EPIC_STEP)
         assert ceiling == EPIC_CEILING, (
-            f"the epic-planning step runs with --max-turns {ceiling}; "
-            f"DRE-3450 sets it to {EPIC_CEILING} because DRE-3419's plan "
-            f"completed successfully at {DRE_3419_TURNS} turns against a "
-            f"ceiling of {DRE_3419_CEILING} and the job was failed anyway"
+            f"the epic-planning step runs with --max-turns {ceiling}; it is "
+            f"set to {EPIC_CEILING} because DRE-3419's plan completed "
+            f"successfully at {DRE_3419_TURNS} turns against a ceiling of "
+            f"{DRE_3419_CEILING} and the job was failed anyway (DRE-3450), "
+            f"and because the planner now searches the web (DRE-2785)"
         )
         assert ceiling > DRE_3419_TURNS, (
             f"a ceiling of {ceiling} does not clear the {DRE_3419_TURNS} "
@@ -157,8 +168,8 @@ class TestEveryOtherPlannerCeilingIsUnchanged:
     def test_each_step_carries_its_declared_ceiling(self, step_id):
         assert _ceiling(step_id) == CEILINGS[step_id], (
             f"plan.yml:{step_id} runs with --max-turns {_ceiling(step_id)}, "
-            f"not the {CEILINGS[step_id]} this table declares. DRE-3450 "
-            f"raises the epic planner's ceiling and NOTHING else"
+            f"not the {CEILINGS[step_id]} this table declares. A ceiling "
+            f"that moves has to be written down here, in the same change"
         )
 
     def test_the_table_names_every_agent_step_in_the_workflow(self):

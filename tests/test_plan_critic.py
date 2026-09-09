@@ -2251,24 +2251,32 @@ class TheCli(unittest.TestCase):
 
 class TheReviewCeilingFitsThePlan(unittest.TestCase):
     """The ceiling scales with the child count (DRE-2924's shape: size the
-    budget from the work, in one place), floored at the 40 a small plan
-    already finishes in and capped where a review stops being the tool."""
+    budget from the work, in one place), floored at the smallest budget a
+    plan review gets and capped where a review stops being the tool.
 
-    def test_fifteen_cards_get_eighty_turns(self):
-        """The number on the card. Round 1 spent 30 on 14 cards and round 2
-        blew through 40 on 15; 80 is 2x the wall it hit, ~2.7x the round that
-        finished, and the planner's own ceiling for WRITING those cards."""
-        self.assertEqual(pc.post_review_turns(15), 80)
+    DRE-2785 moved the whole band up with the web-tool grant — base 20 → 30,
+    floor 40 → 60, cap 120 → 140. This critic's job is to ask what the
+    approved plan is missing, and since the grant that includes going and
+    reading what a vendor actually does rather than recalling it. The SHAPE
+    is untouched: the default is still the fifteen-card number, the floor is
+    still what a small plan gets, and the cap is still the QA critic's own
+    retry ceiling."""
+
+    def test_fifteen_cards_get_ninety_turns(self):
+        """The number on the card, plus the web grant's headroom. Round 1
+        spent 30 turns on 14 cards and round 2 blew through 40 on 15; 90 is
+        over 2x the wall it hit and ~3x the round that finished."""
+        self.assertEqual(pc.post_review_turns(15), 90)
 
     def test_fourteen_cards_leave_headroom_over_round_ones_thirty_turns(self):
         self.assertGreaterEqual(pc.post_review_turns(14), 2 * 30)
 
-    def test_a_small_plan_keeps_todays_forty(self):
-        """The floor is the ceiling that existed: nothing that finished under
-        it gets less room than it had."""
-        self.assertEqual(pc.post_review_turns(3), 40)
-        self.assertEqual(pc.post_review_turns(0), 40)
-        self.assertEqual(pc.POST_REVIEW_TURNS_FLOOR, 40)
+    def test_a_small_plan_gets_the_floor(self):
+        """The floor is never below the ceiling that existed: nothing that
+        finished under it gets less room than it had."""
+        self.assertEqual(pc.post_review_turns(3), 60)
+        self.assertEqual(pc.post_review_turns(0), 60)
+        self.assertEqual(pc.POST_REVIEW_TURNS_FLOOR, 60)
 
     def test_the_ceiling_never_dips_below_the_wall_the_fifteen_card_epic_hit(self):
         for n in range(0, 60):
@@ -2281,14 +2289,18 @@ class TheReviewCeilingFitsThePlan(unittest.TestCase):
         """Above the cap a bigger number only moves the wall (DRE-2924: the
         review quality at turn 119 is not the quality at turn 20)."""
         self.assertEqual(pc.post_review_turns(200), pc.POST_REVIEW_TURNS_CAP)
-        self.assertEqual(pc.POST_REVIEW_TURNS_CAP, 120)
+        self.assertEqual(pc.POST_REVIEW_TURNS_CAP, 140)
 
     def test_an_unknown_count_gets_the_fifteen_card_number(self):
         """A Linear read that failed is unknown, not zero — and unknown must
         not hand a fifteen-card plan the floor it already died at."""
         for unknown in (None, "", "not-a-number", -1):
-            self.assertEqual(pc.post_review_turns(unknown), 80, unknown)
-        self.assertEqual(pc.POST_REVIEW_TURNS_DEFAULT, 80)
+            self.assertEqual(pc.post_review_turns(unknown), 90, unknown)
+        self.assertEqual(pc.POST_REVIEW_TURNS_DEFAULT, 90)
+        self.assertEqual(pc.POST_REVIEW_TURNS_DEFAULT,
+                         pc.post_review_turns(15),
+                         "the default IS the fifteen-card number; a second "
+                         "constant is how the two drift apart")
 
 
 class ADeadReviewLeavesATombstone(unittest.TestCase):
