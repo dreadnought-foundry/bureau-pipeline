@@ -596,15 +596,22 @@ def test_a_terminal_destination_is_refused_before_the_card_is_even_read():
 # the whole thread, paginated — one comment per per-card decision
 # --------------------------------------------------------------------------
 def test_the_drain_reads_the_whole_thread_not_the_newest_fifty():
-    """120 comments, the approval the OLDEST of them. A drain reading the
-    window would find no approval and refuse a batch it was looking at."""
+    """120 comments, the approval the oldest decision on the card and well
+    outside the fifty-comment window. A drain reading the window would find no
+    approval and refuse a batch it was looking at."""
     proposal = _proposal()
     chatter = [{"body": f"a note ({n})", "authored_by_pipeline": False}
                for n in range(118)]
     ops = FakeOps(comments=_thread(proposal) + chatter, lanes=_lanes(proposal))
     assert len(ops.comments) == 120
+    window = ops.comment_records(PROPOSAL_CARD)
+    assert not any(groomer.decision_match(groomer.APPROVAL_TAG, c["body"])
+                   for c in window), (
+        "the fixture must put the approval OUTSIDE the window for this to prove "
+        "anything"
+    )
     assert groomer.drain(ops, card=PROPOSAL_CARD)["moved"] == _batch_ids(proposal)
-    assert all(ops.whole_thread_asked), (
+    assert all(ops.whole_thread_asked[1:]), (
         "the drain read the thread without asking for the whole of it"
     )
 
