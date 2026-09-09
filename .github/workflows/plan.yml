@@ -114,7 +114,15 @@ jobs:
     # 75, not 65 (DRE-3241): the post-approval review's ceiling is now sized
     # per plan, up to plan_critic.POST_REVIEW_TURNS_CAP, and the wiring test
     # adds that cap to the turn arithmetic this number has to cover.
-    timeout-minutes: 75
+    #
+    # 80, raised from 75 with DRE-3450, which raises the epic planner's ceiling
+    # 80 → 120. The wiring test sums every budget in the file at 7 s/turn plus
+    # ~8 minutes of non-turn work, so 40 more turns is ~4.7 more minutes the
+    # clock has to carry; at 75 the raise would have converted a turn death
+    # into a JOB TIMEOUT, which is strictly worse — a timeout leaves no result
+    # record for anything downstream to classify. Still well inside the
+    # 120-minute Planning stall window, which the same test checks.
+    timeout-minutes: 80
     # Whose Linear hour the planner spends (DRE-3321) — see reconcile.yml's
     # sweep for the why. Job level, beside the job that reads
     # secrets.LINEAR_API_KEY: this job has thirty-odd steps that read the key,
@@ -748,8 +756,20 @@ jobs:
           # GITHUB_TOKEN, so its workflow_dispatch runs initiate as
           # github-actions (DRE-2053).
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # 120, raised from 80 by DRE-3450. Epic DRE-3419's plan FINISHED —
+          # `"subtype": "success", "is_error": false, "num_turns": 85`, with the
+          # plan comment and nine children on the board — and the action failed
+          # the job anyway: "Claude reported a successful result after 85 turns,
+          # exceeding the configured maximum of 80". The first attempt and the
+          # automatic retry died on the same number, because a turn ceiling is
+          # DETERMINISTIC. A ceiling below where epic planning actually
+          # finishes converts successes into failures. This is a CEILING, not a
+          # target: runs that finish in 40 turns cost what they cost today, and
+          # only a run that would otherwise have died having already done the
+          # work spends more. `tests/test_plan_turn_ceiling.py` holds it here
+          # and carries the numbers; the job clock above was raised with it.
           claude_args: |
-            --max-turns 80
+            --max-turns 120
             --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
