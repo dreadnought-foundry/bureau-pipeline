@@ -265,6 +265,71 @@ def job_names_this_card(job_names: list, identifier: str) -> bool:
     return any(rx.search(name or "") for name in job_names or [])
 
 
+#: How many of the workflow's recent runs the overlap window reads. It has to
+#: cover every planner run that could still have been in flight when this
+#: dispatch was created — a repo-wide number bounded by the WIP cap, not by
+#: this card.
+_RUNS_PAGE = 50
+
+#: How many candidate runs are worth a jobs read. `self-plan.yml` is ONE
+#: workflow file shared by every card (only the concurrency GROUP is per-card,
+#: `agent-<identifier>`), so the in-flight candidates arrive mixed across every
+#: card being planned and THIS card's duplicate can sit anywhere among them.
+#: The budget therefore cannot be spent before `job_names_this_card` has
+#: narrowed them: truncating first drops the one run the guard exists to find,
+#: and the duplicate plan proceeds silently (DRE-3409). It is the window size,
+#: so every candidate the window returned is readable; the scan stops at the
+#: first match, so a busy repo still cannot turn this guard into an API storm.
+_MAX_JOB_READS = _RUNS_PAGE
+
+
+def sibling_on_this_card(candidates: list, identifier: str,
+                         job_names_of) -> list:
+    """The first candidate whose jobs say it is THIS card's planner run, as a
+    0-or-1 list. One sibling is the whole of what `plan_decide` needs, so the
+    scan short-circuits on it and the read budget is only ever spent in full
+    when this card has no duplicate at all.
+
+    `candidates` is every in-flight run of the shared planner workflow, across
+    every card, newest first. `job_names_of` takes a run id and returns its job
+    names — injected so the ordering this function fixes is testable without
+    GitHub. A truncated scan says so on stderr rather than reading as a clean
+    'no duplicate': "the read ran out" and "there is no duplicate" are
+    different facts and get different output (`standards/console-honesty.md`
+    rule 2).
+    """
+    runs = candidates or []
+    for read, run in enumerate(runs, start=1):
+        if job_names_this_card(job_names_of(run["id"]), identifier):
+            return [run]
+        if read >= _MAX_JOB_READS and read < len(runs):
+            print(f"job-name scan stopped after {read} of {len(runs)} in-flight "
+                  f"planner runs without finding one for {identifier} — a "
+                  "duplicate past that point would not be seen",
+                  file=sys.stderr)
+            break
+    return []
+
+
+def window_may_be_short(runs: list, own_created_at: str) -> bool:
+    """Whether the run window could have cut a candidate off at its edge.
+
+    The window is the newest `_RUNS_PAGE` runs of the shared workflow, and only
+    a run created no later than this dispatch can be a candidate. So a FULL
+    page whose OLDEST entry is still newer than this dispatch means the
+    candidates begin past the edge and none of them were read at all — an
+    answer of 'no sibling' that nothing actually looked for. Anything short of
+    a full page reached the end of the workflow's history and is complete.
+    """
+    if len(runs or []) < _RUNS_PAGE:
+        return False
+    mine = _moment(own_created_at)
+    oldest = _moment((runs[-1] or {}).get("created_at") or "")
+    if mine is None or oldest is None:
+        return False
+    return oldest > mine
+
+
 def plan_decide(identifier: str, trigger_state: str, current_lane: str,
                 in_flight: list) -> Decision:
     """The planner's skip decision. `in_flight` is what
@@ -363,7 +428,8 @@ def _workflow_runs(workflow_id: str) -> list:
     when this dispatch was created, which is exactly the case at issue."""
     data = _gh_json(
         "api",
-        f"repos/{_repo()}/actions/workflows/{workflow_id}/runs?per_page=50",
+        f"repos/{_repo()}/actions/workflows/{workflow_id}/runs"
+        f"?per_page={_RUNS_PAGE}",
     )
     runs = (data or {}).get("workflow_runs") if isinstance(data, dict) else None
     return [
@@ -395,25 +461,23 @@ def _current_lane(identifier: str) -> str:
     return (issue.get("state") or {}).get("name") or ""
 
 
-#: How many candidate runs are worth a jobs read. Overlapping runs of one
-#: workflow are ordinarily 0-2; the cap is there so a busy repo cannot turn
-#: this guard into an API storm.
-_MAX_JOB_READS = 10
-
-
 def _plan_siblings(identifier: str, own_run_id: str) -> list:
     """The runs of this workflow, on this card, that were in flight when this
-    dispatch was created. [] on any unreadable answer — fail-open."""
+    dispatch was created. [] on any unreadable answer — fail-open.
+
+    The workflow is shared by every card, so the in-flight candidates are
+    repo-wide and `sibling_on_this_card` is what narrows them to this one.
+    """
     meta = _run_meta(own_run_id)
     if not meta.get("created_at") or not meta.get("workflow_id"):
         return []
-    candidates = in_flight_when_dispatched(
-        _workflow_runs(meta["workflow_id"]), own_run_id, meta["created_at"]
-    )
-    return [
-        run for run in candidates[:_MAX_JOB_READS]
-        if job_names_this_card(_run_job_names(run["id"]), identifier)
-    ]
+    runs = _workflow_runs(meta["workflow_id"])
+    if window_may_be_short(runs, meta["created_at"]):
+        print(f"every one of the {len(runs)} planner runs read is newer than "
+              f"this dispatch — {identifier}'s own cohort is past the window's "
+              "edge and a sibling there would not be seen", file=sys.stderr)
+    candidates = in_flight_when_dispatched(runs, own_run_id, meta["created_at"])
+    return sibling_on_this_card(candidates, identifier, _run_job_names)
 
 
 def _emit(skip: bool, reason: str) -> None:

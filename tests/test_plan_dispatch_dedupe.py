@@ -233,6 +233,191 @@ def test_a_run_with_no_jobs_yet_is_not_claimed_for_this_card():
 
 
 # --------------------------------------------------------------------------
+# sibling_on_this_card() — the candidates are REPO-WIDE, so narrow before you
+# truncate. `self-plan.yml` is one workflow file shared by every card (only
+# the concurrency group is per-card), so the in-flight runs arrive mixed
+# across every epic being planned and this card's duplicate can sit anywhere
+# among them. Slicing to a fixed head before the card filter drops it and the
+# duplicate plan proceeds silently — the very incident this guard closes.
+# --------------------------------------------------------------------------
+def _mixed_candidates(n: int, mine_at: int, identifier: str = "DRE-3244"):
+    """`n` in-flight planner runs across different cards, newest first, with
+    THIS card's run buried at index `mine_at`. Returns the runs and a
+    `job_names_of(run_id)` reader that counts how many reads it served."""
+    runs = [_run(str(9000 + i), "2026-09-08T21:19:00Z",
+                 "2026-09-08T21:52:45Z", "in_progress") for i in range(n)]
+    owner = {r["id"]: f"DRE-9{i:03d}" for i, r in enumerate(runs)}
+    owner[runs[mine_at]["id"]] = identifier
+    reads = []
+
+    def job_names_of(run_id):
+        reads.append(run_id)
+        return [f"call / bureau-card: {owner[run_id]}", "call / publish"]
+
+    return runs, job_names_of, reads
+
+
+def test_this_cards_duplicate_is_found_past_the_old_ten_run_slice():
+    """The regression: 25 planner runs in flight across 25 different epics,
+    this card's duplicate at index 17. A head slice taken BEFORE the card
+    filter never reaches it and the guard waves the re-plan through."""
+    runs, job_names_of, _ = _mixed_candidates(25, mine_at=17)
+    found = dedupe_dispatch.sibling_on_this_card(runs, "DRE-3244", job_names_of)
+    assert [r["id"] for r in found] == ["9017"]
+    assert dedupe_dispatch.plan_decide(
+        "DRE-3244", "planning", "Planning", found).skip is True
+
+
+def test_the_scan_stops_at_the_first_run_that_is_this_card():
+    """One sibling is all `plan_decide` needs, so the reads stop there — the
+    budget is only ever spent in full when there is no duplicate."""
+    runs, job_names_of, reads = _mixed_candidates(25, mine_at=3)
+    assert [r["id"] for r in dedupe_dispatch.sibling_on_this_card(
+        runs, "DRE-3244", job_names_of)] == ["9003"]
+    assert len(reads) == 4, "the scan must not read past the run it found"
+
+
+def test_no_run_for_this_card_reads_every_candidate_and_finds_nothing():
+    runs, job_names_of, reads = _mixed_candidates(25, mine_at=0)
+    assert dedupe_dispatch.sibling_on_this_card(
+        runs, "DRE-4000", job_names_of) == []
+    assert len(reads) == 25
+
+
+def test_a_truncated_scan_says_so_rather_than_reading_as_clean(capsys):
+    """Past the read budget the guard is degraded, not clean: it must not look
+    identical to a scan that genuinely found no duplicate
+    (standards/console-honesty.md rule 2)."""
+    over = dedupe_dispatch._MAX_JOB_READS + 5
+    runs, job_names_of, reads = _mixed_candidates(over, mine_at=over - 1)
+    assert dedupe_dispatch.sibling_on_this_card(
+        runs, "DRE-3244", job_names_of) == []
+    assert len(reads) == dedupe_dispatch._MAX_JOB_READS
+    err = capsys.readouterr().err
+    assert "job-name scan stopped" in err and "DRE-3244" in err
+
+
+def test_the_read_budget_covers_the_whole_overlap_window():
+    """The window `_workflow_runs` fetches is the only source of candidates,
+    so a budget no smaller than it can never truncate a real scan."""
+    assert dedupe_dispatch._MAX_JOB_READS >= dedupe_dispatch._RUNS_PAGE
+    source = (ROOT / "scripts" / "dedupe_dispatch.py").read_text()
+    assert "per_page={_RUNS_PAGE}" in source, (
+        "the fetch window and the read budget must move together"
+    )
+
+
+def test_an_exhausted_scan_within_budget_stays_quiet(capsys):
+    runs, job_names_of, _ = _mixed_candidates(5, mine_at=0)
+    assert dedupe_dispatch.sibling_on_this_card(
+        runs, "DRE-4000", job_names_of) == []
+    assert capsys.readouterr().err == ""
+
+
+def test_plan_siblings_finds_the_duplicate_among_many_other_cards():
+    """The same ordering, through `_plan_siblings` itself with GitHub stubbed:
+    30 in-flight planner runs across 30 epics, this card's at index 22."""
+    runs, job_names_of, _ = _mixed_candidates(30, mine_at=22)
+    with patch.object(dedupe_dispatch, "_run_meta", return_value={
+             "created_at": "2026-09-08T21:38:27Z", "workflow_id": "12345"}), \
+         patch.object(dedupe_dispatch, "_workflow_runs", return_value=runs), \
+         patch.object(dedupe_dispatch, "_run_job_names",
+                      side_effect=job_names_of):
+        found = dedupe_dispatch._plan_siblings("DRE-3244", "34281711446")
+    assert [r["id"] for r in found] == ["9022"]
+
+
+def test_plan_siblings_is_empty_when_no_other_card_run_is_this_card():
+    runs, job_names_of, _ = _mixed_candidates(30, mine_at=0)
+    with patch.object(dedupe_dispatch, "_run_meta", return_value={
+             "created_at": "2026-09-08T21:38:27Z", "workflow_id": "12345"}), \
+         patch.object(dedupe_dispatch, "_workflow_runs", return_value=runs), \
+         patch.object(dedupe_dispatch, "_run_job_names",
+                      side_effect=job_names_of):
+        assert dedupe_dispatch._plan_siblings("DRE-4000", "34281711446") == []
+
+
+def test_a_window_whose_oldest_run_is_newer_than_us_read_no_candidate():
+    """The other edge of the same read. Only a run created no later than this
+    dispatch can be a candidate, so a FULL page of runs that are ALL newer
+    means the candidates start past the window and nothing was examined."""
+    full = [_run(str(9000 + i), "2026-09-08T22:30:00Z", "2026-09-08T22:40:00Z")
+            for i in range(dedupe_dispatch._RUNS_PAGE)]
+    assert dedupe_dispatch.window_may_be_short(
+        full, "2026-09-08T21:38:27Z") is True
+
+
+def test_a_window_reaching_back_past_us_is_complete():
+    """The oldest entry predates this dispatch, so every possible candidate is
+    inside the page — however full it is."""
+    full = [_run(str(9000 + i), "2026-09-08T22:30:00Z", "2026-09-08T22:40:00Z")
+            for i in range(dedupe_dispatch._RUNS_PAGE - 1)]
+    full.append(_run("8999", "2026-09-08T20:00:00Z", "2026-09-08T20:10:00Z"))
+    assert dedupe_dispatch.window_may_be_short(
+        full, "2026-09-08T21:38:27Z") is False
+
+
+def test_a_short_page_reached_the_end_of_the_history():
+    """Fewer runs than the page size means GitHub had no more to give, so the
+    window cannot have cut anything off — even all-newer."""
+    partial = [_run(str(9000 + i), "2026-09-08T22:30:00Z",
+                    "2026-09-08T22:40:00Z") for i in range(3)]
+    assert dedupe_dispatch.window_may_be_short(
+        partial, "2026-09-08T21:38:27Z") is False
+    assert dedupe_dispatch.window_may_be_short([], "2026-09-08T21:38:27Z") is False
+
+
+def test_an_unreadable_timestamp_is_not_a_short_window():
+    """Fail-open, like every other read here: unknown is not an alarm."""
+    full = [_run(str(9000 + i), "not-a-time", "not-a-time")
+            for i in range(dedupe_dispatch._RUNS_PAGE)]
+    assert dedupe_dispatch.window_may_be_short(
+        full, "2026-09-08T21:38:27Z") is False
+    good = [_run(str(9000 + i), "2026-09-08T22:30:00Z", "2026-09-08T22:40:00Z")
+            for i in range(dedupe_dispatch._RUNS_PAGE)]
+    assert dedupe_dispatch.window_may_be_short(good, "") is False
+
+
+def test_plan_siblings_says_so_when_the_window_edge_cut_the_cohort_off(capsys):
+    full = [_run(str(9000 + i), "2026-09-08T22:30:00Z", "2026-09-08T22:40:00Z")
+            for i in range(dedupe_dispatch._RUNS_PAGE)]
+    with patch.object(dedupe_dispatch, "_run_meta", return_value={
+             "created_at": "2026-09-08T21:38:27Z", "workflow_id": "12345"}), \
+         patch.object(dedupe_dispatch, "_workflow_runs", return_value=full), \
+         patch.object(dedupe_dispatch, "_run_job_names", return_value=[]):
+        assert dedupe_dispatch._plan_siblings("DRE-3244", "34281711446") == []
+    err = capsys.readouterr().err
+    assert "past the window's edge" in err and "DRE-3244" in err
+
+
+def test_plan_siblings_is_quiet_when_the_window_covers_the_cohort(capsys):
+    runs, job_names_of, _ = _mixed_candidates(30, mine_at=22)
+    with patch.object(dedupe_dispatch, "_run_meta", return_value={
+             "created_at": "2026-09-08T21:38:27Z", "workflow_id": "12345"}), \
+         patch.object(dedupe_dispatch, "_workflow_runs", return_value=runs), \
+         patch.object(dedupe_dispatch, "_run_job_names",
+                      side_effect=job_names_of):
+        assert dedupe_dispatch._plan_siblings("DRE-3244", "34281711446")
+    assert capsys.readouterr().err == ""
+
+
+def test_cmd_plan_gate_refuses_a_duplicate_buried_among_other_cards(_gh_output):
+    """End to end through the CLI: the lane still agrees with the trigger, so
+    the ONLY thing that can refuse this dispatch is the buried sibling."""
+    runs, job_names_of, _ = _mixed_candidates(25, mine_at=19)
+    with patch.object(dedupe_dispatch, "_run_meta", return_value={
+             "created_at": "2026-09-08T21:38:27Z", "workflow_id": "12345"}), \
+         patch.object(dedupe_dispatch, "_workflow_runs", return_value=runs), \
+         patch.object(dedupe_dispatch, "_run_job_names",
+                      side_effect=job_names_of), \
+         patch.object(dedupe_dispatch, "_current_lane", return_value="Planning"), \
+         patch.object(dedupe_dispatch.linear_ops, "cmd_comment") as receipt:
+        dedupe_dispatch.cmd_plan_gate("DRE-3244")
+    assert "skip=true" in _gh_output.read_text()
+    assert "9019" in receipt.call_args[0][1]
+
+
+# --------------------------------------------------------------------------
 # plan_decide() — the refusal, and the reason a person reads
 # --------------------------------------------------------------------------
 def test_plan_decide_refuses_the_dispatch_that_was_queued_behind_a_run():
