@@ -347,6 +347,22 @@ class GitHub:
         runs = out.get("workflow_runs") if isinstance(out, dict) else None
         return runs if isinstance(runs, list) else []
 
+    def list_recent_runs(self, repo, per_page: int = 50) -> list[dict]:
+        """The sandbox's most recent runs of ANY status, newest first.
+
+        Deliberately not `list_workflow_runs`, which filters to `completed`:
+        this call answers "is anything happening at all?" (DRE-3453), and a
+        critic review still IN PROGRESS is the loudest possible yes. Reading
+        the completed-only listing would have called a 40-minute review an
+        idle sandbox — the false FAIL on a healthy pipeline that run
+        33274348041 already cost us once.
+        """
+        out = self.request(
+            "GET", f"/repos/{repo}/actions/runs?per_page={int(per_page)}"
+        )
+        runs = out.get("workflow_runs") if isinstance(out, dict) else None
+        return runs if isinstance(runs, list) else []
+
     def list_workflow_runs_for(
         self, repo, workflow_file: str, event: str | None = None,
         per_page: int = 30,

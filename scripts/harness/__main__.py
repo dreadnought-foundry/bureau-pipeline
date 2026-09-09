@@ -259,7 +259,10 @@ def main(argv=None) -> int:
         print(
             f"note: each wait checks the sandbox's own sweep/gate/linear-sync "
             f"runs every {deadline / 60:.0f} min; a failed one ends the run "
-            f"with its cause quoted"
+            f"with its cause quoted, and "
+            f"{framework.IDLE_PROBE_LIMIT} consecutive checks finding the "
+            f"sandbox has started nothing end the wait as "
+            f"'the sandbox will not do this'"
         )
     else:
         print(

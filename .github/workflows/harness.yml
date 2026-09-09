@@ -54,9 +54,12 @@ on:
           Every this many minutes a waiting scenario stops and reads the
           sandbox's own sweep / gate / linear-sync runs; a FAILED one ends the
           run with its cause quoted, a healthy-but-slow one keeps its full
-          budget. The passing PR run does all its scenarios in 18 minutes, so
-          a single silent wait past ten is already a fault. `0` switches the
-          check off.
+          budget. The same check also asks whether the sandbox has STARTED
+          anything since the wait began, and two consecutive nos end the wait
+          as "waiting for something the sandbox will not do" (DRE-3453). The
+          passing PR run does all its scenarios in 18 minutes, so a single
+          silent wait past ten is already a fault. `0` switches both checks
+          off.
         required: false
         default: "10"
   # DRE-2551: automatic promotion needs a PROVEN commit on the trunk, and

@@ -30,7 +30,7 @@ cut the fleet pins is still a human act.
 | `agent_run.py` | runs a REAL build agent on the SHIPPED `agent-task.yml` prompt against a sandbox clone (DRE-2490) |
 | `agent_scenario.py` | the adversarial scenarios' shared shape: seeding, the carrier issue, `## Unmet criteria` parsing, cleanup |
 | `github_api.py` | stdlib REST client — one client per bot identity |
-| `sandbox_health.py` | is the sandbox alive? the failed sweep/gate/linear-sync run a stuck wait quotes (DRE-3076) |
+| `sandbox_health.py` | is the sandbox alive? the failed sweep/gate/linear-sync run a stuck wait quotes (DRE-3076), and when it last started anything at all (DRE-3453) |
 | `scenarios/` | one module per scenario, discovered by convention (`SCENARIO` export); siblings add files, never edit a registry |
 | `__main__.py` | CLI: `PYTHONPATH=scripts python3 -m harness --scenarios bot_pr_flow` |
 
@@ -58,6 +58,18 @@ Two clocks, and they answer different questions:
   ends the run at once, quoting that run's own error line; a healthy or
   unreadable one changes nothing and the wait keeps its full budget.
   Unknown is never dead.
+
+  The same checkpoint asks a second question (DRE-3453): **has the sandbox
+  started anything since this wait began?** `framework.IDLE_PROBE_LIMIT` (2)
+  consecutive checks finding nothing end the wait with `SandboxIdle` —
+  *waiting for something the sandbox will not do* — at twenty minutes rather
+  than seventy. It reads runs of every status, so an in-progress critic
+  review counts as activity; a run created between checks resets the count;
+  and an unreadable or undated listing is unknown, which is never idle.
+  `SandboxIdle` is a `HarnessTimeout`, not a `SandboxBlocked`: nothing in
+  the sandbox failed, so this IS a statement about the commit under test.
+  On 2026-09-07, 2026-09-08 and twice on 2026-09-09 `gate_paths` waited its
+  full 4,200 seconds against a healthy sandbox and then named the critic.
 
 Neither clock answers a third question, so `framework.probe_pr` does: **is
 the thing this wait is about still there?** Every wait that polls a probe

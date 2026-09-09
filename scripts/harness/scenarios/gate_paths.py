@@ -29,6 +29,19 @@ PR:
   observable gate wakes bracket the once-only assertion (the CI
   workflow_run and this PR's own critic comment).
 
+  GIVING UP (DRE-3453): the second wake is a COMMENT, and there are two
+  ways of never seeing one that look identical from the comment list. The
+  critic's verdict can be posted and then DELETED — sandbox PR #1494's
+  `REQUEST_CHANGES @d3155ae8` was comment 5607416317 at 12:20:30 PT on
+  2026-09-09 and answered 404 by 13:38 — and the sandbox can simply be
+  idle. `_VerdictWatch` names the first within one poll; the wait's own
+  liveness probe names the second within twenty minutes; and either way
+  `_named_diagnosis` closes the run with the critic's published check on
+  the head, whether a verdict exists now, and the critic's last run. Before
+  that, the leg spent its whole 4,200-second budget three days running and
+  reported a timeout against a healthy critic, holding every `stable`
+  promotion behind it for the hour.
+
   STALE leg (agent/harness-…-gate_paths-stale): opened current. The
   instant the critic's bound APPROVE lands, the harness pushes a new
   commit — the verdict is now bound to a superseded head (DRE-1990). The
@@ -64,7 +77,7 @@ HONEST COVERAGE LIMITS:
 
 from __future__ import annotations
 
-from harness import framework
+from harness import framework, sandbox_health
 from harness.framework import (
     PROBE_DIR,
     ScenarioFailure,
@@ -77,11 +90,23 @@ from harness.framework import (
 )
 
 import merge_gate
+import publish_review_check
 
 # The gate's own status literal (merge-gate.yml posts it AND greps it as
 # its idempotence key) — unit-pinned against the workflow text, and the
 # harness must never emit it anywhere it writes.
 HUMAN_WAIT_MARKER = "Merge gate: waiting for human merge"
+
+# The critic's head-bound check, from the script that publishes it. When a
+# wait for the critic's COMMENT gives up, this record is the other place the
+# same review is written down — and on 2026-09-09 it was the only place left
+# (probe #1494's verdict comment had been deleted, its check had not).
+CRITIC_CHECK_NAME = publish_review_check.CHECK_NAME
+
+# The workflow file the critic runs as, `self-` tolerated the way
+# sandbox_health.workflow_stem tolerates it. Its last run's conclusion is the
+# third fact a give-up reports.
+CRITIC_WORKFLOW_STEM = "qa-review"
 
 # Creation order: skew and named branch from the ORIGINAL base tip (the
 # base advance lands after them, making both behind); stale branches from
@@ -193,6 +218,46 @@ def _human_wait_comments(comments, qa_login: str) -> list:
         if same_bot(((c.get("user") or {}).get("login")), qa_login)
         and merge_gate.opens_with_marker(c.get("body"), HUMAN_WAIT_MARKER)
     ]
+
+
+class _VerdictWatch:
+    """Remembers the critic's verdict comment on one PR so its DELETION is a
+    sentence rather than an hour (DRE-3453).
+
+    `verdict_state` is a question about the comments that exist NOW, so a
+    verdict that was posted and then removed is indistinguishable from one
+    that was never written — and `poll_critic` waits out the critic's whole
+    4,200-second budget on both. That is what ran on 2026-09-09: sandbox PR
+    #1494 carried `REQUEST_CHANGES @d3155ae8` as comment 5607416317 at
+    12:20:30 PT and answered 404 for it by 13:38, and the harness reported a
+    timeout against a critic that had done its job (twice, on one PR, an hour
+    each).
+
+    Fed on EVERY poll of both of the named leg's waits, because which one is
+    watching when the comment goes depends on how far ahead of the leg the
+    sandbox got.
+    """
+
+    def __init__(self, number, qa_login: str):
+        self.number, self.qa_login = number, qa_login
+        self.comment_id = None
+        self.line = ""
+
+    def observe(self, comments) -> None:
+        if self.comment_id is not None:
+            if not any(c.get("id") == self.comment_id for c in comments or ()):
+                raise ScenarioFailure(
+                    f"the critic's verdict comment {self.comment_id} on PR "
+                    f"#{self.number} was deleted after it was posted — the "
+                    f"second gate wake cannot be observed now, and waiting "
+                    f"longer only buys a timeout that blames the critic. "
+                    f"Last known verdict line: {self.line!r}"
+                )
+            return
+        record = framework.latest_verdict_record(comments, self.qa_login)
+        if record is not None and record.get("id") is not None:
+            self.comment_id = record["id"]
+            self.line = merge_gate.first_line(record.get("body"))
 
 
 class GatePaths(framework.Scenario):
@@ -501,16 +566,13 @@ class GatePaths(framework.Scenario):
                 )
             return pr
 
+        watch = _VerdictWatch(number, ctx.qa_login)
+
         def poll_human():
             _pr_untouched()
             comments = ctx.gh.list_comments(ctx.repo, number)
+            watch.observe(comments)
             return comments if _human_wait_comments(comments, ctx.qa_login) else None
-
-        ctx.wait(
-            f"the waiting-for-human state on PR #{number}",
-            poll_human,
-            timeout=ctx.merge_timeout,
-        )
 
         # A second, observable gate wake: this PR's own critic comment
         # (should_review_pr admits dependabot/** branches). Then a grace
@@ -518,14 +580,35 @@ class GatePaths(framework.Scenario):
         def poll_critic():
             _pr_untouched()
             comments = ctx.gh.list_comments(ctx.repo, number)
+            watch.observe(comments)
             state, _ = verdict_state(comments, ctx.qa_login, h1)
             return comments if state != "none" else None
 
-        ctx.wait(
-            f"a critic comment on PR #{number} (the second gate wake)",
-            poll_critic,
-            timeout=ctx.verdict_timeout,
-        )
+        # Both waits under one give-up: whichever way this leg stops early —
+        # a deleted verdict, an idle sandbox, a swept PR, an honest timeout —
+        # the run's last line is the diagnosis, not the symptom (DRE-3453).
+        try:
+            ctx.wait(
+                f"the waiting-for-human state on PR #{number}",
+                poll_human,
+                timeout=ctx.merge_timeout,
+            )
+            ctx.wait(
+                f"a critic comment on PR #{number} (the second gate wake)",
+                poll_critic,
+                timeout=ctx.verdict_timeout,
+            )
+        except framework.SandboxBlocked as e:
+            # Still a block, not a failure: nothing was proven about the
+            # commit. The diagnosis rides along, the cause is untouched so
+            # the promote receipt still reads `blocked by sandbox`.
+            raise framework.SandboxBlocked(
+                f"{e}; {self._named_diagnosis(ctx, number, h1)}", cause=e.cause
+            ) from e
+        except (framework.HarnessTimeout, ScenarioFailure) as e:
+            raise ScenarioFailure(
+                f"named leg: {e}; {self._named_diagnosis(ctx, number, h1)}"
+            ) from e
         ctx.sleep(GATE_GRACE_SECONDS)
 
         # Still open, still untouched: _pr_untouched now covers BOTH — a
@@ -542,6 +625,83 @@ class GatePaths(framework.Scenario):
                 "(idempotent across re-evaluations)"
             )
         ctx.log(f"[{self.name}] named: human state posted once, PR untouched")
+
+    # -- what a give-up on the named leg can still see ---------------------
+    def _named_diagnosis(self, ctx, number, h1) -> str:
+        """Everything the scenario can still read about the critic's review of
+        `h1`, as one line (DRE-3453).
+
+        A wait that ends says what it was waiting for; that is the symptom.
+        These three are the diagnosis, and they separate the causes that look
+        identical from the comments alone: the critic's own published CHECK on
+        the head (which survives a comment deletion — it is how #1494's
+        vanished verdict was reconstructed at all), whether a verdict comment
+        for the head exists RIGHT NOW, and what the critic's last run
+        concluded.
+
+        Best-effort throughout: every read is another chance for the
+        diagnosis to become the failure, and a run that dies explaining why it
+        died tells nobody anything.
+        """
+        return "; ".join(
+            (
+                self._critic_check(ctx, h1),
+                self._verdict_now(ctx, number, h1),
+                self._last_critic_run(ctx),
+            )
+        )
+
+    def _critic_check(self, ctx, h1) -> str:
+        # merge-gate.yml's own read path, so the qa client leads.
+        client = ctx.gh_qa or ctx.gh
+        try:
+            checks = client.list_check_runs(ctx.repo, h1)
+        except Exception as e:
+            return f"{CRITIC_CHECK_NAME} check on {h1}: unreadable ({e})"
+        mine = [c for c in checks or () if c.get("name") == CRITIC_CHECK_NAME]
+        if not mine:
+            return f"no {CRITIC_CHECK_NAME!r} check published on {h1}"
+        latest = mine[-1]
+        title = ((latest.get("output") or {}).get("title")) or ""
+        return (
+            f"{CRITIC_CHECK_NAME!r} on {h1}: "
+            f"{latest.get('conclusion') or latest.get('status') or 'unknown'}"
+            f" ({title})"
+        )
+
+    def _verdict_now(self, ctx, number, h1) -> str:
+        try:
+            state, detail = verdict_state(
+                ctx.gh.list_comments(ctx.repo, number), ctx.qa_login, h1
+            )
+        except Exception as e:
+            return f"verdict comment for {h1}: unreadable ({e})"
+        if state == "none":
+            return f"no verdict comment for {h1} exists on PR #{number} now"
+        return f"verdict comment for {h1} on PR #{number} now: {state} ({detail})"
+
+    def _last_critic_run(self, ctx) -> str:
+        client = ctx.gh_qa or ctx.gh
+        lister = getattr(client, "list_workflow_runs", None)
+        if lister is None:
+            return f"the sandbox's {CRITIC_WORKFLOW_STEM} runs were not read"
+        try:
+            runs = list(lister(ctx.repo) or ())
+        except Exception as e:
+            return f"the sandbox's {CRITIC_WORKFLOW_STEM} runs: unreadable ({e})"
+        # Newest-first, so the first sighting is the one that says anything
+        # about now — the rule sandbox_health.failure_in already rides on.
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            if sandbox_health.workflow_stem(run) != CRITIC_WORKFLOW_STEM:
+                continue
+            return (
+                f"the sandbox's last {CRITIC_WORKFLOW_STEM} run "
+                f"({run.get('id')}) concluded "
+                f"{run.get('conclusion') or run.get('status') or 'unknown'}"
+            )
+        return f"the sandbox has no {CRITIC_WORKFLOW_STEM} run to report"
 
     # -- real dependabot PR: opportunistic posture check ------------------
     def _verify_real_pr(self, ctx):
