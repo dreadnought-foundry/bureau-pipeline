@@ -189,9 +189,17 @@ def test_a_dispatch_served_in_the_lane_it_was_fired_for_proceeds():
 
 
 def test_a_renamed_lane_is_resolved_before_it_is_compared():
-    """`Plan Review` was renamed to `Green Light` (the contract's own alias).
-    A board mid-rename must not read as a card that moved."""
-    assert dedupe_dispatch.lane_left_behind("plan review", "Green Light") is False
+    """A board mid-rename must not read as a card that moved. The pair is
+    read from the contract's own alias table, never restated here — the
+    retired names are exactly what nothing in this repo may name again."""
+    import lane_scope
+
+    assert lane_scope.LANE_ALIASES, "the contract carries no rename aliases"
+    for retired, current in lane_scope.LANE_ALIASES.items():
+        assert dedupe_dispatch.lane_left_behind(
+            retired.lower(), current) is False
+        assert dedupe_dispatch.lane_left_behind(
+            current.lower(), retired) is False
 
 
 def test_an_unreadable_lane_proceeds():

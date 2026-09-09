@@ -234,9 +234,9 @@ def _earlier_id(run_id: str, own_run_id: str) -> bool:
 
 def _canonical_lane(lane: str) -> str:
     """The contract's name for a lane, matched case-insensitively and through
-    the rename aliases (`Plan Review` → `Green Light`). The relay lower-cases
-    the lane it sends; Linear answers in the board's own casing; and a board
-    mid-rename must not read as a card that moved."""
+    the contract's own rename aliases. The relay lower-cases the lane it
+    sends; Linear answers in the board's own casing; and a board mid-rename
+    must not read as a card that moved."""
     if not lane:
         return ""
     for known in (*lane_scope.LANE_FLOW, *lane_scope.OFF_FLOW):
