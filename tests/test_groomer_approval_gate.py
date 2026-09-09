@@ -75,7 +75,7 @@ class FakeOps:
         self.mutations: list[tuple[str, dict]] = []
         self.written: list[tuple[str, str]] = []
 
-    def comment_records(self, identifier):
+    def comment_records(self, identifier, *, whole_thread=False):
         return list(self.comments)
 
     def get_issue(self, identifier):
@@ -324,13 +324,17 @@ def test_the_drain_refuses_a_card_that_is_no_longer_in_intake():
 # the record of what the drain did (DRE-3326, landed here)
 # --------------------------------------------------------------------------
 def test_the_drain_records_every_card_it_moved_with_its_position():
+    """The record's shape moved to `groom-drained` + the fixed summary grammar
+    in DRE-3370; what it owes has not changed. Every card this drain took is on
+    it, in the order it took them, so undoing a bad batch does not mean diffing
+    lanes."""
     proposal = _proposal()
     ops = FakeOps(comments=_thread(proposal))
     groomer.drain(ops, card=PROPOSAL_CARD)
     assert len(ops.written) == 1, "the drain wrote no record of what it moved"
     target, body = ops.written[0]
     assert target == PROPOSAL_CARD
-    assert body.startswith(f"{groomer.MARK} {groomer.DRAIN_TAG}: {proposal['id']}")
+    assert body.startswith(f"{groomer.MARK} {groomer.DRAINED_TAG}: {proposal['id']}")
     for position, identifier in enumerate(_batch_ids(proposal), start=1):
         line = next((ln for ln in body.splitlines()
                      if f"| {identifier} |" in ln), None)
@@ -338,12 +342,16 @@ def test_the_drain_records_every_card_it_moved_with_its_position():
         assert line.strip().startswith(f"| {position} |"), (
             f"{identifier} is recorded without its position"
         )
-        assert proposal["id"] in line, (
-            f"{identifier} is recorded without the proposal it came from"
-        )
+        assert "moved" in line, f"{identifier} is recorded without its outcome"
+    assert proposal["id"] in body, (
+        "the record does not name the proposal that authorised the move"
+    )
 
 
 def test_the_drain_records_every_card_it_refused_and_why():
+    """A card that left the lane refuses the WHOLE batch, and since DRE-3370
+    the refusal is its own record — `groom-drain-refused: <id> — <reason>` —
+    rather than an empty half of the moved one."""
     proposal = _proposal()
     gone = _batch_ids(proposal)[0]
     ops = FakeOps(comments=_thread(proposal), lanes={gone: "Done"})
@@ -352,10 +360,12 @@ def test_the_drain_records_every_card_it_refused_and_why():
     assert len(ops.written) == 1, "a refused drain left no record"
     target, body = ops.written[0]
     assert target == PROPOSAL_CARD
+    assert body.startswith(
+        f"{groomer.MARK} {groomer.DRAIN_REFUSED_TAG}: {proposal['id']} — ")
     assert gone in body and "Done" in body, (
         "the record must name the refused card and the lane it is in now"
     )
-    assert "| Planning |" not in body, "a refused drain recorded a move"
+    assert groomer.DRAINED_TAG not in body, "a refused drain recorded a move"
 
 
 # --------------------------------------------------------------------------
@@ -392,7 +402,7 @@ def test_the_doc_describes_the_drain_as_moving_the_approved_record():
         "the doc still describes the drain the way it worked before DRE-3338"
     )
     assert "reads the approved batch off the proposal comment" in doc
-    assert groomer.DRAIN_TAG in doc, (
+    assert groomer.DRAINED_TAG in doc, (
         "the doc does not name the record the drain writes"
     )
 

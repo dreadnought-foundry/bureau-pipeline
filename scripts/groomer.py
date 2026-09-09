@@ -88,6 +88,16 @@ the cards in its batch table are the cards that move, in that order. An
 approval written by the pipeline's own Linear identity is refused: a gate the
 proposer can pass by itself is not a gate.
 
+The CEO says more than yes or no (DRE-3370). Beside `groom-approved` the card
+carries `groom-declined: <id> — <reason>`, `groom-excluded: <id> DRE-N` and
+`groom-added: <id> DRE-N`, all read the same way — anchored at the start of the
+comment, emoji optional — and all honoured only when their author is not the
+pipeline. The drain moves the approved batch MINUS the exclusions PLUS the
+additions, reads the WHOLE thread to find them, and writes one
+`groom-drained: <id>` record of what it did; every refusal is written down as
+`groom-drain-refused: <id> — <reason>`, and a batch that already carries a
+drained record is refused, so a second dispatch moves nothing.
+
 It used to rebuild the proposal from live state and refuse when the id it
 re-derived differed from the approved one. That is a real safety property —
 "the batch on the page is not the batch the drain would move" — said the wrong
@@ -162,6 +172,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
+import dead_run  # noqa: E402 — ONE Pacific clock for a time a person reads
 import groom_context  # noqa: E402 — the context pack (DRE-3150)
 import groom_judgement  # noqa: E402 — the one ranked read (DRE-3150)
 import intake_controls  # noqa: E402 — ONE reading of the operator's Intake switch
@@ -217,12 +228,51 @@ NEVER_WRITES = ("Canceled", "Duplicate", "Done")
 
 MARK = "🧺"
 PROPOSAL_TAG = "groom-proposal"
+
+# --- the CEO's decision vocabulary (DRE-3370) -------------------------------
+# One marker was a yes/no question, and a batch is not one. The CEO reading a
+# twenty-card proposal wants to say *yes, except these two* and *yes, and this
+# one as well*, and the only way to say either used to be to re-run the
+# groomer, spend another ranked read (~$6, ~8 minutes) and ask for a second
+# approval of a batch that was right apart from two rows.
+#
+# All four are read the SAME way — anchored at the start of the comment, emoji
+# optional, id `[0-9a-f]{6,}` (`decision_match`) — and all four are honoured
+# only when their author is not the pipeline's own Linear identity. That last
+# clause is the whole gate (DRE-2721): a marker the proposer can write is a
+# credential the proposer can mint, so it decides nothing — approval included,
+# which is why the self-approval refusal is unchanged by any of this.
 APPROVAL_TAG = "groom-approved"
-# What the drain wrote down afterwards, per card (DRE-3326, landed by DRE-3338).
-# A batch that moved and left no per-card record is a batch nobody can undo: the
-# operator is left diffing lanes to work out which cards this drain took and
-# which proposal authorised each one.
-DRAIN_TAG = "groom-drain"
+DECLINE_TAG = "groom-declined"       # `<id> — <reason>`; the reason is required
+EXCLUDE_TAG = "groom-excluded"       # `<id> DRE-N[ — <reason>]`, per card
+ADD_TAG = "groom-added"              # `<id> DRE-N[ — <reason>]`, per card
+DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG)
+
+# The drain's OWN records — written by the drain, never by a person, and read
+# by the console and by the next drain.
+#
+# `groom-drained` is what the drain wrote down afterwards (DRE-3326, landed by
+# DRE-3338): a batch that moved and left no per-card record is a batch nobody
+# can undo, and the operator is left diffing lanes to work out which cards this
+# drain took. It is also the thing that makes a second dispatch a no-op: a
+# record standing on the card refuses the next drain outright.
+#
+# `groom-drain-refused` is the other half. A drain that refuses a batch and
+# says so only in a workflow log is a stall with an alibi, so every refusal the
+# drain reaches after reading the card is written onto it, in one line, with
+# the reason.
+DRAINED_TAG = "groom-drained"
+DRAIN_REFUSED_TAG = "groom-drain-refused"
+
+# The four outcomes a card can carry in the drain's record. Data, so the render
+# and the console mirror one list rather than two spellings of it.
+DRAIN_OUTCOMES = ("moved", "held back", "added", "refused")
+
+# The id a refusal names when the run could not read one at all — no approval,
+# and no proposal comment on the card either. Deliberately NOT id-shaped
+# (`[0-9a-f]{6,}`), so a reader matching ids cannot mistake it for a batch that
+# exists.
+NO_BATCH_ID = "no-batch"
 
 # Said in the proposal AND in docs/groomer.md, from one string, because
 # somebody will otherwise read cycle assignment as a return to sprint planning.
@@ -286,32 +336,67 @@ BOILERPLATE_THRESHOLD = 12
 INTAKE_HOLD = intake_controls.hold()
 
 
-class IntakeHeld(RuntimeError):
+class DrainRefused(RuntimeError):
+    """Every refusal the drain reaches AFTER it has read the proposal card.
+
+    Each one carries the batch it is about, because each one is WRITTEN DOWN:
+    the drain posts `🧺 groom-drain-refused: <id> — <reason>` before it
+    re-raises, so a refusal is on the card the CEO approved on rather than in a
+    workflow log nobody opens (DRE-3370). `batch` falls back to NO_BATCH_ID
+    when the run could not read an id at all.
+    """
+
+    def __init__(self, message: str, *, batch: str | None = None):
+        super().__init__(message)
+        self.batch = batch or NO_BATCH_ID
+
+
+class IntakeHeld(DrainRefused):
     """`INTAKE_HOLD` is set, so nothing leaves Intake. Raised BEFORE any write
     and ahead of the approval's own verdict: an operator who closed the pen has
     said "not this week" about every batch, including one approved last week."""
 
 
-class NotApproved(RuntimeError):
-    """The batch has no CEO approval, so nothing leaves Intake. Raised BEFORE
-    any write: a gate that refuses after moving three cards is not a gate."""
+class NotApproved(DrainRefused):
+    """The batch has no CEO approval — none was written, the only one was
+    written by the pipeline itself, or the newest decision on the card is a
+    DECLINE. Raised BEFORE any write: a gate that refuses after moving three
+    cards is not a gate."""
 
 
-class NoProposalRecord(RuntimeError):
+class NoProposalRecord(DrainRefused):
     """The approval names a proposal id the card carries no proposal for, so
     there is no list to move (DRE-3338). Raised BEFORE any write: the drain
     moves a written-down batch and never a reconstructed one."""
 
 
-class NotInLane(RuntimeError):
-    """A card in the approved batch is no longer in the lane it was approved
-    out of — somebody moved it by hand since. Raised BEFORE any write, for the
-    WHOLE batch: an approved order half-executed is an order nobody gave."""
+class NotInLane(DrainRefused):
+    """A card the drain would move is no longer in the lane it was approved out
+    of — somebody moved it by hand since, or an addition names a card that has
+    already left. Raised BEFORE any write, for the WHOLE batch: an approved
+    order half-executed is an order nobody gave."""
+
+
+class AlreadyDrained(DrainRefused):
+    """A `groom-drained` record for this batch already stands on the card, so
+    this dispatch is the second one and it moves nothing (DRE-3370). The record
+    the first drain wrote is the receipt; re-executing an order that has
+    already been executed moves cards nobody approved twice."""
+
+
+class CycleRefused(DrainRefused, ValueError):
+    """The record's cycle cannot be honoured: it names none, it spans several
+    with no way to say which card is in which, or Linear carries no open cycle
+    with that number. A ValueError as well, because it was one before DRE-3370
+    made every refusal a written record and callers still catch it that way."""
 
 
 class WillNotCancel(RuntimeError):
     """The drain was pointed at a terminal lane. The groomer recommends and
-    never cancels — cancelling is the operator's, as a separate step."""
+    never cancels — cancelling is the operator's, as a separate step.
+
+    The ONE refusal that writes nothing: it is a bad invocation, caught before
+    the card has been read, so there is no batch for a record to name."""
 
 
 # --------------------------------------------------------------------------- #
@@ -1292,8 +1377,24 @@ def proposal_id(proposal: dict) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
+def decision_comment(tag: str, pid: str, *, card: str | None = None,
+                     reason: str | None = None) -> str:
+    """ONE writer for the whole decision vocabulary (DRE-3370).
+
+    `🧺 <tag>: <id>[ DRE-N][ — <reason>]`. The console writes these, the CEO
+    writes them by hand, and `decision_match` reads them back — so the shape
+    lives here once rather than in a writer and a reader that drift.
+    """
+    line = f"{MARK} {tag}: {pid}"
+    if card:
+        line += f" {card}"
+    if reason:
+        line += f" — {reason}"
+    return line
+
+
 def approval_comment(pid: str) -> str:
-    return f"{MARK} {APPROVAL_TAG}: {pid}"
+    return decision_comment(APPROVAL_TAG, pid)
 
 
 def proposal_comment(proposal: dict) -> str:
@@ -1330,8 +1431,11 @@ def post_proposal(lops, card: str, proposal: dict) -> bool:
     proposed" is decidable from the thread — and a population that MOVED
     produces a different id and posts, because a retry that writes nothing must
     not become a groomer that cannot say anything new. The read is
-    `comment_records`' last 50 comments, the same window the approval gate
-    reads; a proposal that has scrolled out of it is posted again.
+    `comment_records`' last 50 comments; a proposal that has scrolled out of it
+    is posted again. The DRAIN reads the whole thread instead (DRE-3370) — it
+    has to, because the approval is the oldest of a card's decisions — and the
+    two differ on purpose: a duplicate proposal costs a comment, while a missed
+    approval costs a batch.
     """
     if already_proposed(proposal, lops.comment_records(card)):
         print(f"proposal {proposal['id']} is already on {card} — not posting again")
@@ -1364,6 +1468,14 @@ def render_proposal(proposal: dict) -> str:
     add("**To approve:** comment `" + approval_comment(proposal["id"])
         + "` on this card. Anything else — including a comment that mentions "
           "the marker — leaves the batch where it is.")
+    add("")
+    # The rest of the vocabulary, at the one place the CEO is deciding
+    # (DRE-3370). A marker nobody is told about is a marker nobody writes.
+    add(f"**To say more than yes:** `{MARK} {DECLINE_TAG}: {proposal['id']} — "
+        f"<reason>` declines the batch (the reason is required); "
+        f"`{MARK} {EXCLUDE_TAG}: {proposal['id']} DRE-N` holds one card back; "
+        f"`{MARK} {ADD_TAG}: {proposal['id']} DRE-N` pulls one in, after the "
+        f"batch. One comment each, and the newest one about a card wins.")
     add("")
     add("## The population")
     add("")
@@ -1679,33 +1791,175 @@ def _render_unranked(proposal: dict) -> list:
 
 # The marker must OPEN the comment — the same anchoring the routing verdict uses,
 # for the same reason: a reader that matched it anywhere would read a sentence
-# ABOUT approving as an approval.
-_APPROVAL_LINE = re.compile(rf"^\s*(?:{MARK}\s*)?{APPROVAL_TAG}\s*:\s*([0-9a-f]{{6,}})")
+# ABOUT approving as an approval. Group 1 is the proposal id; group 2 is the
+# rest of THAT LINE (no `$`, no re.M: `.` stops at the newline, so a marker
+# followed by paragraphs of prose still reads).
+_DECISION_LINES = {
+    tag: re.compile(rf"^\s*(?:{MARK}\s*)?{tag}\s*:\s*([0-9a-f]{{6,}})(.*)")
+    for tag in (*DECISION_TAGS, DRAINED_TAG)
+}
+_APPROVAL_LINE = _DECISION_LINES[APPROVAL_TAG]
+# The tail of an exclusion or an addition: the card it names, then an optional
+# reason after an em dash. And the tail of a decline: a reason, and nothing else.
+_CARD_TAIL = re.compile(r"^\s+(DRE-\d+)\s*(?:—\s*(.*?))?\s*$")
+_REASON_TAIL = re.compile(r"^\s*—\s*(\S.*?)\s*$")
 
 
-def approved_id(records: list[dict]) -> tuple[str | None, str | None]:
-    """The proposal id the CEO approved on this card, or why there isn't one.
+def decision_match(tag: str, body: str | None):
+    """`re.Match` for `tag` opening `body`, or None — the ONE matcher.
 
-    `(id, None)` or `(None, problem)`. The LAST approval a human wrote wins —
-    a thread can carry several as batches are re-proposed, and the newest one
-    is the decision that is current.
+    Every marker in the vocabulary is read the same way, so a new one cannot
+    quietly arrive with looser anchoring than the approval it sits beside.
     """
-    human, by_pipeline = [], []
-    for record in records:
-        match = _APPROVAL_LINE.match((record.get("body") or "").strip())
-        if not match:
+    pattern = _DECISION_LINES.get(tag)
+    if pattern is None:                                   # pragma: no cover
+        raise KeyError(f"{tag} is not one of the groomer's markers")
+    return pattern.match((body or "").strip())
+
+
+def _ignored(tag: str, why: str, identifier: str | None = None) -> dict:
+    return {"tag": tag, "identifier": identifier, "why": why}
+
+
+_BY_THE_PIPELINE = ("written by the pipeline's own Linear identity — the "
+                    "proposer decides nothing about its own proposal")
+
+
+def read_decisions(records: list[dict]) -> dict:
+    """Every decision the CEO wrote on this card, read in one pass.
+
+    Returns `{"approved", "problem", "excluded", "added", "ignored",
+    "drained"}`. `approved` is the id of the batch that is currently approved
+    and `problem` says why there isn't one; `excluded` and `added` map a card
+    identifier to the marker that named it LAST, because a card named by both
+    follows the newest comment; `ignored` is every marker the drain would not
+    honour, each with the reason, so the record can say what it dropped;
+    `drained` is every batch a `groom-drained` record already stands for.
+
+    The NEWEST human decision wins, for the approval as it always has and for
+    the decline beside it — a thread carries several as batches are re-proposed
+    and re-argued, and the last word is the one that is current.
+    """
+    # (thread index, id[, reason]) — the index is how "the newest decision"
+    # is decided between the two lists without either of them being scanned
+    # against the other.
+    approvals: list[tuple[int, str]] = []
+    declines: list[tuple[int, str, str]] = []
+    by_pipeline_approval = False
+    per_card: list[tuple[str, str, str, str | None]] = []   # tag, pid, card, why
+    ignored: list[dict] = []
+    drained: list[str] = []
+
+    for index, record in enumerate(records):
+        body = record.get("body") or ""
+        mine = bool(record.get("authored_by_pipeline"))
+
+        drain = decision_match(DRAINED_TAG, body)
+        if drain:
+            drained.append(drain.group(1))
             continue
-        (by_pipeline if record.get("authored_by_pipeline") else human).append(
-            match.group(1))
-    if human:
-        return human[-1], None
-    if by_pipeline:
+
+        for tag in DECISION_TAGS:
+            match = decision_match(tag, body)
+            if not match:
+                continue
+            pid, tail = match.group(1), match.group(2)
+            if mine:
+                # The gate, applied to the whole vocabulary and not only to the
+                # approval: the proposer cannot approve, decline, exclude or
+                # add anything.
+                if tag == APPROVAL_TAG:
+                    by_pipeline_approval = True
+                else:
+                    ignored.append(_ignored(
+                        tag, f"`{tag}` {_BY_THE_PIPELINE}",
+                        _named_card(tail)))
+                break
+            if tag == APPROVAL_TAG:
+                approvals.append((index, pid))
+            elif tag == DECLINE_TAG:
+                reason = _REASON_TAIL.match(tail)
+                if not reason:
+                    # A decline nobody can act on. Read as absent rather than
+                    # as a refusal: "no" with no reason leaves the CEO having
+                    # stopped a batch and nobody able to fix it.
+                    ignored.append(_ignored(
+                        tag, f"`{tag}` carries no reason after the `—`, and a "
+                             f"decline without one names nothing anybody can "
+                             f"fix — it was read as absent"))
+                else:
+                    declines.append((index, pid, reason.group(1)))
+            else:
+                named = _CARD_TAIL.match(tail)
+                if not named:
+                    ignored.append(_ignored(
+                        tag, f"`{tag}` names no card — the shape is "
+                             f"`{MARK} {tag}: <id> DRE-N[ — <reason>]`"))
+                else:
+                    per_card.append((tag, pid, named.group(1),
+                                     (named.group(2) or "").strip() or None))
+            break
+
+    approved, problem = _current_decision(approvals, declines,
+                                          by_pipeline_approval)
+    excluded, added = {}, {}
+    for tag, pid, identifier, reason in per_card:
+        if approved and pid != approved:
+            ignored.append(_ignored(
+                tag, f"`{tag}` names batch `{pid}`, and the batch approved on "
+                     f"this card is `{approved}`", identifier))
+            continue
+        # The newest comment wins: a later marker replaces an earlier one for
+        # the same card, whichever of the two markers each of them is.
+        excluded.pop(identifier, None)
+        added.pop(identifier, None)
+        (excluded if tag == EXCLUDE_TAG else added)[identifier] = {
+            "tag": tag, "reason": reason}
+    return {"approved": approved, "problem": problem, "excluded": excluded,
+            "added": added, "ignored": ignored, "drained": drained}
+
+
+def _named_card(tail: str) -> str | None:
+    """The card an exclusion or addition names, for a marker being reported
+    rather than honoured. None on a decline, which names none."""
+    found = _CARD_TAIL.match(tail)
+    return found.group(1) if found else None
+
+
+def _current_decision(approvals: list[tuple[int, str]],
+                      declines: list[tuple[int, str, str]],
+                      by_pipeline_approval: bool) -> tuple[str | None, str | None]:
+    """The last word on this card: `(approved id, None)` or `(None, why not)`.
+
+    A CEO who approves a batch and then declines it has declined it, and one
+    who declines and then approves has approved it. Both lists carry the thread
+    index each decision was written at, so "the newest" is a comparison and
+    never an assumption about which marker outranks which.
+    """
+    if approvals or declines:
+        newest_approval = approvals[-1][0] if approvals else -1
+        if declines and declines[-1][0] > newest_approval:
+            _, pid, reason = declines[-1]
+            return None, (f"the newest decision on this card is a decline of "
+                          f"batch `{pid}`: {reason}")
+        return approvals[-1][1], None
+    if by_pipeline_approval:
         return None, ("the only approval on this card was written by the "
                       "pipeline's own Linear identity — the proposer cannot "
                       "approve its own proposal")
     return None, (f"no comment on this card opens with "
                   f"`{MARK} {APPROVAL_TAG}: <proposal id>` — nothing leaves "
                   f"Intake without the CEO approving a batch")
+
+
+def approved_id(records: list[dict]) -> tuple[str | None, str | None]:
+    """The proposal id the CEO approved on this card, or why there isn't one.
+
+    Kept as the narrow reading of `read_decisions` for callers that only ask
+    the yes/no question.
+    """
+    decisions = read_decisions(records)
+    return decisions["approved"], decisions["problem"]
 
 
 # The proposal's own heading, and the one line that names the lane. Both are
@@ -1788,29 +2042,61 @@ def proposal_record(pid: str, records: list[dict]) -> dict | None:
 
 
 def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
-    """Move the APPROVED batch onward, in the order the record carries.
+    """Move the APPROVED batch onward — minus every exclusion, plus every
+    addition — in the order the record carries.
 
     The batch is READ, never re-derived (DRE-3338): the approval names an id,
     the proposal comment carrying that id is the record, and the cards in its
-    batch table are the cards that move. No model is called and the population
-    is never re-read — a drain is a move, not a judgement.
+    batch table are the cards that move. The CEO's per-card decisions
+    (DRE-3370) are read off the same thread and adjust that list: an excluded
+    card stays where it is, an added card moves after the batch on the batch's
+    own cycle. No model is called and the population is never re-read — a drain
+    is a move, not a judgement.
 
     Refuses, before any card moves: a closed pen, a terminal destination, a
-    missing or pipeline-written approval, an approval whose proposal is not on
-    the card, a cycle Linear does not carry, and any card in the list that is
-    no longer in the lane it was approved out of.
+    missing / pipeline-written / declined approval, an approval whose proposal
+    is not on the card, a batch already drained, a cycle Linear does not carry,
+    and any card it would move that is not in the lane. Every refusal but the
+    terminal destination is written onto the card as
+    `🧺 groom-drain-refused: <id> — <reason>`.
     """
     if to in NEVER_WRITES:
+        # Before the card is read, so there is no batch to name and nothing to
+        # write down: a bad invocation, not a refused batch.
         raise WillNotCancel(
             f"the drain will not write {to!r}: the groomer recommends and never "
             f"cancels, and cancelling stays the operator's own step")
+    try:
+        return _drain(lops, card=card, lane=lane, to=to)
+    except DrainRefused as refusal:
+        # ONE writer for every refusal, at the ONE place they all pass through.
+        # A drain that refuses a batch and says so only in a workflow log is a
+        # stall with an alibi, and a refusal each raiser had to remember to
+        # post is a refusal one of them eventually will not.
+        lops.cmd_comment(card, drain_refused_record(refusal.batch, str(refusal)))
+        raise
 
+
+def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
+    """`drain` proper — every exit is a return or a DrainRefused.
+
+    The defaults are `drain`'s own, restated rather than dropped: the lane a
+    write reaches is read off the call site's enclosing signature
+    (`ready_lane_writers.py`), and a parameter with no default is a destination
+    nothing can read.
+    """
     # Reads only, and they decide nothing yet: the hold below has to be able to
     # say how big the batch behind the pen is, and the only place that number
-    # exists now is the record itself.
-    records = lops.comment_records(card)
-    pid, problem = approved_id(records)
+    # exists now is the record itself. The WHOLE thread, paginated: a proposal
+    # card carries one comment per per-card decision, and the approval is the
+    # OLDEST of them — the first thing to fall out of a fifty-comment window.
+    records = lops.comment_records(card, whole_thread=True)
+    decisions = read_decisions(records)
+    pid, problem = decisions["approved"], decisions["problem"]
     record = proposal_record(pid, records) if pid else None
+    # The id a refusal names: the approved batch, else the newest proposal on
+    # the card, else nothing readable at all.
+    named = pid or _newest_proposal_id(records) or NO_BATCH_ID
 
     if INTAKE_HOLD is not None:
         # Ahead of the approval's verdict: the hold is the operator's answer
@@ -1820,55 +2106,149 @@ def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
             INTAKE_HOLD,
             len(record["batch"]) if record else 0,
             f"the batch approved on {card}" if record
-            else f"no approved batch on {card}"))
+            else f"no approved batch on {card}"), batch=named)
     if problem:
-        raise NotApproved(problem)
+        raise NotApproved(problem, batch=named)
+    if pid in decisions["drained"]:
+        raise AlreadyDrained(
+            f"batch {pid} has already been drained — a `{MARK} {DRAINED_TAG}: "
+            f"{pid}` record stands on {card}, and that record is the receipt "
+            f"for cards that have already moved; re-propose if the lane needs "
+            f"draining again", batch=named)
     if record is None:
         raise NoProposalRecord(
             f"the approval on {card} names batch {pid}, and no proposal comment "
             f"on this card carries that id — the drain moves the batch that was "
             f"written down, so re-post the proposal (it may have scrolled out of "
-            f"the comments this reads) and approve it again")
+            f"the comments this reads) and approve it again", batch=named)
 
     lane = record["lane"] or lane
-    rows = record["batch"]
     cycle = _approved_cycle(lops, record)
+    plan = _drain_plan(record, decisions, lane=lane)
 
     # Every card's CURRENT lane, before anything moves. A card somebody moved by
     # hand since the approval is not the card the CEO approved a move for, and
-    # the answer is to refuse the whole batch rather than to move the part that
-    # still fits: an approved order half-executed is an order nobody gave.
-    issues, refused = {}, []
-    for row in rows:
+    # an addition naming a card that has already left the lane is not the card
+    # the CEO meant either. Either way the answer is to refuse the WHOLE batch
+    # rather than to move the part that still fits: an approved order
+    # half-executed is an order nobody gave.
+    issues, gone = {}, []
+    for row in plan["moving"]:
         issues[row["identifier"]] = issue = lops.get_issue(row["identifier"])
         now = ((issue or {}).get("state") or {}).get("name")
         if now != lane:
-            refused.append({**row, "lane": now,
-                            "why": (f"no longer in {lane} — it is in "
-                                    f"{now or 'a lane this run could not read'} "
-                                    f"now")})
-    moved, written = [], []
-    for row in ([] if refused else rows):        # all or nothing, decided above
-        lops.gql(SET_CYCLE, {"id": issues[row["identifier"]]["id"],
-                             "input": {"cycleId": cycle[1]}})
+            gone.append((row["identifier"],
+                         now or "a lane this run could not read"))
+    if gone:
+        named_cards = ", ".join(f"{i} ({where})" for i, where in gone[:5])
+        raise NotInLane(
+            f"{_plural(len(gone), 'card')} the drain would move left {lane} "
+            f"after batch {record['id']} was approved — {named_cards} — so "
+            f"nothing moved; re-propose and get the new batch approved",
+            batch=record["id"])
+
+    moved = []
+    for row in plan["moving"]:
+        if cycle[1]:
+            # Only a cycle the record actually named. A proposal with an empty
+            # batch resolves none, and writing `cycleId: null` onto a card an
+            # addition reached in for would CLEAR the cycle it already had —
+            # a silent edit nobody approved.
+            lops.gql(SET_CYCLE, {"id": issues[row["identifier"]]["id"],
+                                 "input": {"cycleId": cycle[1]}})
         lops.cmd_state(row["identifier"], to)
         moved.append(row["identifier"])
-        written.append({**row, "to": to})
 
-    # ONE record, both outcomes, one call site: what moved and what was refused
-    # are the same question asked of the same batch, and a reader of the card
-    # should not have to know which of two comment shapes to look for.
-    result = {"moved": moved, "rows": written, "refused": refused, "to": to,
-              "from": lane, "cycle": cycle[0], "proposal": record["id"]}
-    lops.cmd_comment(card, drain_record(result))
-    if refused:
-        named = ", ".join(f"{r['identifier']} ({r['lane'] or 'unknown'})"
-                          for r in refused[:5])
-        raise NotInLane(
-            f"{_plural(len(refused), 'card')} in the approved batch "
-            f"{record['id']} left {lane} after it was approved — {named} — so "
-            f"nothing moved; re-propose and get the new batch approved")
+    result = {"moved": moved,
+              "held_back": [r["identifier"] for r in plan["held_back"]],
+              "added": [r["identifier"] for r in plan["moving"]
+                        if r["outcome"] == "added"],
+              "refused": plan["ignored"],
+              "rows": plan["rows"], "to": to, "from": lane,
+              "cycle": cycle[0], "proposal": record["id"]}
+    lops.cmd_comment(card, drained_record(result))
     return result
+
+
+def _drain_plan(record: dict, decisions: dict, *, lane: str) -> dict:
+    """The batch minus the exclusions plus the additions, and the table row
+    every card involved gets.
+
+    Rows follow the PROPOSAL's own order first, so a reader can lay the record
+    beside the proposal and go down both together; then the additions, in the
+    order the CEO wrote them; then any decision the drain would not honour.
+    """
+    excluded, added = decisions["excluded"], dict(decisions["added"])
+    in_batch = {row["identifier"] for row in record["batch"]}
+    ignored = list(decisions["ignored"])
+
+    # An exclusion can only take a card OUT of the batch. One naming a card
+    # that was never in it holds nothing back — and reading it as a decision
+    # would let a marker invent a card into a record it is not in.
+    for identifier, mark in excluded.items():
+        if identifier not in in_batch:
+            ignored.append(_ignored(
+                mark["tag"],
+                f"`{EXCLUDE_TAG}` names a card that is not in the approved "
+                f"batch, so there was nothing to hold back", identifier))
+
+    moving, held_back, rows = [], [], []
+    for row in record["batch"]:
+        identifier = row["identifier"]
+        mark = excluded.get(identifier)
+        if mark:
+            held_back.append(row)
+            rows.append({"identifier": identifier, "outcome": "held back",
+                         "why": _marker_why(mark)})
+            continue
+        if identifier in added:
+            # Already in the batch: the addition asks for something that is
+            # happening anyway, so it is reported rather than acted on.
+            ignored.append(_ignored(
+                added.pop(identifier)["tag"],
+                f"`{ADD_TAG}` names a card already in the approved batch",
+                identifier))
+        moving.append({**row, "outcome": "moved"})
+        rows.append({"identifier": identifier, "outcome": "moved",
+                     "why": f"proposal `{record['id']}` position "
+                            f"{row['position']}"})
+
+    for identifier, mark in added.items():
+        moving.append({"identifier": identifier, "position": None,
+                       "outcome": "added"})
+        rows.append({"identifier": identifier, "outcome": "added",
+                     "why": _marker_why(mark)})
+
+    for mark in ignored:
+        if mark["identifier"] and mark["identifier"] in in_batch:
+            # The card has a row already, carrying what actually happened to
+            # it. The dropped marker is named there rather than contradicted by
+            # a second row for the same card.
+            row = next(r for r in rows if r["identifier"] == mark["identifier"])
+            row["why"] += f" — {mark['why']}, so it was ignored"
+            continue
+        rows.append({"identifier": mark["identifier"] or "—",
+                     "outcome": "refused", "why": mark["why"]})
+    return {"moving": moving, "held_back": held_back, "rows": rows,
+            "ignored": ignored, "lane": lane}
+
+
+def _marker_why(mark: dict) -> str:
+    """The Why cell for a card an exclusion or addition named: the marker, and
+    the CEO's reason when they wrote one."""
+    why = f"`{MARK} {mark['tag']}`"
+    return f"{why} — {mark['reason']}" if mark.get("reason") else why
+
+
+def _newest_proposal_id(records: list[dict]) -> str | None:
+    """The id of the newest proposal comment on the card, for a refusal that
+    has no approval to name a batch with."""
+    found = None
+    for entry in records:
+        parsed = parse_proposal_comment(entry.get("body"))
+        if parsed:
+            found = parsed["id"]
+    return found
 
 
 def _approved_cycle(lops, record: dict) -> tuple[int | None, str | None]:
@@ -1883,58 +2263,71 @@ def _approved_cycle(lops, record: dict) -> tuple[int | None, str | None]:
         return None, None
     numbers = record["cycles"]
     if not numbers:
-        raise ValueError(
+        raise CycleRefused(
             f"proposal {record['id']} names no cycle, so the drain has nothing "
-            f"to assign its batch to")
+            f"to assign its batch to", batch=record["id"])
     if len(numbers) > 1:
-        raise ValueError(
+        raise CycleRefused(
             f"proposal {record['id']} spans cycles "
             f"{', '.join(str(n) for n in numbers)} and its batch table does not "
             f"say which card belongs to which — re-propose with --batch-cycles 1 "
-            f"so the record answers the question the drain has to ask")
+            f"so the record answers the question the drain has to ask",
+            batch=record["id"])
     known = cycle_ids(lops)
     if numbers[0] not in known:
-        raise ValueError(
+        raise CycleRefused(
             f"the approved batch names cycle {numbers[0]} and Linear carries no "
             f"open cycle with that number — create it first; the groomer will "
-            f"not invent one")
+            f"not invent one", batch=record["id"])
     return numbers[0], known[numbers[0]]
 
 
-def drain_record(result: dict) -> str:
-    """What the drain did, per card, on the proposal card (DRE-3326).
+def drained_record(result: dict) -> str:
+    """What the drain did, per card, on the proposal card (DRE-3326, DRE-3370).
 
-    Every card it moved with its position and the proposal that authorised it,
-    and every card it refused with the reason — because undoing a bad batch
-    means knowing which cards THIS drain took, and a run log is not on the
-    card. The refusal half is posted too: a drain that refuses the batch and
-    says so only in a workflow log is a stall with an alibi.
+    ONE record per drain, in a fixed grammar the console mirrors: the marker,
+    then the summary line, then a row per card. Undoing a bad batch means
+    knowing which cards THIS drain took and which it did not, and a run log is
+    not on the card.
+
+    The counts answer four different questions and none of them substitutes for
+    another: `moved` is the approved batch that went, `held back` is what the
+    CEO excluded and is still in the lane, `added` is what the CEO reached in
+    for, and `refused` counts the DECISIONS the drain would not honour — a
+    marker the pipeline wrote, a decline with no reason, an exclusion naming a
+    card that was never in the batch. That last count is of decisions and not
+    of rows, because a refused decision about a card that moved anyway is named
+    on that card's own row: no card gets two.
     """
     pid = result["proposal"]
-    w = [f"{MARK} {DRAIN_TAG}: {pid}", ""]
-    if result["moved"]:
-        w.append(f"Moved {_plural(len(result['moved']), 'card')} out of "
-                 f"{result['from']} into {result['to']}, in the order proposal "
-                 f"`{pid}` was approved in"
-                 + (f" (cycle {result['cycle']})." if result["cycle"] else "."))
-        w += ["", "| # | Card | From | To | Proposal |", "| -- | -- | -- | -- | -- |"]
-        for row in result["rows"]:
-            w.append(f"| {row['position']} | {row['identifier']} | "
-                     f"{result['from']} | {row['to']} | {pid} |")
-        w.append("")
-    elif result["refused"]:
-        w += [f"Moved nothing. The batch approved as `{pid}` is no longer the "
-              f"batch on the board, so none of it moved.", ""]
-    else:
-        w += [f"Moved nothing: proposal `{pid}` carries no cards in its batch.",
-              ""]
-    if result["refused"]:
-        w += ["Refused:", ""]
-        for row in result["refused"]:
-            w.append(f"- {row['identifier']} (position {row['position']}) — "
-                     f"{row['why']}.")
-        w.append("")
+    rows = result["rows"]
+    counts = Counter(row["outcome"] for row in rows)
+    w = [f"{MARK} {DRAINED_TAG}: {pid}", "",
+         f"moved: {counts['moved']} · held back: {counts['held back']} · "
+         f"added: {counts['added']} · refused: {len(result['refused'])} → "
+         f"{result['to']} at {dead_run.pacific(datetime.now(timezone.utc))}",
+         ""]
+    if result["cycle"]:
+        w += [f"Out of {result['from']}, into cycle {result['cycle']}, in the "
+              f"order proposal `{pid}` was approved in.", ""]
+    w += ["| # | Card | Outcome | Why |", "| -- | -- | -- | -- |"]
+    order = {identifier: n for n, identifier in enumerate(result["moved"], 1)}
+    for row in rows:
+        w.append(f"| {order.get(row['identifier'], '—')} | "
+                 f"{row['identifier']} | {row['outcome']} | {row['why']} |")
     return "\n".join(w).rstrip() + "\n"
+
+
+def drain_refused_record(pid: str, reason: str) -> str:
+    """`🧺 groom-drain-refused: <id> — <reason>`, and nothing else.
+
+    One line, because the console reads its grammar and a refusal that ran to
+    three paragraphs would be a shape nobody could parse. Whitespace in the
+    reason is collapsed for the same reason — `intake_controls.notice` writes
+    over several lines and all of it belongs on this one.
+    """
+    return (f"{MARK} {DRAIN_REFUSED_TAG}: {pid} — "
+            f"{' '.join((reason or 'no reason given').split())}\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -2106,8 +2499,7 @@ def main(argv=None) -> int:
     if args.command == "drain":
         try:
             result = drain(linear_ops, card=args.card, lane=args.lane)
-        except (IntakeHeld, NotApproved, NoProposalRecord, NotInLane,
-                WillNotCancel, ValueError) as e:
+        except (DrainRefused, WillNotCancel, ValueError) as e:
             print(f"groomer: refused — {e}", file=sys.stderr)
             return 2
         print(json.dumps(result, indent=2))
