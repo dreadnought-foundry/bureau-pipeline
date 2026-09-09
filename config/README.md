@@ -120,10 +120,20 @@ of it is ever a runtime lookup.
   `LINEAR_IDENTITY: fleet` at job level; a run that declares nothing prints
   `undeclared`, never a guess. No workflow reads the file itself — CI holds
   only the fleet key, as `secrets.LINEAR_API_KEY`, which is the name the
-  operator-tools key wears on the operator's machine. The operator runs, with
-  `LINEAR_API_KEY_FLEET` and `LINEAR_API_KEY` in the environment:
-  `python3 scripts/check_linear_identities.py check`. A key that is absent
-  is `UNKNOWN` and exits non-zero, never OK.
+  operator-tools key wears on the operator's machine.
+  **An identity may have several HOMES** (DRE-3334): one key is not kept in
+  one place, so `homes` declares the extra copies, each with its own `name`,
+  `env` and `lives_in`, and the identity's own `env`/`lives_in` are its first
+  home. The fleet declares one — `relay`, read from `LINEAR_API_KEY_RELAY`,
+  the relay Lambda's own key in AWS Secrets Manager
+  `bureau/relay/linear-api-key` — because the relay's deploy used to copy the
+  operator's key into that secret, which would silently put every parking
+  reason and escalation the relay writes on the operator's budget. Every home
+  is resolved and judged, and `one_user_per_identity` says every home of an
+  identity is the same user as its first. The operator runs, with
+  `LINEAR_API_KEY_FLEET`, `LINEAR_API_KEY_RELAY` and `LINEAR_API_KEY` in the
+  environment: `python3 scripts/check_linear_identities.py check`. A key that
+  is absent is `UNKNOWN` and exits non-zero, never OK.
 
 ---
 

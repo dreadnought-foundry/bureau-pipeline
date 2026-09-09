@@ -32,6 +32,22 @@
     "workflow reads `secrets.LINEAR_API_KEY`. `lives_in` says where each key",
     "is actually kept. A reader who conflates the two will misfile a key.",
     "",
+    "WHY A HOME (DRE-3334). One identity's key is not kept in one place, and",
+    "each copy can rot on its own. `homes` declares the extra ones: a short",
+    "`name` unique within the identity, the `env` the check reads that copy",
+    "from (unique across this whole file), and `lives_in`. The top-level `env`",
+    "and `lives_in` ARE the identity's first home. The fleet's second home is",
+    "the relay Lambda's key: until agent-bureau PR #2299 the relay's deploy",
+    "copied the operator's `LINEAR_API_KEY` into it on every deploy, and that",
+    "variable has been the bureau-tools key since 2026-09-05 — one routine",
+    "deploy would have put every parking reason, escalation and receipt the",
+    "relay writes on the operator's user and the operator's budget, with",
+    "nothing on the board looking any different. The deploy guard that stops",
+    "that lives in the other repo; this check outlives any deploy script, so",
+    "after a relay deploy one command with the relay's key exported says whose",
+    "budget the relay is on. `one_user_per_identity` is the rule it owes:",
+    "every home of an identity must be the same user as its first home.",
+    "",
     "No user ids here on purpose: an id pinned in a file is the thing that",
     "goes stale on the next rotation. The display name is the declared fact;",
     "the check prints the id it resolved so the operator can record it.",
@@ -47,10 +63,17 @@
       "name": "fleet",
       "display_name": "Agent-Bureau",
       "env": "LINEAR_API_KEY_FLEET",
-      "lives_in": "GitHub Actions secret LINEAR_API_KEY in every product repo (read by every workflow as secrets.LINEAR_API_KEY), and the relay Lambda's environment in agent-bureau",
+      "lives_in": "GitHub Actions secret LINEAR_API_KEY in every product repo (read by every workflow as secrets.LINEAR_API_KEY), and the operator's own copy of it in .env as LINEAR_API_KEY_FLEET",
       "purpose": "The user every unattended actor writes to Linear as: the sweeps, the planner, merge-sync, the relay and the console.",
       "must_not_be_admin": true,
-      "must_differ_from": ["operator-tools"]
+      "must_differ_from": ["operator-tools"],
+      "homes": [
+        {
+          "name": "relay",
+          "env": "LINEAR_API_KEY_RELAY",
+          "lives_in": "AWS Secrets Manager bureau/relay/linear-api-key — the relay Lambda's own key in agent-bureau, exported by the operator into LINEAR_API_KEY_RELAY before this check runs"
+        }
+      ]
     },
     {
       "name": "operator-tools",
