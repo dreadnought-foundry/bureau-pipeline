@@ -77,6 +77,20 @@ agent-bureau repo; the third clause added by DRE-2103).
   fleet ever pins `stable` directly — retiring the manual cut — is **not
   decided by DRE-2551** and is not in its scope. Until that decision is
   made and written here, `vN` is the only fleet-facing channel.
+- **Vendor actions ride the same channel, by SHA (DRE-3418).** Every
+  third-party `uses:` in `.github/workflows` and `.github/actions` is pinned
+  to a 40-char commit sha with its release in a trailing `# v<version>`
+  comment; `scripts/check_action_pins.py` runs in `tests.yml` and fails on
+  any that is not. Our own `dreadnought-foundry/*` references are exempt by
+  name — they ARE the channel described above. So a vendor release reaches
+  the fleet exactly the way our own code does: **Dependabot proposes, the
+  harness proves, the channel carries.** The bump arrives as a PR the critic
+  reviews and the harness exercises against the real action, and only then
+  does `stable` — and later a hand-cut `vN` — carry it. Before this, nothing
+  stood in between: on 2026-09-08 the floating `claude-code-action@v1` tag
+  moved to v1.0.218 and every Claude-running job in the fleet died for 72
+  minutes (DRE-3416). A floating major also gave Dependabot nothing to bump,
+  since a patch release moves the tag silently.
 
 ## Queue behind, never cancel (DRE-3070)
 

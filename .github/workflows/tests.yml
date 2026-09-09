@@ -26,7 +26,7 @@ jobs:
     # holds it there and carries the measurements.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The shared plumbing, dogfooded (DRE-2589). This job used to run THREE
       # pip installs — one from the pinned manifest and two of bare `pyyaml`
       # while requirements-dev.txt pins PyYAML — so two of the three took
@@ -61,6 +61,17 @@ jobs:
       # to @vN silently runs scripts/briefs/standards from @main.
       - name: pipeline_ref threading check
         run: python3 scripts/check_pipeline_ref.py
+      # Vendor action pins (DRE-3418): every third-party `uses:` carries a
+      # 40-char commit sha plus its `# v<version>`, so a vendor release reaches
+      # the fleet only as a Dependabot PR the critic and the harness prove.
+      # On 2026-09-08 the floating `claude-code-action@v1` tag moved to
+      # v1.0.218 and killed every Claude-running job in the fleet for 72
+      # minutes (DRE-3416) — nothing stood between the vendor's release and
+      # production. A floating major also gives Dependabot nothing to bump:
+      # patch releases move the tag silently. `dreadnought-foundry/*` is exempt
+      # by name — our own workflows ride our own harness-proven channel.
+      - name: Third-party actions are pinned to a sha
+        run: python3 scripts/check_action_pins.py
       # One WIP cap (DRE-2529): every path that promotes cards must take the
       # caller's `max_wip`, never a literal. A hardcoded cap makes a repo's
       # deliberate override inert on that path — silently, and only inside
@@ -133,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # WHICH RUNS ACTUALLY NEED THE CONSOLE (DRE-3091 review). This job has no
       # path filter — `on: pull_request` with no `paths:` — so without this step
       # every pull request in this repo, whatever it changed, would put another
@@ -193,7 +204,7 @@ jobs:
         id: console
         if: steps.actsreg.outputs.touched == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -230,7 +241,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # the check walks the PR's whole commit list
       - name: RED test precedes implementation

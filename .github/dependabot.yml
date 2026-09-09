@@ -54,6 +54,16 @@ updates:
     #     update-types: ["version-update:semver-major"]
     # --- end major-reject template ---
 
+  # Every third-party action here is pinned to a 40-char commit sha with its
+  # version in a trailing comment (DRE-3418, guarded by
+  # scripts/check_action_pins.py). Dependabot reads that comment to know which
+  # release the sha is, and rewrites both when it proposes the next one — so a
+  # vendor release arrives as a PR the critic reviews and the harness proves,
+  # never as a tag moving underneath us (DRE-3416: `claude-code-action@v1`
+  # moved to v1.0.218 and killed every Claude-running job in the fleet for 72
+  # minutes). A SHA pin is also what gives this entry anything to bump at all:
+  # on a floating major, a patch release moves the tag silently and the weekly
+  # sweep sees no change.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -63,3 +73,13 @@ updates:
       actions-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    # The DRE-2064 house shape, copied — NOT a new policy. agent-bureau's
+    # `.github/dependabot.yml` already runs this on its github-actions entry,
+    # and docs/dependabot-major-rejection.md describes the template above.
+    # Majors land only by a deliberate card, because the alternative is what
+    # DRE-2064 measured: a rejected major re-files at the next rung down (~19
+    # PRs, #1948–#1963), one critic review each. Pinning by sha makes every
+    # vendor release a PR, so without this the walk-down arrives weekly.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

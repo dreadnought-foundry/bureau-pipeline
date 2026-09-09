@@ -79,7 +79,7 @@ jobs:
       # everything quota-heavy after pool selection uses the worker token.
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -94,7 +94,7 @@ jobs:
         id: minted
         run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ steps.app.outputs.token }}
           fetch-depth: 0
@@ -103,7 +103,7 @@ jobs:
       # Checked out AFTER the product repo so the product checkout's clean
       # step can't wipe it; excluded from the product repo's git view so an
       # agent `git add -A` can never commit it.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -130,7 +130,7 @@ jobs:
         id: probe_2
         if: ${{ env.BUREAU_APP_ID_2 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -138,7 +138,7 @@ jobs:
         id: probe_3
         if: ${{ env.BUREAU_APP_ID_3 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -146,7 +146,7 @@ jobs:
         id: probe_4
         if: ${{ env.BUREAU_APP_ID_4 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -173,7 +173,7 @@ jobs:
       # empty — so the chain always falls through to the original app pair.
       - name: Mint worker token (selected pool app)
         id: worker
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -520,7 +520,7 @@ jobs:
         id: pushtoken
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -543,7 +543,7 @@ jobs:
         id: pushtoken2
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -613,7 +613,7 @@ jobs:
       - name: Upload rescued work
         if: always() && steps.rescue.outputs.patch != ''
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rescue-${{ github.event.client_payload.identifier }}.patch
           path: ${{ steps.rescue.outputs.patch }}

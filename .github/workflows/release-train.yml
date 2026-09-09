@@ -135,11 +135,11 @@ jobs:
       # actions/checkout's default is the default branch's head, which is
       # where the walk starts — the commit CI just ran on is one candidate,
       # and a newer merge already on the branch is another.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -214,12 +214,12 @@ jobs:
       # The plan's chosen sha, not the branch: whatever landed while this job
       # queued is the next run's business, not this one's — and the script
       # runs in a checkout of exactly the commit it is handed as RELEASE_SHA.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ matrix.sha }}
           fetch-depth: 0
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
@@ -236,7 +236,7 @@ jobs:
       # BEFORE the script runs, because the script's contract is that its
       # identity is already there (standards/release-train.md).
       - name: Assume the caller's release identity
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ secrets.RELEASE_ROLE_ARN }}
           role-session-name: release-train-${{ matrix.surface }}
