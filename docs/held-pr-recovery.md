@@ -52,10 +52,11 @@ person, not a bot.
 Then stop. **Your comment starts the fix loop by itself** (DRE-3451), normally
 within a minute: agent-fix's job gate admits a User-authored PR comment, and
 its first step validates it with `fix_context.standing_decision` — the same
-four predicates the sweep reads — before anything else in the job runs. That
-run posts the same `🔓 fix-restart-on-operator-decision` receipt the sweep
-posts, so the sweep sees the answer as consumed and does not dispatch a second
-agent onto the branch.
+four predicates the sweep reads — before the job resolves the PR or spends
+anything. Once the attempt is actually starting, the run posts the same
+`🔓 fix-restart-on-operator-decision` receipt the sweep posts, so the sweep
+sees the answer as consumed and does not dispatch a second agent onto the
+branch, and it takes the card out of the parked lane the way the sweep does.
 
 If that run never arrives — GitHub drops the comment event, or the run is
 evicted by concurrency — the reconcile sweep is the backstop and picks the
