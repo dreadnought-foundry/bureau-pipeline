@@ -883,7 +883,7 @@ jobs:
             # DRE-1885 building-card guard would re-route this In Progress →
             # Backlog move to Todo and reintroduce that loop.
             python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Backlog" --park || true
-          elif [ "$FAILED_DELIVERY" = "failed" ]; then
+          elif [ "$FAILED_DELIVERY" = "failed" ] && [ -n "$RESCUE_PATCH" ] && [ -f "$RESCUE_PATCH" ]; then
             # THE RUN STILL DELIVERS (DRE-3262). The work is committed on a disk
             # that is about to be destroyed, GitHub refused the push on both of
             # the rescue's own fresh mints, and the patch is already uploaded as
@@ -915,11 +915,27 @@ jobs:
             # requeue rebuilds from nothing the work the artifact is holding
             # (~90 minutes and the run's cost again), and if the delivery does
             # not land, the sweep's re-check spends the dead-run budget instead.
+            #
+            # AND ONLY WHEN THE PATCH REALLY EXISTS. `write_patch` can fail —
+            # a root commit with no merge base, a full disk — and when it does,
+            # push_rescue says plainly that "this run's disk is the only copy of
+            # the work". There is nothing to deliver then and nothing to name on
+            # the card, so this branch stands aside and DRE-3043's remedy takes
+            # the card: the credential-expiry receipt and the requeue below,
+            # which is the only remedy left when the work is genuinely gone.
             python3 .bureau-pipeline/scripts/deliver_rescue.py handoff \
               --card "$CARD" --repo "$DELIVERY_REPO" --run-id "$RUN_ID" \
               --artifact "$RESCUE_ARTIFACT" --status "$RESCUE_PUSH_STATUS" \
               --stderr "$RESCUE_ERROR" || true
-          elif [ "$PR_STATE" = "UNREADABLE" ]; then
+          elif [ "$PR_STATE" = "UNREADABLE" ] && [ "$FAILED_DELIVERY" != "failed" ]; then
+            # …UNLESS THE RUN PLAINLY FAILED TO DELIVER (DRE-3262). Reached only
+            # when there is no artifact to hand a delivery job — the branch
+            # above took the deliverable case — and then this run's work is
+            # genuinely gone, so a rebuild is the remedy and the death branch
+            # below owns it. It was the SAME expired token that refused the push
+            # and 401'd this lookup, so letting the failed lookup answer is
+            # letting the cause of the problem certify that there isn't one.
+            #
             # GitHub would not tell us whether a PR exists (403, rate limit,
             # network). "Could not tell" is NOT "no PR" — parsing a failed read
             # as emptiness is what yanked healthy cards around on 2026-06-28
