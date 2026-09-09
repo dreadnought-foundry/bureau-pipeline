@@ -21,18 +21,30 @@ refused, and `workflow_dispatch` is untouched. The gate is evaluated the way
 GitHub evaluates it (`fix_concurrency.evaluate`), not matched as text.
 """
 
+import json
 import os
+import re
+import subprocess  # nosec B404 — executes this repo's own workflow step body
 import sys
+import tempfile
 import unittest
 
 import yaml
 
-REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
 import fix_concurrency as fc  # noqa: E402
+import fix_context  # noqa: E402
+import pipeline_act  # noqa: E402
+
+# The restart act's idempotency key, off the registry that declares it.
+RESTART_TAG = pipeline_act.tag("fix-loop-restarted")
 
 WORKFLOW = os.path.join(REPO_ROOT, ".github", "workflows", "agent-fix.yml")
+FIXTURE = os.path.join(
+    os.path.dirname(__file__), "fixtures", "fix-decision-thread-pr2365.json"
+)
 
 QA = "agent-bureau-qa-bot[bot]"
 WORKER = "agent-bureau-bot[bot]"
@@ -149,6 +161,125 @@ class TheFirstStepDecidesTest(unittest.TestCase):
         # empty — the Resolve gate must read that as "carry on", never as a
         # skip, or every conflict repair and sweep restart dies here.
         self.assertIn("!=", str(step_with("id", "pr")["if"]))
+
+
+# ── the decision step, executed for real ───────────────────────────────────
+#
+# Parsing the YAML proves the step is wired; it does not prove the shell in it
+# works. This runs the shipped `run:` block against a stub `gh`, the way
+# tests/test_fix_dispatch_clears_stale_hold.py runs Announce and Resolve —
+# a gate nobody has executed is a gate nobody has tested.
+
+GH_STUB = '''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+if args[0] == "api":
+    payload = json.load(open(os.environ["THREAD"]))
+    print(json.dumps([payload] if "--slurp" in args else payload))
+else:
+    sys.stderr.write("unexpected gh call: %r\\n" % (args,))
+    sys.exit(2)
+'''
+
+
+def substitute(run: str, values: dict) -> str:
+    """Apply the `${{ ... }}` substitutions Actions would make, and prove none
+    survive — an unsubstituted expression is a hole in the harness."""
+    def repl(m):
+        key = m.group(1).strip()
+        if key not in values:
+            raise AssertionError(f"harness has no value for ${{{{ {key} }}}}")
+        return values[key]
+
+    out = re.sub(r"\$\{\{([^}]*)\}\}", repl, run)
+    assert "${{" not in out
+    return out
+
+
+def run_decision_step(thread: list, comment_type: str = "User") -> dict:
+    """Execute the shipped 'Decide a comment-triggered start' body. Returns
+    the step outputs Actions would have collected."""
+    with tempfile.TemporaryDirectory() as td:
+        os.makedirs(os.path.join(td, "bin"))
+        stub = os.path.join(td, "bin", "gh")
+        with open(stub, "w", encoding="utf-8") as fh:
+            fh.write(GH_STUB)
+        os.chmod(stub, 0o755)  # nosec B103 — a test stub on PATH
+        os.symlink(REPO_ROOT, os.path.join(td, ".bureau-pipeline"))
+        thread_file = os.path.join(td, "thread.json")
+        with open(thread_file, "w", encoding="utf-8") as fh:
+            json.dump(thread, fh)
+        out_file = os.path.join(td, "step-output")
+        open(out_file, "w", encoding="utf-8").close()
+
+        body = substitute(
+            step_with("id", "decision")["run"],
+            {"github.event.issue.number": str(PR), "github.repository": "o/r"},
+        )
+        proc = subprocess.run(  # nosec B603 B607 — fixed argv, our own body
+            ["bash", "-c", body], cwd=td, capture_output=True, text=True,
+            env={
+                **os.environ,
+                "PATH": os.path.join(td, "bin") + os.pathsep + os.environ["PATH"],
+                "GITHUB_OUTPUT": out_file, "RUNNER_TEMP": td,
+                "THREAD": thread_file, "GH_TOKEN": "t",
+                "WORKER_LOGIN": WORKER, "COMMENT_TYPE": comment_type,
+            },
+        )
+        assert proc.returncode == 0, proc.stderr
+        outputs = dict(
+            line.split("=", 1)
+            for line in open(out_file, encoding="utf-8").read().splitlines()
+            if "=" in line
+        )
+    outputs["_stdout"] = proc.stdout
+    return outputs
+
+
+def held_thread() -> list:
+    with open(FIXTURE, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+class TheDecisionStepRunsTest(unittest.TestCase):
+    """The shipped shell, executed."""
+
+    def test_a_standing_decision_sets_start_decision(self):
+        out = run_decision_step(held_thread())
+        self.assertEqual(out["start"], "decision", out["_stdout"])
+
+    def test_an_answer_already_receipted_sets_start_skip(self):
+        thread = held_thread() + [{
+            "user": {"login": WORKER, "type": "Bot"},
+            "created_at": "2026-09-08T23:20:00Z",
+            "body": f"🔓 {RESTART_TAG}: picked up.",
+        }]
+        out = run_decision_step(thread)
+        self.assertEqual(out["start"], "skip")
+        self.assertIn(fix_context.SKIP_CONSUMED, out["_stdout"])
+
+    def test_ordinary_conversation_sets_start_skip(self):
+        thread = held_thread()[:-1] + [{
+            "user": {"login": HUMAN, "type": "User"},
+            "created_at": "2026-09-08T23:20:00Z",
+            "body": "any update on this one?",
+        }]
+        out = run_decision_step(thread)
+        self.assertEqual(out["start"], "skip")
+        self.assertIn(fix_context.SKIP_NO_DECISION, out["_stdout"])
+
+    def test_a_bot_trigger_carries_on_into_resolve(self):
+        # The qa-bot verdict door: not a decision start, and NOT a skip —
+        # gating it out would kill the DRE-1988 route this card must not touch.
+        out = run_decision_step(held_thread(), comment_type="Bot")
+        self.assertEqual(out["start"], "verdict")
+
+    def test_the_step_never_echoes_a_comment_body(self):
+        # DRE-1996: every body on that thread is attacker-writable, and a run
+        # log is a publication.
+        out = run_decision_step(held_thread())
+        self.assertNotIn("the critic is right about the payload",
+                         out["_stdout"])
 
 
 class TheProceedingRunReceiptsTheRestartTest(unittest.TestCase):

@@ -135,10 +135,10 @@ RESTART_PROMISE = (
     "need to run anything by hand."
 )
 SKIP_NOTICE = (
-    "If the pipeline cannot read your comment as a decision it skips instead "
-    "of starting the loop, and says so here rather than leaving you waiting. A "
-    "skip means the wording was not recognised, never that your answer was "
-    "rejected."
+    "If your wording is not recognised as a decision the run skips instead of "
+    "starting the loop, and the pipeline posts a note here telling you how to "
+    "re-post it. A skip means the wording was not recognised, never that your "
+    "answer was rejected."
 )
 ANSWER_FORMAT = (
     "**How to answer this** — comment on this PR from your own account with a "
