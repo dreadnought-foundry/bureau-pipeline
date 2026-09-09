@@ -419,14 +419,34 @@ class TestNoLabelFlagOrLaneSkipsPlanning:
         route on — and the run is failing anyway, so the clause is what makes
         that explicit rather than incidental. All three are the classifier's own
         outcomes; none is a label, an input or a lane.
+
+        DRE-3409 added the fourth, and it is the one clause here that is not
+        about the card at all — it is about the RUN. `Duplicate-dispatch guard`
+        refuses a planner dispatch that was queued behind another run on the
+        same epic, or one whose epic has already left the lane it was fired
+        for. That is not a card skipping Planning, which is what this class
+        exists to forbid: the card does not move, and the planning it is owed
+        is being done (or has just been done) by the run this one duplicates.
+        Refusing it is what makes ONE Planning entry produce ONE planner run.
+        The seed incident is DRE-3244, where five runs planned one epic in 42
+        minutes because each queued run pulled the epic back out of Green Light
+        and the relay dispatched again on that entry.
+
+        The clause carries no label, no input and no lane, so the rule this
+        class enforces is untouched — and `planning_escalation.workflow_problems`,
+        which is the general enforcer rather than this change-detector, reads
+        the same workflow and says so.
         """
         steps = _steps()
         route = _step("planning_route.py decide")
         assert route["if"].strip() == (
             "steps.gate.outputs.bounced != 'true' && "
+            "steps.dedupe.outputs.skip != 'true' && "
             "steps.classify.outputs.escalate != 'true' && "
             "steps.classify.outputs.requeue != 'true'"
         )
+        assert planning_escalation.workflow_problems(
+            WF.read_text(encoding="utf-8")) == []
         assert steps  # the workflow parsed
 
 

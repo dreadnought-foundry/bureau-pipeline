@@ -169,6 +169,65 @@ jobs:
           python3 .bureau-pipeline/scripts/validate_card.py gate \
             "${{ github.event.client_payload.identifier }}"
 
+      # --- The planner's duplicate-dispatch guard (DRE-3409) ----------------
+      #
+      # SEED INCIDENT: DRE-3244, 2026-09-08 — five planner runs in 42 minutes,
+      # eight lane moves, three full plans, three critic passes, one epic. No
+      # critic and no person sent it back; the mover was THIS FILE. The thread
+      # carries all eight moves and all five runs:
+      # https://linear.app/dreadnoughtfoundry/issue/DRE-3244
+      #
+      # `Route — plan or activate` below is the one writer of `Planning` inside
+      # a plan run, and it writes it on every run whose trigger lane is not
+      # `in progress`. That is correct for a dispatch being served promptly and
+      # wrong for one that waited: the stub groups plan runs per card
+      # (`agent-<identifier>`, `cancel-in-progress: false`, self-plan.yml), so a
+      # second dispatch does not die — it QUEUES, and starts the moment the run
+      # ahead of it finishes, on a board that has moved on. Run 34281711446 is
+      # the whole defect in five lines of its own log:
+      #
+      #   21:38:22  Green Light → Planning   (the move nobody could explain)
+      #   21:38:27  run 34281711446 created  (the relay, on that Planning entry)
+      #   21:52:45  run 34279893974 completes — the epic is in Green Light
+      #   21:52:50  run 34281711446's job STARTS, 14 minutes after its dispatch
+      #   21:53:02  `DRE-3244 → Planning`    ← the route step below
+      #
+      # Each queued run undid the Green Light the run ahead of it had just
+      # written, and the relay turned that Planning entry into the next
+      # dispatch. The loop sustains itself and only a person stopped it.
+      #
+      # The guard is the build rail's own (`dedupe_dispatch.py`, DRE-2057),
+      # reused: it refuses when another run of this workflow on this card was
+      # in flight when THIS dispatch was created — measured against the
+      # dispatch's creation time, because a start-time liveness check sees
+      # nothing (the run ahead has just ended) — or when the epic has already
+      # left the lane the dispatch was fired for. Fail-open on every read, and
+      # exit 0 always: this gates a PLAN, not a merge, and a false refusal
+      # would strand an epic with nobody planning it.
+      #
+      # Q1 (actor): unchanged — the guard adds no trigger and no new identity;
+      # it READS Actions with the bot token this job already mints. Q2 (store):
+      # no new secret. Q3 (retry): a refused dispatch is a clean success, so
+      # the medic sees nothing to retry and `dead_run` nothing to requeue.
+      # Q4 (limits): `workflow_id`, not the workflow NAME — a product stub may
+      # call this reusable under any name. Q5 (our crash): every read fails
+      # open independently, so a GitHub blip costs the overlap half and a
+      # Linear blip the lane half, and neither costs the epic its plan.
+      - name: Duplicate-dispatch guard
+        id: dedupe
+        if: steps.gate.outputs.bounced != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          # The lane whose ENTRY the relay fired this dispatch on, lower-cased
+          # — the same value the route step reads as FROM. Through env, never
+          # interpolated into the shell line (DRE-1996).
+          TRIGGER_STATE: ${{ github.event.client_payload.trigger_state }}
+        run: |
+          python3 .bureau-pipeline/scripts/dedupe_dispatch.py plan-gate \
+            "${{ github.event.client_payload.identifier }}"
+
       # --- Planning classifies the card itself (DRE-3029) -------------------
       #
       # The shape below is the only judgement on the fast path, and until this
@@ -209,7 +268,7 @@ jobs:
       # variables claude-code-action is handed.
       - name: Classify the card — one-off, epic or wave
         id: classify
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The same credential the model-selection step below reads, through
@@ -315,7 +374,7 @@ jobs:
 
       - name: Planning shape — which route this card takes
         id: shape
-        if: steps.gate.outputs.bounced != 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
@@ -329,7 +388,7 @@ jobs:
       # planner prompt uses this value to name the slug it is planning for.
       - name: Resolve repo slug
         id: repo
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         run: echo "slug=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       # Model selection: the planner's OWN ladder (DRE-3015). It is the one
@@ -353,7 +412,7 @@ jobs:
       # which model each plan attempt used.
       - name: Select model
         id: model
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           # The probe authenticates with the same CLAUDE token the agent uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -388,7 +447,7 @@ jobs:
       # step reads as approval.
       - name: Route — plan or activate
         id: route
-        if: steps.gate.outputs.bounced != 'true' && steps.shape.outputs.route == 'epic'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.shape.outputs.route == 'epic'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The caller's cap, never a literal (DRE-2529). Through env, not
@@ -478,7 +537,7 @@ jobs:
       # route, through the same sanitizing stage (DRE-2721).
       - name: Sanitize untrusted epic text
         id: card
-        if: steps.gate.outputs.bounced != 'true'
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         env:
           RAW_TITLE: ${{ github.event.client_payload.title }}
           RAW_DESCRIPTION: ${{ github.event.client_payload.description }}
