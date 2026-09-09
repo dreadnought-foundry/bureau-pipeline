@@ -6,8 +6,12 @@
 # ON DEMAND, NEVER ON A SCHEDULE (decision D5, approved 2026-08-23): a groomer
 # running unattended over two hundred cards before anyone has checked its calls
 # is the same mistake as trusting a critic's verdicts before comparing them to a
-# held-back set. The calling stub carries workflow_dispatch and nothing else,
-# and tests/test_groomer_wiring.py fails the build if a cron appears.
+# held-back set. Since DRE-3337 (green-lit 2026-09-08) the calling stub carries
+# two on-demand triggers and no cron: a `workflow_dispatch` — the only route to
+# `propose` — and a `groom-drain` `repository_dispatch` fired by the CEO's
+# Approve on the console, which reaches `drain` and nothing else.
+# tests/test_groomer_wiring.py fails the build if a cron appears, if that
+# trigger set widens, or if `propose` becomes reachable from the dispatch.
 #
 # Reusable workflow: permissions live in the calling stub (contents: read).
 name: Groomer (reusable)
