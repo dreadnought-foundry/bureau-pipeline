@@ -1537,7 +1537,12 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
     Linear does not know about used to be skipped after the card existed, so
     the create reported success and the card carried a dependency nothing
     enforced. Checked here, the answer is the same one every other broken card
-    gets: no card, and the reason named."""
+    gets: no card, and the reason named.
+
+    SO IS THE TITLE/LABEL REPO AGREEMENT (DRE-3278). The repo is written twice —
+    the title's `<slug>: …` prefix and the `repo:` label that routes — and
+    nothing compared them, so DRE-3275 was filed for the repo its files live in
+    and labelled for the one its epic happened to carry."""
     problem = body_problem(description)
     if problem is not None:
         raise LinearError(
@@ -1554,6 +1559,13 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
             + ", ".join(gaps)
             + ". "
             + hint
+        )
+
+    mismatch = validate_card.repo_title_mismatch(title, labels)
+    if mismatch is not None:
+        raise LinearError(
+            f"{kind} REJECTED ({title!r}): {mismatch} Re-label the card (or "
+            "re-title it) so the two name the same repo, and retry."
         )
 
     unresolvable = _unresolvable_blockers(blockers or [])

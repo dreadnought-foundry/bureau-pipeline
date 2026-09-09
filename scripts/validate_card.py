@@ -86,6 +86,12 @@ WANT_REPO = "repo: label (or legacy **Repo:** line)"
 WANT_AGENT = "agent: role label"
 WANT_KNOWN_REPO = "repo: label naming a known repo"
 
+# A card title may name its repo as a `<slug>: …` prefix (`bureau-pipeline: …`,
+# `portico: …`). ANCHORED at the start, like every other title convention the
+# routing vocabulary reads (config/routing-verdicts.json `title_conventions`) —
+# a slug mentioned mid-title is prose about a repo, not a claim about the card.
+_TITLE_REPO_RE = re.compile(r"^\s*([a-z0-9][a-z0-9._-]*)\s*:", re.IGNORECASE)
+
 
 def _repo_label_slugs(labels: list[str]) -> list[str]:
     """Every `repo:<slug>` label's slug, lowercased and owner-stripped — the
@@ -130,6 +136,53 @@ def _has_repo(description: str, labels: list[str], known: set[str] | None = None
     # (avoids the doc-example false positive the relay guards against).
     stripped = _FENCE_RE.sub("", description or "")
     return _REPO_RE.search(stripped) is not None
+
+
+def title_repo_slug(title: str) -> str | None:
+    """The repo slug a card's title claims as its `<slug>: …` prefix, or None.
+
+    Only a KNOWN slug counts (VALID_SLUGS — the same set every other repo
+    question here is answered from). `PROOF: …`, `DEMO: …` and
+    `SIGN-OFF (OPERATOR): …` are title conventions, not repos, and most cards
+    open with an ordinary word before a colon or no colon at all — reading any
+    of those as a repo claim would refuse most of the board.
+    """
+    m = _TITLE_REPO_RE.match(title or "")
+    if not m:
+        return None
+    slug = m.group(1).lower()
+    return slug if slug in VALID_SLUGS else None
+
+
+def repo_title_mismatch(title: str, labels: list[str]) -> str | None:
+    """The card names one repo in its title and a DIFFERENT one in its
+    `repo:` label — the problem, with both halves quoted, or None (DRE-3278).
+
+    The planner writes the repo twice: once as the title prefix its brief tells
+    it to use, once as the label that actually routes the card. Nothing compared
+    them, so DRE-3275 was filed `bureau-pipeline: …` (where both its files live)
+    carrying `repo:agent-bureau`, inherited from its epic — a build run
+    dispatched at a repo that does not contain the files the card names.
+
+    ANY matching `repo:` label clears it: a child that inherited its epic's repo
+    AND carries its own names the right one, and which of two labels routes is a
+    different question this check must not answer by refusing the card. An
+    ABSENT label is `missing()`'s WANT_REPO — reporting the same gap twice in
+    two vocabularies gives the author a fix that is not one.
+    """
+    named = title_repo_slug(title)
+    if named is None:
+        return None
+    labelled = _repo_label_slugs(labels)
+    if not labelled or named in labelled:
+        return None
+    return (
+        f"title names repo {named!r} but the card is labelled "
+        + ", ".join(f"repo:{s}" for s in labelled)
+        + f" — title: {(title or '').strip()!r}. A card's `repo:` label is the "
+        "repo its FILES live in (standards/card-quality.md); fix whichever of "
+        "the two is wrong."
+    )
 
 
 def _has_agent_label(labels: list[str]) -> bool:
@@ -600,7 +653,8 @@ def _fetch_card(linear_ops, identifier: str) -> dict:
 
 def child_problems(title: str, description: str, labels: list[str]) -> list[str]:
     """All reasons a created child is incomplete (empty == valid). Reuses
-    `missing()` for the repo/role contract and linear_ops.body_problem for the
+    `missing()` for the repo/role contract, `repo_title_mismatch` for the
+    title/label repo disagreement (DRE-3278) and linear_ops.body_problem for the
     path-like/empty/placeholder body — the SAME checks the create seam enforces,
     so the sweep and the create path can never disagree.
 
@@ -614,6 +668,9 @@ def child_problems(title: str, description: str, labels: list[str]) -> list[str]
     import linear_ops  # body_problem lives with the create seam
 
     out = list(missing(description, labels))
+    mismatch = repo_title_mismatch(title, labels)
+    if mismatch is not None:
+        out.append(mismatch)
     body = linear_ops.body_problem(description)
     if body is not None:
         out.append(body)

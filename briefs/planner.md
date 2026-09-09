@@ -271,14 +271,33 @@ and for a year after it was written, anything that read it.
   "file-disjoint, parallel" but several cards shared `tailwind.config.ts`;
   they built in parallel, each wrote it differently, and PR #1600 looped
   CONFLICTING for hours as siblings re-collided on that one file, 2026-06-15.)
-- **Operator-routed cards**: a card whose changes land in
-  `dreadnought-foundry/bureau-pipeline` (the shared pipeline repo) cannot be
-  executed by a product-repo agent — engineer credentials are deliberately
-  scoped to the product repo, so the run ends in a blocker after the work is
-  done. Title such cards `bureau-pipeline: ...` and state in the first line:
-  "OPERATOR CARD — agents cannot push to bureau-pipeline; the operator
-  implements this." (Origin: DRE-1346's agent completed the work in-runner
-  and could not push it, 2026-06-13.)
+- **A card whose files live in the pipeline repo is an ORDINARY FLEET CARD**:
+  `dreadnought-foundry/bureau-pipeline` is a dispatch target like any other repo
+  (DRE-1929 Option A; the self-hosting convention in
+  `standards/engineering.md`). The relay routes a `repo:bureau-pipeline` card to
+  it, its stub runs the same build workflow every product repo runs, and an
+  agent builds it through a PR, the critic and the merge gate. So label it
+  `repo:bureau-pipeline` — the `repo:` label names the repo the card's FILES
+  live in, never the repo the work is *about* — and plan it like any other
+  card. Do NOT mark it `needs-human`, and do NOT write it as an operator card.
+  (Origin: DRE-3278. This brief carried the opposite rule for two months after
+  it was retired on 2026-07-11, and on 2026-09-06 the planner filed DRE-3275 —
+  a `config/pipeline-acts.json` row and a `linear_ops.py` helper, both files in
+  the pipeline repo — as an operator card labelled `repo:agent-bureau`, which
+  the operator corrected by hand before approval. Five pipeline cards were
+  agent-built that same day: DRE-3241, DRE-3236, DRE-3263, DRE-3266, DRE-3148.)
+- **The operator-only set is exactly what the `OPERATOR` verdict names**: not
+  code — a deploy, a migration run, a secret, a permission grant, an approval.
+  A repo is never what makes work operator-only; the kind of act is. Route
+  those by verdict (below), not by which repository they touch.
+- **The title's repo prefix and the `repo:` label must agree**: if you title a
+  card `bureau-pipeline: ...` or `portico: ...`, the card carries the matching
+  `repo:<slug>` label. The two are the same fact written twice and only the
+  label routes, so a disagreement dispatches a build run at a repo that does
+  not hold the files. Both planner card-validation seams refuse the mismatch
+  with the two values quoted (`linear_ops` at create, `validate_card
+  check-children` over the finished plan) — a child inherits its epic's
+  `repo:` label, so a cross-repo child needs `--label repo:<slug>` explicitly.
 - **Human/infra work is NOT agent:engineer**: a card that is pure operator /
   AWS / deploy / migration / infra work with NO agent-buildable code in a
   product repo (e.g. "run `cdk deploy`", "flip the prod feature flag", "rotate

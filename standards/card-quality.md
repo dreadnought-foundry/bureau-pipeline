@@ -20,6 +20,17 @@ duplicates.
    description is still ACCEPTED for pre-existing cards so they keep routing,
    but it's deprecated — set the label, don't write the stamp. Fenced code is
    ignored.)*
+
+   **The slug names the repo the card's FILES live in** — never the repo the
+   work is *about*, and never the repo the card's epic happens to sit in. Every
+   repo in the map is a dispatch target, `bureau-pipeline` included, so work in
+   the pipeline repo is an ordinary fleet card labelled `repo:bureau-pipeline`
+   and built by an agent through a PR like any other (the self-hosting
+   convention in `standards/engineering.md`). And **when the title names a repo
+   as a `<slug>: …` prefix, the label must name the same one**: the two are one
+   fact written twice, only the label routes, and both planner card-validation
+   seams refuse the disagreement with the values quoted (DRE-3278 — DRE-3275
+   was titled for the repo holding its files and labelled for its epic's).
 2. An **`agent:*` label** (`agent:engineer`, `agent:frontend`, `agent:devops`,
    `agent:planner`, …).
 
