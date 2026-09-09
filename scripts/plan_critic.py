@@ -251,20 +251,32 @@ def in_flight_children(cards: list[dict]) -> list[tuple[str, str]]:
 #
 # The transcript itself is hidden ("full output hidden for security", held
 # that way by tests/test_execution_failure_detail.py), so this is read off the
-# result blocks, not the turns. Base + per-card: fifteen cards get 80 — 2x the
-# wall round 2 hit, ~2.7x the round that finished, and the planner's own
-# ceiling for WRITING those cards (`--max-turns 80` on the plan step).
-POST_REVIEW_TURNS_BASE = 20        # charter, context, sight, children, thread, result
+# result blocks, not the turns. Base + per-card: fifteen cards get 90 — over 2x
+# the wall round 2 hit, ~3x the round that finished.
+#
+# THE WHOLE BAND MOVED UP WITH THE WEB GRANT (DRE-2785): base 20 → 30, floor
+# 40 → 60, cap 120 → 140. This critic reads the approved plan as the
+# specification agents will build from and asks what is missing — and since the
+# grant, "is that true of the vendor" is a question it can go and ANSWER rather
+# than recall. A search and a fetch per external claim is turns this budget was
+# never measured against; every number here was read off a critic that could
+# not leave the repository. The SHAPE is untouched: the default is still the
+# fifteen-card number, the floor is still the smallest budget a review gets,
+# and the cap is still the QA critic's own retry ceiling — which moved to 140
+# in the same change (scripts/pr_size_strategy.py).
+POST_REVIEW_TURNS_BASE = 30        # charter, context, sight, children, thread, result, + the web
 POST_REVIEW_TURNS_PER_CARD = 4     # round 1 measured ~2.1/card; round 2 needed more
-#: Today's ceiling. Nothing that finished under it gets less room than it had.
-POST_REVIEW_TURNS_FLOOR = 40
+#: The smallest budget a review gets. Nothing that finished under the previous
+#: floor gets less room than it had.
+POST_REVIEW_TURNS_FLOOR = 60
 #: Above this a bigger number only moves the wall (DRE-2924: the review quality
 #: at turn 119 is not the quality at turn 20). The QA critic's retry ceiling.
-POST_REVIEW_TURNS_CAP = 120
+POST_REVIEW_TURNS_CAP = 140
 #: What an UNKNOWN child count gets — the fifteen-card number, never the floor
 #: a fifteen-card plan already died at. A Linear read that failed is unknown,
-#: not zero (standards/console-honesty.md rule 2).
-POST_REVIEW_TURNS_DEFAULT = 80
+#: not zero (standards/console-honesty.md rule 2). Derived, never a second
+#: constant: it is `post_review_turns(15)` and the tests pin the equality.
+POST_REVIEW_TURNS_DEFAULT = 90
 
 
 def post_review_turns(children) -> int:

@@ -491,10 +491,15 @@ jobs:
           # The calling stub grants this token actions access.
           github_token: ${{ github.token }}
           allowed_bots: "*"
+          # 60 since DRE-2785 (was 40), raised with the WebSearch/WebFetch
+          # grant. A diagnosis is exactly the work the web helps most with —
+          # a vendor's status page, a released action's changelog, an issue
+          # someone else already filed — and each of those is a search and a
+          # fetch on top of reading the failed run's logs.
           claude_args: |
-            --max-turns 40
+            --max-turns 60
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Read,Glob,Grep,Write"
+            --allowedTools "Bash,Read,Glob,Grep,Write,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — the shared bureau
             engineering standard (to ground your diagnosis) and the comms

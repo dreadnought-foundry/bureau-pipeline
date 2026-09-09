@@ -299,8 +299,24 @@ class SizeRouterTest(unittest.TestCase):
 
     def test_raising_max_turns_was_not_the_fix(self):
         """The card's explicit `Do not`: a larger budget on an unbounded diff
-        moves the wall. The standard one-pass ceiling is unchanged."""
-        self.assertEqual(pss.turn_budget("standard"), (80, 120))
+        moves the wall, so SIZE is answered by routing, never by turns.
+
+        DRE-2785 raised the standard ceiling 80/120 → 100/140 for a different
+        reason — the critic gained `WebSearch`/`WebFetch`, and checking an
+        external claim costs turns the old number was measured without. That
+        does not touch this rule, and the assertion is written so it cannot
+        quietly become the thing DRE-2924 forbade: the one-pass ceiling stays
+        strictly below the file-list path's, so no raise here can ever make a
+        one-pass review of an oversized diff look survivable.
+        """
+        self.assertEqual(pss.turn_budget("standard"), (100, 140))
+        std_first, std_retry = pss.turn_budget("standard")
+        big_first, big_retry = pss.turn_budget("large")
+        self.assertLess(std_first, big_first)
+        self.assertLess(std_retry, big_retry)
+        # And the raise bought no extra size: routing is decided on files and
+        # lines, and those thresholds are untouched by it.
+        self.assertEqual((pss.LARGE_FILES, pss.LARGE_LINES), (10, 1_500))
 
 
 class TheLargeBlockIsHonestAtTheBottomOfItsBandTest(unittest.TestCase):

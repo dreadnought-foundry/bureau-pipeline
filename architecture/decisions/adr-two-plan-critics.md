@@ -6,7 +6,8 @@
   `.github/workflows/plan.yml` on both routes.
 - **Date:** 2026-08-29
 - **Cards:** DRE-2721 (this design and its build), DRE-2712 (web search for the
-  planner and both critics — a hard prerequisite, not yet shipped), DRE-2720
+  planner and both critics — a hard prerequisite; closed with no pull request
+  and shipped by DRE-2785, to every agent in the fleet at once), DRE-2720
   (the plan artifact both critics read), DRE-2726 (the lane contract that
   already named this critic at the Green Light boundary)
 
@@ -150,10 +151,20 @@ the critic being asked to do more.**
 - A crashed critic never holds a plan (`standards/console-honesty.md` rule 1).
   The result reads `NO_RESULT`, the plan proceeds, and the round is not counted
   against the bound.
-- **Web search is still missing.** DRE-2712 gives the planner and both critics
-  web search in one change, deliberately never separately. Until it lands, the
-  second critic can find a claim about a vendor *suspicious* but cannot check
-  it — which is precisely the failure that put three false claims on `main`.
+- **Web search landed with DRE-2785** (2026-09-09), not with DRE-2712, which
+  closed with no linked pull request and made no grant — so for eleven days
+  after this ADR was accepted the second critic could find a claim about a
+  vendor *suspicious* and could not check it, which is precisely the failure
+  that put three false claims on `main`. It can now: `WebSearch` and
+  `WebFetch` reach both critics and the planner, and every other agent in the
+  roster in the same change, because a writer that can make unverifiable
+  external claims reviewed by a critic that cannot check them is worse than
+  neither. Both critics' ceilings were raised with the grant — the pre stage
+  40 → 60 on each round, the post stage's sized band 40/120 → 60/140 — since
+  checking a claim costs turns the old numbers were measured without. What a
+  fetched page is allowed to do to a critic is `standards/untrusted-content.md`:
+  it is the least trustworthy input this pipeline has, and nothing on it can
+  supply a verdict.
 - The two critics are roster entries (`agents.yaml`) on the advisory ladder,
   with their own assembled context: the pre stage deliberately does NOT read
   the engineering floor or the system shape, because reading them is how it

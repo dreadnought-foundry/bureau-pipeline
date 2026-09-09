@@ -825,7 +825,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.size.outputs.max_turns }}
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Read,Glob,Grep,Write"
+            --allowedTools "Bash,Read,Glob,Grep,Write,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — the bureau
             engineering and architecture standards you review AGAINST, plus the
@@ -1125,7 +1125,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.size.outputs.retry_max_turns }}
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Read,Glob,Grep,Write"
+            --allowedTools "Bash,Read,Glob,Grep,Write,WebSearch,WebFetch"
           prompt: |
             THIS IS THE RETRY (DRE-3304). A first attempt already reviewed
             this exact commit, finished cleanly, and left no verdict anyone

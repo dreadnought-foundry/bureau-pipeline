@@ -59,7 +59,21 @@
 #   trigger   — what starts a run (relay dispatch / GitHub event / sweep)
 #   maxTurns  — hard turn budget passed via claude_args
 #   maxBudget — advisory dollars per run (console display; not enforced)
-#   tools     — allowedTools passed to the agent
+#   tools     — allowedTools passed to the agent. EVERY entry carries
+#               `WebSearch` and `WebFetch` since DRE-2785 — the operator
+#               authorised web access on 2026-08-26 and DRE-2712 closed
+#               without making the grant, so until this card every agent
+#               reasoned about the outside world from training data alone.
+#               ALL of them, in one change, deliberately: a writer that can
+#               make unverifiable external claims, reviewed by a critic that
+#               cannot check them, is worse than neither. A fetched page is
+#               the least trustworthy input this pipeline has — anyone can
+#               author one, and the agent chose to go there — and
+#               `standards/untrusted-content.md` is what governs reading it.
+#               Each entry below also records what happened to its TURN
+#               BUDGET in the same change, because search costs turns and
+#               every ceiling in this file was measured on an agent that
+#               could not leave the repository.
 #   credentials — the credential NAMES the agent step is handed, from its own
 #               env chain and from the action's inputs. NAMES ONLY — never a
 #               value, and never the expression that resolves to one. This
@@ -88,9 +102,16 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
+    # DRE-2785 grants the web and leaves this budget where it is, on purpose.
+    # Every build agent already has the fleet's largest ceiling AND the only
+    # per-card handle on it: `turns:`/`size:` labels pick a reviewed rung from
+    # config/turn-budgets.json (150/250/400, DRE-3097), and 150 is the default
+    # a card that names neither gets. A card whose research makes it expensive
+    # takes a rung; raising the default would spend on every card to pay for
+    # the few.
     maxTurns: 150
     maxBudget: 12
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
@@ -110,9 +131,12 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card (label agent:frontend) → Todo → relay repository_dispatch (agent-execute)"
+    # Web tools since DRE-2785; turn budget unchanged for the same reason as
+    # the engineer above — it shares agent-task.yml's rung selection
+    # (config/turn-budgets.json), which is the per-card handle on the ceiling.
     maxTurns: 150
     maxBudget: 12
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
@@ -136,9 +160,14 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Operator-launched (interactive Claude Code / VS Code task); CI auto-dispatch not yet wired"
+    # Web tools since DRE-2785 — it is in the roster and the card grants ALL
+    # ten, dispatched or not; leaving the one entry nobody routes to without
+    # the grant is how a roster ends up with an exception nobody remembers.
+    # Turn budget unchanged: it declares agent-task.yml's ceiling, and that
+    # ceiling is picked per card from config/turn-budgets.json (DRE-3097).
     maxTurns: 150
     maxBudget: 12
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
@@ -153,9 +182,14 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "Linear card (label agent:devops) → Todo → relay repository_dispatch (agent-execute)"
+    # Web tools since DRE-2785 — the role with the most to gain from them,
+    # since a vendor's current behaviour is the whole subject of
+    # standards/vendor-boundaries.md and the answer moves without telling us.
+    # Turn budget unchanged: shares agent-task.yml's per-card rung selection
+    # (config/turn-budgets.json, DRE-3097).
     maxTurns: 150
     maxBudget: 12
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
@@ -178,9 +212,15 @@ agents:
     # Mirrors agent-fix.yml's --max-turns (DRE-2533); the roster is the
     # console's copy of the fleet's budgets and tests/test_agents_registry.py
     # fails if it drifts from the ceiling the workflow actually runs with.
+    #
+    # Web tools since DRE-2785; ceiling unchanged at 150. This agent re-runs
+    # the same work the engineer's budget was sized for, in the same shape,
+    # and 150 is already the fleet's largest fixed ceiling — a fix round that
+    # needs more turns than a build is a card the review loop should be
+    # handing back, not a budget to widen.
     maxTurns: 150
     maxBudget: 9
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
@@ -205,11 +245,22 @@ agents:
     # PR past the file-list threshold runs at 150/200 instead
     # (scripts/pr_size_strategy.py) — a rare path by design, so the roster
     # keeps reporting the ordinary one.
-    maxTurns: 80
+    #
+    # 100 since DRE-2785 (standard strategy 80/120 → 100/140 in
+    # scripts/pr_size_strategy.py), raised in the change that granted
+    # `WebSearch`/`WebFetch`. This is the agent the grant is FOR: a critic
+    # that cannot check an external claim approves a pull request asserting
+    # something false about a vendor, and checking one costs a search and a
+    # fetch per claim on top of reading the entire diff. The 80 was measured
+    # on a critic that could not do it. A crashed critic writes no verdict,
+    # reconcile retries a bounded number of times, and the pull request
+    # simply sits — so the ceiling moves WITH the capability rather than
+    # after the first death. `large` is unchanged at 150/200.
+    maxTurns: 100
     # Advisory display only. Raised with the ceiling so the console does not
     # show a $3 run for an agent observed at $2.05 in 41 turns.
-    maxBudget: 6
-    tools: [Bash, Read, Glob, Grep, Write]
+    maxBudget: 7
+    tools: [Bash, Read, Glob, Grep, Write, WebSearch, WebFetch]
     # No LINEAR_API_KEY, on purpose (DRE-2052 + DRE-2696): card material
     # reaches the critic through ONE sanitising stage — review_card_context.py —
     # and a live key would let it fetch card prose around that stage. The
@@ -245,9 +296,17 @@ agents:
     # #2064 needed 81 and died one turn past the line while working normally;
     # its retry finished the same content in 77, BELOW the ceiling that had
     # denied it. $3.90 and 14.1 minutes discarded to buy $2.92 of useful work.
+    #
+    # Web tools since DRE-2785; ceiling unchanged at 120/160. The verifier
+    # already sits above the whole measured first-attempt distribution (7,
+    # 61, 65, 81) with 39 turns of headroom, and its job is to drive the
+    # change in front of it rather than to check claims about the outside
+    # world — the least search-hungry of the advisory roles. If that reading
+    # is wrong it shows up as `error_max_turns` on a verify run, which is
+    # loud, and the number moves then.
     maxTurns: 120
     maxBudget: 5
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
@@ -273,9 +332,20 @@ agents:
     # artifact (seven sections, the ```kpis block, a token-built mockup for UI
     # work) on top of decomposing the epic. Shipping that on the old ceiling
     # would be knowingly buying turn-exhaustion deaths (DRE-2312).
-    maxTurns: 80
+    #
+    # 140 with DRE-2785, and the number is TWO corrections at once. DRE-3450
+    # raised plan.yml's `Plan epic` step 80 → 120 on 2026-09-09 — epic
+    # DRE-3419 finished successfully at 85 turns and the action failed the job
+    # for it — and left this line at 80, where it went on matching the wave
+    # route's literal so nothing failed. This entry now reports the ceiling
+    # the epic-planning step actually runs with, and that ceiling goes to 140
+    # with the `WebSearch`/`WebFetch` grant: every downstream build run is
+    # shaped by this plan, so "has this changed" and "what does this vendor
+    # actually do" are worth a search and a fetch here rather than a wrong
+    # assumption written into ten cards. plan.yml's job clock moved with it.
+    maxTurns: 140
     maxBudget: 8
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
     # Unchanged by DRE-2720 on purpose: the plan artifact is published to the
     # document portal from a SEPARATE job in plan.yml, so the portal checkout
@@ -297,10 +367,12 @@ agents:
   # plan.yml share one tool list and one credential set. Neither critic writes
   # code; `Edit` reaches them because it reaches the planner in the same file.
   #
-  # WEB SEARCH IS NOT HERE YET. The card names it a hard prerequisite for the
-  # second critic — a critic that cannot check an external claim will approve a
-  # plan asserting something false about a vendor — and DRE-2712 adds it to the
-  # planner and both critics in one change, deliberately never separately.
+  # WEB SEARCH IS HERE NOW (DRE-2785). It was named a hard prerequisite for
+  # the second critic — a critic that cannot check an external claim will
+  # approve a plan asserting something false about a vendor — and DRE-2712 was
+  # to add it to the planner and both critics in one change. DRE-2712 closed
+  # with no linked pull request and the grant was never made; DRE-2785 made it,
+  # to all ten roster agents at once rather than to these three.
   - name: plan-critic-pre
     role: Plan Critic (before approval)
     category: product
@@ -312,9 +384,14 @@ agents:
     # Structural review of cards that already exist, with the mechanical half
     # (plan_critic.py mechanical) done for it before the first turn. Two of
     # these run at most, and the second only after a send-back.
-    maxTurns: 40
+    #
+    # 40 → 60 with DRE-2785's web grant, on both rounds in plan.yml. The
+    # mechanical half being pre-computed is what made 40 enough; checking
+    # whether a plan's external premise is still true is work nothing can
+    # pre-compute, and it costs a search and a fetch per premise.
+    maxTurns: 60
     maxBudget: 3
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
@@ -328,9 +405,16 @@ agents:
     model: claude-sonnet-5  # top of the `advisory` ladder
     # END generated model
     trigger: "Approved epic activated (agent-plan dispatch, activate route) — runs before the children promote"
-    maxTurns: 40
+    # The FLOOR of a band, not a literal: this review's ceiling is sized per
+    # plan (`plan_critic.post_review_turns` — base + 4/card, floored, capped),
+    # so the roster reports the smallest budget it can run with. DRE-2785
+    # moved the whole band up with the web grant: base 20 → 30, floor 40 → 60,
+    # cap 120 → 140. This is the critic reading the approved text AS the
+    # specification agents will build from, so "is that true of the vendor" is
+    # the question it most needs to be able to answer rather than recall.
+    maxTurns: 60
     maxBudget: 3
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
@@ -344,9 +428,15 @@ agents:
     model: claude-sonnet-5  # top of the `advisory` ladder
     # END generated model
     trigger: "workflow_run failed twice (attempt 1 auto-retries without an agent)"
-    maxTurns: 40
+    # Ceiling 40 → 60 with DRE-2785's web grant. Diagnosis is the work the web helps
+    # most with and the 40 was measured without it: a vendor's status page, a
+    # released action's changelog, an issue someone else already filed. The
+    # whole class this agent exists for — DRE-3416, where a floating action
+    # tag moved and killed every Claude-running job in the fleet — is
+    # answerable in one search and unanswerable from training data.
+    maxTurns: 60
     maxBudget: 3
-    tools: [Bash, Read, Glob, Grep, Write]
+    tools: [Bash, Read, Glob, Grep, Write, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]
     briefPath: null
@@ -361,9 +451,14 @@ agents:
     model: claude-opus-5  # top of the `workhorse` ladder
     # END generated model
     trigger: "workflow_run — default-branch CI conclusion=failure (event-driven; no polling; ≤2 attempts per failing SHA)"
+    # Web tools since DRE-2785; ceiling unchanged at 100. A red main is
+    # repaired against a failure this repo's own suite reproduces, and the
+    # bound that matters is ≤2 attempts per failing SHA rather than the turn
+    # count. Widening the budget of the agent that runs unattended on the
+    # default branch is the one place to be slowest about it.
     maxTurns: 100
     maxBudget: 10
-    tools: [Bash, Edit, Write, Read, Glob, Grep]
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
     credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
                   BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
     repoScope: [caller, dreadnought-foundry/bureau-pipeline]

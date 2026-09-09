@@ -60,8 +60,11 @@ DEFAULT_BRANCH = "main"
 DEFAULT_AGENT_CLI = "npx --yes @anthropic-ai/claude-code@latest"
 
 # Mirrors agent-task.yml's claude_args: same turn budget, same tool surface.
+# The tool list is pinned against the workflow's own by
+# tests/test_web_access_grant.py — a harness granting less than production
+# proves the wrong agent obeys the pre-submit gate.
 MAX_TURNS = 150
-ALLOWED_TOOLS = "Bash,Edit,Write,Read,Glob,Grep"
+ALLOWED_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
 
 # One agent run's wall-clock ceiling. Well under harness.yml's job timeout so a
 # hung agent fails its scenario with a named timeout instead of killing the run.

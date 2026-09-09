@@ -437,7 +437,7 @@ jobs:
           claude_args: |
             --max-turns 120
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
             operating context: the shared bureau standards for the verifier
@@ -586,7 +586,7 @@ jobs:
           claude_args: |
             --max-turns 160
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — your assembled
             operating context: the shared bureau standards for the verifier

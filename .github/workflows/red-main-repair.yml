@@ -355,7 +355,7 @@ jobs:
           claude_args: |
             --max-turns 100
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — the shared bureau
             engineering and comms standards you must work to — then

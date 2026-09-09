@@ -2567,7 +2567,8 @@ class TheDeadReviewCli(unittest.TestCase):
         gho = os.path.join(self.tmp, "gho")
         out = self._run("post-turns", "--children", "15", "--github-output", gho)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn("max_turns=80", open(gho).read())
+        # 90 since DRE-2785 widened the band with the web-tool grant.
+        self.assertIn("max_turns=90", open(gho).read())
 
     def test_post_turns_never_fails_on_a_count_it_cannot_read(self):
         gho = os.path.join(self.tmp, "gho")

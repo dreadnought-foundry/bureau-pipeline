@@ -405,7 +405,7 @@ jobs:
           claude_args: |
             --max-turns ${{ steps.model.outputs.turns || 150 }}
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             Read .bureau-pipeline/agent-context.md FIRST — it is your assembled
             operating context: the shared bureau standards for your role plus

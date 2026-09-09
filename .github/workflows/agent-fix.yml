@@ -1048,7 +1048,7 @@ jobs:
           claude_args: |
             --max-turns 150
             ${{ steps.model.outputs.model_arg }}
-            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep,WebSearch,WebFetch"
           prompt: |
             ${{ steps.safe.outputs.escalation }}
             You are the fixing agent for PR #${{ steps.pr.outputs.number }} in this
