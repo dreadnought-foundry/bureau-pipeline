@@ -61,8 +61,14 @@ import pipeline_act  # noqa: E402
 _PATH = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_./-]*\.(?:yml|yaml|py|json|md)")
 
 # The state that means a run was dispatched and is expected to report back —
-# the one state for which any bound exists at all.
+# the one state that reads its bound off a workflow's own job timeout.
 _DISPATCHED = "dispatched"
+
+# The kind added by DRE-3389: an act that says the ordinary work is still
+# moving. It leaves the work `unchanged` and still declares a number, because
+# something IS expected to speak next — the number is measured rather than read
+# off a timeout.
+_PROGRESS = "progress"
 
 
 def _doc() -> dict:
@@ -79,11 +85,14 @@ def _first(doc: dict) -> dict:
 
 
 class TestEveryActDeclaresItsCadence:
-    def test_the_registry_still_declares_nineteen_acts(self):
+    def test_the_registry_still_declares_twenty_two_acts(self):
         """The card counts them. If an act is added, it declares a cadence with
         the rest of its row or this goes red — which is the whole point of the
-        field being data rather than a default."""
-        assert len(pipeline_act.acts()) == 19
+        field being data rather than a default.
+
+        Nineteen when DRE-3298 wrote this; twenty-two since DRE-3389 added the
+        three LIFECYCLE acts under the `progress` kind."""
+        assert len(pipeline_act.acts()) == 22
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
@@ -113,13 +122,22 @@ class TestEveryActDeclaresItsCadence:
     def test_a_dispatched_act_declares_a_number_and_every_other_declares_null(self):
         """The mechanical rule, pinned. A `dispatched` act has a run coming back
         and takes that run's own bound; every other act has handed the work to a
-        person, and no workflow declares how long a person takes."""
+        person, and no workflow declares how long a person takes.
+
+        A `progress` act (DRE-3389) is the one exception, and it is an exception
+        to the REASON rather than to the rule: it announces that ordinary work
+        is still moving, so something IS expected to speak next — the next
+        heartbeat, the next review run, the next gate wake. Its bound is not a
+        job timeout, because nothing times a healthy build; it is measured, and
+        `test_the_numbers_are_the_ones_the_workflows_declare` below is where the
+        measurement has to show itself."""
         for name in pipeline_act.acts():
             entry = pipeline_act.record(name)
-            if entry["state"] == _DISPATCHED:
+            if entry["state"] == _DISPATCHED or entry["kind"] == _PROGRESS:
                 assert isinstance(entry["cadence_s"], int), (
-                    f"{name} dispatched a run — the silence after which that run "
-                    "reads as stuck is the run's own job timeout"
+                    f"{name} expects something to speak next — a dispatched run "
+                    "reads as stuck past its own job timeout, and ordinary work "
+                    "past the silence that was measured for it"
                 )
             else:
                 assert entry["cadence_s"] is None, (
@@ -131,7 +149,13 @@ class TestEveryActDeclaresItsCadence:
     def test_the_numbers_are_the_ones_the_workflows_declare(self):
         """Read off the source, never invented. `timeout-minutes: 65` on
         qa-review's review job and `timeout-minutes: 120` on agent-fix's fix job
-        are the only two bounds any act in this registry waits on."""
+        are the two bounds the dispatching acts in this registry wait on.
+
+        A `progress` act has no such bound to read — no workflow declares how
+        long a healthy build may go quiet — so its number is MEASURED instead,
+        and the row owes the measurement in its `why`: how many runs, when, and
+        the longest green gap the sample held. Either way nothing is invented:
+        the number is read off something, and the row says off what."""
         bounds = {
             ".github/workflows/qa-review.yml": 65 * 60,
             ".github/workflows/agent-fix.yml": 120 * 60,
@@ -147,10 +171,19 @@ class TestEveryActDeclaresItsCadence:
             if entry["cadence_s"] is None:
                 continue
             source = [p for p in _PATH.findall(entry["cadence_why"]) if p in bounds]
-            assert source, f"{name}: its reason names no workflow carrying a bound"
-            assert entry["cadence_s"] == bounds[source[0]], (
-                f"{name}: declares {entry['cadence_s']}s but {source[0]} declares "
-                f"{bounds[source[0]]}s"
+            if source:
+                assert entry["cadence_s"] == bounds[source[0]], (
+                    f"{name}: declares {entry['cadence_s']}s but {source[0]} "
+                    f"declares {bounds[source[0]]}s"
+                )
+                continue
+            assert entry["kind"] == _PROGRESS, (
+                f"{name}: its reason names no workflow carrying a bound, and only "
+                "a measured progress act is allowed to have none"
+            )
+            assert "DRE-3388" in entry["why"], (
+                f"{name}: a measured cadence owes its measurement in `why` — "
+                "sample size, date and the longest green gap"
             )
 
 
