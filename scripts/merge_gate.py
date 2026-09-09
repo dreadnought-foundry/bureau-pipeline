@@ -8,7 +8,7 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3.
+The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → 4.
 
 FRESHNESS IS NOT A GATE (DRE-2416, CEO decision 2026-08-20 recorded on
 DRE-2597; the rule lives in agent-bureau's
@@ -166,6 +166,29 @@ not a critic catch).
    - Same authorship rule as the critic: a forged FAIL could stall merges,
      a forged PASS could mask a real FAIL.
 
+4. DRAFT (DRE-3467) — GitHub's own `isDraft` for the PR. GitHub will not
+   merge a draft under any circumstances: `mergePullRequest` answers
+   "Pull Request is still a draft" and `gh pr merge` exits 1. The gate
+   asked every other question about the head and never that one, so on
+   2026-09-08 it decided `merge` for PR #323 (head 09b52e93, `isDraft:
+   true`) twice, and the run went red twice on a pull request whose code
+   nothing was wrong with. A draft is `human` — the not-ready arm
+   condition D already built: merge-gate.yml posts the honest
+   "waiting for human merge" state ONCE, exits 0, and touches nothing.
+   Marking the PR ready for review is the human act, and the gate merges
+   it on its next wake; nothing about the decision is remembered.
+
+   Evaluated LAST, after 1-3, deliberately: a draft with red CI or no
+   bound verdict is ordinary work in progress — the rest of this pipeline
+   already reads a draft that way (reconcile.py skips drafts in its
+   conflict sweep, its no-checks watchdog and its no-verdict sweep: "a
+   draft is work in progress, not a stranding") — and it reads as today's
+   `wait`, with no note posted. The note lands only for the case this
+   condition exists for, where the draft flag is the ONE thing standing
+   between the pull request and `main`. Condition 0 keeps its position
+   ahead of it: a conflicted draft still routes to the fix agent, because
+   the branch has to be reconciled with its base whatever the flag says.
+
 STRUCTURED / ANCHORED verdict parsing (DRE-1992 scope note, 2026-07-09):
 a comment merely QUOTING a verdict marker must not count as one. A comment
 is a verdict comment only if its FIRST LINE starts with the marker
@@ -186,7 +209,10 @@ Contract with merge-gate.yml:
     of GET /repos/{repo}/compare/{base}...{head_sha} — the content-binding
     record, DRE-2340; its `.status` is reported as a note and gates
     nothing, DRE-2416), --merge-state (GitHub's own `mergeStateStatus` for
-    the PR — the conflict record, DRE-2416), --review-workflows (optional
+    the PR — the conflict record, DRE-2416), --is-draft (GitHub's own
+    `isDraft` for the PR as the JSON literal `true`/`false` — the draft
+    record, DRE-3467; omitted claims not-a-draft, anything else is exit 2),
+    --review-workflows (optional
     comma-separated allowlist of review workflow paths), --head-branch /
     --pr-author / --pr-commits-file (the raw REST payload of GET
     pulls/{pr}/commits) — the dependabot-policy record (DRE-2039) AND the
@@ -209,9 +235,10 @@ head); `hold` means an explicit negative verdict is standing
 (REQUEST_CHANGES, Verifier FAIL) and only a new verdict lifts it;
 `conflict` means the branch cannot merge until it is reconciled with its
 base (DRE-2416) and the workflow dispatches the fix agent; `human` means
-the gate will NEVER merge this PR (a dependabot major / unprovable semver
-level — DRE-2039): the workflow posts that state once and stops. None of
-the four merges.
+the gate will not merge this PR as it stands and no event it watches will
+change that — a person must act, by merging a dependabot major by hand
+(DRE-2039) or by marking a draft ready for review (DRE-3467): the workflow
+posts that state once and stops. None of the four merges.
 """
 
 from __future__ import annotations
@@ -269,6 +296,14 @@ STALE_STATUSES = frozenset({"behind", "diverged"})
 # UNKNOWN) are not conflicts and never route to the fix agent — matching the
 # shell arm this replaced, which tested this one literal.
 CONFLICTING_MERGE_STATE = "DIRTY"
+
+# The draft record (DRE-3467) as `gh pr view --json isDraft` renders it: the
+# JSON literal, lower-cased. Omitted ('') is not-a-draft — the pre-DRE-3467
+# behavior for every caller that never passes it. Anything ELSE is a caller
+# that broke, and main() exits 2 rather than guessing: a mistyped value must
+# not read as "not a draft" and re-arm the very failure this condition is
+# here to stop.
+DRAFT_VALUES = {"": False, "true": True, "false": False}
 
 # Dependabot policy (DRE-2039). The author check anchors the leniency to
 # the real Dependabot App — GitHub reserves the "[bot]" suffix, so no user
@@ -492,6 +527,28 @@ def evaluate_conflict(merge_state) -> Optional[Decision]:
     return None
 
 
+def evaluate_draft(is_draft) -> Optional[Decision]:
+    """Condition 4 (DRE-3467). None = not a draft, proceed. A draft is
+    `human`: GitHub refuses to merge one at all, so no wake of this gate can
+    ever change the answer, and the honest state belongs on the PR rather
+    than in a failed merge command.
+
+    Evaluated LAST (see the module docstring): reaching it means CI is
+    green, the critic's APPROVE is bound to this head and the verifier is
+    satisfied — the draft flag is the only thing left, which is exactly what
+    the note says.
+    """
+    if is_draft:
+        return Decision(
+            "human",
+            "the pull request is still a draft — GitHub refuses to merge a "
+            "draft (mergePullRequest), so the gate cannot either; everything "
+            "else is green, so marking it ready for review is all that is "
+            "left and the gate merges it on its next wake",
+        )
+    return None
+
+
 def currency_note(compare_status) -> Optional[str]:
     """The audit line for a head that is behind its base (DRE-2416).
 
@@ -675,8 +732,9 @@ def decide(
     pr_commits=(),
     head_content_id: Optional[str] = None,
     merge_state: str = "",
+    is_draft: bool = False,
 ) -> Decision:
-    """The whole gate: conditions 0 → D → 1 → 2 → 3, first blocker wins.
+    """The whole gate: conditions 0 → D → 1 → 2 → 3 → 4, first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
     `head_branch` / `pr_author` / `pr_commits` are the dependabot-policy
@@ -700,7 +758,12 @@ def decide(
     the PR's own contribution at the CURRENT head, computed by main() from
     the compare payload. None (the default, and the fail-closed direction
     on a truncated or blipped record) means verdicts bind the head SHA
-    alone. `pr_commits` doubles as the carry's condition 4."""
+    alone. `pr_commits` doubles as the carry's condition 4.
+
+    `is_draft` is the draft record (DRE-3467) — condition 4, evaluated LAST
+    so a draft that is not otherwise ready keeps reading as today's `wait`.
+    The default (False) reproduces the pre-DRE-3467 behavior for every
+    caller that never passes it."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -750,6 +813,14 @@ def decide(
             decision.content_id = head_content_id
         return decision
 
+    # Condition 4 LAST (DRE-3467): reaching it means every other condition
+    # said merge, so the note the workflow posts is about the draft flag and
+    # nothing else. Routed through _decided so a verdict carried across a
+    # head change is still explained on the PR.
+    blocked = evaluate_draft(is_draft)
+    if blocked:
+        return _decided(blocked)
+
     if carried:
         reason = (
             f"CI green + critic APPROVE bound to {critic_sha or head_sha}, "
@@ -793,6 +864,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="GitHub's mergeStateStatus for the PR — the "
                              "conflict record (DRE-2416). DIRTY routes to "
                              "the fix agent; omitted claims no conflict")
+    parser.add_argument("--is-draft", default="",
+                        help="GitHub's own isDraft for the PR (the JSON "
+                             "literal true/false) — the draft record "
+                             "(DRE-3467). GitHub never merges a draft, so a "
+                             "draft is `human`; omitted claims not-a-draft")
     parser.add_argument("--review-workflows",
                         default=",".join(DEFAULT_REVIEW_WORKFLOWS),
                         help="comma-separated paths of the review workflow "
@@ -830,6 +906,15 @@ def main(argv=None) -> int:
     # means the token minting step broke — fail loud, never fail open.
     if not args.qa_login.endswith("[bot]") or len(args.qa_login) <= len("[bot]"):
         _die(f"--qa-login must be a GitHub App login (…[bot]), got {args.qa_login!r}")
+    # DRE-3467: a value that is neither the JSON literal nor absent means the
+    # caller broke. Fail LOUD (exit 2, nothing merges) rather than reading it
+    # as "not a draft" — a silent default here is the failure this condition
+    # exists to stop, wearing a typo.
+    draft_raw = (args.is_draft or "").strip().lower()
+    if draft_raw not in DRAFT_VALUES:
+        _die(f"--is-draft must be true or false (GitHub's own isDraft), "
+             f"got {args.is_draft!r}")
+    is_draft = DRAFT_VALUES[draft_raw]
 
     try:
         with open(args.check_runs_file) as f:
@@ -893,7 +978,7 @@ def main(argv=None) -> int:
     decision = decide(
         args.head_sha, args.qa_login, check_runs, comments, review_suites,
         compare_status, args.head_branch, args.pr_author, pr_commits,
-        head_content_id, args.merge_state,
+        head_content_id, args.merge_state, is_draft,
     )
     for note in decision.notes:
         print(f"note={note}")

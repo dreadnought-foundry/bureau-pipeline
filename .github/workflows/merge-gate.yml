@@ -1,8 +1,11 @@
 # Deterministic merge gate: merges an agent PR when ALL conditions hold —
 # the branch does not conflict with its base (DRE-2416), every CI check
-# green, AND the latest QA Critic verdict is APPROVE **for the PR's current
+# green, the latest QA Critic verdict is APPROVE **for the PR's current
 # head commit** (DRE-1990: the verdict embeds the SHA it reviewed; a missing
-# or stale SHA is treated as no verdict). The merge uses the qa-bot identity
+# or stale SHA is treated as no verdict), AND the pull request is not a
+# DRAFT (DRE-3467 — GitHub never merges one, so the gate posts the honest
+# waiting-for-human state instead of failing on the merge command). The
+# merge uses the qa-bot identity
 # (distinct GitHub App), so author != merger is enforced by identity, not
 # policy. No human in the loop; no agent claims trusted — all inputs are
 # read from GitHub's own records.
@@ -218,6 +221,20 @@ jobs:
           # the re-read poll.
           MSTATE=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)
 
+          # The draft record (DRE-3467): GitHub will not merge a draft under
+          # any circumstances — `mergePullRequest` answers "Pull Request is
+          # still a draft" and the merge command at the end of this step
+          # exits 1. The gate
+          # asked every other question about this head and never that one,
+          # so PR #323 was decided `merge` twice and the run went red twice
+          # on code nothing was wrong with. Read from GitHub's own record,
+          # like every other input here, and handed to condition 4.
+          # NO `|| true` fallback, deliberately: an unreadable draft state
+          # kills the step under `set -e`, exactly as the MSTATE and SHA
+          # reads above do. Defaulting to "not a draft" on a blip would
+          # re-arm the failure this fixes.
+          IS_DRAFT=$(gh pr view "$PR" --json isDraft --jq .isDraft)
+
           # Gather the decision inputs from GitHub's own records; the rules
           # live in scripts/merge_gate.py (DRE-1992 — conditions 0-3: no
           # merge conflict with the base (DRE-2416 — a conflicted branch
@@ -287,6 +304,7 @@ jobs:
             --workflow-runs-file /tmp/workflow-runs.json \
             --compare-file /tmp/compare.json \
             --merge-state "$MSTATE" \
+            --is-draft "$IS_DRAFT" \
             --review-workflows ".github/workflows/qa-review.yml,.github/workflows/pr-review.yml" \
             --head-branch "$BRANCH" \
             --pr-author "$AUTHOR" \
