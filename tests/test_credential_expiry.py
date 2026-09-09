@@ -705,9 +705,21 @@ class TheWorkflowWiring(unittest.TestCase):
         self.assertIn("nohup", run)
 
     def test_the_report_step_hands_the_classifier_what_it_observed(self):
-        run = _step("Report result to Linear")["run"]
+        step = _step("Report result to Linear")
+        run = step["run"]
         self.assertIn("--work-on-runner", run)
-        self.assertIn("steps.rescue.outputs.local_work", run)
+        # DRE-3484: the rescue's observation still reaches the classifier, but
+        # it arrives as env and is read as a shell variable rather than being
+        # interpolated into the script. A run block carrying even one `${{ }}`
+        # is compiled by GitHub into a single expression whose format string is
+        # the whole script; at ~23,000 characters this one crossed the 21,000
+        # ceiling and made the file unparseable fleet-wide. Assert the wiring at
+        # both ends so neither half can be dropped.
+        self.assertEqual(
+            step["env"]["RESCUE_LOCAL_WORK"],
+            "${{ steps.rescue.outputs.local_work }}",
+        )
+        self.assertIn('LOCAL_WORK="$RESCUE_LOCAL_WORK"', run)
         self.assertIn("--credential-expiry", run)
         self.assertIn(check_agent_result.DEATH_CREDENTIAL_EXPIRY, run)
 

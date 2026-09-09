@@ -260,19 +260,16 @@ def run_report(
         if os.path.exists(path):
             os.remove(path)
 
-    run = substitute(report_step()["run"], {
-        "github.server_url": "https://github.com",
-        "github.repository": REPO,
-        "github.run_id": "33468806067",
-        "steps.claude.outputs.execution_file": exec_file,
-        # DRE-3043: the Push rescue step's observation. None of the three runs
-        # this fixture drives left committed work on the runner — attempts 2
-        # and 3 never reached the agent at all — so it defaults to "false" and
-        # the classifications below are the ones they had before that step
-        # existed. tests/test_credential_expiry_scenario.py drives the run
-        # that DID leave work behind through this same block.
-        "steps.rescue.outputs.local_work": local_work,
-    })
+    # DRE-3484: the Report block carries NO `${{ }}` any more. Its five values
+    # arrive as env instead (below), because a run block containing even one
+    # interpolation is compiled by GitHub into a single expression whose format
+    # string is the whole script — and at ~23,000 characters this one exceeded
+    # the 21,000 ceiling, made agent-task.yml unparseable, and took every
+    # repo's build lane down for 3h20m on 2026-09-09 with no job and no log.
+    # The empty table is deliberate and load-bearing: substitute() raises on any
+    # expression it has no value for and asserts none survive, so this harness
+    # now FAILS THE MOMENT an interpolation is put back into the block.
+    run = substitute(report_step()["run"], {})
     script = os.path.join(td, "report.sh")
     with open(script, "w", encoding="utf-8") as fh:
         fh.write("set -eo pipefail\n" + run)
@@ -293,6 +290,19 @@ def run_report(
             PRE_AGENT_LOG=pre_log,
             GH_TOKEN="test",
             LINEAR_API_KEY="test-key",
+            # The five the step now declares in `env:` instead of interpolating
+            # (DRE-3484). Same values the substitution table above carried.
+            BUREAU_SERVER_URL="https://github.com",
+            BUREAU_REPOSITORY=REPO,
+            BUREAU_RUN_ID="33468806067",
+            CLAUDE_EXECUTION_FILE=exec_file,
+            # DRE-3043: the Push rescue step's observation. None of the three
+            # runs this fixture drives left committed work on the runner —
+            # attempts 2 and 3 never reached the agent at all — so it defaults
+            # to "false" and the classifications below are the ones they had
+            # before that step existed. tests/test_credential_expiry_scenario.py
+            # drives the run that DID leave work behind through this same block.
+            RESCUE_LOCAL_WORK=local_work,
             LINEAR_STUB_LOG=log,
             LINEAR_STUB_PRIOR=prior,
             LINEAR_STUB_LABELS=labels,
