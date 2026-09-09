@@ -48,10 +48,18 @@ def _all_workflows() -> dict[str, dict]:
     return {p.name: yaml.safe_load(p.read_text()) for p in sorted(WORKFLOWS.glob("*.yml"))}
 
 
-def _call_job(doc: dict) -> dict:
+def _call_jobs(doc: dict) -> list[dict]:
+    """Every job in a stub — and every one of them calls the reusable.
+
+    It used to be "a stub has exactly one job", which stopped being true in
+    DRE-3366: self-groomer.yml carries a second job for its `repository_dispatch`
+    drain so that `mode: drain` can be a LITERAL, out of reach of the payload.
+    One job per trigger, never a job that does something else — which is the
+    property these assertions actually want, and the count never was.
+    """
     jobs = doc.get("jobs") or {}
-    assert len(jobs) == 1, "a stub has exactly one job"
-    return next(iter(jobs.values()))
+    assert jobs, "a stub has at least one job"
+    return list(jobs.values())
 
 
 # stub file -> (reusable workflow file it must call, required workflow name)
@@ -65,8 +73,10 @@ EXPECTED_STUBS = {
     "self-agent-fix.yml": ("agent-fix.yml", "Agent Fix"),
     "self-red-main-repair.yml": ("red-main-repair.yml", "Red-Main Repair"),
     "pr-review.yml": ("qa-review.yml", "QA Review"),
-    # DRE-2683. Manual dispatch only, by decision D5 — the trigger shape is
-    # asserted in tests/test_groomer_wiring.py, which fails if a cron appears.
+    # DRE-2683, amended by DRE-3337. On demand, never on a schedule: a manual
+    # dispatch, plus a `groom-drain` repository_dispatch that reaches the drain
+    # and only the drain. The trigger shape is asserted in
+    # tests/test_groomer_wiring.py, which fails if a cron appears.
     "self-groomer.yml": ("groomer.yml", "Groomer"),
     # DRE-3016. Manual dispatch only, following the same D5 reasoning — the
     # trigger shape is asserted in tests/test_planner_score.py.
@@ -81,23 +91,23 @@ class StubCallsReusableTest(unittest.TestCase):
     def test_every_stub_calls_its_reusable_at_qualified_main(self):
         for stub, (reusable, _) in EXPECTED_STUBS.items():
             doc = _load(stub)
-            job = _call_job(doc)
-            self.assertEqual(
-                job.get("uses"),
-                f"{PIPELINE}/.github/workflows/{reusable}@main",
-                f"{stub} must call its reusable workflow via the fully "
-                f"qualified @main ref (never a local ./ reference)",
-            )
+            for job in _call_jobs(doc):
+                self.assertEqual(
+                    job.get("uses"),
+                    f"{PIPELINE}/.github/workflows/{reusable}@main",
+                    f"{stub} must call its reusable workflow via the fully "
+                    f"qualified @main ref (never a local ./ reference)",
+                )
 
     def test_every_stub_inherits_secrets(self):
         for stub in EXPECTED_STUBS:
-            job = _call_job(_load(stub))
-            self.assertEqual(
-                job.get("secrets"), "inherit",
-                f"{stub} must carry `secrets: inherit` — the reusable "
-                f"workflows read LINEAR_API_KEY / bot app keys from the "
-                f"caller's secrets",
-            )
+            for job in _call_jobs(_load(stub)):
+                self.assertEqual(
+                    job.get("secrets"), "inherit",
+                    f"{stub} must carry `secrets: inherit` — the reusable "
+                    f"workflows read LINEAR_API_KEY / bot app keys from the "
+                    f"caller's secrets",
+                )
 
     def test_stub_names_match_the_fleet_reference(self):
         for stub, (_, name) in EXPECTED_STUBS.items():
