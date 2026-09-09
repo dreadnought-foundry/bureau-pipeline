@@ -1,0 +1,33 @@
+[
+  {
+    "_note": "The comment thread of a held agent PR in REST shape — exactly what GET /repos/{repo}/issues/{n}/comments returns, which is the payload fix_context parses and the ONLY shape that carries user.type (DRE-3451: the sweep re-fetches over REST for this reason, and the comment-triggered gate has to read the same thing). Written from PR #2365's 2026-09-08 sequence as recorded on DRE-3451 — decision posted 16:13 PT, restart 16:28 PT — with the pipeline's own bodies abridged to the lines the predicates key on. It is a reconstruction of that timeline, not a byte-for-byte capture of the API response.",
+    "id": 900001,
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-08T21:44:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @1111111111111111111111111111111111111111\n\n## For the fixing agent\nRound 1: the gate admits a payload it never validates."
+  },
+  {
+    "id": 900002,
+    "user": {"login": "agent-bureau-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-08T22:05:00Z",
+    "body": "🔧 Fix attempt 1 pushed — CI and critic review re-running."
+  },
+  {
+    "id": 900003,
+    "user": {"login": "agent-bureau-qa-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-08T22:31:00Z",
+    "body": "🔎 QA Critic — VERDICT: REQUEST_CHANGES cause:defect @2222222222222222222222222222222222222222\n\n## For the fixing agent\nRound 2: the same gate, read the other way."
+  },
+  {
+    "id": 900004,
+    "user": {"login": "agent-bureau-bot[bot]", "type": "Bot"},
+    "created_at": "2026-09-08T22:58:00Z",
+    "body": "🛑 Fix budget exhausted — 2 review rounds in a row made no progress (the stop budget is 2). Holding for a human decision."
+  },
+  {
+    "id": 900005,
+    "user": {"login": "smeed652", "type": "User"},
+    "created_at": "2026-09-08T23:13:00Z",
+    "body": "**Operator decision** — the critic is right about the payload; validate it the way the sweep does and keep the narrow author gate."
+  }
+]
