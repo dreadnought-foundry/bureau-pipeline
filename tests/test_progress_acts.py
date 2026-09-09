@@ -388,6 +388,22 @@ class TestTheConsumerGuardCoversTheNewActs(unittest.TestCase):
         for name in MEASURED:
             self.assertIn(name, report.unknown)
 
+    def test_a_failing_report_names_what_the_console_does_carry(self):
+        """A cross-repo failure is read by somebody who cannot open the other
+        file — that is why this guard lives on the producer side at all. "The
+        console does not carry `review-run`" leaves them one question short:
+        did it ship under another word? Both reports answer it in the same
+        message rather than costing a round trip."""
+        gap = guard.check(doc=_doc(), source='ACTS = {"reviewer-down": "hold"}')
+        self.assertIn("reviewer-down", gap.text())
+
+        paced = guard.cadences(
+            doc=_doc(),
+            source='ACTS = {"reviewer-down": "hold", "some-other-name": 6_300_000}',
+        )
+        self.assertFalse(paced.ok, paced.text())
+        self.assertIn("some-other-name", paced.text())
+
     def test_the_critics_receipt_carries_the_cadence_answer_too(self):
         """The receipt qa-review hands the critic on a registry PR reported
         whether the console KNOWS each act. A reviewer told only that would

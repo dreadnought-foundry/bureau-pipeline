@@ -119,6 +119,11 @@ SOURCE_ENV = "BUREAU_CONSOLE_ACTS_FILE"
 #: MUST be confirmed against the console rather than merely not contradicted.
 PROGRESS_KIND = "progress"
 
+#: How much of the consumer's vocabulary a failing report prints back. Enough
+#: to answer "did it ship under another word" for a file the reader cannot
+#: open, capped so one bad row cannot bury the fixes above it in a wall.
+_VOCABULARY_SHOWN = 60
+
 _TIMEOUT = 15
 
 
@@ -442,7 +447,21 @@ class CadenceReport:
         if not lines:
             return f"OK — every declared cadence is the console's. {head}"
         verdict = "OK with notes" if self.ok else f"{len(self.mismatched)} difference(s)"
-        return "\n".join([f"{verdict}. {head}", *lines])
+        return "\n".join([f"{verdict}. {head}", *lines, self.carried()])
+
+    def carried(self) -> str:
+        """Which keys the console stands a number beside — the same courtesy
+        `Report.carried()` pays, one field along. "No number could be located
+        for `review-run`" is unanswerable without it for a reader who cannot
+        open the console's file."""
+        keys = sorted(self.by_key or ())
+        shown = keys[:_VOCABULARY_SHOWN]
+        more = f" (+{len(keys) - len(shown)} more)" if len(keys) > len(shown) else ""
+        return (
+            "What the console DOES stand a number beside, so an act declared "
+            f"under another word is findable rather than guessed at: "
+            f"{', '.join(shown)}{more}"
+        )
 
 
 def cadences(doc: dict | None = None, source: str | None = -1, reason: str = "",
@@ -538,8 +557,28 @@ class Report:
         if self.ok:
             return f"OK — every declared act is known to the console. {head}"
 
-        return "\n".join(
-            [f"{len(self.unknown)} act(s) the console does not know. {head}", *self.fixes()]
+        return "\n".join([
+            f"{len(self.unknown)} act(s) the console does not know. {head}",
+            *self.fixes(),
+            self.carried(),
+        ])
+
+    def carried(self) -> str:
+        """What the consumer DOES know, printed whenever something is missing.
+
+        A cross-repo failure is read by somebody who cannot open the other file
+        — that is the whole reason this guard exists on the producer side — so
+        "the console does not carry `review-run`" leaves them one question
+        short. Naming the vocabulary answers "did it ship under another word"
+        in the same message, without a second round trip.
+        """
+        vocabulary = sorted(self.vocabulary or ())
+        shown = vocabulary[:_VOCABULARY_SHOWN]
+        more = f" (+{len(vocabulary) - len(shown)} more)" if len(vocabulary) > len(shown) else ""
+        return (
+            f"What the console's {self.spec.get('symbol')} DOES carry, so the "
+            f"same act under another word is findable rather than guessed at: "
+            f"{', '.join(shown)}{more}"
         )
 
 
