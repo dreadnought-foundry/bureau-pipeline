@@ -299,6 +299,11 @@ class HarnessContext:
     # push (DRE-2490). Never logged — agent_run builds every log line from the
     # repo slug, never from the clone URL.
     worker_token: str = ""
+    # The commit this run is PROVING — harness.yml's resolved checkout, the
+    # sha its `integration-harness` stamp binds (DRE-3486). Read-only, and
+    # used for one thing: saying which commit of `agent-task.yml` GitHub
+    # actually compiled when the sandbox fired it. Empty off a local CLI run.
+    tested_sha: str = ""
     verdict_timeout: float = VERDICT_TIMEOUT_SECONDS  # ≥ the critic's own cap
     merge_timeout: float = MERGE_TIMEOUT_SECONDS
     poll_interval: float = POLL_INTERVAL_SECONDS
