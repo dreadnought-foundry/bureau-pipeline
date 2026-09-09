@@ -62,6 +62,12 @@ import pipeline_act  # noqa: E402
 CONFIG = ROOT / "config" / "pipeline-acts.json"
 AN_ACT = "fix-attempt-landed"
 
+# The kind that composes no receipt at all (DRE-3389). A progress act says the
+# ordinary work is still moving — the ⏳ heartbeat the build agent already
+# posts, the review run, the gate's re-check — so there is no body for the one
+# writer to compose and no tag for anything to suppress on.
+_PROGRESS = "progress"
+
 
 def _tree(tmp_path: Path, *, workflow: str = "", script: str = "") -> str:
     """A miniature repo: one workflow, one script. The guard reads a root, so
@@ -784,12 +790,36 @@ class TestTheShippedTree:
         something this guard reads — a poster site, or the `--act=` seam the
         two workflow-side acts reach the writer through. Without it a declared
         act could be posted raw from a pathway nobody scans, which is exactly
-        how a hand-reverted `flag_stranded()` left every check green."""
+        how a hand-reverted `flag_stranded()` left every check green.
+
+        A `progress` act (DRE-3389) is the exception, and the test below is the
+        other half of stating it: it posts NOTHING. The ⏳ heartbeat already
+        exists and is written by the build agent, and the review run and the
+        gate's re-check are read by the console off GitHub — so there is no
+        body for this writer to compose."""
         composed = {s.composed_as for s in guard.sites() if s.composed_as}
         flagged = {act for _, _, act in guard.shell_act_flags()}
         for name in pipeline_act.acts():
+            if pipeline_act.kind(name) == _PROGRESS:
+                continue
             assert name in composed or name in flagged, (
                 f"{name} is declared but nothing the guard can see composes it"
+            )
+
+    def test_a_progress_act_composes_nothing(self):
+        """The exemption above, stated as the claim it actually is rather than
+        left as a hole. A progress act's tag is not an idempotency key — a
+        heartbeat repeats five times a build — so putting a trailer on one
+        would hand a repeating comment a key that `tag in body` suppresses on.
+        This card posts nothing new, and this is what says so next year."""
+        composed = {s.composed_as for s in guard.sites() if s.composed_as}
+        flagged = {act for _, _, act in guard.shell_act_flags()}
+        progress = [n for n in pipeline_act.acts() if pipeline_act.kind(n) == _PROGRESS]
+        assert progress, "the registry declares no progress act at all"
+        for name in progress:
+            assert name not in composed and name not in flagged, (
+                f"{name} composes a receipt — a progress act announces nothing "
+                "new, and its tag is not a key anything may suppress on"
             )
 
     def test_ci_runs_the_guard(self):

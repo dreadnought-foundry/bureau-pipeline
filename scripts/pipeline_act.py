@@ -2,11 +2,11 @@
 """The pipeline's acts (DRE-2825) — one registry, one writer.
 
 An ACT is something the pipeline does on its own and then announces: a
-refusal, a recovery, or a hold. `config/pipeline-acts.json` declares every one
-of them — its tag, its kind, the state it leaves the work in, the next actor,
-what it discharges, and the workflow expected to act on it. This module is the
-only reader and the only writer, exactly as `routing_verdict.py` is for the
-routing vocabulary.
+refusal, a recovery, a hold or a progress act. `config/pipeline-acts.json`
+declares every one of them — its tag, its kind, the state it leaves the work
+in, the next actor, what it discharges, and the workflow expected to act on
+it. This module is the only reader and the only writer, exactly as
+`routing_verdict.py` is for the routing vocabulary.
 
 ## Why a registry at all
 
@@ -78,9 +78,10 @@ journey-bar sweep; the pipeline supplied neither, so every row read `unknown`.
 
 The rule is mechanical and the numbers are read off what already runs. An act
 whose `state` is `dispatched` has a run coming back, and its cadence is that
-run's own job timeout — `qa-review.yml`'s 65 minutes, `agent-fix.yml`'s 120.
-Every other act has handed the work to a person, no workflow declares how long
-a person takes, and the cadence is `null`.
+run's own job timeout — `qa-review.yml`'s 65 minutes, `agent-fix.yml`'s 120. A
+`progress` act (below) expects the ordinary work to speak again, and its cadence
+is MEASURED. Every other act has handed the work to a person, no workflow
+declares how long a person takes, and the cadence is `null`.
 
 `null` is a DECLARATION, not an omission — the console renders it as "parked",
 never as "overdue" — so a row that leaves the field out fails `check`, and so
@@ -94,6 +95,31 @@ one as a number).
 The trailer grammar is UNCHANGED by all of it. The cadence is read off the
 registry by whoever needs it; putting it on a receipt would move every receipt
 body this pipeline has ever posted, which is the DRE-2825 warning above.
+
+## The fourth kind — `progress` (DRE-3389)
+
+`progress` is the ordinary life of a card: the build's ⏳ n/5 heartbeat, the
+review run on a head, the gate's re-check on a pull request. It was the hole the
+first three kinds left — a refusal, a recovery and a hold all happen when
+something has gone wrong, so every act carrying a cadence was a `recovery` and
+the console had a bound to pulse against only in the hour after a fix attempt.
+
+A progress act **holds nothing and repairs nothing**: it leaves the work
+`unchanged`, with the same actor still on it. It is never a hold and never a
+recovery.
+
+**The idempotency-key rule above does not apply to it.** A heartbeat repeats by
+design, five times a build, so a `progress` tag is not a suppression key and
+nothing counts the receipts that carry one. All three declare `adopted: false`,
+which here means "this tag is not, and will not become, a live key" rather than
+"a later card will emit it" — `problems()` still proves the tag is absent from
+the tree, which is what keeps that claim honest.
+
+Their cadences are MEASURED, because nothing times a healthy build. DRE-3388
+measured all three against live Actions runs on 2026-09-08 and declared them in
+the console's `console/backend/receipts.py` FIRST; this file copies them, each
+row's `why` carries the measurement, and `check_act_consumers.py cadences` reads
+both files and fails on any difference.
 
 ## What this module does NOT do
 

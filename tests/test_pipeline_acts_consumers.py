@@ -505,6 +505,27 @@ class TestTheLiveConsoleKnowsEveryDeclaredAct(unittest.TestCase):
             self.skipTest(report.text())
         self.assertTrue(report.ok, report.text())
 
+    def test_every_cadence_this_file_declares_is_the_one_the_console_declares(self):
+        """DRE-3389, and the second half of the same contract.
+
+        Knowing the act is not enough once the row carries a NUMBER the console
+        renders as a claim about a specific piece of work. DRE-3388 measured the
+        three lifecycle cadences against live Actions runs and declared them in
+        `console/backend/receipts.py` first; this file copies them. Two files
+        holding the same number is a number that can drift, so it is read out of
+        both and compared here rather than remembered.
+
+        It lives beside its neighbour above and skips on the same condition, so
+        the `act registry consumers` job — which mints the console token and
+        fails on any skip — is what turns "could not read the console" into a
+        red build. The reader's own behaviour is pinned offline in
+        `tests/test_progress_acts.py`.
+        """
+        report = guard.cadences()
+        if report.skipped:
+            self.skipTest(report.text())
+        self.assertTrue(report.ok, report.text())
+
 
 if __name__ == "__main__":
     unittest.main()

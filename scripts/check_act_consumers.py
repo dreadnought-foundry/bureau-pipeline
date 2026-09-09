@@ -41,9 +41,36 @@ is KNOWN when either its tag or its name is one of them: both are unique
 identifiers of the act, and an act the console has never heard of carries
 neither.
 
+## …and the same question about the NUMBER on the row (DRE-3389)
+
+Knowing the act is not enough once a row carries a `cadence_s` the console
+renders as a claim about a specific piece of work. DRE-3388 MEASURED the three
+lifecycle cadences — the ⏳ build heartbeat, the review run, the gate's
+re-check — against live Actions runs and declared them in the console FIRST;
+`config/pipeline-acts.json` copies them. Two files holding the same number is a
+number that can drift, so `cadences` reads it out of both and compares.
+
+The reader is deliberately SHAPE-TOLERANT, for the same reason `check` reads
+strings rather than a literal's shape: the console owns its own file. It parses
+the module, resolves module-level integer constants (`_REVIEW_BOUND = 65 * 60 *
+1000` is a real one), and for every act collects the integers standing in any
+container row keyed on that act's tag or name — inside `ACTS` or in a cadence
+table beside it. Seconds and milliseconds are the same cadence: 6300 and
+6_300_000 both agree with a registry that declares 6300.
+
+What that buys, and what it does not:
+
+  * a DIFFERENCE always fails — the console declares a number for the act and
+    this file declares another;
+  * an act whose number cannot be located at all is `unconfirmed`, printed with
+    the rest, and fatal only for a `progress` act. Those three are what this
+    check exists for; demanding to place every one of the other nineteen would
+    turn a console refactor that changed nothing into a red build here.
+
 ## CLI
 
     check_act_consumers.py check [--registry PATH]   0 ok · 1 gap · 3 unread
+    check_act_consumers.py cadences [--registry PATH]  same three answers
     check_act_consumers.py context --changed-files F --out G
     check_act_consumers.py assert-ran REPORT.xml     the no-skip assertion
 
@@ -85,6 +112,37 @@ EXIT_SKIPPED = 3
 
 TOKEN_ENV = "BUREAU_CONSOLE_TOKEN"
 SOURCE_ENV = "BUREAU_CONSOLE_ACTS_FILE"
+
+#: The kind whose cadence this repo did not choose (DRE-3389). Read off the
+#: registry rather than restated in a list here — `cadences()` asks each row
+#: what kind it is, and the three acts under this one are the rows whose number
+#: MUST be confirmed against the console rather than merely not contradicted.
+PROGRESS_KIND = "progress"
+
+#: How much of the consumer's vocabulary a failing report prints back. Enough
+#: to answer "did it ship under another word" for a file the reader cannot
+#: open, capped so one bad row cannot bury the fixes above it in a wall.
+_VOCABULARY_SHOWN = 60
+
+
+def _undeclared(vocabulary, known, what: str) -> str:
+    """One line: what `what` carries that no act in this registry declares.
+
+    The guard's own question, asked backwards. It is printed only on a failure,
+    and only for the strings this file does NOT already account for, because
+    the interesting half of "the console does not know `review-run`" is what it
+    knows instead.
+    """
+    extra = sorted(s for s in (vocabulary or ()) if s not in known)
+    shown = extra[:_VOCABULARY_SHOWN]
+    more = f" (+{len(extra) - len(shown)} more)" if len(extra) > len(shown) else ""
+    if not shown:
+        return f"{what} carries nothing this registry does not already declare."
+    return (
+        f"{what} also carries {len(extra)} string(s) no act here declares, so "
+        f"the same act under another word is findable rather than guessed at: "
+        f"{', '.join(repr(s) for s in shown)}{more}"
+    )
 
 _TIMEOUT = 15
 
@@ -230,6 +288,253 @@ def console_vocabulary(source: str, symbol: str) -> tuple[frozenset | None, str]
     return strings, ""
 
 
+# ── reading the console's NUMBERS (DRE-3389) ────────────────────────────────
+#: The arithmetic a declared constant is allowed to be built out of. Enough for
+#: `65 * 60 * 1000` and nothing more: this resolves a console's own literals, it
+#: does not execute the console.
+_FOLD = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.FloorDiv: lambda a, b: a // b,
+}
+
+
+def _as_int(node, constants: dict):
+    """`node` as an int, or None if it is not one this reader can resolve.
+
+    `True` is not an integer here even though Python says it is — a boolean
+    read as 1 would agree with nothing and disagree with everything.
+    """
+    if isinstance(node, ast.Constant):
+        value = node.value
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        inner = _as_int(node.operand, constants)
+        return None if inner is None else -inner
+    if isinstance(node, ast.BinOp) and type(node.op) in _FOLD:
+        left, right = _as_int(node.left, constants), _as_int(node.right, constants)
+        if left is None or right is None:
+            return None
+        try:
+            return _FOLD[type(node.op)](left, right)
+        except ZeroDivisionError:
+            return None
+    return None
+
+
+def _module_constants(tree) -> dict:
+    """`NAME = <int>` at module level, resolved in file order.
+
+    In order on purpose: `_REVIEW_BOUND = 65 * 60 * 1000` is written before the
+    table that uses it, so a single forward pass resolves everything the console
+    actually writes without this reader needing to iterate to a fixed point.
+    """
+    constants: dict[str, int] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        value = _as_int(node.value, constants)
+        if value is None:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = value
+    return constants
+
+
+def _strings(node) -> frozenset:
+    return frozenset(
+        n.value for n in ast.walk(node)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    )
+
+
+def _ints(node, constants: dict) -> frozenset:
+    return frozenset(
+        v for v in (_as_int(n, constants) for n in ast.walk(node)) if v is not None
+    )
+
+
+def console_cadences(source: str) -> tuple:
+    """`(by_key, reason)` — every integer the console stands beside each key.
+
+    `by_key` maps a string the console uses as a row key (or writes inside a
+    row) to every integer resolvable in that row, unioned across the whole
+    module. Deliberately not scoped to `ACTS`: a console is free to keep its
+    cadences in a table of its own beside it, and a reader that insisted on one
+    shape would report a drift where there is only a refactor.
+    """
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError as e:
+        return None, f"the console module does not parse ({e.msg})"
+
+    constants = _module_constants(tree)
+    by_key: dict = {}
+
+    def _add(key: str, numbers) -> None:
+        if key and numbers:
+            by_key[key] = by_key.get(key, frozenset()) | numbers
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if key is None:
+                    continue
+                numbers = _ints(value, constants)
+                for name in _strings(key):
+                    _add(name, numbers)
+        elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            for element in node.elts:
+                numbers = _ints(element, constants)
+                for name in _strings(element):
+                    _add(name, numbers)
+
+    if not by_key:
+        return None, (
+            "no act in the console module stands beside a number this reader "
+            "can resolve — it is built rather than written out, so this guard "
+            "cannot say what cadence the console declares"
+        )
+    return by_key, ""
+
+
+@dataclass(frozen=True)
+class CadenceReport:
+    """Agreement about the NUMBER, act by act.
+
+    Three outcomes and never a fourth: the console says the same thing, the
+    console says something else (`mismatched`, always a failure), or this reader
+    could not place the act's number at all (`unconfirmed`, a failure only for
+    the `progress` acts this check exists for).
+    """
+
+    spec: dict
+    by_key: dict | None
+    mismatched: tuple  # (name, tag, kind, declared_s, found)
+    unconfirmed: tuple  # (name, tag, kind, declared_s)
+    checked: int
+    reason: str
+    #: Every name and tag this registry declares — subtracted by `carried()`.
+    known: frozenset = frozenset()
+
+    @property
+    def skipped(self) -> bool:
+        return self.by_key is None
+
+    @property
+    def unconfirmed_progress(self) -> tuple:
+        return tuple(row for row in self.unconfirmed if row[2] == PROGRESS_KIND)
+
+    @property
+    def ok(self) -> bool:
+        return (
+            self.by_key is not None
+            and not self.mismatched
+            and not self.unconfirmed_progress
+        )
+
+    def text(self) -> str:
+        head = (
+            f"{REGISTRY_PATH} declares {self.checked} cadence(s); the consumer "
+            f"is {self.spec.get('repo')}:{self.spec.get('path')}."
+        )
+        if self.skipped:
+            return (
+                f"SKIPPED — {self.reason}. Unread is never a pass: the `act "
+                f"registry consumers` job in tests.yml fails on this. {head}"
+            )
+
+        lines = []
+        for name, tag, _kind, declared, found in self.mismatched:
+            lines.append(
+                f"{name} ({tag}): this file declares {declared}s, the console "
+                f"declares {sorted(found)} — one of the two moved, and the row "
+                "the console renders is a claim about a specific piece of work"
+            )
+        for name, tag, kind, declared in self.unconfirmed:
+            note = (
+                "and a progress cadence is exactly what this check exists to "
+                "keep equal — has the console shipped it yet?"
+                if kind == PROGRESS_KIND
+                else "reported, not failed: the console owns its own literal"
+            )
+            lines.append(
+                f"{name} ({tag}): declares {declared}s and no number for it "
+                f"could be located in the console — {note}"
+            )
+        if not lines:
+            return f"OK — every declared cadence is the console's. {head}"
+        verdict = "OK with notes" if self.ok else f"{len(self.mismatched)} difference(s)"
+        return "\n".join([f"{verdict}. {head}", *lines, self.carried()])
+
+    def carried(self) -> str:
+        """The same courtesy `Report.carried()` pays, one field along: which
+        keys the console stands a number beside that no act here declares.
+        "No number could be located for `review-run`" is unanswerable without
+        it for a reader who cannot open the console's file."""
+        return _undeclared(
+            frozenset(self.by_key or ()), self.known,
+            "the console (keys it stands a number beside)",
+        )
+
+
+def cadences(doc: dict | None = None, source: str | None = -1, reason: str = "",
+             registry: str | None = None) -> CadenceReport:
+    """Does the console declare the same cadence this file does?
+
+    `source` takes the same sentinel `check()` does: -1 means "go and read it",
+    None means "it could not be read" and `reason` says why.
+    """
+    doc = doc if doc is not None else load(registry)
+    spec = console_spec(doc)
+    rows = tuple(
+        (
+            (e.get("name") or "").strip(),
+            (e.get("tag") or "").strip(),
+            (e.get("kind") or "").strip(),
+            e.get("cadence_s"),
+        )
+        for e in (doc.get("acts") or ())
+        if isinstance(e.get("cadence_s"), int) and not isinstance(e.get("cadence_s"), bool)
+    )
+
+    if source == -1:
+        source, reason = read_console_source(spec)
+    if source is None:
+        return CadenceReport(
+            spec, None, (), (), len(rows), reason or "the console could not be read"
+        )
+
+    by_key, why = console_cadences(source)
+    if by_key is None:
+        return CadenceReport(spec, None, (), (), len(rows), why)
+
+    mismatched, unconfirmed = [], []
+    for name, tag, kind, declared in rows:
+        found = (by_key.get(tag) or frozenset()) | (by_key.get(name) or frozenset())
+        if not found:
+            unconfirmed.append((name, tag, kind, declared))
+        # The console serves milliseconds and this file declares seconds. The
+        # comparison is of the CADENCE, not of the unit either side stores it
+        # in — anything else would report a difference that is not one.
+        elif declared not in found and declared * 1000 not in found:
+            mismatched.append((name, tag, kind, declared, found))
+
+    return CadenceReport(
+        spec, by_key, tuple(mismatched), tuple(unconfirmed), len(rows), "",
+        known=frozenset(
+            value
+            for e in (doc.get("acts") or ())
+            for value in ((e.get("name") or "").strip(), (e.get("tag") or "").strip())
+            if value
+        ),
+    )
+
+
 # ── the report ──────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Report:
@@ -241,6 +546,9 @@ class Report:
     checked: int
     reason: str
     unknown_rows: tuple = ()  # the same acts as (name, tag, kind)
+    #: Every name and tag this registry declares — what `carried()` subtracts
+    #: so a failure reports the console's WORDS rather than its whole file.
+    known: frozenset = frozenset()
 
     @property
     def skipped(self) -> bool:
@@ -276,8 +584,25 @@ class Report:
         if self.ok:
             return f"OK — every declared act is known to the console. {head}"
 
-        return "\n".join(
-            [f"{len(self.unknown)} act(s) the console does not know. {head}", *self.fixes()]
+        return "\n".join([
+            f"{len(self.unknown)} act(s) the console does not know. {head}",
+            *self.fixes(),
+            self.carried(),
+        ])
+
+    def carried(self) -> str:
+        """The OTHER direction, printed whenever something is missing.
+
+        A cross-repo failure is read by somebody who cannot open the other file
+        — that is the whole reason this guard exists on the producer side — so
+        "the console does not carry `review-run`" leaves them one question
+        short: did it ship under another word? Printing the whole vocabulary
+        back would bury the fixes above, so this prints only what the console
+        carries that NO act here declares. That set is short, and the answer is
+        always in it.
+        """
+        return _undeclared(
+            self.vocabulary, self.known, f"the console's {self.spec.get('symbol')}"
         )
 
 
@@ -313,6 +638,7 @@ def check(doc: dict | None = None, source: str | None = -1, reason: str = "",
     return Report(
         spec, vocabulary, tuple(r[0] for r in missing), len(rows), "",
         unknown_rows=missing,
+        known=frozenset(r[0] for r in rows) | frozenset(r[1] for r in rows),
     )
 
 
@@ -333,7 +659,17 @@ def context(changed_files, doc: dict | None = None, source: str | None = -1,
         "CONSOLE-FIRST (docs/pipeline-acts.md); the pipeline PR cannot merge "
         "ahead of the console one. The producer-side guard says:"
     )
-    return f"{lead}\n{report.text()}"
+    # Both halves of the same contract, always together (DRE-3389). The act
+    # check answers "does the console know this row exists"; the cadence check
+    # answers "does it hold the same NUMBER on it". A reviewer told only the
+    # first would read a clean receipt as a clean registry.
+    paced = cadences(doc=doc, source=source, reason=reason, registry=registry)
+    pace_lead = (
+        "AND THE CADENCES ON THOSE ROWS. The numbers were measured once, by "
+        "the console card, and copied here; two files holding one number is a "
+        "number that can drift, so both are read and compared:"
+    )
+    return f"{lead}\n{report.text()}\n\n{pace_lead}\n{paced.text()}"
 
 
 # ── the no-skip assertion ───────────────────────────────────────────────────
@@ -370,6 +706,8 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command")
     run = sub.add_parser("check")
     run.add_argument("--registry", default=None)
+    pace = sub.add_parser("cadences")
+    pace.add_argument("--registry", default=None)
     ctx = sub.add_parser("context")
     ctx.add_argument("--changed-files", required=True)
     ctx.add_argument("--out", required=True)
@@ -401,6 +739,13 @@ def main(argv=None) -> int:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(text)
         return 0
+
+    if command == "cadences":
+        paced = cadences(registry=args.registry)
+        print(paced.text())
+        if paced.skipped:
+            return EXIT_SKIPPED
+        return EXIT_OK if paced.ok else EXIT_GAP
 
     report = check(registry=args.registry)
     print(report.text())

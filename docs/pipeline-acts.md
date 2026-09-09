@@ -1,9 +1,9 @@
 # The act registry — and how a new act ships
 
 `config/pipeline-acts.json` declares every autonomous act the pipeline can
-take: a refusal, a recovery or a hold, and per act its tag, its kind, the
-state it leaves the work in, the next actor, what it discharges, the
-workflow expected to act on it, and its cadence — how long its work may go
+take: a refusal, a recovery, a hold or a progress act, and per act its tag,
+its kind, the state it leaves the work in, the next actor, what it discharges,
+the workflow expected to act on it, and its cadence — how long its work may go
 quiet before it reads as stuck (DRE-3298). It is read and written through one
 module, `scripts/pipeline_act.py`. That much is DRE-2825, and
 `config/README.md` carries the shape.
@@ -42,6 +42,27 @@ The order cannot be the other way round, and the asymmetry is the point. The
 console learning a tag the pipeline has not declared yet costs nothing — no
 receipt carries it, so nothing reads it. The pipeline declaring a tag the
 console has not learned costs **every open pull request in agent-bureau**.
+
+### …and the same rule for the NUMBER on the row (DRE-3389)
+
+Since a row carries a `cadence_s`, knowing the act is not enough: the console
+renders that number as a claim about a specific piece of work. The three
+`progress` acts — `build-heartbeat`, `review-run`, `merge-gate-watch` — take
+cadences DRE-3388 **measured** against live Actions runs on 2026-09-08 and
+declared in `console/backend/receipts.py` first. This repo copies them; it does
+not choose them, and each row's `why` carries the measurement so no round number
+stands here without one.
+
+`scripts/check_act_consumers.py cadences` reads the number out of **both** files
+and fails on any difference. It runs in the same `act registry consumers` job,
+off `tests/test_pipeline_acts_consumers.py`, so a skip is red there like every
+other question that job asks. A *difference* always fails; an act whose number
+the reader cannot place in the console is reported and fatal only for a
+`progress` act, because the console owns its own literal and a refactor there
+must not turn red here.
+
+Console-first covers this too: measure and declare in the console, then copy.
+Whoever builds second otherwise has to invent a number twice.
 
 ## The rows, and what a row is not — `🔬 proof-waiting` (DRE-3275)
 
