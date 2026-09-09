@@ -62,8 +62,10 @@ TRIGGER_EVENT = "repository_dispatch"
 #: DRE-3486). Its shape matches its four siblings.
 WORKFLOW_FILE = "agent-task.yml"
 
-#: The callee the stub must reach, spelled the way GitHub spells a
-#: `referenced_workflows` path: `<owner>/<repo>/<path>`.
+#: The callee the stub must reach, as `<owner>/<repo>/<path>` — WITHOUT the
+#: ref. GitHub spells a `referenced_workflows` path with the ref attached,
+#: `<owner>/<repo>/<path>@<ref>`, and ALSO carries `ref` as its own field, so
+#: the two overlap. Compare on the part before the `@` (`callee_path`).
 PIPELINE_REPO = "dreadnought-foundry/bureau-pipeline"
 CALLEE_PATH = f"{PIPELINE_REPO}/.github/workflows/{WORKFLOW_FILE}"
 
@@ -111,12 +113,30 @@ def is_our_dispatch(run) -> bool:
     return title is None or title == DISPATCH_EVENT
 
 
+def callee_path(entry) -> str:
+    """The workflow an entry names, with any `@<ref>` suffix stripped.
+
+    The live endpoint returns `path` WITH the ref attached — sandbox run
+    34414467787 (2026-09-09, PR #332's own proving run) answered
+    `dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml@main`
+    beside `ref` — while the REST schema's example shows the bare path. An
+    exact-equality comparison against the bare spelling rejected a correctly
+    wired stub and reported it as "does not call this repo's reusable
+    workflow", so the ref is stripped rather than assumed absent. Splitting on
+    the FIRST `@` is safe: neither an owner, a repo nor a path segment may
+    contain one.
+    """
+    if not isinstance(entry, dict):
+        return ""
+    return (entry.get("path") or "").split("@", 1)[0].strip()
+
+
 def callee_reference(referenced) -> dict | None:
     """The `referenced_workflows` entry for bureau-pipeline's agent-task.yml,
     or None. `jobs > 0` alone would pass for a stub calling something else
     entirely, so the callee is half of what a dispatch proves."""
     for entry in referenced or ():
-        if isinstance(entry, dict) and (entry.get("path") or "") == CALLEE_PATH:
+        if callee_path(entry) == CALLEE_PATH:
             return entry
     return None
 

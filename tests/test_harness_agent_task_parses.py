@@ -56,13 +56,21 @@ DOC = ROOT / "docs" / "harness.md"
 # The commit the harness run is proving — harness.yml's `tested` step.
 TESTED_SHA = "c0ffee1c0ffee1c0ffee1c0ffee1c0ffee1c0ffe"
 
-# The callee the sandbox stub must reach, spelled the way GitHub spells a
-# `referenced_workflows` path.
+# The callee the sandbox stub must reach, WITHOUT the ref.
 CALLEE = "dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml"
+
+# ...and the way the LIVE endpoint spells it: the ref is attached to `path`,
+# and carried again as `ref`. Sandbox run 34414467787 (2026-09-09, PR #332's
+# own proving run) returned exactly this, and the rehearsal — comparing
+# against the bare `CALLEE` the REST schema's example shows — rejected a
+# correctly wired stub as "does not call this repo's reusable workflow". The
+# fixture defaults to the live shape so that cannot recur silently.
+CALLEE_AT_REF = f"{CALLEE}@main"
 
 
 def _run_record(run_id=771, status="in_progress", conclusion=None, sha=TESTED_SHA,
-                referenced=True, display_title="agent-execute"):
+                referenced=True, display_title="agent-execute",
+                callee_path=CALLEE_AT_REF):
     """An Actions workflow-run record, REST-shaped.
 
     `event` is the TRIGGER (`repository_dispatch`), never the dispatch type;
@@ -84,7 +92,7 @@ def _run_record(run_id=771, status="in_progress", conclusion=None, sha=TESTED_SH
     }
     if referenced:
         record["referenced_workflows"] = [
-            {"path": CALLEE, "sha": sha, "ref": "refs/heads/main"}
+            {"path": callee_path, "sha": sha, "ref": "refs/heads/main"}
         ]
     return record
 
@@ -354,6 +362,47 @@ class StartedJobTest(unittest.TestCase):
             "the seeded card id must sit inside the sweepable harness "
             f"namespace, got {payload['identifier']!r}",
         )
+
+    def test_the_ref_attached_to_the_path_does_not_hide_the_callee(self):
+        """The live endpoint returns `path` with the ref attached. Sandbox run
+        34414467787 answered `…/agent-task.yml@main` and the rehearsal — which
+        compared against the bare path the REST schema's example shows —
+        reported the correctly wired stub as one that "does not call this
+        repo's reusable workflow". A false alarm on EVERY run, from the check
+        whose whole job is to be believed when it goes red."""
+        scenario, ctx, _gh = self._pass(callee_path=CALLEE_AT_REF)
+        scenario.verify(ctx)  # must not raise
+        self.assertEqual(ctx.state["parsed_sha"], TESTED_SHA)
+        self.assertTrue(ctx.state["covers_commit_under_test"])
+
+    def test_a_path_with_no_ref_is_still_the_callee(self):
+        """The schema's own example spells it bare, so both must match."""
+        scenario, ctx, _gh = self._pass(callee_path=CALLEE)
+        scenario.verify(ctx)  # must not raise
+        self.assertEqual(ctx.state["parsed_sha"], TESTED_SHA)
+
+    def test_another_workflow_in_this_repo_is_not_the_callee(self):
+        """Stripping the ref must not loosen the match to a prefix: a stub
+        calling bureau-pipeline's `ci.yml` proves nothing about agent-task.yml,
+        and neither does one calling a fork's look-alike."""
+        for impostor in (
+            "dreadnought-foundry/bureau-pipeline/.github/workflows/ci.yml@main",
+            f"{CALLEE}.disabled",
+            f"someone-else/bureau-pipeline/.github/workflows/agent-task.yml@main",
+        ):
+            with self.subTest(path=impostor):
+                scenario, ctx, _gh = self._pass(callee_path=impostor)
+                with self.assertRaises(framework.ScenarioFailure) as caught:
+                    scenario.verify(ctx)
+                self.assertIn(CALLEE, str(caught.exception))
+
+    def test_callee_path_survives_a_malformed_entry(self):
+        self.assertEqual(atp.callee_path({"path": CALLEE_AT_REF}), CALLEE)
+        self.assertEqual(atp.callee_path({"path": CALLEE}), CALLEE)
+        self.assertEqual(atp.callee_path({"path": None}), "")
+        self.assertEqual(atp.callee_path({}), "")
+        self.assertEqual(atp.callee_path(None), "")
+        self.assertIsNone(atp.callee_reference([None, "junk", {}]))
 
     def test_a_run_that_never_reached_bureau_pipeline_fails(self):
         """`jobs > 0` alone would pass for a stub calling something else
