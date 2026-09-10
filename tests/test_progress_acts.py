@@ -219,6 +219,23 @@ class TestTheThreeLifecycleActs(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 #: A console that declares its cadences on the act's own row, in milliseconds
 #: — the shape the console serves `cadenceMs` from.
+#: The six RELEASE acts DRE-3521 added under this same `progress` kind, in the
+#: milliseconds the console serves. An unplaced `progress` cadence is FATAL to
+#: `cadences()`, so every fake console below has to carry them or these tests
+#: would go red on rows that are not theirs. Their own pins live in
+#: `tests/test_release_acts.py`; this is the fixture's half and nothing more.
+RELEASE_CADENCES = textwrap.dedent(
+    '''
+    RELEASE_CADENCE_MS = {
+        "release-ci-green": 600_000,
+        "release-cut": 3_600_000,
+        "release-build": 1_440_000,
+        "release-roll-out": 600_000,
+        "release-verify": 3_600_000,
+    }
+    '''
+)
+
 CONSOLE_AGREES = textwrap.dedent(
     '''
     """The console's receipt vocabulary."""
@@ -231,7 +248,7 @@ CONSOLE_AGREES = textwrap.dedent(
         "merge-gate-watch": {"kind": "progress", "cadence_ms": _REVIEW_BOUND},
     }
     '''
-)
+) + RELEASE_CADENCES
 
 #: The same console with ONE number moved. This is the difference the
 #: acceptance criterion says the test must fail on.
@@ -252,7 +269,7 @@ CONSOLE_SEPARATE_TABLE = textwrap.dedent(
         "merge-gate-watch": 3_900_000,
     }
     '''
-)
+) + RELEASE_CADENCES
 
 
 class TestTheConsoleCadenceReader(unittest.TestCase):
@@ -292,7 +309,7 @@ class TestTheConsoleCadenceReader(unittest.TestCase):
         report = guard.cadences(
             doc=_doc(),
             source='ACTS = {"build-heartbeat": 6300, "review-run": 3000, '
-                   '"merge-gate-watch": 3900}',
+                   '"merge-gate-watch": 3900}' + RELEASE_CADENCES,
         )
         self.assertTrue(report.ok, report.text())
 
