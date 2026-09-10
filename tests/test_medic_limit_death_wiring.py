@@ -25,6 +25,9 @@ What must hold:
      the whole medic down (every job `needs: classify`).
   4. The retry job and the diagnosis job both read the output: a limit death
      gets exactly one marker and no rerun.
+  5. A TURN-CAP result is none of the above (DRE-3499): the step publishes
+     `limit=false`, posts no marker and says so, even though the failed log
+     carries `rate_limit_error` in prose the agent read.
 
 Run: cd bureau-pipeline && GITHUB_REPOSITORY=dreadnought-foundry/bureau-pipeline \\
      python3 -m pytest tests/test_medic_limit_death_wiring.py -v
@@ -411,6 +414,45 @@ class PlannerCardTest(unittest.TestCase):
         result = run_step(decision=None, log_text=log, payload=PLANNER)
         self.assertIn("limit=true", result["outputs"])
         self.assertEqual([], _comment_calls(result))
+
+
+TURN_CAP_LOG = (ROOT / "tests" / "fixtures"
+                / "medic-turn-cap-over-ceiling-log.txt").read_text(encoding="utf-8")
+
+
+class TurnCapIsNotALimitDeathTest(unittest.TestCase):
+    """DRE-3499, through the step's own shell and the REAL classifier.
+
+    On 2026-09-07 at 16:50Z this step posted `🪦 limit-death: kind=claude
+    stage=plan reset=unknown` on epic DRE-3257 for agent-bureau run
+    34144302622. Nothing in that run hit an account limit: the post-approval
+    review ran 51 turns against a 48-turn ceiling and ended `"subtype":
+    "success"`. The log carried `rate_limit_error` because the reviewer had
+    READ the standard that quotes it — and `limit_recovery.py` reads the
+    marker and re-enters the plan stage when the window it never hit resets.
+
+    The fixture is that run's log, synthesised from the fields the epic
+    records (the run is not readable from this repo's runner).
+    """
+
+    def test_the_card_is_resolvable_so_the_absence_of_a_marker_is_the_verdict(self):
+        """Not "no card to mark" — the log names the epic the medic marked."""
+        self.assertEqual("DRE-3257", medic_retry.card_for_run("main", TURN_CAP_LOG))
+
+    def test_the_step_publishes_false_and_posts_no_marker(self):
+        result = run_step(decision=None, log_text=TURN_CAP_LOG, payload=PLANNER,
+                          failed_step="Plan epic")
+        self.assertEqual(0, result["rc"], result["text"])
+        self.assertIn("limit=false", result["outputs"])
+        self.assertNotIn("limit=true", result["outputs"])
+        self.assertEqual([], _comment_calls(result), result["calls"])
+        self.assertNotIn("🪦 limit-death:", result["text"])
+
+    def test_the_step_says_the_death_is_not_a_limit_death(self):
+        result = run_step(decision=None, log_text=TURN_CAP_LOG, payload=PLANNER,
+                          failed_step="Plan epic")
+        self.assertIn("not a limit death", result["text"])
+        self.assertIn("requeue", result["text"], "the ordinary medic handling")
 
 
 class CardResolutionTest(unittest.TestCase):
