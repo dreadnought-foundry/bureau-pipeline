@@ -94,6 +94,17 @@ A LIMIT DEATH IS A WAIT, NOT A DEATH (DRE-3171):
               Bringing the card back is `limit_recovery.py`'s job — the
               reconcile sweep re-enters the stage that died once the reset
               time has passed or the account has switched.
+              A TURN CAP IS NEVER THIS (DRE-3499): `limit_kind` classifies a
+              whole failed log, and "hit your limit"/`rate_limit_error` are
+              words an agent writes when it has merely READ the standard that
+              quotes them. On 2026-09-07 the medic marked epic DRE-3257
+              `kind=claude stage=plan` for agent-bureau run 34144302622,
+              whose review ran 51 turns against a 48-turn ceiling and ended
+              `"subtype": "success"` — and the marker arms limit_recovery to
+              re-enter the plan stage when a window it never hit resets.
+              `turn_cap_in_text` vetoes the Claude answer on the action's own
+              turn-cap evidence; the Linear answer is untouched, because a
+              turn count cannot explain away another vendor's refusal.
 
 A CANCELLED run is NOT a death class (DRE-2074): when the agent step's outcome
 is `cancelled` (the job timeout, or an external/concurrency cancel), the agent
@@ -131,6 +142,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# ONE definition of what the action's turn ceiling looks like (DRE-3499). The
+# limit classifier below vetoes on it, and check_agent_result is where it
+# already lives — no I/O, no Linear seam, so importing it costs nothing.
+import check_agent_result  # noqa: E402 — after the path insert, by design
 
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
@@ -206,6 +222,33 @@ LIMIT_SIGNATURE_PAIRS = (
     ("transient network fault, retried once", "The read operation timed out"),
 )
 _CLAUDE_LIMIT_SIGNATURES = ("hit your limit", "rate_limit_error")
+# The turn-cap VETO (DRE-3499). The Claude signatures above are ordinary
+# English, and the classifier scans the WHOLE failed log — `gh run view
+# --log-failed`, prose and all. On 2026-09-07 at 16:50Z the medic posted
+# `🪦 limit-death: kind=claude stage=plan reset=unknown` on epic DRE-3257 for
+# agent-bureau run 34144302622: nothing in that run met an account wall — the
+# post-approval review ran 51 turns against a 48-turn ceiling and the action
+# ended `"subtype": "success"`, `"num_turns": 51`. The words were in the log
+# because the reviewer had READ the standard that quotes `429
+# rate_limit_error` as an example. The consequence is not a wrong word:
+# limit_recovery.py reads that marker and re-enters the plan stage when a
+# window the run never hit "resets".
+#
+# So the ceiling is checked FIRST, and it is checked POSITIVELY — the same
+# discipline check_agent_result._turn_cap_evidence uses, never an inference
+# from the absence of something else. `_TURN_CAP_TEXT`/`_TURN_CAP_SUBTYPES`
+# come from that module rather than being retyped: it already owns what the
+# action's turn ceiling looks like, and a second spelling here is how two
+# readers of the same payload drift apart.
+_TURN_CAP_SUBTYPE = re.compile(
+    r'"?subtype"?\s*:\s*"?(?:%s)"?'
+    % "|".join(re.escape(s) for s in check_agent_result._TURN_CAP_SUBTYPES)
+)
+# The ceiling as the log states it: the action input (`maxTurns: 48`), the
+# result record's own field (`"max_turns": 48`) and the CLI arg the workflow
+# passes (`--max-turns 48`). "num_turns" does not contain any of these stems.
+_TURN_CEILING = re.compile(r"max[_ -]?turns[\"']?\s*[:= ]\s*(\d+)", re.I)
+_TURNS_SPENT = re.compile(r"\"?num_turns\"?\s*[:=]\s*(\d+)")
 # The bare `RATELIMITED` code is line-anchored, exactly as medic_classify
 # anchors it: DRE-2923's own card body quotes the payload and an agent log
 # echoes card text, so the code counts only on a line that also names
@@ -234,11 +277,53 @@ _MARKER_LINE = re.compile(
 _ISO_Z = "%Y-%m-%dT%H:%M:%SZ"
 
 
+def turn_cap_in_text(text: str) -> bool:
+    """True when a failed log carries the action's OWN turn-cap evidence.
+
+    Four shapes, any one of which settles it:
+
+      - `"subtype": "error_max_turns"` — the result record's JSON field;
+      - `  subtype: error_max_turns` — the line print_failure_detail writes
+        into the log from that same field;
+      - `maximum number of turns` — the sentence the action puts in `result`
+        and check_agent_result._TURN_CAP_TEXT already recognises;
+      - a result record that spent at least as many turns as the log says it
+        was GIVEN (`"num_turns": 51` against `--max-turns 48`). A run that was
+        under its ceiling is not evidence of anything, which is why the
+        comparison is against a ceiling the log states rather than a constant.
+
+    Pure text, no I/O: the medic holds a log, not an execution file.
+    """
+    text = text or ""
+    if _TURN_CAP_SUBTYPE.search(text):
+        return True
+    if check_agent_result._TURN_CAP_TEXT in text.lower():
+        return True
+    ceilings = [int(m) for m in _TURN_CEILING.findall(text)]
+    if not ceilings:
+        return False
+    spent = [int(m) for m in _TURNS_SPENT.findall(text)]
+    return any(turns >= ceiling for turns in spent for ceiling in ceilings)
+
+
 def limit_kind(text: str) -> str | None:
     """`"claude"` or `"linear"` when `text` — a failed run's log or result —
-    carries one of LIMIT_SIGNATURES / LIMIT_SIGNATURE_PAIRS, else None."""
+    carries one of LIMIT_SIGNATURES / LIMIT_SIGNATURE_PAIRS, else None.
+
+    THE TURN-CAP VETO COMES FIRST (DRE-3499). A run that hit the turn ceiling
+    did not hit the Claude account's usage limit, whatever words are in its
+    log — and the Claude signatures are words an agent writes about itself
+    when it has merely read the standard that quotes them. When the veto
+    fires the Claude signatures are not consulted at all.
+
+    The Linear answer is untouched by the veto: that is a different vendor
+    refusing a request, and a turn count cannot explain it away. A log
+    carrying BOTH a Linear signature and a turn cap still reads `linear`.
+    """
     text = text or ""
-    if any(sig in text for sig in _CLAUDE_LIMIT_SIGNATURES):
+    if not turn_cap_in_text(text) and any(
+        sig in text for sig in _CLAUDE_LIMIT_SIGNATURES
+    ):
         return "claude"
     for sig in LIMIT_SIGNATURES:
         if sig in _CLAUDE_LIMIT_SIGNATURES:
