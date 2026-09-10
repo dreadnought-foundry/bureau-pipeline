@@ -95,6 +95,19 @@ of it is ever a runtime lookup.
   there is an answer, not a gap: DRE-3078 has not shipped, so every month is
   BEFORE and the after half is UNKNOWN rather than an empty bucket that would
   read as an improvement.
+- **`groomer-audit.json`** — the dimensions the GROOMER'S JUDGEMENT is scored on
+  (DRE-3155), read by `scripts/groomer_score.py`. Like the two files above it
+  carries no answers, only the vocabulary: the audit table's exact header (one
+  contract, shared with DRE-3151 which records the table and DRE-3150 which
+  writes the proposal), the calls a column may take, and the dimensions —
+  `placement` and `likely-done` scored, `trigger` and `unranked` counted and
+  never scored. The held-out answer is the CEO's own, written on DRE-3151 before
+  he reads the model's reasons, and it arrives on stdin: nothing in the scorer
+  reads Linear or GitHub. One dimension, `constraints`, is excluded as
+  contaminated because `groomer.sequence` applies collisions, blockers, epic
+  units and capacity after the model's order; the exclusion names those
+  functions in `enforces` and `groomer_score.py check` fails if
+  `scripts/groomer.py` stops defining one of them.
 - **`split-ledger.json`** — every card that did not fit one run (DRE-3077),
   derived by `python3 scripts/split_ledger.py derive` from Linear and the run
   receipts: the turn-cap deaths and what they cost, the splits and the pieces
