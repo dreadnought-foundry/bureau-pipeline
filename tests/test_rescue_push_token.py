@@ -565,5 +565,245 @@ class TheCardSaysWhatHappenedAndWhereTheWorkIs(unittest.TestCase):
         self.assertIn(f"rescue-{CARD}.patch", done.stdout)
 
 
+# ── the checkout's include-file credential (DRE-3513) ────────────────────────
+# What today's `actions/checkout` leaves behind. The token is no longer in
+# `.git/config`: it is written to `$RUNNER_TEMP/git-credentials-<uuid>.config`
+# and reached through an `includeIf.gitdir:<gitdir>.path` entry in
+# `.git/config`. Verbatim from agent-bureau run 34416564915 (2026-09-09):
+#
+#   push rescue: pushing agent/DRE-3509-abandoned-work-on-one-river failed —
+#     HTTP 400, credential: the rescue's own mint (Mint fresh push token)
+#     (attempt 1 of 2)
+#   push rescue: git is sending 2 auth header(s), from:
+#     file:/home/runner/work/_temp/git-credentials-560e0615-4b80-4c13-a90c-0667ce50b64a.config,
+#     file:.git/config
+#
+# `--unset-all --local` cannot remove a value that arrives through an include,
+# so the re-point ADDED a header beside the checkout's and GitHub answered 400.
+CREDENTIALS_FILE = (
+    "/home/runner/work/_temp/"
+    "git-credentials-560e0615-4b80-4c13-a90c-0667ce50b64a.config"
+)
+CHECKOUT_GITDIR = "/home/runner/work/agent-bureau/agent-bureau/.git"
+INCLUDE_KEY = f"includeif.gitdir:{CHECKOUT_GITDIR}.path"
+# An include that is NOT the checkout's credential and must be left alone.
+OTHER_INCLUDE_KEY = "includeif.gitdir:/home/runner/work/other/.git.path"
+OTHER_INCLUDE_PATH = "/home/runner/work/other/.gitconfig-extra"
+
+
+class IncludeFileFakeGit(FakeGit):
+    """A FakeGit whose `.git/config` includes the checkout's credentials file.
+
+    Stateful, the way the runner is: `--show-origin --get-all` answers the two
+    origin lines above until the includeIf key is `--unset`, and one after.
+    `--get-regexp` answers git's real exit code — 1 — once nothing matches.
+    `unreachable` is a list of extra origins the re-point cannot touch
+    (`$HOME/.gitconfig`), which persist through every call.
+    """
+
+    def __init__(self, *, includes=None, unreachable=(), **kw):
+        super().__init__(**kw)
+        self.includes = dict(includes if includes is not None
+                             else {INCLUDE_KEY: CREDENTIALS_FILE})
+        self.unreachable = list(unreachable)
+
+    def _is_credential_include(self, path: str) -> bool:
+        return re.search(r"git-credentials-.*\.config$", path) is not None
+
+    def __call__(self, argv, *, cwd=None, env=None):
+        rest = [a for a in argv[1:] if a not in ("-C", cwd)]
+        if argv[0] == "git" and "config" in rest:
+            if "--get-regexp" in rest:
+                self.calls.append(list(argv))
+                self.envs.append(dict(env or {}))
+                lines = [f"{k} {v}\n" for k, v in self.includes.items()]
+                return (0, "".join(lines), "") if lines else (1, "", "")
+            if "--unset" in rest and rest[-1] in self.includes:
+                self.calls.append(list(argv))
+                self.envs.append(dict(env or {}))
+                del self.includes[rest[-1]]
+                return 0, "", ""
+            if "--show-origin" in rest:
+                self.calls.append(list(argv))
+                self.envs.append(dict(env or {}))
+                origins = [f"file:{p}" for p in self.includes.values()
+                           if self._is_credential_include(p)]
+                origins += [f"file:{p}" for p in self.unreachable]
+                origins.append("file:.git/config")
+                return 0, "".join(f"{o}\tAUTHORIZATION: basic ZHVtbXk=\n"
+                                  for o in origins), ""
+        return super().__call__(argv, cwd=cwd, env=env)
+
+
+def _index_of(calls, *needles) -> int:
+    for i, call in enumerate(calls):
+        if all(n in call for n in needles):
+            return i
+    raise AssertionError(f"no call containing {needles}: {calls}")
+
+
+class TheCheckoutsIncludeFileCredentialIsRemoved(unittest.TestCase):
+    """The rescue must send ONE Authorization header, which means the include
+    that carries the checkout's credential has to go before the re-point —
+    by unsetting the KEY in `.git/config`, never by deleting the file, which
+    `actions/checkout`'s post step owns and removes itself."""
+
+    def test_the_include_is_unset_by_key_and_the_file_is_not_touched(self):
+        fake = IncludeFileFakeGit()
+        push_rescue.repoint_git_credential(MINT_1, run=fake)
+        unsets = fake.argv_containing("config", "--local", "--unset", INCLUDE_KEY)
+        self.assertEqual(len(unsets), 1, fake.calls)
+        # The path only ever appears as a VALUE git printed, never as an argv
+        # element: nothing here is allowed to rm, truncate or edit the file.
+        self.assertFalse(
+            any("git-credentials-" in a for c in fake.calls for a in c),
+            fake.calls,
+        )
+
+    def test_after_the_re_point_git_sends_one_header(self):
+        fake = IncludeFileFakeGit()
+        self.assertEqual(len(push_rescue.credential_origins(run=fake)), 2)
+        push_rescue.repoint_git_credential(MINT_1, run=fake)
+        self.assertEqual(push_rescue.credential_origins(run=fake),
+                         ["file:.git/config"])
+
+    def test_an_include_that_is_not_the_credential_is_left_alone(self):
+        fake = IncludeFileFakeGit(includes={
+            INCLUDE_KEY: CREDENTIALS_FILE,
+            OTHER_INCLUDE_KEY: OTHER_INCLUDE_PATH,
+        })
+        push_rescue.repoint_git_credential(MINT_1, run=fake)
+        self.assertNotIn(OTHER_INCLUDE_KEY, [c[-1] for c in fake.calls
+                                             if "--unset" in c])
+        self.assertIn(OTHER_INCLUDE_KEY, fake.includes)
+        self.assertNotIn(INCLUDE_KEY, fake.includes)
+
+    def test_every_credential_include_goes_not_only_the_first(self):
+        # checkout writes FOUR: the host gitdir, its worktrees, and the
+        # container twins under /github/workspace.
+        container = "/github/runner_temp/git-credentials-560e0615.config"
+        fake = IncludeFileFakeGit(includes={
+            INCLUDE_KEY: CREDENTIALS_FILE,
+            f"includeif.gitdir:{CHECKOUT_GITDIR}/worktrees/*.path": CREDENTIALS_FILE,
+            "includeif.gitdir:/github/workspace/.git.path": container,
+            "includeif.gitdir:/github/workspace/.git/worktrees/*.path": container,
+        })
+        push_rescue.repoint_git_credential(MINT_1, run=fake)
+        self.assertEqual(fake.includes, {})
+        self.assertEqual(push_rescue.credential_origins(run=fake),
+                         ["file:.git/config"])
+
+    def test_the_remote_is_read_with_one_header(self):
+        # Three of the day's four cases: the agent HAD pushed, `ls-remote`
+        # ran under two headers and answered 400, the branch read as absent,
+        # the rescue pushed, got 400, and wrote a false "needs a human"
+        # receipt. The remote must be read only after the include is gone.
+        fake = IncludeFileFakeGit(remote_sha="aaaa111")
+        out = _rescue(fake)
+        unset = _index_of(fake.calls, "config", "--unset", INCLUDE_KEY)
+        first_write = [i for i, c in enumerate(fake.calls)
+                       if _is_credential_write(c)][0]
+        ls_remote = _index_of(fake.calls, "ls-remote")
+        self.assertLess(unset, ls_remote, fake.calls)
+        self.assertLess(first_write, ls_remote, fake.calls)
+        self.assertFalse(out.local_work)
+        self.assertEqual(fake.argv_containing("push"), [])
+        self.assertEqual(out.patch, "")
+
+    def test_the_header_count_is_logged_right_after_each_re_point(self):
+        # The "git is sending N auth header(s)" line used to appear only after
+        # a FAILED push. A delivered push logs it too, once per re-point, so a
+        # run that worked still shows the count it worked with.
+        logged: list[str] = []
+        fake = IncludeFileFakeGit(push_results=[(128, REFUSED_400), (0, "")])
+        out = _rescue(fake, logged=logged)
+        self.assertTrue(out.pushed)
+        counts = [l for l in logged if "auth header(s)" in l]
+        self.assertGreaterEqual(len(counts), 2, logged)
+        for line in counts:
+            self.assertIn("1 auth header(s)", line)
+            self.assertIn("file:.git/config", line)
+        for line in logged:
+            self.assertNotIn("ZHVtbXk=", line)
+            self.assertNotIn(MINT_1, line)
+            self.assertNotIn(MINT_2, line)
+
+    def test_a_header_the_re_point_cannot_reach_is_named_and_the_push_still_runs(self):
+        # `$HOME/.gitconfig` is outside `--local`. The rescue cannot remove
+        # that one, so it says which file still holds a header and pushes
+        # anyway: the 400 then travels the normal receipt path (patch,
+        # artifact, deliver-rescue) instead of being swallowed by a raise.
+        logged: list[str] = []
+        fake = IncludeFileFakeGit(unreachable=["/home/runner/.gitconfig"],
+                                  push_results=[(128, REFUSED_400)])
+        out = _rescue(fake, logged=logged)
+        self.assertEqual(fake.pushes, 2)
+        self.assertEqual(out.push_status, "400")
+        self.assertTrue(out.patch)
+        joined = "\n".join(logged)
+        self.assertIn("2 auth header(s)", joined)
+        self.assertIn("/home/runner/.gitconfig", joined)
+
+    def test_real_git_stops_sending_the_included_header(self):
+        """The fake proves the plumbing; this proves the argv is right against
+        git itself: a checkout-shaped include, then the re-point."""
+        git = subprocess.run(["git", "--version"], capture_output=True)
+        self.assertEqual(git.returncode, 0)
+        with tempfile.TemporaryDirectory() as td:
+            work = os.path.join(os.path.realpath(td), "work")
+            temp = os.path.join(os.path.realpath(td), "_temp")
+            os.makedirs(work)
+            os.makedirs(temp)
+
+            def g(*args):
+                subprocess.run(["git", "-C", work, *args], check=True,
+                               capture_output=True)
+            g("init", "-q", "-b", "main")
+            gitdir = subprocess.run(
+                ["git", "-C", work, "rev-parse", "--absolute-git-dir"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            creds = os.path.join(temp, "git-credentials-560e0615.config")
+            subprocess.run(
+                ["git", "config", "--file", creds, push_rescue.GITHUB_EXTRAHEADER,
+                 _header(AGENT_TOKEN)],
+                check=True, capture_output=True,
+            )
+            g("config", "--local", f"includeIf.gitdir:{gitdir}.path", creds)
+            g("config", "--local", f"includeIf.gitdir:{gitdir}/worktrees/*.path",
+              creds)
+            other = os.path.join(temp, "unrelated.inc")
+            Path(other).write_text("[user]\n\tname = bot\n", encoding="utf-8")
+            g("config", "--local", "includeIf.gitdir:/nowhere/.path", other)
+
+            run = push_rescue._subprocess_run
+            before = push_rescue.credential_origins(run=run, workdir=work)
+            self.assertEqual(before, [f"file:{creds}"], before)
+
+            push_rescue.repoint_git_credential(MINT_1, run=run, workdir=work)
+
+            after = push_rescue.credential_origins(run=run, workdir=work)
+            self.assertEqual(len(after), 1, after)
+            self.assertTrue(after[0].endswith(".git/config") or
+                            after[0].endswith("/config"), after)
+            got = subprocess.run(
+                ["git", "-C", work, "config", "--get-all",
+                 push_rescue.GITHUB_EXTRAHEADER],
+                capture_output=True, text=True,
+            ).stdout.strip().splitlines()
+            self.assertEqual(got, [_header(MINT_1)])
+            # The file is checkout's to remove, and it is still there, intact.
+            self.assertTrue(os.path.exists(creds))
+            self.assertIn(_header(AGENT_TOKEN),
+                          Path(creds).read_text(encoding="utf-8"))
+            # The unrelated include survives.
+            left = subprocess.run(
+                ["git", "-C", work, "config", "--local", "--get",
+                 "includeIf.gitdir:/nowhere/.path"],
+                capture_output=True, text=True,
+            ).stdout.strip()
+            self.assertEqual(left, other)
+
+
 if __name__ == "__main__":
     unittest.main()
