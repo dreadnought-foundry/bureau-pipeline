@@ -8,7 +8,9 @@ incidents:
   1. SELF-SKIP (DRE-2067): the pull_request review run triggered by actor
      dependabot[bot] gets GitHub's separate, EMPTY Dependabot secrets
      store — the reusable's job-if must skip it clean (a `skipped` check
-     run on the head), never crash it red at the token mint.
+     run on the head), never crash it red at the token mint. Judged on the
+     RUN-attributed checks only: the head-bound record DRE-2291 added is
+     review-named too, and its red means REQUEST_CHANGES, not a crash.
   2. DISPATCH ROUTE (DRE-2047/2053): the reconcile sweep's
      workflow_dispatch review — the real review path for dependabot heads
      — produces a REAL verdict bound to the PR's current head sha (any
@@ -53,6 +55,7 @@ from harness.framework import (
     sweep_leftovers,
     verdict_state,
 )
+from publish_review_check import CHECK_NAME as HEAD_BOUND_CHECK_NAME
 
 # The reconcile sweep's receipt contract (reconcile.py posts these; the
 # scenario only READS them). Literals repeated here because reconcile.py
@@ -71,7 +74,9 @@ REBASE_TIMEOUT = 600.0
 # any step); this only needs to cover runner queueing.
 CHECKS_TIMEOUT = 600.0
 
-# A review-shaped check run that concluded red = the DRE-2047/2067 crash.
+# A review RUN that concluded red = the DRE-2047/2067 crash. Only the
+# run-attributed checks are read against this (see review_check_runs) — the
+# head-bound record's conclusion is a verdict, not a liveness report.
 RED_CONCLUSIONS = frozenset({"failure", "timed_out"})
 
 NO_PR_GUIDANCE = (
@@ -87,12 +92,29 @@ def rebase_command() -> str:
 
 
 def review_check_runs(check_runs) -> list:
-    """The review-stage check runs among a head's check runs, by job name.
+    """The review RUNS among a head's check runs, by job name — the checks
+    that report whether the event-driven run survived.
+
     Name matching is fine HERE — this is a harness observation inside a
     sandbox whose workflows we author, not a security gate (the gate's own
     review-run exclusion is by verified origin, DRE-1994, which needs the
-    actions:read permission neither harness App has)."""
-    return [r for r in check_runs if "review" in ((r.get("name") or "").lower())]
+    actions:read permission neither harness App has).
+
+    The head-bound `QA critic review` record is EXCLUDED, because it is not
+    a run at all (DRE-2291): publish_review_check.py writes it from inside a
+    review that reached its end, and its conclusion reports the VERDICT —
+    `REQUEST_CHANGES` is a red check on a review route that worked
+    perfectly. reconcile draws the same line on this surface from the other
+    side (`_authoritative_review_checks`), and refuses to call a head
+    crashed while a verdict binds it. What the critic SAID is the verdict
+    wait's question, one clause below, which can tell a rejection from a
+    crash where a check conclusion cannot.
+    """
+    return [
+        r for r in check_runs
+        if "review" in ((r.get("name") or "").lower())
+        and (r.get("name") or "") != HEAD_BOUND_CHECK_NAME
+    ]
 
 
 def receipt_count(comments, worker_login: str, head_sha: str) -> int:
@@ -189,7 +211,7 @@ class DependabotFlow(framework.Scenario):
         ]
         if red:
             raise ScenarioFailure(
-                f"review run crashed red on the dependabot head "
+                f"review RUN crashed red on the dependabot head "
                 f"{tracker['head']}: "
                 f"{[(r.get('name'), r.get('conclusion')) for r in red]} — "
                 "the DRE-2047/2067 class (empty Dependabot secrets store "
