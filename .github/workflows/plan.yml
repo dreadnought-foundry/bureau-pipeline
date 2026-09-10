@@ -1159,10 +1159,23 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
-          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" \
-            | python3 .bureau-pipeline/scripts/plan_critic.py mechanical \
-                --surfaces-dir console/design/images/screens \
-                --note-file "$NOTE"
+          # Two board reads, saved rather than piped once (DRE-3398): the seam
+          # reader needs the same children the mechanical check reads AND the
+          # `blocks` relations only `children-detail` carries.
+          CHILDREN="${{ runner.temp }}/plan-children.json"
+          DETAIL="${{ runner.temp }}/plan-children-detail.json"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" > "$CHILDREN"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$DETAIL"
+          python3 .bureau-pipeline/scripts/plan_critic.py mechanical \
+              --surfaces-dir console/design/images/screens \
+              --note-file "$NOTE" < "$CHILDREN"
+          # The seam, appended to the SAME note — one comment carrying both.
+          # It also writes the structural file the decision step is gated on,
+          # so this step is what makes a two-epic plan a send-back.
+          python3 .bureau-pipeline/scripts/plan_seam.py findings \
+              --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
           # The same file the critic is handed, so the list on the epic is
           # byte-for-byte the list the model read.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -1262,6 +1275,14 @@ jobs:
           # pipeline's own markers from a comment anyone on the epic left.
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
             --with-authors > "${{ runner.temp }}/plan-critic-thread.json"
+          # The one mechanical finding that is a DECISION and not input
+          # (DRE-3398). It rewrites the result file before `decide` reads it,
+          # so an observation-gated seam inside one epic is a send-back
+          # whatever the critic wrote — and refuses outright if the seam check
+          # never ran, because that is not the same fact as no seam.
+          python3 .bureau-pipeline/scripts/plan_seam_gate.py gate \
+            --result-file "${{ runner.temp }}/plan-critic-pre.md" \
+            --structural-file "${{ runner.temp }}/plan-structural.txt"
           python3 .bureau-pipeline/scripts/plan_critic.py decide \
             --stage pre \
             --epic "$EPIC" \
@@ -1307,6 +1328,15 @@ jobs:
 
             ${{ steps.pre1.outputs.findings }}
 
+            ONE FINDING IS NOT FIXED BY EDITING CARDS. A finding that reads
+            `wait on observing … live — that is a second epic` says the plan is
+            TWO epics, so reordering the cards or rewording them answers
+            nothing: say so in the artifact's summary, cancel the cards on the
+            far side of the seam here, and file the second epic as a SIBLING of
+            this one — the same parent, its own number — with those cards
+            re-created under it and blocked on this epic's PROOF card, in the
+            shape DRE-3164/DRE-3245 took.
+
             Fix EVERY one of them and nothing else. The critic names everything
             it sees in the round it sees it, so this list is the whole of what
             it found — round 2 checks these fixes rather than finding them
@@ -1331,7 +1361,11 @@ jobs:
           BOUNCE_FILE="${{ runner.temp }}/proof-demo-bounce.md"
           # Both bounce notes are written into the job's shared temp, so the
           # revision's verdict must never be read off the first pass's file.
-          rm -f "${{ runner.temp }}/plan-critic-pre.md" "$BOUNCE_FILE"
+          # The seam goes with it (DRE-3398): a round-2 decision reading round
+          # 1's structural file would send back a plan that answered the seam
+          # by splitting the epic, and the gate refuses an absent file, so the
+          # step that rewrites it is not optional.
+          rm -f "${{ runner.temp }}/plan-critic-pre.md" "${{ runner.temp }}/plan-structural.txt" "$BOUNCE_FILE"
           python3 .bureau-pipeline/scripts/validate_card.py check-children "$EPIC"
           python3 .bureau-pipeline/scripts/plan_artifact.py check \
             "${{ runner.temp }}/plan-artifact.md" \
@@ -1360,10 +1394,20 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           NOTE="${{ runner.temp }}/plan-mechanical.md"
-          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" \
-            | python3 .bureau-pipeline/scripts/plan_critic.py mechanical \
-                --surfaces-dir console/design/images/screens \
-                --note-file "$NOTE"
+          CHILDREN="${{ runner.temp }}/plan-children.json"
+          DETAIL="${{ runner.temp }}/plan-children-detail.json"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-json "$EPIC" > "$CHILDREN"
+          python3 .bureau-pipeline/scripts/linear_ops.py children-detail "$EPIC" > "$DETAIL"
+          python3 .bureau-pipeline/scripts/plan_critic.py mechanical \
+              --surfaces-dir console/design/images/screens \
+              --note-file "$NOTE" < "$CHILDREN"
+          # Re-read against the REVISION, and the structural file rewritten with
+          # it — the re-check above deleted round 1's, so a plan that answered
+          # the seam by splitting the epic passes round 2 with no seam at all.
+          python3 .bureau-pipeline/scripts/plan_seam.py findings \
+              --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
@@ -1453,6 +1497,12 @@ jobs:
           # pipeline's own markers from a comment anyone on the epic left.
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
             --with-authors > "${{ runner.temp }}/plan-critic-thread.json"
+          # Round 2 reads round 2's seam: the re-check deleted round 1's
+          # structural file and the mechanical step above rewrote it against
+          # the revision (DRE-3398).
+          python3 .bureau-pipeline/scripts/plan_seam_gate.py gate \
+            --result-file "${{ runner.temp }}/plan-critic-pre.md" \
+            --structural-file "${{ runner.temp }}/plan-structural.txt"
           python3 .bureau-pipeline/scripts/plan_critic.py decide \
             --stage pre \
             --epic "$EPIC" \
