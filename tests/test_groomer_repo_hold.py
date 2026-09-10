@@ -65,6 +65,10 @@ from test_groomer_decisions import FakeOps, PROPOSAL_CARD  # noqa: E402
 
 HELD = "atlas"
 DOC = ROOT / "docs" / "groomer.md"
+#: The rules-only page as `main` rendered it BEFORE this card — written by that
+#: groomer, so the parity test below compares against yesterday's bytes rather
+#: than against today's code agreeing with itself.
+GOLDEN_RENDER = ROOT / "tests" / "fixtures" / "groom_rules_only_render.md"
 HELD_HEADING = "## Held repos — switched off by you"
 
 
@@ -274,8 +278,9 @@ def test_the_held_rows_are_sorted_by_cards_descending_then_slug():
 
 
 def test_a_held_card_never_reaches_the_model(monkeypatch):
-    """BEFORE `groom_judgement.census` is built: a card the model never sees
-    cannot be ranked, and cannot be ranked `now` into a batch."""
+    """The marker on the card, end to end: the cards are gone BEFORE
+    `groom_judgement.census` is built, so a card the model never sees cannot be
+    ranked, and cannot be ranked `now` into a batch."""
     cards = lane(atlas=12, portico=4)
     seen: list = []
     # BEFORE the patch below, or the canned judgement would build through the
@@ -286,6 +291,9 @@ def test_a_held_card_never_reaches_the_model(monkeypatch):
         seen.append([row["identifier"] for row in rows])
         return answer
 
+    ops = FakeOps([held()])
+    monkeypatch.setattr(groomer.linear_ops, "comment_records",
+                        ops.comment_records)
     monkeypatch.setattr(groomer, "read_population", lambda lops, l: cards)
     monkeypatch.setattr(groomer, "read_cycles", lambda lops: CYCLES)
     monkeypatch.setattr(groom_context, "read_pack", lambda lops: PACK)
@@ -293,11 +301,15 @@ def test_a_held_card_never_reaches_the_model(monkeypatch):
 
     built = groomer._build(argparse.Namespace(
         lane="Intake", capacity=20, batch_cycles=1, judgement=True,
-        window_days=groomer.WINDOW_DAYS, keep_answer=None, post=None,
-        hold_repo=[HELD], priority=",".join(groomer.REPO_PRIORITY)))
+        window_days=groomer.WINDOW_DAYS, keep_answer=None,
+        post=PROPOSAL_CARD, hold_repo=[],
+        priority=",".join(groomer.REPO_PRIORITY)))
     assert seen, "no census was built at all"
     assert seen[0] == [f"DRE-{200 + n:03d}" for n in range(4)]
     assert built["held_repos"] == [{"repo": HELD, "cards": 12}]
+    assert built["offered"] == built["population"] - 12
+    assert batched(built) == [f"DRE-{200 + n:03d}" for n in range(4)]
+    assert "- held: atlas · 12 cards" in groomer.render_proposal(built)
 
 
 def test_a_held_card_is_never_counted_against_the_capacity():
@@ -430,19 +442,28 @@ def _fixture(**kw):
         judgement=None, **kw)
 
 
-def test_a_proposal_with_no_hold_renders_exactly_as_today():
+def test_a_proposal_with_no_hold_renders_byte_for_byte_as_today():
+    """The parity that keeps the switch cheap to leave in place.
+
+    `groom_rules_only_render.md` is the page this fixture rendered on `main`
+    BEFORE this card, written by that groomer and not by this one — so this is
+    a comparison against yesterday's bytes rather than against today's code
+    agreeing with itself.
+    """
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     built = _fixture()
     assert built["held_repos"] == []
     assert built["offered"] == built["population"]
-    # The rules-only JSON is the audit's own comparison (DRE-3151), and it is
-    # held byte for byte in tests/test_groomer.py against this same fixture.
-    text = groomer.render_proposal(built)
-    assert HELD_HEADING not in text
-    assert groomer.render_proposal(_fixture(held_repos=())) == text
     assert built["id"] == golden["proposal"]["id"], (
         "an empty hold moved the proposal id"
     )
+    text = groomer.render_proposal(built)
+    assert HELD_HEADING not in text
+    assert text == GOLDEN_RENDER.read_text(encoding="utf-8"), (
+        "a proposal with no hold no longer renders as it did before DRE-3403"
+    )
+    # …and an empty hold is the same thing as no hold at all.
+    assert groomer.render_proposal(_fixture(held_repos=())) == text
 
 
 # --------------------------------------------------------------------------

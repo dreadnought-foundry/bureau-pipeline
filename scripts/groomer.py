@@ -1808,7 +1808,7 @@ def render_proposal(proposal: dict) -> str:
     for row in proposal.get("held_blockers") or []:
         add(f"- {row['identifier']} — blocked by a held repo: {row['blocked_by']} "
             f"is in {row['repo']}, which you switched off. It stays in the "
-            f"batch and the dependency gate holds it until then.")
+            f"batch, and the dependency gate holds it until that card is done.")
     add("")
     unreadable = proposal["collisions"]["unreadable"]
     if unreadable:
@@ -2471,16 +2471,20 @@ def proposal_record(pid: str, records: list[dict]) -> dict | None:
 
 
 def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
-    """Move the APPROVED batch onward — minus every exclusion, plus every
-    addition — in the order the record carries.
+    """Move the APPROVED batch onward — minus every exclusion and every card in
+    a repo the CEO has switched off, plus every addition — in the order the
+    record carries.
 
     The batch is READ, never re-derived (DRE-3338): the approval names an id,
     the proposal comment carrying that id is the record, and the cards in its
     batch table are the cards that move. The CEO's per-card decisions
     (DRE-3370) are read off the same thread and adjust that list: an excluded
     card stays where it is, an added card moves after the batch on the batch's
-    own cycle. No model is called and the population is never re-read — a drain
-    is a move, not a judgement.
+    own cycle. The repo switch (DRE-3403) is read off that same thread at DRAIN
+    time, so a hold written after the proposal was posted still holds its cards
+    back — `held back`, `repo held: <slug>` — while the rest of the batch
+    moves. No model is called and the population is never re-read — a drain is
+    a move, not a judgement.
 
     Refuses, before any card moves: a closed pen, a terminal destination, a
     missing / pipeline-written / declined approval, an approval whose proposal
