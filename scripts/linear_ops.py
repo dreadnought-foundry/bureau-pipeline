@@ -1898,7 +1898,11 @@ def create_card(title: str, description: str, *, repo_slug: str,
     slug = validated_repo_slug(repo_slug)
     teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
     team_id = teams["teams"]["nodes"][0]["id"]
-    names = [f"repo:{slug}", *labels]
+    # Deduplicated here, not only inside _team_label_ids: a caller that names
+    # the whole label set (repair_card does, so its answer is readable in one
+    # place) would otherwise print `repo:<slug>` twice in a receipt whose write
+    # carried it once.
+    names = list(dict.fromkeys([f"repo:{slug}", *labels]))
     data = gql(
         """mutation($input: IssueCreateInput!) {
              issueCreate(input: $input) { success issue { id identifier url } } }""",
