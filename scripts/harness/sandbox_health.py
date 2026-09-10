@@ -25,12 +25,23 @@ Three rules, each of which is a test:
     serve, a cancelled run — none of those block anything. Inventing a block
     from missing data would fail every harness run on a GitHub blip, which is
     the same outage wearing the opposite hat.
+
+The probe answers a SECOND question at the same checkpoint (DRE-3453): when
+did the sandbox last start anything? A healthy sandbox answers "nothing has
+failed" forever, which is exactly what it answered on 2026-09-07, -08 and -09
+while `gate_paths` waited seventy minutes for a comment nobody was ever going
+to write. `newest_run_at` is the other half — the wait ends after two
+consecutive probes that find the sandbox has started nothing since it began.
+The two are opposite verdicts and must not be confused: a quote means *not
+the commit's fault*, an idle sandbox means *this pull request will never get
+what it is waiting for*.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import medic_classify
@@ -246,6 +257,68 @@ def failure_in(runs, gh, repo: str, log: Callable = print) -> Optional[SandboxFa
     )
 
 
+def epoch(stamp) -> Optional[float]:
+    """An ISO8601 REST timestamp as epoch seconds, or None when there is not
+    one to read. None is UNKNOWN, and unknown never decides anything."""
+    if not stamp:
+        return None
+    try:
+        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.timestamp()
+
+
+def newest_run_at(gh, repo: str, log: Callable = print) -> Optional[float]:
+    """When the sandbox last STARTED anything, as epoch seconds — or None.
+
+    The second question the deadline asks (DRE-3453). `latest_failure` answers
+    "did the machinery break?", which a healthy sandbox answers no to forever;
+    this answers "is the sandbox doing anything at all?", which is what the
+    2026-09-07/08/09 hangs actually needed. It reads runs of EVERY status and
+    of every workflow: an in-progress critic review is activity, and so is a
+    product-CI run the machinery filter would drop.
+
+    None means unknown — an unreadable listing, an undated record, a client
+    that does not offer the call — and unknown is never idle.
+    """
+    lister = getattr(gh, "list_recent_runs", None)
+    if lister is None:
+        return None
+    try:
+        runs = list(lister(repo) or ())
+    except Exception as e:  # a probe must never be the thing that fails a run
+        log(f"sandbox probe: could not list {repo} recent runs ({e})")
+        return None
+    stamps = [
+        at
+        for at in (
+            epoch((run or {}).get("created_at"))
+            for run in runs
+            if isinstance(run, dict)
+        )
+        if at is not None
+    ]
+    return max(stamps) if stamps else None
+
+
+@dataclass
+class ProbeReport:
+    """What one liveness probe found: the sandbox's last words if its
+    machinery has FAILED, and when it last started anything.
+
+    Two facts, one read, because they are asked at the same checkpoint and
+    mean opposite things — `quote` is *not the commit's fault* (the run stops
+    and re-proves later), `newest_run_at` feeds *the sandbox will never do
+    this* (a statement about the pull request under test).
+    """
+
+    quote: Optional[str] = None
+    newest_run_at: Optional[float] = None
+
+
 def probe(clients, repo: str, log: Callable = print) -> Callable:
     """The callable `HarnessContext.sandbox_probe` holds.
 
@@ -254,11 +327,11 @@ def probe(clients, repo: str, log: Callable = print) -> Callable:
     a client that cannot see the listing falls through to the next rather than
     turning a slow sandbox into a blocked one.
 
-    Returns a function `(description, elapsed) -> quote | None`.
+    Returns a function `(description, elapsed) -> ProbeReport`.
     """
     usable = [c for c in clients if c is not None]
 
-    def ask(description: str, elapsed: float) -> Optional[str]:
+    def ask(description: str, elapsed: float) -> ProbeReport:
         log(
             f"sandbox probe: {elapsed:.0f}s waiting for {description} — "
             f"checking whether {repo}'s own machinery is alive"
@@ -272,8 +345,8 @@ def probe(clients, repo: str, log: Callable = print) -> Callable:
             failure = failure_in(runs, client, repo, log=log)
             if failure:
                 log(f"sandbox probe: {failure.quote()}")
-                return failure.quote()
-            return None
+                return ProbeReport(quote=failure.quote())
+            return ProbeReport(newest_run_at=newest_run_at(client, repo, log=log))
         # Loud on purpose (Q1/Q2 of the vendor premortem): reading Actions
         # runs is an `actions: read` grant, which is not the checks grant the
         # qa App is proven for. If neither installation has it the fail-fast
@@ -282,6 +355,6 @@ def probe(clients, repo: str, log: Callable = print) -> Callable:
         log("::warning::sandbox probe: no identity could read "
             f"{repo}'s workflow runs — the sandbox is UNKNOWN, not dead, so "
             "this wait runs its full budget (needs `actions: read`)")
-        return None
+        return ProbeReport()
 
     return ask

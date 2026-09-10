@@ -16,7 +16,15 @@ PR:
     binds the new head;
   * REAL-PR POSTURE: when the sandbox's genuine Dependabot PR is
     observable, its gate arm (major/unprovable → human once + untouched;
-    provable minor/patch + bound APPROVE → auto-merge) is asserted too.
+    provable minor/patch + bound APPROVE → auto-merge) is asserted too;
+  * GIVING UP HONESTLY (DRE-3453): the named leg's second wake is a critic
+    comment on the probe, and both ways of never getting one now END the
+    wait in minutes with the cause named — a verdict that is DELETED after
+    it was posted (probe #1494, comment 5607416317), and a sandbox that is
+    alive but doing nothing at all (probe #1407). Neither may cost the
+    critic's full 4,200-second budget, and every give-up names the critic's
+    published check on the head, whether a verdict exists now, and the
+    critic's last run.
 
 The LIVE scenario mocks nothing GitHub-side; this suite drives its LOGIC
 against the shared FakeGitHub, with a per-leg driver standing in for the
@@ -35,6 +43,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import merge_gate  # noqa: E402
 from harness import framework  # noqa: E402
+from harness import sandbox_health  # noqa: E402
 from harness import scenarios  # noqa: E402
 from harness.scenarios import gate_paths  # noqa: E402
 from test_harness_bot_pr_flow import QA, WORKER, FakeGitHub, _FakeTime  # noqa: E402
@@ -46,8 +55,14 @@ MERGE_GATE_YML = (
 )
 
 
+#: A wall-clock instant for the idle-sandbox replay. The liveness probe reads
+#: Actions run timestamps, which are epoch-shaped — the monotonic fake clock
+#: above cannot stand in for them.
+WALL_NOW = 1_757_000_000.0
+
 def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE,
-         faketime=None):
+         faketime=None, sandbox_probe=None, wait_deadline=None,
+         verdict_timeout=100, merge_timeout=100):
     # Composed the way __main__ composes it: the namespace OPENS the run id,
     # so the run's branches sit in the slice its own sweep owns (DRE-3075).
     run_id = framework.namespaced_run_id(namespace, run_id)
@@ -60,11 +75,17 @@ def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE,
         namespace=namespace,
         worker_login=WORKER,
         qa_login=QA,
-        verdict_timeout=100,
-        merge_timeout=100,
+        verdict_timeout=verdict_timeout,
+        merge_timeout=merge_timeout,
         poll_interval=1,
         clock=faketime.clock,
         sleep=faketime.sleep,
+        wall_clock=lambda: WALL_NOW,
+        wait_deadline=(
+            framework.WAIT_DEADLINE_SECONDS if wait_deadline is None
+            else wait_deadline
+        ),
+        sandbox_probe=sandbox_probe,
         log=lambda *_: None,
     )
 
@@ -114,25 +135,41 @@ class LegDriver:
                 gh.branches.pop(pr["head"]["ref"], None)
                 self.state["named_verdict"] = True
                 return
+            if mode == "no_verdict":
+                # Probe #1407's shape: the gate has held the PR, and nothing
+                # else in the sandbox ever happens on it. The critic's comment
+                # — the second gate wake — never arrives.
+                return
             # The critic reviews dependabot/** branches too — its comment
-            # is the second gate wake.
+            # is the second gate wake, and it publishes its head-bound check
+            # alongside it (publish_review_check.py).
             if mode == "quote":
                 # The critic reasoning out loud about the state it found:
                 # its verdict PROSE quotes the gate's status line. Same
                 # login as the note (one App, two steps), so only the
-                # comment's shape separates the two.
-                gh.comments.setdefault(n, []).append({
-                    "user": {"login": QA},
-                    "body": (
-                        f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: "
-                        f"REQUEST_CHANGES @{pr['head']['sha']}\n\n"
-                        f"## Summary\nThe gate has already posted "
-                        f"`{gate_paths.HUMAN_WAIT_MARKER}` here, so nothing "
-                        "merges on my verdict.\n"
-                    ),
-                })
+                # comment's shape separates the two. Posted through the
+                # fake's own minter, so it carries an id like every other
+                # comment — the deletion watch reads ids (DRE-3453) and a
+                # fixture without one would be invisible to it.
+                gh._add_comment(
+                    n,
+                    QA,
+                    f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: "
+                    f"REQUEST_CHANGES @{pr['head']['sha']}\n\n"
+                    f"## Summary\nThe gate has already posted "
+                    f"`{gate_paths.HUMAN_WAIT_MARKER}` here, so nothing "
+                    "merges on my verdict.\n",
+                )
             else:
                 gh.post_verdict(n, "REQUEST_CHANGES", pr["head"]["sha"])
+            gh.check_runs.setdefault(pr["head"]["sha"], []).append(
+                {
+                    "name": gate_paths.CRITIC_CHECK_NAME,
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "output": {"title": f"REQUEST_CHANGES @{pr['head']['sha']}"},
+                }
+            )
             self.state["named_verdict"] = True
             if mode == "touch":
                 gh.gate_update_branch(n)
@@ -409,6 +446,26 @@ class HumanPathTest(unittest.TestCase):
         # Not "slow": nothing can ever arrive, so sitting out the verdict
         # budget only buys a timeout that names the wrong culprit.
         self.assertLess(faketime.now, _ctx(FakeGitHub()).verdict_timeout)
+        # …and this path carries the diagnosis too (DRE-3453): "on any path"
+        # means the give-up line is a property of the leg, not of the two
+        # causes that motivated it.
+        self.assertIn(gate_paths.CRITIC_CHECK_NAME.lower(), errors)
+        self.assertIn("verdict comment for", errors)
+
+    def test_an_honest_timeout_carries_the_diagnosis_too(self):
+        # No liveness probe wired (the operator's `0`, and every unit run) —
+        # so the leg reaches its budget the old way. Even then the last line
+        # says what it could see, instead of only naming the critic.
+        gh = FakeGitHub()
+        gh.on_poll = LegDriver(named="no_verdict")
+        result = framework.run_scenario(
+            gate_paths.SCENARIO, _ctx(gh, wait_deadline=0)
+        )
+        errors = "\n".join(result.errors)
+        self.assertFalse(result.ok)
+        self.assertIn("timed out after", errors)
+        self.assertIn(gate_paths.CRITIC_CHECK_NAME, errors)
+        self.assertIn("verdict comment for", errors)
 
     def test_a_verdict_quoting_the_marker_is_not_a_second_waiting_state(self):
         """The once-only count separates the gate's note from the critic's
@@ -458,6 +515,184 @@ class HumanPathTest(unittest.TestCase):
             [c["body"] for c in waits], [note["body"]],
             "the critic's verdict was counted as a waiting-for-human note",
         )
+
+    def test_a_verdict_that_is_posted_and_KEPT_passes_unchanged(self):
+        # Probe #1498's shape — the run that passed in nine minutes on the
+        # same PR. The deletion watch (DRE-3453) must cost this path nothing.
+        gh = FakeGitHub()
+        result, gh = _run(LegDriver(), gh=gh)
+        self.assertTrue(result.ok, result.errors)
+        named = _find(gh, "-named")
+        verdicts = [
+            c for c in gh.comments[named["number"]]
+            if "VERDICT:" in (c.get("body") or "")
+        ]
+        self.assertEqual(len(verdicts), 1, "the critic's verdict must survive")
+
+
+class DeletedVerdictSandbox(FakeGitHub):
+    """The sandbox of probe #1494 (DRE-3453): the critic's verdict on the
+    named leg is posted, read ONCE, and then deleted out from under the wait.
+
+    The deletion is keyed on the read rather than on a poll count so the
+    replay stays exact if the scenario's polling changes: the named PR's
+    comments are read by nothing but the named leg's own two waits.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.deleted_id = None
+        self._reads = 0
+
+    def list_comments(self, repo, number):
+        comments = super().list_comments(repo, number)
+        ref = ((self.prs.get(number) or {}).get("head") or {}).get("ref", "")
+        if "-named" not in ref:
+            return comments
+        verdict = next(
+            (c for c in comments if "VERDICT:" in (c.get("body") or "")), None
+        )
+        if verdict is None:
+            return comments
+        self._reads += 1
+        if self._reads >= 2:  # observed once, gone by the next poll
+            self.delete_comment(number, verdict["id"])
+            self.deleted_id = verdict["id"]
+            comments = [c for c in comments if c["id"] != verdict["id"]]
+        return comments
+
+
+def _idle_sandbox_probe(asked):
+    """A liveness probe over a sandbox that is ALIVE (nothing has failed) and
+    IDLE (its newest run predates this wait). Shaped as sandbox_health.probe's
+    callable, which is what wires the two facts together in production."""
+
+    def ask(description, elapsed):
+        asked.append(elapsed)
+        return sandbox_health.ProbeReport(
+            quote=None, newest_run_at=WALL_NOW - 900.0
+        )
+
+    return ask
+
+
+class DeletedVerdictTest(unittest.TestCase):
+    """DRE-3453 — a verdict that is posted and then deleted is a SENTENCE.
+
+    2026-09-09, PR #329 attempts 1 and 2 (runs 34385950560): the critic posted
+    `REQUEST_CHANGES @d3155ae8` on probe #1494 at 12:20:30 PT as comment
+    5607416317, and by 13:38 that comment answered 404. `poll_critic` reads
+    `verdict_state`, which is a question about the comments that exist NOW, so
+    a deleted verdict is indistinguishable from one that has not been written
+    — and the leg waited out its whole 4,200-second budget, twice, reporting a
+    timeout against a critic that had done its job.
+    """
+
+    def setUp(self):
+        self.faketime = _FakeTime()
+        self.gh = DeletedVerdictSandbox()
+        self.gh.workflow_runs = [
+            {
+                "id": 34385950560,
+                "name": "QA Review (reusable)",
+                "path": ".github/workflows/qa-review.yml",
+                "status": "completed",
+                "conclusion": "success",
+                "updated_at": "2026-09-09T19:22:00Z",
+            }
+        ]
+        self.result, _ = _run(
+            LegDriver(named="happy"), gh=self.gh, faketime=self.faketime
+        )
+        self.errors = "\n".join(self.result.errors)
+
+    def test_the_deletion_is_named_with_the_comment_id(self):
+        self.assertFalse(self.result.ok)
+        self.assertEqual(self.result.failed_phase, "verify")
+        self.assertIsNotNone(self.gh.deleted_id, "the replay never deleted")
+        self.assertIn("deleted after it was posted", self.errors)
+        self.assertIn(str(self.gh.deleted_id), self.errors)
+
+    def test_the_last_known_verdict_line_is_reported(self):
+        self.assertIn("REQUEST_CHANGES", self.errors)
+
+    def test_it_fails_within_a_poll_interval_not_at_the_verdict_budget(self):
+        # The whole card: a deletion costs one poll, never seventy minutes.
+        self.assertLess(self.faketime.now, _ctx(FakeGitHub()).verdict_timeout)
+
+    def test_the_give_up_message_names_what_the_scenario_can_see(self):
+        # The critic's published check on h1, whether a verdict comment for h1
+        # exists now, and the critic's last run — the three facts that turn
+        # this run's last line into the diagnosis.
+        self.assertIn(gate_paths.CRITIC_CHECK_NAME, self.errors)
+        self.assertIn("verdict comment for", self.errors)
+        self.assertIn("qa-review", self.errors)
+
+
+class IdleSandboxTest(unittest.TestCase):
+    """DRE-3453 — a wait gives up on an IDLE sandbox after two probes.
+
+    Probe #1407's shape and the 2026-09-07/08 hangs: the gate has posted its
+    hold, the sandbox's machinery is healthy (so `sandbox_health` reports no
+    failure and the pre-existing fail-fast stays silent), and nothing further
+    is ever going to happen on this PR. The old behaviour was to sit out the
+    critic's own 65-minute job budget and then blame the critic.
+    """
+
+    def setUp(self):
+        self.faketime = _FakeTime()
+        self.asked = []
+        gh = FakeGitHub()
+        gh.workflow_runs = [
+            {
+                "id": 34290739524,
+                "name": "QA Review (reusable)",
+                "path": ".github/workflows/qa-review.yml",
+                "status": "completed",
+                "conclusion": "success",
+                "updated_at": "2026-09-08T17:10:00Z",
+            }
+        ]
+        gh.on_poll = LegDriver(named="no_verdict")
+        self.result = framework.run_scenario(
+            gate_paths.SCENARIO,
+            _ctx(
+                gh,
+                faketime=self.faketime,
+                sandbox_probe=_idle_sandbox_probe(self.asked),
+                verdict_timeout=framework.VERDICT_TIMEOUT_SECONDS,
+                merge_timeout=framework.MERGE_TIMEOUT_SECONDS,
+            ),
+        )
+        self.errors = "\n".join(self.result.errors)
+
+    def test_it_gives_up_after_two_idle_probes_not_at_seventy_minutes(self):
+        self.assertFalse(self.result.ok)
+        self.assertEqual(self.result.failed_phase, "verify")
+        self.assertEqual(
+            len(self.asked), 2,
+            f"two consecutive idle probes end the wait, got {self.asked}",
+        )
+        self.assertAlmostEqual(
+            self.asked[-1], 2 * framework.WAIT_DEADLINE_SECONDS, delta=60.0
+        )
+        self.assertLess(self.faketime.now, framework.VERDICT_TIMEOUT_SECONDS)
+
+    def test_it_says_the_sandbox_will_not_do_the_thing(self):
+        self.assertIn("waiting for something the sandbox will not do", self.errors)
+        self.assertIn("critic comment", self.errors)
+
+    def test_a_healthy_idle_sandbox_is_not_reported_as_BLOCKED(self):
+        # Nothing in the sandbox FAILED, so this is a statement about the
+        # commit's PR, not a reason to stop the run and re-prove later.
+        self.assertIsNone(self.result.blocked)
+
+    def test_the_give_up_message_names_what_the_scenario_can_see(self):
+        # No critic check was ever published on h1 here — the message must say
+        # so by name rather than omitting the fact.
+        self.assertIn(gate_paths.CRITIC_CHECK_NAME, self.errors)
+        self.assertIn("verdict comment for", self.errors)
+        self.assertIn("qa-review", self.errors)
 
 
 class RealPrPostureTest(unittest.TestCase):

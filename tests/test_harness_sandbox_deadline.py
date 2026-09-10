@@ -409,6 +409,178 @@ class EveryWaitCarriesTheDeadlineTest(unittest.TestCase):
         self.assertGreater(ctx.wait_deadline, 0)
 
 
+# ── an ALIVE but IDLE sandbox: the second thing the deadline can find ──────
+class IdleSandbox(FakeSandbox):
+    """A sandbox whose machinery is healthy and whose newest run is older than
+    the wait asking about it. `list_recent_runs` — not `list_workflow_runs` —
+    because a run that is still IN PROGRESS is activity: the completed-only
+    listing would report a 40-minute critic review as an idle sandbox, which
+    is the false FAIL run 33274348041 already cost us."""
+
+    def __init__(self, runs, newest_created=None, in_progress=()):
+        super().__init__(runs)
+        self.recent_calls = 0
+        self._recent = list(runs) + list(in_progress)
+        if newest_created is not None:
+            self._recent = [dict(r, created_at=newest_created)
+                            for r in self._recent]
+
+    def list_recent_runs(self, repo, per_page=50):
+        self.recent_calls += 1
+        return list(self._recent)
+
+
+class IdleWaitTest(unittest.TestCase):
+    """DRE-3453 — the deadline's SECOND question, on the same clock.
+
+    `SandboxBlocked` answers "did the sandbox's machinery just fail?" and a
+    healthy sandbox answers no forever. On 2026-09-07/08/09 the sandbox was
+    healthy and simply never going to produce the thing the wait wanted, so
+    the harness sat for its full 4,200-second budget and then named a timeout.
+    Two consecutive probes that find no run created since the wait began end
+    it instead — twenty minutes, on the clock that was already running.
+    """
+
+    WALL = 1_757_000_000.0
+
+    def _ctx(self, probe, **kwargs):
+        clock = Clock()
+        ctx = framework.HarnessContext(
+            gh=None, repo=SANDBOX, run_id="gha-1-1",
+            clock=clock, sleep=clock.sleep, log=lambda *a: None,
+            wall_clock=lambda: self.WALL, sandbox_probe=probe, **kwargs,
+        )
+        return ctx, clock
+
+    def _probe(self, newest_at, asked=None):
+        def ask(description, elapsed):
+            (asked if asked is not None else []).append(elapsed)
+            at = newest_at(elapsed) if callable(newest_at) else newest_at
+            return sandbox_health.ProbeReport(quote=None, newest_run_at=at)
+
+        return ask
+
+    def test_two_idle_probes_end_the_wait_naming_what_it_wanted(self):
+        asked = []
+        ctx, clock = self._ctx(self._probe(self.WALL - 900.0, asked))
+        with self.assertRaises(framework.SandboxIdle) as caught:
+            ctx.wait("a critic comment on PR #1494", lambda: None,
+                     timeout=ctx.verdict_timeout)
+        self.assertIn(
+            "waiting for something the sandbox will not do: "
+            "a critic comment on PR #1494",
+            str(caught.exception),
+        )
+        self.assertEqual(len(asked), 2)
+        self.assertLessEqual(clock.now, 2 * framework.WAIT_DEADLINE_SECONDS + 60)
+
+    def test_a_run_created_between_probes_resets_the_count(self):
+        asked = []
+        # Every probe finds a run created since the previous one: the sandbox
+        # is working, so the wait keeps its full budget.
+        ctx, clock = self._ctx(
+            self._probe(lambda elapsed: self.WALL + elapsed, asked)
+        )
+        with self.assertRaises(framework.HarnessTimeout) as caught:
+            ctx.wait("a slow but real verdict", lambda: None,
+                     timeout=ctx.verdict_timeout)
+        self.assertNotIsInstance(caught.exception, framework.SandboxIdle)
+        self.assertGreaterEqual(clock.now, ctx.verdict_timeout)
+        self.assertGreater(len(asked), 2)
+
+    def test_one_idle_probe_is_not_enough(self):
+        """A single quiet ten minutes is ordinary — the gate's own wake is
+        driven by reconcile's ~15-minute nudge."""
+        asked = []
+        ctx, _ = self._ctx(
+            self._probe(
+                lambda elapsed: self.WALL - 900.0 if len(asked) < 2
+                else self.WALL + elapsed,
+                asked,
+            )
+        )
+        with self.assertRaises(framework.HarnessTimeout) as caught:
+            ctx.wait("a merge", lambda: None, timeout=ctx.verdict_timeout)
+        self.assertNotIsInstance(caught.exception, framework.SandboxIdle)
+
+    def test_a_sandbox_whose_activity_is_unknown_is_never_idle(self):
+        """The probe's own rule, unchanged: unreadable is not dead. A probe
+        that cannot date the sandbox's runs must not invent a failure."""
+        ctx, clock = self._ctx(lambda description, elapsed: None)
+        with self.assertRaises(framework.HarnessTimeout) as caught:
+            ctx.wait("a verdict", lambda: None, timeout=ctx.verdict_timeout)
+        self.assertNotIsInstance(caught.exception, framework.SandboxIdle)
+        self.assertGreaterEqual(clock.now, ctx.verdict_timeout)
+
+    def test_a_dead_sandbox_still_wins_over_an_idle_one(self):
+        """`SandboxBlocked` is not a verdict on the commit and `SandboxIdle`
+        is — a sandbox that has FAILED must never be reported as the PR's
+        fault just because it is also quiet."""
+        cause = f"{promote_channel.BLOCKED_MARKER} sandbox Reconcile failed"
+        ctx, _ = self._ctx(
+            lambda description, elapsed: sandbox_health.ProbeReport(
+                quote=cause, newest_run_at=self.WALL - 900.0
+            )
+        )
+        with self.assertRaises(framework.SandboxBlocked):
+            ctx.wait("a verdict", lambda: None, timeout=ctx.verdict_timeout)
+
+    def test_the_idle_failure_is_a_timeout_not_a_block(self):
+        """It rides HarnessTimeout so every scenario's existing give-up
+        handler catches it and keeps its own wording."""
+        self.assertTrue(
+            issubclass(framework.SandboxIdle, framework.HarnessTimeout)
+        )
+        self.assertFalse(
+            issubclass(framework.SandboxIdle, framework.SandboxBlocked)
+        )
+
+
+class ProbeReportTest(unittest.TestCase):
+    """The shipped probe answers both questions in one pass (DRE-3453)."""
+
+    def test_the_probe_reports_the_newest_run_it_can_see(self):
+        gh = IdleSandbox(
+            [_run("reconcile.yml", "success")],
+            newest_created="2026-09-09T19:20:30Z",
+        )
+        report = sandbox_health.probe((gh,), SANDBOX, log=lambda *a: None)(
+            "a critic comment", 600.0
+        )
+        self.assertIsNone(report.quote)
+        self.assertEqual(
+            report.newest_run_at,
+            sandbox_health.epoch("2026-09-09T19:20:30Z"),
+        )
+
+    def test_an_in_progress_run_counts_as_activity(self):
+        """The completed-only listing cannot see a 40-minute critic review
+        that is still running; the activity read must."""
+        gh = IdleSandbox(
+            [_run("reconcile.yml", "success", updated="2026-09-09T18:00:00Z")],
+            in_progress=[{
+                "id": 7, "name": "QA Review", "status": "in_progress",
+                "path": ".github/workflows/qa-review.yml", "conclusion": None,
+                "created_at": "2026-09-09T19:20:30Z",
+            }],
+        )
+        report = sandbox_health.probe((gh,), SANDBOX, log=lambda *a: None)(
+            "a critic comment", 600.0
+        )
+        self.assertEqual(
+            report.newest_run_at,
+            sandbox_health.epoch("2026-09-09T19:20:30Z"),
+        )
+
+    def test_a_client_that_cannot_date_the_runs_reports_unknown(self):
+        gh = FakeSandbox([_run("reconcile.yml", "success")])
+        report = sandbox_health.probe((gh,), SANDBOX, log=lambda *a: None)(
+            "a critic comment", 600.0
+        )
+        self.assertIsNone(report.quote)
+        self.assertIsNone(report.newest_run_at)
+
+
 # ── a blocked run stops, says why, and is not a verdict on the commit ──────
 class BlockedRunTest(unittest.TestCase):
     def _blocking_scenario(self, cause):

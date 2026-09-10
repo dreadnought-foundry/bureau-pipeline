@@ -164,6 +164,25 @@ POLL_INTERVAL_SECONDS = 30.0
 # looking at.
 WAIT_DEADLINE_SECONDS = 10 * 60.0
 
+# How many CONSECUTIVE liveness probes may find the sandbox idle before the
+# wait gives up (DRE-3453). Two, on the deadline above, is twenty minutes —
+# and it is not a new clock: the probe was already running, and this reads the
+# answer it was already fetching.
+#
+# The deadline's original question — did the machinery FAIL? — a healthy
+# sandbox answers no to forever, so on 2026-09-07, 2026-09-08 (run 34290739524)
+# and twice on 2026-09-09 (run 34385950560) `gate_paths` waited its whole
+# 4,200-second verdict budget for a critic comment that had been posted and
+# then deleted, and reported a timeout against a critic that had done its job.
+# Every `stable` promotion behind it waited the hour and main read red.
+#
+# ONE is not enough: the merge gate's own wake is driven partly by reconcile's
+# ~15-minute nudge, so a single quiet ten minutes is ordinary. A run created
+# between probes resets the count, so a slow-but-working sandbox keeps its
+# full budget — the property `test_a_slow_but_healthy_sandbox_keeps_its_full
+# _budget` has protected since DRE-3076.
+IDLE_PROBE_LIMIT = 2
+
 #: The driver's exit code for "the SANDBOX blocked this run" — distinct from 1
 #: (a scenario failed, which is a statement about the commit) and 2 (bad
 #: invocation). Nothing is proven either way; the next run re-proves.
@@ -172,6 +191,17 @@ BLOCKED_EXIT = 3
 
 class HarnessTimeout(Exception):
     """A polled condition never became true within its budget."""
+
+
+class SandboxIdle(HarnessTimeout):
+    """The wait was for something the sandbox is never going to do (DRE-3453).
+
+    A TIMEOUT rather than a `SandboxBlocked`, in both senses that matter: it
+    IS a statement about the pull request under test — nothing in the sandbox
+    failed, it simply has no work to do on this PR — and it subclasses
+    `HarnessTimeout` so every scenario's existing give-up handler catches it
+    and keeps its own wording.
+    """
 
 
 class SandboxBlocked(Exception):
@@ -311,10 +341,17 @@ class HarnessContext:
     # (DRE-3076). 0 disables the check — the operator's escape hatch, and the
     # pre-DRE-3076 behaviour.
     wait_deadline: float = WAIT_DEADLINE_SECONDS
-    # `(description, elapsed) -> quote | None`, from sandbox_health.probe. None
-    # here means no probe is wired and every wait runs its full budget.
+    # `(description, elapsed) -> sandbox_health.ProbeReport`, from
+    # sandbox_health.probe. None here means no probe is wired and every wait
+    # runs its full budget. A bare `quote | None` is still understood — that
+    # was the contract before DRE-3453 and it carries no activity signal.
     sandbox_probe: Optional[Callable] = None
     clock: Callable[[], float] = time.monotonic
+    # WALL clock, separate from `clock` above: "has the sandbox started
+    # anything since this wait began?" compares against Actions' own
+    # `created_at` timestamps, which a monotonic counter cannot be measured
+    # against (DRE-3453).
+    wall_clock: Callable[[], float] = time.time
     sleep: Callable[[float], None] = time.sleep
     log: Callable = print
     state: dict = field(default_factory=dict)  # per-run scratch, phase→phase
@@ -338,6 +375,7 @@ class HarnessContext:
             sleep=self.sleep,
             deadline=self.wait_deadline,
             on_deadline=self.sandbox_probe,
+            started_at=self.wall_clock(),
         )
 
 
@@ -408,22 +446,46 @@ def run_scenario(scenario: Scenario, ctx: HarnessContext) -> ScenarioResult:
     return result
 
 
+def probe_answer(value) -> tuple:
+    """`(quote, newest_run_at)` out of whatever a liveness probe returned.
+
+    A bare string or None is the pre-DRE-3453 contract — a quote and nothing
+    else — and carries no activity signal, so a probe written against the old
+    shape leaves the idle check inert rather than wrong.
+    """
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        return value, None
+    return getattr(value, "quote", None), getattr(value, "newest_run_at", None)
+
+
 def wait_until(description, poll, timeout, interval, clock=time.monotonic,
-               sleep=time.sleep, deadline=None, on_deadline=None):
+               sleep=time.sleep, deadline=None, on_deadline=None,
+               started_at=None, idle_limit=IDLE_PROBE_LIMIT):
     """Poll until `poll()` returns truthy (that value is returned) or
     `timeout` seconds elapse (HarnessTimeout, naming what was awaited).
     Exceptions from poll() propagate — scenarios use that to fail fast on
     a state that can never become the awaited one.
 
-    `on_deadline(description, elapsed)` is the sandbox-liveness question
-    (DRE-3076), asked every `deadline` seconds and once more when the budget
-    expires. It returns a quote when the SANDBOX has failed, and that ends the
-    wait with `SandboxBlocked` — the run stops there rather than waiting out
-    the job's ceiling. It returns None for healthy and for unknown alike, and
-    the wait then keeps its full budget: a slow critic is not a dead sandbox.
+    `on_deadline(description, elapsed)` is the sandbox question (DRE-3076),
+    asked every `deadline` seconds and once more when the budget expires. It
+    reports two things, and they end the wait for opposite reasons:
 
-    Scenarios call `HarnessContext.wait`, which wires both from the context;
-    this signature is the mechanism, not the call site.
+      * a QUOTE — the sandbox's own machinery has failed. `SandboxBlocked`:
+        the run stops rather than waiting out the job's ceiling, and nothing
+        is proven about the commit either way.
+      * the sandbox's NEWEST RUN — when it last started anything (DRE-3453).
+        `idle_limit` consecutive probes finding nothing created since
+        `started_at` (wall clock) raise `SandboxIdle`, which IS a statement
+        about the pull request: it is waiting for something that will not
+        happen. A run created between probes resets the count, and an unknown
+        answer — no probe wired, an unreadable listing, an undated record —
+        never counts as idle, so a slow-but-working sandbox keeps its full
+        budget.
+
+    Scenarios call `HarnessContext.wait`, which wires all of it from the
+    context; this signature is the mechanism, not the call site.
     """
     start = clock()
     # `deadline <= 0` is the operator's off switch and means no liveness check
@@ -431,6 +493,9 @@ def wait_until(description, poll, timeout, interval, clock=time.monotonic,
     # keeps the check but only at expiry.
     probing = bool(on_deadline) and (deadline is None or deadline > 0)
     next_check = deadline if (probing and deadline) else None
+    # The reference the next probe measures activity against: the wait's own
+    # start until the sandbox does something, then whatever it last did.
+    last_activity, idle_probes = started_at, 0
     while True:
         value = poll()
         if value:
@@ -438,13 +503,26 @@ def wait_until(description, poll, timeout, interval, clock=time.monotonic,
         elapsed = clock() - start
         expired = elapsed >= timeout
         if probing and (expired or (next_check is not None and elapsed >= next_check)):
-            cause = on_deadline(description, elapsed)
+            cause, newest = probe_answer(on_deadline(description, elapsed))
             if cause:
                 raise SandboxBlocked(
                     f"{cause} — gave up after {elapsed:.0f}s waiting for "
                     f"{description}",
                     cause=cause,
                 )
+            if newest is None or last_activity is None:
+                idle_probes = 0  # unknown activity is never idle
+            elif newest > last_activity:
+                last_activity, idle_probes = newest, 0
+            else:
+                idle_probes += 1
+                if idle_limit and idle_probes >= idle_limit:
+                    raise SandboxIdle(
+                        f"waiting for something the sandbox will not do: "
+                        f"{description} — {idle_probes} consecutive liveness "
+                        f"probes over {elapsed:.0f}s found no sandbox run "
+                        f"created since this wait began"
+                    )
             if next_check is not None:
                 next_check = elapsed + deadline
         if expired:
@@ -679,6 +757,28 @@ def verdict_state(comments, qa_login: str, head_sha: str) -> tuple[str, str]:
                            f"content:{content_id}")
         return "stale", f"verdict bound to {sha}, head is {head_sha}"
     return token, line
+
+
+def latest_verdict_record(comments, qa_login: str) -> Optional[dict]:
+    """The comment RECORD `verdict_state` read its body out of, or None.
+
+    Same judgement, one level up: `merge_gate.latest_verdict_comment` is a
+    "latest of the matching" filter, so applied to a single-comment list it is
+    exactly the predicate — reused that way rather than re-implemented, for
+    the same reason `verdict_state` reuses it (a second parser can disagree
+    with the gate's, and then the harness is proving something else).
+
+    A scenario needs the record, not the body, to tell "no verdict yet" from
+    "a verdict that was posted and then DELETED": the id is the only thing
+    that survives the comment (DRE-3453, sandbox comment 5607416317).
+    """
+    latest = None
+    for c in comments or ():
+        if merge_gate.latest_verdict_comment(
+            [c], qa_login, merge_gate.CRITIC_MARKER
+        ) is not None:
+            latest = c
+    return latest
 
 
 def probe_pr(gh, repo: str, number) -> dict:
