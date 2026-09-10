@@ -5,7 +5,9 @@ vendor path that produced most of the 2026-07-12 incidents — and asserts:
 
   * the `pull_request`-triggered qa-review run SELF-SKIPS clean for actor
     dependabot[bot] (DRE-2067: the empty Dependabot secrets store must
-    produce a skipped check run, never a red crash);
+    produce a skipped check run, never a red crash) — judged on the
+    RUN-attributed checks only, since DRE-2291 put a second review-named
+    check on the head whose conclusion reports the verdict;
   * the reconcile sweep's workflow_dispatch review route (DRE-2047/2053)
     produces a REAL verdict bound to the PR's current head sha;
   * the receipt lifecycle (DRE-2049/2071): 1..DEPENDABOT_RECEIPT_CAP
@@ -31,6 +33,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import merge_gate  # noqa: E402
+import publish_review_check  # noqa: E402
 import reconcile  # noqa: E402
 from harness import framework  # noqa: E402
 from harness import scenarios  # noqa: E402
@@ -97,6 +100,20 @@ def _skipped_review_runs(gh, sha, extra=()):
     ]
 
 
+def _bound_check(conclusion):
+    """The head-bound review record publish_review_check.py writes (DRE-2291).
+
+    Its conclusion reports the VERDICT, not the run's liveness: a genuine
+    `REQUEST_CHANGES` publishes it RED on a review route that worked
+    perfectly.
+    """
+    return {
+        "name": publish_review_check.CHECK_NAME,
+        "status": "completed",
+        "conclusion": conclusion,
+    }
+
+
 class DiscoveryTest(unittest.TestCase):
     def test_dependabot_flow_is_discovered_by_convention(self):
         self.assertIn("dependabot_flow", scenarios.discover())
@@ -115,6 +132,14 @@ class ProducerConsumerParityTest(unittest.TestCase):
     def test_receipt_cap_matches_reconcile(self):
         self.assertEqual(
             dependabot_flow.RECEIPT_CAP, reconcile.DEPENDABOT_RECEIPT_CAP
+        )
+
+    def test_head_bound_check_name_matches_its_publisher(self):
+        # The name is the join between the script that WRITES the head-bound
+        # record and the scenario that has to tell it apart from a run's own
+        # liveness check — imported, never re-typed (DRE-2291).
+        self.assertEqual(
+            dependabot_flow.HEAD_BOUND_CHECK_NAME, publish_review_check.CHECK_NAME
         )
 
 
@@ -166,6 +191,18 @@ class PureLogicTest(unittest.TestCase):
             {"name": "ci / test", "conclusion": "success"},
         ]
         self.assertEqual(len(dependabot_flow.review_check_runs(runs)), 1)
+
+    def test_review_check_runs_excludes_the_head_bound_verdict_record(self):
+        # The self-skip clause asks whether the event-driven RUN survived,
+        # and only run-attributed checks answer that. The head-bound record
+        # answers a different question — what the critic SAID — so it must
+        # not be counted among them (DRE-2291).
+        runs = [
+            {"name": "qa / review", "conclusion": "skipped"},
+            _bound_check("failure"),
+        ]
+        kept = dependabot_flow.review_check_runs(runs)
+        self.assertEqual([r["name"] for r in kept], ["qa / review"])
 
 
 class SteadyStateTest(unittest.TestCase):
@@ -228,6 +265,41 @@ class SelfSkipTest(unittest.TestCase):
         result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
         self.assertFalse(result.ok)
         self.assertEqual(result.failed_phase, "verify")
+
+    def test_a_request_changes_verdict_check_is_not_read_as_a_crash(self):
+        # The red-main class (run 34519112325): the sandbox's settled state
+        # is a REQUEST_CHANGES verdict on a major pin, and since DRE-2291
+        # that verdict ALSO publishes a red head-bound check. Reading that
+        # redness as the DRE-2047/2067 self-skip crash fails a route that
+        # worked — the scenario's own contract says any bound verdict token
+        # is a working route, and reconcile agrees (recover_crashed_reviews
+        # never calls a head with a bound verdict crashed).
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        _skipped_review_runs(gh, head, extra=[_bound_check("failure")])
+        gh.comments[number].append(_receipt(head))
+        gh.post_verdict(number, "REQUEST_CHANGES", head)
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+
+        self.assertTrue(result.ok, result.errors)
+
+    def test_a_head_bound_red_check_with_no_verdict_still_fails(self):
+        # The crash signal survives the clause above: a critic that ran and
+        # died publishes the same red record and posts NO verdict, so the
+        # head stays frozen and the scenario must still fail — on the
+        # verdict wait, which can tell the two apart, not on the check
+        # conclusion, which cannot.
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        _skipped_review_runs(gh, head, extra=[_bound_check("failure")])
+        gh.comments[number].append(_receipt(head))
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed_phase, "verify")
+        self.assertIn("verdict", "\n".join(result.errors).lower())
 
     def test_gate_updated_head_tolerates_a_success_review_run(self):
         # A 2-parent head was update-branched by the gate (minor/patch PR
