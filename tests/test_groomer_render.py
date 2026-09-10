@@ -428,6 +428,22 @@ def test_every_section_the_fixture_renders_today_still_renders():
     assert groomer.CYCLE_IS_NOT_SPRINT_PLANNING in text
 
 
+def test_the_page_opens_the_same_way_when_there_is_no_decline_to_answer():
+    """DRE-3373 puts an answering paragraph above everything else — and only
+    when the card the proposal is posted to carries an open decline. This
+    fixture is built from a JSON file and posted nowhere, so the golden page it
+    renders is the one this file has always held to, byte for byte."""
+    text = groomer.render_proposal(_fixture())
+    assert groomer.ANSWER_OPENER not in text
+    # Title, blank, then the sentence the answering paragraph would displace.
+    head = text.splitlines()
+    assert head[0].startswith("# Groom proposal ")
+    assert head[1] == ""
+    assert head[2].endswith("Nothing moves until you approve it."), (
+        "something was inserted between the title and the batch's own sentence"
+    )
+
+
 # --------------------------------------------------------------------------
 # the docs the page is described in
 # --------------------------------------------------------------------------
