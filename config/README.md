@@ -108,9 +108,37 @@ of it is ever a runtime lookup.
   chosen against the READER's window, `ledger_context.LEDGER_MAX_AGE_HOURS` =
   72, so two dropped scheduled runs still leave a ledger the planner treats as
   fresh. A read that
-  fails records `UNKNOWN`, never `0`: the ten seed rows include five cards whose
+  fails records `UNKNOWN`, never `0`: the seed rows include five cards whose
   pieces live in a repo this rail's token cannot see, and a clean-looking
   footprint there would be composed entirely of reads that never happened.
+  **The population DISCOVERS itself** (DRE-3356) — it used to be the ten seed
+  cards DRE-3077 named and nothing else, so the history was whatever somebody
+  had remembered to type. `derive` now asks the board three ways, each one a
+  receipt the pipeline already writes: a comment carrying the turn-cap tag or
+  the hold receipt, a comment opening with the hand-back receipt, and a
+  description citing the card it was cut from (the origin taken from the
+  successor's own words, kept only when `split_ledger.cites` agrees). Those
+  searches are a NET, not a verdict — Linear cannot anchor a text match, so
+  about half of what they return is a comment QUOTING a receipt — and the row's
+  own anchored readers decide what stays. A card whose comments or successors
+  could not be READ stays either way, carrying its `UNKNOWN`s. The seeds stay
+  in whatever the search says; `--card` ADDS to the population rather than
+  replacing it. Every search is bounded by **`--window-days`** on `createdAt`
+  (90 by default, recorded at the top level as `window_days`), which is what
+  keeps a full derive inside a few hundred Linear calls — the budget
+  `scripts/check_linear_budget.py` adds up. A search that could not be read is
+  named in the file's own `source` sentence rather than quietly shrinking the
+  population. Two blocks come off that window: **`rows[].created_at`** — the
+  card's Linear `createdAt` as ISO-8601 UTC or `UNKNOWN`, never `""`, which is
+  what lets a reader order "the last N splits" (`scripts/ledger_context.py`
+  sorts on it) — and **`monthly`**, one record per calendar month the window
+  touches carrying `planner_children` (cards the planner gave a parent that
+  month), `split`, `died` and `complete`. `complete` is "the window covers the
+  whole month and it ended before the derive ran": an incomplete month is a
+  PARTIAL count, not a low one, and a children count that could not be read
+  says `UNKNOWN` rather than `0`. Every field the file carried before DRE-3356
+  keeps its name and its type — the context renderer (DRE-3358) and the plan
+  critic's ledger check (DRE-3079) read them.
 - **`linear-identities.json`** — the two non-human Linear users (DRE-3172):
   `fleet` (`Agent-Bureau` — every sweep, planner, merge-sync, the relay and
   the console) and `operator-tools` (`bureau-tools` — the operator's scripts

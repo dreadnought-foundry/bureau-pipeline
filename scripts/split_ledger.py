@@ -43,10 +43,48 @@ tests/test_split_ledger.py does. They are deterministic READINGS of the text,
 not judgements: each under-reports rather than guessing, because a tell that
 fires on every card is a label rather than a measurement.
 
+## The population discovers itself (DRE-3356)
+
+`derive` used to read the ten cards DRE-3077 named and nothing else, so the
+ledger's history was whatever a person had remembered to type. `discover()`
+asks the board instead, three ways, each one a receipt the pipeline already
+writes: a comment carrying the turn-cap tag or the hold receipt, a comment
+opening with the hand-back receipt, and a description citing the card it was
+cut from — the origin taken from the successor's own words and kept only when
+`cites()` agrees, which is the same reading the successor search already uses.
+
+Every search is bounded by `--window-days` on `createdAt` (90 by default), so
+the Linear spend is bounded with it (`check_linear_budget.py`). The seeds stay
+in the population whatever the window says: they are in the ledger because
+DRE-3077 named them, and a narrow window does not un-name them. A search that
+could not be read is NAMED in the ledger's `source` sentence — a discovery
+that quietly loses a search reports a smaller history in exactly the same
+shape, which is the silent zero this module exists to refuse.
+
+**Discovery proposes; the row's own readers dispose** (`belongs`). Linear's
+`containsIgnoreCase` cannot anchor, so a search matches a comment that merely
+QUOTES a receipt — about half the candidates the board returned on 2026-09-09
+were a critic verdict or a medic diagnosis naming the turn tag. The anchored
+readings decide, so the net can be wide without the ledger going soft. What is
+never dropped is a card whose comments or successors could not be READ: that
+row stays with its UNKNOWNs, because "this card did not die" and "we could not
+look" are different facts.
+
+## Dated rows and a monthly count
+
+Every row carries `created_at` — the card's Linear `createdAt` as ISO-8601 UTC,
+or `UNKNOWN`. That is what lets a reader show "the last N splits" in order.
+`monthly` then counts, per calendar month the window touches, how many cards
+the planner gave a parent, how many ledger rows created that month were split,
+and how many died at the turn cap. `complete` says whether the record covers
+the whole month; an incomplete month is a PARTIAL count, not a low one.
+
 CLI:
 
     python3 scripts/split_ledger.py derive [--card DRE-N ...] [--from J]
-    python3 scripts/split_ledger.py collect [--card DRE-N ...]
+                                           [--window-days N] [--no-discover]
+    python3 scripts/split_ledger.py collect [--card DRE-N ...] [--window-days N]
+    python3 scripts/split_ledger.py discover [--window-days N]
     python3 scripts/split_ledger.py tells --body-file F
 """
 
@@ -72,6 +110,16 @@ DOC_PATH = os.path.join(ROOT, "docs", "split-ledger.md")
 
 #: The literal every unreadable field carries. Never `0`, never `[]`.
 UNKNOWN = "UNKNOWN"
+
+#: How long the derive looks back, in days, when nobody says otherwise
+#: (DRE-3356). It bounds every discovery search and every monthly count, which
+#: is what keeps a full derive inside a few hundred Linear calls.
+DEFAULT_WINDOW_DAYS = 90
+
+#: The one timestamp format this module writes — `generated_at`, the window
+#: bounds and every row's `created_at`. One format so the bounds can be
+#: compared as strings, which is the whole reason the months are cheap.
+ISO = "%Y-%m-%dT%H:%M:%SZ"
 
 #: The ten cards DRE-3077 names as seed rows — the medic's history on DRE-2812
 #: names them all. The population is these plus whatever the successor search
@@ -136,6 +184,26 @@ _CITATIONS = (
      "DRE-2952/2953 — \"Backend half of [DRE-2937]\""),
 )
 
+#: The literal needles the DISCOVERY search hands Linear, one per spelling
+#: `_CITATIONS` above knows (DRE-3356). `containsIgnoreCase` takes a literal,
+#: not the regex — so each needle is the fixed part of a phrase and `cites()`
+#: is what decides afterwards, exactly as it already decides the successor
+#: search. `"piece "` carries its trailing space on purpose: without it the
+#: needle also matches every card that writes "pieces", which is most of this
+#: repo's vocabulary and none of its citations.
+#:
+#: tests/test_split_ledger.py holds the two halves to each other — every real
+#: successor opening must be reachable by a needle AND accepted by `cites()`. A
+#: phrase no needle reaches is a card the discovery cannot see at all.
+CITATION_NEEDLES = (
+    "split from",
+    "split of",
+    "split out of",
+    "splitting",
+    "piece ",
+    "half of",
+)
+
 # Why a card is in the ledger at all. A card can carry more than one.
 REASON_TURN_CAP = "turn-cap-death"
 REASON_SPLIT = "split"
@@ -152,6 +220,20 @@ REASON_SEED = "named-as-a-seed"
 #: error and no log line (DRE-3079 review).
 DEATH_REASONS = (REASON_TURN_CAP, REASON_SPLIT, REASON_HANDBACK)
 REASONS = DEATH_REASONS + (REASON_SEED,)
+
+#: The receipts DISCOVERY searches comments for, each with the reason it
+#: records (DRE-3356). Built from the constants above rather than typed out, so
+#: a reword of a receipt changes the search and the reader together.
+#:
+#: `TURN_HOLD_MARK` embeds `TURN_TAG`, so the second search is a subset of the
+#: first today. It is asked anyway, for one Linear call: the two strings are
+#: written by different branches of `dead_run.decide` and nothing stops one of
+#: them being reworded out of the other's shape.
+COMMENT_NEEDLES = (
+    (TURN_TAG, REASON_TURN_CAP),
+    (TURN_HOLD_MARK, REASON_TURN_CAP),
+    (HANDBACK_RECEIPT_PREFIX, REASON_HANDBACK),
+)
 
 # --------------------------------------------------------------------------- #
 # DRE-2893's four tells, as a deterministic read of a card body                #
@@ -252,6 +334,49 @@ _FOOTPRINT_HEADING = re.compile(
 class LedgerError(RuntimeError):
     """The ledger file is malformed. Raised rather than defaulted — a ledger
     that silently loses its rows reports a smaller history in the same shape."""
+
+
+# --------------------------------------------------------------------------- #
+# the clock — one format, so the window can be compared as strings             #
+# --------------------------------------------------------------------------- #
+
+
+def _moment(value):
+    """Any ISO-8601 instant Linear or this file writes, as an aware UTC
+    datetime — or None when it said nothing readable."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+    return parsed.astimezone(_dt.timezone.utc)
+
+
+def now_iso() -> str:
+    """This instant, in the one format."""
+    return _dt.datetime.now(_dt.timezone.utc).strftime(ISO)
+
+
+def created_at_of(value) -> str:
+    """Linear's `createdAt` as ISO-8601 UTC, or UNKNOWN.
+
+    Never `""`. An empty string is a value a reader sorting "the last N splits"
+    silently sorts FIRST, which is the same class of lie as an unread footprint
+    printed as clean (DRE-3358 sorts the ledger's rows on exactly this field).
+    """
+    parsed = _moment(value)
+    return parsed.strftime(ISO) if parsed else UNKNOWN
+
+
+def window_start(window_days, now=None) -> str:
+    """The instant `window_days` before `now` — the `createdAt` floor every
+    discovery search and every monthly count is bounded by."""
+    parsed = _moment(now) or _dt.datetime.now(_dt.timezone.utc)
+    return (parsed - _dt.timedelta(days=int(window_days))).strftime(ISO)
 
 
 # --------------------------------------------------------------------------- #
@@ -523,6 +648,22 @@ def cites(body: str, identifier: str) -> bool:
                for template, _ in _CITATIONS)
 
 
+def cited_origins(body: str) -> list:
+    """Every card this body cites as the one it was cut from (DRE-3356).
+
+    The other direction of `cites`: the successor search asks "does this body
+    cite THAT card", and discovery has no card to ask about — it has a page of
+    successors and needs the origin each one names. So the candidates are the
+    card references in the opening paragraph, and `cites()` is what keeps them:
+    the reading that decides membership is the same one either way round, which
+    is what stops the discovered population and the successor search disagreeing
+    about what a citation is.
+    """
+    head = (body or "").split("\n\n", 1)[0]
+    return [identifier for identifier in dict.fromkeys(_CARD_REF.findall(head))
+            if cites(body, identifier)]
+
+
 def reasons(record: dict) -> list:
     """Why this card is in the ledger — one, two or all three."""
     out: list[str] = []
@@ -607,11 +748,17 @@ def row(record: dict) -> dict:
         unreadable.append("the card declares no `Files:` line, so it made no "
                           "footprint claim to compare against")
 
+    created = created_at_of(record.get("created_at"))
+    if created is UNKNOWN:
+        unreadable.append("this card's creation date could not be read, so the "
+                          "row belongs to no month and to no ordering")
+
     return {
         "card": identifier,
         "title": record.get("title") or "",
         "url": record.get("url") or "",
         "state": record.get("state") or UNKNOWN,
+        "created_at": created,
         "reasons": (reasons(record)
                     or ([REASON_SEED] if identifier in SEED_CARDS else [])),
         "size": size_of(record.get("labels")),
@@ -692,20 +839,135 @@ def rates(rows: list) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# the months (DRE-3356)                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def _months_between(since: str, until: str) -> list:
+    """Every `YYYY-MM` the window touches, first to last, inclusive."""
+    start, end = _moment(since), _moment(until)
+    if start is None or end is None or start > end:
+        return []
+    months, year, month = [], start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        months.append(f"{year:04d}-{month:02d}")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return months
+
+
+def month_windows(since: str, until: str) -> list:
+    """One record per calendar month the window touches, CLAMPED to it.
+
+    A month at either end of the window is only partly inside it, and the
+    honest count for that month is the part the window covers — not the whole
+    calendar month, which would report days the derive never looked at.
+    `complete` is exactly "the clamp did nothing": the window covers the whole
+    month and the month ended before the derive ran. A reader who sees a low
+    number on an incomplete month is reading a PARTIAL count, and the flag is
+    what tells them so.
+
+    The bounds are strings in the one format, so every comparison downstream is
+    a string comparison and costs nothing.
+    """
+    first, last = created_at_of(since), created_at_of(until)
+    if UNKNOWN in (first, last):
+        return []
+    windows = []
+    for month in _months_between(first, last):
+        opens, closes = planner_score._month_window(month)
+        windows.append({
+            "month": month,
+            "since": max(opens, first),
+            "until": min(closes, last),
+            "complete": opens >= first and closes <= last,
+        })
+    return windows
+
+
+def monthly(rows: list, children=None, *, since: str,
+            generated_at: str) -> list:
+    """The by-month block: how many children the planner made, how many of the
+    ledger's own rows from that month were split, and how many died.
+
+    `planner_children` is `UNKNOWN` — never `0` — for a month whose count could
+    not be read. `split` and `died` are counted off the ROWS, which are already
+    the ledger's decision about what "did not fit one run" means, so there is
+    no second definition here. A row whose `created_at` is UNKNOWN belongs to no
+    month and says so in its own `unreadable` list rather than landing in one.
+    """
+    counts = children or {}
+    block = []
+    for window in month_windows(since, generated_at):
+        dated = [r for r in rows or ()
+                 if window["since"] <= str((r or {}).get("created_at") or "")
+                 < window["until"]]
+        count = counts.get(window["month"])
+        block.append({
+            "month": window["month"],
+            "planner_children": (count if isinstance(count, int)
+                                 and not isinstance(count, bool) else UNKNOWN),
+            "split": sum(1 for r in dated
+                         if REASON_SPLIT in (r.get("reasons") or ())),
+            "died": sum(1 for r in dated
+                        if REASON_TURN_CAP in (r.get("reasons") or ())),
+            "complete": window["complete"],
+        })
+    return block
+
+
+#: What the ledger is derived from, when nobody composes a fuller sentence.
+DEFAULT_SOURCE = ("Linear card bodies, labels and comment receipts, plus the "
+                  "merged pull requests of each card's split pieces")
+
+
+def belongs(row_: dict, named=()) -> bool:
+    """Does this row belong in the ledger? Discovery PROPOSES; the row's own
+    readers DISPOSE (DRE-3356).
+
+    Linear's `containsIgnoreCase` cannot anchor, so a discovery search matches
+    a comment that merely QUOTES a receipt — a critic verdict citing
+    `turn-exhaustion-requeue`, a medic diagnosis naming it. Read off the board
+    on 2026-09-09, about half the candidates were exactly that. The anchored
+    readings (`_is_turn_cap_receipt`, `handed_back`, `cites`) are what decide,
+    the same way `cites` already decides the successor search — so the net can
+    be wide without the ledger going soft.
+
+    A row is dropped only when the two reads that DECIDE its reasons both
+    succeeded and both said no. A card whose comments or successors could not
+    be read stays, carrying its UNKNOWNs: "this card did not die" and "we could
+    not look" are different facts, and dropping the second is the silent zero
+    in its purest form. A card named on the command line stays whatever the
+    board says — `--card` is a person asking to see one.
+    """
+    if row_.get("reasons") or row_.get("card") in set(named or ()):
+        return True
+    return UNKNOWN in (row_.get("deaths"), row_.get("pieces"))
+
+
 def ledger(records: list, *, generated_at: str | None = None,
-           source: str = "") -> dict:
-    """The whole ledger: when it was derived, every row, and the rates."""
+           source: str = "", window_days: int = DEFAULT_WINDOW_DAYS,
+           children_by_month=None, keep=()) -> dict:
+    """The whole ledger: when it was derived, over what window, every row, the
+    by-month counts and the rates.
+
+    `keep` names the cards that stay whatever history says — the `--card`
+    arguments. Everything else is held to `belongs`.
+    """
     rows = [row(record) for record in records]
+    rows = [r for r in rows if belongs(r, keep)]
     rows.sort(key=lambda r: r["card"])
+    generated = generated_at or now_iso()
     return {
-        "generated_at": generated_at or _dt.datetime.now(
-            _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": generated,
+        "window_days": int(window_days),
         "generated_by": "scripts/split_ledger.py derive",
-        "source": source or ("Linear card bodies, labels and comment receipts, "
-                             "plus the merged pull requests of each card's "
-                             "split pieces"),
+        "source": source or DEFAULT_SOURCE,
         "seed_cards": list(SEED_CARDS),
         "rows": rows,
+        "monthly": monthly(rows, children_by_month,
+                           since=window_start(window_days, generated),
+                           generated_at=generated),
         "rates": rates(rows),
     }
 
@@ -764,6 +1026,16 @@ def render_markdown(doc: dict) -> str:
       "it down is DRE-3022's: the planner has been sizing cards against "
       "nothing.")
     w("")
+    window = doc.get("window_days", UNKNOWN)
+    w("**The population discovers itself.** Nobody names it: the derive asks "
+      "Linear for every card whose own comments carry a turn-cap or hand-back "
+      "receipt, and for every card a successor cites as the one it was cut "
+      "from, created in the "
+      + (f"**{window} days**" if isinstance(window, int) else f"`{UNKNOWN}`")
+      + " before that timestamp. The seed cards stay in whatever the window "
+        "says, because they are here for a different reason — DRE-3077 named "
+        "them.")
+    w("")
     w("**A read that failed says `UNKNOWN`, never 0 and never \"none\".** "
       "\"GitHub would not say\" and \"the pull request touched nothing\" are "
       "different facts, and a ledger that collapses them reports a history "
@@ -798,6 +1070,33 @@ def render_markdown(doc: dict) -> str:
     for band in rates_["by_declared_files"]:
         w(f"- {band['sentence']}")
     w("")
+    w("## By month")
+    w("")
+    w("One row per calendar month the window touches. **Planner-created "
+      "children** is every card the planner gave a parent in that month — the "
+      "denominator DRE-3022's split rate is measured against. **Split** and "
+      "**died** are this ledger's own rows created in that month, so a card "
+      "created before the window belongs to no row here.")
+    w("")
+    w("A month is **complete** when the window covers all of it and it ended "
+      "before this file was generated. An incomplete month is a PARTIAL count, "
+      "not a low one — and a count that could not be read says `UNKNOWN`, "
+      "never 0.")
+    w("")
+    months = doc.get("monthly") or []
+    if not months:
+        w("*(no month fell inside the window)*")
+        w("")
+    else:
+        w("| Month | Planner-created children | Split | Died at the turn cap | "
+          "Complete |")
+        w("| --- | --- | --- | --- | --- |")
+        for record in months:
+            w(f"| {record['month']} | {_cell(record['planner_children'])} | "
+              f"{_cell(record['split'])} | {_cell(record['died'])} | "
+              + ("yes" if record["complete"] else "no — a partial count")
+              + " |")
+        w("")
     w("## The tells, in hindsight")
     w("")
     w("DRE-2893's four tells, read back over each card's own body by "
@@ -812,13 +1111,14 @@ def render_markdown(doc: dict) -> str:
     w("")
     w("## The rows")
     w("")
-    w("| Card | Size | Role | Declared | Pieces touched | Pieces | Deaths | "
-      "Cost | Tells | Why it is here |")
-    w("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    w("| Card | Created | Size | Role | Declared | Pieces touched | Pieces | "
+      "Deaths | Cost | Tells | Why it is here |")
+    w("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for row_ in doc["rows"]:
         w("| " + " | ".join([
             f"[{row_['card']}]({row_['url']})" if row_.get("url")
             else row_["card"],
+            _cell(row_.get("created_at", UNKNOWN)),
             _cell(row_["size"]),
             _cell(row_["role"]),
             _count_cell(row_["declared_files"]),
@@ -867,11 +1167,34 @@ PR_FIELDS = "number,url,headRefName,state,files"
 
 _CARD_QUERY = """query($id: String!) {
   issue(id: $id) {
-    identifier title url description
+    identifier title url description createdAt
     state { name type }
     labels { nodes { name } }
   }
 }"""
+
+#: The three discovery searches (DRE-3356). Each selects the least it can: the
+#: comment and children searches need only an identifier, and only the citation
+#: search needs the description, because only it has a reading left to do.
+_COMMENT_SEARCH_QUERY = """query($after: String, $filter: IssueFilter) {
+  issues(first: 100, after: $after, filter: $filter) {
+    pageInfo { hasNextPage endCursor }
+    nodes { identifier }
+  }
+}"""
+
+_CITATION_SEARCH_QUERY = """query($after: String, $filter: IssueFilter) {
+  issues(first: 100, after: $after, filter: $filter) {
+    pageInfo { hasNextPage endCursor }
+    nodes { identifier description }
+  }
+}"""
+
+#: A month's planner-created children. "Planner-created child" is operationally
+#: "a card with a parent", the same definition `planner_score.collect_month`
+#: uses — the planner's one writer files sub-issues and nothing else on this
+#: board gives a card a parent.
+_CHILD_COUNT_QUERY = _COMMENT_SEARCH_QUERY
 
 _SUCCESSOR_QUERY = """query($needle: String!) {
   issues(filter: {description: {containsIgnoreCase: $needle}}, first: 50) {
@@ -886,6 +1209,127 @@ _SUCCESSOR_QUERY = """query($needle: String!) {
 
 def _labels(node: dict) -> list:
     return [label["name"] for label in ((node.get("labels") or {}).get("nodes") or [])]
+
+
+def _paged(lops, query: str, variables: dict, connection: str = "issues") -> list:
+    """Every node of a paginated Linear connection, followed to exhaustion.
+
+    `linear_ops.gql_paged`'s walk, done against the injected `lops` seam so a
+    fixture only has to answer `gql`. The lesson is the same one and it is not
+    optional: Linear serves at most 100 nodes per page and says so ONLY in
+    `pageInfo`, so a search that reads page one has a population decided by
+    Linear's default ordering and nothing anywhere says so (DRE-2681).
+    """
+    nodes: list = []
+    after: str | None = None
+    seen: set = set()
+    while True:
+        page = ((lops.gql(query, {**(variables or {}), "after": after}) or {})
+                .get(connection)) or {}
+        nodes += page.get("nodes") or []
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            return nodes
+        after = info.get("endCursor")
+        if not after or after in seen:
+            print(f"split_ledger: {connection} claims another page with cursor "
+                  f"{after!r} — stopping at {len(nodes)} node(s)",
+                  file=sys.stderr)
+            return nodes
+        seen.add(after)
+
+
+def discover(*, window_days: int = DEFAULT_WINDOW_DAYS, lops=None, now=None,
+             seeds=SEED_CARDS) -> dict:
+    """The population, without anyone naming it (DRE-3356).
+
+    Three searches over receipts the pipeline already writes, all bounded by
+    `createdAt` inside the window:
+
+      1. comments carrying the turn-cap tag or the hold receipt,
+      2. comments opening with the hand-back receipt,
+      3. descriptions carrying a citation phrase — and for each hit, the card
+         the successor NAMES, kept only when `cites()` agrees.
+
+    The seeds are added last and unconditionally: they are in the ledger
+    because DRE-3077 named them, and a narrow window does not un-name them.
+
+    Reads are SERIAL through the one `LINEAR_API_KEY`, the bound every reader
+    in this repo takes. A search that raised is recorded in `unreadable` and
+    the others still count — one refused search must not empty a population,
+    but it must never be invisible either.
+    """
+    if lops is None:
+        import linear_ops as lops                   # noqa: PLC0415 - live seam
+    since = window_start(window_days, now)
+    window = {"createdAt": {"gte": since}}
+    found: dict = {}
+    unreadable: list = []
+
+    def _record(identifier: str, reason: str) -> None:
+        if identifier and reason not in found.setdefault(identifier, []):
+            found[identifier].append(reason)
+
+    for needle, reason in COMMENT_NEEDLES:
+        try:
+            nodes = _paged(lops, _COMMENT_SEARCH_QUERY, {"filter": {
+                **window, "comments": {"body": {"containsIgnoreCase": needle}}}})
+        except Exception as e:                      # noqa: BLE001 - live seam
+            unreadable.append(
+                f"the search for comments carrying {needle!r} could not be "
+                f"read, so any card it alone would have found is missing: {e}")
+            continue
+        for node in nodes:
+            _record(node.get("identifier"), reason)
+
+    for needle in CITATION_NEEDLES:
+        try:
+            nodes = _paged(lops, _CITATION_SEARCH_QUERY, {"filter": {
+                **window, "description": {"containsIgnoreCase": needle}}})
+        except Exception as e:                      # noqa: BLE001 - live seam
+            unreadable.append(
+                f"the search for descriptions citing {needle!r} could not be "
+                f"read, so any origin it alone would have named is missing: {e}")
+            continue
+        for node in nodes:
+            for origin in cited_origins(node.get("description") or ""):
+                if origin != node.get("identifier"):
+                    _record(origin, REASON_SPLIT)
+
+    for seed in seeds or ():
+        _record(seed, REASON_SEED)
+
+    return {
+        "window_days": int(window_days),
+        "since": since,
+        "cards": sorted(found),
+        "found": found,
+        "unreadable": unreadable,
+    }
+
+
+def child_counts(windows, lops=None, unreadable=None) -> dict:
+    """Month → how many planner-created children were created inside it.
+
+    A month whose read failed is absent from the map, never `0` — `monthly`
+    turns the absence into `UNKNOWN`, and the reason lands in `unreadable`.
+    """
+    if lops is None:
+        import linear_ops as lops                   # noqa: PLC0415 - live seam
+    counts: dict = {}
+    for window in windows or ():
+        try:
+            nodes = _paged(lops, _CHILD_COUNT_QUERY, {"filter": {
+                "createdAt": {"gte": window["since"], "lt": window["until"]},
+                "parent": {"null": False}}})
+        except Exception as e:                      # noqa: BLE001 - live seam
+            if unreadable is not None:
+                unreadable.append(
+                    f"{window['month']}: the planner-children count could not "
+                    f"be read, so the month says UNKNOWN rather than 0: {e}")
+            continue
+        counts[window["month"]] = len(nodes)
+    return counts
 
 
 def _pr_for(identifier: str, labels, finder, readable, seen: dict):
@@ -921,8 +1365,14 @@ def _pr_for(identifier: str, labels, finder, readable, seen: dict):
     }, None
 
 
-def collect(identifiers, lops=None, finder=None, readable=None) -> dict:
+def collect(identifiers, lops=None, finder=None, readable=None, *,
+            window_days=None, generated_at=None) -> dict:
     """Every named card, its receipts, its successors and their pull requests.
+
+    With `window_days` set it also reads the by-month children counts and
+    stamps the payload with the instant and the window it was gathered over, so
+    `derive --from` derives the same ledger offline that a live `derive` would
+    have written.
 
     Reads are SERIAL through the one `LINEAR_API_KEY` — the same bound
     `planner_score.collect` and `critic_score.read_population` take, for the
@@ -976,6 +1426,7 @@ def collect(identifiers, lops=None, finder=None, readable=None) -> dict:
             "identifier": issue.get("identifier") or identifier,
             "title": issue.get("title") or "",
             "url": issue.get("url") or "",
+            "created_at": issue.get("createdAt") or "",
             "body": issue.get("description") or "",
             "labels": labels,
             "state": (issue.get("state") or {}).get("name") or UNKNOWN,
@@ -987,12 +1438,43 @@ def collect(identifiers, lops=None, finder=None, readable=None) -> dict:
             "successors": successors,
             "successors_unreadable": successors_unreadable,
         })
-    return {"cards": cards}
+
+    payload: dict = {"cards": cards}
+    if window_days is not None:
+        generated = generated_at or now_iso()
+        notes: list = []
+        payload.update({
+            "generated_at": generated,
+            "window_days": int(window_days),
+            "children_by_month": child_counts(
+                month_windows(window_start(window_days, generated), generated),
+                lops=lops, unreadable=notes),
+            "children_unreadable": notes,
+        })
+    return payload
 
 
 # --------------------------------------------------------------------------- #
 # CLI                                                                          #
 # --------------------------------------------------------------------------- #
+
+
+def derived_source(window_days, notes) -> str:
+    """What this ledger was derived from, in one sentence — including the reads
+    that failed.
+
+    The failures go HERE because `source` is a field the ledger already
+    carries: a discovery that loses a search reports a smaller history in the
+    same shape, and the one place a reader is certain to look is the sentence
+    saying where the rows came from.
+    """
+    sentence = (f"{DEFAULT_SOURCE}, over a population DISCOVERED from the "
+                f"turn-cap, hand-back and split-citation receipts of the last "
+                f"{window_days} days plus the seed cards")
+    if notes:
+        sentence += (f" — with {len(notes)} read(s) that could not be made and "
+                     "are therefore in no count below: " + "; ".join(notes))
+    return sentence
 
 
 def main(argv=None) -> int:
@@ -1003,9 +1485,21 @@ def main(argv=None) -> int:
         "collect", help="read the cards, their receipts and their pieces, as JSON")
     derived = sub.add_parser(
         "derive", help="write config/split-ledger.json and docs/split-ledger.md")
+    finding = sub.add_parser(
+        "discover", help="print the population the board answers with, as JSON")
     for cmd in (gathering, derived):
         cmd.add_argument("--card", action="append", default=[],
-                         help="a card to read (repeatable); defaults to the seeds")
+                         help="a card to read (repeatable); ADDED to the "
+                              "discovered population and the seeds")
+    for cmd in (gathering, derived, finding):
+        cmd.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS,
+                         help="how far back the discovery searches and the "
+                              "monthly counts look (default "
+                              f"{DEFAULT_WINDOW_DAYS})")
+    for cmd in (gathering, derived):
+        cmd.add_argument("--no-discover", action="store_true",
+                         help="read only the seeds and any --card, the way "
+                              "derive behaved before DRE-3356")
     derived.add_argument("--from", dest="source",
                          help="a collect JSON to derive from, instead of reading "
                               "Linear")
@@ -1027,10 +1521,25 @@ def main(argv=None) -> int:
         print(f"{len(tells(body))} of {len(TELLS)} tells")
         return 0
 
-    cards = list(dict.fromkeys(list(args.card) or list(SEED_CARDS)))
+    if command == "discover":
+        print(json.dumps(discover(window_days=args.window_days), indent=2))
+        return 0
+
+    # The population: what the board answers with, plus the seeds, plus
+    # whatever was named on the command line. `--card` ADDS since DRE-3356 —
+    # it used to REPLACE the seeds, which is how a targeted run could quietly
+    # rewrite the committed ledger down to one row.
+    notes: list = []
+    population = list(args.card)
+    if not (args.no_discover or getattr(args, "source", None)):
+        found = discover(window_days=args.window_days)
+        population += found["cards"]
+        notes += found["unreadable"]
+    population += list(SEED_CARDS)
+    cards = list(dict.fromkeys(population))
 
     if command == "collect":
-        print(json.dumps(collect(cards), indent=2))
+        print(json.dumps(collect(cards, window_days=args.window_days), indent=2))
         return 0
 
     if command == "derive":
@@ -1038,14 +1547,26 @@ def main(argv=None) -> int:
             with open(args.source, encoding="utf-8") as fh:
                 gathered = json.load(fh)
         else:
-            gathered = collect(cards)
-        doc = ledger(gathered["cards"])
+            gathered = collect(cards, window_days=args.window_days)
+        notes += gathered.get("children_unreadable") or []
+        window_days = gathered.get("window_days", args.window_days)
+        doc = ledger(
+            gathered["cards"],
+            generated_at=gathered.get("generated_at"),
+            window_days=window_days,
+            children_by_month=gathered.get("children_by_month"),
+            source=derived_source(window_days, notes),
+            keep=args.card,
+        )
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, indent=2)
             fh.write("\n")
         with open(args.doc, "w", encoding="utf-8") as fh:
             fh.write(render_markdown(doc))
-        print(f"wrote {args.out} ({len(doc['rows'])} rows) and {args.doc}")
+        print(f"wrote {args.out} ({len(doc['rows'])} rows, "
+              f"{len(doc['monthly'])} month(s)) and {args.doc}")
+        for note in notes:
+            print(f"  unread: {note}", file=sys.stderr)
         return 0
 
     parser.print_usage(sys.stderr)

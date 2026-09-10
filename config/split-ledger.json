@@ -1,7 +1,8 @@
 {
-  "generated_at": "2026-09-04T05:21:08Z",
+  "generated_at": "2026-09-10T13:42:09Z",
+  "window_days": 90,
   "generated_by": "scripts/split_ledger.py derive",
-  "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces",
+  "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards",
   "seed_cards": [
     "DRE-3029",
     "DRE-3016",
@@ -20,6 +21,7 @@
       "title": "Stop reading dependencies out of prose entirely \u2014 a blocker is a Linear relation or it does not exist",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2676/stop-reading-dependencies-out-of-prose-entirely-a-blocker-is-a-linear",
       "state": "Done",
+      "created_at": "2026-08-23T16:31:19Z",
       "reasons": [
         "turn-cap-death"
       ],
@@ -43,6 +45,7 @@
       "title": "Everything goes to Planning \u2014 which decides one-off, epic, or wave",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2719/everything-goes-to-planning-which-decides-one-off-epic-or-wave",
       "state": "Canceled",
+      "created_at": "2026-08-25T14:13:24Z",
       "reasons": [
         "turn-cap-death",
         "split",
@@ -103,10 +106,385 @@
       ]
     },
     {
+      "card": "DRE-2727",
+      "title": "Update every agent brief and standard to the new model \u2014 or they will confidently do the old thing",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2727/update-every-agent-brief-and-standard-to-the-new-model-or-they-will",
+      "state": "Done",
+      "created_at": "2026-08-25T14:26:04Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "L",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 18.36,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'every agent' with no count of agents anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2731",
+      "title": "The Alerts list renders UTC as if it were local \u2014 an alert reads 7 hours newer than it is",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2731/the-alerts-list-renders-utc-as-if-it-were-local-an-alert-reads-7-hours",
+      "state": "Done",
+      "created_at": "2026-08-25T21:54:34Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "XS",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 15.73,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'every rendered' with no count of rendereds anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2744",
+      "title": "Delete the two redundant product keys \u2014 and the third call site that raises rather than falls back",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2744/delete-the-two-redundant-product-keys-and-the-third-call-site-that",
+      "state": "Canceled",
+      "created_at": "2026-08-26T17:20:10Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "UNKNOWN",
+      "role": "UNKNOWN",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": [
+        "config/linear-workspace.json",
+        "docs/protocol/card-quality-standard.md",
+        "scripts/tests/test_label_retirement.py",
+        "architecture/agent-bureau-architecture.md",
+        "architecture/project-registry-plan.md",
+        "cloud/relay/lambda_function.py",
+        "cloud/relay/test_lambda_function.py",
+        "plugins/dreadnought-standards/skills/dreadnought-card-quality/SKILL.md",
+        "scripts/onboard-customer.py",
+        "scripts/test_onboard_customer.py",
+        "README.md",
+        "briefs/planner.md",
+        "config/README.md",
+        "scripts/linear_ops.py",
+        "scripts/structural_repair.py",
+        "scripts/validate_card.py",
+        "standards/card-quality.md",
+        "tests/test_initiative_claim_matches_the_code.py",
+        "tests/test_oneoff_card_creation.py",
+        "tests/test_repo_map_snapshot.py",
+        "tests/test_structural_repair.py",
+        "tests/test_subissue_valid_children.py",
+        "tests/test_validate_card.py",
+        "tests/test_validate_card_autofix.py"
+      ],
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-2876",
+        "DRE-2875",
+        "DRE-2874"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'Every retired' with no count of retireds anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2753",
+      "title": "The console needs a batch-approval surface \u2014 the groomer proposes, and there is nowhere for you to approve it",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2753/the-console-needs-a-batch-approval-surface-the-groomer-proposes-and",
+      "state": "Done",
+      "created_at": "2026-08-26T17:46:07Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "UNKNOWN",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 17.97,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'each batch' with no count of batchs anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2771",
+      "title": "Phase 1's two lane changes were never declared \u2014 the board still has no Intake and still says Plan Review",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2771/phase-1s-two-lane-changes-were-never-declared-the-board-still-has-no",
+      "state": "Done",
+      "created_at": "2026-08-27T00:42:33Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 2,
+      "dollars": 36.89,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2780",
+      "title": "The console reports the version you rolled AWAY from \u2014 a rollback moves the image, not the version stamp",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2780/the-console-reports-the-version-you-rolled-away-from-a-rollback-moves",
+      "state": "Done",
+      "created_at": "2026-08-27T20:44:51Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 18.75,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2811",
+      "title": "The console cannot tell a working fix loop from a stalled one \u2014 both read as failure",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2811/the-console-cannot-tell-a-working-fix-loop-from-a-stalled-one-both",
+      "state": "Done",
+      "created_at": "2026-08-29T03:58:21Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 3,
+      "dollars": 52.84,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2814",
+      "title": "Console noise: the dashboard keeps asking for a human who already answered",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2814/console-noise-the-dashboard-keeps-asking-for-a-human-who-already",
+      "state": "Done",
+      "created_at": "2026-08-29T15:42:18Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 4,
+      "dollars": 72.01,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'Each sighting' with no count of sightings anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2821",
+      "title": "Every automatic recovery is invisible to the console \u2014 it shows the last bad state, never the repair already running",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2821/every-automatic-recovery-is-invisible-to-the-console-it-shows-the-last",
+      "state": "Done",
+      "created_at": "2026-08-29T17:20:58Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 2,
+      "dollars": 36.54,
+      "tells": [
+        "two-languages-or-tiers",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans workflow, python",
+        "unbounded-quantifier": "'All current' with no count of currents anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2826",
+      "title": "Every act emits its trailer, and every receipt body is byte-identical",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2826/every-act-emits-its-trailer-and-every-receipt-body-is-byte-identical",
+      "state": "Done",
+      "created_at": "2026-08-29T19:49:58Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 18.42,
+      "tells": [
+        "two-languages-or-tiers",
+        "unenumerated-count",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans python, workflow",
+        "unenumerated-count": "'567 findings' \u2014 the body names 7",
+        "unbounded-quantifier": "'every relay' with no count of relays anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2837",
+      "title": "One derivation, and no surface asserts a state it did not read",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2837/one-derivation-and-no-surface-asserts-a-state-it-did-not-read",
+      "state": "Canceled",
+      "created_at": "2026-08-29T22:55:31Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "L",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": [
+        "console/backend/README.md",
+        "console/backend/enrich.py",
+        "console/backend/inflight.py",
+        "console/backend/pr_merge.py",
+        "console/backend/project_rollups.py",
+        "console/backend/schema.py",
+        "console/backend/sources.py",
+        "console/backend/tests/test_enrich_gate_phase.py",
+        "console/backend/tests/test_inflight.py",
+        "console/backend/tests/test_inflight_query.py",
+        "console/backend/tests/test_one_derivation_per_question.py",
+        "console/web/schema.graphql",
+        "console/web/src/components/atoms/ciStatus.test.ts",
+        "console/web/src/components/atoms/ciStatus.ts",
+        "console/web/src/components/atoms/index.ts",
+        "console/web/src/components/board/kanbanMapping.test.ts",
+        "console/web/src/components/board/kanbanMapping.ts",
+        "console/web/src/components/board/swimLanes.test.ts",
+        "console/web/src/components/board/swimLanes.ts",
+        "console/web/src/components/composed/actorKey.test.ts",
+        "console/web/src/components/composed/actorKey.ts",
+        "console/web/src/components/composed/index.ts",
+        "console/web/src/components/dashboard/inFlightMapping.test.ts",
+        "console/web/src/components/dashboard/inFlightMapping.ts",
+        "console/web/src/components/derivationAgreement.test.ts",
+        "console/web/src/components/flyout/CardFlyout.tsx",
+        "console/web/src/components/flyout/MobileCardSheet.tsx",
+        "console/web/src/components/flyout/cardMeta.test.ts",
+        "console/web/src/components/flyout/cardMeta.ts",
+        "console/web/src/components/flyout/index.ts",
+        "console/web/src/generated/graphql.ts",
+        "console/web/src/components/atoms/statusColors.laneShim.test.tsx",
+        "console/web/src/components/atoms/statusColors.ts",
+        "console/web/src/components/board/epicWorkFilter.ts",
+        "console/web/src/components/cards/EpicCard.tsx"
+      ],
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-2872",
+        "DRE-2871",
+        "DRE-2870"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "contracts-between-pieces",
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "contracts-between-pieces": "'reads what' (standards/card-quality.md \u2014 \"B reads what A writes\")",
+        "two-languages-or-tiers": "the footprint spans python, web"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2871: no merged pull request this run could read"
+      ]
+    },
+    {
       "card": "DRE-2838",
       "title": "Every rendered claim carries its age, and the stored/live split dies",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2838/every-rendered-claim-carries-its-age-and-the-storedlive-split-dies",
       "state": "Canceled",
+      "created_at": "2026-08-29T22:55:52Z",
       "reasons": [
         "turn-cap-death",
         "split"
@@ -115,7 +493,46 @@
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
+      "piece_files": [
+        "console/web/src/components/atoms/LiveSyncBadge.test.tsx",
+        "console/web/src/components/atoms/LiveSyncBadge.tsx",
+        "console/web/src/components/dashboard/InFlightSection.test.tsx",
+        "console/web/src/components/dashboard/InFlightSection.tsx",
+        "console/web/src/components/dashboard/readModelFreshness.test.ts",
+        "console/web/src/components/dashboard/readModelFreshness.ts",
+        "console/web/src/lib/useLiveQuery.test.tsx",
+        "console/web/src/lib/useLiveQuery.ts",
+        "console/web/src/pages/Dashboard.tsx",
+        "console/web/src/test/freshness.ts",
+        "console/backend/schema.py",
+        "console/backend/tests/test_project_rollup_freshness.py",
+        "console/web/schema.graphql",
+        "console/web/src/components/dashboard/GlanceBanner.test.tsx",
+        "console/web/src/components/dashboard/GlanceBanner.tsx",
+        "console/web/src/components/dashboard/OpenPrsGroup.test.tsx",
+        "console/web/src/components/dashboard/OpenPrsGroup.tsx",
+        "console/web/src/components/dashboard/ReadAgeLabel.test.tsx",
+        "console/web/src/components/dashboard/ReadAgeLabel.tsx",
+        "console/web/src/components/dashboard/StatRibbon.test.tsx",
+        "console/web/src/components/dashboard/StatRibbon.tsx",
+        "console/web/src/generated/graphql.ts",
+        "console/web/src/graphql/operations.graphql",
+        "console/web/src/lib/time.ts",
+        "console/web/src/pages/ProjectDetail.tsx",
+        "console/web/src/pages/ProjectOverview.tsx",
+        "console/web/src/pages/projectDetailModel.ts",
+        "console/web/src/pages/projectDetailTabs.test.tsx",
+        "console/web/src/pages/projectDetailTabs.tsx",
+        "console/web/src/pages/projectOverview.test.tsx",
+        "console/web/src/pages/projectRightRail.ts",
+        "console/backend/pr_merge.py",
+        "console/backend/sources.py",
+        "console/backend/tests/isolation.py",
+        "console/backend/tests/test_badge_dependabot.py",
+        "console/backend/tests/test_fix_loop_engagement.py",
+        "console/backend/tests/test_merge_gate_one_clock.py",
+        "console/backend/tests/test_pr_merge.py"
+      ],
       "pieces": 3,
       "pieces_named": [
         "DRE-2892",
@@ -133,10 +550,104 @@
         "unbounded-quantifier": "'each other' with no count of others anywhere"
       },
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against",
-        "DRE-2892: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
-        "DRE-2891: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
-        "DRE-2890: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2842",
+      "title": "Move the wave-plan standard into bureau-pipeline/standards/ \u2014 the wave route cannot read it where it lives",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2842/move-the-wave-plan-standard-into-bureau-pipelinestandards-the-wave",
+      "state": "Done",
+      "created_at": "2026-08-30T20:49:16Z",
+      "reasons": [
+        "handed-back"
+      ],
+      "size": "XS",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": [
+        "architecture/wave-plans/README.md",
+        "architecture/wave-plans/wave-1.5-the-intake-gate.html",
+        "docs/design/dre-2822-instances.json",
+        "scripts/tests/test_wave_plan_pointer.py"
+      ],
+      "pieces": 1,
+      "pieces_named": [
+        "DRE-2851"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "unenumerated-count",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unenumerated-count": "'six requirements' \u2014 the body names 4",
+        "unbounded-quantifier": "'every phase' with no count of phases anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2845",
+      "title": "The wave route \u2014 a wave plan written to the standard, and the epics it commits to",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2845/the-wave-route-a-wave-plan-written-to-the-standard-and-the-epics-it",
+      "state": "Done",
+      "created_at": "2026-08-30T20:50:47Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "L",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 17.01,
+      "tells": [
+        "unenumerated-count",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unenumerated-count": "'six cards' \u2014 the body names 5",
+        "unbounded-quantifier": "'every phase' with no count of phases anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2846",
+      "title": "Progressive commitment \u2014 an epic inside an approved wave gets its own green light when its turn comes",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2846/progressive-commitment-an-epic-inside-an-approved-wave-gets-its-own",
+      "state": "Done",
+      "created_at": "2026-08-30T20:51:12Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "devops",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 21.12,
+      "tells": [
+        "unenumerated-count",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unenumerated-count": "'six cards' \u2014 the body names 5",
+        "unbounded-quantifier": "'each arrives' with no count of arrives anywhere"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
     },
     {
@@ -144,6 +655,7 @@
       "title": "Close the back doors into Backlog and Todo \u2014 and prove the absence by test",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2847/close-the-back-doors-into-backlog-and-todo-and-prove-the-absence-by",
       "state": "Canceled",
+      "created_at": "2026-08-30T20:51:34Z",
       "reasons": [
         "turn-cap-death",
         "split"
@@ -153,6 +665,8 @@
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
       "piece_files": [
+        "config/linear-workspace.json",
+        "scripts/tests/test_linear_workspace.py",
         "config/lane-contract.json",
         "docs/lane-contract.md",
         "scripts/planning_escalation.py",
@@ -191,8 +705,31 @@
         "unbounded-quantifier": "'each writer' with no count of writers anywhere"
       },
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against",
-        "DRE-2860: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2852",
+      "title": "Moving work looks like it is moving \u2014 a pulse earned from a timestamp, never from the state name",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2852/moving-work-looks-like-it-is-moving-a-pulse-earned-from-a-timestamp",
+      "state": "Done",
+      "created_at": "2026-08-30T22:00:55Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 2,
+      "dollars": 32.89,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
     },
     {
@@ -200,6 +737,7 @@
       "title": "Eight surfaces stop asserting what they never read, and UNKNOWN resolves one way",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2871/eight-surfaces-stop-asserting-what-they-never-read-and-unknown",
       "state": "Canceled",
+      "created_at": "2026-08-31T18:27:15Z",
       "reasons": [
         "turn-cap-death",
         "split"
@@ -208,7 +746,14 @@
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": "UNKNOWN",
+      "piece_files": [
+        ".github/workflows/ci.yml",
+        "Makefile",
+        "console/Makefile",
+        "console/backend/check_unknown_direction.py",
+        "console/backend/tests/test_unknown_direction_guard.py",
+        "console/backend/unknown_resolution.py"
+      ],
       "pieces": 3,
       "pieces_named": [
         "DRE-2912",
@@ -227,9 +772,8 @@
       },
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against",
-        "DRE-2912: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
-        "DRE-2911: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
-        "DRE-2910: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+        "DRE-2912: no merged pull request this run could read",
+        "DRE-2911: no merged pull request this run could read"
       ]
     },
     {
@@ -237,6 +781,7 @@
       "title": "Four cutover surfaces carry their read age, or say UNKNOWN",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2891/four-cutover-surfaces-carry-their-read-age-or-say-unknown",
       "state": "Done",
+      "created_at": "2026-09-01T00:40:52Z",
       "reasons": [
         "turn-cap-death"
       ],
@@ -260,10 +805,153 @@
       ]
     },
     {
+      "card": "DRE-2898",
+      "title": "COMPLIANCE \u00b7 An answer to a question the form never asked exports as an ordinary answer, and reads 12/11",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2898/compliance-an-answer-to-a-question-the-form-never-asked-exports-as-an",
+      "state": "Intake",
+      "created_at": "2026-09-01T01:02:38Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 2,
+      "dollars": 39.47,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2911",
+      "title": "Four backend surfaces stop asserting what they never read",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2911/four-backend-surfaces-stop-asserting-what-they-never-read",
+      "state": "Canceled",
+      "created_at": "2026-09-01T03:47:22Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "S",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": [
+        "console/backend/poller.py",
+        "console/backend/sources.py",
+        "console/backend/tests/test_non_dispatch_repo_prs.py",
+        "console/backend/tests/test_offrail_timeline.py",
+        "console/backend/tests/test_pr_ingest.py",
+        "console/backend/tests/test_sources.py",
+        "console/backend/check_unknown_direction.py",
+        "console/backend/project_rollups.py",
+        "console/backend/tests/test_project_rollups.py",
+        "console/backend/unknown_resolution.py",
+        "console/backend/alerts.py",
+        "console/backend/tests/test_alerts.py"
+      ],
+      "pieces": 4,
+      "pieces_named": [
+        "DRE-2937",
+        "DRE-2936",
+        "DRE-2935",
+        "DRE-2934"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "contracts-between-pieces"
+      ],
+      "tell_evidence": {
+        "contracts-between-pieces": "'reads what' (standards/card-quality.md \u2014 \"B reads what A writes\")"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2937: no merged pull request this run could read"
+      ]
+    },
+    {
+      "card": "DRE-2912",
+      "title": "Four frontend surfaces stop asserting what they never read",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2912/four-frontend-surfaces-stop-asserting-what-they-never-read",
+      "state": "Canceled",
+      "created_at": "2026-09-01T03:47:38Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "S",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": [
+        "console/web/src/pages/settings/membersModel.test.ts",
+        "console/web/src/pages/settings/membersModel.ts",
+        "console/design/docs/desktop.md",
+        "console/web/src/components/composed/ProjectRightRail.test.tsx",
+        "console/web/src/components/composed/ProjectRightRail.tsx",
+        "console/web/src/pages/projectRightRail.test.ts",
+        "console/web/src/pages/projectRightRail.ts",
+        "console/web/src/components/dashboard/GitHubQuotaPanel.test.tsx",
+        "console/web/src/components/dashboard/GitHubQuotaPanel.tsx",
+        "console/web/src/components/mobile/MobileDashboard.test.tsx",
+        "console/web/src/components/mobile/MobileDashboard.tsx",
+        "console/web/src/components/mobile/mobileDashboardModel.test.ts",
+        "console/web/src/components/mobile/mobileDashboardModel.ts"
+      ],
+      "pieces": 4,
+      "pieces_named": [
+        "DRE-2942",
+        "DRE-2941",
+        "DRE-2940",
+        "DRE-2939"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "contracts-between-pieces"
+      ],
+      "tell_evidence": {
+        "contracts-between-pieces": "'reads what' (standards/card-quality.md \u2014 \"B reads what A writes\")"
+      },
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-2917",
+      "title": "SECURITY \u00b7 The library WRITE responses still return the template id",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2917/security-the-library-write-responses-still-return-the-template-id",
+      "state": "Done",
+      "created_at": "2026-09-01T04:23:04Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 16.07,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
       "card": "DRE-2937",
       "title": "A cold cache renders \"nothing needs you\" into the bell \u2014 and fixing it crosses the whole stack, not just the backend",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2937/a-cold-cache-renders-nothing-needs-you-into-the-bell-and-fixing-it",
       "state": "Canceled",
+      "created_at": "2026-09-01T14:03:23Z",
       "reasons": [
         "turn-cap-death",
         "split"
@@ -274,7 +962,24 @@
         "alerts.py"
       ],
       "declared_file_count": 1,
-      "piece_files": "UNKNOWN",
+      "piece_files": [
+        "console/web/src/components/AlertBellBadge.tsx",
+        "console/web/src/components/AppShell.test.tsx",
+        "console/web/src/components/AppSidebar.test.tsx",
+        "console/web/src/components/AppSidebar.tsx",
+        "console/web/src/components/TopBar.test.tsx",
+        "console/web/src/components/TopBar.tsx",
+        "console/web/src/generated/graphql.ts",
+        "console/web/src/graphql/operations.graphql",
+        "console/web/src/lib/useAlertCount.test.tsx",
+        "console/web/src/lib/useAlertCount.ts",
+        "console/web/src/pages/Alerts.test.tsx",
+        "console/web/src/pages/Alerts.tsx",
+        "console/backend/alerts.py",
+        "console/backend/schema.py",
+        "console/backend/tests/test_alert_coverage.py",
+        "console/web/schema.graphql"
+      ],
       "pieces": 2,
       "pieces_named": [
         "DRE-2953",
@@ -288,9 +993,70 @@
       "tell_evidence": {
         "two-languages-or-tiers": "the footprint spans python, web"
       },
+      "unreadable": []
+    },
+    {
+      "card": "DRE-2968",
+      "title": "The dev mock has no artifact with painted anchors, so no passage-anchored flow can be driven locally",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2968/the-dev-mock-has-no-artifact-with-painted-anchors-so-no-passage",
+      "state": "Done",
+      "created_at": "2026-09-02T12:09:28Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "frontend",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 2,
+      "dollars": 37.5,
+      "tells": [],
+      "tell_evidence": {},
       "unreadable": [
-        "DRE-2953: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
-        "DRE-2952: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-3012",
+      "title": "The format has no dropdown \u2014 50 of the questionnaire's controls are &lt;select&gt;, and all of them become radio buttons",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3012/the-format-has-no-dropdown-50-of-the-questionnaires-controls-are",
+      "state": "Canceled",
+      "created_at": "2026-09-03T19:46:13Z",
+      "reasons": [
+        "turn-cap-death",
+        "split"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": [
+        "client/app/e2e/choice-dropdown.spec.ts",
+        "client/app/e2e/mocks/handlers.ts",
+        "client/app/src/features/forms/FormReadingView.test.tsx",
+        "client/app/src/features/forms/FormReadingView.tsx",
+        "infra/scripts/convert-readiness-html.ts",
+        "infra/test/convert_readiness_options.test.ts",
+        "client/app/src/features/forms/formDefinition.ts",
+        "infra/lambda/form_def_lib.ts",
+        "infra/test/form_def_lib.test.ts",
+        "infra/test/readiness_data_section.test.ts"
+      ],
+      "pieces": 3,
+      "pieces_named": [
+        "DRE-3025",
+        "DRE-3024",
+        "DRE-3023"
+      ],
+      "deaths": 2,
+      "dollars": 37.24,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
       ]
     },
     {
@@ -298,6 +1064,7 @@
       "title": "Score the planner against plans it has never seen \u2014 replay past epics into the demo repo and measure what each plan got right",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3016/score-the-planner-against-plans-it-has-never-seen-replay-past-epics",
       "state": "Done",
+      "created_at": "2026-09-04T00:28:19Z",
       "reasons": [
         "turn-cap-death"
       ],
@@ -329,10 +1096,10 @@
       "card": "DRE-3022",
       "title": "The planner sizes against the ledger \u2014 every turn-cap death, split and hand-back as data it reads before it cuts a card",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3022/the-planner-sizes-against-the-ledger-every-turn-cap-death-split-and",
-      "state": "Backlog",
+      "state": "In Progress",
+      "created_at": "2026-09-04T00:33:40Z",
       "reasons": [
-        "turn-cap-death",
-        "split"
+        "turn-cap-death"
       ],
       "size": "M",
       "role": "engineer",
@@ -342,10 +1109,24 @@
         "briefs/planner.md",
         ".github/workflows/plan.yml",
         "reconcile.yml",
+        "tests/test_split_ledger.py",
+        "scripts/mid_epic.py"
+      ],
+      "declared_file_count": 7,
+      "piece_files": [
+        "config/README.md",
+        "config/planner-audit.json",
+        "docs/planner-audit.md",
+        "scripts/plan_critic.py",
+        "scripts/planner_score.py",
+        "scripts/split_ledger.py",
+        "standards/plan-critic.md",
+        "tests/test_plan_critic.py",
+        "tests/test_planner_score.py",
+        "config/split-ledger.json",
+        "docs/split-ledger.md",
         "tests/test_split_ledger.py"
       ],
-      "declared_file_count": 6,
-      "piece_files": "UNKNOWN",
       "pieces": 3,
       "pieces_named": [
         "DRE-3079",
@@ -363,9 +1144,7 @@
         "two-languages-or-tiers": "the footprint spans python, workflow"
       },
       "unreadable": [
-        "DRE-3079: no merged pull request this run could read",
-        "DRE-3078: no merged pull request this run could read",
-        "DRE-3077: no merged pull request this run could read"
+        "DRE-3078: no merged pull request this run could read"
       ]
     },
     {
@@ -373,6 +1152,7 @@
       "title": "Planning classifies the card itself \u2014 the planner run stamps one-off, epic or wave, escalates what it cannot classify, and no card waits on a hand-run script",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3029/planning-classifies-the-card-itself-the-planner-run-stamps-one-off",
       "state": "Done",
+      "created_at": "2026-09-04T00:40:47Z",
       "reasons": [
         "named-as-a-seed"
       ],
@@ -402,98 +1182,470 @@
         "unenumerated-count": "'201 cards' \u2014 the body names 12"
       },
       "unreadable": []
+    },
+    {
+      "card": "DRE-3037",
+      "title": "A placed form freezes a full copy of its definition into the library partition, which is read as ONE page \u2014 five copies of the readiness questionnaire truncate the library silently",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3037/a-placed-form-freezes-a-full-copy-of-its-definition-into-the-library",
+      "state": "Done",
+      "created_at": "2026-09-04T00:50:48Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "M",
+      "role": "engineer",
+      "declared_files": "UNKNOWN",
+      "declared_file_count": "UNKNOWN",
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 2,
+      "dollars": 39.34,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": [
+        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+      ]
+    },
+    {
+      "card": "DRE-3074",
+      "title": "The classifier calls the Messages API raw with the subscription token and gets 429 every time \u2014 every card entering Planning escalates to the CEO; the classification must run through the Claude Code path",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3074/the-classifier-calls-the-messages-api-raw-with-the-subscription-token",
+      "state": "Done",
+      "created_at": "2026-09-04T04:18:27Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "engineer",
+      "declared_files": [
+        "scripts/planning_classify.py",
+        ".github/workflows/plan.yml",
+        "scripts/planning_escalation.py",
+        "tests/test_planning_classify.py"
+      ],
+      "declared_file_count": 4,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 21.19,
+      "tells": [
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans python, workflow"
+      },
+      "unreadable": []
+    },
+    {
+      "card": "DRE-3076",
+      "title": "The harness fails fast on a dead sandbox \u2014 each scenario wait has its own deadline, and a failed sandbox sweep or gate is quoted, not waited on for three hours",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3076/the-harness-fails-fast-on-a-dead-sandbox-each-scenario-wait-has-its",
+      "state": "Done",
+      "created_at": "2026-09-04T04:53:43Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "devops",
+      "declared_files": [
+        ".github/workflows/harness.yml",
+        ".github/workflows/promote-channel.yml"
+      ],
+      "declared_file_count": 2,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 16.14,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": []
+    },
+    {
+      "card": "DRE-3078",
+      "title": "The planner reads the split ledger and the mulch planning records before it sizes a card (piece 2 of 3 of DRE-3022)",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3078/the-planner-reads-the-split-ledger-and-the-mulch-planning-records",
+      "state": "Backlog",
+      "created_at": "2026-09-04T04:55:00Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "devops",
+      "declared_files": [
+        ".github/workflows/plan.yml",
+        "briefs/planner.md",
+        "scripts/plan_artifact.py"
+      ],
+      "declared_file_count": 3,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 2,
+      "dollars": 40.07,
+      "tells": [
+        "contracts-between-pieces",
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "contracts-between-pieces": "'reads what' (standards/card-quality.md \u2014 \"B reads what A writes\")",
+        "two-languages-or-tiers": "the footprint spans workflow, python"
+      },
+      "unreadable": []
+    },
+    {
+      "card": "DRE-3088",
+      "title": "The post-approval send-back revises the plan and never builds a plan held twice \u2014 one re-plan per hold with the critic's finding, a park with needs-human at the bound, and receipts that name In Progress, not Todo",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3088/the-post-approval-send-back-revises-the-plan-and-never-builds-a-plan",
+      "state": "Done",
+      "created_at": "2026-09-04T15:44:48Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "XS",
+      "role": "devops",
+      "declared_files": [
+        ".github/workflows/plan.yml",
+        "tests/test_plan_workflow.py"
+      ],
+      "declared_file_count": 2,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 3,
+      "dollars": 54.67,
+      "tells": [
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans python, workflow"
+      },
+      "unreadable": []
+    },
+    {
+      "card": "DRE-3101",
+      "title": "A pull request's harness run takes its sandbox cleanup and probe rules from main, not from the PR's branch \u2014 an old branch cannot wipe main's proving run out of the shared sandbox",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3101/a-pull-requests-harness-run-takes-its-sandbox-cleanup-and-probe-rules",
+      "state": "Done",
+      "created_at": "2026-09-04T19:39:47Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "devops",
+      "declared_files": [
+        ".github/workflows/harness.yml",
+        ".github/workflows/promote-channel.yml"
+      ],
+      "declared_file_count": 2,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 16.21,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": []
+    },
+    {
+      "card": "DRE-3232",
+      "title": "COMPLIANCE \u00b7 Answers outside the frozen definition are kept, flagged, and never counted as asked",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3232/compliance-answers-outside-the-frozen-definition-are-kept-flagged-and",
+      "state": "Done",
+      "created_at": "2026-09-05T23:47:56Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "UNKNOWN",
+      "role": "engineer",
+      "declared_files": [
+        "infra/lambda/answered_lib.ts",
+        "infra/lambda/response_export_lib.ts",
+        "infra/lambda/routes/responses.ts",
+        "infra/lambda/routes/library.ts",
+        "infra/lambda/items_lib.ts",
+        "infra/test/answered_lib.test.ts",
+        "infra/test/response_export_lib.test.ts",
+        "infra/test/responses_route.test.ts",
+        "infra/test/api_shapes.test.ts",
+        "infra/test/fixtures/api-shapes/folder-form-progress.json",
+        "infra/test/fixtures/api-shapes/responses-submit.json"
+      ],
+      "declared_file_count": 11,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 17.76,
+      "tells": [],
+      "tell_evidence": {},
+      "unreadable": []
+    },
+    {
+      "card": "DRE-3275",
+      "title": "bureau-pipeline: declare the \ud83d\udd2c proof-waiting act in the registry and add linear_ops.py proof-waiting / proof-observed helpers",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3275/bureau-pipeline-declare-the-proof-waiting-act-in-the-registry-and-add",
+      "state": "Done",
+      "created_at": "2026-09-07T00:14:30Z",
+      "reasons": [
+        "turn-cap-death"
+      ],
+      "size": "S",
+      "role": "devops",
+      "declared_files": [
+        "dreadnought-foundry/",
+        "bureau-pipeline/config/pipeline-acts.json",
+        "bureau-pipeline/scripts/linear_ops.py",
+        "bureau-pipeline/scripts/test_linear_ops.py",
+        "bureau-pipeline/docs/pipeline-acts.md"
+      ],
+      "declared_file_count": 5,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 1,
+      "dollars": 13.6,
+      "tells": [
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "unbounded-quantifier": "'all built' with no count of builts anywhere"
+      },
+      "unreadable": []
+    },
+    {
+      "card": "DRE-3306",
+      "title": "One River atomic rebuild \u2014 tier 4, the templates and the showroom (hand-built)",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3306/one-river-atomic-rebuild-tier-4-the-templates-and-the-showroom-hand",
+      "state": "Done",
+      "created_at": "2026-09-08T00:41:56Z",
+      "reasons": [
+        "handed-back"
+      ],
+      "size": "L",
+      "role": "frontend",
+      "declared_files": [
+        "console/web/src/components/oneriver/",
+        "console/web/src/components/oneriver/atomic.guard.test.ts",
+        "console/web/src/components/alerts/AlertTable.tsx",
+        "console/web/tailwind.config.ts",
+        "console/web/src/theme/stage.token.test.ts",
+        "console/web/src/pages/Gallery.tsx",
+        "gallery/OneRiverSpecimens.tsx",
+        "console/web/src/dev/",
+        "console/web/src/lib/graphqlClient.ts",
+        "console/design/atomic/",
+        "templates.html",
+        "index.html",
+        "coverage.md"
+      ],
+      "declared_file_count": 13,
+      "piece_files": "UNKNOWN",
+      "pieces": 0,
+      "pieces_named": [],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "two-languages-or-tiers"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans web, python"
+      },
+      "unreadable": []
+    }
+  ],
+  "monthly": [
+    {
+      "month": "2026-06",
+      "planner_children": 372,
+      "split": 0,
+      "died": 0,
+      "complete": false
+    },
+    {
+      "month": "2026-07",
+      "planner_children": 228,
+      "split": 0,
+      "died": 0,
+      "complete": true
+    },
+    {
+      "month": "2026-08",
+      "planner_children": 305,
+      "split": 6,
+      "died": 17,
+      "complete": true
+    },
+    {
+      "month": "2026-09",
+      "planner_children": 365,
+      "split": 4,
+      "died": 16,
+      "complete": false
     }
   ],
   "rates": {
-    "cards": 10,
-    "died": 9,
+    "cards": 40,
+    "died": 33,
     "by_declared_files": [
       {
         "more_than": 1,
-        "of": 3,
-        "died": 2,
+        "of": 11,
+        "died": 9,
         "cards": [
           "DRE-3016",
-          "DRE-3022"
+          "DRE-3022",
+          "DRE-3074",
+          "DRE-3076",
+          "DRE-3078",
+          "DRE-3088",
+          "DRE-3101",
+          "DRE-3232",
+          "DRE-3275"
         ],
-        "sentence": "cards declaring more than 1 file died 2 of 3 times"
+        "sentence": "cards declaring more than 1 file died 9 of 11 times"
       },
       {
         "more_than": 2,
-        "of": 3,
-        "died": 2,
+        "of": 8,
+        "died": 6,
         "cards": [
           "DRE-3016",
-          "DRE-3022"
+          "DRE-3022",
+          "DRE-3074",
+          "DRE-3078",
+          "DRE-3232",
+          "DRE-3275"
         ],
-        "sentence": "cards declaring more than 2 files died 2 of 3 times"
+        "sentence": "cards declaring more than 2 files died 6 of 8 times"
       },
       {
         "more_than": 3,
-        "of": 3,
-        "died": 2,
+        "of": 7,
+        "died": 5,
         "cards": [
           "DRE-3016",
-          "DRE-3022"
+          "DRE-3022",
+          "DRE-3074",
+          "DRE-3232",
+          "DRE-3275"
         ],
-        "sentence": "cards declaring more than 3 files died 2 of 3 times"
+        "sentence": "cards declaring more than 3 files died 5 of 7 times"
       },
       {
         "more_than": 4,
-        "of": 3,
-        "died": 2,
+        "of": 6,
+        "died": 4,
         "cards": [
           "DRE-3016",
-          "DRE-3022"
+          "DRE-3022",
+          "DRE-3232",
+          "DRE-3275"
         ],
-        "sentence": "cards declaring more than 4 files died 2 of 3 times"
+        "sentence": "cards declaring more than 4 files died 4 of 6 times"
       },
       {
         "more_than": 5,
-        "of": 3,
-        "died": 2,
+        "of": 5,
+        "died": 3,
         "cards": [
           "DRE-3016",
-          "DRE-3022"
+          "DRE-3022",
+          "DRE-3232"
         ],
-        "sentence": "cards declaring more than 5 files died 2 of 3 times"
+        "sentence": "cards declaring more than 5 files died 3 of 5 times"
       },
       {
         "more_than": 6,
+        "of": 4,
+        "died": 2,
+        "cards": [
+          "DRE-3022",
+          "DRE-3232"
+        ],
+        "sentence": "cards declaring more than 6 files died 2 of 4 times"
+      },
+      {
+        "more_than": 7,
+        "of": 2,
+        "died": 1,
+        "cards": [
+          "DRE-3232"
+        ],
+        "sentence": "cards declaring more than 7 files died 1 of 2 times"
+      },
+      {
+        "more_than": 8,
+        "of": 2,
+        "died": 1,
+        "cards": [
+          "DRE-3232"
+        ],
+        "sentence": "cards declaring more than 8 files died 1 of 2 times"
+      },
+      {
+        "more_than": 9,
+        "of": 2,
+        "died": 1,
+        "cards": [
+          "DRE-3232"
+        ],
+        "sentence": "cards declaring more than 9 files died 1 of 2 times"
+      },
+      {
+        "more_than": 10,
+        "of": 2,
+        "died": 1,
+        "cards": [
+          "DRE-3232"
+        ],
+        "sentence": "cards declaring more than 10 files died 1 of 2 times"
+      },
+      {
+        "more_than": 11,
         "of": 1,
         "died": 0,
         "cards": [],
-        "sentence": "cards declaring more than 6 files died 0 of 1 times"
+        "sentence": "cards declaring more than 11 files died 0 of 1 times"
+      },
+      {
+        "more_than": 12,
+        "of": 1,
+        "died": 0,
+        "cards": [],
+        "sentence": "cards declaring more than 12 files died 0 of 1 times"
       }
     ],
     "by_tell": [
       {
         "tell": "contracts-between-pieces",
-        "of": 2,
-        "died": 2,
-        "sentence": "cards carrying the contracts-between-pieces tell died 2 of 2 times"
+        "of": 6,
+        "died": 3,
+        "sentence": "cards carrying the contracts-between-pieces tell died 3 of 6 times"
       },
       {
         "tell": "two-languages-or-tiers",
-        "of": 7,
-        "died": 6,
-        "sentence": "cards carrying the two-languages-or-tiers tell died 6 of 7 times"
+        "of": 14,
+        "died": 11,
+        "sentence": "cards carrying the two-languages-or-tiers tell died 11 of 14 times"
       },
       {
         "tell": "unenumerated-count",
-        "of": 2,
-        "died": 1,
-        "sentence": "cards carrying the unenumerated-count tell died 1 of 2 times"
+        "of": 6,
+        "died": 4,
+        "sentence": "cards carrying the unenumerated-count tell died 4 of 6 times"
       },
       {
         "tell": "unbounded-quantifier",
-        "of": 2,
-        "died": 2,
-        "sentence": "cards carrying the unbounded-quantifier tell died 2 of 2 times"
+        "of": 13,
+        "died": 11,
+        "sentence": "cards carrying the unbounded-quantifier tell died 11 of 13 times"
       }
     ],
-    "unreadable_footprint": 6,
-    "dead_dollars": 515.44,
+    "unreadable_footprint": 28,
+    "dead_dollars": 1223.23,
     "dead_dollars_unreadable": 0
   }
 }
