@@ -174,13 +174,24 @@ def pr_body(run_id: str, leg: str) -> str:
 
 
 def _human_wait_comments(comments, qa_login: str) -> list:
-    """The gate's waiting-for-human status notes — qa-authored only, so a
-    quoted or forged marker never satisfies (or spams) the assertion."""
+    """The gate's waiting-for-human status notes — qa-authored, and OPENING
+    with the marker, so a quoted or forged one never satisfies (or spams)
+    the assertion.
+
+    The shape half is load-bearing and the author half cannot cover it: the
+    critic writes under the same login as the gate, so its verdict passes the
+    author filter, and a verdict that quotes the status line it found would
+    be counted as a second note — the leg would red with "2 waiting-for-human
+    comments" against a gate that posted exactly one. Read through the gate's
+    own predicate (`merge_gate.opens_with_marker`, the read `gate_note` keys
+    its idempotence on), so the harness's idea of "the gate's note" is
+    definitionally the gate's.
+    """
     return [
         c
         for c in comments
         if same_bot(((c.get("user") or {}).get("login")), qa_login)
-        and HUMAN_WAIT_MARKER in (c.get("body") or "")
+        and merge_gate.opens_with_marker(c.get("body"), HUMAN_WAIT_MARKER)
     ]
 
 

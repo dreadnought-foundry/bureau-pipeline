@@ -364,18 +364,35 @@ def first_line(body: Optional[str]) -> str:
     return body.splitlines()[0] if body else ""
 
 
+def opens_with_marker(body: Optional[str], marker: str) -> bool:
+    """True when `body`'s FIRST line OPENS with `marker` (only the producer's
+    short emoji/badge prefix allowed) — the one predicate that separates a
+    comment that IS a thing from a comment that MENTIONS one.
+
+    Every producer on the PR — the critic, the verifier, the merge gate's
+    status note — writes under the SAME qa-bot login, because they are steps
+    of one App and not distinct identities. Authorship therefore cannot tell
+    them apart, and `marker in body` cannot either: prose quoting a marker
+    satisfies it. This anchor is what makes a quote inert, and it is shared
+    rather than restated because both readers of it decide whether a comment
+    survives (`gate_note.matching_notes` prunes what it selects, and it
+    pruned the critic's verdict for quoting the gate's status line — run
+    34417968508, red main).
+    """
+    return bool(_marker_re(marker).match(first_line(body)))
+
+
 def latest_verdict_comment(comments, qa_login: str, marker: str) -> Optional[str]:
     """Body of the LATEST comment that (a) is authored by the qa-bot App and
     (b) opens with the marker on its first line. None if no such comment —
     forged, human, deleted-account, and quoting/prose comments are invisible,
     not merely non-approving."""
-    rx = _marker_re(marker)
     latest = None
     for c in comments:
         user = c.get("user") or {}
         if user.get("login") != qa_login:
             continue
-        if not rx.match(first_line(c.get("body"))):
+        if not opens_with_marker(c.get("body"), marker):
             continue
         latest = c.get("body") or ""
     return latest
