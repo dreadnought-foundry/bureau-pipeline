@@ -45,6 +45,9 @@ concurrency:
 permissions:
   contents: read
   statuses: read
+  # DRE-3568: the channel receipt names the failing scenarios of the harness
+  # run that declined to promote, read from that run's own log.
+  actions: read
 
 jobs:
   promote:
@@ -162,12 +165,50 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/git/refs" \
             -f ref="refs/tags/stable" -f sha="${CANDIDATE}"
 
+      # Where the channel stands, as the ONE receipt line the release train
+      # also prints (DRE-3568) — through release_train.py, so the console
+      # parses one format from either run. Main runs only: a PR-head run is
+      # not about the channel and spends no reads (the DRE-3070 rule above).
+      #
+      # Measured against the DEFAULT BRANCH HEAD, never the candidate this
+      # run was triggered on, and naming the branch's NEWEST harness run —
+      # the same question the train's plan answers, so the two receipts can
+      # never contradict each other. Against the candidate, the receipt
+      # right after a promotion reads `current behind=0` while main is
+      # already ahead with its gate running — and the console, which takes
+      # the state from this log and `behind` from a live tag-vs-main read,
+      # would show "4 behind · current" on the ordinary half-hour cadence.
+      # Five reads at most (the branch head, the ref, the compare, the
+      # newest run, and that run's `--log-failed` when it went red — that is
+      # where the scenario names come from). Reporting only: exit 0 always,
+      # and a read that fails prints `unknown`, never a number nobody
+      # fetched.
+      - name: Where the channel stands
+        id: channel
+        if: github.event.workflow_run.head_branch == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GATE_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          python3 scripts/release_train.py --repo "$GITHUB_REPOSITORY" \
+            channel --default-branch "$DEFAULT_BRANCH" --gate-run "$GATE_RUN"
+
       # A no-op is the ordinary outcome and must not read as a failure. The
       # reason is printed either way so "why did the channel not move?" is
       # answerable from the run alone — and since DRE-3070 the receipt leads
       # with the machine-readable outcome, so "the channel is quiet" and "the
       # channel is starved by a merge train" are different strings rather than
       # the same silence.
+      #
+      # DRE-3568: on a MAIN run that did not move the tag, the silence is the
+      # defect — on 2026-09-10 every promote-channel run concluded `success`
+      # while `stable` sat 39 commits behind on a red gate. So a decline on
+      # main raises one `::warning::` and a `## Did not promote` block naming
+      # the candidate sha, the gating run and its failing scenarios. The exit
+      # stays 0: declining is correct, being quiet about it is not. A PR-head
+      # decline stays a plain receipt — nothing is owed there, and a warning
+      # on every PR harness run would bury the one that matters.
       #
       # Since DRE-3076 that sentence has a third form. A harness run that died
       # because the SANDBOX was down never judged the commit, and its stamp
@@ -181,7 +222,12 @@ jobs:
         env:
           OUTCOME: ${{ steps.decide.outputs.outcome }}
           REASON: ${{ steps.decide.outputs.reason }}
+          PROMOTED: ${{ steps.decide.outputs.promote }}
           HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SCENARIOS: ${{ steps.channel.outputs.scenarios }}
+          CHANNEL_RECEIPT: ${{ steps.channel.outputs.receipt }}
         run: |
           {
             echo "🏁 promote-channel: ${OUTCOME}"
@@ -190,3 +236,18 @@ jobs:
             echo ""
             echo "Harness run: ${HARNESS_RUN}"
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$BRANCH" = "main" ] && [ "$PROMOTED" != "true" ]; then
+            echo "::warning title=Did not promote::${OUTCOME} — candidate ${CANDIDATE:0:7}, gating run ${HARNESS_RUN}, scenarios ${SCENARIOS:-none}: ${REASON}"
+            {
+              echo "## Did not promote"
+              echo ""
+              echo "- candidate: \`${CANDIDATE}\`"
+              echo "- outcome: \`${OUTCOME}\`"
+              echo "- gating run: ${HARNESS_RUN}"
+              echo "- failing scenarios: ${SCENARIOS:-none}"
+              echo ""
+              echo "${REASON}"
+              echo ""
+              echo "\`${CHANNEL_RECEIPT:-pipeline-channel receipt not read}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -51,7 +51,7 @@ One rule set, asked twice: once to build the matrix, and once inside each surfac
 | Order | Decision | Act | Says |
 | --- | --- | --- | --- |
 | 1 | `held` | `held` | `RELEASE_HOLD` is set: every surface exits held, once each, before any surface job exists |
-| 2 | `channel` | `no-op` | the surface records a channel another train advances |
+| 2 | `channel-current / channel-advancing / channel-blocked / channel-unknown` | `no-op` | the surface records a channel another train advances — the release train never runs it, and since DRE-3568 the row says where it is: `current` at the head; `advancing` when behind with the gate (`harness.yml` on the default branch) running or green past the channel; `blocked` when behind and the gate's latest run failed, was cancelled or has judged nothing since the channel — this one names the run, its failing scenarios and how long the channel has been behind, and raises a `::warning::` and a `## Blocked` step summary; `unknown` when a read failed, which warns too and is never a green. Each prints one `pipeline-channel: state=… behind=… since=… tag=… head=… gate=… scenarios=…` receipt line the console parses |
 | 3 | `no-script` | `no-op` | the surface declares no script |
 | 4 | `auto-false` | `no-op` | unattended runs skip an `auto: false` surface; a hand dispatch runs it |
 | 5 | `current` | `no-op` | nothing under the surface's `paths` has changed since its newest tag |

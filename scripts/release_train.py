@@ -105,6 +105,28 @@ exists. It is a repository variable, so `vars.RELEASE_HOLD` — see
 `standards/release-train.md` for WHERE to set it, because a called workflow's
 `vars` context resolves against the CALLING repository plus the organization,
 and the fleet-wide brake is therefore the organization variable.
+
+THE CHANNEL ROW SAYS WHERE THE CHANNEL IS (DRE-3568). A `record: channel`
+surface is still never run — but "another train advances it" was the one
+sentence the plan had about the engine's own release surface, and on
+2026-09-10 it was all anyone got: `stable` sat at b860c24 (21:41 PT the night
+before) for the whole working day, 39 commits behind `main`, while every
+promote-channel run concluded `success` because the promotion gate
+(`harness.yml` on `main`) failed on every push and nothing named that on any
+run, any page or any card. The DRE-3526 shape, for the channel: a run that did
+not ship reads green. So the plan now READS the channel — the ref, how far it
+trails the head and since when, and the gate's latest run on the default
+branch with the failing scenario names from its `== harness summary ==` block
+— and the decision is `channel-current`, `channel-advancing` (behind, and the
+gate is running or green past the channel: promotion is coming) or
+`channel-blocked` (behind, and the gate's latest run failed, was cancelled, or
+has judged nothing past the channel). `channel-blocked` raises a `::warning::`
+and a `## Blocked` step summary. And by console-honesty rule 1 an UNREADABLE
+answer is `channel-unknown`, never a green: it warns too, prints `unknown`
+where a number would be a lie, and exits 0 — the row releases nothing, and a
+red train on an API blip would be a second kind of noise. Both this plan and
+`promote-channel.yml` print ONE machine-readable receipt line for it
+(`Channel.receipt`), byte-stable, which agent-bureau's console parses.
 """
 
 from __future__ import annotations
@@ -116,7 +138,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 from zoneinfo import ZoneInfo
@@ -181,6 +203,38 @@ _WINDOW_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d) P
 
 #: The line a surface script prints to say the deployment is owed to a person.
 DEFERRAL_PREFIX = "deferred:"
+
+#: The channel's gate (DRE-3568): the workflow whose latest run on the default
+#: branch says whether promotion is coming. `promote-channel.yml` fires on this
+#: workflow completing and moves `stable` only when it was green on `main`, so
+#: its latest run IS the channel's forecast. A module constant rather than a
+#: schema field: this repo's own `pipeline-channel` is the only `channel`
+#: surface in the fleet, and `tests/test_channel_row_states.py` pins the
+#: constant to what promote-channel.yml actually listens to.
+CHANNEL_GATE = "harness.yml"
+
+#: The channel row's states. `unknown` is the fourth, by console-honesty rule
+#: 1 — an unreadable answer is never `current` or `advancing`.
+CHANNEL_CURRENT = "current"
+CHANNEL_ADVANCING = "advancing"
+CHANNEL_BLOCKED = "blocked"
+CHANNEL_UNKNOWN = "unknown"
+
+#: Opens the ONE receipt line the train and promote-channel both print for the
+#: channel; agent-bureau's console parses it (`release_train_health.py`).
+CHANNEL_RECEIPT_TAG = "pipeline-channel"
+
+#: The gate conclusions whose run log carries a `== harness summary ==` block
+#: worth reading for scenario names. A cancelled run never reached one.
+LOGGED_CONCLUSIONS = ("failure", "timed_out")
+
+#: One scenario line of the harness driver's `== harness summary ==` block
+#: (`scripts/harness/__main__.py`): `  <scenario>: FAIL at <phase>` or
+#: `BLOCKED at <phase>` (DRE-3076, the sandbox case). Searched, never
+#: anchored — `gh run view --log-failed` prefixes every line with
+#: `job<TAB>step<TAB>timestamp`.
+_HARNESS_SUMMARY_HEADER = "== harness summary =="
+_HARNESS_FAILURE_RE = re.compile(r"(?:^|\s)(\w+): ((?:FAIL|BLOCKED) at \w+)\s*$")
 
 
 class Field(NamedTuple):
@@ -252,6 +306,42 @@ class Surface(NamedTuple):
     record: str
 
 
+class Channel(NamedTuple):
+    """Where a `record: channel` surface's ref stands (DRE-3568): how far it
+    trails the head and since when, and what the gate's latest run on the
+    default branch says about whether promotion is coming.
+
+    `behind` and `since` are `None` when they were not read — the receipt
+    prints `unknown`/`none` for them, never a number nobody fetched.
+    """
+
+    state: str                     # current | advancing | blocked | unknown
+    behind: int | None             # commits the ref trails the head by
+    since: datetime | None         # the ref's commit date (aware, UTC)
+    tag_sha: str | None
+    head_sha: str | None
+    gate_url: str | None           # the gate's latest run on the branch
+    scenarios: tuple = ()          # failing scenario names, in log order
+    detail: str = ""               # one clause for the human sentence
+
+    def receipt(self) -> str:
+        """The ONE machine-readable line, byte-stable — the console parses
+        it, so every value is a single token and absent is `none`."""
+        since = (self.since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                 if self.since else "none")
+        behind = "unknown" if self.behind is None else str(self.behind)
+        return (
+            f"{CHANNEL_RECEIPT_TAG}: state={self.state} behind={behind} "
+            f"since={since} tag={_short(self.tag_sha)} head={_short(self.head_sha)} "
+            f"gate={self.gate_url or 'none'} "
+            f"scenarios={','.join(self.scenarios) or 'none'}"
+        )
+
+
+def _short(sha: str | None) -> str:
+    return sha[:7] if sha else "none"
+
+
 class Decision(NamedTuple):
     """What the train does about one surface, and the plain sentence why."""
 
@@ -262,6 +352,9 @@ class Decision(NamedTuple):
     #: The commit a `release` decision chose (DRE-3266) — the plan's, which
     #: the surface job checks out and hands the script as `RELEASE_SHA`.
     sha: str | None = None
+    #: Where the channel stands, on a `record: channel` surface (DRE-3568) —
+    #: what the second receipt line and the step summary are printed from.
+    channel: Channel | None = None
 
     @property
     def ok(self) -> bool:
@@ -519,6 +612,205 @@ def fetch_checks(repo: str, sha: str) -> Checks:
 
 
 # ---------------------------------------------------------------------------
+# The channel — where the ref stands, and what its gate says (DRE-3568)
+# ---------------------------------------------------------------------------
+
+def harness_failures(log_text) -> tuple:
+    """`((scenario, "FAIL at <phase>"), …)` from a harness run's log, in the
+    order the driver's `== harness summary ==` block lists them.
+
+    Only the summary block is read: an error line above it quoting a
+    scenario's name is not a verdict. `BLOCKED at <phase>` (DRE-3076, the
+    sandbox case) counts as a failure to name — the run proved nothing.
+    """
+    if not log_text:
+        return ()
+    found: list = []
+    in_summary = False
+    for line in log_text.splitlines():
+        if _HARNESS_SUMMARY_HEADER in line:
+            in_summary = True
+            continue
+        if not in_summary:
+            continue
+        match = _HARNESS_FAILURE_RE.search(line)
+        if match:
+            found.append((match.group(1), match.group(2)))
+    return tuple(found)
+
+
+def read_channel(*, head, ref, compare, run, log_text=None) -> Channel:
+    """One `Channel` from the four reads — pure, so the fixture drives it.
+
+    `ref` is `git/ref/tags/<channel>`'s object (`sha`), or None when the ref
+    could not be read; `compare` is `compare/<channel>...<head>` slimmed to
+    `status`, `ahead_by`, `base_sha`, `base_date`; `run` is the gate's latest
+    run on the default branch (`status`, `conclusion`, `html_url`,
+    `head_sha`), or None when there is none; `log_text` is that run's
+    `--log-failed` output when it concluded anything but success.
+
+    The states, in the order they are decided:
+      unknown    — the ref or the compare was not read (rule 1: never a green)
+      current    — the ref is at the head, or the head is inside it
+      advancing  — behind, and the gate is running, or green on a commit
+                   PAST the channel: promotion is coming
+      blocked    — behind, and the gate's latest run failed or was cancelled,
+                   or there is no run past the channel at all (the
+                   Actions-budget-block shape: nothing is judging the head)
+    """
+    if not ref or not isinstance(ref, dict) or not ref.get("sha"):
+        return Channel(CHANNEL_UNKNOWN, None, None, None, head, None, (),
+                       "the channel ref could not be read")
+    tag_sha = ref["sha"]
+    if not compare or not isinstance(compare, dict) or "ahead_by" not in compare:
+        return Channel(CHANNEL_UNKNOWN, None, None, tag_sha, head, None, (),
+                       "the compare against the head could not be read")
+
+    behind = int(compare.get("ahead_by") or 0)
+    if compare.get("status") in ("identical", "behind") or behind == 0:
+        return Channel(CHANNEL_CURRENT, 0, None, tag_sha, head, None, (),
+                       "the channel is at the head")
+
+    since = _iso(compare.get("base_date"))
+    if not run:
+        return Channel(
+            CHANNEL_BLOCKED, behind, since, tag_sha, head, None, (),
+            f"no {CHANNEL_GATE} run on the default branch at all — nothing "
+            f"is judging the {behind} commits since the channel")
+
+    url = run.get("html_url")
+    run_sha = run.get("head_sha") or ""
+    status = run.get("status") or ""
+    conclusion = run.get("conclusion") or ""
+    if status != "completed":
+        return Channel(
+            CHANNEL_ADVANCING, behind, since, tag_sha, head, url, (),
+            f"the gate is {status or 'not complete'} on {_short(run_sha)}")
+    if conclusion == "success":
+        if run_sha == tag_sha:
+            return Channel(
+                CHANNEL_BLOCKED, behind, since, tag_sha, head, url, (),
+                f"the gate's latest run proved {_short(run_sha)}, the commit "
+                f"the channel already sits on — no harness run has judged "
+                f"any of the {behind} commits since")
+        return Channel(
+            CHANNEL_ADVANCING, behind, since, tag_sha, head, url, (),
+            f"the gate concluded success on {_short(run_sha)}")
+    scenarios = tuple(name for name, _ in harness_failures(log_text))
+    return Channel(
+        CHANNEL_BLOCKED, behind, since, tag_sha, head, url, scenarios,
+        f"the gate's latest run on the default branch concluded "
+        f"{conclusion or 'nothing'} on {_short(run_sha)}")
+
+
+def _iso(raw) -> datetime | None:
+    """An API timestamp as an aware datetime, or None when it cannot be
+    read — unreadable is absent, never a guess."""
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _gh_json(path: str, jq: str, what: str):
+    """One `gh api` read as JSON — `None` when the resource is absent (a 404
+    is "no such ref", not an error) and a `RuntimeError` on anything else,
+    which the caller reports as UNKNOWN."""
+    out = subprocess.run(
+        ["gh", "api", path, "--jq", jq], capture_output=True, text=True)
+    if out.returncode != 0:
+        if "HTTP 404" in (out.stderr or ""):
+            return None
+        raise RuntimeError(f"gh could not read {what}: {out.stderr.strip()}")
+    text = out.stdout.strip()
+    return json.loads(text) if text else None
+
+
+def default_branch_head(repo: str, branch: str) -> str:
+    """The default branch's head from `git/ref/heads/<branch>` — one read.
+    `promote-channel.yml` has no checkout of the branch at the moment it
+    runs (it is triggered by a harness run on the CANDIDATE), so the promote
+    path resolves the head it measures against here."""
+    ref = _gh_json(f"repos/{repo}/git/ref/heads/{branch}", ".object | {sha}",
+                   f"git/ref/heads/{branch}")
+    if not ref or not ref.get("sha"):
+        raise RuntimeError(f"git/ref/heads/{branch} could not be read")
+    return ref["sha"]
+
+
+def fetch_channel(repo: str, surface, head: str, gate_run=None,
+                  default_branch: str = "main") -> Channel:
+    """The channel's four reads, at most: the ref, the compare, the gate's
+    run and — only when that run concluded anything but success — its log.
+    Read-only, and every read is `gh`, so a test puts a fake on PATH.
+
+    THE REF IS READ THROUGH THE API, NOT THE CHECKOUT'S TAGS, on purpose:
+    `promote-channel.yml` reads `git/ref/tags/stable` and `compare/stable...`
+    to decide whether to move the ref, and this row reads the same two
+    records so the train's row and the promoter's receipt can never disagree
+    about where `stable` is. It also makes the read independent of the
+    checkout — a moving tag in a clone is a snapshot from checkout time
+    (the train's checkout is fetch-depth 0 with `fetch-tags: false`), and
+    the operator's command works from any checkout with no fetch first.
+
+    BOTH RECEIPTS ANSWER THE SAME QUESTION. The train's plan and
+    promote-channel measure against the DEFAULT BRANCH HEAD and name the
+    branch's NEWEST gate run — never the candidate promote-channel was
+    triggered on. Measured against the candidate, the receipt right after
+    the 2026-09-10 12:13 PT promotion of b7e9e2c would have read `current
+    behind=0 head=b7e9e2c` while main was already four ahead at 657651b
+    with its gate running, and the console (which reads state from
+    promote-channel's log and `behind` from a live tag-vs-main read) would
+    have shown "4 behind · current". `gate_run` — the run that triggered
+    promote-channel — is only the fallback when the branch's listing
+    answers nothing; when it IS the newest run it is the one named anyway.
+    """
+    channel_ref = surface.tag_series[0] if surface.tag_series else "stable"
+    ref = _gh_json(f"repos/{repo}/git/ref/tags/{channel_ref}",
+                   ".object | {sha, type}", f"git/ref/tags/{channel_ref}")
+    if not ref:
+        return read_channel(head=head, ref=None, compare=None, run=None)
+    compare = _gh_json(
+        f"repos/{repo}/compare/{channel_ref}...{head}",
+        "{status, ahead_by, behind_by, base_sha: .base_commit.sha, "
+        "base_date: .base_commit.commit.committer.date}",
+        f"compare/{channel_ref}...{head[:7]}")
+    if not compare or not int(compare.get("ahead_by") or 0):
+        return read_channel(head=head, ref=ref, compare=compare, run=None)
+
+    fields = "{id, html_url, status, conclusion, head_sha, head_branch, event}"
+    # `branch=<default>` so a PR-head run never reads as the branch's latest.
+    run = _gh_json(
+        f"repos/{repo}/actions/workflows/{CHANNEL_GATE}/runs"
+        f"?branch={default_branch}&per_page=1",
+        f".workflow_runs[0] | {fields}", f"the latest {CHANNEL_GATE} run")
+    if not run and gate_run:
+        run = _gh_json(f"repos/{repo}/actions/runs/{int(gate_run)}", fields,
+                       f"run {gate_run}")
+    log_text = None
+    if run and run.get("status") == "completed" \
+            and run.get("conclusion") in LOGGED_CONCLUSIONS:
+        # The medic's proven path (red-main-repair.yml): the failed steps'
+        # logs, which is where the driver's summary block is. Only a run that
+        # RAN to a verdict has one — a cancelled run is `blocked: cancelled`
+        # with no scenarios, and a log read that errored on it would degrade
+        # the whole row to `unknown` until the next push.
+        done = subprocess.run(
+            ["gh", "run", "view", "--repo", repo, str(run.get("id")), "--log-failed"],
+            capture_output=True, text=True)
+        if done.returncode != 0:
+            raise RuntimeError(
+                f"gh could not read the log of run {run.get('id')}: "
+                f"{done.stderr.strip()}")
+        log_text = done.stdout
+    return read_channel(head=head, ref=ref, compare=compare, run=run,
+                        log_text=log_text)
+
+
+# ---------------------------------------------------------------------------
 # The rules
 # ---------------------------------------------------------------------------
 
@@ -534,7 +826,7 @@ def brake(raw=None) -> str | None:
 
 
 def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
-           dispatched: bool = False) -> Decision:
+           dispatched: bool = False, channel: Channel | None = None) -> Decision:
     """The whole rule, as one answer with a plain sentence.
 
     `lag_state` is `"current"` or `"behind"` (this module's `lag_state()`
@@ -542,7 +834,9 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
     bool; `brake` is `None` or the date the fleet was braked. `dispatched` is
     the hand dispatch: it runs an `auto: false` surface and ignores the
     window, and it bypasses nothing else — not the brake, not the spacing,
-    not green-at-SHA.
+    not green-at-SHA. `channel` is where a `record: channel` surface's ref
+    stands (DRE-3568), read by `plan()`; `None` means nobody read it, which
+    is UNKNOWN and never current.
     """
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError(
@@ -560,11 +854,7 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
             f"releases nothing until it is cleared")
 
     if surface.record == "channel":
-        series = ", ".join(surface.tag_series) or "its series"
-        return Decision(
-            NO_OP, "channel",
-            f"{surface.name} records the channel {series}, which another train "
-            f"advances — the release train never runs a `channel` surface")
+        return _channel_decision(surface, now, channel)
 
     if not surface.script:
         return Decision(
@@ -627,6 +917,76 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
         RELEASE, "release",
         f"{surface.name} is behind and the spacing has elapsed — releasing "
         f"({said})")
+
+
+def _channel_decision(surface, now, channel: Channel | None) -> Decision:
+    """The channel row (DRE-3568): a no-op whose code carries the channel's
+    state and whose sentence says where it is — still never run.
+
+    The tail clause is the same on every branch on purpose: "the release
+    train never runs a `channel` surface" is the sentence the document and
+    the standard make, and the row reports; it does not promote.
+    """
+    series = ", ".join(surface.tag_series) or "its series"
+    never = (f"another train advances {series} — the release train never "
+             f"runs a `channel` surface")
+    if channel is None:
+        channel = Channel(CHANNEL_UNKNOWN, None, None, None, None, None, (),
+                          "nobody read the channel")
+    if channel.state == CHANNEL_UNKNOWN:
+        return Decision(
+            NO_OP, "channel-unknown",
+            f"{surface.name} could not be read — {channel.detail}; UNKNOWN is "
+            f"not current and not advancing ({never})",
+            channel=channel)
+    if channel.state == CHANNEL_CURRENT:
+        return Decision(
+            NO_OP, "channel-current",
+            f"{surface.name} is current: {series} is at the head "
+            f"{_short(channel.head_sha)} ({never})",
+            channel=channel)
+
+    behind = (f"{series} at {_short(channel.tag_sha)} is {channel.behind} commits "
+              f"behind {_short(channel.head_sha)}")
+    if channel.since is not None:
+        # The tag's COMMIT date: how old the code the channel serves is, and a
+        # lower bound on how long it has sat there — not the moment it fell
+        # behind, which nothing records.
+        behind += (f"; that commit dates from "
+                   f"{channel.since.astimezone(PT):%Y-%m-%d %H:%M} PT, "
+                   f"{_for(now - channel.since)} ago")
+    gate = f" ({channel.gate_url})" if channel.gate_url else ""
+    if channel.state == CHANNEL_ADVANCING:
+        return Decision(
+            NO_OP, "channel-advancing",
+            f"{surface.name} is behind but promotion is coming: {behind}; "
+            f"{channel.detail}{gate} ({never})",
+            channel=channel)
+    scenarios = (": " + ", ".join(channel.scenarios)
+                 if channel.scenarios else "")
+    return Decision(
+        NO_OP, "channel-blocked",
+        f"{surface.name} is BLOCKED: {behind} — {channel.detail}{gate}"
+        f"{scenarios} ({never})",
+        channel=channel)
+
+
+def _for(elapsed: timedelta) -> str:
+    """`11 hours` / `3 days` — the unit a human would have used, the
+    `channel_watch._days` reading."""
+    hours = max(0.0, elapsed.total_seconds() / 3600)
+    if hours >= 48:
+        value, unit = hours / 24, "day"
+    else:
+        value, unit = hours, "hour"
+    shown = f"{value:.0f}"
+    return f"{shown} {unit}" + ("" if shown == "1" else "s")
+
+
+def channel_warns(decision: Decision) -> bool:
+    """Which channel decisions raise a `::warning::` and a step summary:
+    blocked and unknown. Current and advancing are the channel working."""
+    return decision.code in ("channel-blocked", "channel-unknown")
 
 
 def _ci_refusal(checks: Checks) -> str:
@@ -947,7 +1307,7 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
 
 
 def plan(data, *, repo_root, head, now, brake=None, dispatched_surface=None,
-         checks_for=None, repo="", bound=WALK_BOUND):
+         checks_for=None, channel_for=None, repo="", bound=WALK_BOUND):
     """Every declared surface, what the train does about it, and — for each
     that releases — WHICH commit (`Decision.sha`).
 
@@ -957,17 +1317,31 @@ def plan(data, *, repo_root, head, now, brake=None, dispatched_surface=None,
     `checks_for(sha)` — `fetch_checks` against `repo` unless a test hands in
     its own — is read once per candidate until the first green one. A hand
     dispatch narrows the plan to the one surface it names.
+
+    A `record: channel` surface is read instead (DRE-3568): `channel_for
+    (surface, head)` — `fetch_channel` against `repo` unless a test hands in
+    its own — and a reader that raises is reported as UNKNOWN, never as a
+    green: the row releases nothing, so it warns rather than refuses.
     """
     if checks_for is None:
         checks_for = lambda sha: fetch_checks(repo, sha)  # noqa: E731
+    if channel_for is None:
+        channel_for = lambda entry, sha: fetch_channel(repo, entry, sha)  # noqa: E731
     out = []
     for name, entry in surfaces(data).items():
         if dispatched_surface and name != dispatched_surface:
             continue
+        channel = None
+        if entry.record == "channel" and brake is None:
+            try:
+                channel = channel_for(entry, head)
+            except RuntimeError as err:
+                channel = Channel(CHANNEL_UNKNOWN, None, None, None, head,
+                                  None, (), str(err))
         tag, tag_at = newest_tag(repo_root, entry.tag_series)
         lag = lag_state(repo_root, tag, head, entry.paths)
         decision = decide(entry, now, tag_at, lag, ASSUMED_GREEN, brake,
-                          dispatched=bool(dispatched_surface))
+                          dispatched=bool(dispatched_surface), channel=channel)
         if decision.releases:
             try:
                 found = walk(entry, repo_root=repo_root, head=head, tag=tag,
@@ -1130,7 +1504,19 @@ def render_markdown() -> str:
 _ORDER = (
     ("held", HELD, f"`{ENV_HOLD}` is set: every surface exits held, once each, "
                    "before any surface job exists"),
-    ("channel", NO_OP, "the surface records a channel another train advances"),
+    ("channel-current / channel-advancing / channel-blocked / channel-unknown",
+     NO_OP,
+     "the surface records a channel another train advances — the release "
+     "train never runs it, and since DRE-3568 the row says where it is: "
+     "`current` at the head; `advancing` when behind with the gate "
+     f"(`{CHANNEL_GATE}` on the default branch) running or green past the "
+     "channel; `blocked` when behind and the gate's latest run failed, was "
+     "cancelled or has judged nothing since the channel — this one names the "
+     "run, its failing scenarios and how long the channel has been behind, and "
+     "raises a `::warning::` and a `## Blocked` step summary; `unknown` when a "
+     "read failed, which warns too and is never a green. Each prints one "
+     f"`{CHANNEL_RECEIPT_TAG}: state=… behind=… since=… tag=… head=… gate=… "
+     "scenarios=…` receipt line the console parses"),
     ("no-script", NO_OP, "the surface declares no script"),
     ("auto-false", NO_OP, "unattended runs skip an `auto: false` surface; a "
                           "hand dispatch runs it"),
@@ -1171,6 +1557,41 @@ def _emit_output(name: str, value: str) -> None:
             fh.write(f"{name}={value}\n")
 
 
+def _warning(title: str, text: str, out=print) -> None:
+    """One GitHub annotation, so the run list shows it without opening the
+    log. One line: a newline would end the annotation."""
+    out(f"::warning title={title}::{' '.join(text.split())}")
+
+
+def _step_summary(heading: str, lines) -> None:
+    """A block on the run's summary page (`$GITHUB_STEP_SUMMARY`), when
+    there is one. The small generic mechanism a deferral (DRE-3526) and the
+    channel row (DRE-3568) both use: a heading, then the lines."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(f"## {heading}\n\n")
+        for line in lines:
+            fh.write(f"{line}\n")
+        fh.write("\n")
+
+
+def _announce_channel(decision: Decision, out=print) -> None:
+    """The channel row's second receipt line, and — when it is blocked or
+    unknown — the warning and the summary block that make a green run say
+    what did not ship."""
+    channel = decision.channel
+    if channel is None:
+        return
+    out(channel.receipt())
+    if not channel_warns(decision):
+        return
+    heading = "Blocked" if decision.code == "channel-blocked" else "Unknown"
+    _warning(f"pipeline channel {channel.state}", decision.reason, out=out)
+    _step_summary(heading, [decision.reason, "", f"`{channel.receipt()}`"])
+
+
 def _cmd_schema(args) -> int:
     problems = check_schema(load(args.file), repo_root=args.repo_root)
     if problems:
@@ -1196,11 +1617,46 @@ def _cmd_plan(args) -> int:
                    dispatched_surface=args.surface or None, repo=args.repo)
     for entry, decision in planned:
         print(decision.receipt(args.repo, entry.name, decision.sha))
+        _announce_channel(decision)
     _emit_output("matrix", json.dumps(matrix(planned)))
     _emit_output("head", args.head)
     # A refusal is loud here too — a red-only or too-far-behind surface
     # fails the plan, the way it would fail the surface job.
     return 0 if all(decision.ok for _, decision in planned) else 1
+
+
+def _cmd_channel(args) -> int:
+    """Where the channel stands, as the one receipt line — for
+    `promote-channel.yml`, which prints it through THIS code so the console
+    never needs a second format. Reporting only: exit 0 always, and a
+    read that fails prints `unknown` with a warning, never a number."""
+    data = load(args.file)
+    channels = [entry for entry in surfaces(data).values()
+                if entry.record == "channel"]
+    if not channels:
+        print(f"{TAG}: {args.file} declares no `channel` surface")
+        return 0
+    entry = channels[0]
+    head = args.head
+    try:
+        if not head:
+            # The promote path: measure against the DEFAULT BRANCH HEAD, the
+            # same question the train's plan answers — never the candidate.
+            head = default_branch_head(args.repo, args.default_branch)
+        channel = fetch_channel(args.repo, entry, head,
+                                gate_run=args.gate_run or None,
+                                default_branch=args.default_branch)
+    except RuntimeError as err:
+        channel = Channel(CHANNEL_UNKNOWN, None, None, None, head or None, None,
+                          (), str(err))
+    decision = decide(entry, datetime.now(tz=PT), None, "behind",
+                      ASSUMED_GREEN, None, channel=channel)
+    _announce_channel(decision)
+    _emit_output("state", channel.state)
+    _emit_output("behind", "unknown" if channel.behind is None else str(channel.behind))
+    _emit_output("scenarios", ",".join(channel.scenarios) or "none")
+    _emit_output("receipt", channel.receipt())
+    return 0
 
 
 def _cmd_release(args) -> int:
@@ -1256,12 +1712,29 @@ def main(argv=None) -> int:
 
     sub.add_parser("render", help="rewrite docs/release-train.md")
 
+    channel = sub.add_parser(
+        "channel", help="where the channel stands — the one receipt line "
+                        "promote-channel.yml prints (DRE-3568)")
+    channel.add_argument("--head", default="",
+                         help="the default branch's head; absent, it is read "
+                              "from git/ref/heads/<default-branch> (the "
+                              "promote path)")
+    channel.add_argument("--default-branch", default="main",
+                         help="the default branch the channel is measured "
+                              "against — github.event.repository.default_branch")
+    channel.add_argument("--gate-run", default="",
+                         help="the run that triggered the promotion attempt; "
+                              "named only when the branch's listing answers "
+                              "nothing — the newest gate run on the default "
+                              "branch wins, the train's own rule")
+
     args = parser.parse_args(argv)
     return {
         "schema": _cmd_schema,
         "plan": _cmd_plan,
         "release": _cmd_release,
         "render": _cmd_render,
+        "channel": _cmd_channel,
     }[args.command](args)
 
 
