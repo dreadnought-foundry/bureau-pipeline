@@ -532,12 +532,27 @@ jobs:
       # mapping and reads the files from this checkout at run time, so a `@main`
       # edit to a standard propagates to the planner on its next run with no
       # workflow change. Only on the plan path (an "activate" route runs no agent).
+      #
+      # Then the one block that is NOT static prose (DRE-3359): what the split
+      # ledger and the product repo's mulch planning records say about cards
+      # that did not fit one run. It is APPENDED — `>>`, after the standards, so
+      # the planner sizes against evidence rather than against memory — and the
+      # renderer (DRE-3358) always exits 0: a missing config/split-ledger.json
+      # or .mulch/expertise/planning.jsonl renders `UNKNOWN — <reason>`, because
+      # a file read for CONTEXT must never fail a plan run. The `--mulch` path
+      # is the PRODUCT checkout's, the opposite side to the ledger's own
+      # default. The two STATUS lines are grepped back into the step log so a
+      # run answers "what was the planner given" without opening a file nothing
+      # commits. The wave route is untouched: it decomposes into epics, not
+      # cards, and sizes nothing.
       - name: Assemble planner context
         id: ctx
         if: steps.route.outputs.mode == 'plan'
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
+          python3 .bureau-pipeline/scripts/ledger_context.py render --mulch .mulch/expertise/planning.jsonl >> .bureau-pipeline/agent-context.md
+          grep -E '^(LEDGER|MULCH) STATUS:' .bureau-pipeline/agent-context.md || echo "no LEDGER STATUS: or MULCH STATUS: line in the assembled context"
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
 
       # DRE-1996: make the DRE-1989 sentinel fence mechanical. Epic title and

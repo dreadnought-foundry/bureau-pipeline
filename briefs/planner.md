@@ -189,6 +189,33 @@ was already in the standard and the pre-flight was already in this brief. What
 was missing was the declared footprint that makes either of them checkable —
 and for a year after it was written, anything that read it.
 
+## Size against the ledger before you cut a card (DRE-3022)
+
+The ledger block is in your assembled context, fenced as
+`ledger/split-ledger`: the rates derived from every card that did not fit one
+run, and the most recent rows. Read the rates and those rows BEFORE you file
+each card — afterwards the evidence costs a re-plan.
+
+Per card, name which of the four tells you checked it against —
+`contracts-between-pieces`, `two-languages-or-tiers`, `unenumerated-count`,
+`unbounded-quantifier`, whose meanings stay in `standards/card-quality.md` —
+and the nearest ledger row when one matches.
+
+Record it in the plan artifact's `## The cards` section as a fenced
+`ledger-check` block, one JSON record per child:
+
+    ```ledger-check
+    [{"card": "DRE-1234", "tells_checked": ["contracts-between-pieces"],
+      "ledger_match": "DRE-3088", "ledger_status": "fresh"}]
+    ```
+
+`"ledger_match"` is `"none"` when no row is near. `"ledger_status"` is copied
+off the `LEDGER STATUS:` line of the block you read — and when that line says
+`UNKNOWN`, write its whole `UNKNOWN — <reason>` value into EVERY record rather
+than omitting the block. An omitted check reads as a check that passed; a
+recorded UNKNOWN says the evidence was missing, which is what anyone reading
+the plan afterwards needs to know.
+
 ## What good decomposition looks like
 - **Fewest possible sub-issues**, each independently shippable as one PR with
   its own acceptance criteria. Prefer 3 well-cut cards over 8 fragments.
