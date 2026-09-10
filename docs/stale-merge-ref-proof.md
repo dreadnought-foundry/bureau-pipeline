@@ -29,10 +29,10 @@ honest state, not a pass.
 
 | Fact | Value |
 | --- | --- |
-| Rule reached bureau-pipeline `main` | `763f0e93` — merge of PR #303, 2026-09-07 16:14 PT |
+| Rule reached bureau-pipeline `main` | `763f0e9c` — merge of PR #303, 2026-09-07 16:14 PT |
 | bureau-pipeline's own sweep runs | `.github/workflows/self-reconcile.yml`, `reconcile.yml@main`, `pipeline_ref: main` |
 | agent-bureau's sweep runs | `.github/workflows/reconcile.yml`, `reconcile.yml@stable`, `pipeline_ref: stable` |
-| `stable` at the time of reading | `b860c24144b66e918117a09d17e7bcac08cfcf7d`, which contains `763f0e93` |
+| `stable` at the time of reading | `b860c24144b66e918117a09d17e7bcac08cfcf7d`, which contains `763f0e9c` |
 | Console's act row | `console/backend/receipts.py`, commit `1e8e0e62f`, 2026-09-05 09:09 PT |
 
 So the rule is live in bureau-pipeline directly and in agent-bureau through the
