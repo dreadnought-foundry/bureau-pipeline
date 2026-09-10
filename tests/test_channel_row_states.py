@@ -91,10 +91,10 @@ def _channel(**over) -> "release_train.Channel":
     return release_train.Channel(**fields)
 
 
-def _decide(channel, now=None, **kw):
+def _decide(channel, now=None, brake=None):
     return release_train.decide(
         _channel_surface(), now or pt(2026, 9, 10, 8, 41), None, "behind",
-        release_train.ASSUMED_GREEN, None, channel=channel, **kw)
+        release_train.ASSUMED_GREEN, brake, channel=channel)
 
 
 # --------------------------------------------------------------------------

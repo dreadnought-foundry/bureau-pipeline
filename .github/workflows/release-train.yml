@@ -152,8 +152,20 @@ jobs:
 
       # Reads checks HERE now (DRE-3266) — for a surface that would release,
       # one read per candidate walked, newest first, until the first green
-      # one; a surface with nothing to release still reads none. Hence the
-      # token: the stub's `checks: read` and `actions: read` cover it.
+      # one; a `tag` surface with nothing to release still reads none. Hence
+      # the token: the stub's `checks: read` and `actions: read` cover it.
+      #
+      # A `record: channel` surface is the exception (DRE-3568): the train
+      # never runs it, but its row now READS where the channel is — the ref
+      # (`git/ref/tags/<channel>`, through the API rather than the checkout's
+      # tags: the same two records promote-channel.yml reads, so the row and
+      # the promoter can never disagree), the compare against the head, the
+      # gate's latest run on the default branch (harness.yml) and, only when
+      # that run went red, its `--log-failed` output for the scenario names.
+      # At most four reads, all through `gh` with this same token; a read
+      # that fails prints `unknown` with a warning and never a green. A
+      # blocked channel raises a `::warning::` and a `## Blocked` block on
+      # this run's summary page, the same way a deferral is carried.
       - name: Decide every surface
         id: plan
         env:
