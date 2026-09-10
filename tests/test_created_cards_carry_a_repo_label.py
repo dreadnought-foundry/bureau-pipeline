@@ -194,5 +194,71 @@ class EveryCallSitePassesTheRepoThatFailed(unittest.TestCase):
             )
 
 
+class InProgressBoard(FakeBoard):
+    """A board that also has the working lanes — the repair card is filed into
+    one (DRE-3533)."""
+
+    LANES = FakeBoard.LANES + (
+        ("state-todo", "Todo", "unstarted"),
+        ("state-inprogress", "In Progress", "started"),
+    )
+
+
+class TheCreateSeamTakesLabelsAndALane(unittest.TestCase):
+    """DRE-3533: the repair loop files its card through this same seam, but it
+    needs more than the repo label and it must land in a working lane — the
+    card describes work an agent is ALREADY doing."""
+
+    def setUp(self):
+        self.fake = InProgressBoard()
+        fh = tempfile.NamedTemporaryFile("w", suffix=".md", delete=False)
+        fh.write(GOOD_BODY)
+        fh.close()
+        self.body_file = fh.name
+        self.addCleanup(os.unlink, self.body_file)
+
+    def test_extra_labels_ride_alongside_the_repo_label(self):
+        _create(self.fake, "Pipeline failure: ci", self.body_file,
+                "--repo", "atlas", "--label", "Bug", "--label", "hand-built")
+        self.assertEqual(self.fake.label_names(),
+                         ["repo:atlas", "Bug", "hand-built"])
+
+    def test_a_lane_may_be_named_and_planning_stays_the_default(self):
+        _create(self.fake, "Pipeline failure: ci", self.body_file,
+                "--repo", "atlas", "--lane", "In Progress")
+        self.assertEqual(self.fake.created["stateId"], "state-inprogress")
+        fresh = InProgressBoard()
+        _create(fresh, "Pipeline failure: ci", self.body_file, "--repo", "atlas")
+        self.assertEqual(fresh.created["stateId"], "state-planning")
+
+    def test_create_card_returns_the_issue_it_made(self):
+        # The callable behind the CLI: a caller that must go on to stamp,
+        # comment or name a branch after the card needs the identifier back.
+        with mock.patch.object(linear_ops, "gql", side_effect=self.fake.gql):
+            with redirect_stdout(io.StringIO()):
+                issue = linear_ops.create_card(
+                    "Pipeline failure: ci", GOOD_BODY, repo_slug="atlas",
+                    labels=["Bug"], lane="In Progress",
+                )
+        self.assertEqual("DRE-300", issue["identifier"])
+        self.assertEqual(self.fake.created["stateId"], "state-inprogress")
+
+    def test_create_card_refuses_an_unknown_slug_before_creating(self):
+        with mock.patch.object(linear_ops, "gql", side_effect=self.fake.gql):
+            with self.assertRaises(linear_ops.LinearError):
+                linear_ops.create_card("t", GOOD_BODY, repo_slug="not-a-repo")
+        self.assertIsNone(self.fake.created)
+
+    def test_find_open_returns_the_identifier_the_command_prints(self):
+        # `find-open` is how the repair loop finds the card a first attempt
+        # already filed. The CLI prints it; a Python caller needs the value.
+        found = {"issues": {"nodes": [{"identifier": "DRE-301"}]}}
+        with mock.patch.object(linear_ops, "gql", return_value=found):
+            self.assertEqual("DRE-301", linear_ops.find_open("a title"))
+        with mock.patch.object(linear_ops, "gql",
+                               return_value={"issues": {"nodes": []}}):
+            self.assertIsNone(linear_ops.find_open("a title"))
+
+
 if __name__ == "__main__":
     unittest.main()
