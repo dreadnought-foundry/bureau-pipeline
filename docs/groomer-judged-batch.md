@@ -1,6 +1,6 @@
 # The judged groom — the first two batches, read against the live board
 
-Observed by hand on **2026-09-10**, between 06:50 and 07:30 PT, entirely
+Observed by hand on **2026-09-10**, between 06:46 and 06:54 PT, entirely
 read-only. Nothing was moved: every number below comes from a `propose` run
 that had already happened, from the proposal artifact that run kept, or from
 the live Linear board. The drain was not run for this record.
