@@ -92,9 +92,13 @@ def approved(pid, **kw):
 
 
 def paragraph(text):
-    """The answering paragraph of a rendered proposal, or None."""
-    return next((line for line in text.splitlines()
-                 if line.startswith(groomer.ANSWER_OPENER)), None)
+    """The answering block of a rendered proposal — the answer and the sentence
+    under it — or None."""
+    lines = text.splitlines()
+    for n, line in enumerate(lines):
+        if line.startswith(groomer.ANSWER_OPENER):
+            return "\n".join(lines[n:n + 3])
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -112,11 +116,17 @@ def test_the_proposal_answers_the_decline_with_the_reason_and_the_diff():
     assert answering["cards_in"] == ["DRE-4"]
     assert answering["cards_out"] == ["DRE-2", "DRE-3"]
 
-    line = paragraph(groomer.render_proposal(new))
-    assert line, "the rendered proposal carries no answering paragraph"
-    assert f"`{old['id']}`" in line, "the answer names no batch"
-    assert REASON in line, "the CEO's reason is not quoted verbatim"
-    assert "DRE-4" in line and "DRE-2" in line and "DRE-3" in line, (
+    block = paragraph(groomer.render_proposal(new))
+    assert block, "the rendered proposal carries no answering paragraph"
+    answer, blank, changed = block.splitlines()
+    assert f"`{old['id']}`" in answer, "the answer names no batch"
+    assert REASON in answer, "the CEO's reason is not quoted verbatim"
+    # Verbatim means verbatim: nothing is appended to the CEO's own words, and
+    # `REASON` deliberately ends without a full stop — the sentence that
+    # follows gets its own paragraph rather than running onto the end of it.
+    assert answer.endswith(REASON)
+    assert blank == ""
+    assert "DRE-4" in changed and "DRE-2" in changed and "DRE-3" in changed, (
         "the in/out difference is not stated by id"
     )
 

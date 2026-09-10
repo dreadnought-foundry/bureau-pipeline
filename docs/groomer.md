@@ -198,7 +198,7 @@ What each one does:
 - **declined** — the batch is not drained, and the refusal quotes the reason.
   The reason is required: a decline without one leaves the CEO having stopped a
   batch and nobody able to fix it, so it is read as absent and reported in the
-  record instead.
+  record instead. **The next proposal opens by answering it** — see below.
 - **excluded** — the card stays in Intake and the record lists it as `held
   back`. An exclusion naming a card that is not in the batch holds nothing back
   and is reported.
@@ -325,6 +325,54 @@ A proposal built with `--batch-cycles 2` or more is not drainable — its batch
 table records one position per card and not which of the several cycles each
 belongs to, so the drain refuses rather than guessing. Propose one cycle at a
 time (the default, and what the workflow passes).
+
+## The next proposal answers your last decline (DRE-3373)
+
+Declining a batch used to be a one-way message. The reason went into the drain's
+refusal and nowhere else, so the next `propose` posted a fresh twenty-card page
+that read exactly like the one that had just been turned down — with no sign
+that anybody had read the objection. Working out whether the thing you
+complained about was fixed meant diffing two proposal comments by eye.
+
+Now `propose --post` reads the card first, and when it finds an open decline the
+proposal **opens with the answer**, as its first paragraph after the title:
+
+```
+# Groom proposal `9c41ab77e0d2` — cycle 12
+
+**Answering your decline of `f673bfefa340`:** two of these cards edit Thread.tsx
+
+Relative to that batch: 1 card in (DRE-3401) and 2 cards out (DRE-3300,
+DRE-3302).
+```
+
+Two halves, and they come from different places:
+
+- **Your reason, verbatim.** It is quoted back, never acted on. The reason is
+  text the pipeline does not authenticate, being rendered into the very kind of
+  comment these markers are read from, so a line inside it shaped like a marker
+  is rendered with a visible `[defanged] ` prefix and the run's log says how many
+  lines it defanged — never what they said (`standards/untrusted-content.md`).
+  It gets its own paragraph because verbatim text may end without punctuation:
+  running the next sentence onto the end of it would read as one mangled
+  sentence in your own words, and inventing a full stop inside quoted text is
+  the one thing verbatim forbids.
+- **What changed, by id.** **Cards in** and **cards out**, computed from the two
+  batch lists: the declined batch read off its own `🧺 groom-proposal:` comment,
+  this one off the rows the run just sequenced. **No model is asked what
+  changed** — a sentence a model wrote about a difference it did not compute can
+  be wrong in the one place you are deciding, and it would be wrong in your own
+  words. If the declined proposal has scrolled out of the comments the run read,
+  the paragraph says so rather than rendering an empty diff.
+
+A decline is **answered once**. It is skipped when it is older than the newest
+`🧺 groom-proposal:` on the card (that proposal already answered it), when the
+card carries a `🧺 groom-approved:` for the same batch (you settled it with a
+yes), when it was written by the pipeline's own Linear identity, or when it
+carries no reason. With nothing to answer the proposal renders **byte for byte**
+as it did before this existed, and posting stays idempotent either way — the
+paragraph sits below the `🧺 groom-proposal: <id>` marker line, and the id still
+digests the batch alone, so answering a decline never retires an approval.
 
 ## The cadence, and its stated cost
 

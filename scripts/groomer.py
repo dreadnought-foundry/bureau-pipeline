@@ -98,6 +98,14 @@ additions, reads the WHOLE thread to find them, and writes one
 `groom-drain-refused: <id> — <reason>`, and a batch that already carries a
 drained record is refused, so a second dispatch moves nothing.
 
+And the next proposal ANSWERS the last decline (DRE-3373). `propose --post`
+reads the card first, and when it finds a decline newer than the last proposal
+there — unapproved, reasoned, not written by the pipeline — the page opens with
+the reason quoted back verbatim and one sentence naming what changed in this
+batch relative to the declined one, by id, computed from the two batch lists
+and never asked of a model. A proposal with no decline behind it renders byte
+for byte as it did before.
+
 It used to rebuild the proposal from live state and refuse when the id it
 re-derived differed from the approved one. That is a real safety property —
 "the batch on the page is not the batch the drain would move" — said the wrong
@@ -179,6 +187,7 @@ import intake_controls  # noqa: E402 — ONE reading of the operator's Intake sw
 import linear_ops  # noqa: E402
 import planning_classify  # noqa: E402 — the model receipt, one definition
 import planning_escalation  # noqa: E402 — the plain-English write guard
+import sanitize_untrusted  # noqa: E402 — ONE defang prefix for untrusted text
 
 # --------------------------------------------------------------------------- #
 # vocabulary                                                                   #
@@ -263,6 +272,16 @@ DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG)
 # the reason.
 DRAINED_TAG = "groom-drained"
 DRAIN_REFUSED_TAG = "groom-drain-refused"
+
+# Every marker this module writes or reads, in one tuple — the set a decline's
+# reason is defanged against (DRE-3373). A reason is CEO-written free text that
+# `propose` renders back into a Linear comment, and a Linear comment is exactly
+# where all of these are read from.
+ALL_MARKERS = (PROPOSAL_TAG, *DECISION_TAGS, DRAINED_TAG, DRAIN_REFUSED_TAG)
+
+# The answering paragraph's opener (DRE-3373). A constant because the console
+# finds the answer by this string, so a rename here is a rename there.
+ANSWER_OPENER = "**Answering your decline of"
 
 # The four outcomes a card can carry in the drain's record. Data, so the render
 # and the console mirror one list rather than two spellings of it.
@@ -1417,7 +1436,8 @@ def already_proposed(proposal: dict, records: list[dict]) -> bool:
     return False
 
 
-def post_proposal(lops, card: str, proposal: dict) -> bool:
+def post_proposal(lops, card: str, proposal: dict,
+                  records: list[dict] | None = None) -> bool:
     """Post the proposal to `card` unless the same batch is already there.
 
     A retried `propose` must write nothing (vendor boundary Q3), and `--post` is
@@ -1436,12 +1456,209 @@ def post_proposal(lops, card: str, proposal: dict) -> bool:
     has to, because the approval is the oldest of a card's decisions — and the
     two differ on purpose: a duplicate proposal costs a comment, while a missed
     approval costs a batch.
+
+    `records` is that same read, already in the caller's hand: `main` reads the
+    thread once to find the decline this proposal answers (DRE-3373) and passes
+    it here rather than asking Linear for the same fifty comments twice. Absent,
+    the read happens here exactly as it always did — the idempotence rule is
+    untouched either way.
     """
-    if already_proposed(proposal, lops.comment_records(card)):
+    if records is None:
+        records = lops.comment_records(card)
+    if already_proposed(proposal, records):
         print(f"proposal {proposal['id']} is already on {card} — not posting again")
         return False
     lops.cmd_comment(card, proposal_comment(proposal))
     return True
+
+
+# --------------------------------------------------------------------------- #
+# answering the last decline (DRE-3373)                                        #
+# --------------------------------------------------------------------------- #
+#
+# DRE-3370 gave the CEO a way to say *no, because…*. The drain honours it and
+# then the reason goes nowhere: the next `propose` posts a fresh twenty-card
+# page that reads exactly like the one that was turned down, with no sign
+# anybody read the objection, and the CEO is left diffing two proposal comments
+# by eye to find out whether the thing they complained about was fixed.
+#
+# So the proposal opens by answering it — the reason quoted back verbatim, and
+# then what changed in this batch relative to the declined one, BY ID and
+# computed from the two batch lists. Never asked of a model: a sentence a model
+# wrote about a difference it did not compute can be wrong in the one place the
+# CEO is deciding, and it would be wrong in the CEO's own words.
+
+# Broad on purpose, exactly as `sanitize_untrusted.SENTINEL_RE` is broad: an
+# exact match is a bypass (a different id shape, extra spacing, no emoji still
+# READS as a marker), and a false positive costs a visible, harmless prefix.
+_MARKER_SHAPED = re.compile(
+    rf"(?:{MARK}\s*)?(?:{'|'.join(re.escape(t) for t in ALL_MARKERS)})\s*:")
+
+
+def defang_reason(reason: str | None) -> tuple[str, int]:
+    """The reason as it is safe to render, and how many lines were defanged.
+
+    Card text is data (`standards/untrusted-content.md`): the reason is quoted,
+    never obeyed. A line inside it shaped like one of this module's own markers
+    is prefixed with `[defanged] ` rather than dropped, so a reviewer still sees
+    the attempt — and per the standard a `[defanged]` line is itself the
+    strongest signal the text is hostile.
+
+    Nothing downstream reads a marker from the middle of a comment (every
+    reader here anchors at the start of one), so this is depth rather than the
+    only wall. It is worth having anyway: the console and any later reader of
+    this page are not bound by that anchoring, and the reason is the one string
+    on the page written by somebody the pipeline does not authenticate.
+    """
+    normalized = (reason or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines, defanged = [], 0
+    for line in normalized.split("\n"):
+        if _MARKER_SHAPED.search(line):
+            lines.append(sanitize_untrusted.DEFANG_PREFIX + line)
+            defanged += 1
+        else:
+            lines.append(line)
+    return "\n".join(lines), defanged
+
+
+def decline_to_answer(records: list[dict]) -> dict | None:
+    """The decline this run's proposal owes an answer to — `{"id", "reason"}`.
+
+    Four conditions, and each one exists because its absence puts a wrong
+    sentence at the top of the page:
+
+      1. **Somebody other than the pipeline wrote it.** The authorship gate the
+         whole vocabulary is read under (DRE-2721, DRE-3370) — a marker the
+         proposer can write is a credential the proposer can mint, and this one
+         would put the proposer's own words in the CEO's mouth.
+      2. **It carries the reason the marker requires.** `read_decisions` reads a
+         reasonless decline as absent and this reader agrees with it: there is
+         nothing to quote.
+      3. **It is NEWER than the last `groom-proposal:` on the card.** That
+         proposal already answered it. Answering it again puts a complaint the
+         CEO made two batches ago at the top of this one.
+      4. **The card carries no `groom-approved:` naming that batch.** A decline
+         the CEO settled with a yes is not an open argument. This is the card's
+         own rule read literally, and it is the quiet direction: at worst a
+         proposal renders as it did before this existed, where the other
+         reading risks re-opening an argument in the CEO's name.
+
+    The NEWEST decline that clears all four is the one answered — the same
+    "last word wins" the approval has always used.
+    """
+    newest_proposal = -1
+    declines: list[tuple[int, str, str]] = []
+    approved: set[str] = set()
+
+    for index, record in enumerate(records):
+        body = record.get("body") or ""
+        if _PROPOSAL_LINE.match(body.strip()):
+            newest_proposal = index
+            continue
+        if record.get("authored_by_pipeline"):
+            continue
+        approval = decision_match(APPROVAL_TAG, body)
+        if approval:
+            approved.add(approval.group(1))
+            continue
+        marker = decision_match(DECLINE_TAG, body)
+        if not marker:
+            continue
+        reason = _REASON_TAIL.match(marker.group(2))
+        if reason:
+            declines.append((index, marker.group(1), reason.group(1)))
+
+    for index, pid, reason in reversed(declines):
+        if index > newest_proposal and pid not in approved:
+            return {"id": pid, "reason": reason}
+    return None
+
+
+def answer_decline(proposal: dict, records: list[dict]) -> dict | None:
+    """Attach this proposal's answer to the CEO's last open decline, or not.
+
+    Writes `proposal["answering"]` and returns it. With nothing to answer it
+    returns None and leaves the proposal object untouched — which is what makes
+    "a proposal with no decline behind it renders byte for byte as today" a
+    property of the data rather than a promise about the renderer.
+
+    The proposal id is a digest of the BATCH and is computed in `propose`, so a
+    paragraph about a PREVIOUS batch cannot move it and cannot retire a CEO
+    approval — the same property the render has always had.
+    """
+    decline = decline_to_answer(records)
+    if decline is None:
+        return None
+    reason, defanged = defang_reason(decline["reason"])
+    # The declined batch, read off its own proposal comment — the list the CEO
+    # was looking at when they declined, not a rebuild of it.
+    declined = proposal_record(decline["id"], records)
+    before = {row["identifier"] for row in (declined or {}).get("batch", [])}
+    now = {row["identifier"] for row in proposal["outcomes"]["now"]}
+    answering = {
+        "id": decline["id"],
+        "reason": reason,
+        "defanged": defanged,
+        # False when the declined proposal has scrolled out of the read. The
+        # page then says so instead of rendering an empty diff, which would be
+        # indistinguishable from "nothing changed" (console-honesty rule 2).
+        "batch_read": declined is not None,
+        "cards_in": sorted(now - before, key=_card_sort_key) if declined else [],
+        "cards_out": sorted(before - now, key=_card_sort_key) if declined else [],
+    }
+    proposal["answering"] = answering
+    print(f"groomer: this proposal answers the decline of batch "
+          f"{decline['id']} — {len(answering['cards_in'])} card(s) in, "
+          f"{len(answering['cards_out'])} card(s) out", file=sys.stderr)
+    if not answering["batch_read"]:
+        print(f"groomer: batch {decline['id']} is on no proposal comment in the "
+              f"thread that was read — the answer names no cards in or out",
+              file=sys.stderr)
+    if defanged:
+        # The COUNT only, never the line. Echoing hostile content into a run log
+        # is the amplification `sanitize_untrusted` exists to prevent.
+        print(f"groomer: the declined reason carried {defanged} marker-shaped "
+              f"line(s) — defanged before rendering, and never obeyed",
+              file=sys.stderr)
+    return answering
+
+
+def _render_answer(answering: dict) -> list:
+    """The block that opens a proposal following a decline.
+
+    Two paragraphs, and the blank line between them is load-bearing: the reason
+    is rendered VERBATIM, so it may end without punctuation — a CEO writes
+    `two of these cards edit Thread.tsx` — and running the next sentence onto
+    the end of it reads as one mangled sentence in the CEO's own words. The
+    alternative is inventing a full stop inside quoted text, which is the one
+    thing "verbatim" forbids.
+    """
+    return [f"{ANSWER_OPENER} `{answering['id']}`:** {answering['reason']}",
+            "",
+            _change_sentence(answering),
+            ""]
+
+
+def _change_sentence(answering: dict) -> str:
+    """What changed in this batch relative to the declined one, by id.
+
+    One grammar for all four shapes — cards in, cards out, both, neither — so
+    "nothing changed" is a sentence the page says out loud rather than a
+    sentence it omits.
+    """
+    if not answering["batch_read"]:
+        return ("That batch's own proposal comment is not in the thread this "
+                "run read, so the difference between the two is not computed "
+                "here.")
+    return (f"Relative to that batch: {_side(answering['cards_in'], 'in')} "
+            f"and {_side(answering['cards_out'], 'out')}.")
+
+
+def _side(identifiers: list[str], word: str) -> str:
+    if not identifiers:
+        return f"nothing {word}"
+    return (f"{_plural(len(identifiers), 'card')} {word} "
+            f"({', '.join(identifiers)})")
 
 
 # --------------------------------------------------------------------------- #
@@ -1455,6 +1672,11 @@ def render_proposal(proposal: dict) -> str:
     add = w.append
     add(f"# Groom proposal `{proposal['id']}` — cycle {cycles}")
     add("")
+    # The CEO's last open decline, answered before anything else on the page
+    # (DRE-3373). Absent unless `answer_decline` found one, so a proposal with
+    # no decline behind it renders byte for byte as it did before that card.
+    if proposal.get("answering"):
+        w.extend(_render_answer(proposal["answering"]))
     add(f"{len(batch)} cards of {proposal['population']} in {proposal['lane']} "
         f"are proposed for cycle {cycles}, in the order below. Nothing moves "
         f"until you approve it.")
@@ -2512,12 +2734,19 @@ def main(argv=None) -> int:
         return 0
 
     proposal = _build(args)
+    # ONE read of the thread, and only when there is a card to read: it answers
+    # both "is there a decline to open with" (DRE-3373) and "is this batch
+    # already proposed here". Before `--out`, so the artifact the console reads
+    # carries the answer the comment does.
+    records = linear_ops.comment_records(args.post) if args.post else None
+    if records is not None:
+        answer_decline(proposal, records)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(proposal, fh, indent=2)
         print(f"wrote {args.out} ({proposal['id']})")
     if args.post:
-        post_proposal(linear_ops, args.post, proposal)
+        post_proposal(linear_ops, args.post, proposal, records)
     print(render_proposal(proposal))
     return 0
 
