@@ -166,6 +166,20 @@ def _rescue(fake, **kw):
     return push_rescue.rescue(CARD, REPO, FRESH, run=fake, log=lambda *_: None, **kw)
 
 
+def _is_credential_write(call: list[str]) -> bool:
+    """Does this git call SET the credential header? WRITES only:
+    `--unset-all` clears the key and `--show-origin --get-all` reads it back
+    (the DRE-3262 diagnostic, printed after every re-point since DRE-3513),
+    and neither re-points anything. The same definition as
+    tests/test_rescue_push_token.py's."""
+    return (
+        "config" in call
+        and push_rescue.GITHUB_EXTRAHEADER in call
+        and "--unset-all" not in call
+        and "--get-all" not in call
+    )
+
+
 # ── 2. git gets the fresh token, not only gh ─────────────────────────────────
 class GitGetsTheFreshToken(unittest.TestCase):
     """`gh` reads GH_TOKEN from the environment; git reads the header
@@ -175,11 +189,7 @@ class GitGetsTheFreshToken(unittest.TestCase):
     def test_the_checkout_header_is_repointed_at_the_fresh_token(self):
         fake = FakeGit()
         _rescue(fake)
-        sets = [
-            c for c in fake.calls
-            if "config" in c and push_rescue.GITHUB_EXTRAHEADER in c
-            and "--unset-all" not in c
-        ]
+        sets = [c for c in fake.calls if _is_credential_write(c)]
         self.assertEqual(len(sets), 1, fake.calls)
         expected = base64.b64encode(f"x-access-token:{FRESH}".encode()).decode()
         self.assertIn(f"AUTHORIZATION: basic {expected}", sets[0])
@@ -197,9 +207,7 @@ class GitGetsTheFreshToken(unittest.TestCase):
             if "--unset-all" in c and push_rescue.GITHUB_EXTRAHEADER in c
         )
         write = next(
-            i for i, c in enumerate(fake.calls)
-            if "config" in c and push_rescue.GITHUB_EXTRAHEADER in c
-            and "--unset-all" not in c
+            i for i, c in enumerate(fake.calls) if _is_credential_write(c)
         )
         self.assertLess(unset, write, fake.calls)
 
@@ -209,9 +217,7 @@ class GitGetsTheFreshToken(unittest.TestCase):
         fake = FakeGit()
         _rescue(fake)
         write = next(
-            i for i, c in enumerate(fake.calls)
-            if "config" in c and push_rescue.GITHUB_EXTRAHEADER in c
-            and "--unset-all" not in c
+            i for i, c in enumerate(fake.calls) if _is_credential_write(c)
         )
         first_remote = next(
             i for i, c in enumerate(fake.calls)

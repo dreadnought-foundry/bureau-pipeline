@@ -36,7 +36,12 @@ So the step that pushes mints a FRESH token first (the workflow's own
      overwrite multiple values with a single value", exit 5), leaving every
      dead header in place. So the stale values are unset first — that is what
      makes the re-point unconditional rather than best-effort — and it happens
-     BEFORE any credentialed read (`git ls-remote` is one).
+     BEFORE any credentialed read (`git ls-remote` is one). And since
+     2026-09-09 (DRE-3513) the header checkout leaves is not IN `.git/config`
+     at all: it lives in `$RUNNER_TEMP/git-credentials-<uuid>.config` and is
+     reached through `includeIf.gitdir:…` entries, which `--unset-all` cannot
+     see through — so those include KEYS are unset too, and the file itself is
+     never touched.
   2. PUSH what GitHub does not have.
   3. OPEN THE PR if the card has none — the incident's other half is a branch
      that landed and a `gh pr create` that died.
@@ -276,7 +281,8 @@ def basic_auth_header(token: str) -> str:
     return f"AUTHORIZATION: basic {encoded}"
 
 
-def repoint_git_credential(token: str, *, run, workdir: str = ".") -> None:
+def repoint_git_credential(token: str, *, run, workdir: str = ".",
+                           log=_log) -> None:
     """Point git at `token`, having removed whatever was there.
 
     `--unset-all` first is the load-bearing half, and not for the reason it
@@ -296,13 +302,77 @@ def repoint_git_credential(token: str, *, run, workdir: str = ".") -> None:
     The unset itself is allowed to fail: unsetting a key that is not set exits
     5 too, and that is the normal case on a runner that never checked out over
     HTTPS.
+
+    AND THE HEADER IS NO LONGER WHERE `--unset-all` LOOKS (DRE-3513). On
+    2026-09-09 (agent-bureau run 34416564915, four cards) every rescue push got
+    400 and the log said why:
+
+        push rescue: git is sending 2 auth header(s), from:
+          file:/home/runner/work/_temp/git-credentials-<uuid>.config,
+          file:.git/config
+
+    Today's `actions/checkout` writes its token into that `$RUNNER_TEMP` file
+    and reaches it with `includeIf.gitdir:<gitdir>.path = <file>` entries in
+    `.git/config` (four of them: the host gitdir, its worktrees, and container
+    twins under `/github/workspace`). An included value is not a LOCAL value,
+    so the unset above left it in place, the write ADDED a second header, and
+    GitHub refused the pair. Every `includeIf.*.path` whose target is a
+    `git-credentials-*.config` is therefore unset here — the KEY, in
+    `.git/config`; the file is checkout's own to remove in its post step, and
+    an include that points anywhere else is left alone.
+
+    After the write the origins are counted once more and logged. A header
+    the re-point cannot reach (`$HOME/.gitconfig` is outside `--local`) is
+    named there and the push goes ahead anyway: a raise at this point would
+    skip the patch and the receipt, and the whole reason the rescue exists is
+    that the runner must not be the last copy.
     """
     run(["git", "-C", workdir, "config", "--local", "--unset-all",
          GITHUB_EXTRAHEADER])
+    for key in credential_includes(run=run, workdir=workdir):
+        run(["git", "-C", workdir, "config", "--local", "--unset", key])
     code, _, err = run(["git", "-C", workdir, "config", "--local",
                         GITHUB_EXTRAHEADER, basic_auth_header(token)])
     if code != 0:
         raise RuntimeError(f"could not re-point the git credential: {err.strip()}")
+    log(_auth_header_line(credential_origins(run=run, workdir=workdir)))
+
+
+def _auth_header_line(origins: list[str]) -> str:
+    """The one log line that tells a 400-as-malformed-request apart from a
+    400-as-rejected-credential (DRE-3262): how many AUTHORIZATION headers git
+    will send, and from which config files. Origins only, never values."""
+    return (f"push rescue: git is sending {len(origins)} auth header(s), "
+            f"from: {', '.join(origins) or 'no config file'}")
+
+
+# The file `actions/checkout` keeps its token in, as the include's target is
+# spelled on the host (`$RUNNER_TEMP/git-credentials-<uuid>.config`) and in a
+# container (`/github/runner_temp/git-credentials-<uuid>.config`).
+_CREDENTIALS_FILE_RE = re.compile(r"git-credentials-.*\.config$")
+
+
+def credential_includes(*, run, workdir: str = ".") -> list[str]:
+    """The `includeIf.*.path` keys in `.git/config` that pull in checkout's
+    credentials file (DRE-3513). Keys only — what `--unset` takes.
+
+    `--get-regexp` exits 1 when nothing matches, which is the normal case on
+    a runner that checked out with `persist-credentials: false` or over SSH.
+    """
+    code, out, _ = run([
+        "git", "-C", workdir, "config", "--local", "--get-regexp",
+        r"^includeif\..*\.path$",
+    ])
+    if code != 0 or not out.strip():
+        return []
+    keys = []
+    for line in out.splitlines():
+        # `<key> <value>`, split on the first whitespace: the key has dots and
+        # a slash-laden subsection, the value is a path.
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and _CREDENTIALS_FILE_RE.search(parts[1].strip()):
+            keys.append(parts[0])
+    return keys
 
 
 def credential_origins(*, run, workdir: str = ".") -> list[str]:
@@ -320,6 +390,11 @@ def credential_origins(*, run, workdir: str = ".") -> list[str]:
     `$HOME/.gitconfig`, in a worktree config or by a submodule pass is still
     sent, and still makes two. So a failed push prints the origins it found and
     the next occurrence is diagnosable from the log alone.
+
+    It was this line that diagnosed DRE-3513: the second origin it named was
+    checkout's `git-credentials-<uuid>.config`, reached through an include,
+    which is why `repoint_git_credential` now unsets those includes too and
+    prints this same line right after every re-point, delivered or not.
     """
     code, out, _ = run([
         "git", "-C", workdir, "config", "--show-origin", "--get-all",
@@ -499,9 +574,12 @@ def rescue(
         log(_preserved(out))
         return out
 
-    # BEFORE any credentialed call: `git ls-remote` below authenticates too.
+    # BEFORE any credentialed call: `git ls-remote` below authenticates too,
+    # and under two headers it answers 400 — so a branch the agent HAD pushed
+    # read as absent, the rescue pushed it again, got 400 again, and wrote a
+    # false "needs a human" receipt (three of DRE-3513's four cases).
     active_token = credentials[0][0]
-    repoint_git_credential(active_token, run=run, workdir=workdir)
+    repoint_git_credential(active_token, run=run, workdir=workdir, log=log)
 
     out.remote_sha = _remote_sha(out.branch, run=run, workdir=workdir)
     out.local_work = out.local_sha != out.remote_sha
@@ -513,7 +591,8 @@ def rescue(
                 # mint — not the one GitHub just refused, and not the one the
                 # agent step held (DRE-3098).
                 log(f"push rescue: retrying the push with {source}")
-                repoint_git_credential(candidate, run=run, workdir=workdir)
+                repoint_git_credential(candidate, run=run, workdir=workdir,
+                                       log=log)
                 active_token = candidate
             out.attempts = attempt
             code, _, err = run([
@@ -535,9 +614,7 @@ def rescue(
             # more than one origin here is a malformed request (two
             # AUTHORIZATION headers), not a rejected credential — and those two
             # readings send a reader to opposite ends of the system.
-            origins = credential_origins(run=run, workdir=workdir)
-            log(f"push rescue: git is sending {len(origins)} auth header(s), "
-                f"from: {', '.join(origins) or 'no config file'}")
+            log(_auth_header_line(credential_origins(run=run, workdir=workdir)))
         if not out.pushed:
             out.patch = write_patch(out.branch, base, patch_path, run=run,
                                     workdir=workdir)
