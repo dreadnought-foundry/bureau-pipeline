@@ -35,9 +35,12 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_critic_wiring.py -v
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
 
 import yaml
@@ -49,6 +52,7 @@ SCRIPTS = os.path.join(ROOT, "scripts")
 sys.path.insert(0, SCRIPTS)
 
 import assemble_context as ac  # noqa: E402
+import check_act_receipts as car  # noqa: E402
 import plan_critic as pc  # noqa: E402
 import review_rerun as rr  # noqa: E402
 
@@ -620,6 +624,30 @@ class TheStandard(unittest.TestCase):
         index = open(os.path.join(ROOT, "standards", "README.md")).read()
         self.assertIn("plan-critic.md", index)
 
+    def test_it_names_the_ceiling_formula_that_is_live(self):
+        """DRE-3498. The sentence said "fifteen cards get 80 turns" while the
+        code said 90 — a document that names a number goes stale the moment
+        the number moves, which is why the formula is written out beside it."""
+        text = open(STANDARD).read()
+        self.assertIn("40 + 4 × children", text)
+        self.assertIn("floor 60", text)
+        self.assertIn("cap 140", text)
+        self.assertIn(f"fifteen cards get {pc.post_review_turns(15)}", text)
+        self.assertNotIn("fifteen cards get 80", text)
+
+    def test_its_retry_example_is_the_arithmetic_the_code_does(self):
+        text = open(STANDARD).read()
+        self.assertIn("100 → 150, 150 → 180", text)
+        self.assertNotIn("80 → 120, 120 → 180", text)
+        self.assertEqual(rr.retry_ceiling(100), 150)
+        self.assertEqual(rr.retry_ceiling(150), 180)
+
+    def test_it_names_the_receipt_the_next_re_tune_is_read_from(self):
+        text = open(STANDARD).read()
+        self.assertIn("🧮 review-turns:", text)
+        self.assertIn("34144302622", text,
+                      "the run this card's number was measured from")
+
 
 # --- DRE-3241: the post-approval review's ceiling, and what a dead one leaves ---
 
@@ -670,11 +698,23 @@ class TheReviewCeilingIsSizedFromThePlan(unittest.TestCase):
         self.assertIn("--max-turns ${{ steps.postturns.outputs.max_turns }}", args)
         self.assertNotRegex(args, r"--max-turns\s+\d+")
 
-    def test_fifteen_cards_get_ninety_turns_end_to_end(self):
+    def test_fifteen_cards_get_a_hundred_turns_end_to_end(self):
         """The number this card writes down, read through the same function
         the workflow step calls. 80 until DRE-2785 raised the band with the
-        web-tool grant."""
-        self.assertEqual(pc.post_review_turns(15), 90)
+        web-tool grant, 90 until DRE-3498 raised the base to 40."""
+        self.assertEqual(pc.post_review_turns(15), 100)
+
+    def test_the_comments_above_the_step_name_the_numbers_it_uses(self):
+        """A change that contradicts a document updates that document — and
+        the nearest document to a ceiling is the comment block over the step
+        that sets it (standards/engineering.md)."""
+        src = wf_src()
+        head = src[:src.index("id: postturns")]
+        block = head[head.rindex("# The ceiling, sized from the plan"):]
+        self.assertIn("fifteen cards → 100", block)
+        self.assertIn("100 → 150, 150 → 180", block)
+        self.assertNotIn("fifteen cards → 80", block)
+        self.assertNotIn("80 → 120, 120 → 180", block)
 
 
 class ADeadReviewWritesItsTombstone(unittest.TestCase):
@@ -809,6 +849,127 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
             gate = str(step_named(fragment).get("if") or "")
             self.assertNotIn("always()", gate, fragment)
             self.assertNotIn("failure()", gate, fragment)
+
+
+# --- DRE-3498: what the review actually spent, recorded per round -----------
+
+RECEIPT = "Second critic — turns receipt"
+
+# The step's own shell, rendered. Everything the runner would substitute, and
+# nothing else: an unresolved `${{ }}` reaching bash is asserted, not ignored.
+_RECEIPT_EXPRESSIONS = {
+    "github.event.client_payload.identifier": "DRE-3257",
+    "steps.posta.outputs.execution_file": "",
+    "steps.postturns.outputs.max_turns": "48",
+    "steps.postmodel.outputs.model": "claude-sonnet-5",
+}
+
+
+def _render(run: str, temp: str, expressions: dict) -> str:
+    for expr, value in expressions.items():
+        run = re.sub(r"\$\{\{\s*" + re.escape(expr) + r"\s*\}\}", value, run)
+    run = re.sub(r"\$\{\{\s*runner\.temp\s*\}\}", temp, run)
+    return run
+
+
+class TheReviewSaysWhatItSpent(unittest.TestCase):
+    """DRE-3498. The ceiling has been re-tuned three times off one archaeology
+    dig each — DRE-3164's 40-turn wall, the web-tool grant, and run
+    34144302622's 51 turns at a ceiling of 48. The receipt puts the number on
+    the epic's own thread so the next re-tune is read, not excavated.
+
+    It runs whenever the review ran AT ALL — a review that died at its ceiling
+    is precisely the one whose spend matters — and it can never change the
+    review's outcome."""
+
+    def test_it_sits_immediately_after_the_review(self):
+        self.assertEqual(index_of(RECEIPT), index_of(SECOND) + 1)
+        self.assertEqual(step_named(RECEIPT).get("id"), "postreceipt")
+
+    def test_it_runs_on_both_the_verdict_path_and_the_death_path(self):
+        """`always()`-style, gated on the activate route AND on `posta` having
+        RUN: never on an earlier step's failure, where `posta` is `skipped`."""
+        gate = str(step_named(RECEIPT).get("if") or "")
+        self.assertIn("always()", gate)
+        self.assertIn("mode == 'activate'", gate)
+        self.assertIn("steps.posta.outcome == 'success'", gate)
+        self.assertIn("steps.posta.outcome == 'failure'", gate)
+        self.assertNotIn("skipped", gate)
+
+    def test_a_receipt_that_cannot_be_written_never_fails_the_review(self):
+        self.assertTrue(step_named(RECEIPT).get("continue-on-error"))
+
+    def test_it_reads_the_ceiling_the_child_count_and_the_model(self):
+        run = str(step_named(RECEIPT).get("run") or "")
+        self.assertIn("plan_critic.py review-turns", run)
+        self.assertIn("steps.posta.outputs.execution_file", run)
+        self.assertIn("claude-execution-output.json", run,
+                      "the tombstone step's fallback, for an action that "
+                      "moved the output")
+        self.assertIn("steps.postturns.outputs.max_turns", run)
+        self.assertIn("steps.postmodel.outputs.model", run)
+        self.assertIn("linear_ops.py children", run,
+                      "counted again here — `steps.kids` is the plan route's")
+        self.assertIn("linear_ops.py comment", run)
+
+    def test_the_posted_body_is_the_receipt_line_and_nothing_else(self):
+        """Rendered and RUN, not grepped: the line is only a record while it is
+        alone in its comment (`plan_critic._sole_record`)."""
+        with tempfile.TemporaryDirectory() as raw:
+            temp = os.path.join(raw, "temp")
+            os.makedirs(temp)
+            posted = os.path.join(raw, "posted.txt")
+            stub = os.path.join(raw, "linear_ops.py")
+            with open(stub, "w") as f:
+                f.write(
+                    "import sys\n"
+                    "if sys.argv[1] == 'children':\n"
+                    "    print(7)\n"
+                    "elif sys.argv[1] == 'comment':\n"
+                    f"    open({posted!r}, 'a').write(sys.argv[3])\n"
+                )
+            execution = os.path.join(raw, "claude-execution-output.json")
+            with open(execution, "w") as f:
+                json.dump([{"type": "result", "subtype": "success",
+                            "is_error": False, "num_turns": 51,
+                            "total_cost_usd": 2.11, "duration_ms": 421000,
+                            "env": {"ANTHROPIC_API_KEY": "never-printed"}}], f)
+
+            expressions = dict(_RECEIPT_EXPRESSIONS,
+                               **{"steps.posta.outputs.execution_file": execution})
+            run = _render(str(step_named(RECEIPT).get("run") or ""),
+                          temp, expressions)
+            self.assertNotIn("${{", run,
+                             "an unresolved GitHub expression reached the shell")
+            run = run.replace(".bureau-pipeline/scripts/linear_ops.py", stub)
+            run = run.replace(".bureau-pipeline/scripts/plan_critic.py",
+                              os.path.join(SCRIPTS, "plan_critic.py"))
+            script = os.path.join(raw, "receipt.sh")
+            with open(script, "w") as f:
+                f.write("set -e\n" + run)
+            proc = subprocess.run(["bash", script], capture_output=True,
+                                  text=True, cwd=raw)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            body = open(posted).read().strip()
+
+        self.assertEqual(
+            body,
+            "🧮 review-turns: spent=51 ceiling=48 children=7 "
+            "model=claude-sonnet-5")
+        self.assertEqual(len(pc.parse_review_turns([
+            {"body": body, "authored_by_pipeline": True}])), 1)
+
+    def test_the_registry_declares_the_receipt_as_a_fact_not_an_act(self):
+        """A line about a CALL creates no obligation and hands the work to
+        nobody, so it carries no act trailer — and `check_act_receipts.py`
+        stays green only because the `unconverted` block says so."""
+        rows = [r for r in car.declarations()
+                if r.get("step") == RECEIPT
+                and r.get("file") == ".github/workflows/plan.yml"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["kind"], "not-an-act")
+        self.assertTrue(rows[0]["why"].strip())
+        self.assertEqual(car.problems(), [])
 
 
 class EveryNoticeThatAsksForAReRunNamesTheAct(unittest.TestCase):
