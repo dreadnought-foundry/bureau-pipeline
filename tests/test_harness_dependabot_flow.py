@@ -31,6 +31,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import merge_gate  # noqa: E402
+import publish_review_check  # noqa: E402
 import reconcile  # noqa: E402
 from harness import framework  # noqa: E402
 from harness import scenarios  # noqa: E402
@@ -95,6 +96,28 @@ def _skipped_review_runs(gh, sha, extra=()):
         {"name": "ci / test", "status": "completed", "conclusion": "success"},
         *extra,
     ]
+
+
+def _bound_check(sha, conclusion, title, summary=""):
+    """The head-bound review check exactly as publish_review_check.publish
+    writes it (DRE-2291/DRE-3304): the title is `<decide title> @<sha[:8]>`."""
+    return {
+        "name": publish_review_check.CHECK_NAME,
+        "status": "completed",
+        "conclusion": conclusion,
+        "output": {"title": f"{title} @{sha[:8]}", "summary": summary},
+    }
+
+
+def _crash_message(head, red):
+    """The DRE-2047/2067 ScenarioFailure exactly as verify step 1 raises it
+    on main today — pinned byte for byte, because DRE-3572 must leave the
+    real crash case's message unchanged."""
+    return (
+        f"verify: ScenarioFailure: review run crashed red on the dependabot "
+        f"head {head}: {red} — the DRE-2047/2067 class (empty Dependabot "
+        "secrets store must self-skip, never crash)"
+    )
 
 
 class DiscoveryTest(unittest.TestCase):
@@ -212,6 +235,223 @@ class SelfSkipTest(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.failed_phase, "verify")
         self.assertIn("red", "\n".join(result.errors).lower())
+        # DRE-3572 acceptance (2): a red review check WITHOUT a verdict title
+        # is still the crash, and its message is byte-identical to main's.
+        self.assertEqual(
+            result.errors,
+            [_crash_message(head, [("qa / review", "failure")])],
+        )
+
+
+class BoundVerdictIsNotACrashTest(unittest.TestCase):
+    """DRE-3572. The critic's head-bound review check (DRE-3304) publishes
+    the VERDICT as its conclusion: REQUEST_CHANGES → failure, so the merge
+    gate stays shut. verify step 1 read every red review check as the
+    DRE-2047/2067 crash without ever reading `output.title`, and harness run
+    34519112325 (main @657651b) failed the channel's promotion gate on a
+    critic that had simply asked for changes. A red check whose title
+    starts `VERDICT:` is a bound verdict — a working route — and step 1
+    must accept it; a red check with no verdict title, or one carrying the
+    producer's crash markers, stays the crash with its message unchanged."""
+
+    REQUEST_CHANGES_SUMMARY = (
+        "The adversarial reviewer is asking for changes to this commit. "
+        "Read its verdict comment on the pull request for the findings."
+    )
+
+    def _replay_34519112325(self, gh, head):
+        # The incident's exact shape: `call / review` self-skipped clean
+        # (the event-driven run), and the re-dispatched critic published its
+        # head-bound check red with a REQUEST_CHANGES title.
+        gh.check_runs[head] = [
+            {"name": "call / review", "status": "completed", "conclusion": "skipped"},
+            _bound_check(
+                head, "failure", "VERDICT: REQUEST_CHANGES",
+                self.REQUEST_CHANGES_SUMMARY,
+            ),
+        ]
+
+    def test_request_changes_bound_check_is_a_verdict_not_a_crash(self):
+        # Acceptance (1): run 34519112325's shape passes verify step 1.
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        self._replay_34519112325(gh, head)
+        gh.comments[number].append(_receipt(head))
+        gh.post_verdict(number, "REQUEST_CHANGES", head)
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+        self.assertTrue(result.ok, result.errors)
+
+    def test_replayed_title_carries_the_short_sha_the_producer_writes(self):
+        # The incident title was `VERDICT: REQUEST_CHANGES @b5d5efdd` —
+        # verdict word THEN the 8-char sha, publish_review_check's shape.
+        head = "b5d5efdd" + "0" * 32
+        run = _bound_check(head, "failure", "VERDICT: REQUEST_CHANGES")
+        self.assertEqual(
+            run["output"]["title"], "VERDICT: REQUEST_CHANGES @b5d5efdd"
+        )
+        self.assertTrue(dependabot_flow.bound_verdict(run))
+
+    def test_approve_title_is_accepted_the_same_way(self):
+        # Acceptance (3): the classifier is title-driven, not word-driven.
+        run = _bound_check("a" * 40, "success", "VERDICT: APPROVE")
+        self.assertTrue(dependabot_flow.bound_verdict(run))
+        # ...and a (hypothetical) red conclusion under an APPROVE title is
+        # still a verdict, never a crash.
+        run["conclusion"] = "failure"
+        self.assertTrue(dependabot_flow.bound_verdict(run))
+
+    def test_approve_bound_check_beside_the_self_skip_passes_verify(self):
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        gh.check_runs[head] = [
+            {"name": "call / review", "status": "completed", "conclusion": "skipped"},
+            _bound_check(head, "success", "VERDICT: APPROVE"),
+        ]
+        gh.comments[number].append(_receipt(head))
+        gh.post_verdict(number, "APPROVE", head)
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+        self.assertTrue(result.ok, result.errors)
+
+    def test_red_check_with_no_output_at_all_is_still_the_crash(self):
+        # Acceptance (2), the head-bound name: a check that carries no
+        # `output` (a stripped listing, or a run that died before writing
+        # one) has no verdict to read — fail closed, same message.
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        gh.check_runs[head] = [
+            {"name": "call / review", "status": "completed", "conclusion": "skipped"},
+            {
+                "name": publish_review_check.CHECK_NAME,
+                "status": "completed",
+                "conclusion": "failure",
+            },
+        ]
+        gh.comments[number].append(_receipt(head))
+        gh.post_verdict(number, "REQUEST_CHANGES", head)
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed_phase, "verify")
+        self.assertEqual(
+            result.errors,
+            [_crash_message(head, [(publish_review_check.CHECK_NAME, "failure")])],
+        )
+
+    def test_red_check_titled_review_crashed_is_still_the_crash(self):
+        # The producer's crashed-critic record (publish_review_check.decide
+        # with real=False): no VERDICT: prefix, "could not run" in the
+        # summary. This is the very class step 1 exists to catch.
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        gh.check_runs[head] = [
+            {"name": "call / review", "status": "completed", "conclusion": "skipped"},
+            _bound_check(
+                head, "failure", "Review crashed — no verdict",
+                "The adversarial reviewer could not run (an infrastructure "
+                "failure — it produced no findings). This is NOT a code "
+                "rejection.",
+            ),
+        ]
+        gh.comments[number].append(_receipt(head))
+        gh.post_verdict(number, "REQUEST_CHANGES", head)
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+        self.assertFalse(result.ok)
+        self.assertEqual(
+            result.errors,
+            [_crash_message(head, [(publish_review_check.CHECK_NAME, "failure")])],
+        )
+
+    def test_verdict_title_over_a_could_not_run_summary_is_still_the_crash(self):
+        # Belt and braces: the title says VERDICT: but the summary says the
+        # reviewer could not run. Contradictory records fail closed.
+        run = _bound_check(
+            "c" * 40, "failure", "VERDICT: REQUEST_CHANGES",
+            "The adversarial reviewer could not run.",
+        )
+        self.assertFalse(dependabot_flow.bound_verdict(run))
+        run = _bound_check(
+            "c" * 40, "failure", "VERDICT: REQUEST_CHANGES",
+            "A review ran but wrote no `VERDICT:` line. Treated as a crash.",
+        )
+        self.assertFalse(dependabot_flow.bound_verdict(run))
+
+    def test_timed_out_with_a_verdict_title_is_still_a_verdict(self):
+        # Both RED_CONCLUSIONS members go through the same title read.
+        run = _bound_check("d" * 40, "timed_out", "VERDICT: REQUEST_CHANGES")
+        self.assertTrue(dependabot_flow.bound_verdict(run))
+
+    def test_a_verdict_in_a_comment_never_rescues_a_red_check(self):
+        # The card: read the verdict from the CHECK RUN, never a comment. A
+        # bound REQUEST_CHANGES comment beside a red check with no verdict
+        # title changes nothing about step 1.
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        gh.check_runs[head] = [
+            {"name": "qa / review", "status": "completed", "conclusion": "failure"},
+        ]
+        gh.comments[number].append(_receipt(head))
+        gh.post_verdict(number, "REQUEST_CHANGES", head)
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+        self.assertFalse(result.ok)
+        self.assertEqual(
+            result.errors, [_crash_message(head, [("qa / review", "failure")])]
+        )
+
+
+class BoundVerdictProducerParityTest(unittest.TestCase):
+    """The classifier reads titles publish_review_check.decide WRITES — the
+    same producer/consumer pin this file keeps for the receipt tag. Every
+    genuine verdict `decide` can emit must classify as a verdict; every
+    no-review record it can emit must classify as a crash."""
+
+    SHA = "b5d5efdd" + "f" * 32
+
+    def _as_published(self, decision, conclusion_override=None):
+        conclusion, title, summary = decision
+        return {
+            "name": publish_review_check.CHECK_NAME,
+            "status": "completed",
+            "conclusion": conclusion_override or conclusion,
+            "output": {"title": f"{title} @{self.SHA[:8]}", "summary": summary},
+        }
+
+    def test_every_real_verdict_the_producer_emits_is_a_verdict(self):
+        for body in ("VERDICT: REQUEST_CHANGES\n\n## Summary\nx",
+                     "VERDICT: APPROVE\n\n## Summary\nx",
+                     "VERDICT: REQUEST_CHANGES cause:defect\n"):
+            with self.subTest(body=body):
+                run = self._as_published(publish_review_check.decide(True, body))
+                self.assertTrue(dependabot_flow.bound_verdict(run), run)
+
+    def test_every_no_review_record_the_producer_emits_is_a_crash(self):
+        cases = {
+            "crashed": publish_review_check.decide(False, ""),
+            "unreadable": publish_review_check.decide(True, "no verdict line"),
+            "too-large": publish_review_check.decide(
+                True, "", too_large="480 files, 65,000 changed lines"
+            ),
+        }
+        for label, decision in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(decision[0], "failure")
+                run = self._as_published(decision)
+                self.assertFalse(dependabot_flow.bound_verdict(run), run)
+
+    def test_crash_markers_are_the_producers_own_words(self):
+        # Every marker the classifier scans for must appear in at least one
+        # record decide emits, so a reworded producer turns this red
+        # instead of silently un-pinning the summary scan.
+        emitted = " ".join(
+            f"{t} {s}".lower() for _, t, s in (
+                publish_review_check.decide(False, ""),
+                publish_review_check.decide(True, "no verdict line"),
+            )
+        )
+        for marker in dependabot_flow.CRASH_MARKERS:
+            with self.subTest(marker=marker):
+                self.assertIn(marker.lower(), emitted)
 
     def test_reviewed_instead_of_skipped_on_a_dependabot_pushed_head_fails(self):
         # A success-concluded review run on a single-parent (dependabot-
