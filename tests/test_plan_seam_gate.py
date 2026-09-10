@@ -347,10 +347,16 @@ class TheRailCarriesTheWiring(unittest.TestCase):
         self.assertRegex(run, r"rm -f [^\n]*plan-structural\.txt")
 
     def test_the_replan_is_told_a_seam_is_two_epics(self):
+        """The prompt quotes the finding so the planner can recognise it, and
+        the quoted words come from the reader's own template — typed here, they
+        would be a third copy of a sentence that has exactly one owner."""
         step = step_named("Re-plan after send-back")
         prompt = str((step.get("with") or {}).get("prompt") or "")
-        self.assertIn("second epic", prompt)
-        self.assertIn("wait on observing", prompt)
+        head, tail = plan_seam.FINDING.split("{observation}")
+        self.assertIn(head.split(": ", 1)[1].strip(), prompt)
+        self.assertIn(tail.split("—", 1)[1].split(",", 1)[0].strip(), prompt)
+        self.assertIn("cancel", prompt.lower())
+        self.assertIn("sibling", prompt.lower())
 
     def test_no_activate_route_step_names_the_gate_or_the_path(self):
         for s in steps():
