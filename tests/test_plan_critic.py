@@ -2908,9 +2908,19 @@ class TheResultFileSaysWhetherThereIsAVerdict(unittest.TestCase):
                               self._verdict(self._result_file(text)))
 
     def test_the_cut_off_reviews_pass_decides_an_ordinary_round(self):
-        """The other half of the fixture: the same file through `decide
-        --stage post` is a round with `result=PASS`, and no tombstone is
-        composed for it."""
+        """The whole fixture, end to end: run 34144302622's execution record —
+        `"subtype": "success"`, `"num_turns": 51`, `"is_error": false`, against
+        a 48-turn ceiling — beside the result file it had already written. The
+        record says the run was cut off; the FILE says the critic decided, and
+        the file is what the rail reads. The round is an ordinary
+        `result=PASS`, and nothing composes a tombstone for it."""
+        with open(os.path.join(self.tmp, "claude-execution-output.json"), "w") as f:
+            json.dump([{"type": "result", "subtype": "success",
+                        "is_error": False, "num_turns": 51,
+                        "total_cost_usd": 2.11, "duration_ms": 421000}], f)
+        self.assertIn("verdict=PASS",
+                      self._verdict(self._result_file("PLAN-CRITIC: PASS\n")))
+        os.remove(self.gho)
         note = os.path.join(self.tmp, "note.md")
         record = os.path.join(self.tmp, "record.txt")
         out = self._run("decide", "--stage", "post", "--epic", "DRE-3257",
