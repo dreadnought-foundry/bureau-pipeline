@@ -234,6 +234,14 @@ class TestSeamEvidence:
         assert evidence, "the card the seam rule was written from reads as no seam"
         assert "clean console releases" in evidence
         assert len(evidence) <= 130, "the evidence is a sentence, not a section"
+        # The WHOLE surfaces row, not a fragment of one. A full stop that no
+        # whitespace follows is not a sentence end: reading `deploy.sh` as one
+        # quotes the card back at a person as "sh` by hand | second, after…".
+        assert evidence.startswith("| agent-bureau · relay |")
+
+    def test_a_dotted_path_does_not_end_the_sentence(self):
+        body = "The relay runs `cloud/relay/deploy.sh` by hand, after a week of clean releases.\n"
+        assert planning_classify.seam_evidence(body) == body.strip()
 
     @pytest.mark.parametrize("body,what", [
         ("The relay joins after seven clean console days.", "a clean-days count"),

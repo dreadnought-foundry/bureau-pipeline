@@ -304,8 +304,10 @@ _SEAM_PHRASES = (
 
 #: Where a sentence ends, for the evidence. A newline counts: most of what a
 #: card writes a seam into is a table row, a list item or a heading, none of
-#: which ends in a full stop.
-_SENTENCE_END = re.compile(r"[.!?\n]")
+#: which ends in a full stop. A full stop only counts when WHITESPACE follows
+#: it — otherwise `cloud/relay/deploy.sh` ends a sentence, and DRE-3164's
+#: surfaces row comes back quoted as "sh` by hand | second, after a week of…".
+_SENTENCE_END = re.compile(r"[.!?](?=\s|$)|\n")
 
 _API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -705,7 +707,9 @@ def _evidence_sentence(text: str, start: int, end: int) -> str:
     words that decided the card, and evidence a reader cannot check against the
     body is not evidence.
     """
-    left = max(text.rfind(ch, 0, start) for ch in ".!?\n") + 1
+    left = 0
+    for stop in _SENTENCE_END.finditer(text, 0, start):
+        left = stop.end()
     tail = _SENTENCE_END.search(text, end)
     right = tail.end() if tail else len(text)
     before = " ".join(text[left:start].split())
