@@ -460,6 +460,27 @@ def test_the_plan_cli_reads_no_log_when_the_gate_is_green_or_running(
     assert not any("--log-failed" in line for line in calls.read_text().splitlines())
 
 
+def test_a_cancelled_gate_run_reads_no_log_and_is_blocked_not_unknown(
+        tmp_path, monkeypatch, capsys):
+    """A hand-cancelled or capped gate never printed a summary block; reading
+    its log would at best find nothing and at worst error the row down to
+    `unknown` on every train run until the next push."""
+    fixture = _fixture()
+    cancelled = dict(fixture["run"], conclusion="cancelled")
+    calls = _fake_gh(tmp_path, monkeypatch, run_override=cancelled,
+                     fail_on="--log-failed")
+    monkeypatch.delenv("RELEASE_HOLD", raising=False)
+    code = release_train.main([
+        "--repo", REPO, "--repo-root", str(ROOT), "--file", str(OWN_DATA),
+        "plan", "--head", fixture["head"],
+    ])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "pipeline-channel: state=blocked behind=39" in out
+    assert "scenarios=none" in out
+    assert not any("--log-failed" in line for line in calls.read_text().splitlines())
+
+
 def test_a_channel_read_that_fails_is_unknown_warns_and_does_not_redden_the_train(
         tmp_path, monkeypatch, capsys):
     """Rule 1: unreadable is UNKNOWN. It is reported loudly (a warning and a

@@ -224,6 +224,10 @@ CHANNEL_UNKNOWN = "unknown"
 #: channel; agent-bureau's console parses it (`release_train_health.py`).
 CHANNEL_RECEIPT_TAG = "pipeline-channel"
 
+#: The gate conclusions whose run log carries a `== harness summary ==` block
+#: worth reading for scenario names. A cancelled run never reached one.
+LOGGED_CONCLUSIONS = ("failure", "timed_out")
+
 #: One scenario line of the harness driver's `== harness summary ==` block
 #: (`scripts/harness/__main__.py`): `  <scenario>: FAIL at <phase>` or
 #: `BLOCKED at <phase>` (DRE-3076, the sandbox case). Searched, never
@@ -766,9 +770,13 @@ def fetch_channel(repo: str, surface, head: str, gate_run=None) -> Channel:
             f"?branch=main&per_page=1",
             f".workflow_runs[0] | {fields}", f"the latest {CHANNEL_GATE} run")
     log_text = None
-    if run and run.get("status") == "completed" and run.get("conclusion") != "success":
+    if run and run.get("status") == "completed" \
+            and run.get("conclusion") in LOGGED_CONCLUSIONS:
         # The medic's proven path (red-main-repair.yml): the failed steps'
-        # logs, which is where the driver's summary block is.
+        # logs, which is where the driver's summary block is. Only a run that
+        # RAN to a verdict has one — a cancelled run is `blocked: cancelled`
+        # with no scenarios, and a log read that errored on it would degrade
+        # the whole row to `unknown` until the next push.
         done = subprocess.run(
             ["gh", "run", "view", "--repo", repo, str(run.get("id")), "--log-failed"],
             capture_output=True, text=True)
@@ -920,8 +928,12 @@ def _channel_decision(surface, now, channel: Channel | None) -> Decision:
     behind = (f"{series} at {_short(channel.tag_sha)} is {channel.behind} commits "
               f"behind {_short(channel.head_sha)}")
     if channel.since is not None:
-        behind += (f" and has been since {channel.since.astimezone(PT):%Y-%m-%d %H:%M} PT "
-                   f"({_for(now - channel.since)})")
+        # The tag's COMMIT date: how old the code the channel serves is, and a
+        # lower bound on how long it has sat there — not the moment it fell
+        # behind, which nothing records.
+        behind += (f"; that commit dates from "
+                   f"{channel.since.astimezone(PT):%Y-%m-%d %H:%M} PT, "
+                   f"{_for(now - channel.since)} ago")
     gate = f" ({channel.gate_url})" if channel.gate_url else ""
     if channel.state == CHANNEL_ADVANCING:
         return Decision(
