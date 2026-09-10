@@ -34,6 +34,7 @@ import yaml
 
 REPO = os.path.join(os.path.dirname(__file__), "..")
 SCRIPTS = os.path.join(REPO, "scripts")
+CONFIG = os.path.join(REPO, "config")
 WF = os.path.join(REPO, ".github", "workflows", "plan.yml")
 sys.path.insert(0, SCRIPTS)
 
@@ -156,6 +157,9 @@ class ArtifactLifecycleTest(unittest.TestCase):
         self.pipeline = os.path.join(self.tmp, ".bureau-pipeline")
         os.makedirs(self.pipeline)
         shutil.copytree(SCRIPTS, os.path.join(self.pipeline, "scripts"))
+        # And the config beside them: the real `.bureau-pipeline` is a
+        # whole checkout, and the scripts read `config/` at import time.
+        shutil.copytree(CONFIG, os.path.join(self.pipeline, "config"))
         self.artifact = os.path.join(self.tmp, "plan-artifact.md")
 
     def _shell(self, fragment: str, ui: str = "true"):
@@ -287,6 +291,9 @@ class ArtifactStopsTheRunTest(unittest.TestCase):
         self.pipeline = os.path.join(self.tmp, ".bureau-pipeline")
         os.makedirs(self.pipeline)
         shutil.copytree(SCRIPTS, os.path.join(self.pipeline, "scripts"))
+        # And the config beside them: the real `.bureau-pipeline` is a
+        # whole checkout, and the scripts read `config/` at import time.
+        shutil.copytree(CONFIG, os.path.join(self.pipeline, "config"))
         self.artifact = os.path.join(self.tmp, "plan-artifact.md")
 
     def _check(self, text, ui="true"):
