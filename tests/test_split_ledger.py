@@ -810,7 +810,8 @@ def test_monthly_pins_a_complete_month_an_incomplete_one_and_an_unread_one():
     """
     split = _record(identifier="DRE-7001", created_at="2026-07-14T00:00:00Z",
                     state_type="canceled", comments=[])
-    died = _record(identifier="DRE-7002", created_at="2026-07-20T00:00:00Z")
+    died = _record(identifier="DRE-7002", created_at="2026-07-20T00:00:00Z",
+                   successors=[])
     doc = split_ledger.ledger(
         [split, died], generated_at="2026-09-10T00:00:00Z", window_days=90,
         children_by_month={"2026-06": 41, "2026-07": 228, "2026-09": 90})
@@ -876,7 +877,8 @@ def test_the_children_count_is_a_planner_child_query_per_month():
 
 
 def test_a_children_count_that_failed_is_unknown_in_the_month_never_zero():
-    lops = _DiscoveryLops(children={"2026-07": 3}, raise_on=["2026-08"])
+    lops = _DiscoveryLops(children={"2026-07": 3},
+                          raise_on=['"gte": "2026-08'])
     windows = split_ledger.month_windows("2026-07-01T00:00:00Z",
                                          "2026-09-01T00:00:00Z")
     notes: list = []
