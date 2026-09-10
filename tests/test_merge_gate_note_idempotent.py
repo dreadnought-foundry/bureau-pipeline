@@ -277,6 +277,123 @@ class AuthorScopeTest(unittest.TestCase):
         self.assertEqual(result["action"], "standing")
 
 
+class CriticVerdictTest(unittest.TestCase):
+    """Author scope is not enough: the gate and the CRITIC post under the
+    SAME login. They are two steps of one App, not two identities, so the
+    only thing separating a status note from a verdict is shape — and the
+    note was recognised by `marker in body`, which a verdict's prose
+    satisfies the moment it quotes the state it is reasoning about.
+
+    Both directions of that were live bugs, and both are silent:
+
+      * the verdict lands AFTER the note, so it is the later comment and
+        `_prune` deletes it — the gate removes the review it is waiting
+        for, and no one can tell it from a critic that never ran;
+      * the verdict lands BEFORE the note, so it wins the earliest-id
+        tie-break and the gate's own honest state is the one deleted.
+
+    Run 34417968508 (red main, 2026-09-09) is the first: the harness's
+    `gate_paths` named leg — the one leg where the gate posts this note —
+    spent 4,200 of its 4,614 seconds waiting for a critic comment on
+    sandbox PR #1554, while the skew and stale legs, which get no note,
+    were reviewed and merged inside the first seven minutes.
+
+    The rule: a note is a comment whose FIRST LINE OPENS with the marker
+    (`merge_gate.opens_with_marker` — the same anchor that already makes
+    quoting a VERDICT inert). A marker anywhere else is prose.
+    """
+
+    # A full 40-hex sha, the form the producers append (`@<sha>`).
+    HEAD = "d3155ae8" * 5
+
+    def verdict_body(self, token="REQUEST_CHANGES", quote=True):
+        tail = (
+            f"\n\n## Summary\nThe gate has already posted "
+            f"`{MARKER}` on this PR, so nothing here merges on my verdict.\n"
+            if quote
+            else "\n\n## Summary\nok\n"
+        )
+        return f"🔎 QA Critic — VERDICT: {token} @{self.HEAD}{tail}"
+
+    def test_the_quoted_verdict_is_a_verdict_the_gate_itself_reads(self):
+        """Anti-vacuity: the comment the other tests protect is exactly the
+        comment merge_gate counts as the critic's verdict. If this fixture
+        stopped parsing, the rest of this class would pass proving nothing."""
+        import merge_gate
+
+        body = merge_gate.latest_verdict_comment(
+            [{"user": {"login": QA_LOGIN}, "body": self.verdict_body()}],
+            QA_LOGIN, merge_gate.CRITIC_MARKER,
+        )
+        self.assertIsNotNone(body, "the fixture is not a readable verdict")
+        line = merge_gate.first_line(body)
+        self.assertEqual(
+            merge_gate.verdict_token(line, merge_gate.CRITIC_MARKER),
+            "REQUEST_CHANGES",
+        )
+        self.assertIn(MARKER, body, "the fixture no longer quotes the marker")
+
+    def test_a_verdict_quoting_the_marker_is_not_one_of_the_gates_notes(self):
+        comments = [
+            {"id": 100, "user": {"login": QA_LOGIN}, "body": note_body("gate")},
+            {"id": 101, "user": {"login": QA_LOGIN}, "body": self.verdict_body()},
+        ]
+        self.assertEqual(
+            [n["id"] for n in gate_note.matching_notes(comments, MARKER, QA_LOGIN)],
+            [100],
+            "the critic's verdict was selected as one of the gate's own notes",
+        )
+
+    def test_the_gate_never_deletes_the_critics_verdict(self):
+        verdict = self.verdict_body()
+        store = _Store(seed=[(QA_LOGIN, note_body("gate")), (QA_LOGIN, verdict)])
+        api = _FakeApi(store)
+        result = gate_note.post_once(api, MARKER, note_body("this wake"),
+                                     QA_LOGIN, log=lambda *a: None)
+        self.assertEqual(result["action"], "standing")
+        self.assertEqual(result["deleted"], [],
+                         "the gate deleted the review it is waiting for")
+        self.assertIn(verdict, [c["body"] for c in store.snapshot()])
+
+    def test_a_verdict_posted_first_does_not_win_the_tie_break(self):
+        """The other direction — probe #1498's, where the verdict predates
+        the hold: the gate's own note is then the later comment and the one
+        pruned, so the honest state vanishes and nobody notices."""
+        verdict = self.verdict_body()
+        store = _Store(seed=[(QA_LOGIN, verdict), (QA_LOGIN, note_body("gate"))])
+        api = _FakeApi(store)
+        result = gate_note.post_once(api, MARKER, note_body("this wake"),
+                                     QA_LOGIN, log=lambda *a: None)
+        self.assertEqual(result["action"], "standing")
+        self.assertEqual(result["id"], 101,
+                         "the standing note is the gate's, not the verdict")
+        self.assertEqual([c["id"] for c in store.snapshot()], [100, 101])
+
+    def test_a_quoted_marker_does_not_silence_the_honest_state(self):
+        """A critic that reviews before the gate's first wake must not
+        suppress the note — the same property AuthorScopeTest pins for a
+        human, for the one author the author filter cannot exclude."""
+        store = _Store(seed=[(QA_LOGIN, self.verdict_body())])
+        api = _FakeApi(store)
+        result = gate_note.post_once(api, MARKER, note_body(1), QA_LOGIN,
+                                     log=lambda *a: None)
+        self.assertEqual(
+            result["action"], "posted",
+            "the critic quoting the marker silenced the gate's honest state",
+        )
+        self.assertEqual(len(surviving_notes(store)), 1)
+
+    def test_a_verdict_that_does_not_quote_the_marker_is_untouched(self):
+        """The control: nothing about a verdict's own shape is what saves
+        it — a plain verdict was never at risk and must stay that way."""
+        plain = self.verdict_body(quote=False)
+        store = _Store(seed=[(QA_LOGIN, note_body("gate")), (QA_LOGIN, plain)])
+        api = _FakeApi(store)
+        gate_note.post_once(api, MARKER, note_body("this wake"), QA_LOGIN,
+                            log=lambda *a: None)
+        self.assertIn(plain, [c["body"] for c in store.snapshot()])
+
+
 class ReadBlipTest(unittest.TestCase):
     """A comments-API blip must not become a DUPLICATE note: unreadable
     means "defer to the next wake", never "post blind"."""

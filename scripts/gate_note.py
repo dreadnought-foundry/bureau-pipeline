@@ -33,16 +33,28 @@ Scoped to the gate's OWN login throughout: a human quoting the marker on the
 PR must not silence the honest state (the old grep matched any body), and the
 gate must never delete a comment that is not its own.
 
+Scoped to the note's own SHAPE too, because the login does not reach far
+enough (run 34417968508, red main). The critic posts under the SAME login —
+the gate's note and the critic's verdict are steps of one App, not two
+identities — so the author filter admits verdicts, and `marker in body`
+selected any verdict whose prose quoted the gate's status line. Since this
+module DELETES what it selects, the gate pruned the critic's verdict, and a
+comment posted and then removed is indistinguishable from one nobody ever
+wrote. A note is now a comment whose FIRST LINE opens with the marker, read
+through merge_gate's own anchor — the same one that makes quoting a verdict
+inert.
+
 An unreadable comments record DEFERS the note to the next gate wake rather
 than posting blind — the gate wakes on every CI completion, every verdict,
 and reconcile's ~15-minute nudge, so deferring costs a wake; posting blind
 costs the duplicate this module exists to prevent.
 
-Contract with merge-gate.yml: the body MUST contain the marker (the marker is
-the idempotence key — a body that does not carry it re-posts on every wake,
-the trap DRE-2340's carry note documents), and the note must carry no
-verdict-shaped text: it is a status note, never an approval credential, and
-it must not re-wake the gate's own issue_comment leg.
+Contract with merge-gate.yml: the body's FIRST LINE must OPEN with the marker
+(the marker is the idempotence key — a body that does not carry it where this
+module looks re-posts on every wake, the trap DRE-2340's carry note
+documents), and the note must carry no verdict-shaped text: it is a status
+note, never an approval credential, and it must not re-wake the gate's own
+issue_comment leg.
 """
 
 from __future__ import annotations
@@ -51,6 +63,12 @@ import argparse
 import json
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
+
+# ONE definition of "this comment OPENS with that marker": the gate's own
+# (merge_gate.opens_with_marker). A second copy here is how the note's read
+# and the verdict's read drifted apart in the first place — see
+# matching_notes.
+import merge_gate
 
 #: Pages of comments to walk. GitHub caps `per_page` at 100; ten pages is far
 #: past any real PR and bounds a pathological loop.
@@ -74,17 +92,36 @@ def same_login(a: str | None, b: str | None) -> bool:
 
 
 def matching_notes(comments, marker: str, author: str) -> list:
-    """The gate's own notes carrying `marker`, oldest first.
+    """The gate's own notes — comments by `author` whose FIRST LINE opens
+    with `marker` — oldest first.
 
     Author-scoped on purpose: the idempotence key is the note the GATE
     posted, not the string appearing anywhere on the PR.
+
+    And SHAPE-scoped, because author scope alone does not get there. The
+    critic posts under the same login as the gate — one App, two workflow
+    steps, not two identities — so the author filter admits its verdicts,
+    and a verdict whose prose quotes the state it is reasoning about
+    satisfied the old `marker in body` read. This function does not merely
+    select: `_prune` DELETES everything it selects but the earliest. So the
+    gate deleted the critic's verdict (when the verdict landed after the
+    hold) or its own honest state (when it landed before), and both are
+    silent — a comment posted and removed reads exactly like one nobody
+    wrote. Run 34417968508, red main: the harness's `gate_paths` named leg
+    waited 4,200 seconds for a review that had already been made and
+    deleted.
+
+    The anchor is merge_gate's own, not a copy: it is the same predicate
+    that makes quoting a VERDICT inert, and the gate must not have one idea
+    of "this comment IS the marker" for what it reads and another for what
+    it deletes.
     """
     return sorted(
         (
             c
             for c in comments
             if same_login(((c.get("user") or {}).get("login")), author)
-            and marker in (c.get("body") or "")
+            and merge_gate.opens_with_marker(c.get("body"), marker)
         ),
         key=lambda c: int(c.get("id") or 0),
     )
@@ -101,10 +138,11 @@ def post_once(api, marker: str, body: str, author: str, log=print) -> dict:
     its own converge pass heals on the next wake instead of leaving the PR
     permanently doubled (premortem Q5).
     """
-    if marker not in body:
+    if not merge_gate.opens_with_marker(body, marker):
         raise ValueError(
-            "the note body must carry the marker — it IS the idempotence key, "
-            "and a body without it re-posts on every gate wake"
+            "the note body's FIRST LINE must open with the marker — it IS the "
+            "idempotence key, and a body that carries it anywhere else is "
+            "invisible to matching_notes and re-posts on every gate wake"
         )
     try:
         standing = matching_notes(api.list_comments(), marker, author)
