@@ -734,8 +734,12 @@ def test_the_train_never_runs_a_channel_surface():
         dispatched=True,
     )
     assert decision.act == release_train.NO_OP
-    assert decision.code == "channel"
-    assert "channel" in decision.reason
+    # Since DRE-3568 the code carries the channel's state
+    # (`channel-current|advancing|blocked|unknown`); with no state handed in
+    # it is UNKNOWN, never a green — and it is still never run.
+    assert decision.code.startswith("channel-"), decision.code
+    assert decision.code == "channel-unknown"
+    assert "channel" in decision.reason and "never runs" in decision.reason
 
 
 def test_a_channel_surface_that_names_a_script_is_refused():
