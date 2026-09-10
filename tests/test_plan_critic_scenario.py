@@ -669,7 +669,7 @@ class CriticWalk(unittest.TestCase):
             "${{ steps.postturns.outputs.max_turns }}": "40",
             "${{ github.run_id }}": "34008698027",
             "${{ github.run_attempt }}": "2",
-        })
+        }, expect_rc=1)
 
         # Two comments: the note the CEO reads, then the tombstone alone. The
         # retry line DRE-3289 adds lands after both of them, so the pair is
@@ -717,7 +717,7 @@ class CriticWalk(unittest.TestCase):
             "${{ steps.postturns.outputs.max_turns }}": "90",
             "${{ github.run_id }}": "1",
             "${{ github.run_attempt }}": "1",
-        })
+        }, expect_rc=1)
         record = self._thread()[-1]
         self.assertIn("turns=?", record)
         self.assertIn("ceiling=90", record)
@@ -726,26 +726,33 @@ class CriticWalk(unittest.TestCase):
     # --- DRE-3289: the review re-runs itself once, then parks ---------------
 
     def _died_at(self, ceiling: str, run: str,
-                 subtype: str = "error_max_turns", **env_extra):
+                 subtype: str = "error_max_turns", turns: int | None = None,
+                 **env_extra):
         """The dead-review step, walked for a death at `ceiling` in run `run`.
 
         The execution file is the one claude-code-action writes and the one
-        DRE-2924's QA gate reads — the subtype in it is the whole of what
-        decides retry-or-leave."""
+        DRE-2924's QA gate reads. What decides retry-or-leave is the subtype
+        in it OR the turns it spent against the ceiling (DRE-3501), so `turns`
+        is a knob here: it defaults to one PAST the ceiling, which is what a
+        run cut off there spends, and a death that is genuinely the medic's is
+        one that stopped short of it.
+
+        `expect_rc=1`: the step ends by failing the job itself, because the
+        review step above it no longer does (DRE-3501)."""
         exec_path = os.path.join(self.tmp, f"execution-{run}.json")
         with open(exec_path, "w") as f:
             json.dump([
                 {"type": "system", "subtype": "init"},
                 {"type": "result", "subtype": subtype, "is_error": True,
-                 "num_turns": int(ceiling) + 1, "total_cost_usd": 2.10,
-                 "duration_ms": 900000},
+                 "num_turns": int(ceiling) + 1 if turns is None else turns,
+                 "total_cost_usd": 2.10, "duration_ms": 900000},
             ], f)
         return self._shell("second critic — the review died", {
             "${{ steps.posta.outputs.execution_file }}": exec_path,
             "${{ steps.postturns.outputs.max_turns }}": ceiling,
             "${{ github.run_id }}": run,
             "${{ github.run_attempt }}": "1",
-        }, **env_extra)
+        }, expect_rc=1, **env_extra)
 
     def _dispatches(self) -> list[dict]:
         """Every `repository_dispatch` payload GitHub actually accepted."""
@@ -807,7 +814,7 @@ class CriticWalk(unittest.TestCase):
         """The medic owns every other death and retries it once already
         (`medic_retry.RULE_TURN_EXHAUSTION` is the only one it refuses). Two
         automatic retries of one run is the DRE-2937 failure, at ~$16 a go."""
-        self._died_at("90", "333", subtype="error_during_execution")
+        self._died_at("90", "333", subtype="error_during_execution", turns=20)
         self.assertEqual(self._dispatches(), [])
         log = self._log()
         self.assertNotIn("state ", log)
@@ -815,6 +822,40 @@ class CriticWalk(unittest.TestCase):
         # Still exactly the two comments a death always wrote.
         self.assertEqual(log.count("comment "), 2, log)
         self.assertEqual(pc.post_release(self._thread(), EPIC)[0], pc.POST_DIED)
+
+    # --- DRE-3501: the result file decides, not the step outcome -----------
+
+    def test_a_review_cut_off_after_writing_its_verdict_is_an_ordinary_round(self):
+        """agent-bureau run 34144302622, walked. The review FINISHED at turn 51
+        of a 48-turn ceiling — `"subtype": "success"` — and the action marked
+        its step failed anyway. The rail read the step: tombstone, no decision,
+        and a `PLAN-CRITIC: PASS` nobody ever opened. Now the verdict step
+        reads the FILE, the tombstone's own gate needs NO_RESULT, and the round
+        is ordinary."""
+        self._critic_writes("post", pc.PASS)
+        self._shell("second critic — verdict or death?")
+        self.assertEqual(self._outputs()["verdict"], pc.PASS,
+                         "the tombstone's gate is `== NO_RESULT`")
+        self._shell("second critic — decision")
+        out = self._outputs()
+        self.assertEqual((out["action"], out["result"]), ("proceed", pc.PASS))
+        self.assertEqual(pc.post_release(self._thread(), EPIC)[0], pc.POST_RELEASED)
+        for body in self._thread():
+            self.assertNotIn("🪦", body, "no tombstone is composed for a round")
+
+    def test_a_review_that_wrote_nothing_still_reaches_the_tombstone(self):
+        """The other side of the same gate, and the whole of what keeps the
+        DRE-3241 trap closed: no result file is NO_RESULT, NO_RESULT is the
+        tombstone's gate, and the over-ceiling finish is read as the turn cap
+        — so the review is asked for again instead of being left to a medic
+        that refuses turn caps."""
+        self._shell("second critic — verdict or death?")
+        self.assertEqual(self._outputs()["verdict"], pc.NO_RESULT)
+        self._died_at("48", "34144302622", subtype="success", turns=51)
+        note = self._thread()[-3]
+        self.assertIn("ran out of turns — 51 of its 48-turn ceiling", note)
+        self.assertNotIn("(success)", note)
+        self.assertEqual(len(self._dispatches()), 1, self._log())
 
     def test_a_failed_dispatch_is_said_and_never_claimed_as_started(self):
         """DRE-2034's rule at this seam: a 403'd dispatch must not leave the

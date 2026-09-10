@@ -721,19 +721,40 @@ class ADeadReviewWritesItsTombstone(unittest.TestCase):
     """The step that failed the job on 2026-09-05 wrote nothing. Now a review
     that dies leaves a `🪦` record on the epic, and NOTHING promotes."""
 
-    def test_the_review_is_not_continue_on_error(self):
-        """The trap: `continue-on-error` on the review would let the decision
-        step read an empty result file as NO_RESULT — "a crash is not a
-        rejection" — and ACTIVATE the epic with no review at all."""
-        self.assertFalse(step_named(SECOND).get("continue-on-error"))
+    def test_the_review_is_continue_on_error_and_the_verdict_gates_the_death(self):
+        """DRE-3501 replaced the DRE-3241 trap door with a READ. The step
+        outcome no longer decides anything on its own: `posta` is
+        `continue-on-error`, and what separates a death from a decided round
+        is whether the result file holds a verdict.
+
+        The trap stays closed because the decision step is reachable on a
+        FAILED review only through a parsed verdict — never through an empty
+        result file, which is still `NO_RESULT` and still goes to the
+        tombstone."""
+        self.assertTrue(step_named(SECOND).get("continue-on-error"))
+        died = str(step_named(DIED).get("if") or "")
+        self.assertIn("steps.posta.outcome == 'failure'", died)
+        self.assertIn("steps.postverdict.outputs.verdict == 'NO_RESULT'", died)
 
     def test_the_tombstone_step_runs_only_when_the_review_itself_failed(self):
         self.assertLess(index_of(SECOND), index_of(DIED))
         self.assertLess(index_of(DIED), index_of(DECISION))
         gate = str(step_named(DIED).get("if") or "")
-        self.assertIn("failure()", gate)
         self.assertIn("steps.posta.outcome == 'failure'", gate)
         self.assertIn("mode == 'activate'", gate)
+        self.assertNotIn("failure()", gate,
+                         "`continue-on-error` on the review keeps the job "
+                         "green there, so `failure()` would never be true and "
+                         "the tombstone would never be written")
+
+    def test_the_job_still_goes_red_on_a_death(self):
+        """The review no longer fails the job, so the tombstone step does —
+        after its dispatch, so the medic sees exactly what it saw before and
+        the retry still happens (DRE-3289's order)."""
+        run = str(step_named(DIED).get("run") or "")
+        self.assertRegex(run.rstrip().splitlines()[-1].strip(), r"^exit [1-9]")
+        self.assertLess(run.index("review_rerun.py after-death"),
+                        run.rindex("exit 1"))
 
     def test_the_decision_and_the_activation_stay_skipped_on_a_dead_review(self):
         """Neither step may carry `always()`/`failure()`: on a failed review the
@@ -839,12 +860,17 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
         self.assertIn('--note-file "$PARK_NOTE"', run,
                       "...and that is the file after-death was told to write")
 
-    def test_the_review_step_still_has_no_continue_on_error(self):
-        """The DRE-3241 trap, re-pinned here because this card is the one that
-        makes a dead review recoverable: with `continue-on-error` the decision
-        step would read the empty result file as NO_RESULT and activate the
-        epic with no review at all."""
-        self.assertFalse(step_named(SECOND).get("continue-on-error"))
+    def test_a_death_still_reaches_this_step_through_the_verdict_gate(self):
+        """Re-pinned here because this card is the one that makes a dead
+        review recoverable: the retry only ever fires from the tombstone step,
+        and since DRE-3501 that step is reached on a failed review with no
+        parseable verdict — never on a review that decided.
+
+        The decision and the activation keep their implied `success()`, which
+        is what the tombstone's own `exit 1` keeps meaning."""
+        gate = str(step_named(DIED).get("if") or "")
+        self.assertIn("steps.posta.outcome == 'failure'", gate)
+        self.assertIn("steps.postverdict.outputs.verdict == 'NO_RESULT'", gate)
         for fragment in (DECISION, ACTIVATE):
             gate = str(step_named(fragment).get("if") or "")
             self.assertNotIn("always()", gate, fragment)
@@ -1051,6 +1077,118 @@ class EveryNoticeThatAsksForAReRunNamesTheAct(unittest.TestCase):
                 except (OSError, UnicodeDecodeError):
                     continue
         self.assertEqual(hits, [], f"the retired wording still lives in {hits}")
+
+
+# --- DRE-3501: the result file decides, not the step outcome ----------------
+
+VERDICT = "Second critic — verdict or death?"
+
+
+class TheResultFileDecidesNotTheStepOutcome(unittest.TestCase):
+    """agent-bureau run 34144302622: the review FINISHED — `subtype: success`,
+    turn 51 of a 48-turn ceiling — and the action marked its step failed. The
+    rail read the step outcome, skipped the decision, and buried a plan the
+    critic had already passed under a tombstone reading *died (success)*.
+
+    So the rail now reads the result file. `posta` is `continue-on-error`, one
+    step says which of the three verdicts is in the file, and the tombstone and
+    the decision are gated on THAT."""
+
+    def test_the_verdict_step_follows_the_turns_receipt(self):
+        self.assertEqual(index_of(VERDICT), index_of(RECEIPT) + 1)
+        self.assertEqual(step_named(VERDICT).get("id"), "postverdict")
+        self.assertLess(index_of(VERDICT), index_of(DIED))
+        self.assertLess(index_of(VERDICT), index_of(DECISION))
+
+    def test_it_runs_on_both_the_verdict_path_and_the_death_path(self):
+        gate = str(step_named(VERDICT).get("if") or "")
+        self.assertIn("always()", gate)
+        self.assertIn("mode == 'activate'", gate)
+        self.assertIn("steps.posta.outcome == 'success'", gate)
+        self.assertIn("steps.posta.outcome == 'failure'", gate)
+
+    def test_it_reads_the_file_the_critic_was_told_to_write(self):
+        """The same path the prompt names and the decision reads — a second
+        spelling of it would answer about a file nobody wrote."""
+        run = str(step_named(VERDICT).get("run") or "")
+        self.assertIn("plan_critic.py read-result", run)
+        self.assertIn("plan-critic-post.md", run)
+        self.assertIn("plan-critic-post.md", prompt_of(SECOND))
+        self.assertIn("plan-critic-post.md",
+                      str(step_named(DECISION).get("run") or ""))
+
+    def test_the_review_step_is_continue_on_error(self):
+        self.assertTrue(step_named(SECOND).get("continue-on-error"))
+
+    def test_the_tombstone_needs_a_failed_review_AND_no_verdict(self):
+        gate = str(step_named(DIED).get("if") or "")
+        self.assertIn("steps.posta.outcome == 'failure'", gate)
+        self.assertIn("steps.postverdict.outputs.verdict == 'NO_RESULT'", gate)
+
+    def test_the_tombstone_step_ends_by_failing_the_job(self):
+        """The review no longer reddens the job, so the death does — and after
+        the dispatch, so the retry still fires and the medic still sees a red
+        run."""
+        run = str(step_named(DIED).get("run") or "")
+        self.assertRegex(run.rstrip().splitlines()[-1].strip(), r"^exit [1-9]")
+
+    def test_the_decision_admits_a_parsed_verdict_on_a_failed_review(self):
+        """...and still admits a successful review, whatever the file says —
+        a review that ran to its decision and wrote nothing usable is a round
+        with NO_RESULT, exactly as before (console-honesty rule 1)."""
+        gate = str(step_named(DECISION).get("if") or "")
+        self.assertIn("steps.posta.outcome == 'success'", gate)
+        self.assertIn("steps.postverdict.outputs.verdict", gate)
+        self.assertIn("NO_RESULT", gate)
+        self.assertNotIn("always()", gate)
+        self.assertNotIn("failure()", gate)
+
+    def test_the_comment_above_the_review_states_the_new_gate(self):
+        """A change that contradicts a document updates it, and the nearest
+        document to a step is the comment over it (standards/engineering.md).
+        It used to say `NO continue-on-error here, on purpose`."""
+        src = wf_src()
+        head = src[:src.index("id: posta\n")]
+        above = head[:head.rindex("      - name: Second critic — review")]
+        comment = above[above.rindex("\n\n"):]
+        self.assertNotIn("NO `continue-on-error` here", comment)
+        self.assertIn("postverdict", comment)
+        self.assertIn("DRE-3241", comment, "the trap it still closes")
+
+    def test_the_step_answers_each_of_the_three_verdicts(self):
+        """Rendered and RUN, not grepped: the step's own shell, against a
+        result file, three times — the PASS run 34144302622 wrote before it
+        was cut off, a send-back, and no file at all."""
+        run_block = str(step_named(VERDICT).get("run") or "")
+        cases = [
+            ("PLAN-CRITIC: PASS\n\n1. DRE-3258: nothing blocking\n", "verdict=PASS"),
+            ("PLAN-CRITIC: SEND_BACK — DRE-3259 has no operator step\n",
+             "verdict=SEND_BACK"),
+            (None, "verdict=NO_RESULT"),
+        ]
+        for text, expected in cases:
+            with self.subTest(expected=expected), \
+                    tempfile.TemporaryDirectory() as raw:
+                temp = os.path.join(raw, "temp")
+                os.makedirs(temp)
+                if text is not None:
+                    with open(os.path.join(temp, "plan-critic-post.md"), "w") as f:
+                        f.write(text)
+                rendered = _render(run_block, temp, {})
+                self.assertNotIn("${{", rendered,
+                                 "an unresolved GitHub expression reached the shell")
+                rendered = rendered.replace(
+                    ".bureau-pipeline/scripts/plan_critic.py",
+                    os.path.join(SCRIPTS, "plan_critic.py"))
+                gho = os.path.join(raw, "gho")
+                script = os.path.join(raw, "verdict.sh")
+                with open(script, "w") as f:
+                    f.write("set -e\n" + rendered)
+                proc = subprocess.run(["bash", script], capture_output=True,
+                                      text=True, cwd=raw,
+                                      env=dict(os.environ, GITHUB_OUTPUT=gho))
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(open(gho).read(), expected + "\n")
 
 
 if __name__ == "__main__":

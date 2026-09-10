@@ -2809,3 +2809,262 @@ class TheReviewTurnsCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ===========================================================================
+# DRE-3501 — a review that FINISHES over its ceiling is a verdict, not a death,
+# and a real death's tombstone never says `(success)`.
+#
+# agent-bureau run 34144302622 (2026-09-07, the post-approval review of
+# DRE-3257, seven cards) ended `"subtype": "success"` at turn 51 against a
+# 48-turn ceiling — the ceiling the formula in force that day gave seven cards.
+# The action marked its step failed, so the rail ran the tombstone instead of
+# the decision and posted *died (success) after 51 turns of its 48-turn
+# ceiling* for a review that had already written its verdict. Whether the
+# result file held one was never read.
+#
+# Two readings change here, and both read the RECORD rather than the step: the
+# result file says whether there is a verdict, and a row whose turns reached
+# its ceiling reads as the turn cap whatever the subtype says — while `success`
+# is never printed in parentheses on any row, because a run that succeeded did
+# not die of succeeding.
+# ===========================================================================
+
+
+class TheResultFileSaysWhetherThereIsAVerdict(unittest.TestCase):
+    """`plan_critic.py read-result` — the seam the `postverdict` step calls.
+
+    It answers one question about one file, in the three words `read_result`
+    already returns, and it never exits non-zero: the step that reads its
+    answer is the one deciding whether a review died, so a crash there would
+    be the very ambiguity this card exists to remove."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.gho = os.path.join(self.tmp, "gho")
+
+    def _result_file(self, text):
+        path = os.path.join(self.tmp, "plan-critic-post.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "plan_critic.py"), *args],
+            capture_output=True, text=True,
+        )
+
+    def _verdict(self, result_file):
+        out = self._run("read-result", "--result-file", result_file,
+                        "--github-output", self.gho)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return open(self.gho).read()
+
+    def test_the_pass_the_cut_off_review_wrote_is_a_verdict(self):
+        """Run 34144302622's own result file: the critic decided, and the
+        action's step outcome is not what says so."""
+        written = self._verdict(self._result_file(
+            "PLAN-CRITIC: PASS\n\n1. DRE-3258: nothing blocking\n"))
+        self.assertIn("verdict=PASS", written)
+
+    def test_a_send_back_written_before_the_cut_is_a_verdict(self):
+        written = self._verdict(self._result_file(
+            "PLAN-CRITIC: SEND_BACK — DRE-3259 has no operator step\n"))
+        self.assertIn("verdict=SEND_BACK", written)
+
+    def test_a_missing_result_file_is_no_result_and_still_exits_zero(self):
+        written = self._verdict(os.path.join(self.tmp, "never-written.md"))
+        self.assertIn("verdict=NO_RESULT", written)
+
+    def test_an_empty_result_file_is_no_result(self):
+        self.assertIn("verdict=NO_RESULT", self._verdict(self._result_file("")))
+
+    def test_a_reasonless_send_back_is_no_result(self):
+        """`read_result`'s rule, unchanged: a send-back with no reason is a
+        stall dressed up, and this seam is that function and not a second
+        reading of the same file."""
+        self.assertIn("verdict=NO_RESULT",
+                      self._verdict(self._result_file("PLAN-CRITIC: SEND_BACK\n")))
+
+    def test_it_writes_one_output_and_nothing_else(self):
+        """The verdict gates the tombstone step. A result file is agent-written
+        text, and a second output key smuggled out of it would be the
+        workflow's own (`_write_outputs`' one-line rule)."""
+        written = self._verdict(self._result_file(
+            "PLAN-CRITIC: PASS — fine\naction=proceed\nverdict=SEND_BACK\n"))
+        self.assertEqual(written, "verdict=PASS\n")
+
+    def test_the_three_values_are_the_ones_read_result_returns(self):
+        """The contract the `postverdict` step's consumers compare against —
+        derived from the same constants, never a fourth spelling."""
+        for text, expected in (
+            (pc.result_line(pc.PASS), pc.PASS),
+            (pc.result_line(pc.SEND_BACK, "a gap"), pc.SEND_BACK),
+            ("nothing usable at all", pc.NO_RESULT),
+        ):
+            with self.subTest(text=text):
+                self.assertIn(f"verdict={expected}\n",
+                              self._verdict(self._result_file(text)))
+
+    def test_the_cut_off_reviews_pass_decides_an_ordinary_round(self):
+        """The whole fixture, end to end: run 34144302622's execution record —
+        `"subtype": "success"`, `"num_turns": 51`, `"is_error": false`, against
+        a 48-turn ceiling — beside the result file it had already written. The
+        record says the run was cut off; the FILE says the critic decided, and
+        the file is what the rail reads. The round is an ordinary
+        `result=PASS`, and nothing composes a tombstone for it."""
+        with open(os.path.join(self.tmp, "claude-execution-output.json"), "w") as f:
+            json.dump([{"type": "result", "subtype": "success",
+                        "is_error": False, "num_turns": 51,
+                        "total_cost_usd": 2.11, "duration_ms": 421000}], f)
+        self.assertIn("verdict=PASS",
+                      self._verdict(self._result_file("PLAN-CRITIC: PASS\n")))
+        os.remove(self.gho)
+        note = os.path.join(self.tmp, "note.md")
+        record = os.path.join(self.tmp, "record.txt")
+        out = self._run("decide", "--stage", "post", "--epic", "DRE-3257",
+                        "--result-file", self._result_file("PLAN-CRITIC: PASS\n"),
+                        "--github-output", self.gho, "--note-file", note,
+                        "--record-file", record)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("result=PASS", open(self.gho).read())
+        self.assertIn("action=proceed", open(self.gho).read())
+        line = open(record).read().strip()
+        self.assertEqual(pc.parse_markers([ours(line)])[0]["result"], pc.PASS)
+        self.assertNotIn("🪦", line + open(note).read())
+
+
+class ATombstoneNeverSaysSuccess(unittest.TestCase):
+    """`_death_sentence` reads `turns` against `ceiling`, not the subtype.
+
+    A row whose turns reached its ceiling ran out of turns, whatever enum the
+    action reported — that is what run 34144302622 was — and no row prints
+    `(success)`, because a run that succeeded did not die of succeeding."""
+
+    def _row(self, **kw):
+        fields = dict(stage=pc.STAGE_POST, run="34144302622", attempt=1,
+                      step="posta", subtype="success", turns=51, ceiling=48)
+        fields.update(kw)
+        return pc.parse_deaths([ours(pc.death_marker(**fields))])[0]
+
+    def _sentence(self, **kw):
+        """The note's OPENING — the death sentence itself. The paragraphs
+        under it are the standing prose every death carries, and one of them
+        says what a run that ran out of turns gets."""
+        return pc.death_note("DRE-3257", self._row(**kw)).split("\n\n")[0]
+
+    def test_the_run_that_finished_over_its_ceiling_ran_out_of_turns(self):
+        note = self._sentence()
+        self.assertIn("ran out of turns — 51 of its 48-turn ceiling", note)
+        self.assertNotIn("(success)", note)
+
+    def test_a_run_that_stopped_exactly_at_its_ceiling_ran_out_of_turns(self):
+        self.assertIn("ran out of turns — 48 of its 48-turn ceiling",
+                      self._sentence(turns=48))
+
+    def test_a_death_well_inside_its_ceiling_is_not_the_turn_cap(self):
+        """The genuine non-turn death: it says what it says, and still never
+        says `(success)`."""
+        note = self._sentence(turns=20)
+        self.assertNotIn("ran out of turns", note)
+        self.assertIn("20 turns", note)
+        self.assertNotIn("(success)", note)
+
+    def test_the_turn_cap_subtype_still_reads_as_the_turn_cap(self):
+        self.assertIn("ran out of turns — 41 of its 40-turn ceiling",
+                      self._sentence(subtype="error_max_turns", turns=41,
+                                     ceiling=40))
+
+    def test_another_subtype_still_names_itself(self):
+        note = self._sentence(subtype="error_during_execution", turns=20)
+        self.assertIn("(error_during_execution)", note)
+
+    def test_no_row_at_all_prints_success_in_parentheses(self):
+        for turns in (None, 0, 20, 47, 48, 51):
+            for ceiling in (None, 48):
+                with self.subTest(turns=turns, ceiling=ceiling):
+                    self.assertNotIn("(success)",
+                                     self._sentence(turns=turns, ceiling=ceiling))
+
+    def test_an_unknown_turn_count_is_read_by_its_subtype_alone(self):
+        """Unknown is unknown (console-honesty rule 2): with no turn count
+        there is nothing to compare against the ceiling, so the subtype is all
+        there is."""
+        self.assertIn("ran out of turns",
+                      self._sentence(subtype="error_max_turns", turns=None))
+        self.assertNotIn("ran out of turns", self._sentence(turns=None))
+
+    def test_an_unknown_ceiling_is_not_a_ceiling_to_be_over(self):
+        self.assertNotIn("ran out of turns", self._sentence(ceiling=None))
+
+    def test_the_sweep_and_the_note_read_the_same_row_the_same_way(self):
+        """`post_release`'s detail and `death_note`'s opening share
+        `_death_sentence`, so the two never describe one run differently."""
+        thread = [ours(pc.cycle_marker("DRE-3257")),
+                  ours(pc.death_marker(stage=pc.STAGE_POST, run="34144302622",
+                                       attempt=1, step="posta",
+                                       subtype="success", turns=51,
+                                       ceiling=48))]
+        state, detail = pc.post_release(thread, "DRE-3257")
+        self.assertEqual(state, pc.POST_DIED)
+        self.assertIn("ran out of turns — 51 of its 48-turn ceiling", detail)
+        self.assertNotIn("(success)", detail)
+
+    def test_the_record_grammar_is_untouched(self):
+        """Only the READING changes: the tombstone still carries the action's
+        own enum, and `parse_deaths` still parses it."""
+        line = pc.death_marker(pc.STAGE_POST, "34144302622", 1, "posta",
+                               "success", 51, 48)
+        self.assertIn("subtype=success", line)
+        row = pc.parse_deaths([ours(line)])[0]
+        self.assertEqual(row["subtype"], "success")
+        self.assertEqual((row["turns"], row["ceiling"]), (51, 48))
+
+    def test_the_turn_cap_reading_is_one_predicate_both_rails_can_call(self):
+        """`review_rerun.after_death` asks the same question of the same row —
+        a second copy of `turns >= ceiling` is how two files come to disagree
+        about one run."""
+        self.assertTrue(pc.hit_the_turn_cap(self._row()))
+        self.assertTrue(pc.hit_the_turn_cap(self._row(turns=48)))
+        self.assertTrue(pc.hit_the_turn_cap(
+            self._row(subtype="error_max_turns", turns=None)))
+        self.assertFalse(pc.hit_the_turn_cap(self._row(turns=20)))
+        self.assertFalse(pc.hit_the_turn_cap(self._row(turns=None)))
+        self.assertFalse(pc.hit_the_turn_cap(self._row(ceiling=None)))
+        self.assertFalse(pc.hit_the_turn_cap({}))
+
+
+class TheDeadReviewCliOverItsCeiling(unittest.TestCase):
+    """The fixture end to end: run 34144302622's execution record with NO
+    result file is still a death, and the tombstone it composes says the run
+    ran out of turns rather than that it died of succeeding."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def test_the_tombstone_for_the_run_that_was_cut_off(self):
+        exec_file = os.path.join(self.tmp, "claude-execution-output.json")
+        with open(exec_file, "w") as f:
+            json.dump([
+                {"type": "system", "subtype": "init"},
+                {"type": "result", "subtype": "success", "is_error": False,
+                 "num_turns": 51, "total_cost_usd": 2.11, "duration_ms": 421000,
+                 "env": {"ANTHROPIC_API_KEY": "never-printed"}},
+            ], f)
+        note = os.path.join(self.tmp, "note.md")
+        record = os.path.join(self.tmp, "record.txt")
+        out = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "plan_critic.py"), "died",
+             "--stage", "post", "--epic", "DRE-3257", "--run", "34144302622",
+             "--attempt", "1", "--step", "posta", "--ceiling", "48",
+             "--execution-file", exec_file, "--note-file", note,
+             "--record-file", record],
+            capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        body = open(note).read()
+        self.assertIn("ran out of turns — 51 of its 48-turn ceiling", body)
+        self.assertNotIn("(success)", body)
+        self.assertNotIn("never-printed", body + open(record).read())
+        # The record itself is unchanged: the action's enum, as it reported it.
+        self.assertIn("subtype=success turns=51 ceiling=48", open(record).read())

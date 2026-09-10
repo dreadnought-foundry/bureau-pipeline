@@ -300,22 +300,29 @@ class AfterADeath(unittest.TestCase):
     def test_a_non_turn_death_is_left_to_the_medic(self):
         """The medic retries a non-turn death once already, and refuses a
         turn-cap one (`medic_retry.RULE_TURN_EXHAUSTION`). The two must never
-        both act on one death."""
+        both act on one death.
+
+        WELL INSIDE ITS CEILING, on purpose (DRE-3501): a row that reached its
+        ceiling is a turn-cap death whatever subtype the action reported, so a
+        death that is genuinely the medic's is one that stopped short of it."""
         thread = _pipeline(pc.cycle_marker(EPIC), _round(),
-                           _death(subtype="error_during_execution"))
+                           _death(subtype="error_during_execution", turns=20))
         action, why = rr.after_death(thread, EPIC, "error_during_execution")
         self.assertEqual(action, "leave")
         self.assertIn("medic", why.lower())
 
     def test_a_second_non_turn_death_is_still_the_medics(self):
         thread = _pipeline(pc.cycle_marker(EPIC), _round(),
-                           _death(run="1", subtype="error_during_execution"),
-                           _death(run="2", subtype="error_during_execution"))
+                           _death(run="1", subtype="error_during_execution",
+                                  turns=20),
+                           _death(run="2", subtype="error_during_execution",
+                                  turns=20))
         action, _why = rr.after_death(thread, EPIC, "error_during_execution")
         self.assertEqual(action, "leave")
 
     def test_an_unknown_subtype_is_left_alone(self):
-        thread = _pipeline(pc.cycle_marker(EPIC), _round(), _death(subtype=None))
+        thread = _pipeline(pc.cycle_marker(EPIC), _round(),
+                           _death(subtype=None, turns=20))
         self.assertEqual(rr.after_death(thread, EPIC, "")[0], "leave")
 
     def test_a_round_since_the_deaths_refunds_the_death_count(self):
@@ -325,6 +332,51 @@ class AfterADeath(unittest.TestCase):
                            _death(run="2"))
         action, _why = rr.after_death(thread, EPIC, "error_max_turns")
         self.assertEqual(action, "retry")
+
+    # --- DRE-3501: the retry reads the RECORD, not the enum ----------------
+    #
+    # agent-bureau run 34144302622 FINISHED at turn 51 against a 48-turn
+    # ceiling and reported `subtype: success`. `success` is not
+    # `error_max_turns`, so this module answered `leave` — the medic's — and
+    # the medic refuses a turn cap, so nothing re-ran the review. A row whose
+    # turns reached its ceiling ran out of turns whatever the enum says, and
+    # the row already carries both numbers (`plan_critic.hit_the_turn_cap`).
+
+    def test_a_first_death_over_its_ceiling_is_retried_whatever_the_subtype(self):
+        thread = _pipeline(pc.cycle_marker(EPIC), _round(),
+                           _death(run="34144302622", subtype="success",
+                                  turns=51, ceiling=48))
+        action, why = rr.after_death(thread, EPIC, "success")
+        self.assertEqual(action, "retry")
+        self.assertTrue(why.strip())
+
+    def test_a_second_death_over_its_ceiling_parks_like_any_other(self):
+        thread = _pipeline(pc.cycle_marker(EPIC), _round(),
+                           _death(run="34144302622", subtype="success",
+                                  turns=51, ceiling=48),
+                           _death(run="34144302623", subtype="success",
+                                  turns=73, ceiling=72))
+        action, why = rr.after_death(thread, EPIC, "success")
+        self.assertEqual(action, "park")
+        self.assertIn("34144302622", why)
+        self.assertIn("34144302623", why)
+
+    def test_a_death_well_inside_its_ceiling_is_still_the_medics(self):
+        """The other side of the same reading: `success` at turn 20 of 48 is a
+        genuine non-turn death, and this rail must not take it off the medic."""
+        thread = _pipeline(pc.cycle_marker(EPIC), _round(),
+                           _death(subtype="success", turns=20, ceiling=48))
+        action, why = rr.after_death(thread, EPIC, "success")
+        self.assertEqual(action, "leave")
+        self.assertIn("medic", why.lower())
+
+    def test_the_turn_cap_reading_is_plan_critics_and_is_not_re_derived(self):
+        """One predicate, read off the row both files already share — a second
+        copy of `turns >= ceiling` is how two files come to disagree about one
+        run (this module's own docstring)."""
+        with open(os.path.join(SCRIPTS, "review_rerun.py"), encoding="utf-8") as f:
+            source = f.read()
+        self.assertIn("plan_critic.hit_the_turn_cap", source)
 
     def test_the_park_note_is_plain_english_and_names_the_runs(self):
         thread = _pipeline(pc.cycle_marker(EPIC), _round(),
@@ -453,10 +505,24 @@ class TheCli(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("action=retry", open(gho).read())
 
+    def test_after_death_writes_retry_for_a_run_that_finished_over_its_ceiling(self):
+        """Run 34144302622 through the seam the workflow calls: `success` at
+        turn 51 of a 48-turn ceiling is the turn cap, so the review is asked
+        for again instead of being left to a medic that refuses it."""
+        thread = self._file("thread.json", json.dumps(
+            _pipeline(pc.cycle_marker(EPIC), _round(),
+                      _death(run="34144302622", subtype="success",
+                             turns=51, ceiling=48))))
+        gho = os.path.join(self.tmp, "gho")
+        out = self._run("after-death", "--epic", EPIC, "--thread-file", thread,
+                        "--subtype", "success", "--github-output", gho)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("action=retry", open(gho).read())
+
     def test_after_death_writes_leave_for_a_death_that_is_the_medics(self):
         thread = self._file("thread.json", json.dumps(
             _pipeline(pc.cycle_marker(EPIC), _round(),
-                      _death(subtype="error_during_execution"))))
+                      _death(subtype="error_during_execution", turns=20))))
         gho = os.path.join(self.tmp, "gho")
         out = self._run("after-death", "--epic", EPIC, "--thread-file", thread,
                         "--subtype", "error_during_execution",

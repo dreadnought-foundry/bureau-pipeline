@@ -292,7 +292,18 @@ result has not rejected anything and never holds a plan
 **A review that DIES leaves a tombstone, and holds until it is re-run.** Two
 things end without a verdict and they are not the same fact. A critic that ran
 to its decision and wrote nothing usable is `NO_RESULT`: the run records it as
-a round, says so on the epic with a ⚠️ note, and proceeds. A review that never
+a round, says so on the epic with a ⚠️ note, and proceeds. **A VERDICT THAT
+EXISTS IS NOT A DEATH** (DRE-3501): whether the review died is read off the
+result file, never off the action's step outcome, so a review cut off after
+writing `PLAN-CRITIC: PASS` or `SEND_BACK — …` is a decided round however the
+step ended. And **a run that FINISHED over its ceiling with no verdict is a
+turn-cap death** — the tombstone's own `turns >= ceiling` says so whatever
+subtype the action reported, and no tombstone ever prints `(success)`, because
+a run that succeeded did not die of succeeding. On 2026-09-07 run 34144302622
+reported `"subtype": "success"` at turn 51 of a 48-turn ceiling with a pass
+already in the file: the rail read the step, posted *died (success) after 51
+turns of its 48-turn ceiling*, and read `success` as "not a turn cap", so the
+retry below never fired either. A review that never
 reached its decision — the action died at its turn ceiling, or crashed — used
 to leave *nothing*: the job went red, and the sweep read the newest marker it
 could find, which on 2026-09-05 was a send-back the re-plan had already
@@ -343,16 +354,23 @@ answers:
   BOTH dead runs. Two turn-cap deaths on one card is the operator's signal to
   split, not a queue position (`standards/card-quality.md`), and what an
   operator needs to see is why the review cannot finish at either ceiling.
-* **leave** — any other subtype. That death belongs to the medic, which
-  retries a non-turn death once already and refuses a turn-cap one outright
-  (`medic_retry.RULE_TURN_EXHAUSTION`). This rail retries ONLY
-  `error_max_turns`, so the two never both act on one death.
+* **leave** — a death that is not the turn cap. That death belongs to the
+  medic, which retries a non-turn death once already and refuses a turn-cap one
+  outright (`medic_retry.RULE_TURN_EXHAUSTION`). This rail retries only the
+  turn cap — `error_max_turns`, or a row whose turns reached its ceiling
+  (`plan_critic.hit_the_turn_cap`, one predicate both readings share) — so the
+  two never both act on one death.
 
-The job still goes red on a death — no `continue-on-error` on the review, and
-the decision and activation steps keep their implied `success()` — so the
-tombstone step is the only thing that runs, and the tombstone lands before the
-dispatch: a crash between them leaves an honest record and the sweep's refusal
-still names what happens next.
+The job still goes red on a death, because the tombstone step itself ends by
+exiting non-zero — after the record, the note and the dispatch, so nothing the
+medic and the sweep read is lost to it. The review step is
+`continue-on-error`: its outcome is not what says whether the review died, and
+on a FAILED review the decision step is reachable ONLY through a verdict
+`read_result` actually parsed. That is what keeps the DRE-3241 trap closed — an
+empty result file is `NO_RESULT`, `NO_RESULT` goes to the tombstone, and no
+epic is ever activated on a review that did not happen. The tombstone still
+lands before the dispatch: a crash between them leaves an honest record and the
+sweep's refusal still names what happens next.
 
 **The budget belongs to one planning attempt, not to the epic.** An epic sent
 back to Triage is re-planned from scratch, and the new plan gets its own
