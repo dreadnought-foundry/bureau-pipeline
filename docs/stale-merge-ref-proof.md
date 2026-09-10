@@ -1,6 +1,6 @@
 # The stale merge-ref refresh, observed on the live board
 
-**DRE-3145.** Read by hand on 2026-09-10 between 06:20 and 06:51 PT against the
+**DRE-3145.** Read by hand on 2026-09-10 between 06:46 and 06:53 PT against the
 live GitHub state of `dreadnought-foundry/bureau-pipeline` and
 `dreadnought-foundry/agent-bureau`. Nothing here was written, dispatched or
 re-run: every line below came from a `gh` read of a sweep log, a pull request,
@@ -129,7 +129,7 @@ Printed by three consecutive full sweeps:
 | [34427336783](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34427336783) | `2026-09-10T01:55:11Z` | 2026-09-09 18:55 PT |
 | [34428708908](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34428708908) | `2026-09-10T02:15:34Z` | 2026-09-09 19:15 PT |
 
-Checked against the head's own check runs, read 2026-09-10 06:45 PT:
+Checked against the head's own check runs, read 2026-09-10 06:50 PT:
 
 ```
 QA critic review :: failure
@@ -161,7 +161,7 @@ Printed by **nine** consecutive full sweeps, 2026-09-09 22:23 PT through
 2026-09-09 23:38 PT: runs 34440833031, 34440871346, 34441541062, 34441661365,
 34441878222, 34442400306, 34442797133, 34443926463, 34446061450.
 
-The head's check runs, read 2026-09-10 06:45 PT:
+The head's check runs, read 2026-09-10 06:50 PT:
 
 ```
 Console web (vitest) (1) :: cancelled
@@ -249,6 +249,6 @@ not something to manufacture on the live board.
 
 ---
 
-Read and written 2026-09-10, 06:20–06:51 PT, from
+Read and written 2026-09-10, 06:46–06:53 PT, from
 `dreadnought-foundry/bureau-pipeline` and `dreadnought-foundry/agent-bureau`.
 Every observation is a read; nothing on either board was changed.
