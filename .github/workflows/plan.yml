@@ -1550,14 +1550,15 @@ jobs:
       # on 14 cards; round 2, on 15 cards plus the re-plan's edits, died at
       # turn 41 of a 40-turn ceiling twice. The reading is linear in the
       # cards, so the ceiling is too, in ONE place: scripts/plan_critic.py
-      # `post_review_turns` (fifteen cards → 80, the planner's own ceiling
-      # for writing them). Counted fresh here because `steps.kids` exists
+      # `post_review_turns` (fifteen cards → 100 since DRE-3498 raised the
+      # base to 40 — run 34144302622 needed 51 turns on seven cards at a
+      # ceiling of 48). Counted fresh here because `steps.kids` exists
       # only on the plan route.
       #
       # ...unless this run IS the retry (DRE-3289). `review_rerun.py ceiling`
       # asks the epic's own thread first: when the newest post-stage record is
       # a tombstone the review is being re-run, and it gets the dead run's
-      # ceiling with headroom (80 → 120, 120 → 180, capped) instead of the
+      # ceiling with headroom (100 → 150, 150 → 180, capped) instead of the
       # number the plan sizes to — which is the number it just died at. A
       # first run is sized exactly as before, through the same
       # `post_review_turns`. The thread is dumped WITH AUTHORS because a
@@ -1586,7 +1587,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
           || {
             echo "::warning::could not size the post-approval review — falling back to the fifteen-card ceiling"
-            echo "max_turns=90" >> "$GITHUB_OUTPUT"
+            echo "max_turns=100" >> "$GITHUB_OUTPUT"
           }
 
       # NO `continue-on-error` here, on purpose (DRE-3241). With it, a review
@@ -1673,6 +1674,56 @@ jobs:
             the wrong thing: a card referencing something nothing creates, a
             migration with no operator step, a claim about a vendor that is not
             true, or two epics editing the same thing.
+
+      # WHAT THE REVIEW SPENT (DRE-3498). This ceiling has now been re-tuned
+      # three times, and every re-tune was one archaeology dig through Actions
+      # logs for one number: DRE-3164's 40-turn wall, the web-tool grant's
+      # widening, and run 34144302622's 51 turns at a ceiling of 48. Nothing
+      # recorded what a review actually costs, so each re-tune was a guess off
+      # a single observation. From here every review says so on the epic, in
+      # one line composed by `plan_critic.py review-turns` and posted ALONE in
+      # its own comment — a fact about a call, in its own grammar, carrying no
+      # act trailer and no verdict (config/pipeline-acts.json says why).
+      #
+      # IT RUNS ON BOTH PATHS. `always()` gated on this route AND on `posta`
+      # having actually RUN — success OR failure, never `skipped`, so an
+      # earlier step's failure does not post a receipt for a review that never
+      # started. A review that DIED at its ceiling is precisely the observation
+      # the next re-tune needs, so it must not be the one that goes unrecorded.
+      #
+      # AND IT CANNOT COST THE REVIEW ANYTHING. `continue-on-error: true` and a
+      # composer that never exits non-zero: an unreadable execution file yields
+      # `spent=?` rather than a red step. The job's own status is untouched —
+      # on a death `posta` has already failed it, which is what keeps the
+      # decision and the activation below skipped.
+      - name: Second critic — turns receipt
+        id: postreceipt
+        if: always() && steps.route.outputs.mode == 'activate' && (steps.posta.outcome == 'success' || steps.posta.outcome == 'failure')
+        continue-on-error: true
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          EPIC="${{ github.event.client_payload.identifier }}"
+          # The same file and the same fallback the tombstone step reads, for
+          # an action version that moved its output.
+          EXEC_FILE="${{ steps.posta.outputs.execution_file }}"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
+          # Counted again here for the same reason the ceiling step counts it:
+          # `steps.kids` exists only on the plan route. An unreadable count is
+          # `children=?`, never 0.
+          KIDS=$(python3 .bureau-pipeline/scripts/linear_ops.py children "$EPIC") || KIDS=""
+          RECEIPT="${{ runner.temp }}/plan-critic-review-turns.txt"
+          python3 .bureau-pipeline/scripts/plan_critic.py review-turns \
+            --execution-file "$EXEC_FILE" \
+            --ceiling "${{ steps.postturns.outputs.max_turns }}" \
+            --children "$KIDS" \
+            --model "${{ steps.postmodel.outputs.model }}" \
+            > "$RECEIPT"
+          # ALONE in its own comment: a record is only readable as a record
+          # while nothing else can be written in the same comment beside it
+          # (`plan_critic._sole_record`).
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
+            "$(cat "$RECEIPT")"
 
       # The review DIED — the action ended without a decision (DRE-3241). On
       # 2026-09-05 that left nothing on the epic: the job went red, every

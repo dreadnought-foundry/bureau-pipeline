@@ -96,6 +96,12 @@ CLI:
   rate --stage S                     comment thread on stdin
   collisions                         comment thread on stdin
   late-collision --epic E --with E2 --detail "…"   print the marker line
+  review-turns --execution-file F --ceiling M --children K --model X
+                                     what one post-approval review SPENT
+                                     against what it was given, as one line
+                                     for its own comment (DRE-3498). A fact
+                                     about a call: no verdict, no act, no
+                                     round. Never exits non-zero.
 """
 
 from __future__ import annotations
@@ -251,8 +257,8 @@ def in_flight_children(cards: list[dict]) -> list[tuple[str, str]]:
 #
 # The transcript itself is hidden ("full output hidden for security", held
 # that way by tests/test_execution_failure_detail.py), so this is read off the
-# result blocks, not the turns. Base + per-card: fifteen cards get 90 — over 2x
-# the wall round 2 hit, ~3x the round that finished.
+# result blocks, not the turns. Base + per-card: fifteen cards get 100 — 2.5x
+# the wall round 2 hit, over 3x the round that finished.
 #
 # THE WHOLE BAND MOVED UP WITH THE WEB GRANT (DRE-2785): base 20 → 30, floor
 # 40 → 60, cap 120 → 140. This critic reads the approved plan as the
@@ -264,7 +270,20 @@ def in_flight_children(cards: list[dict]) -> list[tuple[str, str]]:
 # fifteen-card number, the floor is still the smallest budget a review gets,
 # and the cap is still the QA critic's own retry ceiling — which moved to 140
 # in the same change (scripts/pr_size_strategy.py).
-POST_REVIEW_TURNS_BASE = 30        # charter, context, sight, children, thread, result, + the web
+#
+# ...AND THE BASE MOVED AGAIN, 30 → 40 (DRE-3498), on the first measurement
+# taken at the SMALL end. agent-bureau run 34144302622 (2026-09-07 PT, the
+# post-approval review of DRE-3257, 7 cards, claude-sonnet-5) needed 51 turns
+# and was cut off at the pre-grant ceiling of `20 + 4 × 7 = 48`. Seven cards
+# sized to 58 and floored to 60 — under 1.2× a number measured on a critic
+# that still could not leave the repository, and the grant then added a search
+# and a fetch per external claim on top of it. At 40 a seven-card plan gets 68
+# and a fifteen-card one 100. Floor and cap are untouched.
+#
+# That is three re-tunes read off three separate digs through Actions logs,
+# which is why `review_turns_marker` below now puts what a review SPENT on the
+# epic's own thread: the fourth re-tune is read, not excavated.
+POST_REVIEW_TURNS_BASE = 40        # charter, context, sight, children, thread, result, + the web
 POST_REVIEW_TURNS_PER_CARD = 4     # round 1 measured ~2.1/card; round 2 needed more
 #: The smallest budget a review gets. Nothing that finished under the previous
 #: floor gets less room than it had.
@@ -276,7 +295,7 @@ POST_REVIEW_TURNS_CAP = 140
 #: a fifteen-card plan already died at. A Linear read that failed is unknown,
 #: not zero (standards/console-honesty.md rule 2). Derived, never a second
 #: constant: it is `post_review_turns(15)` and the tests pin the equality.
-POST_REVIEW_TURNS_DEFAULT = 90
+POST_REVIEW_TURNS_DEFAULT = 100
 
 
 def post_review_turns(children) -> int:
@@ -746,12 +765,21 @@ _DEATH = re.compile(
 
 _TOKEN = re.compile(r"[\w-]+")
 
+#: A MODEL id, which is the same token widened by one character: vendors
+#: version with dots (`claude-3.5-…`) and a `?` where a real id belongs would
+#: throw away the one fact the receipt exists to carry (DRE-3498).
+_MODEL_TOKEN = re.compile(r"[\w.-]+")
 
-def _token(value) -> str:
+
+def _token(value, pattern=_TOKEN) -> str:
     """One `[\\w-]+` token, or `?`. Every field of the tombstone lands in a
     credential line, and a value the action's own file hands us (the subtype)
-    must not be able to carry a second line or a second record into it."""
-    m = _TOKEN.fullmatch(str(value).strip()) if value not in (None, "") else None
+    must not be able to carry a second line or a second record into it.
+
+    `pattern` widens the alphabet where a field legitimately needs more — one
+    seam rather than a second near-identical function, so there is one place
+    where "what may reach a signed line" is decided."""
+    m = pattern.fullmatch(str(value).strip()) if value not in (None, "") else None
     return m.group(0) if m else "?"
 
 
@@ -790,6 +818,61 @@ def parse_deaths(bodies: list) -> list[dict]:
             "subtype": None if m.group("subtype") == "?" else m.group("subtype"),
             "turns": None if m.group("turns") == "?" else int(m.group("turns")),
             "ceiling": None if m.group("ceiling") == "?" else int(m.group("ceiling")),
+        })
+    return rows
+
+
+# --- What the review SPENT (DRE-3498) ---------------------------------------
+#
+# The ceiling above has been re-tuned three times, and each re-tune was one
+# archaeology dig through Actions logs for one number: DRE-3164's 40-turn wall
+# (2026-09-05), the web-tool grant's widening (DRE-2785), and run 34144302622's
+# 51 turns at a ceiling of 48 (2026-09-07). Three guesses off three single
+# observations, because nothing recorded what a review actually costs.
+#
+# So every review now says so, on the epic, in the same shape as a round: one
+# line, alone in its comment, pipeline-authored. It is a FACT ABOUT A CALL, not
+# an act and not a judgement — nothing is refused, recovered or held by it, so
+# it carries no act trailer (config/pipeline-acts.json's `unconverted` block
+# says why), it spends nothing of the bound, and `parse_markers`/`parse_deaths`
+# cannot see it. It is written whether the review passed, sent the plan back or
+# DIED — a death at the ceiling is precisely the observation the next re-tune
+# needs.
+#
+# Every field goes through `_token`/`_count`, for the same reason the tombstone
+# does: the spend and the model id come off the action's own execution file,
+# and a value that could carry a newline could carry a forged round into a
+# comment the pipeline signed.
+REVIEW_TURNS_PREFIX = "review-turns:"
+
+_REVIEW_TURNS = re.compile(
+    rf"^🧮\s+{re.escape(REVIEW_TURNS_PREFIX)}\s+spent=(?P<spent>\d+|\?)"
+    r"\s+ceiling=(?P<ceiling>\d+|\?)\s+children=(?P<children>\d+|\?)"
+    r"\s+model=(?P<model>[\w.-]+|\?)\s*$",
+    re.MULTILINE,
+)
+
+
+def review_turns_marker(spent, ceiling, children, model) -> str:
+    """What one post-approval review cost, as one line for its own comment."""
+    return (f"🧮 {REVIEW_TURNS_PREFIX} spent={_count(spent)} "
+            f"ceiling={_count(ceiling)} children={_count(children)} "
+            f"model={_token(model, _MODEL_TOKEN)}")
+
+
+def parse_review_turns(bodies: list) -> list[dict]:
+    """Every turns receipt in a thread, oldest→newest — the same credential as
+    `parse_deaths`: pipeline-authored AND alone in its comment."""
+    rows = []
+    for body in trusted_bodies(bodies):
+        m = _sole_record(_REVIEW_TURNS, body)
+        if not m:
+            continue
+        rows.append({
+            "spent": None if m.group("spent") == "?" else int(m.group("spent")),
+            "ceiling": None if m.group("ceiling") == "?" else int(m.group("ceiling")),
+            "children": None if m.group("children") == "?" else int(m.group("children")),
+            "model": None if m.group("model") == "?" else m.group("model"),
         })
     return rows
 
@@ -2194,6 +2277,21 @@ def _cmd_post_turns(args) -> int:
     return 0
 
 
+def _cmd_review_turns(args) -> int:
+    """The receipt for one post-approval review — what it SPENT against what
+    it was given (DRE-3498). Reads the run's execution file through the one
+    loader every result gate uses (`execution_result.load_execution` +
+    `spend_scalars`), never a second parser, and prints ONE line for its own
+    comment. Always 0, and never raises: a receipt that cannot be written must
+    not change the review's outcome, so an unreadable file is `spent=?`."""
+    execution = execution_result.load_execution(args.execution_file) \
+        if args.execution_file else None
+    scalars = execution_result.spend_scalars(execution)
+    print(review_turns_marker(scalars.get("num_turns"), args.ceiling,
+                              args.children, args.model))
+    return 0
+
+
 def _cmd_died(args) -> int:
     """The tombstone and its note, for the workflow step that runs only when
     the review step itself failed. Reads what the action wrote about the
@@ -2286,6 +2384,18 @@ def main(argv: list[str]) -> int:
     t.add_argument("--children", default="")
     t.add_argument("--github-output", default=None)
     t.set_defaults(fn=_cmd_post_turns)
+
+    w = sub.add_parser("review-turns",
+                       help="what one post-approval review spent, as one line")
+    w.add_argument("--execution-file", default=None)
+    # Strings on purpose, exactly as `post-turns --children` is: the workflow
+    # hands over whatever the ceiling step and `linear_ops.py children`
+    # printed, and an empty or unreadable value must read as `?` rather than
+    # fail the argument parse.
+    w.add_argument("--ceiling", default="")
+    w.add_argument("--children", default="")
+    w.add_argument("--model", default="")
+    w.set_defaults(fn=_cmd_review_turns)
 
     g = sub.add_parser("died", help="the tombstone for a review that ended without deciding")
     g.add_argument("--stage", required=True, choices=sorted(STAGES))

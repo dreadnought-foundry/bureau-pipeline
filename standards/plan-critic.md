@@ -304,8 +304,26 @@ one line, alone in its comment, the pipeline's own:
 It is not a round: it carries no result, spends nothing of the bound, and the
 rate ignores it. The sweep reads it as *the review died — it was not a
 rejection* and holds the children under its own tag. Its ceiling is sized from
-the plan (`plan_critic.post_review_turns`: fifteen cards get 80 turns), because
-the reading is linear in the cards and a fixed 40 had no headroom at fifteen.
+the plan (`plan_critic.post_review_turns`: `40 + 4 × children`, floor 60,
+cap 140 — so fifteen cards get 100), because the reading is linear in the cards
+and a fixed 40 had no headroom at fifteen.
+
+**And every review says what it SPENT** (DRE-3498). That ceiling has been
+re-tuned three times, and each time the number came from one archaeology dig
+through Actions logs: DRE-3164's 40-turn wall, the web-tool grant, and run
+34144302622 — the post-approval review of DRE-3257, seven cards, which needed
+51 turns at a ceiling of 48 and was cut off. So the run that reviews now posts
+one line on the epic, alone in its own comment, whether the review passed, sent
+the plan back or died:
+
+    🧮 review-turns: spent=51 ceiling=48 children=7 model=claude-sonnet-5
+
+It is a fact about a CALL: not a round, not a death, not a verdict. It spends
+nothing of the bound, `parse_markers` and `parse_deaths` cannot see it, and it
+carries no act trailer (`config/pipeline-acts.json` records why). An unreadable
+execution file reads `spent=?` — unknown is unknown — and the receipt is
+best-effort by construction, because a receipt that cannot be written must
+never change the review's outcome. The next re-tune is read off this line.
 
 **And the review re-runs ITSELF, once, at a higher ceiling** (DRE-3289). The
 way forward used to be a move only a person could make, for a plan nobody had
@@ -317,9 +335,10 @@ answers:
 * **retry** — the first turn-cap death since the last round. The run asks for
   its own re-run (`repository_dispatch`, `trigger_state: in progress`,
   `reason: review-retry`) and the next run reads the tombstone off the thread
-  and sizes itself at `ceil(ceiling × 1.5)`, capped at 180 — 80 → 120,
-  120 → 180. **The epic's lane is never written**: it is already In Progress,
-  and moving it would ask the CEO for a decision he does not have to make.
+  and sizes itself at `ceil(ceiling × 1.5)`, capped at 180 —
+  100 → 150, 150 → 180. **The epic's lane is never written**: it is already
+  In Progress, and moving it would ask the CEO for a decision he does not
+  have to make.
 * **park** — the second death. `needs-human`, Green Light, and a note naming
   BOTH dead runs. Two turn-cap deaths on one card is the operator's signal to
   split, not a queue position (`standards/card-quality.md`), and what an
