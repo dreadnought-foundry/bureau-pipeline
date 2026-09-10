@@ -59,6 +59,15 @@ class FakeGitHub:
         # the sweep must never read as permission to delete.
         self.dates = {}
         self.check_runs = {}  # sha -> [check-run dicts]
+        # Actions run records (REST shape). Read by the sandbox-liveness probe
+        # and by a scenario's give-up diagnosis — "what did the critic's last
+        # run conclude?" (DRE-3453). Empty = a sandbox nothing has run in.
+        self.workflow_runs = []
+        # Comment ids, as GitHub mints them: strictly increasing in creation
+        # order and stable for the comment's life. A scenario that has to tell
+        # "not posted yet" from "posted and then DELETED" reads them
+        # (DRE-3453), so the fake carries them like the REST shape does.
+        self._comment_id = 5_600_000_000
         self.on_create_pr = None  # hook(fake, pr) — the test's "pipeline"
         self.on_poll = None  # hook(fake) — fired on get_pr/list_comments polls
 
@@ -66,6 +75,20 @@ class FakeGitHub:
     def _new_sha(self):
         self._sha_counter += 1
         return f"{self._sha_counter:040x}"
+
+    def _add_comment(self, number, login, body):
+        self._comment_id += 1
+        comment = {"id": self._comment_id, "user": {"login": login}, "body": body}
+        self.comments.setdefault(number, []).append(comment)
+        return comment
+
+    def delete_comment(self, number, comment_id):
+        """Whatever removed sandbox comment 5607416317 — replayed. The harness
+        never deletes a comment; the sandbox's gate does (DRE-3453)."""
+        kept = [
+            c for c in self.comments.get(number, []) if c.get("id") != comment_id
+        ]
+        self.comments[number] = kept
 
     def _record_commit(self, sha, parents, login):
         self.commits[sha] = {
@@ -122,27 +145,21 @@ class FakeGitHub:
         return sha
 
     def post_verdict(self, number, token, sha, login=QA):
-        self.comments.setdefault(number, []).append(
-            {
-                "user": {"login": login},
-                "body": (
-                    f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: {token} @{sha}"
-                    "\n\n## Summary\nok"
-                ),
-            }
+        return self._add_comment(
+            number,
+            login,
+            f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: {token} @{sha}"
+            "\n\n## Summary\nok",
         )
 
     def post_human_wait(self, number, login=QA):
         """The merge gate's DRE-2039 status note, shaped as merge-gate.yml
         posts it (a status, deliberately NOT verdict-shaped)."""
-        self.comments.setdefault(number, []).append(
-            {
-                "user": {"login": login},
-                "body": (
-                    "⏸️ Merge gate: waiting for human merge — dependabot PR "
-                    "includes a semver-major update"
-                ),
-            }
+        return self._add_comment(
+            number,
+            login,
+            "⏸️ Merge gate: waiting for human merge — dependabot PR "
+            "includes a semver-major update",
         )
 
     # -- the client surface the driver consumes ----------------------------
@@ -216,9 +233,7 @@ class FakeGitHub:
         return list(self.comments.get(number, []))
 
     def create_comment(self, repo, number, body):
-        comment = {"user": {"login": WORKER}, "body": body}
-        self.comments.setdefault(number, []).append(comment)
-        return comment
+        return self._add_comment(number, WORKER, body)
 
     def get_commit(self, repo, sha):
         return self.commits[sha]
@@ -231,6 +246,12 @@ class FakeGitHub:
 
     def list_check_runs(self, repo, sha):
         return list(self.check_runs.get(sha, []))
+
+    def list_workflow_runs(self, repo, per_page=50):
+        return list(self.workflow_runs)
+
+    def list_recent_runs(self, repo, per_page=50):
+        return list(self.workflow_runs)
 
 
 def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE,
