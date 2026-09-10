@@ -964,6 +964,13 @@
       "why": "Act-shaped, and the registry has no row for it — the same debt as its sibling above, which this receipt was split out of (DRE-3074). Giving it a row is a REGISTRY change: a tag, a kind, a state, a next actor and a subscriber, and the state it would declare is the one the registry has no word for yet — the card did not move and nobody was asked. Named here so the debt is countable rather than invisible. It already carries its own idempotency key (planning-classify-transport), read back by planning_classify.py, which BUDGETS off it: a trailer beside that key would be a second grammar over a comment whose count is load-bearing."
     },
     {
+      "file": "scripts/repair_card.py",
+      "anchor": "attempt_note(run_url, attempt)",
+      "kind": "not-an-act",
+      "means": "The repair card is told that a second attempt at the same failing commit has started, on the card the first attempt already filed (DRE-3533).",
+      "why": "Progress on a card, not an act: nothing downstream reads it, nothing budgets off it, and it discharges nothing. It is the human-readable half of a fact the branch already carries mechanically — the repair loop's own attempt record is the repair/* refs and their pull requests, which is what the decide step counts. An act row would declare a state, a next actor and a subscriber for a line that changes none of the three, and every act this registry gains has to be taught to the console before it can merge."
+    },
+    {
       "file": "scripts/planning_route.py",
       "anchor": "lops.cmd_comment(identifier, body)",
       "kind": "seam",

@@ -1806,13 +1806,19 @@ def required_repo_slug(flags) -> str:
     config/repo-map.json, so onboarding a repo is a data edit and this seam
     follows it with no code change.
     """
-    import validate_card
-
     slug = ""
     it = iter(flags)
     for tok in it:
         if tok == "--repo":
             slug = next(it, "").strip()
+    return validated_repo_slug(slug)
+
+
+def validated_repo_slug(slug: str) -> str:
+    """The same check, for a caller that already HAS the slug as a value
+    (`create_card`) rather than as a CLI flag. One refusal, two seams."""
+    import validate_card
+
     valid = ", ".join(sorted(validate_card.VALID_SLUGS))
     if not slug:
         raise LinearError(
@@ -1844,29 +1850,72 @@ def cmd_create(title: str, description_file: str, *flags: str) -> None:
     guard has returned three times. A pipeline failure or a drifted model is new
     WORK, correctly formed and owing a classification — which is Planning's
     question, not Triage's. A caller that genuinely wants the broken-card lane
-    still says so itself, in its own step (red-main-repair.yml does)."""
+    still says so itself, in its own step (red-main-repair.yml does).
+
+    `--label <name>` (repeatable) and `--lane <name>` extend it without moving
+    either default (DRE-3533): the red-main repair loop files a card for the
+    repair its agent is ALREADY building, so that one needs the role and marks
+    the readiness gate reads, and it belongs in a working lane rather than
+    Planning — a card that entered Todo would be dispatched by the relay onto
+    work an agent is already doing."""
     slug = required_repo_slug(flags)
-    teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
-    team_id = teams["teams"]["nodes"][0]["id"]
+    labels, _ = _parse_flags(flags)
     with open(description_file) as f:
         description = f.read()
-    sid = state_id(team_id, "Planning")
-    label = f"repo:{slug}"
+    create_card(title, description, repo_slug=slug, labels=labels,
+                lane=_flag_value(flags, "--lane") or CREATE_LANE)
+
+
+#: The lane `create` lands a card in unless the caller names another one.
+#: Planning, not Backlog or Triage — see `cmd_create` for why (DRE-2858). A
+#: NAMED value because readers depend on it: the medic's prompt must search
+#: the lane this seam writes, and `tests/test_workflow_prompt_lanes.py` binds
+#: the two together by reading this constant.
+CREATE_LANE = "Planning"
+
+
+def _flag_value(flags, name: str) -> str:
+    """The value of a single-valued trailing flag, or "" when absent."""
+    it = iter(flags)
+    for tok in it:
+        if tok == name:
+            return next(it, "").strip()
+    return ""
+
+
+def create_card(title: str, description: str, *, repo_slug: str,
+                labels=(), lane: str = CREATE_LANE) -> dict:
+    """Create a standalone card and RETURN the issue (identifier + url).
+
+    The callable behind `cmd_create`. A caller that must go on to stamp a
+    routing verdict, comment, or name a branch after the card needs the
+    identifier back — printing it and returning None makes the value reachable
+    only by parsing our own receipt out of a log (DRE-3533).
+
+    The `repo:<slug>` label is applied first and always; `labels` ride after it
+    in the order given, deduplicated by `_team_label_ids`.
+    """
+    slug = validated_repo_slug(repo_slug)
+    teams = gql('{ teams(filter: {key: {eq: "DRE"}}) { nodes { id } } }')
+    team_id = teams["teams"]["nodes"][0]["id"]
+    names = [f"repo:{slug}", *labels]
     data = gql(
         """mutation($input: IssueCreateInput!) {
-             issueCreate(input: $input) { success issue { identifier url } } }""",
+             issueCreate(input: $input) { success issue { id identifier url } } }""",
         {
             "input": {
                 "teamId": team_id,
                 "title": title,
                 "description": description,
-                "stateId": sid,
-                "labelIds": _team_label_ids(team_id, [label]),
+                "stateId": state_id(team_id, lane),
+                "labelIds": _team_label_ids(team_id, names),
             }
         },
     )
     issue = data["issueCreate"]["issue"]
-    print(f"created {issue['identifier']} {issue['url']} labels={label}")
+    print(f"created {issue['identifier']} {issue['url']} "
+          f"labels={','.join(names)} lane={lane}")
+    return issue
 
 
 def cmd_find_open(title: str) -> None:
@@ -1875,6 +1924,17 @@ def cmd_find_open(title: str) -> None:
     this before creating an escalation/triage card so duplicate failure
     events for the same red main never mint duplicate cards; terminal cards
     deliberately don't count — a re-broken main deserves a fresh card."""
+    found = find_open(title)
+    if found:
+        print(found)
+
+
+def find_open(title: str) -> str | None:
+    """The identifier of a non-terminal card with exactly `title`, or None.
+
+    The value behind `cmd_find_open`, for a Python caller (`repair_card.py`)
+    that must decide between reusing that card and creating one — one query,
+    one answer, not a printed line somebody parses back."""
     data = gql(
         """query($t: String!) {
              issues(filter: {
@@ -1884,8 +1944,7 @@ def cmd_find_open(title: str) -> None:
         {"t": title},
     )
     nodes = data["issues"]["nodes"]
-    if nodes:
-        print(nodes[0]["identifier"])
+    return nodes[0]["identifier"] if nodes else None
 
 
 def cmd_children(identifier: str) -> None:

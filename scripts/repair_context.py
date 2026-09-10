@@ -7,7 +7,8 @@ weakening or deleting the tests that caught the breakage. qa-review.yml
 calls this for every reviewed PR and injects the output into BOTH critic
 prompts; it makes the guardrail mechanical:
 
-  * repair PRs are identified by branch prefix (repair/<failing-sha>), and
+  * repair PRs are identified by branch prefix (repair/DRE-<n>-<sha12>, or
+    the cardless repair/<failing-sha> fallback), and
     the ORIGINAL failing job log rides into the critic's context so it
     judges "does this diff fix what actually failed", not "is this diff
     plausible";
@@ -51,7 +52,13 @@ from sanitize_untrusted import _write_output, sanitize_body
 BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
 END = "===== END UNTRUSTED CARD TEXT ====="
 
-REPAIR_BRANCH_RE = re.compile(r"^repair/([0-9a-f]{40})(?:-[0-9]+)?$")
+# Both repair branch shapes: `repair/DRE-<n>-<sha12>` (DRE-3533 — the card the
+# repair filed before it started) and the cardless `repair/<sha>` fallback.
+# Either way group 1 is the failing commit, abbreviated or whole.
+REPAIR_BRANCH_RE = re.compile(
+    r"^repair/(?:DRE-[0-9]+-)?([0-9a-f]{12}|[0-9a-f]{40})(?:-[0-9]+)?$",
+    re.IGNORECASE,
+)
 
 # Keep the tail of the log — pytest/vitest put the failure summary last —
 # and cap what enters the prompt.
@@ -97,7 +104,8 @@ def build_context(branch, changed_paths, log_text, log_note: str = "") -> str:
     if sha is None:
         return (
             "REPAIR CHECK: this is not a red-main repair PR (head branch "
-            "does not match repair/<failing-sha>). Skip the repair-specific "
+            "does not match repair/DRE-<n>-<sha12> or repair/<failing-sha>). "
+            "Skip the repair-specific "
             "checks below-mentioned entirely — their absence is NOT a "
             "finding."
         )

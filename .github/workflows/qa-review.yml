@@ -577,8 +577,24 @@ jobs:
           : > /tmp/repair/original-failure.log
           NOTE=""
           # The failing head SHA is encoded in the branch name itself —
-          # deterministic, no trust in the PR body.
-          SHA=$(printf '%s' "$BRANCH" | grep -oE '^repair/[0-9a-f]{40}' | cut -d/ -f2 || true)
+          # deterministic, no trust in the PR body. Two shapes since DRE-3533:
+          # repair/DRE-<n>-<sha12> (the card the repair filed) and the cardless
+          # repair/<sha> fallback.
+          SHA=$(printf '%s' "$BRANCH" | grep -oiE '^repair/(DRE-[0-9]+-)?[0-9a-f]{12}([0-9a-f]{28})?' | grep -oiE '[0-9a-f]{12}([0-9a-f]{28})?$' || true)
+          # An ABBREVIATED sha is not a head_sha the runs API answers — it
+          # returns 0 runs, silently, and the critic would review a repair with
+          # no failing log and maximum suspicion. The commits API does accept
+          # an abbreviation, so resolve it to the whole sha first.
+          if [ -n "$SHA" ] && [ ${#SHA} -lt 40 ]; then
+            FULL=$(GH_TOKEN="$RUNS_TOKEN" gh api \
+              "repos/${{ github.repository }}/commits/$SHA" --jq .sha 2>/dev/null || true)
+            if [ -n "$FULL" ] && [ "$FULL" != "null" ]; then
+              SHA="$FULL"
+            else
+              NOTE="could not resolve abbreviated commit $SHA"
+              SHA=""
+            fi
+          fi
           if [ -n "$SHA" ]; then
             RUN_ID=$(GH_TOKEN="$RUNS_TOKEN" gh api \
               "repos/${{ github.repository }}/actions/runs?head_sha=$SHA&status=failure&per_page=20" \

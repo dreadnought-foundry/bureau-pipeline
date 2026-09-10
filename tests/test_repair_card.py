@@ -367,7 +367,8 @@ class CriticStillReadsTheFailingLogTest(unittest.TestCase):
         self.body = wf("qa-review.yml")
 
     def test_the_extraction_accepts_a_card_named_repair_branch(self):
-        line = [ln for ln in self.body.splitlines() if "SHA=$(" in ln]
+        line = [ln for ln in self.body.splitlines()
+                if "SHA=$(" in ln and "$BRANCH" in ln]
         self.assertEqual(1, len(line), "one sha extraction in qa-review.yml")
         script = (f'BRANCH="repair/{CARD}-{SHA12}-2"; {line[0].strip()}; '
                   'printf "%s" "$SHA"')
@@ -376,7 +377,8 @@ class CriticStillReadsTheFailingLogTest(unittest.TestCase):
         self.assertEqual(SHA12, out)
 
     def test_the_extraction_still_accepts_the_old_shape(self):
-        line = [ln for ln in self.body.splitlines() if "SHA=$(" in ln][0]
+        line = [ln for ln in self.body.splitlines()
+                if "SHA=$(" in ln and "$BRANCH" in ln][0]
         script = (f'BRANCH="repair/{SHA}"; {line.strip()}; printf "%s" "$SHA"')
         out = subprocess.run(["bash", "-c", script], capture_output=True,
                              text=True, check=True).stdout
@@ -385,7 +387,7 @@ class CriticStillReadsTheFailingLogTest(unittest.TestCase):
     def test_a_short_sha_is_resolved_before_the_runs_query(self):
         self.assertIn("/commits/", self.body)
         self.assertLess(self.body.index("/commits/"),
-                        self.body.index("head_sha=$"),
+                        self.body.index("actions/runs?head_sha="),
                         "resolve the abbreviated sha, THEN ask for its runs")
 
 

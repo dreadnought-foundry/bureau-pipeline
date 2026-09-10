@@ -15,15 +15,17 @@ gathers the inputs from GitHub's own records and acts on the output:
     already owns the retry-once; a rate-limit resets on its own).
   * Bounded attempts, keyed by the failing SHA (guardrail 2). At most 2
     repair attempts per distinct failing head SHA, tracked mechanically:
-    the repair/<sha> (and repair/<sha>-2) branch + its PR ARE the attempt
-    record — no external state. Budget exhausted → escalate=true (the
-    workflow raises a deduplicated plain-English triage card), never a
-    third swing.
+    the repair branch (`repair/DRE-<n>-<sha12>` since DRE-3533, or the
+    cardless `repair/<sha>` fallback) and its PR ARE the attempt record —
+    no external state, and both shapes count as the same repair. Budget
+    exhausted → escalate=true (the workflow raises a deduplicated
+    plain-English triage card), never a third swing.
   * One repair in flight per repo (guardrail 3). Any OPEN repair/* PR makes
     a new failure event a no-op — the in-flight repair's merge re-runs CI
     on main and either clears the newer failure or produces a fresh event.
-  * Debounce by SHA (guardrail 3). The repair/<sha> branch already existing
-    (agent still building, or died pre-PR) makes a duplicate event a no-op.
+  * Debounce by SHA (guardrail 3). A repair branch for this SHA already
+    existing (agent still building, or died pre-PR) makes a duplicate event
+    a no-op.
   * Fail-closed. Unreadable attempt records mean NO dispatch (a blind
     dispatch could double-run a repair; the next failure event retries with
     fresh records), and only a validated full 40-hex SHA ever becomes a
@@ -118,13 +120,43 @@ def is_infra_failure(log_text: str, workflow_name: str = "") -> bool:
     return any(sig.search(text) for sig in INFRA_SIGNATURES)
 
 
-def repair_branch(sha: str, attempt: int) -> str:
-    """The attempt's branch name: repair/<sha> for 1, repair/<sha>-N after."""
-    return f"repair/{sha}" if attempt == 1 else f"repair/{sha}-{attempt}"
+#: How much of the failing sha a card-named branch carries. Twelve characters
+#: is git's own unambiguous-abbreviation territory and keeps the ref readable
+#: beside the card id; the full sha stays in the card body and the PR body, and
+#: `qa-review.yml` resolves the short one back through the commits API before
+#: asking for that commit's runs (the runs API answers 0 for an abbreviation).
+SHA_CHARS = 12
+
+
+def repair_branch(sha: str, attempt: int, card: str | None = None) -> str:
+    """The attempt's branch name.
+
+    With a card (the normal path since DRE-3533): `repair/DRE-<n>-<sha12>`,
+    suffixed `-N` from attempt 2. The card id in the head ref is what closes
+    the card on merge — `linear-sync` reads it there, exactly as it does out of
+    an `agent/` ref — and what shows the pull request's card on the console.
+
+    Without one: `repair/<sha>`, the pre-DRE-3533 shape. That is the FALLBACK
+    for a repair whose card could not be filed (Linear down or rate-limited)
+    and the shape every repair branch already in the fleet has, so every reader
+    of these refs still has to accept it.
+    """
+    stem = f"{card}-{sha[:SHA_CHARS]}" if card else sha
+    return f"repair/{stem}" if attempt == 1 else f"repair/{stem}-{attempt}"
 
 
 def _sha_record_re(sha: str) -> re.Pattern:
-    return re.compile(rf"^repair/{re.escape(sha)}(?:-[0-9]+)?$")
+    """Refs that ARE an attempt at this commit — both branch shapes.
+
+    The attempt record, the debounce and the 2-attempt budget all count these,
+    so a card-named branch and a bare-sha branch at the same commit must count
+    as the same repair. They can legitimately mix: attempt 1 files its card,
+    attempt 2 runs while Linear is down (or the reverse).
+    """
+    stem = (
+        rf"(?:DRE-[0-9]+-{re.escape(sha[:SHA_CHARS])}|{re.escape(sha)})"
+    )
+    return re.compile(rf"^repair/{stem}(?:-[0-9]+)?$")
 
 
 def decide(
