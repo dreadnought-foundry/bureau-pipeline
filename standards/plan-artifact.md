@@ -24,7 +24,7 @@ section, not a substitute.
 | **Risk assessment** | What can go wrong, blast radius, reversibility |
 | **Outcome** | If this goes right, what is different for the business |
 | **Visual model** | For UI work: the screens, built from `console/design/tokens.css` |
-| **The cards** | The decomposition, in dependency order, collisions named |
+| **The cards** | The decomposition, in dependency order, collisions named, each child's ledger check recorded |
 | **Proof and demo** | How we will know it works, and how the CEO will be shown |
 
 **Proof and demo is a section AND two cards (DRE-2746).** This section says how
@@ -61,6 +61,49 @@ move the number" becomes a memory exercise. As data,
 things the CEO reads differently: KPIs that moved as predicted, KPIs predicted
 and never measured, and KPIs measured but never predicted — the story case,
 named mechanically instead of argued about afterwards.
+
+## The ledger check is data, not prose
+
+`## The cards` says how the epic was cut. It also says how each cut was
+**sized**, as a fenced block with the info-string `ledger-check`, one JSON
+record per child:
+
+    ```ledger-check
+    [
+      {"card": "DRE-1234", "tells_checked": ["contracts-between-pieces"],
+       "ledger_match": "DRE-3088", "ledger_status": "fresh"},
+      {"card": "DRE-1235", "tells_checked": ["two-languages-or-tiers"],
+       "ledger_match": "none", "ledger_status": "fresh"}
+    ]
+    ```
+
+Four keys, all required:
+
+- **`card`** — the child's id.
+- **`tells_checked`** — which of DRE-2893's four tells the card was read
+  against: `contracts-between-pieces`, `two-languages-or-tiers`,
+  `unenumerated-count`, `unbounded-quantifier` (`standards/card-quality.md`
+  carries what each one means). The list is `split_ledger.TELLS`, and a name
+  outside it is a defect.
+- **`ledger_match`** — the nearest split-ledger row, or the string `none` when
+  no row is near. `none` is an answer; an empty field is not.
+- **`ledger_status`** — `fresh`, or a string starting with `UNKNOWN`, copied
+  off the `LEDGER STATUS:` line of the ledger block in the planner's context
+  (`scripts/ledger_context.py`).
+
+**`UNKNOWN` is a required value, not a failure.** When the ledger was missing,
+unreadable, malformed or stale, every record carries that whole
+`UNKNOWN — <reason>` status and the artifact still PASSES `check` —
+`tells_checked` may then be empty, because there was no evidence to check
+against. What does not pass is **silence**: an artifact with no `ledger-check`
+block is a defect, because an omitted check reads as a check that passed, and
+nobody reading the plan afterwards can tell the difference between "sized
+against the ledger" and "never looked".
+
+Every child needs a record and every record needs a child. When the run knows
+the child ids it passes them (`plan_artifact.py check --children-file`), and a
+child with no record fails by name — that omission is the exact thing this
+block exists to make impossible.
 
 ## Visual model — the mockup IS the UI
 
@@ -132,6 +175,8 @@ On a plan, the critic checks: all seven sections present; the KPI block
 parses and every record carries `name`, a numeric `baseline`, and a
 `direction`; the risk assessment names blast radius AND reversibility; a UI
 epic carries a live token-built mockup rather than a screenshot; the cards are
-in dependency order with collisions named; and proof-and-demo says how the CEO
-will be shown. A missing answer is a send-back, same as a missing test — cite
-the section and say what would satisfy it.
+in dependency order with collisions named; the `ledger-check` block records
+every child, with an `UNKNOWN` status where the ledger was missing or stale
+rather than no record at all; and proof-and-demo says how the CEO will be
+shown. A missing answer is a send-back, same as a missing test — cite the
+section and say what would satisfy it.

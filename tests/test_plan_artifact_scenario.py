@@ -34,6 +34,7 @@ import yaml
 
 REPO = os.path.join(os.path.dirname(__file__), "..")
 SCRIPTS = os.path.join(REPO, "scripts")
+CONFIG = os.path.join(REPO, "config")
 WF = os.path.join(REPO, ".github", "workflows", "plan.yml")
 sys.path.insert(0, SCRIPTS)
 
@@ -88,6 +89,16 @@ The Intake lane, as it will look.
 | -- | -- |
 | DRE-2718 | The Intake lane exists |
 | DRE-2719 | Everything goes to Planning |
+
+```ledger-check
+[
+  {"card": "DRE-2718", "tells_checked": ["contracts-between-pieces"],
+   "ledger_match": "DRE-3088", "ledger_status": "fresh"},
+  {"card": "DRE-2719",
+   "tells_checked": ["two-languages-or-tiers", "unbounded-quantifier"],
+   "ledger_match": "none", "ledger_status": "fresh"}
+]
+```
 
 ## Proof and demo
 
@@ -146,6 +157,9 @@ class ArtifactLifecycleTest(unittest.TestCase):
         self.pipeline = os.path.join(self.tmp, ".bureau-pipeline")
         os.makedirs(self.pipeline)
         shutil.copytree(SCRIPTS, os.path.join(self.pipeline, "scripts"))
+        # And the config beside them: the real `.bureau-pipeline` is a
+        # whole checkout, and the scripts read `config/` at import time.
+        shutil.copytree(CONFIG, os.path.join(self.pipeline, "config"))
         self.artifact = os.path.join(self.tmp, "plan-artifact.md")
 
     def _shell(self, fragment: str, ui: str = "true"):
@@ -277,6 +291,9 @@ class ArtifactStopsTheRunTest(unittest.TestCase):
         self.pipeline = os.path.join(self.tmp, ".bureau-pipeline")
         os.makedirs(self.pipeline)
         shutil.copytree(SCRIPTS, os.path.join(self.pipeline, "scripts"))
+        # And the config beside them: the real `.bureau-pipeline` is a
+        # whole checkout, and the scripts read `config/` at import time.
+        shutil.copytree(CONFIG, os.path.join(self.pipeline, "config"))
         self.artifact = os.path.join(self.tmp, "plan-artifact.md")
 
     def _check(self, text, ui="true"):
@@ -321,6 +338,23 @@ class ArtifactStopsTheRunTest(unittest.TestCase):
         r = self._check(hexed)
         self.assertEqual(r.returncode, 1)
         self.assertIn("token", (r.stdout + r.stderr).lower())
+
+    def test_an_omitted_ledger_check_stops_the_run(self):
+        # DRE-3362 — the silent omission the epic names. An artifact with no
+        # ledger-check block reads as a decomposition nobody sized against
+        # the ledger, and it must not reach the CEO looking complete.
+        stripped = re.sub(r"```ledger-check.*?```\n\n", "", V1, flags=re.DOTALL)
+        r = self._check(stripped)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ledger-check", r.stdout + r.stderr)
+
+    def test_an_unknown_ledger_status_passes_the_run(self):
+        # And the other half: UNKNOWN is the REQUIRED report when the ledger
+        # was missing or stale, so it must not be the thing that fails.
+        unknown = V1.replace('"ledger_status": "fresh"',
+                             '"ledger_status": "UNKNOWN — missing"')
+        r = self._check(unknown)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_a_backend_epic_passes_without_a_mockup(self):
         # The gate must not force a mockup onto work that has no screens —

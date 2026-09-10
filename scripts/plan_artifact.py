@@ -12,8 +12,10 @@ So the artifact is markdown with a fixed shape, and this module is the
 mechanical form of that shape (the human form is standards/plan-artifact.md):
 
   check   — the seven sections are present, the KPI block parses and carries
-            the fields a close-out diffs, and the visual model is a live
-            mockup or a stated reason.
+            the fields a close-out diffs, `## The cards` records the ledger
+            check per child (DRE-3362 — a missing or stale ledger is UNKNOWN
+            there, never omitted), and the visual model is a live mockup or a
+            stated reason.
   kpis    — the predictions, as records.
   closeout— prediction vs outcome, including the O10 story case: an outcome
             reported for a KPI nobody predicted comes back as `unpredicted`.
@@ -95,6 +97,33 @@ _DIRECTIONS = ("up", "down", "flat")
 
 # The KPI record fields the rendered table shows, in order.
 KPI_COLUMNS = ["name", "baseline", "unit", "direction", "target"]
+
+# --- The ledger check (DRE-3362) --------------------------------------------
+#
+# `## The cards` carries, per child, which of DRE-2893's four tells the card
+# was sized against and what the split ledger said — the block DRE-3359's
+# brief section tells the planner to write. It is gated here for the reason
+# the KPI block is: an omitted check reads as a check that passed, so a ledger
+# that was missing or stale must come back as UNKNOWN rather than as silence.
+LEDGER_CHECK_FENCE = "ledger-check"
+LEDGER_CHECK_SECTION = "the cards"
+
+# The four keys every record carries, in the order the table reads.
+LEDGER_CHECK_COLUMNS = ["card", "tells_checked", "ledger_match",
+                        "ledger_status"]
+
+# What `ledger_match` says when no ledger row is near. A literal, never an
+# empty string: "no row matched" and "nobody looked" are different answers.
+LEDGER_MATCH_NONE = "none"
+
+# A Linear card id, the same shape split_ledger._CARD_REF reads.
+_CARD_ID = re.compile(r"^[A-Z]{2,}-\d+$")
+
+# A fenced block rendered as a table gets its id from its FENCE, not from its
+# section, where the section can hold more than one — `## The cards` carries
+# the decomposition table and the ledger check, and `#the-cards-ledger-check`
+# is what a comment on the check binds to. Anything unlisted is `-table`.
+TABLE_ANCHORS = {LEDGER_CHECK_FENCE: LEDGER_CHECK_FENCE}
 
 # A section heading, and the separators that introduce a trailing clause:
 # planners write "## KPIs — as structured data", and the section is still KPIs.
@@ -295,6 +324,100 @@ def kpis(md: str) -> list[dict]:
     return data
 
 
+def ledger_vocabulary() -> tuple[tuple[str, ...], str, str]:
+    """`(the four tell names, the fresh literal, the UNKNOWN literal)`.
+
+    Read from the modules that DEFINE them — `split_ledger.TELLS` for the
+    tells, `ledger_context` for the `LEDGER STATUS:` vocabulary the planner
+    copies — rather than restated here, so a renamed tell fails the check
+    instead of quietly matching nothing. Imported late for the reason
+    `is_ui_epic` is: this module is what the renderers import, and the ledger
+    chain is heavy.
+
+    An import that fails is an ArtifactError with a plain reason, never a
+    traceback out of a gate the planner reads — and never a restated fallback
+    tuple, which would pass every record against a vocabulary nobody checked.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import ledger_context
+        import split_ledger
+    except Exception as e:  # noqa: BLE001 - see docstring
+        raise ArtifactError(
+            "the ledger vocabulary could not be read in this checkout "
+            f"({type(e).__name__}: {e}) — the ledger check cannot be verified"
+        ) from e
+    return split_ledger.TELLS, ledger_context.FRESH, ledger_context.UNKNOWN
+
+
+def ledger_check(md: str) -> list[dict]:
+    """The ledger check the artifact records, per child.
+
+    The fenced `ledger-check` block inside `## The cards`, as records. Raises
+    ArtifactError — with a plain reason — when the block is absent, does not
+    parse, is not a list, or a record lacks one of the four keys; callers that
+    want a report catch it, and there is no silent [].
+    """
+    cards = sections(md).get(LEDGER_CHECK_SECTION) or ""
+    blocks = fenced_blocks(cards, LEDGER_CHECK_FENCE)
+    if not blocks:
+        raise ArtifactError(
+            f"the `## The cards` section carries no ```{LEDGER_CHECK_FENCE} "
+            "block — an omitted check reads as a check that passed, and a "
+            "ledger that was missing or stale is recorded as UNKNOWN, never "
+            "left out"
+        )
+    try:
+        data = json.loads(blocks[0])
+    except json.JSONDecodeError as e:
+        raise ArtifactError(
+            f"the ```{LEDGER_CHECK_FENCE} block is not valid JSON: {e}") from e
+    if not isinstance(data, list):
+        raise ArtifactError(
+            f"the ```{LEDGER_CHECK_FENCE} block must be a JSON list of records")
+    for i, record in enumerate(data, 1):
+        where = f"ledger check {i}"
+        if not isinstance(record, dict):
+            raise ArtifactError(f"{where}: not a record")
+        card = record.get("card")
+        if isinstance(card, str) and card.strip():
+            where = f"ledger check for {card.strip()}"
+        for key in LEDGER_CHECK_COLUMNS:
+            if key not in record:
+                raise ArtifactError(f"{where}: no `{key}`")
+    return data
+
+
+def children_ids(raw: str) -> list[str]:
+    """The child card ids in a `children-json` dump, in order, deduplicated.
+
+    Tolerant of the two shapes a caller has to hand: the records
+    `linear_ops.py children-json` prints (`identifier`), and a bare list of
+    ids. Anything else is a file the run cannot read as children, and that is
+    an error rather than an empty list — an empty list would silently disable
+    the very cross-check the flag was passed to run.
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ArtifactError(f"the children file is not valid JSON: {e}") from e
+    if not isinstance(data, list):
+        raise ArtifactError("the children file must be a JSON list of "
+                            "`children-json` records")
+    out: list[str] = []
+    for item in data:
+        if isinstance(item, str):
+            ident = item
+        elif isinstance(item, dict):
+            ident = item.get("identifier") or item.get("card") or ""
+        else:
+            ident = ""
+        ident = ident.strip() if isinstance(ident, str) else ""
+        if ident and ident not in out:
+            out.append(ident)
+    return out
+
+
 def mockup(md: str) -> str | None:
     """The live mockup markup from the visual-model section, if any."""
     visual = sections(md).get("visual model", "")
@@ -455,6 +578,80 @@ def kpi_defects(md: str) -> list[str]:
     return out
 
 
+def ledger_check_defects(md: str, children=None) -> list[str]:
+    """Everything wrong with the ledger check, named card by card.
+
+    `children` is the epic's child ids when the run knows them (the `check`
+    CLI's `--children-file`). With them, every child must have a record and
+    every record must name a child: a child with no record is the SILENT
+    OMISSION this card exists to stop, and a record naming no child is a check
+    performed on something the epic does not contain.
+
+    A `ledger_status` of `UNKNOWN — <reason>` is a PASS, not a defect. That is
+    the whole point — the ledger was missing or stale, and the plan says so
+    where anyone reading it afterwards can see it.
+    """
+    try:
+        records = ledger_check(md)
+        tells, fresh, unknown = ledger_vocabulary()
+    except ArtifactError as e:
+        return [str(e)]
+    out: list[str] = []
+    recorded: list[str] = []
+    for i, record in enumerate(records, 1):
+        where = f"ledger check {i}"
+        card = record.get("card")
+        card = card.strip() if isinstance(card, str) else card
+        if isinstance(card, str) and _CARD_ID.match(card):
+            where = f"ledger check for {card}"
+            recorded.append(card)
+        else:
+            out.append(f"{where}: `card` must be a card id like DRE-1234, got "
+                       f"{record.get('card')!r}")
+
+        status = record.get("ledger_status")
+        is_unknown = isinstance(status, str) and status.strip().startswith(unknown)
+        if not (status == fresh or is_unknown):
+            out.append(f"{where}: `ledger_status` must be {fresh!r} or start "
+                       f"with {unknown!r} — the two values the LEDGER STATUS "
+                       f"line carries, got {status!r}")
+
+        checked = record.get("tells_checked")
+        if not isinstance(checked, list):
+            out.append(f"{where}: `tells_checked` must be a list of tell "
+                       f"names, got {checked!r}")
+        else:
+            for tell in checked:
+                if tell not in tells:
+                    out.append(f"{where}: `tells_checked` names an unknown "
+                               f"tell {tell!r} — the four are "
+                               f"{', '.join(tells)}")
+            if not checked and not is_unknown:
+                out.append(f"{where}: `tells_checked` is empty — a card sized "
+                           f"against no tell was not sized, and only a "
+                           f"`ledger_status` of {unknown} excuses it")
+
+        match = record.get("ledger_match")
+        match = match.strip() if isinstance(match, str) else match
+        if not (match == LEDGER_MATCH_NONE
+                or (isinstance(match, str) and _CARD_ID.match(match))):
+            out.append(f"{where}: `ledger_match` must be a card id or "
+                       f"{LEDGER_MATCH_NONE!r}, got "
+                       f"{record.get('ledger_match')!r}")
+
+    if children is not None:
+        known = list(children)
+        for child in known:
+            if child not in recorded:
+                out.append(f"{child} has no ```{LEDGER_CHECK_FENCE} record — "
+                           "an omitted child reads as a check that passed")
+        for card in recorded:
+            if card not in known:
+                out.append(f"the ```{LEDGER_CHECK_FENCE} block records "
+                           f"{card}, which is not a child of this epic")
+    return out
+
+
 def visual_model_defects(md: str, ui: bool = False) -> list[str]:
     """Everything wrong with the visual model.
 
@@ -498,11 +695,14 @@ def visual_model_defects(md: str, ui: bool = False) -> list[str]:
     return []
 
 
-def defects(md: str, ui: bool = False) -> list[str]:
+def defects(md: str, ui: bool = False, children=None) -> list[str]:
     """Every reason this artifact is not fit to take the CEO's time."""
+    found = sections(md)
     out = [f"missing section: {s}" for s in missing_sections(md)]
-    if "kpis" in sections(md):
+    if "kpis" in found:
         out += kpi_defects(md)
+    if LEDGER_CHECK_SECTION in found:
+        out += ledger_check_defects(md, children=children)
     out += visual_model_defects(md, ui=ui)
     return out
 
@@ -606,6 +806,36 @@ def _kpi_changes(previous: str, current: str) -> list[str]:
     return notes
 
 
+def _ledger_check_index(md: str) -> dict[str, dict]:
+    try:
+        return {r.get("card"): r for r in ledger_check(md) if isinstance(r, dict)}
+    except ArtifactError:
+        return {}
+
+
+def _ledger_check_changes(previous: str, current: str) -> list[str]:
+    """Which cards' ledger check moved — the same reading `_kpi_changes` gives
+    a KPI, because a status that went from `fresh` to UNKNOWN is exactly the
+    kind of change the CEO is re-reading the section to find."""
+    was, now = _ledger_check_index(previous), _ledger_check_index(current)
+    notes: list[str] = []
+    for card in now:
+        if card not in was:
+            notes.append(f'added "{card}"')
+    for card in was:
+        if card not in now:
+            notes.append(f'removed "{card}"')
+    for card in now:
+        if card not in was:
+            continue
+        for field in LEDGER_CHECK_COLUMNS[1:]:
+            old, new = was[card].get(field), now[card].get(field)
+            if old != new:
+                notes.append(f'{field} changed for "{card}" '
+                             f'({_cell(old)} → {_cell(new)})')
+    return notes
+
+
 def version_record(previous: str, current: str) -> str:
     """What changed since the CEO last read this — generated, not written.
 
@@ -627,6 +857,10 @@ def version_record(previous: str, current: str) -> str:
             unchanged.append(title)
         elif key == "kpis":
             notes = _kpi_changes(previous, current)
+            detail = "; ".join(notes) if notes else "revised"
+            changed.append(f"- **{title}** — {detail}")
+        elif key == LEDGER_CHECK_SECTION:
+            notes = _ledger_check_changes(previous, current)
             detail = "; ".join(notes) if notes else "revised"
             changed.append(f"- **{title}** — {detail}")
         else:
@@ -808,7 +1042,8 @@ def render_section(key: str, body: str, title: str | None = None,
     """
     anchor = key.replace(" ", "-")
     title = title if title is not None else section_title(key)
-    tables = tables if tables is not None else {"kpis": KPI_COLUMNS}
+    tables = tables if tables is not None else {
+        "kpis": KPI_COLUMNS, LEDGER_CHECK_FENCE: LEDGER_CHECK_COLUMNS}
     out = [f'<section id="{anchor}" data-anchor>',
            f'<a class="anchor" href="#{anchor}">#</a>',
            f"<h2>{_esc(title)}</h2>"]
@@ -837,7 +1072,8 @@ def render_section(key: str, body: str, title: str | None = None,
                            f'<a class="anchor" href="#{anchor}-mockup">#</a>'
                            f"\n{safe}\n</div>")
             elif lang in tables:
-                out.append(_json_table(raw, anchor, tables[lang]))
+                out.append(_json_table(raw, anchor, tables[lang],
+                                       suffix=TABLE_ANCHORS.get(lang, "table")))
             else:
                 out.append(f"<pre><code>{_esc(raw)}</code></pre>")
             continue
@@ -886,15 +1122,24 @@ def _cell(value) -> str:
     return "" if value is None else str(value)
 
 
-def _json_table(raw: str, anchor: str, cols: list[str]) -> str:
+def _json_table(raw: str, anchor: str, cols: list[str],
+                suffix: str = "table") -> str:
     """A fenced JSON block as a table the CEO can read. Unparseable JSON falls
-    back to escaped source — a block nobody can read is still not markup."""
+    back to escaped source — a block nobody can read is still not markup.
+
+    `suffix` names the table's id within its section (`#the-cards-ledger-check`),
+    because a section can hold more than one: `## The cards` carries the
+    decomposition AND the ledger check, and feedback has to land on the one it
+    is about. Column HEADINGS read as words — the underscores are the record's
+    key names, which is the reader's business only in the standard.
+    """
     try:
         records = json.loads(raw)
     except json.JSONDecodeError:
         return f"<pre><code>{_esc(raw)}</code></pre>"
-    out = [f'<table id="{anchor}-table"><thead><tr>'
-           + "".join(f"<th>{c}</th>" for c in cols) + "</tr></thead><tbody>"]
+    out = [f'<table id="{anchor}-{suffix}"><thead><tr>'
+           + "".join(f"<th>{_esc(c.replace('_', ' '))}</th>" for c in cols)
+           + "</tr></thead><tbody>"]
     for k in records if isinstance(records, list) else []:
         if not isinstance(k, dict):
             continue
@@ -955,6 +1200,10 @@ def main(argv: list[str]) -> int:
     c.add_argument("artifact")
     c.add_argument("--ui", action="store_true",
                    help="this epic builds UI: a live mockup is mandatory")
+    c.add_argument("--children-file", default=None,
+                   help="a `linear_ops.py children-json` dump: with it, every "
+                        "child must carry a ledger-check record and every "
+                        "record must name a child")
 
     k = sub.add_parser("kpis", help="the predictions, as JSON")
     k.add_argument("artifact")
@@ -1013,7 +1262,11 @@ def main(argv: list[str]) -> int:
         return 0
 
     if args.cmd == "check":
-        found = defects(_read(args.artifact), ui=args.ui)
+        # Optional, and absent means "not asked" rather than "no children":
+        # an empty list would fail every record as naming no child.
+        kids = (children_ids(_read(args.children_file))
+                if args.children_file else None)
+        found = defects(_read(args.artifact), ui=args.ui, children=kids)
         if not found:
             print("plan artifact: complete")
             return 0
