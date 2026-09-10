@@ -97,7 +97,13 @@ of it is ever a runtime lookup.
   they became, the hand-backs, each card's declared footprint against what its
   pieces actually touched, and which of DRE-2893's four tells applied in
   hindsight. **Generated, not hand-edited** — the file carries the timestamp it
-  was derived at, and `docs/split-ledger.md` is rendered from it. A read that
+  was derived at, and `docs/split-ledger.md` is rendered from it. Since
+  DRE-3357 the derivation is a job rather than a habit: `.github/workflows/
+  split-ledger.yml` runs `derive` daily and commits both paths (and only those
+  two — it proves its staged set the way `model-drift.yml` does). Daily is
+  chosen against the READER's window, `ledger_context.LEDGER_MAX_AGE_HOURS` =
+  72, so two dropped scheduled runs still leave a ledger the planner treats as
+  fresh. A read that
   fails records `UNKNOWN`, never `0`: the ten seed rows include five cards whose
   pieces live in a repo this rail's token cannot see, and a clean-looking
   footprint there would be composed entirely of reads that never happened.
@@ -117,7 +123,8 @@ of it is ever a runtime lookup.
   `LINEAR_IDENTITY` (DRE-3321), which the seam prints as the last part of its
   rate-limit refusal and its `linear-budget:` line so a dry bucket names its
   owner. `reconcile.yml`, `linear-sync.yml` and `plan.yml` declare
-  `LINEAR_IDENTITY: fleet` at job level; a run that declares nothing prints
+  `LINEAR_IDENTITY: fleet` at job level, and `split-ledger.yml` declares it on
+  the one step that reads the board; a run that declares nothing prints
   `undeclared`, never a guess. No workflow reads the file itself — CI holds
   only the fleet key, as `secrets.LINEAR_API_KEY`, which is the name the
   operator-tools key wears on the operator's machine.
