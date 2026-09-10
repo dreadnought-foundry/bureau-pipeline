@@ -2,14 +2,46 @@
 # consumes its OWN reusable workflows exactly like a product repo.
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
-# workflow_dispatch AND NOTHING ELSE (DRE-2683, decision D5 approved
-# 2026-08-23): the groomer runs on demand until its judgement has been audited.
-# The cost is stated rather than hidden — on demand means it runs when someone
-# remembers — and the cadence is revisited once its calls have been checked
-# against a real batch, not by adding a cron here.
+# ON DEMAND, NEVER ON A SCHEDULE — two decisions, in order.
+#
+# D5 (DRE-2683, approved 2026-08-23): the groomer runs on demand until its
+# judgement has been audited, and never on a schedule. The cost is stated
+# rather than hidden — on demand means it runs when someone remembers — and the
+# cadence is revisited once its calls have been checked against a real batch,
+# not by adding a cron here.
+#
+# THE AMENDMENT (DRE-3337, green-lit 2026-09-08): the DRAIN may also be fired by
+# the CEO's Approve on the console, as a `repository_dispatch` of type
+# `groom-drain` — "no hand dispatch, no operator script". The App the console
+# dispatches with holds `contents: write` and nothing in Actions, which is why
+# this is a repository_dispatch and not a workflow_dispatch (the bureau Apps
+# were granted `actions: read` on 2026-09-03, DRE-3001); it is the same path the
+# relay already fires `agent-execute` down.
+#
+# D5 IS NARROWED, NOT REVERSED, and the narrowing is the whole of the change:
+#   * still ON DEMAND — that dispatch is one person's Approve, not a clock, and
+#     there is still no `schedule:` in this file;
+#   * DRAIN ONLY — `mode` is a literal in the second job below, so nothing in
+#     the payload can reach it, and a drain makes no model call (DRE-3338). The
+#     judgement D5 wanted audited before it ran unattended is never run by this
+#     trigger. `propose` stays `workflow_dispatch`-only.
+#
+# tests/test_groomer_wiring.py fails the build if a cron appears, if the trigger
+# set widens, or if `propose` becomes reachable from the dispatch.
 name: Groomer
 
 on:
+  # The CEO's Approve on the console (DRE-3337). The contract, shared with the
+  # console's approve mutation: `client_payload` is
+  # `{"card": "DRE-N", "proposal": "<12-hex id>"}`. Only `card` is read here.
+  # `proposal` rides along for the console's own record and NOTHING in this
+  # workflow reads it — deliberately: the id the drain acts on is the one the
+  # approval on the card names, and the drain writes that id into its own
+  # `🧺 groom-drain:` comment (DRE-3326). An id echoed from the payload would be
+  # a second answer to "which batch moved" that nothing checks against the card.
+  repository_dispatch:
+    types: [groom-drain]
+
   workflow_dispatch:
     inputs:
       mode:
@@ -51,7 +83,14 @@ permissions:
   contents: read
 
 jobs:
+  # The hand dispatch, unchanged since DRE-2683 — every input is offered and
+  # `propose` is the default. GUARDED, because a job with no `if` runs on every
+  # trigger the file carries: on a `repository_dispatch` there is no `inputs`
+  # context at all, so each `${{ inputs.* }}` below would render the empty
+  # string and this job would call the reusable in propose mode with an empty
+  # lane. This is also the only route to `propose`.
   call:
+    if: github.event_name == 'workflow_dispatch'
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/groomer.yml@main
     with:
       pipeline_ref: main
@@ -74,5 +113,39 @@ jobs:
       #   gh variable set INTAKE_HOLD \
       #     --repo dreadnought-foundry/bureau-pipeline --body 2026-09-08
       #   gh variable delete INTAKE_HOLD --repo dreadnought-foundry/bureau-pipeline
+      intake_hold: ${{ vars.INTAKE_HOLD }}
+    secrets: inherit
+
+  # The approval's drain (DRE-3337). A SECOND JOB rather than an expression on
+  # the one above, for one reason: `drain` is then a literal. There is no
+  # expression keyed on the payload, so there is no expression to get wrong —
+  # this event reaches the drain whatever the payload carries, which is what the
+  # amendment to D5 was granted for.
+  drain:
+    if: github.event_name == 'repository_dispatch'
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/groomer.yml@main
+    with:
+      pipeline_ref: main
+      mode: drain
+      # The only field of the payload this workflow reads, and NO fallback on
+      # purpose: a dispatch that carries no card must reach the reusable empty
+      # so the drain's own "drain needs the card the approval lives on" refusal
+      # fires. A default invented here would point a live drain at whichever
+      # card the default named.
+      card: ${{ github.event.client_payload.card }}
+      # QUOTED, because YAML 1.1 reads a bare `off` as the boolean False and the
+      # reusable compares against the string. A drain reads an approval and
+      # moves cards; it never judges, and `groomer.yml` hands the drain branch
+      # no model credential at all.
+      judgement: "off"
+      # Every other input is OMITTED, not passed empty: a reusable workflow
+      # applies its default only to an input the caller left out, so
+      # `lane: ${{ inputs.lane }}` on this event would hand it "" instead of
+      # `Intake`. Omission is how "the defaults" is actually spelled.
+      #
+      # The pen's switch is not one of them — the same repository variable the
+      # hand dispatch reads (DRE-3035/DRE-3285). A drain the operator's hold
+      # cannot stop is a pen with a hole in it, and this trigger is the one that
+      # fires without anybody opening Actions.
       intake_hold: ${{ vars.INTAKE_HOLD }}
     secrets: inherit

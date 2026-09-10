@@ -437,24 +437,41 @@ digests the batch alone, so answering a decline never retires an approval.
 
 ## The cadence, and its stated cost
 
-**On demand — a manual `workflow_dispatch`, never a schedule** (decision D5,
-approved 2026-08-23, until the groomer's judgement has been audited). A groomer
-running unattended over two hundred cards before anyone has checked its calls is
-the same mistake as trusting a critic's verdicts before comparing them to a
-held-back set.
+**On demand, never a schedule** (decision D5, approved 2026-08-23, until the
+groomer's judgement has been audited). A groomer running unattended over two
+hundred cards before anyone has checked its calls is the same mistake as
+trusting a critic's verdicts before comparing them to a held-back set.
 
-The cost is stated rather than hidden: on demand means it runs when someone
-remembers, and this programme's whole thesis is that anything relying on
-remembering eventually does not happen. Revisit the cadence once the calls have
-been checked against a real batch — the first one is written up in
-[groomer-first-batch.md](groomer-first-batch.md).
+Two triggers, both on demand, no cron:
+
+- **`workflow_dispatch`** — a person at Actions. The only route to `propose`,
+  and the only one that offers the lane, capacity, priority and `judgement`
+  inputs.
+- **`repository_dispatch`, type `groom-drain`** — the CEO's Approve on the
+  console (DRE-3337, green-lit 2026-09-08), so an approval starts the drain
+  without anyone opening Actions. `client_payload` is
+  `{"card": "DRE-N", "proposal": "<12-hex id>"}` and only `card` is read. On
+  this event `mode` is the literal `drain` whatever the payload carries, and
+  `judgement` is `off` — a drain makes no model call, so the judgement D5 wants
+  audited is never run by this trigger. It is a `repository_dispatch` rather
+  than a `workflow_dispatch` because the dispatching App holds `contents: write`
+  and no Actions permission (DRE-3001), which is the same path the relay already
+  fires `agent-execute` down.
+
+The cost of "on demand" is stated rather than hidden: for `propose` it still
+means it runs when someone remembers, and this programme's whole thesis is that
+anything relying on remembering eventually does not happen. Revisit the cadence
+once the calls have been checked against a real batch — the first one is written
+up in [groomer-first-batch.md](groomer-first-batch.md).
 
 **The audit D5 was waiting for is DRE-3151.** It runs the two readings —
 `--no-judgement` and the ranked read — over one population and compares them
 card by card, which is the check that decides whether this ever runs on a
-schedule. Until it has, the cadence stays manual: a groomer ranking two hundred
-cards unattended before anyone has read its calls is the same mistake as
-trusting a critic's verdicts before comparing them to a held-back set.
+schedule. Until it has, nothing here runs on a clock: a groomer ranking two
+hundred cards unattended before anyone has read its calls is the same mistake as
+trusting a critic's verdicts before comparing them to a held-back set. The
+`groom-drain` dispatch above is not an exception to that — it carries no
+judgement, and it fires on a person's Approve.
 
 ## On cycles
 
