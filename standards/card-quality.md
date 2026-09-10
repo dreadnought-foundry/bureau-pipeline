@@ -450,6 +450,80 @@ the merge event, so a criterion deferred in prose is owed by nobody the moment
 the PR lands. That is the propose-gate shape (DRE-1980), which ran dead for six
 weeks because it was everyone's assumption and nobody's card.
 
+## When a plan is two epics — the observation-gated seam (DRE-3244)
+
+The section above is one criterion a card cannot satisfy before merge. This is
+the same fault a whole plan wide: **a plan whose later cards depend on
+OBSERVING its earlier cards live is not one epic but two.** The shape is a
+`wave` — the first epic ends at the observation, the second is filed at the
+same gate, blocked on the first, and planned in detail only when the first is
+Done.
+
+The tells below are readable before the plan is written, in the same grammar as
+the size tells above. Any ONE of them means the plan is cut at a seam.
+
+1. **A clean-days or clean-releases criterion.** A card whose acceptance
+   criterion is a number of clean days or clean releases before something else
+   may happen. DRE-3218 asked for "after seven clean console days" — nothing in
+   the plan below it can be planned, let alone built, until those seven days
+   have been watched, and no plan survives being written seven days early.
+2. **An operator card in the middle of the chain.** An `[OPERATOR]` card — a
+   supervised release, a grant applied by hand, a switch flipped — that build
+   cards wait on. DRE-3166 was one, and DRE-3215 and DRE-3217 were blocked on
+   it: everything downstream of a human act is downstream of when that human
+   acts, which is not a date the plan knows.
+3. **A second surface or repo that joins "after the first is proven".** Portico,
+   the relay, the website "after a week of clean console releases". The second
+   surface's cards are written against a mechanism whose real shape is whatever
+   the first surface turns out to need, so writing them early is writing them
+   twice.
+4. **More than about eight build cards under one parent.** With a proof card
+   that lists all of them as blockers: DRE-3164 had thirteen build cards and one
+   proof naming every one. A proof blocked on everything is a proof that runs
+   once, at the end, against a plan nobody has been able to check since it was
+   approved.
+
+### The worked example — DRE-3164
+
+**A — the engine and its first rider:** DRE-3167, DRE-3165, DRE-3210, DRE-3211,
+DRE-3166, plus a PROOF of the first supervised console release and its DEMO.
+That epic ends at an observation: a release, watched, by a person.
+
+**B — the fleet:** DRE-3212, DRE-3216, DRE-3213, DRE-3238, DRE-3214, DRE-3215,
+DRE-3217, DRE-3218, plus the fleet proof and demo. Blocked on A, and planned
+only when A is Done.
+
+**What it cost as one epic.** A collision with DRE-3060 at the second critic. A
+plan drifting out of date against its own children over twenty hours, because
+the cards were written before the thing they describe existed. And a critic that
+could not finish reading fifteen cards at the old ceiling — the plan was too
+long to be reviewed in one pass, which means nobody read all of it.
+
+**The split as it landed on the board.** DRE-3164 kept seven cards. DRE-3245
+took eight, blocked on it, sitting in Backlog until part 1 is Done.
+
+### What the planner files instead
+
+The shape is `wave`, not `epic`. The first epic ends at the observation. The
+second is filed at the same time, blocked on the first, and planned in detail
+only when the first is Done — so its plan is written against the thing that
+exists rather than the thing that was imagined.
+
+The wave plan for a seam is short: two epics in order, and the detail belongs in
+the first epic's own artifact, written when its turn comes.
+
+**The pre-approval critic treats a seam inside one epic as a mechanical
+send-back**, in exactly these words: *cards N.. wait on observing cards 1..M
+live — that is a second epic, not a later step.* It is mechanical because it is
+readable off the cards, not a judgement about ambition.
+
+**A seam is NOT the DRE-3075 case.** That one is a single acceptance criterion
+that cannot be proved before merge, and the remedy is two CARDS. This is the
+epic-level analogue: a whole half of a plan that cannot be written, let alone
+proved, before the other half runs, and the remedy is two EPICS. Same fault,
+different unit — and applying the card remedy to the epic case leaves twelve
+cards nobody can plan.
+
 ## Dead — do not use
 The 8-section XML tags, `**Size:**`, and `scripts/orch/v4` references — v1
 conventions the cloud pipeline ignores.

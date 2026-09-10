@@ -68,12 +68,12 @@
     },
     {
       "name": "wave",
-      "means": "A programme of epics — too big for one plan, so what it owes first is a decomposition into epics.",
+      "means": "A programme of epics — more than one plan: too big for one, or cut at an observation-gated seam — so what it owes first is a decomposition into epics.",
       "destination": "Planning",
       "actor": "plan.yml",
       "promotable": false,
       "marks": ["agent:planner"],
-      "why": "A wave cannot be green-lit as one plan, because the thing a CEO would be approving is not written yet: the first work it owes is being split into epics, and Planning is the lane that owes a decomposition. So it goes to the planner, not to the CEO — asking for approval of a wave-sized card is asking someone to approve a title. Marked `agent:planner` for the same reason an epic is: nothing dispatched builds a container."
+      "why": "A wave cannot be green-lit as one plan, because the thing a CEO would be approving is not written yet: the first work it owes is being split into epics, and Planning is the lane that owes a decomposition. So it goes to the planner, not to the CEO — asking for approval of a wave-sized card is asking someone to approve a title. Marked `agent:planner` for the same reason an epic is: nothing dispatched builds a container. DRE-3244 added the second way in: a plan whose later cards depend on OBSERVING its earlier cards live is two epics rather than one, and a wave is the shape that holds them in order — the tells are in standards/card-quality.md."
     }
   ]
 }

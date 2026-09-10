@@ -27,7 +27,18 @@ question — *how is this work structured, and what gate does it owe*.
 | -- | -- | -- | -- |
 | **one-off** | One card, one pull request. No plan artifact, no green light — it leaves carrying its routing verdict, and that verdict IS its approval | `Backlog` | the sweep (`reconcile.py`) promotes it |
 | **epic** | A set of children that ship separately, plus ONE plan artifact the CEO approves before any of them run | `Green Light` | the CEO |
-| **wave** | A programme of epics — too big for one plan, so what it owes FIRST is a decomposition into epics, in order | `Planning` | `plan.yml`'s wave route |
+| **wave** | A programme of epics — more than one plan: too big for one, or cut at an observation-gated seam — so what it owes FIRST is a decomposition into epics, in order. A seam is two epics, the second blocked on the first | `Planning` | `plan.yml`'s wave route |
+
+**The second way into `wave` is the one planners miss** (DRE-3244). A plan whose
+later cards depend on OBSERVING its earlier cards live is not one epic but two,
+however well it holds together as a subject: the first epic ends at the
+observation, the second is filed at the same gate, blocked on the first, and
+planned in detail only when the first is Done. The tells and the worked example
+are in `standards/card-quality.md`, `When a plan is two epics — the
+observation-gated seam` — read them there, not from this paragraph. DRE-3164 is
+the example: thirteen build cards and one proof naming every one, which cost a
+critic that could not finish reading it and a plan that drifted out of date
+against its own children over twenty hours.
 
 The vocabulary is data — `config/planning-shapes.json`, every destination and
 actor bound to `config/lane-contract.json`, so a shape naming a lane that does
@@ -80,7 +91,7 @@ agent — and you answer one question: **is this one-off, epic, or wave?** The
 shapes are listed below with what each one means; nothing else is a valid
 answer.
 
-Three rules decide it, in this order:
+Four rules decide it, in this order:
 
 1. **Is this a decision rather than work?** A card whose deliverable is a
    judgement — should we go public or stay private, do we charge for this — has
@@ -97,8 +108,16 @@ Three rules decide it, in this order:
    change is a planner run, a document and a CEO decision nobody needed, and
    nothing anywhere reports it. When the card sits between two shapes, take the
    smaller one and name the doubt in your reason.
+4. **Does anything later wait on OBSERVING something earlier live?** Walk the
+   seam tests appended below the size tests and name the ones you checked. Any
+   one of them tripping means this is a `wave`, not an `epic` — the plan is cut
+   at an observation-gated seam, so it is two epics: the first ending at the
+   observation, the second blocked on it and planned only when it is Done. The
+   `seam` answer names the observation and what waits on it. This rule runs
+   AFTER rule 3 on purpose: it does not make a small card bigger, it says a card
+   already sized as an epic is really two.
 
-One fact outranks all three, and the card states it: **a card that already has
+One fact outranks all four, and the card states it: **a card that already has
 children is an epic**, whatever its body says. Children are cards that ship
 separately, which is what the word means; nothing with them is one pull request.
 
@@ -114,6 +133,9 @@ Answer with ONE JSON object and nothing else:
   the person reading it needs.
 * `why` — one line, plain English, saying what made it that shape.
 * `tells` — the NUMBERS of the size tests you checked, as a list.
+* `seam` — one line naming the observation and what waits on it (*"cards 9–13
+  wait on watching the first supervised release"*), or `null` when there is
+  none. A card with no seam answers `null`; it never answers with a guess.
 * `decision` — `true` when the card is a decision rather than work, `false`
   otherwise.
 * `question` — when you cannot classify it, the question a non-technical reader
@@ -568,6 +590,15 @@ resolve. Print the headings rather than remembering them:
 
 A wave is never green-lit as one plan; each epic comes back with its own
 artifact when its turn comes.
+
+**A wave cut at an observation-gated seam is the short case** (DRE-3244). Its
+`epics` block names exactly two: the first ending at the observation, and the
+second carrying `depends_on` the first. On approval the run files both, blocked
+in sequence (`wave_commitment.py`, DRE-2846), and plans the second only when its
+turn comes — which is when the first is Done and the thing its cards describe
+actually exists. So the wave plan itself is short: what the observation is, and
+what waits on it. The detail belongs in the first epic's own artifact, written
+when ITS turn comes, which is immediately on approval.
 
 Two things planners get wrong:
 - **KPIs as prose.** "Review time should come down a lot" predicts nothing a

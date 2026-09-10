@@ -246,12 +246,15 @@ class TestThePlannerBrief:
         )
 
     def test_the_seam_answer_is_null_when_there_is_no_seam(self):
-        prompt = self._classification()
-        seam_line = next(
-            (ln for ln in prompt.splitlines() if ln.strip().startswith("* `seam`")),
-            "",
+        # The whole bullet, continuation lines included — the brief hard-wraps
+        # at 80 columns and the bullet runs to three lines.
+        bullet = re.search(
+            r"^\* `seam`.*?(?=\n\* |\n\n|\Z)",
+            self._classification(),
+            re.M | re.S,
         )
-        assert seam_line, "the `seam` key has no answer-key bullet of its own"
+        assert bullet, "the `seam` key has no answer-key bullet of its own"
+        seam_line = bullet.group(0)
         assert "null" in seam_line.lower(), (
             "the `seam` bullet must say what to answer when there is no seam, "
             "or a model invents one"
