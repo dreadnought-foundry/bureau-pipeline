@@ -217,5 +217,6 @@ _Waiting on: the routing verdict exists and is readable (DRE-2724); still needed
 | `groomer.py` | the groomer — moves ONE approved batch out of Intake, in order | `scripts/groomer.py` |
 | `critic_score.py` | the critic's audit — moves a card the critic could not classify, with the reason on it | `scripts/critic_score.py` |
 | `backlog_cutover.py` | the retroactive pass — moves the legacy Backlog into Intake, promoter-reach cards first and then newest-first, with no exemption list | `scripts/backlog_cutover.py` |
+| `release-train.yml` | the release train — runs a surface's release script and verifies the tag it cut; it moves no card, and is here as the actor the six release acts name (DRE-3521) | `.github/workflows/release-train.yml` |
 | `guard` | the lane guard — returns a card whose occupancy is unjustified | DRE-2725, built in agent-bureau; reads its scope from lane_scope.py |
 

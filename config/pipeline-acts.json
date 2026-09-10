@@ -37,6 +37,20 @@
     "both and fails on any difference. Each row's `why` carries the",
     "measurement, so no round number stands here without one.",
     "",
+    "THE SIX RELEASE ACTS (DRE-3521) are the same kind, one per stage of a",
+    "release-train run: CI green, cut, build, roll out, verify, live. They",
+    "follow the three above in every respect — `adopted: false`, `state:",
+    "unchanged`, nothing discharged — and the numbers are the console's",
+    "again, declared in receipts.py by DRE-3518 and copied here. Nothing in",
+    "this tree emits any of them: the train relays the surface script's",
+    "output AFTER the script exits (scripts/release_train.py, run_surface),",
+    "so the run's log carries no stage timestamps, and each stage is",
+    "recorded by the caller's surface script as a GitHub deployment status",
+    "(agent-bureau DRE-3519) which the console reads. `release-live`",
+    "declares a null cadence: nothing follows a landed release, so the",
+    "console renders it complete rather than overdue. docs/pipeline-acts.md",
+    "carries the table.",
+    "",
     "Per act: the TAG it is keyed on, its KIND, the STATE it leaves the work",
     "in, the NEXT ACTOR, what it DISCHARGES, its SUBSCRIBER — the workflow",
     "expected to act on it — and its CADENCE, how often it is expected to",
@@ -558,6 +572,114 @@
       "emits": {
         "file": ".github/workflows/merge-gate.yml",
         "anchor": "group: merge-gate-pr-${{ needs.resolve.outputs.pr }}"
+      }
+    },
+    {
+      "name": "release-ci-green",
+      "tag": "release-ci-green-observed",
+      "adopted": false,
+      "kind": "progress",
+      "means": "The train is waiting for, or has read, green-at-SHA on the default branch's head — the first ordinary sign that a release is moving.",
+      "state": "unchanged",
+      "next_actor": "release-train.yml",
+      "discharges": null,
+      "subscriber": "release-train.yml",
+      "cadence_s": 600,
+      "cadence_why": "The console read it off the plan job's own bound: .github/workflows/release-train.yml gives `plan` timeout-minutes: 10, and deciding every surface — spacing, window, current, green-at-SHA, the brake — cannot outlast the job that does it. It is declared in the console's console/backend/receipts.py (DRE-3518) and this file is held equal to it by scripts/check_act_consumers.py.",
+      "why": "The release journey's first stage (DRE-3336: CI green → cut → build → roll out → verify → live), and a PROGRESS act like the three DRE-3389 declared: it holds nothing, repairs nothing and leaves the work unchanged with the train still on it. THE NUMBER IS NOT THIS REPO'S: DRE-3518 declared all six in the console first, each beside a comment naming the bound it was read off, and this file copies them — console first, pipeline second (docs/pipeline-acts.md). Nothing here emits this tag, and nothing will. The train relays the surface script's output AFTER the script has exited — scripts/release_train.py, run_surface, runs it with capture_output=True and prints the captured lines once the process is done — so the run's own log carries no stage timestamps for the console to read. The stages are recorded instead by the caller's surface script, as a GitHub deployment status per stage (agent-bureau DRE-3519), and the console reads them from there. This row is what lets it compare the age of that mark against a bound.",
+      "emits": {
+        "file": ".github/workflows/release-train.yml",
+        "anchor": "- name: Decide every surface"
+      }
+    },
+    {
+      "name": "release-cut",
+      "tag": "release-cut-observed",
+      "adopted": false,
+      "kind": "progress",
+      "means": "The tag is being cut for the surface — the release has left the decision and started.",
+      "state": "unchanged",
+      "next_actor": "release-train.yml",
+      "discharges": null,
+      "subscriber": "release-train.yml",
+      "cadence_s": 3600,
+      "cadence_why": "Nothing declares a bound for a cut on its own, so the console declared the smallest bound the operation cannot exceed: .github/workflows/release-train.yml gives its `release` job timeout-minutes: 60, and every step of a surface's release happens inside it. A re-measurement is owed once the deployment record has timed ten real releases. It is declared in the console's console/backend/receipts.py (DRE-3518) and this file is held equal to it by scripts/check_act_consumers.py.",
+      "why": "The release journey's second stage (DRE-3336), and a PROGRESS act like the three DRE-3389 declared: it holds nothing, repairs nothing and leaves the work unchanged with the train still on it. THE NUMBER IS NOT THIS REPO'S: DRE-3518 declared all six in the console first, each beside a comment naming the bound it was read off, and this file copies them — console first, pipeline second (docs/pipeline-acts.md). Nothing here emits this tag, and nothing will. The train relays the surface script's output AFTER the script has exited — scripts/release_train.py, run_surface, runs it with capture_output=True and prints the captured lines once the process is done — so the run's own log carries no stage timestamps for the console to read. The stages are recorded instead by the caller's surface script, as a GitHub deployment status per stage (agent-bureau DRE-3519), and the console reads them from there. This row is what lets it compare the age of that mark against a bound.",
+      "emits": {
+        "file": ".github/workflows/release-train.yml",
+        "anchor": "- name: Run the surface"
+      }
+    },
+    {
+      "name": "release-build",
+      "tag": "release-build-observed",
+      "adopted": false,
+      "kind": "progress",
+      "means": "The image is being built and pushed, and the surface's migrations run on it before any new code serves traffic.",
+      "state": "unchanged",
+      "next_actor": "release-train.yml",
+      "discharges": null,
+      "subscriber": "release-train.yml",
+      "cadence_s": 1440,
+      "cadence_why": "The console read it off the surface script's own waits: the migration ceiling in agent-bureau's infra/release-console.sh (`aws ecs wait tasks-stopped`, 100 attempts × 6 s = 600 s) plus the image resolution that precedes it (840 s), giving 1440 s. This repo's half of the same stage is standards/release-train.md item 1, Migrations first. It is declared in the console's console/backend/receipts.py (DRE-3518) and this file is held equal to it by scripts/check_act_consumers.py.",
+      "why": "The release journey's third stage (DRE-3336), and a PROGRESS act like the three DRE-3389 declared: it holds nothing, repairs nothing and leaves the work unchanged with the train still on it. THE NUMBER IS NOT THIS REPO'S: DRE-3518 declared all six in the console first, each beside a comment naming the bound it was read off, and this file copies them — console first, pipeline second (docs/pipeline-acts.md). It is anchored on the surface contract rather than on scripts/release_train.py, because the contract is where this repo declares what a surface script does at this stage, and a row pointing at that script would make the binding check demand a row for every *_TAG constant in it. Nothing here emits this tag, and nothing will. The train relays the surface script's output AFTER the script has exited — scripts/release_train.py, run_surface, runs it with capture_output=True and prints the captured lines once the process is done — so the run's own log carries no stage timestamps for the console to read. The stages are recorded instead by the caller's surface script, as a GitHub deployment status per stage (agent-bureau DRE-3519), and the console reads them from there. This row is what lets it compare the age of that mark against a bound.",
+      "emits": {
+        "file": "standards/release-train.md",
+        "anchor": "1. **Migrations first.**"
+      }
+    },
+    {
+      "name": "release-roll-out",
+      "tag": "release-roll-out-observed",
+      "adopted": false,
+      "kind": "progress",
+      "means": "The surface's own rollout script is running — the machine's preparation has become a change to the live system.",
+      "state": "unchanged",
+      "next_actor": "release-train.yml",
+      "discharges": null,
+      "subscriber": "release-train.yml",
+      "cadence_s": 600,
+      "cadence_why": "The console read it off the rollout's own ceiling: `ROLLOUT_TIMEOUT` (600 s) in agent-bureau's infra/release-console.sh, checked against the `rollout SUCCEEDED (after Ns)` lines of the completed train runs that printed a released receipt. This repo's half of the same stage is standards/release-train.md item 2, Rollout only where changed. It is declared in the console's console/backend/receipts.py (DRE-3518) and this file is held equal to it by scripts/check_act_consumers.py.",
+      "why": "The release journey's fourth stage (DRE-3336) and the one where the hue changes, because this is where the live system starts moving. A PROGRESS act like the three DRE-3389 declared: it holds nothing, repairs nothing and leaves the work unchanged with the train still on it. THE NUMBER IS NOT THIS REPO'S: DRE-3518 declared all six in the console first, each beside a comment naming the bound it was read off, and this file copies them — console first, pipeline second (docs/pipeline-acts.md). It is anchored on the surface contract rather than on scripts/release_train.py, because the contract is where this repo declares what a surface script does at this stage, and a row pointing at that script would make the binding check demand a row for every *_TAG constant in it. Nothing here emits this tag, and nothing will. The train relays the surface script's output AFTER the script has exited — scripts/release_train.py, run_surface, runs it with capture_output=True and prints the captured lines once the process is done — so the run's own log carries no stage timestamps for the console to read. The stages are recorded instead by the caller's surface script, as a GitHub deployment status per stage (agent-bureau DRE-3519), and the console reads them from there. This row is what lets it compare the age of that mark against a bound.",
+      "emits": {
+        "file": "standards/release-train.md",
+        "anchor": "2. **Rollout only where changed.**"
+      }
+    },
+    {
+      "name": "release-verify",
+      "tag": "release-verify-observed",
+      "adopted": false,
+      "kind": "progress",
+      "means": "The rollout is being health-checked against the live digest, before anything claims the commit is live.",
+      "state": "unchanged",
+      "next_actor": "release-train.yml",
+      "discharges": null,
+      "subscriber": "release-train.yml",
+      "cadence_s": 3600,
+      "cadence_why": "Nothing declares a bound for a verify on its own, so the console declared the smallest bound the operation cannot exceed: .github/workflows/release-train.yml gives its `release` job timeout-minutes: 60, and the health check happens inside it. A re-measurement is owed once the deployment record has timed ten real releases. This repo's half of the same stage is standards/release-train.md item 3, Verify before you tag. It is declared in the console's console/backend/receipts.py (DRE-3518) and this file is held equal to it by scripts/check_act_consumers.py.",
+      "why": "The release journey's fifth stage (DRE-3336), and a PROGRESS act like the three DRE-3389 declared: it holds nothing, repairs nothing and leaves the work unchanged with the train still on it. THE NUMBER IS NOT THIS REPO'S: DRE-3518 declared all six in the console first, each beside a comment naming the bound it was read off, and this file copies them — console first, pipeline second (docs/pipeline-acts.md). It is anchored on the surface contract rather than on scripts/release_train.py, because the contract is where this repo declares what a surface script does at this stage, and a row pointing at that script would make the binding check demand a row for every *_TAG constant in it. Nothing here emits this tag, and nothing will. The train relays the surface script's output AFTER the script has exited — scripts/release_train.py, run_surface, runs it with capture_output=True and prints the captured lines once the process is done — so the run's own log carries no stage timestamps for the console to read. The stages are recorded instead by the caller's surface script, as a GitHub deployment status per stage (agent-bureau DRE-3519), and the console reads them from there. This row is what lets it compare the age of that mark against a bound.",
+      "emits": {
+        "file": "standards/release-train.md",
+        "anchor": "3. **Verify before you tag.**"
+      }
+    },
+    {
+      "name": "release-live",
+      "tag": "release-live-observed",
+      "adopted": false,
+      "kind": "progress",
+      "means": "Verified and recorded: the annotated tag is cut at the released commit, and the tag IS the deployment record.",
+      "state": "unchanged",
+      "next_actor": "release-train.yml",
+      "discharges": null,
+      "subscriber": "release-train.yml",
+      "cadence_s": null,
+      "cadence_why": "null, and declared rather than omitted: this is the end of the journey, so nothing is expected to follow a landed release and the console renders it as complete, never as overdue. It is the same null every act that hands its work on carries, arrived at from the other direction — there is no next stage to wait for. It is declared in the console's console/backend/receipts.py (DRE-3518) and this file is held equal to it by scripts/check_act_consumers.py.",
+      "why": "The release journey's sixth and last stage (DRE-3336), and a PROGRESS act like the three DRE-3389 declared: it holds nothing, repairs nothing and leaves the work unchanged with the train still on it. THE NUMBER IS NOT THIS REPO'S: DRE-3518 declared all six in the console first — this one as no number at all — and this file copies them, console first, pipeline second (docs/pipeline-acts.md). It is anchored on the surface contract rather than on scripts/release_train.py, because the contract is where this repo declares what a surface script does at this stage, and a row pointing at that script would make the binding check demand a row for every *_TAG constant in it. Nothing here emits this tag, and nothing will. The train relays the surface script's output AFTER the script has exited — scripts/release_train.py, run_surface, runs it with capture_output=True and prints the captured lines once the process is done — so the run's own log carries no stage timestamps for the console to read. The stages are recorded instead by the caller's surface script, as a GitHub deployment status per stage (agent-bureau DRE-3519), and the console reads them from there. This row is what lets it compare the age of that mark against a bound.",
+      "emits": {
+        "file": "standards/release-train.md",
+        "anchor": "4. **Tag with the standard annotation.**"
       }
     }
   ],
