@@ -114,12 +114,15 @@ class TestMedicDuplicateSuppression:
         # Whatever lane linear_ops.cmd_create lands a new card in MUST be in
         # the medic's search, or the very card the medic just created is
         # invisible to the next failure.
-        import re
+        #
+        # Read as a VALUE, not as a regex over the source (DRE-3533). The seam
+        # now takes an explicit `--lane` for the one caller that needs another
+        # one — the red-main repair card — so the default moved into a named
+        # constant, and a source-shape match would have gone on passing against
+        # a literal that was no longer the default.
+        import linear_ops
 
-        ops = (ROOT / "scripts" / "linear_ops.py").read_text(encoding="utf-8")
-        block = ops[ops.index("def cmd_create") :]
-        block = block[: block.index("\ndef ")]
-        lane = re.search(r'state_id\(team_id, "([^"]+)"\)', block).group(1)
+        lane = linear_ops.CREATE_LANE
         assert lane in self._medic_prompt(), (
             f"cmd_create lands cards in {lane!r} and the medic never looks there"
         )

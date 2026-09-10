@@ -82,6 +82,39 @@ class OwnAgentBranchClosesItsCardTest(unittest.TestCase):
         )
 
 
+class RepairBranchClosesItsCardTest(unittest.TestCase):
+    """DRE-3533: a Red-Main Repair PR now files its card first and names the
+    branch after it (`repair/DRE-<n>-<sha12>`). That ref is the card's OWN
+    branch by exactly the same provenance rule an `agent/` ref is — the repair
+    agent is the one who filed it — so the merge closes it. Before this, a
+    repair PR closed nothing and the board had no record of the repair at all
+    (PR #340, 2026-09-09)."""
+
+    def test_merged_repair_branch_dones_its_own_card(self):
+        self.assertEqual(
+            extracted_card("repair/DRE-3533-44891f372381", "fix(red-main): x"),
+            "DRE-3533",
+        )
+
+    def test_second_attempt_suffix_still_carries_the_card(self):
+        self.assertEqual(
+            extracted_card("repair/DRE-3533-44891f372381-2", "fix(red-main): x"),
+            "DRE-3533",
+        )
+
+    def test_a_cardless_repair_branch_still_dones_nothing(self):
+        # The fallback shape, opened when Linear could not be reached: there is
+        # no card id to read, and inventing one is the DRE-2027 bug.
+        self.assertEqual(
+            extracted_card("repair/" + "a" * 40, "fix(red-main): x"), ""
+        )
+
+    def test_the_repair_prefix_is_anchored_too(self):
+        self.assertEqual(
+            extracted_card("wip/repair/DRE-3533-abc123abc123", "anything"), ""
+        )
+
+
 class ReferencesNeverTransitionTest(unittest.TestCase):
     """Card MENTIONS — titles, hand-named branches, prefix collisions —
     must never move any card."""

@@ -66,7 +66,9 @@ because a medic that watched itself is the crash-loop guardrail 2 forbids.
    code/test failure* proceeds; infra noise backs off.
 2. **Scoped fix agent, forward-fix only.** The repair agent receives the
    failing job logs and the failing head SHA as context. It fixes *forward*
-   on a branch (`repair/<failing-sha>`): never a push to `main`, never a
+   on a branch (`repair/DRE-<n>-<sha12>` since the DRE-3533 amendment below,
+   `repair/<failing-sha>` when no card could be filed): never a push to
+   `main`, never a
    force-push, never a blind revert. If the offending commit should be
    reverted, the revert itself ships as a reviewed PR like any other change.
 3. **A normal PR through the normal gates.** The repair PR is authored by
@@ -137,8 +139,8 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
     and a red unit suite is precisely what a fix agent is for.
 - **Bounded attempts, keyed by the failing SHA.** At most **2** repair
   attempts per distinct failing head SHA on `main`, tracked mechanically
-  (the `repair/<failing-sha>` branch and its PR are the attempt record — no
-  external state). Budget exhausted → stop and raise a plain-English Linear
+  (the repair branch and its PR are the attempt record — no external state;
+  both branch shapes count as the same repair). Budget exhausted → stop and raise a plain-English Linear
   triage card for a human; never a third swing at the same wall.
 - **Repair never watches itself.** The trigger is the product repo's CI on
   the default branch only — a repair run's own failure routes through the
@@ -162,8 +164,8 @@ two agents converging on the same target destroy each other's work):
   CI on `main` and either clear the newer failure or produce a fresh event
   to handle next.
 - **Debounce by SHA:** multiple failing `workflow_run` events off the same
-  failing head SHA (matrix jobs, re-runs) collapse into one repair — the
-  `repair/<failing-sha>` branch already existing makes the duplicate event
+  failing head SHA (matrix jobs, re-runs) collapse into one repair — a
+  repair branch for that SHA already existing makes the duplicate event
   a no-op.
 
 ## Guardrail 4 — quota isolation
@@ -207,6 +209,38 @@ installation buckets the 2026-06-28 incident exhausted):
 - The build card (DRE-1923) implements exactly the mechanisms named here;
   divergence requires updating this ADR first (the pin-test
   `tests/test_adr_red_main_auto_repair.py` holds the two in lockstep).
+
+## Amendment — 2026-09-10 (DRE-3533): the repair files its card first
+
+This ADR shipped with the repair PR deliberately cardless, and that was
+wrong in one specific way: **the card id in the head ref is what the rest of
+the pipeline reads.** `linear-sync` closes a card on merge by finding
+`DRE-<n>` there; the console shows a pull request's card the same way. A
+`repair/<failing-sha>` ref carries none, so a repair PR showed no card,
+closed no card, and nothing on the board recorded that the repair had
+happened. PR #340 (2026-09-09) is the case that made it plain — a real fix
+for a real outage, invisible to the board, its bookkeeping filed by hand.
+
+The amendment, mechanically:
+
+- **The card is filed BEFORE the agent runs**, by `scripts/repair_card.py`
+  through the same `linear_ops` create seam every other machine-filed card
+  uses: titled for the workflow and the failing commit (never the run id —
+  attempt 2 is a different run at the same commit and must find the first
+  attempt's card), labelled `repo:<slug>`, `initiative:bureau`, `Bug`,
+  `hand-built` and the engineer role, landed in **In Progress**.
+- **Never `Todo`.** A card entering Todo is dispatched by the relay, which
+  would put a second agent on work an agent is already doing. The repair is
+  in flight before the card exists, so it is filed where the work is, and
+  the `WORKBENCH` routing verdict — stamped through
+  `routing_verdict.stamp_card`, the one writer of that vocabulary — says the
+  fleet has nothing to dispatch for it.
+- **The branch names the card:** `repair/DRE-<n>-<sha12>`, `-2` on the
+  second attempt. Every `repair/*` matcher is unchanged and still matches.
+- **A Linear failure never blocks a repair.** Main being red outranks the
+  bookkeeping: the loop falls back to `repair/<failing-sha>`, the PR opens,
+  and its body says the card is owed. Every reader of these refs therefore
+  still accepts both shapes.
 
 ## Sign-off
 

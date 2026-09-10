@@ -106,12 +106,20 @@ jobs:
           # interpolated into the shell line.
           MAX_WIP: ${{ inputs.max_wip }}
         run: |
-          # Own-branch provenance only (DRE-2027): anchored agent/DRE-<n>-
-          # with the delimiter required after the number; case-insensitive,
-          # normalized to uppercase (DRE-2003). PR title/body never read.
-          CARD=$(printf '%s' "$HEAD_REF" | grep -oiE '^agent/DRE-[0-9]+-' | grep -oiE 'DRE-[0-9]+' | tr '[:lower:]' '[:upper:]' || true)
+          # Own-branch provenance only (DRE-2027): anchored agent/DRE-<n>- or
+          # repair/DRE-<n>- with the delimiter required after the number;
+          # case-insensitive, normalized to uppercase (DRE-2003). PR title/body
+          # never read.
+          #
+          # repair/ joined agent/ in DRE-3533. A Red-Main Repair now files its
+          # card before it starts and names its branch after it, so the ref
+          # carries the same own-branch provenance an agent ref does — the
+          # repair agent filed the card and is the one working it. The cardless
+          # repair/<sha> fallback (Linear unreachable) matches nothing here and
+          # still closes nothing, which is correct: there is no card to close.
+          CARD=$(printf '%s' "$HEAD_REF" | grep -oiE '^(agent|repair)/DRE-[0-9]+-' | grep -oiE 'DRE-[0-9]+' | tr '[:lower:]' '[:upper:]' || true)
           if [ -z "$CARD" ]; then
-            echo "head branch '$HEAD_REF' is not a card's own agent branch (agent/DRE-<n>-<slug>) — no automatic Done"
+            echo "head branch '$HEAD_REF' is not a card's own branch (agent/DRE-<n>-<slug> or repair/DRE-<n>-<sha12>) — no automatic Done"
             echo "card references in PR titles/bodies never transition cards; hand-named branches are closed by the operator"
             exit 0
           fi
