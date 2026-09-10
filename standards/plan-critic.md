@@ -39,13 +39,47 @@ and PR #252 sat `CONFLICTING` for eleven hours until an operator decision moved
 it. Nobody was wrong; the card was, and the cost landed on the human. Caught
 here it costs one send-back.
 
+**And an observation-gated seam INSIDE one epic is a send-back at this critic,
+not advice.** When a plan holds a card somebody has to watch run before the work
+behind it can start, everything past that card is a second epic wearing the
+first one's number — nobody can cost it until the first half has been observed —
+and the finding is one sentence:
+
+    DRE-3215, DRE-3217, DRE-3218: wait on observing DRE-3166 live — that is a second epic, not a later step.
+
+The reader is `scripts/plan_seam.py`: relation-based, walking the `blocks`
+relations of `children-json` joined with `children-detail`, with the PROOF/DEMO
+pair excluded because the pair is blocked by every other child by construction
+and would make every observation card look like a seam. The gate is
+`scripts/plan_seam_gate.py`, and it is what makes this finding a decision rather
+than input — it rewrites the critic's result file before `plan_critic.py decide`
+reads it, so the round is a `SEND_BACK` with the seam as its reason whatever the
+model wrote. The re-plan is told what the answer is: not reordering the cards,
+but two epics, with the far side cancelled here and re-created as a sibling
+blocked on this epic's PROOF card. See
+`When a plan is two epics — the observation-gated seam (DRE-3244)` in
+`standards/card-quality.md` for the shape.
+
+**The cost of leaving it to judgement was DRE-3164**: fifteen cards, two critics
+reading them across six rounds, and neither ever named the seam. What that
+bought was a collision at the second critic, a plan drifting out of date over
+twenty hours while the rounds ran, and a critic that could not finish reading at
+the ceiling of the day.
+
+**After approval the seam is still input only.** The second critic reads it in
+the mechanical note like any other finding and decides for itself; whether it
+should be a hard send-back there too is a question on its own card (DRE-3400),
+not an omission here.
+
 It protects attention, and **it cannot do more than that, because intent is not
 settled yet.** It does not redesign the plan, rank the work, or judge whether
 the epic is worth doing — that is the CEO's call, and the plan exists to let
 them make it.
 
 Its cheap half is mechanical and runs before the critic thinks — **in a step of
-its own, and the findings are posted to the epic before the model reads them**:
+its own, and the findings are posted to the epic before the model reads them**
+— all of them input to its judgement except the seam above, which the gate has
+already decided for it:
 
     python3 scripts/linear_ops.py children-json <EPIC> \
       | python3 scripts/plan_critic.py mechanical --surfaces-dir <design dir> \

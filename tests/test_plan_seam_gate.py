@@ -160,12 +160,20 @@ class APassOverASeamIsASendBack(GateBase):
         self.assertEqual(result, pc.SEND_BACK)
         self.assertEqual(reason, gate.PREFIX + self.lines[0])
 
-    def test_the_seam_is_counted_among_the_findings(self):
-        """Two: the headline carries the attribution and the numbered list
-        carries the finding itself, which is the line the re-plan acts on."""
-        self.assertIn(f"findings_count={len(self.lines) + 1}", self.read(self.gho))
+    def test_the_seam_is_counted_once(self):
+        """One seam is one finding. The first line is listed in the form it
+        takes as the headline, so the note does not tell the CEO there are two
+        findings and then print the same sentence twice."""
+        self.assertIn(f"findings_count={len(self.lines)}", self.read(self.gho))
         self.assertEqual(pc.all_findings(self.read(self.result)),
-                         [gate.PREFIX + self.lines[0]] + self.lines)
+                         [gate.PREFIX + self.lines[0]] + self.lines[1:])
+
+    def test_every_seam_line_reaches_the_findings_the_replan_is_handed(self):
+        written = self.read(self.gho)
+        for line in self.lines:
+            self.assertIn(line, written)
+        self.assertIn(pc.findings_block(pc.all_findings(self.read(self.result))),
+                      written)
 
     def test_the_note_names_the_seam_and_says_the_check_found_it(self):
         note = self.read(self.note)

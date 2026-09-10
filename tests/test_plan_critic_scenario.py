@@ -64,6 +64,10 @@ WF = os.path.join(ROOT, ".github", "workflows", "plan.yml")
 sys.path.insert(0, SCRIPTS)
 
 import plan_critic as pc  # noqa: E402
+import plan_seam  # noqa: E402  — DRE-3395's reader, for the seam walk's input
+
+SEAM_FIXTURE = os.path.join(ROOT, "tests", "fixtures",
+                            "dre-3164-children-2026-09-05.json")
 
 EPIC = "DRE-2721"
 OTHER_EPIC = "DRE-2700"
@@ -216,9 +220,13 @@ class CriticWalk(unittest.TestCase):
         # list goes out through (DRE-3251) — imported late, so only walk 12
         # reaches it, and it reaches the REAL one because what that walk
         # checks is the block GitHub would have to parse.
+        # plan_seam_gate.py: the seam gate both pre-stage decision steps now run
+        # before `decide` (DRE-3398) — the real module, because what these walks
+        # check is that a round with no seam decides exactly as it always did.
         for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
                      "checkbox_marks.py", "execution_result.py",
-                     "review_rerun.py", "plan_run.py", "sanitize_untrusted.py"):
+                     "review_rerun.py", "plan_run.py", "sanitize_untrusted.py",
+                     "plan_seam_gate.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
         self._stub("linear_ops.py", LINEAR_STUB)
@@ -232,7 +240,13 @@ class CriticWalk(unittest.TestCase):
         self.thread_path = os.path.join(self.tmp, "thread.json")
         self.log_path = os.path.join(self.tmp, "log.txt")
         self.gho = os.path.join(self.tmp, "step-output")
-        for path, seed in ((self.thread_path, "[]"), (self.log_path, ""), (self.gho, "")):
+        # The mechanical step writes this before either decision reads it, and
+        # the gate REFUSES an absent one — a seam check that never ran is not
+        # the same fact as no seam. Empty is the ordinary case these walks are
+        # about: a plan with no seam in it.
+        self.structural = os.path.join(self.tmp, "plan-structural.txt")
+        for path, seed in ((self.thread_path, "[]"), (self.log_path, ""),
+                           (self.gho, ""), (self.structural, "")):
             with open(path, "w") as f:
                 f.write(seed)
 
@@ -353,6 +367,37 @@ class CriticWalk(unittest.TestCase):
         # And the epic reaches the CEO.
         self._shell(" Green Light")
         self.assertIn("state Green Light", self._log())
+
+    # --- 3: the seam a round cannot pass over (DRE-3398) -------------------
+
+    def test_a_pass_over_a_seam_is_a_send_back_at_the_first_critic(self):
+        """The whole chain through the real step shell: the structural file the
+        mechanical step leaves behind, the gate that rewrites the result file,
+        and `decide` — unedited — turning the critic's PASS into the round's
+        send-back with the seam as its reason.
+
+        The sentence is DRE-3395's reading of DRE-3395's fixture and never a
+        literal here, so the two cards cannot silently disagree about it.
+        """
+        with open(SEAM_FIXTURE) as f:
+            lines = plan_seam.seam_findings(json.load(f))
+        self.assertEqual(len(lines), 1, "the fixture stopped yielding one seam")
+        with open(self.structural, "w") as f:
+            f.write(lines[0] + "\n")
+
+        self._critic_writes("pre", pc.PASS)
+        self._shell("first critic — round 1 decision")
+        out = self._outputs()
+        self.assertEqual(out["action"], "hold",
+                         "a two-epic plan passed the round the critic passed")
+        self.assertEqual(out["result"], pc.SEND_BACK)
+        self.assertIn(lines[0], out["reason"])
+        # The CEO reads it, and the bound counts it — the record is whatever
+        # `decide` writes for any send-back.
+        self.assertIn("🛑", self._note())
+        self.assertIn(lines[0], self._note())
+        self.assertIn(lines[0], self._record())
+        self.assertEqual(pc.send_backs(self._thread(), pc.STAGE_PRE), 1)
 
     # --- 4: the bound, at the first critic --------------------------------
 
