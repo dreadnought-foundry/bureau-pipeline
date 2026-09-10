@@ -287,6 +287,11 @@ class ShaStampTest(unittest.TestCase):
     def _runs(self):
         return "\n".join(s.get("run") or "" for s in _steps(_doc()))
 
+    def _stamps(self):
+        """(index, step) for every step that posts a commit status."""
+        return [(i, s) for i, s in enumerate(_steps(_doc()))
+                if "/statuses/" in (s.get("run") or "")]
+
     def test_tested_sha_is_resolved_from_the_actual_checkout(self):
         self.assertIn("git rev-parse HEAD", self._runs())
 
@@ -305,11 +310,48 @@ class ShaStampTest(unittest.TestCase):
         # A red dispatch run against a candidate sha must leave an honest
         # failure stamp (a later green run overwrites it — latest status
         # per context wins); a cancelled run proved nothing either way.
-        stamps = [
-            s for s in _steps(_doc()) if "/statuses/" in (s.get("run") or "")
-        ]
-        self.assertEqual(len(stamps), 1)
-        self.assertEqual(stamps[0].get("if"), "success() || failure()")
+        verdicts = [s for _, s in self._stamps() if s.get("if")]
+        self.assertEqual(len(verdicts), 1)
+        self.assertEqual(verdicts[0].get("if"), "success() || failure()")
+
+    def test_the_attempt_opens_by_stamping_the_context_pending(self):
+        """A re-run must clear the last attempt's verdict before it re-proves.
+
+        A commit status is not a check run. GitHub replaces a check run when a
+        run is re-run, which is why the `harness` check goes back to
+        in_progress; a STATUS stands on the sha until something posts over it,
+        and the verdict stamp below only fires at the end of the job. So for
+        the whole of a re-run the previous attempt's `failure` is what every
+        consumer reads. Live on 2026-09-09 (bureau-pipeline PR #332): attempt 2
+        stamped failure at 15:18 PT, attempt 3 started at 15:20 PT, and the
+        console read the PR as "blocked — Stuck, needs you" while the harness
+        was busy re-proving the very check it was reporting. The console was
+        reading GitHub faithfully; the stale stamp was the lie.
+
+        Pending is honest to every reader: release_gate.py counts it RED
+        ("pending proved nothing"), and promote-channel.yml runs on workflow_run
+        completion, by which time the verdict stamp has replaced it.
+        """
+        stamps = self._stamps()
+        self.assertEqual(len(stamps), 2,
+                         "one pending stamp at the top, one verdict at the end")
+        (opening_at, opening), (verdict_at, _) = stamps
+        self.assertIn('state="pending"', opening.get("run") or "")
+        self.assertLess(opening_at, verdict_at)
+        # Unconditional: an attempt that stamps its pending status only
+        # sometimes leaves the stale-verdict window open the rest of the time.
+        self.assertIsNone(opening.get("if"))
+
+    def test_the_pending_stamp_lands_before_any_scenario_runs(self):
+        """It has to bind the sha and then beat the work, or the window it
+        closes — the minutes a re-run spends under the last verdict — is
+        exactly as long as the run itself."""
+        steps = _steps(_doc())
+        index = {s.get("id"): i for i, s in enumerate(steps) if s.get("id")}
+        opening_at = self._stamps()[0][0]
+        self.assertLess(index["tested"], opening_at,
+                        "the stamp needs the resolved sha")
+        self.assertLess(opening_at, index["scenarios"])
 
 
 class BudgetTest(unittest.TestCase):
