@@ -32,6 +32,15 @@ What this file pins about `dead_run.py`:
      run=<run id>` (+ `account=<label>` when known), followed by one
      plain-English paragraph — and the line round-trips through the parser the
      recovery sweep reads it with.
+  6. **The turn-cap veto (DRE-3499).** A turn-cap result is never `kind=claude`.
+     The classifier reads the WHOLE failed log, and the Claude signatures are
+     ordinary English an agent can write about itself: on 2026-09-07 the medic
+     stamped `🪦 limit-death: kind=claude stage=plan reset=unknown` on epic
+     DRE-3257 for agent-bureau run 34144302622, whose post-approval review ran
+     51 turns against a 48-turn ceiling and ended `"subtype": "success"`. The
+     log carried `rate_limit_error` because the reviewer had READ the standard
+     that quotes it. `limit_recovery.py` reads that marker and would re-enter
+     the plan stage when a window it never hit "reset".
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_limit_death_is_its_own_class.py -v
 """
@@ -90,6 +99,17 @@ QUOTED_CARD_BODY = (
     "and the sweep died on HTTP 400. Fix the client so the log names it.\n"
     "Error: assert 0 == 1"
 )
+
+# The 2026-09-07 log, as a fixture (DRE-3499). agent-bureau run 34144302622 is
+# not readable from this repo's runner (`gh run view … --log-failed` answers
+# HTTP 404 for the token the build holds), so the file is SYNTHESISED from the
+# fields the epic records: `--max-turns 48`, `"num_turns": 51`,
+# `"subtype": "success"`, `"is_error": false`, and `rate_limit_error` quoted
+# inside standards prose the reviewer had read.
+TURN_CAP_OVER_CEILING = (
+    Path(__file__).resolve().parent / "fixtures"
+    / "medic-turn-cap-over-ceiling-log.txt"
+).read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -329,6 +349,117 @@ def test_the_paragraph_reads_as_a_wait_not_a_fault():
 
 
 # --------------------------------------------------------------------------
+# 6. the turn-cap veto (DRE-3499)
+# --------------------------------------------------------------------------
+CEILING_LINE = "claude_args: --max-turns 48 --model claude-opus-5"
+
+SUBTYPE_JSON = (
+    '{"type":"result","subtype":"error_max_turns","is_error":true,'
+    '"num_turns":48}'
+)
+SUBTYPE_DETAIL_LINE = (
+    "agent result gate: what the agent itself reported (from the execution file):\n"
+    "  subtype: error_max_turns\n"
+    "  num_turns: 48\n"
+)
+CAP_SENTENCE = (
+    "agent result gate: what the agent itself reported (from the execution file):\n"
+    "  result: Reached maximum number of turns (48)\n"
+)
+OVER_THE_CEILING = f'{CEILING_LINE}\n{{"num_turns": 51,"is_error":false}}\n'
+UNDER_THE_CEILING = f'{CEILING_LINE}\n{{"num_turns": 30,"is_error":false}}\n'
+
+
+@pytest.mark.parametrize(
+    "text",
+    [SUBTYPE_JSON, SUBTYPE_DETAIL_LINE, CAP_SENTENCE, OVER_THE_CEILING],
+    ids=["subtype-json", "subtype-failure-detail-line", "cap-sentence",
+         "num_turns-at-or-over-the-ceiling"],
+)
+def test_the_action_s_own_turn_cap_evidence_is_recognised(text):
+    """The four shapes a failed log carries the ceiling in: the JSON field,
+    the line `execution_result.print_failure_detail` writes, the sentence
+    `check_agent_result._TURN_CAP_TEXT` already recognises, and a result
+    record that spent at least as many turns as the log says it was given."""
+    assert dead_run.turn_cap_in_text(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [UNDER_THE_CEILING, ORDINARY_DEATH, CLAUDE_LIMIT, LINEAR_NAMED, ""],
+    ids=["num_turns-under-the-ceiling", "ordinary-death", "claude-limit",
+         "linear-limit", "empty"],
+)
+def test_a_log_without_turn_cap_evidence_is_not_vetoed(text):
+    assert dead_run.turn_cap_in_text(text) is False
+
+
+@pytest.mark.parametrize(
+    "ceiling",
+    ["maxTurns: 48", '"max_turns": 48', "--max-turns 48"],
+    ids=["maxTurns", "max_turns-json", "--max-turns"],
+)
+def test_the_ceiling_is_read_in_every_spelling_the_log_uses(ceiling):
+    assert dead_run.turn_cap_in_text(f'{ceiling}\n"num_turns": 51') is True
+    assert dead_run.turn_cap_in_text(f'{ceiling}\n"num_turns": 30') is False
+
+
+def test_a_turn_cap_result_is_never_a_claude_limit_death():
+    """The 2026-09-07 log itself: 51 turns against 48, `"subtype": "success"`,
+    and `rate_limit_error` in the text because the reviewer READ the standard
+    that quotes it. The medic stamped kind=claude on epic DRE-3257 for it."""
+    assert "rate_limit_error" in TURN_CAP_OVER_CEILING
+    assert dead_run.turn_cap_in_text(TURN_CAP_OVER_CEILING) is True
+    assert dead_run.limit_kind(TURN_CAP_OVER_CEILING) is None
+
+
+def test_the_veto_does_not_disarm_the_claude_signatures_generally():
+    """A real Claude wall still classifies — the veto is about the turn cap,
+    not about the words."""
+    assert dead_run.limit_kind(CLAUDE_LIMIT) == "claude"
+    assert dead_run.limit_kind(CLAUDE_API_LIMIT) == "claude"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [LINEAR_NAMED, LINEAR_CLASS_ONLY, LINEAR_CODE_ON_THE_CLIENT_LINE,
+     LINEAR_READ_TIMEOUT],
+    ids=["rate-limited-2500", "LinearRateLimited",
+         "RATELIMITED-on-the-client-line", "read-timeout-pair"],
+)
+def test_a_linear_wall_survives_the_veto(text):
+    """A different vendor: the Linear client's refusal is not something a turn
+    count can explain away, so a log carrying BOTH still reads `linear`."""
+    assert dead_run.limit_kind(text) == "linear"
+    assert dead_run.limit_kind(f"{text}\n{SUBTYPE_JSON}\n") == "linear"
+    assert dead_run.limit_kind(f"{text}\n{OVER_THE_CEILING}") == "linear"
+
+
+def test_the_signature_list_keeps_every_member():
+    """The veto is a new gate in front of the list, not a deletion from it —
+    nothing is removed by DRE-3499."""
+    assert dead_run.LIMIT_SIGNATURES == (
+        "hit your limit",
+        "rate_limit_error",
+        "rate limited: 2500 requests/hour exhausted",
+        "LinearRateLimited",
+        "RATELIMITED",
+    )
+
+
+def test_the_veto_reads_the_turn_cap_evidence_from_one_place():
+    """`check_agent_result` already owns what the action's turn ceiling looks
+    like; a second spelling here is how the two readers drift apart."""
+    import check_agent_result  # noqa: PLC0415 — the import IS the assertion
+
+    assert dead_run.turn_cap_in_text(
+        f"  result: Reached {check_agent_result._TURN_CAP_TEXT} (48)"
+    ) is True
+    for subtype in check_agent_result._TURN_CAP_SUBTYPES:
+        assert dead_run.turn_cap_in_text(f'"subtype": "{subtype}"') is True
+
+
+# --------------------------------------------------------------------------
 # the CLI: the workflow hands the log over and reads the action back
 # --------------------------------------------------------------------------
 def test_cli_decide_classifies_the_limit_log(tmp_path, capsys):
@@ -346,6 +477,24 @@ def test_cli_decide_classifies_the_limit_log(tmp_path, capsys):
         f"🪦 limit-death: kind=claude stage=build reset=2026-09-05T20:30:00Z "
         f"run={RUN} account=main"
     )
+
+
+def test_cli_decide_on_the_turn_cap_log_is_the_ordinary_decision(tmp_path, capsys):
+    """The exact call the medic makes for run 34144302622, on the fixture:
+    the action is the ordinary non-limit one this log got before DRE-3171
+    existed, and nothing prints a limit marker."""
+    log = tmp_path / "medic-log.txt"
+    log.write_text(TURN_CAP_OVER_CEILING, encoding="utf-8")
+    rc = dead_run.main([
+        "decide", "0", "--limit-log", str(log),
+        "--workflow", "Agent Plan (reusable)", "--run-id", "34144302622",
+        "--now", "2026-09-07T16:50:00Z",
+    ])
+    out = capsys.readouterr().out.splitlines()
+    assert rc == 0
+    assert out[0] != "limit"
+    assert out[0] == "requeue"
+    assert dead_run.LIMIT_MARK not in "\n".join(out)
 
 
 def test_cli_decide_without_a_limit_in_the_log_is_unchanged(tmp_path, capsys):

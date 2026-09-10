@@ -99,6 +99,20 @@ Planning entry is the planner's trigger), In Progress → Todo for a build, the
 ORIGINAL run re-run `--failed` for fix/review/sync — and posts a `🔁
 limit-recovery:` receipt naming the trigger. The signatures live once, in
 `dead_run.LIMIT_SIGNATURES`.*
+*Amended 2026-09-10 (DRE-3499): the `claude` answer is now vetoed by the run's
+own turn cap. The classifier reads the WHOLE failed log, and both Claude
+signatures are ordinary English an agent can write about itself — on 2026-09-07
+the medic marked epic DRE-3257 `kind=claude stage=plan` for agent-bureau run
+34144302622, whose review ran 51 turns against a 48-turn ceiling and ended
+`"subtype": "success"`, because the reviewer had READ the standard that quotes
+`429 rate_limit_error`. `dead_run.turn_cap_in_text` is consulted first: a log
+carrying `error_max_turns` (as the JSON field or the failure-detail line), the
+sentence `maximum number of turns`, or a `num_turns` at or over a ceiling the
+log states (`maxTurns:`/`"max_turns":`/`--max-turns`) is never `kind=claude`,
+and the ordinary medic handling resumes. Nothing was removed from
+`LIMIT_SIGNATURES`, and the `linear` answer is unaffected — a turn count cannot
+explain away another vendor's refusal, so a log carrying both still reads
+`linear`.*
 
 **Verdict:** covered.
 

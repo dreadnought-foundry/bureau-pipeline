@@ -1,0 +1,17 @@
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:44:02.1000000Z ##[group]Run dreadnought-foundry/claude-code-action@v1
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:44:02.1100000Z bureau-card: DRE-3257
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:44:02.2000000Z   with:
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:44:02.2100000Z     claude_args: --max-turns 48 --model claude-opus-5
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:44:02.2200000Z     prompt_file: /tmp/plan-review-prompt.md
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:44:02.3000000Z ##[endgroup]
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:45:18.4000000Z The reviewer read standards/vendor-boundaries.md, which quotes the wall as
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:45:18.4100000Z an example: "that token cannot call the raw Messages API: it answers 429
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:45:18.4200000Z `rate_limit_error` to every request, regardless of load" — so the same words
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:45:18.4300000Z are now in this run's own log, without this run having met the wall.
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:50:07.9000000Z {"type":"result","subtype":"success","is_error":false,"num_turns":51,"duration_ms":345212,"total_cost_usd":4.11,"result":"Review written to /tmp/plan-review.md","session_id":"8f1c..."}
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:50:08.1000000Z plan review gate: the run did NOT error — this is what it did (from the execution file):
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:50:08.1100000Z   subtype: success
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:50:08.1200000Z   num_turns: 51
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:50:08.1300000Z   total_cost_usd: 4.11
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:50:08.2000000Z plan review gate: FAIL — the reviewer stopped mid-task and left no verdict file
+call / bureau-card: DRE-3257	Post-approval plan review	2026-09-07T16:50:08.3000000Z ##[error]Process completed with exit code 1.
