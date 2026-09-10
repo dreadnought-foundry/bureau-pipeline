@@ -157,6 +157,14 @@ class ReferenceTest(unittest.TestCase):
             list(groomer_score.load()["contract"]["header"]),
             list(groomer_score.HEADER))
 
+    def test_the_dead_row_source_is_spelled_the_way_the_groomer_writes_it(self):
+        """The scorer imports no client, so `groomer.DEAD_FROM_LINE` is spelled
+        here rather than imported — and a marker that drifts would read as "the
+        model made this call", which is exactly the false done being counted."""
+        import groomer
+
+        self.assertEqual(groomer_score.DEAD_FROM_LINE, groomer.DEAD_FROM_LINE)
+
     def test_a_reference_whose_header_drifts_from_the_parser_is_refused(self):
         doc = copy.deepcopy(groomer_score.load())
         doc["contract"]["header"] = ["Card", "Judgement said", "CEO said"]
@@ -184,6 +192,23 @@ class ParserTest(unittest.TestCase):
             groomer_score.parse_audit([comment(
                 [("DRE-1", "now", "not-now")], header=bad)])
         self.assertIn(groomer_score.HEADER_LINE, str(caught.exception))
+
+    def test_a_header_of_the_right_width_in_the_wrong_order_is_refused(self):
+        """The one a width check cannot catch, and the one that matters:
+        `Rules said` and `Judgement said` are one column apart, so a table read
+        in the wrong order scores the RULES against the CEO and reports the
+        number as the judgement's."""
+        swapped = "| Card | Judgement said | Rules said | CEO said | Agree? |"
+        with self.assertRaises(groomer_score.AuditError) as caught:
+            groomer_score.parse_audit([comment(
+                [row("DRE-1", "now", "not-now", "not-now")], header=swapped)])
+        self.assertIn(groomer_score.HEADER_LINE, str(caught.exception))
+
+    def test_a_renamed_column_is_refused_even_at_the_right_width(self):
+        renamed = "| Card | Rules said | Model said | CEO said | Agree? |"
+        with self.assertRaises(groomer_score.AuditError):
+            groomer_score.parse_audit([comment(
+                [row("DRE-1", "now", "not-now", "not-now")], header=renamed)])
 
     def test_a_thread_with_no_audit_table_is_refused_naming_the_header(self):
         with self.assertRaises(groomer_score.AuditError) as caught:
@@ -400,6 +425,11 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(len(lines), 1, report)
         self.assertTrue(lines[0].lstrip("*- ").startswith("false-done:"),
                         lines[0])
+
+    def test_the_trigger_split_in_the_report_is_the_proposals_own(self):
+        report = groomer_score.render_report(self.fixture())
+        self.assertIn("1 name an event", report)
+        self.assertIn("2 name a date", report)
 
     def test_an_unknown_row_is_named_under_its_own_heading(self):
         report = groomer_score.render_report(self.fixture())
