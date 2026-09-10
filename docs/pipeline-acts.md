@@ -64,6 +64,44 @@ must not turn red here.
 Console-first covers this too: measure and declare in the console, then copy.
 Whoever builds second otherwise has to invent a number twice.
 
+### The six RELEASE acts (DRE-3521)
+
+A release is the most consequential thing the pipeline does, and until DRE-3521
+the registry had nothing to say about one — so the console's release row had no
+declared cadence to read for any stage of a train run. The six below are one
+`progress` act per stage of `CI green → cut → build → roll out → verify → live`
+(DRE-3336), and like the three above they were declared in the console FIRST
+(DRE-3518, agent-bureau PR #2422) and copied here. This repo did not choose a
+single one of the numbers.
+
+| stage | act | tag | `cadence_s` | read off |
+| -- | -- | -- | -- | -- |
+| CI green | `release-ci-green` | `release-ci-green-observed` | 600 | the `plan` job's `timeout-minutes: 10` |
+| cut | `release-cut` | `release-cut-observed` | 3600 | the `release` job's `timeout-minutes: 60` |
+| build | `release-build` | `release-build-observed` | 1440 | the migration wait ceiling plus image resolution |
+| roll out | `release-roll-out` | `release-roll-out-observed` | 600 | the surface's `ROLLOUT_TIMEOUT` |
+| verify | `release-verify` | `release-verify-observed` | 3600 | the `release` job's `timeout-minutes: 60` |
+| live | `release-live` | `release-live-observed` | `null` | nothing follows a landed release |
+
+**Nothing in this repository emits any of them, and nothing will** — every row
+declares `adopted: false`. The train relays the surface script's output *after*
+the script has exited: `scripts/release_train.py`, `run_surface`, runs it with
+`capture_output=True` and prints the captured lines once the process is done, so
+the run's own log carries no per-stage timestamps at all. The stages are
+recorded instead by the caller's surface script, as a GitHub deployment status
+per stage (agent-bureau DRE-3519), and the console reads them from there. The
+rows exist so that the console has a declared bound to compare the age of each
+of those marks against, rather than a number typed into a component.
+
+Their `emits` anchors follow from the same fact. `CI green` and `cut` are what
+the train itself decides, so they anchor in `.github/workflows/release-train.yml`;
+`build`, `roll out`, `verify` and `live` are what a surface script owes, so they
+anchor on the four numbered items of the surface contract in
+`standards/release-train.md`, which is where this repo declares what happens at
+each of those stages. Deliberately **not** `scripts/release_train.py`: the
+binding check reads every `*_TAG` constant out of a `.py` file a row points at
+and demands a registry row for each one.
+
 ## The rows, and what a row is not — `🔬 proof-waiting` (DRE-3275)
 
 The newest row is the clearest example of the distinction the registry keeps,

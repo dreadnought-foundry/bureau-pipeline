@@ -70,6 +70,16 @@ _DISPATCHED = "dispatched"
 # off a timeout.
 _PROGRESS = "progress"
 
+# The progress acts that expect NOTHING to follow them (DRE-3521). A progress
+# act normally declares a number because ordinary work is still moving and will
+# speak again; `live` is the end of a release journey — the tag is cut, the
+# deployment record is written, and there is no next stage. So it declares
+# `null`, which is the same "nothing is expected to speak" every other null in
+# this file means, and the console renders it as complete rather than overdue.
+# Named, not inferred: a second progress act quietly going null is exactly what
+# this list has to fail on.
+_TERMINAL_PROGRESS = frozenset({"release-live"})
+
 
 def _doc() -> dict:
     return copy.deepcopy(pipeline_act.load())
@@ -85,14 +95,16 @@ def _first(doc: dict) -> dict:
 
 
 class TestEveryActDeclaresItsCadence:
-    def test_the_registry_still_declares_twenty_two_acts(self):
+    def test_the_registry_still_declares_twenty_eight_acts(self):
         """The card counts them. If an act is added, it declares a cadence with
         the rest of its row or this goes red — which is the whole point of the
         field being data rather than a default.
 
         Nineteen when DRE-3298 wrote this; twenty-two since DRE-3389 added the
-        three LIFECYCLE acts under the `progress` kind."""
-        assert len(pipeline_act.acts()) == 22
+        three LIFECYCLE acts under the `progress` kind; twenty-eight since
+        DRE-3521 added the six RELEASE acts under the same kind, one per stage
+        of a train run."""
+        assert len(pipeline_act.acts()) == 28
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
@@ -130,10 +142,24 @@ class TestEveryActDeclaresItsCadence:
         heartbeat, the next review run, the next gate wake. Its bound is not a
         job timeout, because nothing times a healthy build; it is measured, and
         `test_the_numbers_are_the_ones_the_workflows_declare` below is where the
-        measurement has to show itself."""
+        measurement has to show itself.
+
+        And the exception has its own exception (DRE-3521): a progress act at
+        the END of a journey has no next stage to expect, so `release-live`
+        declares `null` like every other act nothing is coming back to."""
         for name in pipeline_act.acts():
             entry = pipeline_act.record(name)
-            if entry["state"] == _DISPATCHED or entry["kind"] == _PROGRESS:
+            if name in _TERMINAL_PROGRESS:
+                assert entry["kind"] == _PROGRESS, (
+                    f"{name} is listed as a terminal progress act and is not a "
+                    "progress act at all"
+                )
+                assert entry["cadence_s"] is None, (
+                    f"{name} is the last stage of its journey — nothing speaks "
+                    "after it, so the console must read it as complete, not "
+                    "overdue"
+                )
+            elif entry["state"] == _DISPATCHED or entry["kind"] == _PROGRESS:
                 assert isinstance(entry["cadence_s"], int), (
                     f"{name} expects something to speak next — a dispatched run "
                     "reads as stuck past its own job timeout, and ordinary work "
@@ -155,7 +181,12 @@ class TestEveryActDeclaresItsCadence:
         long a healthy build may go quiet — so its number is MEASURED instead,
         and the row owes the measurement in its `why`: how many runs, when, and
         the longest green gap the sample held. Either way nothing is invented:
-        the number is read off something, and the row says off what."""
+        the number is read off something, and the row says off what.
+
+        A progress act this repo did not choose at all (DRE-3521's six release
+        acts) owes the same thing one step removed: the console declared the
+        number first and the row names the card that did it, so a reader can
+        follow it to the source the console cites."""
         bounds = {
             ".github/workflows/qa-review.yml": 65 * 60,
             ".github/workflows/agent-fix.yml": 120 * 60,
@@ -181,9 +212,11 @@ class TestEveryActDeclaresItsCadence:
                 f"{name}: its reason names no workflow carrying a bound, and only "
                 "a measured progress act is allowed to have none"
             )
-            assert "DRE-3388" in entry["why"], (
-                f"{name}: a measured cadence owes its measurement in `why` — "
-                "sample size, date and the longest green gap"
+            assert "DRE-3388" in entry["why"] or "DRE-3518" in entry["why"], (
+                f"{name}: a progress cadence that names no bounded workflow "
+                "owes its source in `why` — the measurement that produced it "
+                "(DRE-3388), or the console declaration it was copied from "
+                "(DRE-3518)"
             )
 
 

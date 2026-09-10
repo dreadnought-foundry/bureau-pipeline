@@ -89,7 +89,15 @@
       "Every actor permitted to move a card, and where it lives. A lane names",
       "writers by key; the harness checks the key resolves here and that a writer",
       "with a path still exists in this checkout — a lane whose writer was deleted",
-      "is a lane nothing can legally move a card out of."
+      "is a lane nothing can legally move a card out of.",
+      "",
+      "It is also the ACTOR GLOSSARY the act registry binds to (DRE-2825):",
+      "`pipeline_act.problems()` refuses an act whose `next_actor` is not a key",
+      "here, so that an act cannot hand work to somebody nothing knows about. An",
+      "entry may therefore name an actor no lane lists — `release-train.yml` is",
+      "one, added by DRE-3521 for the six release acts. Being in this glossary is",
+      "not permission to move a card: permission is a lane naming the key in its",
+      "own `writers` clause, which is what `ready_lane_writers.py` reads."
     ],
     "relay": {
       "what": "the dispatch Lambda — creates a card's first lane from an inbound event",
@@ -151,6 +159,10 @@
     "backlog_cutover.py": {
       "what": "the retroactive pass — moves the legacy Backlog into Intake, promoter-reach cards first and then newest-first, with no exemption list",
       "path": "scripts/backlog_cutover.py"
+    },
+    "release-train.yml": {
+      "what": "the release train — runs a surface's release script and verifies the tag it cut; it moves no card, and is here as the actor the six release acts name (DRE-3521)",
+      "path": ".github/workflows/release-train.yml"
     },
     "guard": {
       "what": "the lane guard — returns a card whose occupancy is unjustified",

@@ -37,17 +37,21 @@ of it is ever a runtime lookup.
   the workflow expected to act on it, and its **cadence** — `cadence_s`, the
   longest silence in seconds after which that act's work reads as stuck, with
   `cadence_why` saying where the number came from (DRE-3298). A `dispatched`
-  act takes the run's own job timeout; a `progress` act takes a number
-  MEASURED against live runs; every other act has handed the work to a person
+  act takes the run's own job timeout; a `progress` act takes the number the
+  console declared for it — MEASURED against live runs for DRE-3389's three,
+  read off the bound the operation cannot exceed for DRE-3521's six release
+  stages; every other act has handed the work to a person
   and declares `null`, which the console renders as "parked" and never as
   "overdue". There is no default — a missing field, a `cadence_s` that is
   neither a positive integer nor `null`, and an empty `cadence_why` each fail
   the check. **`progress`** is the fourth kind (DRE-3389) — the ⏳ build
   heartbeat, the review run, the gate's re-check on a pull request, i.e. the
-  ordinary life of a card. It holds nothing and repairs nothing, nothing times
-  a healthy build so its cadence is measured rather than read off a timeout,
+  ordinary life of a card, and since DRE-3521 the six stages of a release-train
+  run. It holds nothing and repairs nothing, its cadence comes from the console
+  rather than from a timeout here (nothing times a healthy build),
   and the idempotency-key rule below does not apply to it because a heartbeat
-  repeats by design. Read and written through `scripts/pipeline_act.py`,
+  repeats by design. A `progress` act at the END of a journey declares `null`
+  like anything else nothing follows — `release-live` is the one. Read and written through `scripts/pipeline_act.py`,
   which reproduces each existing receipt body **byte-identically** and only
   appends a trailer — the tags are live idempotency keys and per-sha budget
   counters, so rewording one makes every in-flight PR's receipts invisible.
