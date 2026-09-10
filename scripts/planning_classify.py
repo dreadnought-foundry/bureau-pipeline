@@ -48,6 +48,30 @@ the size tests from the `too big for one run` section of
 standard renames it in the prompt and in the stamp's reason. A prompt that
 restated any of the three would be a second copy, and the copy is what drifts.
 
+## The seam is read too, and it makes an epic a wave (DRE-3394)
+
+DRE-3244 found the fault a whole plan wide: **a plan whose later cards depend
+on OBSERVING its earlier cards live is not one epic but two.** DRE-3391 wrote
+it into `standards/card-quality.md`, `briefs/planner.md` and the shape
+vocabulary. Nothing read it — the only tells this prompt appended were the SIZE
+tells, so DRE-3164 (thirteen build cards, an `[OPERATOR]` card in the middle of
+the chain, a surfaces table saying the relay joins *"second, after a week of
+clean console releases"*) would have been stamped `epic` and planned as one.
+
+So the seam tests are appended after the size tests, out of the same standard
+and by the same reader (`seam_tells` / `seam_block`); the answer carries a
+`seam` key; and `seam_evidence` is a deterministic, under-reporting read of the
+card body — a phrase list of what real cards write, each phrase named with the
+card it was read from, outside fenced code. Where either says seam, an `epic`
+becomes a `wave` and the stamp's **Why:** line names it after the literal
+`observation-gated seam:`. A `one-off` is never upgraded: that is a
+contradiction the model has to resolve, and an upgrade here would be a default.
+No seam anywhere and the decision is what it was, byte for byte.
+
+Nothing downstream of the stamp changes. `planning_route` → the wave planner →
+`wave_commitment` already file the committed epics blocked in sequence on
+approval; this card only makes them the route DRE-3164 would have taken.
+
 ## The transport is the Claude Code path (DRE-3074)
 
 None of the above ever ran. The call was a raw POST to
@@ -206,13 +230,37 @@ PROMPT_HEADING = "## Classifying the card itself"
 # extended by DRE-2913). Located by heading, so the tests travel with the
 # standard rather than being copied into a prompt.
 _TOO_BIG_HEADING = re.compile(r"^## .*too big.*$", re.IGNORECASE | re.MULTILINE)
+# The section that owns the SEAM tests (DRE-3244, landed by DRE-3391). Located
+# the same way and for the same reason: a tell renamed in the standard is
+# renamed in the prompt, never in a copy of it.
+_SEAM_HEADING = re.compile(
+    r"^## .*observation-gated seam.*$", re.IGNORECASE | re.MULTILINE)
 _SECTION_END = re.compile(r"^## ", re.MULTILINE)
 _TELL = re.compile(r"^(\d+)\. \*\*(.+?)\*\*", re.MULTILINE)
 
 # The keys the answer carries. Named here AND in the brief, and
 # `problems()` refuses a brief that has stopped naming one of them — the prompt
 # and the parser are the two halves of one contract.
-ANSWER_KEYS = ("shape", "why", "tells", "decision", "question")
+ANSWER_KEYS = ("shape", "why", "tells", "seam", "decision", "question")
+
+# The shapes this module reasons ABOUT rather than merely passes through. The
+# vocabulary still owns the list (`planning_shape.shapes`); these two are named
+# because the seam rule is a statement about them — an `epic` over a seam is a
+# `wave`, and a `one-off` over a seam is never touched.
+SHAPE_EPIC = "epic"
+SHAPE_WAVE = "wave"
+
+# The literal the stamp's **Why:** line carries, followed by the seam itself.
+# `planning_route`, the wave planner and a person reading the card all find the
+# seam by this string, so it is written once (DRE-3394's shared contract).
+SEAM_MARK = "observation-gated seam:"
+SEAM_RULE = ("the seam rule (DRE-3244) files this as two epics, the second "
+             "blocked on the first")
+
+# How much of the sentence that fired comes back as evidence. A sentence, not a
+# section: it rides a Linear comment a person reads, beside the model's own
+# reason and the size tests behind it.
+EVIDENCE_CHARS = 120
 
 # The words a model reaches for when it means "I could not". Read as no shape,
 # never as a shape name the vocabulary might one day carry.
@@ -222,6 +270,42 @@ _NO_ANSWER_WORDS = ("none", "null", "unknown", "unclear", "n/a", "escalate", "")
 # longer is a model talking to itself, and a truncated answer is a refusal.
 MAX_TOKENS = 1000
 TIMEOUT_SECONDS = 60
+
+#: How prose spells a count of clean days or clean releases. Written out
+#: because a card says "seven clean console days" far more often than "7".
+_SEAM_NUMBERS = ("two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+                 "thirteen|fourteen|thirty")
+
+#: The phrases an observation-gated seam is actually written with, each named
+#: with the card it was read from — `split_ledger._CONTRACT_PHRASES`' rule,
+#: for the same reason: match the phrases real cards write, not the phrases a
+#: model imagines they write. The list UNDER-REPORTS on purpose. Evidence that
+#: fires on every card is a label rather than a measurement, and the model's own
+#: `seam` answer is the reading that is allowed to be broad — this one only has
+#: to catch the card the classifier would otherwise get wrong in silence.
+_SEAM_PHRASES = (
+    (re.compile(r"\b(?:\d{1,3}|" + _SEAM_NUMBERS + r")[\s-]+clean[\s-]+"
+                r"(?:console[\s-]+)?(?:days?|releases?)\b", re.IGNORECASE),
+     "DRE-3218 — \"after seven clean console days\""),
+    (re.compile(r"\ba week of clean\b[^.\n]{0,40}?\breleases?\b", re.IGNORECASE),
+     "DRE-3164 — \"second, after a week of clean console releases\""),
+    (re.compile(r"\bsupervised\s+(?:train\s+)?release\b", re.IGNORECASE),
+     "DRE-3166 — \"one supervised release\", the [OPERATOR] card in the chain"),
+    (re.compile(r"\[OPERATOR\]"),
+     "DRE-3166, DRE-3216, DRE-3218 — an [OPERATOR] card build cards wait on"),
+    (re.compile(r"\bafter the first is proven\b"
+                r"|\bonce\b[^.\n]{0,60}?\bis proven\b"
+                r"|\bproven in production\b", re.IGNORECASE),
+     "DRE-3244 — \"a second surface that joins after the first is proven\""),
+    (re.compile(r"\bafter\b[^.\n]{0,80}?\bswitch(?:-on|ed on)\b"
+                r"|\bswitch(?:-on|ed on)\b[^.\n]{0,80}?\bafter\b", re.IGNORECASE),
+     "DRE-3218 — the switch-on that waits on the clean days"),
+)
+
+#: Where a sentence ends, for the evidence. A newline counts: most of what a
+#: card writes a seam into is a table row, a list item or a heading, none of
+#: which ends in a full stop.
+_SENTENCE_END = re.compile(r"[.!?\n]")
 
 _API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -312,6 +396,11 @@ class Decision:
     shape: str | None = None
     why: str = ""
     tells: tuple = ()
+    # The observation-gated seam this card is cut at, or None (DRE-3394). The
+    # model's own `seam` answer when it named one, otherwise the sentence
+    # `seam_evidence` read off the body — recorded rather than only spelled into
+    # `why`, so a reader that wants the seam does not have to parse a sentence.
+    seam: str | None = None
     question: str | None = None
     model: str | None = None
     # The model this run ASKED for, beside the one that answered (DRE-3083).
@@ -399,41 +488,83 @@ def _tells_section(text: str | None = None) -> str:
     return section[: subheading.start()] if subheading else section
 
 
-def size_tells(text: str | None = None) -> dict:
-    """`{number: headline}` for the size tests in `standards/card-quality.md`.
+def _seam_section(text: str | None = None) -> str:
+    """The numbered list of seam tests, and only it (DRE-3244/DRE-3391).
 
-    DRE-2893 wrote four and DRE-2913 added two to the same section; the number
-    is whatever the standard carries today, which is the point of reading it.
+    Bounded at the first `### ` for the same reason `_tells_section` is: the
+    worked example and "what the planner files instead" live under subheadings
+    of this section, and a scan that ran on would read whatever they open with.
     """
-    found = {
-        int(n): headline.strip() for n, headline in _TELL.findall(_tells_section(text))
-    }
+    text = _read(STANDARD_PATH) if text is None else text
+    heading = _SEAM_HEADING.search(text)
+    if heading is None:
+        raise ClassifyError(
+            "standards/card-quality.md no longer carries a section on the "
+            "observation-gated seam, so the classifier has no seam tests to "
+            "apply"
+        )
+    section = _section(text, heading.start())
+    subheading = re.search(r"^### ", section, re.MULTILINE)
+    return section[: subheading.start()] if subheading else section
+
+
+def _numbered_tells(section: str, what: str) -> dict:
+    """`{number: headline}` for one of the standard's numbered tell lists."""
+    found = {int(n): headline.strip() for n, headline in _TELL.findall(section)}
     if not found:
         raise ClassifyError(
-            "the card-quality standard's size section lists no numbered tells"
+            f"the card-quality standard's {what} section lists no numbered tells"
         )
     return found
 
 
-def tells_block(text: str | None = None) -> str:
-    """The size tests as the standard WRITES them — headline and reasoning, the
+def _numbered_block(section: str, what: str) -> str:
+    """The tells as the standard WRITES them — headline and reasoning, the
     incident each one was learned from included.
 
     The reasoning is the half that decides a card. "An unbounded quantifier" on
     its own is a phrase; the sentence under it says 57 mount sites, and that is
     what makes a classifier count instead of skim.
     """
-    section = _tells_section(text)
     starts = [m.start() for m in re.finditer(r"^\d+\. \*\*", section, re.MULTILINE)]
     if not starts:
         raise ClassifyError(
-            "the card-quality standard's size section lists no numbered tells"
+            f"the card-quality standard's {what} section lists no numbered tells"
         )
     starts.append(len(section))
     items = [
         section[starts[i]:starts[i + 1]].strip() for i in range(len(starts) - 1)
     ]
     return "\n\n".join(items)
+
+
+def size_tells(text: str | None = None) -> dict:
+    """`{number: headline}` for the size tests in `standards/card-quality.md`.
+
+    DRE-2893 wrote four and DRE-2913 added two to the same section; the number
+    is whatever the standard carries today, which is the point of reading it.
+    """
+    return _numbered_tells(_tells_section(text), "size")
+
+
+def tells_block(text: str | None = None) -> str:
+    """The size tests as the standard writes them."""
+    return _numbered_block(_tells_section(text), "size")
+
+
+def seam_tells(text: str | None = None) -> dict:
+    """`{number: headline}` for the seam tests in `standards/card-quality.md`.
+
+    Read exactly as the size tells are, because they are the same grammar in
+    the same file — DRE-3244 wrote its four "in the same grammar as the size
+    tells above" so that one reader could serve both.
+    """
+    return _numbered_tells(_seam_section(text), "seam")
+
+
+def seam_block(text: str | None = None) -> str:
+    """The seam tests as the standard writes them."""
+    return _numbered_block(_seam_section(text), "seam")
 
 
 def shape_block(doc: dict | None = None) -> str:
@@ -469,6 +600,13 @@ def prompt_for(card: dict, *, doc: dict | None = None, brief: str | None = None,
         "## The size tests",
         "",
         tells_block(standard),
+        "",
+        # AFTER the size tests, in the order the brief's four rules are read:
+        # the seam question runs last on purpose, because it does not make a
+        # small card bigger — it says a card already sized as an epic is two.
+        "## The seam tests",
+        "",
+        seam_block(standard),
         "",
         "## The card",
         "",
@@ -520,10 +658,92 @@ def problems() -> list:
     except ClassifyError as e:
         found.append(str(e))
     try:
+        seams = seam_tells()
+        if len(seams) < 3:
+            found.append(
+                f"the card-quality standard lists {len(seams)} seam test(s); "
+                "DRE-3244 wrote four and a classifier cannot read a seam it is "
+                "not given"
+            )
+    except ClassifyError as e:
+        found.append(str(e))
+    try:
         prompt_for({"identifier": "DRE-0", "title": "t", "description": "d"})
     except (ClassifyError, planning_shape.ShapeError) as e:
         found.append(f"the prompt does not compose: {e}")
     return found
+
+
+# --------------------------------------------------------------------------- #
+# reading the seam off the card body                                           #
+# --------------------------------------------------------------------------- #
+
+
+def _outside_fences(body: str) -> str:
+    """The body with every fenced block blanked out, character for character.
+
+    Same length as what came in, so a match's offsets still point at the real
+    text — the sentence around it is read off this string, and a mask that
+    changed the offsets would quote the wrong words. Fenced code is where a
+    card QUOTES the standard's own examples, and a quotation is not a seam.
+    """
+    out, inside = [], False
+    for line in (body or "").split("\n"):
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            out.append(" " * len(line))
+            continue
+        out.append(" " * len(line) if inside else line)
+    return "\n".join(out)
+
+
+def _evidence_sentence(text: str, start: int, end: int) -> str:
+    """The sentence `text[start:end]` falls in, collapsed and cut to
+    ~`EVIDENCE_CHARS` — with the phrase that fired still in it.
+
+    A long table row or a paragraph would otherwise be truncated before the
+    words that decided the card, and evidence a reader cannot check against the
+    body is not evidence.
+    """
+    left = max(text.rfind(ch, 0, start) for ch in ".!?\n") + 1
+    tail = _SENTENCE_END.search(text, end)
+    right = tail.end() if tail else len(text)
+    before = " ".join(text[left:start].split())
+    matched = " ".join(text[start:right].split())
+    sentence = f"{before} {matched}".strip()
+    if len(sentence) <= EVIDENCE_CHARS:
+        return sentence
+    # The window starts as late as it must to keep the phrase in view, and no
+    # later than the phrase itself.
+    begin = min(len(sentence) - len(matched), len(sentence) - EVIDENCE_CHARS)
+    begin = max(begin, 0)
+    window = sentence[begin:begin + EVIDENCE_CHARS].strip()
+    head = "…" if begin else ""
+    tail_mark = "…" if begin + EVIDENCE_CHARS < len(sentence) else ""
+    return f"{head}{window}{tail_mark}"
+
+
+def seam_evidence(body: str) -> str | None:
+    """The sentence in this card body that reads as an observation-gated seam,
+    or None (DRE-3394).
+
+    Pure and deterministic — the body is the only input — and it UNDER-REPORTS
+    on purpose, the way `split_ledger.tells` does: a phrase list of what real
+    cards write, each phrase named with the card it was read from, rather than a
+    judgement about ambition. This is the floor under the model's own reading,
+    not a replacement for it: it exists so that DRE-3164, the card the seam rule
+    was written from, cannot be stamped `epic` in silence.
+
+    Read outside fenced code, so a card quoting the standard's examples is not
+    read as carrying them.
+    """
+    text = _outside_fences(body or "")
+    for pattern, _source in _SEAM_PHRASES:
+        found = pattern.search(text)
+        if found is None:
+            continue
+        return _evidence_sentence(text, found.start(), found.end()) or None
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -666,8 +886,15 @@ def parse(answer: str, *, doc: dict | None = None, model: str | None = None) -> 
             ),
         )
 
+    # The seam the model named, or None (DRE-3394). A non-string, an empty
+    # string and a missing key are one fact — the model named no seam — and
+    # never a refusal: a card with no seam answers `null`, which is most cards.
+    stated_seam = payload.get("seam")
+    seam = stated_seam.strip() if isinstance(stated_seam, str) else ""
+
     return Decision(
-        shape=shape, why=why, tells=tuple(tells), question=question, model=model
+        shape=shape, why=why, tells=tuple(tells), seam=seam or None,
+        question=question, model=model,
     )
 
 
@@ -1183,7 +1410,45 @@ def classify(card: dict, *, call=None, model: str | None = None,
     # asked for. Every real Claude Code success bills its `modelUsage`, so this
     # falls back only for the plain-string `call` seam.
     decision = parse(answer.text, doc=doc, model=answer.model or model)
+    decision = seam_decision(decision, card.get("description") or "")
     return dataclasses.replace(decision, answered=True, asked=model)
+
+
+def seam_decision(decision: Decision, body: str) -> Decision:
+    """The seam rule applied to a read answer (DRE-3244, DRE-3394).
+
+    An `epic` cut at an observation-gated seam is a `wave`: the first epic ends
+    at the observation, the second is filed at the same gate, blocked on the
+    first, and planned only when the first is Done. The wave route that follows
+    already files it that way, so all this owes is the shape and the reason.
+
+    Three rules, and the third is the one that matters:
+
+      * a seam the MODEL named outranks the phrase list — it read the whole
+        card, and `seam_evidence` deliberately reads only what real cards write;
+      * a `wave` the model already named keeps its shape and gains the same
+        suffix, so the seam is on the card whichever way it was found;
+      * a `one-off` is NEVER upgraded. A one-off with a seam is a contradiction
+        the model has to resolve, and upgrading it here would be exactly the
+        silent default DRE-2843 refuses — under-sizing is loud, and a card sized
+        wrong by a person is handed back within one run.
+
+    No seam anywhere and the decision comes back untouched, byte for byte in
+    the `why`: the stamp on an ordinary epic must not move because this reader
+    exists.
+    """
+    if decision.shape not in (SHAPE_EPIC, SHAPE_WAVE):
+        return decision
+    seam = decision.seam or seam_evidence(body)
+    if not seam:
+        return decision
+    seam = " ".join(str(seam).split())
+    return dataclasses.replace(
+        decision,
+        shape=SHAPE_WAVE,
+        seam=seam,
+        why=f"{decision.why.strip()} — {SEAM_MARK} {seam}; {SEAM_RULE}",
+    )
 
 
 def _unreachable(error: Exception) -> str:
@@ -1398,7 +1663,8 @@ def main(argv=None) -> int:
         for problem in found:
             print(f"  [FAIL] {problem}")
         print(
-            f"{len(size_tells()) if not found else 0} size test(s) and "
+            f"{len(size_tells()) if not found else 0} size test(s), "
+            f"{len(seam_tells()) if not found else 0} seam test(s) and "
             f"{len(planning_shape.shapes())} shape(s) in the prompt, "
             f"{len(found)} problem(s)"
         )
