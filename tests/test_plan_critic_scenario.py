@@ -606,16 +606,16 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual([p["client_payload"]["reason"] for p in self._dispatches()],
                          ["re-review"])
 
-        # The re-review run sizes itself off the thread, and DIES at 90.
+        # The re-review run sizes itself off the thread, and DIES at 100.
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "90")
-        self._died_at("90", "111")
+        self.assertEqual(self._outputs()["max_turns"], "100")
+        self._died_at("100", "111")
         self.assertEqual([p["client_payload"]["reason"] for p in self._dispatches()],
                          ["re-review", "review-retry"])
 
         # The retry reads the tombstone and runs with headroom.
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "135")
+        self.assertEqual(self._outputs()["max_turns"], "150")
 
         # ...and passes. Round 2 of 2 — the death was never a round.
         self._critic_writes("post", pc.PASS)
@@ -635,11 +635,11 @@ class CriticWalk(unittest.TestCase):
 
     def test_the_review_ceiling_is_sized_from_the_children(self):
         """The activate route counts the children fresh and hands the review
-        a ceiling sized for them — fifteen cards get 90, a three-card plan
+        a ceiling sized for them — fifteen cards get 100, a three-card plan
         gets the floor of 60. Both numbers moved up with DRE-2785's web-tool
-        grant; the shape did not."""
+        grant and the base again with DRE-3498; the shape did not."""
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "90")
+        self.assertEqual(self._outputs()["max_turns"], "100")
         self._shell("second critic — turn ceiling", STUB_KIDS="3")
         self.assertEqual(self._outputs()["max_turns"], "60")
 
@@ -755,13 +755,13 @@ class CriticWalk(unittest.TestCase):
 
     def test_a_dead_review_re_runs_itself_once_and_a_second_death_parks(self):
         """The whole of DRE-3289, walked. A fifteen-card plan's review dies at
-        90; the run re-dispatches ITSELF at the higher ceiling with no lane
-        move, the next run reads 135 off the thread, and when that one dies too
+        100; the run re-dispatches ITSELF at the higher ceiling with no lane
+        move, the next run reads 150 off the thread, and when that one dies too
         the epic parks with needs-human and a note naming both runs."""
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "90")
+        self.assertEqual(self._outputs()["max_turns"], "100")
 
-        self._died_at("90", "111")
+        self._died_at("100", "111")
 
         # ONE dispatch, on the ACTIVATE route, saying why it was asked for.
         sent = self._dispatches()
@@ -788,11 +788,11 @@ class CriticWalk(unittest.TestCase):
 
         # The retry run sizes itself from the thread the dead one left.
         self._shell("second critic — turn ceiling", STUB_KIDS="15")
-        self.assertEqual(self._outputs()["max_turns"], "135",
+        self.assertEqual(self._outputs()["max_turns"], "150",
                          "the retry ran into the same wall it just died at")
 
         # And it dies too. Two deaths is the bound: park for an operator.
-        self._died_at("135", "222")
+        self._died_at("150", "222")
         self.assertEqual(len(self._dispatches()), 1,
                          "a second death must not buy a third attempt")
         log = self._log()
@@ -801,7 +801,7 @@ class CriticWalk(unittest.TestCase):
         park = self._thread()[-1]
         self.assertIn("111", park)
         self.assertIn("222", park)
-        self.assertIn("135", park, "the ceiling the second one still could not finish under")
+        self.assertIn("150", park, "the ceiling the second one still could not finish under")
 
     def test_a_non_turn_death_dispatches_nothing_and_writes_no_lane(self):
         """The medic owns every other death and retries it once already

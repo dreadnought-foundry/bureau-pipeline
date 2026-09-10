@@ -1509,6 +1509,14 @@
     },
     {
       "file": ".github/workflows/plan.yml",
+      "anchor": "\"$(cat \"$RECEIPT\")\"",
+      "step": "Second critic — turns receipt",
+      "kind": "not-an-act",
+      "means": "What one post-approval review SPENT against what it was given — turns, ceiling, child count and model — posted alone because it is only a record while nothing else shares its comment (DRE-3498).",
+      "why": "A model receipt is a fact about a call, not something the pipeline did on its own — the same reading the 🧠 model-attempt rows above carry. Nothing was refused, recovered or held and no work moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. It is already machine-readable in its own single-definition grammar, `review-turns:`, owned by scripts/plan_critic.py (`review_turns_marker` / `parse_review_turns`) and read back by whoever re-tunes `post_review_turns`; a second grammar in the same comment is exactly what its 'alone' rule forbids."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
       "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-death-note.md\")\"",
       "step": "Second critic — the review died",
       "kind": "undeclared-act",
