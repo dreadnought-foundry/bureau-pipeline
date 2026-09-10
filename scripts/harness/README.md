@@ -267,7 +267,10 @@ readable with no harness PRs left open.
 Consumes the sandbox's REAL open Dependabot PR (never closes it — it is
 the vendor's standing fixture): asserts the dependabot-actor
 `pull_request` review run self-skipped clean (a `skipped` check run on
-the head, never a red crash — DRE-2067), waits for the reconcile
+the head, never a red crash — DRE-2067; read on the RUN-attributed
+checks only, since the head-bound `QA critic review` record DRE-2291
+publishes is review-named too and goes red on a REQUEST_CHANGES verdict,
+i.e. on a review route that worked), waits for the reconcile
 dispatch route's sha-bound verdict (budgeting one cron interval —
 DRE-2047/2053), and audits the receipt lifecycle (1..cap worker-bot
 receipts per head; past-cap = looping sweep; zero receipts on an
