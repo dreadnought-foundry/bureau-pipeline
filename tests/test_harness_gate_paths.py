@@ -116,7 +116,23 @@ class LegDriver:
                 return
             # The critic reviews dependabot/** branches too — its comment
             # is the second gate wake.
-            gh.post_verdict(n, "REQUEST_CHANGES", pr["head"]["sha"])
+            if mode == "quote":
+                # The critic reasoning out loud about the state it found:
+                # its verdict PROSE quotes the gate's status line. Same
+                # login as the note (one App, two steps), so only the
+                # comment's shape separates the two.
+                gh.comments.setdefault(n, []).append({
+                    "user": {"login": QA},
+                    "body": (
+                        f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: "
+                        f"REQUEST_CHANGES @{pr['head']['sha']}\n\n"
+                        f"## Summary\nThe gate has already posted "
+                        f"`{gate_paths.HUMAN_WAIT_MARKER}` here, so nothing "
+                        "merges on my verdict.\n"
+                    ),
+                })
+            else:
+                gh.post_verdict(n, "REQUEST_CHANGES", pr["head"]["sha"])
             self.state["named_verdict"] = True
             if mode == "touch":
                 gh.gate_update_branch(n)
@@ -393,6 +409,55 @@ class HumanPathTest(unittest.TestCase):
         # Not "slow": nothing can ever arrive, so sitting out the verdict
         # budget only buys a timeout that names the wrong culprit.
         self.assertLess(faketime.now, _ctx(FakeGitHub()).verdict_timeout)
+
+    def test_a_verdict_quoting_the_marker_is_not_a_second_waiting_state(self):
+        """The once-only count separates the gate's note from the critic's
+        verdict by SHAPE, because it cannot separate them by author: both
+        are posted by the qa-bot. `_human_wait_comments` already promises a
+        quoted marker "never satisfies (or spams) the assertion" — counting
+        `MARKER in body` does not deliver it for the one author the filter
+        admits, and the leg then reds with "2 waiting-for-human comments"
+        against a gate that posted exactly one.
+
+        This is the same read as the gate's own idempotence key
+        (scripts/gate_note.py), and it has to move with it: fixing the gate
+        so the quoting verdict SURVIVES is what puts a second
+        marker-carrying comment on the PR in the first place.
+        """
+        result, _ = _run(LegDriver(named="quote"))
+        self.assertTrue(result.ok, result.errors)
+
+    def test_the_quoted_verdict_is_still_read_as_the_second_gate_wake(self):
+        """Anti-vacuity for the test above: the quoting comment must still
+        be the verdict the leg is waiting for, or the leg would pass by
+        never seeing a second wake at all."""
+        gh = FakeGitHub()
+        ctx = _ctx(gh)
+        head = "c" * 40
+        quoting = {
+            "user": {"login": QA},
+            "body": (
+                f"🔎 {merge_gate.CRITIC_MARKER} — VERDICT: APPROVE @{head}\n\n"
+                f"## Summary\n`{gate_paths.HUMAN_WAIT_MARKER}` is already up.\n"
+            ),
+        }
+        note = {
+            "user": {"login": QA},
+            "body": (
+                f"⏸️ {gate_paths.HUMAN_WAIT_MARKER} — dependabot PR includes "
+                "a semver-major update"
+            ),
+        }
+        comments = [note, quoting]
+        self.assertEqual(
+            framework.verdict_state(comments, ctx.qa_login, head)[0], "APPROVE",
+            "the quoting comment stopped reading as the critic's verdict",
+        )
+        waits = gate_paths._human_wait_comments(comments, ctx.qa_login)
+        self.assertEqual(
+            [c["body"] for c in waits], [note["body"]],
+            "the critic's verdict was counted as a waiting-for-human note",
+        )
 
 
 class RealPrPostureTest(unittest.TestCase):
