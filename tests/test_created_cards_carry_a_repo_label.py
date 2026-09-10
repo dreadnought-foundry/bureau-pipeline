@@ -231,6 +231,18 @@ class TheCreateSeamTakesLabelsAndALane(unittest.TestCase):
         _create(fresh, "Pipeline failure: ci", self.body_file, "--repo", "atlas")
         self.assertEqual(fresh.created["stateId"], "state-planning")
 
+    def test_the_receipt_names_each_label_once(self):
+        # A caller that names the WHOLE label set — repair_card.card_labels
+        # does, so its answer is readable in one place — passes repo:<slug>
+        # itself, and the seam prepends it too. The label written is right
+        # either way (_team_label_ids deduplicates the ids), but a receipt
+        # that says repo:atlas twice describes a write that happened once.
+        out = _create(self.fake, "Pipeline failure: ci", self.body_file,
+                      "--repo", "atlas", "--label", "repo:atlas",
+                      "--label", "Bug")
+        self.assertEqual(1, out.count("repo:atlas"), f"receipt: {out!r}")
+        self.assertEqual(["repo:atlas", "Bug"], self.fake.label_names())
+
     def test_create_card_returns_the_issue_it_made(self):
         # The callable behind the CLI: a caller that must go on to stamp,
         # comment or name a branch after the card needs the identifier back.
