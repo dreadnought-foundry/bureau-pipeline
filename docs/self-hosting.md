@@ -40,7 +40,13 @@ agent-bureau repo; the third clause added by DRE-2103).
   boundary-touching PRs here via its `pull_request` trigger — the merge
   gate's all-checks-green rule holds a PR whose harness run is red, and
   since DRE-2551 it runs on every push to `main` as well, so trunk commits
-  carry a stamp of their own.
+  carry a stamp of their own. Every attempt OPENS the same context `pending`
+  before it runs a scenario (DRE-3515): a commit status stands on the sha
+  until something posts over it, so before this a re-run spent its whole
+  length under the previous attempt's verdict — on 2026-09-09 PR #332 read
+  `blocked` on the console while the harness was re-proving the very check it
+  was reporting. Pending is still RED to `release_gate.py`; nothing promotes
+  on a run that has not finished.
 - **`stable` moves itself; `vN` is still cut by hand (DRE-2551).**
   `promote-channel.yml` keeps one moving tag, `stable`, on the newest
   commit on `main` carrying a green `integration-harness` stamp. No

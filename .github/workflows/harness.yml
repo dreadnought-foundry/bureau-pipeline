@@ -193,6 +193,39 @@ jobs:
         id: tested
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # The same context, opened PENDING before any scenario runs (DRE-3515).
+      #
+      # A commit status is not a check run. GitHub replaces a check run when a
+      # run is re-run — which is why `harness` goes back to in_progress — but a
+      # STATUS stands on the sha until something posts over it, and the verdict
+      # stamp at the bottom of this job only fires when the job ends. So for the
+      # whole of a re-run, every consumer reads the PREVIOUS attempt's verdict.
+      # Live on 2026-09-09, PR #332: attempt 2 stamped `failure` at 15:18 PT,
+      # attempt 3 started at 15:20 PT, and the console read the pull request as
+      # "blocked — Stuck, needs you" while this harness was busy re-proving the
+      # very check it was reporting. The console was reading GitHub faithfully;
+      # the stale stamp was the lie, so the fix belongs here and not in a reader.
+      #
+      # Pending is honest to every consumer of the context: release_gate.py
+      # counts it RED ("pending proved nothing" — a tag still cannot promote on
+      # a run that has not finished), and promote-channel.yml fires on
+      # workflow_run completion, by which time the verdict below has replaced
+      # this. A run CANCELLED at the cap still stamps no verdict and now leaves
+      # this pending standing — the honest record of a run that proved nothing,
+      # with the job's own cancelled check run red beside it.
+      - name: Open the harness stamp for this attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ steps.tested.outputs.sha }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
+            -f state="pending" \
+            -f context="integration-harness" \
+            -f description="integration harness: running (attempt ${ATTEMPT})" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+
       # A pull request's run drives the SHARED sandbox with whatever
       # scripts/harness/ its branch carries (DRE-3101). On 2026-09-04 that
       # meant three PR branches cut before DRE-3075 merged still ran the old,

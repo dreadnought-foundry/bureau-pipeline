@@ -568,6 +568,18 @@ def _step(predicate):
     return None
 
 
+def _verdict_stamp():
+    """The stamp that carries the run's VERDICT — the last one in the job.
+
+    "The stamp" stopped meaning "the only ``/statuses/`` step" at DRE-3515: the
+    job now OPENS by stamping the same context pending, so that a re-run does
+    not sit under the previous attempt's verdict for its whole length. The
+    receipt below belongs to the closing stamp, which is the last one.
+    """
+    stamps = [s for s in _steps() if "/statuses/" in (s.get("run") or "")]
+    return stamps[-1] if stamps else None
+
+
 class WorkflowWiringTest(unittest.TestCase):
     def test_the_deadline_is_a_dispatch_input(self):
         on = _doc().get("on", _doc().get(True)) or {}
@@ -599,7 +611,7 @@ class WorkflowWiringTest(unittest.TestCase):
         self.assertLess(framework.WAIT_DEADLINE_SECONDS * 2, cap)
 
     def test_the_stamp_quotes_the_block_in_its_description(self):
-        step = _step(lambda s: "/statuses/" in (s.get("run") or ""))
+        step = _verdict_stamp()
         self.assertIsNotNone(step, "no stamp step")
         env = step.get("env") or {}
         self.assertEqual(
