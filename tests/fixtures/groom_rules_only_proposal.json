@@ -917,6 +917,9 @@
       "bureau-pipeline": 13,
       "agent-bureau": 3
     },
+    "held_repos": [],
+    "offered": 34,
+    "held_blockers": [],
     "capacity": 8,
     "cycle_days": 14,
     "window_days": 14,

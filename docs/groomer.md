@@ -179,9 +179,16 @@ batch that was right apart from two rows.
 | `🧺 groom-added: <id> DRE-N[ — <reason>]` | the CEO | per card |
 | `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · refused: n → Planning at <time PT>` + table | the drain | one per drain |
 | `🧺 groom-drain-refused: <id> — <reason>` | the drain | one per refusal |
+| `🧺 groom-hold-repo: <slug>` | the CEO (console or by hand) | not bound to a proposal id; newest marker per slug wins; pipeline-authored ignored |
+| `🧺 groom-release-repo: <slug>` | the CEO (console or by hand) | same |
 
 `<id>` is the proposal id the approval names, and a decision naming any other
 batch says nothing about the approved one.
+
+The last two are the exception that proves the shape: they name a repo **slug**
+(`[a-z0-9][a-z0-9-]*`) and no id at all, because a hold outlives the proposal it
+was written on. Everything else about them is the same — anchored at the start
+of the comment, the emoji optional, ignored when the pipeline wrote it.
 
 Every marker is matched the way the approval has always been matched — **anchored
 at the start of the comment**, the emoji optional, the id `[0-9a-f]{6,}` — so a
@@ -325,6 +332,60 @@ A proposal built with `--batch-cycles 2` or more is not drainable — its batch
 table records one position per card and not which of the several cycles each
 belongs to, so the drain refuses rather than guessing. Propose one cycle at a
 time (the default, and what the workflow passes).
+
+### Switching a repo off (DRE-3403)
+
+Saying "not that repo" and having it happen anyway is a missing switch, not a
+communication problem. atlas cards were proposed, approved as part of a batch,
+drained, and one was mid-planning before it was pulled back by hand — after the
+decision that the Bureau repos are the only ones proposed until the groomer is
+solid had been stated three times (CEO decision, 2026-09-08).
+
+```
+🧺 groom-hold-repo: atlas          switches atlas off
+🧺 groom-release-repo: atlas       switches it back on
+```
+
+**What `propose` does.** Every card whose `repo:` label names a held repo is
+removed *before* the census the model reads is built, so a held card is never
+sent to the model, never ranked, never given a cycle, never counted against
+`--capacity`, and never half of a collision pair or a pull-forward. The batch
+fills from the other repos instead. The lane's **population and census are
+untouched** — the work is still there, it is just not on offer — and the JSON
+carries `held_repos: [{"repo": "atlas", "cards": 12}]` beside
+`offered: <population minus held>`.
+
+The page gains one section, directly before *On cycles*, and only when
+something is held:
+
+```
+## Held repos — switched off by you
+
+- held: atlas · 12 cards
+```
+
+A slug with no cards in the lane still gets its line (`· 0 cards`): the CEO
+switched that repo off, and a hold that rendered nothing would read as a hold
+nobody honoured. A proposal with no hold renders exactly as it did before this
+existed.
+
+A batched card that Linear says is **blocked by a card in a held repo** stays in
+the batch and is named in the collisions section as `blocked by a held repo`.
+The hold takes the blocker out of the offer and the ordering constraint goes
+with it, but `blockedBy` is the relation the promotion gate reads, so the
+dependency gate holds the card later anyway — the groomer names it rather than
+silently dropping it.
+
+**What the drain does.** It reads the same markers **at drain time**, so a hold
+written after the proposal was posted still holds those cards back: each one is
+recorded `held back` with Why `repo held: <slug>` in the `groom-drained` record,
+and the rest of the batch moves.
+
+For a dry run with no card to read the markers off, `--hold-repo <slug>`
+(repeatable) does exactly what the marker does.
+
+**Not the work-in-progress cap.** That one stops BUILDS after classification.
+This stops the cards being proposed at all.
 
 ## The next proposal answers your last decline (DRE-3373)
 

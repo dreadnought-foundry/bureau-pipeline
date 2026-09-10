@@ -98,6 +98,18 @@ additions, reads the WHOLE thread to find them, and writes one
 `groom-drain-refused: <id> — <reason>`, and a batch that already carries a
 drained record is refused, so a second dispatch moves nothing.
 
+And the CEO can switch a whole REPO off (DRE-3403). `🧺 groom-hold-repo: atlas`
+on the card leaves atlas out of every proposal until
+`🧺 groom-release-repo: atlas` switches it back on: the cards are removed
+before the census is built, so none of them is sent to the model, ranked,
+given a cycle or counted against `--capacity`, and the page lists the repo once
+as held. The lane's population and census are untouched — the work is still
+there, it is just not on offer. The drain reads the same markers at drain time,
+so a hold written after the proposal was posted holds those cards back (`held
+back`, `repo held: <slug>`) while the rest of the batch moves. Not to be
+confused with the per-repo work-in-progress cap, which stops BUILDS after
+classification; this stops the cards being proposed at all.
+
 And the next proposal ANSWERS the last decline (DRE-3373). `propose --post`
 reads the card first, and when it finds a decline newer than the last proposal
 there — unapproved, reasoned, not written by the pipeline — the page opens with
@@ -132,6 +144,7 @@ CLI:
                                        [--window-days 14] [--no-judgement]
                                        [--out proposal.json] [--post DRE-N]
                                        [--keep-answer judgement-answer.txt]
+                                       [--hold-repo atlas]
     python3 scripts/groomer.py drain   --card DRE-N [--lane Intake]
 
 `--keep-answer` writes the ranked read's raw answer — every piece of a
@@ -257,6 +270,33 @@ EXCLUDE_TAG = "groom-excluded"       # `<id> DRE-N[ — <reason>]`, per card
 ADD_TAG = "groom-added"              # `<id> DRE-N[ — <reason>]`, per card
 DECISION_TAGS = (APPROVAL_TAG, DECLINE_TAG, EXCLUDE_TAG, ADD_TAG)
 
+# --- the CEO's repo switch (DRE-3403) ---------------------------------------
+# Beside the decision markers, and deliberately NOT one of them: these are not
+# about a batch. The CEO said three times that the Bureau repos — agent-bureau
+# and bureau-pipeline — are the only ones proposed until the groomer is solid,
+# and atlas cards were proposed anyway, approved as part of a batch, drained,
+# and one was mid-planning before it was pulled back by hand (CEO decision,
+# 2026-09-08). Saying "not that repo" three times and having it happen anyway
+# is a missing switch, not a communication problem.
+#
+# So a repo the CEO switches off is left out of every proposal until it is
+# switched back on. The marker names a SLUG and no proposal id, because a hold
+# outlives the proposal it was written on — that is the whole point of a
+# switch — and the newest marker per slug wins, so `groom-release-repo` is not
+# a second mechanism but the same switch the other way up.
+#
+# Read the way every other marker is read (anchored at the start of the
+# comment, emoji optional) and honoured only when the author is not the
+# pipeline's own Linear identity. That gate matters most in the RELEASE
+# direction: a proposer that could switch a repo back on could undo the CEO's
+# own answer and propose the cards anyway.
+#
+# DISTINCT from the per-repo work-in-progress cap, which stops BUILDS after
+# classification. This stops the cards being proposed at all.
+REPO_HOLD_TAG = "groom-hold-repo"
+REPO_RELEASE_TAG = "groom-release-repo"
+REPO_TAGS = (REPO_HOLD_TAG, REPO_RELEASE_TAG)
+
 # The drain's OWN records — written by the drain, never by a person, and read
 # by the console and by the next drain.
 #
@@ -277,7 +317,8 @@ DRAIN_REFUSED_TAG = "groom-drain-refused"
 # reason is defanged against (DRE-3373). A reason is CEO-written free text that
 # `propose` renders back into a Linear comment, and a Linear comment is exactly
 # where all of these are read from.
-ALL_MARKERS = (PROPOSAL_TAG, *DECISION_TAGS, DRAINED_TAG, DRAIN_REFUSED_TAG)
+ALL_MARKERS = (PROPOSAL_TAG, *DECISION_TAGS, *REPO_TAGS, DRAINED_TAG,
+               DRAIN_REFUSED_TAG)
 
 # The answering paragraph's opener (DRE-3373). A constant because the console
 # finds the answer by this string, so a rename here is a rename there.
@@ -1044,15 +1085,28 @@ def cycle_days(cycles: list[dict]) -> int:
 def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CAPACITY,
             batch_cycles: int = 1, repo_priority=REPO_PRIORITY,
             lane: str = "Intake", now: str | None = None,
-            window_days: int = WINDOW_DAYS, judgement=None) -> dict:
+            window_days: int = WINDOW_DAYS, judgement=None,
+            held_repos=()) -> dict:
     """The whole population, sequenced, with one outcome per card.
 
     `judgement` is a `groom_judgement.Judgement` (or a bare
     `dict[str, Verdict]`) and `None` is the rules-only path this has always
     taken — `--no-judgement`, kept byte-for-byte so the audit card can run the
     two readings over one population (DRE-3150).
+
+    `held_repos` is the slugs the CEO has switched off (DRE-3403). Their cards
+    are removed HERE, before anything else reads them, so a held card is never
+    ranked, never sequenced, never given a cycle, never counted against
+    `capacity` and never half of a collision pair or a pull-forward. What stays
+    the whole lane is `population` and the census: a held repo's cards are
+    still visible as existing, and only the OFFER shrinks.
     """
     now = now or _now()
+    # The whole lane, kept under its own name — every read below this line is
+    # of the offer, and the two must not be able to swap by accident.
+    in_lane = list(cards)
+    holds = held_repo_rows(in_lane, held_repos)
+    cards = offered(in_lane, held_repos)
     verdicts = _verdicts_of(judgement)
     dead, live = [], []
     unstated = []
@@ -1123,11 +1177,20 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                        "band": None, "deferred": False, "outcome": "dead"}
                       for d in dead]
 
+    in_batch = {row["identifier"] for row in now_rows}
     proposal = {
         "generated_at": now,
         "lane": lane,
-        "population": len(cards),
-        "census": census(cards),
+        # The LANE, not the offer: a held repo's cards are still there, and a
+        # census that hid them would say the work had gone away.
+        "population": len(in_lane),
+        "census": census(in_lane),
+        # …and what was actually put in front of the reader (DRE-3403).
+        "held_repos": holds,
+        "offered": len(cards),
+        "held_blockers": [row for row in blocked_by_held(live, in_lane,
+                                                         held_repos)
+                          if row["identifier"] in in_batch],
         "capacity": capacity,
         "cycle_days": cycle_days(cycles),
         "window_days": window_days,
@@ -1740,6 +1803,12 @@ def render_proposal(proposal: dict) -> str:
             add(f"- {pair['before']} before {pair['after']} — {pair['why']}")
     else:
         add("- None found in this population.")
+    # A card the hold took the blocker out from under. Named, never dropped —
+    # the dependency gate holds it later (DRE-3403).
+    for row in proposal.get("held_blockers") or []:
+        add(f"- {row['identifier']} — blocked by a held repo: {row['blocked_by']} "
+            f"is in {row['repo']}, which you switched off. It stays in the "
+            f"batch and the dependency gate holds it until then.")
     add("")
     unreadable = proposal["collisions"]["unreadable"]
     if unreadable:
@@ -1800,6 +1869,7 @@ def render_proposal(proposal: dict) -> str:
               "they are sequenced normally rather than recommended dead.")
     add("")
     w.extend(_render_unranked(proposal))
+    w.extend(_render_held(proposal))
     add("## On cycles")
     add("")
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
@@ -1981,6 +2051,30 @@ def _render_dead(proposal: dict) -> list:
                      + f" · {_trim(row['title'])}")
         w.append("")
     return w[:-1] if w else w
+
+
+def _render_held(proposal: dict) -> list:
+    """The repos the CEO switched off, and the marker that switches one back on.
+
+    ONE section, and only when something is held — a proposal with no hold
+    renders byte for byte as it did before this card, which is what makes the
+    switch cheap to leave in place. The grammar is fixed because the console
+    mirrors it: `- held: <slug> · <N> cards`, and a slug with no cards in the
+    lane still gets its line.
+    """
+    rows = proposal.get("held_repos") or []
+    if not rows:
+        return []
+    w = ["## Held repos — switched off by you", ""]
+    for row in rows:
+        w.append(f"- held: {row['repo']} · {_plural(row['cards'], 'card')}")
+    w.append("")
+    w.append(f"Their cards are still in {proposal['lane']} and were not ranked, "
+             f"not counted against the capacity and not offered here — comment "
+             f"`{MARK} {REPO_RELEASE_TAG}: <slug>` on this card to switch one "
+             f"back on.")
+    w.append("")
+    return w
 
 
 def _render_unranked(proposal: dict) -> list:
@@ -2184,6 +2278,119 @@ def approved_id(records: list[dict]) -> tuple[str | None, str | None]:
     return decisions["approved"], decisions["problem"]
 
 
+# --------------------------------------------------------------------------- #
+# the repo switch (DRE-3403)                                                   #
+# --------------------------------------------------------------------------- #
+
+# The same anchoring `decision_match` uses, and for the same reason: a reader
+# that matched the marker anywhere would read a sentence ABOUT holding a repo
+# as a hold. What differs is the tail — a SLUG, `[a-z0-9][a-z0-9-]*`, and no
+# proposal id, because a hold outlives the proposal it was written on. The
+# lookahead is what stops `atlas.beta` reading as `atlas`: a slug that does not
+# end where the label's own slug ends is not this repo's slug, and holding the
+# wrong repo is worse than holding none.
+_REPO_SWITCH_LINES = {
+    tag: re.compile(rf"^\s*(?:{MARK}\s*)?{tag}\s*:\s*([a-z0-9][a-z0-9-]*)(?=\s|$)")
+    for tag in REPO_TAGS
+}
+
+
+def repo_switch_match(tag: str, body: str | None):
+    """`re.Match` for a repo switch opening `body`, or None — the ONE matcher.
+
+    Group 1 is the repo slug. Both switches are read here, so a hold and a
+    release cannot quietly arrive with different anchoring.
+    """
+    pattern = _REPO_SWITCH_LINES.get(tag)
+    if pattern is None:                                   # pragma: no cover
+        raise KeyError(f"{tag} is not one of the groomer's repo switches")
+    return pattern.match((body or "").strip())
+
+
+def held_repos(records: list[dict]) -> list[str]:
+    """The repos that are switched off right now, read off a whole thread.
+
+    The NEWEST marker per slug wins — a release after a hold switches the repo
+    back on, and a hold after that switches it off again — so this is one
+    switch read in thread order rather than two lists that can disagree.
+    `records` is `linear_ops.comment_records(card, whole_thread=True)`: a hold
+    is not bound to a proposal, so the current answer can be the OLDEST comment
+    on the card, and the fifty-comment window would lose it.
+
+    Honoured only when the author is not the pipeline's own Linear identity
+    (DRE-2721). The gate matters most in the release direction: a proposer that
+    could switch a repo back on could undo the CEO's own answer and propose the
+    cards anyway. A marker it wrote is ignored and named in the run log, so a
+    hold that did nothing is visible rather than silent.
+    """
+    switch: dict[str, bool] = {}
+    ignored: list[tuple[str, str]] = []
+    for record in records:
+        body = record.get("body") or ""
+        for tag in REPO_TAGS:
+            match = repo_switch_match(tag, body)
+            if not match:
+                continue
+            if record.get("authored_by_pipeline"):
+                ignored.append((tag, match.group(1)))
+            else:
+                switch[match.group(1)] = tag == REPO_HOLD_TAG
+            break
+    for tag, slug in ignored:
+        print(f"groomer: `{MARK} {tag}: {slug}` was written by the pipeline's "
+              f"own Linear identity, so it was ignored — the proposer does not "
+              f"switch a repo off or back on", file=sys.stderr)
+    return sorted(slug for slug, held in switch.items() if held)
+
+
+def offered(cards: list[dict], held) -> list[dict]:
+    """The lane minus every card whose repo is switched off (DRE-3403).
+
+    ONE definition. `_build` filters before it builds the census the model
+    reads and `propose` filters before it sequences, and two filters is two
+    chances for a held card to reach the model or the batch.
+    """
+    slugs = set(held)
+    return [card for card in cards if repo_of(card) not in slugs]
+
+
+def held_repo_rows(cards: list[dict], held) -> list[dict]:
+    """`[{"repo": <slug>, "cards": <n>}]` — one row per held slug, biggest
+    first, then alphabetical.
+
+    A slug with no cards in the lane still gets a row: the CEO switched that
+    repo off, and a hold that rendered nothing would read as a hold nobody
+    honoured.
+    """
+    counts = Counter(repo_of(card) for card in cards)
+    return sorted(({"repo": slug, "cards": counts.get(slug, 0)}
+                   for slug in dict.fromkeys(held)),
+                  key=lambda row: (-row["cards"], row["repo"]))
+
+
+def blocked_by_held(on_offer: list[dict], cards: list[dict], held) -> list[dict]:
+    """Batchable cards a card in a HELD repo blocks, one row per pair.
+
+    The hold takes the blocker out of the offer, and the ordering constraint
+    goes with it — so the blocked card sequences as though nothing held it.
+    It is NAMED rather than dropped: `blockedBy` is the relation the promotion
+    gate reads, so the dependency gate holds it later anyway, and a groomer
+    that quietly removed it would be answering a question nobody asked it.
+    """
+    slugs = set(held)
+    held_cards = {card["identifier"]: repo_of(card) for card in cards
+                  if repo_of(card) in slugs}
+    rows = []
+    for card in on_offer:
+        for blocker in blockers_of(card):
+            if blocker in held_cards:
+                rows.append({"identifier": card["identifier"],
+                             "blocked_by": blocker,
+                             "repo": held_cards[blocker]})
+    return sorted(rows, key=lambda row: (_card_sort_key(row["identifier"]),
+                                         _card_sort_key(row["blocked_by"])))
+
+
 # The proposal's own heading, and the one line that names the lane. Both are
 # written by `render_proposal` a few dozen lines up, and read back here: the
 # render and this parser are two halves of ONE contract, so the round trip is
@@ -2346,7 +2553,11 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
 
     lane = record["lane"] or lane
     cycle = _approved_cycle(lops, record)
-    plan = _drain_plan(record, decisions, lane=lane)
+    # The repo switch, read at DRAIN time off the same thread (DRE-3403), so a
+    # hold written AFTER the proposal was posted never drains a card the CEO
+    # has switched off.
+    plan = _drain_plan(record, decisions, lane=lane,
+                       held=held_repos(records))
 
     # Every card's CURRENT lane, before anything moves. A card somebody moved by
     # hand since the approval is not the card the CEO approved a move for, and
@@ -2392,15 +2603,20 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
     return result
 
 
-def _drain_plan(record: dict, decisions: dict, *, lane: str) -> dict:
-    """The batch minus the exclusions plus the additions, and the table row
-    every card involved gets.
+def _drain_plan(record: dict, decisions: dict, *, lane: str, held=()) -> dict:
+    """The batch minus the exclusions and the held repos, plus the additions,
+    and the table row every card involved gets.
 
     Rows follow the PROPOSAL's own order first, so a reader can lay the record
     beside the proposal and go down both together; then the additions, in the
     order the CEO wrote them; then any decision the drain would not honour.
+
+    A card whose repo is switched off is held back through the SAME per-card
+    exclusion the CEO's own marker uses (DRE-3403) — one way for a card to stay
+    behind, one row shape in the record, and the rest of the batch moves.
     """
     excluded, added = decisions["excluded"], dict(decisions["added"])
+    switched_off = set(held)
     in_batch = {row["identifier"] for row in record["batch"]}
     ignored = list(decisions["ignored"])
 
@@ -2422,6 +2638,13 @@ def _drain_plan(record: dict, decisions: dict, *, lane: str) -> dict:
             held_back.append(row)
             rows.append({"identifier": identifier, "outcome": "held back",
                          "why": _marker_why(mark)})
+            continue
+        # The record's own repo cell — the repo the CEO was looking at when
+        # they approved the batch, and the one the hold is about.
+        if row.get("repo") in switched_off:
+            held_back.append(row)
+            rows.append({"identifier": identifier, "outcome": "held back",
+                         "why": f"repo held: {row['repo']}"})
             continue
         if identifier in added:
             # Already in the batch: the addition asks for something that is
@@ -2635,6 +2858,12 @@ def _shaping(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--window-days", type=int, default=WINDOW_DAYS,
                         help="how far back the batch reaches, in days of "
                              "creation age (default %(default)s)")
+    parser.add_argument("--hold-repo", dest="hold_repo", action="append",
+                        default=[], metavar="SLUG",
+                        help="switch a repo off for this run, exactly as "
+                             "`groom-hold-repo: <slug>` on the --post card "
+                             "does — repeatable, and how a dry run with no "
+                             "card to read exercises the switch (DRE-3403)")
     parser.add_argument("--no-judgement", dest="judgement",
                         action="store_false", default=True,
                         help="sequence by the rules alone and make NO model "
@@ -2655,11 +2884,22 @@ def _build(args) -> dict:
     function or the model call inside it.
     """
     cards = read_population(linear_ops, args.lane)
+    # The repo switch, read BEFORE the census (DRE-3403). A card the model
+    # never sees cannot be ranked, cannot be given a cycle and cannot fill a
+    # slot in the batch — which is the difference between this and the
+    # work-in-progress cap, that stops builds after classification.
+    holds = read_holds(linear_ops, args)
+    on_offer = offered(cards, holds)
+    if holds:
+        print(f"groomer: {_plural(len(holds), 'repo')} switched off — "
+              f"{', '.join(holds)}; {_plural(len(cards) - len(on_offer), 'card')} "
+              f"left out of this proposal", file=sys.stderr)
     cycles = read_cycles(linear_ops)
     judgement = None
     if getattr(args, "judgement", False):
         judgement = groom_judgement.run(
-            groom_judgement.census(cards), groom_context.read_pack(linear_ops))
+            groom_judgement.census(on_offer),
+            groom_context.read_pack(linear_ops))
         if judgement.problem:
             print(f"groomer: {judgement.problem}", file=sys.stderr)
         # Beside it, what the call was sized with — the number that explains a
@@ -2674,7 +2914,7 @@ def _build(args) -> dict:
         # The number a run that says `answered` owes (DRE-3331), and the raw
         # answer it was read off, kept where the workflow can pick it up.
         print(f"groomer: the ranked read ranked {judgement.ranked} of "
-              f"{len(cards)} card(s)", file=sys.stderr)
+              f"{len(on_offer)} card(s)", file=sys.stderr)
         keep = getattr(args, "keep_answer", None)
         if keep and judgement.answer is not None:
             with open(keep, "w", encoding="utf-8") as fh:
@@ -2685,7 +2925,27 @@ def _build(args) -> dict:
     return propose(cards, cycles=cycles, capacity=args.capacity,
                    batch_cycles=args.batch_cycles, lane=args.lane,
                    window_days=args.window_days, judgement=judgement,
+                   held_repos=holds,
                    repo_priority=tuple(p for p in args.priority.split(",") if p))
+
+
+def read_holds(lops, args) -> list[str]:
+    """The repos switched off for this run (DRE-3403).
+
+    Off the `--post` card's WHOLE thread when there is a card: a hold is not
+    bound to a proposal id and outlives the proposal it was written on, so the
+    current answer can be the oldest comment on the card and the fifty-comment
+    window would lose it. `--hold-repo` supplies the same thing on a dry run
+    with no card to read, and is honoured beside a card's own markers rather
+    than instead of them — a flag that silently dropped a hold standing on the
+    card would be the failure this switch exists to prevent.
+    """
+    flags = {slug for slug in (getattr(args, "hold_repo", None) or ()) if slug}
+    card = getattr(args, "post", None)
+    if not card:
+        return sorted(flags)
+    return sorted(flags | set(held_repos(
+        lops.comment_records(card, whole_thread=True))))
 
 
 def main(argv=None) -> int:

@@ -48,7 +48,9 @@ class FakeOps:
         self.comments = list(comments or [])
         self.posted: list[tuple[str, str]] = []
 
-    def comment_records(self, identifier):
+    def comment_records(self, identifier, *, whole_thread=False):
+        # `whole_thread` is what the repo-switch read asks for (DRE-3403); this
+        # fake's thread is short enough that the two answers are the same.
         return list(self.comments)
 
     def cmd_comment(self, identifier, body):
