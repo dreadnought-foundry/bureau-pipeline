@@ -71,8 +71,23 @@ REBASE_TIMEOUT = 600.0
 # any step); this only needs to cover runner queueing.
 CHECKS_TIMEOUT = 600.0
 
-# A review-shaped check run that concluded red = the DRE-2047/2067 crash.
+# A review-shaped check run that concluded red is the DRE-2047/2067 crash —
+# UNLESS it is the critic's head-bound record carrying a verdict (below).
 RED_CONCLUSIONS = frozenset({"failure", "timed_out"})
+
+# The critic's head-bound check (publish_review_check.py, DRE-2291/3304)
+# reports the VERDICT as its conclusion: REQUEST_CHANGES → failure, so the
+# merge gate stays shut. That red is a working route, not a crash (DRE-3572
+# — harness run 34519112325 failed the promotion gate on exactly this). A
+# verdict is recognised by its `output.title`, which the producer writes as
+# `VERDICT: <WORD> @<sha[:8]>`; its no-review records ("Review crashed",
+# "no readable verdict", "too large") never start with that prefix.
+VERDICT_TITLE_PREFIX = "VERDICT:"
+# publish_review_check.decide's own words for "nothing was reviewed". A
+# title/summary carrying any of these is a crash even under a VERDICT:
+# title — contradictory records fail closed. Pinned to the producer in
+# tests/test_harness_dependabot_flow.py.
+CRASH_MARKERS = ("could not run", "treated as a crash", "review crashed")
 
 NO_PR_GUIDANCE = (
     "no open genuine Dependabot PR in the sandbox — one cannot be conjured "
@@ -93,6 +108,22 @@ def review_check_runs(check_runs) -> list:
     review-run exclusion is by verified origin, DRE-1994, which needs the
     actions:read permission neither harness App has)."""
     return [r for r in check_runs if "review" in ((r.get("name") or "").lower())]
+
+
+def bound_verdict(run) -> bool:
+    """True when a review check run carries the critic's bound verdict —
+    read from the CHECK RUN's `output.title`, never from a comment. A run
+    with no `output` (a listing that stripped it, or a run that died before
+    writing one) has no verdict to read and is not one; neither is a
+    VERDICT-titled run whose title or summary says the reviewer could not
+    run. APPROVE and REQUEST_CHANGES classify alike: the conclusion colour
+    is the verdict, and a red verdict is the route working as designed."""
+    output = run.get("output") or {}
+    title = (output.get("title") or "").strip()
+    if not title.startswith(VERDICT_TITLE_PREFIX):
+        return False
+    text = f"{title} {output.get('summary') or ''}".lower()
+    return not any(marker in text for marker in CRASH_MARKERS)
 
 
 def receipt_count(comments, worker_login: str, head_sha: str) -> int:
@@ -165,7 +196,9 @@ class DependabotFlow(framework.Scenario):
         tracker = {"head": ctx.state["head"], "state": "none", "detail": ""}
 
         # 1. SELF-SKIP: the dependabot-actor pull_request review run on
-        # this head must have concluded — skipped, never red.
+        # this head must have concluded — skipped, never crashed red. The
+        # critic's head-bound check may sit red beside it with a bound
+        # REQUEST_CHANGES verdict; that is a verdict, not a crash (DRE-3572).
         def poll_review_runs():
             runs = review_check_runs(qa_gh.list_check_runs(ctx.repo, tracker["head"]))
             if runs and all(r.get("status") == "completed" for r in runs):
@@ -186,6 +219,7 @@ class DependabotFlow(framework.Scenario):
         red = [
             r for r in review_runs
             if (r.get("conclusion") or "") in RED_CONCLUSIONS
+            and not bound_verdict(r)
         ]
         if red:
             raise ScenarioFailure(
