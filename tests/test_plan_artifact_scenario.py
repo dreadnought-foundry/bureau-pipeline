@@ -89,6 +89,16 @@ The Intake lane, as it will look.
 | DRE-2718 | The Intake lane exists |
 | DRE-2719 | Everything goes to Planning |
 
+```ledger-check
+[
+  {"card": "DRE-2718", "tells_checked": ["contracts-between-pieces"],
+   "ledger_match": "DRE-3088", "ledger_status": "fresh"},
+  {"card": "DRE-2719",
+   "tells_checked": ["two-languages-or-tiers", "unbounded-quantifier"],
+   "ledger_match": "none", "ledger_status": "fresh"}
+]
+```
+
 ## Proof and demo
 
 The harness replays a hostile card through the gate; the demo is one epic
@@ -321,6 +331,23 @@ class ArtifactStopsTheRunTest(unittest.TestCase):
         r = self._check(hexed)
         self.assertEqual(r.returncode, 1)
         self.assertIn("token", (r.stdout + r.stderr).lower())
+
+    def test_an_omitted_ledger_check_stops_the_run(self):
+        # DRE-3362 — the silent omission the epic names. An artifact with no
+        # ledger-check block reads as a decomposition nobody sized against
+        # the ledger, and it must not reach the CEO looking complete.
+        stripped = re.sub(r"```ledger-check.*?```\n\n", "", V1, flags=re.DOTALL)
+        r = self._check(stripped)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ledger-check", r.stdout + r.stderr)
+
+    def test_an_unknown_ledger_status_passes_the_run(self):
+        # And the other half: UNKNOWN is the REQUIRED report when the ledger
+        # was missing or stale, so it must not be the thing that fails.
+        unknown = V1.replace('"ledger_status": "fresh"',
+                             '"ledger_status": "UNKNOWN — missing"')
+        r = self._check(unknown)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_a_backend_epic_passes_without_a_mockup(self):
         # The gate must not force a mockup onto work that has no screens —

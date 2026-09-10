@@ -25,6 +25,12 @@ section against the card's acceptance criteria:
      screenshot. A UI epic with a PNG and no mockup fails the check.
   6. ANCHORS — every section and every paragraph carries a stable id, so
      feedback lands on the paragraph or the mockup it is about.
+  7. THE LEDGER CHECK, PER CHILD (DRE-3362) — `## The cards` carries a fenced
+     ```ledger-check block saying, per child, which of DRE-2893's four tells
+     it was sized against and what the split ledger said. A missing or stale
+     ledger is recorded as UNKNOWN — which PASSES, because reporting UNKNOWN
+     is the required behaviour; omitting the check is the defect, since an
+     omitted check reads as a check that passed.
 """
 
 import json
@@ -53,6 +59,19 @@ KPI_BLOCK_V1 = """```kpis
    "direction": "down", "target": 1.5},
   {"name": "Plans sent back for rework", "baseline": 6, "unit": "per week",
    "direction": "down", "target": 2}
+]
+```"""
+
+# The ledger check the planner records per child (DRE-3362). Well-formed:
+# every child has a record, every record names checked tells from
+# split_ledger.TELLS, and the status is the one the ledger block reported.
+LEDGER_CHECK_BLOCK = """```ledger-check
+[
+  {"card": "DRE-2718", "tells_checked": ["contracts-between-pieces"],
+   "ledger_match": "DRE-3088", "ledger_status": "fresh"},
+  {"card": "DRE-2719",
+   "tells_checked": ["two-languages-or-tiers", "unbounded-quantifier"],
+   "ledger_match": "none", "ledger_status": "fresh"}
 ]
 ```"""
 
@@ -88,6 +107,8 @@ Not applicable — this epic ships no UI.
 | -- | -- |
 | DRE-2718 | The Intake lane exists |
 | DRE-2719 | Everything goes to Planning |
+
+{LEDGER_CHECK_BLOCK}
 
 ## Proof and demo
 
@@ -584,6 +605,228 @@ class MockupIsNotAnInjectionChannelTest(unittest.TestCase):
         self.assertEqual(len(json.loads(payload)), 2)
 
 
+def _with_ledger_check(records):
+    """ARTIFACT_V1 with its ledger-check block replaced by `records`."""
+    block = "```ledger-check\n" + json.dumps(records, indent=2) + "\n```"
+    return ARTIFACT_V1.replace(LEDGER_CHECK_BLOCK, block)
+
+
+def _record(**over):
+    base = {"card": "DRE-2718", "tells_checked": ["contracts-between-pieces"],
+            "ledger_match": "DRE-3088", "ledger_status": "fresh"}
+    base.update(over)
+    return base
+
+
+#: What `linear_ops.py children-json` dumps for this artifact's two children.
+CHILDREN_JSON = [{"identifier": "DRE-2718", "body": "", "labels": [],
+                  "parent": "DRE-2717", "state": "Backlog"},
+                 {"identifier": "DRE-2719", "body": "", "labels": [],
+                  "parent": "DRE-2717", "state": "Backlog"}]
+
+
+class LedgerCheckTest(unittest.TestCase):
+    """DRE-3362 — the plan artifact RECORDS the ledger check, per child.
+
+    DRE-3359 tells the planner to write the block; nothing checked that it
+    did, and an omitted check reads as a check that passed. So `check` gates
+    it the way it gates the KPI block, and a missing or stale ledger comes
+    back as UNKNOWN — which is a PASS, because reporting UNKNOWN is the
+    required behaviour, and silence is the defect.
+    """
+
+    def test_a_well_formed_block_parses_into_records(self):
+        records = _pa().ledger_check(ARTIFACT_V1)
+        self.assertEqual([r["card"] for r in records], ["DRE-2718", "DRE-2719"])
+
+    def test_a_well_formed_block_is_no_defect(self):
+        self.assertEqual(_pa().ledger_check_defects(ARTIFACT_V1), [])
+
+    def test_the_block_is_read_out_of_the_cards_section(self):
+        # A block in some other section is not the record `## The cards` owes:
+        # the CEO reads the check beside the decomposition it is about.
+        moved = ARTIFACT_V1.replace(LEDGER_CHECK_BLOCK, "").replace(
+            "Baselines measured over the fortnight to 2026-08-25.",
+            LEDGER_CHECK_BLOCK)
+        self.assertTrue(_pa().ledger_check_defects(moved),
+                        "a ledger-check block outside `## The cards` is not "
+                        "the record the section owes")
+
+    def test_no_block_names_the_block_and_the_section(self):
+        stripped = ARTIFACT_V1.replace(LEDGER_CHECK_BLOCK, "")
+        found = _pa().ledger_check_defects(stripped)
+        self.assertTrue(found, "an omitted check reads as a check that passed")
+        joined = " ".join(found)
+        self.assertIn("ledger-check", joined)
+        self.assertIn("The cards", joined)
+
+    def test_no_block_fails_the_whole_check(self):
+        stripped = ARTIFACT_V1.replace(LEDGER_CHECK_BLOCK, "")
+        self.assertTrue(any("ledger-check" in d
+                            for d in _pa().defects(stripped)),
+                        "defects() must carry the ledger check, like the KPIs")
+
+    def test_a_block_that_is_not_json_is_reported(self):
+        bad = ARTIFACT_V1.replace('"card": "DRE-2718",', '"card":,')
+        self.assertTrue(_pa().ledger_check_defects(bad))
+
+    def test_a_block_that_is_not_a_list_is_reported(self):
+        bad = _with_ledger_check({"card": "DRE-2718"})
+        self.assertTrue(any("list" in d for d in _pa().ledger_check_defects(bad)))
+
+    def test_a_record_missing_any_of_the_four_keys_names_that_key(self):
+        for key in ("card", "tells_checked", "ledger_match", "ledger_status"):
+            with self.subTest(key=key):
+                record = _record()
+                record.pop(key)
+                found = _pa().ledger_check_defects(_with_ledger_check([record]))
+                self.assertTrue(any(key in d for d in found),
+                                f"a record with no {key!r} must name it, got "
+                                f"{found}")
+
+    def test_an_unknown_tell_name_is_named(self):
+        found = _pa().ledger_check_defects(_with_ledger_check(
+            [_record(tells_checked=["too-many-files"])]))
+        self.assertTrue(any("too-many-files" in d for d in found), found)
+
+    def test_the_four_tell_names_come_from_the_ledger_itself(self):
+        # Read off split_ledger.TELLS, never restated here: a renamed tell
+        # must fail the check rather than quietly match nothing.
+        sys.path.insert(0, SCRIPTS)
+        import split_ledger
+
+        for tell in split_ledger.TELLS:
+            with self.subTest(tell=tell):
+                self.assertEqual(
+                    _pa().ledger_check_defects(_with_ledger_check(
+                        [_record(tells_checked=[tell])])), [])
+
+    def test_a_status_that_is_neither_fresh_nor_unknown_is_named(self):
+        found = _pa().ledger_check_defects(_with_ledger_check(
+            [_record(ledger_status="stale-ish")]))
+        self.assertTrue(any("ledger_status" in d for d in found), found)
+
+    def test_an_all_unknown_block_passes(self):
+        # AC2, and the point of the card: a missing or stale ledger is
+        # REPORTED as UNKNOWN, never omitted — so the UNKNOWN path must pass.
+        unknown = "UNKNOWN — missing: there is no ledger in this checkout"
+        text = _with_ledger_check([
+            _record(card="DRE-2718", ledger_match="none",
+                    ledger_status=unknown),
+            _record(card="DRE-2719", tells_checked=[], ledger_match="none",
+                    ledger_status=unknown),
+        ])
+        self.assertEqual(_pa().ledger_check_defects(text), [])
+        self.assertEqual(_pa().defects(text), [])
+
+    def test_empty_tells_are_a_defect_when_the_ledger_was_fresh(self):
+        # A card sized against no tell was not sized. Only a status that says
+        # the evidence was not there excuses the empty list.
+        found = _pa().ledger_check_defects(_with_ledger_check(
+            [_record(tells_checked=[])]))
+        self.assertTrue(any("tells_checked" in d for d in found), found)
+
+    def test_ledger_match_is_a_card_id_or_the_string_none(self):
+        pa = _pa()
+        self.assertEqual(
+            pa.ledger_check_defects(_with_ledger_check(
+                [_record(ledger_match="none")])), [])
+        found = pa.ledger_check_defects(_with_ledger_check(
+            [_record(ledger_match="the DRE-3088 row, roughly")]))
+        self.assertTrue(any("ledger_match" in d for d in found), found)
+
+    def test_the_card_field_must_be_a_card_id(self):
+        found = _pa().ledger_check_defects(_with_ledger_check(
+            [_record(card="the first one")]))
+        self.assertTrue(any("card" in d for d in found), found)
+
+    def test_a_child_with_no_record_fails_naming_the_id(self):
+        # The silent omission the epic names: the check reads as passed for a
+        # child nobody checked.
+        text = _with_ledger_check([_record(card="DRE-2718")])
+        found = _pa().ledger_check_defects(text, children=["DRE-2718",
+                                                           "DRE-2719"])
+        self.assertTrue(any("DRE-2719" in d for d in found), found)
+
+    def test_a_record_naming_no_child_fails_naming_the_id(self):
+        text = _with_ledger_check([_record(card="DRE-2718"),
+                                   _record(card="DRE-9999")])
+        found = _pa().ledger_check_defects(text, children=["DRE-2718"])
+        self.assertTrue(any("DRE-9999" in d for d in found), found)
+
+    def test_without_children_the_cross_check_is_not_run(self):
+        # The flag is optional — an artifact checked without the child list
+        # must not be failed for a child nobody named.
+        text = _with_ledger_check([_record(card="DRE-2718")])
+        self.assertEqual(_pa().ledger_check_defects(text), [])
+
+    def test_every_child_recorded_passes_the_cross_check(self):
+        self.assertEqual(
+            _pa().ledger_check_defects(ARTIFACT_V1,
+                                       children=["DRE-2718", "DRE-2719"]), [])
+
+    def test_children_ids_read_a_children_json_dump(self):
+        self.assertEqual(_pa().children_ids(json.dumps(CHILDREN_JSON)),
+                         ["DRE-2718", "DRE-2719"])
+
+    def test_the_ledger_check_renders_as_a_table_with_its_own_anchor(self):
+        html = _pa().render(ARTIFACT_V1, "DRE-2668")
+        self.assertIn('id="the-cards-ledger-check"', html)
+        self.assertNotIn("&quot;tells_checked&quot;", html,
+                         "the check must be a table, not raw JSON on the page")
+        self.assertIn("DRE-3088", html)
+
+    def test_a_changed_record_is_named_in_the_version_record(self):
+        revised = ARTIFACT_V1.replace(
+            '"ledger_match": "DRE-3088", "ledger_status": "fresh"',
+            '"ledger_match": "DRE-3088", '
+            '"ledger_status": "UNKNOWN — older than 72 hours"')
+        record = _pa().version_record(ARTIFACT_V1, revised)
+        self.assertIn("DRE-2718", record)
+        self.assertIn("ledger_status", record)
+
+    def test_changed_tells_are_named_in_the_version_record(self):
+        revised = ARTIFACT_V1.replace(
+            '"tells_checked": ["contracts-between-pieces"],',
+            '"tells_checked": ["contracts-between-pieces", '
+            '"unenumerated-count"],')
+        record = _pa().version_record(ARTIFACT_V1, revised)
+        self.assertIn("DRE-2718", record)
+        self.assertIn("tells_checked", record)
+
+    def test_an_added_and_a_removed_record_are_named(self):
+        pa = _pa()
+        shrunk = _with_ledger_check([_record(card="DRE-2718")])
+        record = pa.version_record(ARTIFACT_V1, shrunk)
+        self.assertIn("DRE-2719", record)
+        self.assertIn("removed", record.lower())
+        self.assertIn("added", pa.version_record(shrunk, ARTIFACT_V1).lower())
+
+
+class LedgerCheckStandardTest(unittest.TestCase):
+    """The standard states the block, or the planner writes what nothing
+    documents and the checker becomes the only record of the contract."""
+
+    def _standard(self):
+        return open(os.path.join(REPO, "standards", "plan-artifact.md")).read()
+
+    def test_the_standard_names_the_block(self):
+        self.assertIn("```ledger-check", self._standard())
+
+    def test_the_standard_names_the_four_keys(self):
+        body = self._standard()
+        for key in ("card", "tells_checked", "ledger_match", "ledger_status"):
+            self.assertIn(f"`{key}`", body,
+                          f"the standard must name the {key!r} key")
+
+    def test_the_standard_says_unknown_is_required_not_omitted(self):
+        body = self._standard()
+        self.assertIn("UNKNOWN", body)
+        self.assertTrue(
+            "omit" in body.lower() or "silen" in body.lower(),
+            "the standard must say that omitting the check is the defect")
+
+
 class CliTest(unittest.TestCase):
     """The workflow drives this by CLI — exit codes and stdout are contract."""
 
@@ -613,6 +856,55 @@ class CliTest(unittest.TestCase):
             f.write(ARTIFACT_V1)
         self.assertEqual(self._run("check", f.name).returncode, 0)
         self.assertEqual(self._run("check", f.name, "--ui").returncode, 1)
+
+    def test_check_fails_an_artifact_with_no_ledger_check(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+            f.write(ARTIFACT_V1.replace(LEDGER_CHECK_BLOCK, ""))
+        r = self._run("check", f.name)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ledger-check", r.stdout + r.stderr)
+
+    def test_check_with_children_file_fails_an_omitted_child(self):
+        # AC3 — the silent omission the epic names, caught by the one flag.
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "plan.md")
+            open(src, "w").write(
+                _with_ledger_check([_record(card="DRE-2718")]))
+            kids = os.path.join(d, "children.json")
+            json.dump(CHILDREN_JSON, open(kids, "w"))
+            self.assertEqual(self._run("check", src).returncode, 0)
+            r = self._run("check", src, "--children-file", kids)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("DRE-2719", r.stdout + r.stderr)
+
+    def test_check_with_children_file_fails_a_record_naming_no_child(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "plan.md")
+            open(src, "w").write(_with_ledger_check(
+                [_record(card="DRE-2718"), _record(card="DRE-9999")]))
+            kids = os.path.join(d, "children.json")
+            json.dump([{"identifier": "DRE-2718"}], open(kids, "w"))
+            r = self._run("check", src, "--children-file", kids)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("DRE-9999", r.stdout + r.stderr)
+
+    def test_check_with_children_file_passes_a_complete_record(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "plan.md")
+            open(src, "w").write(ARTIFACT_V1)
+            kids = os.path.join(d, "children.json")
+            json.dump(CHILDREN_JSON, open(kids, "w"))
+            r = self._run("check", src, "--children-file", kids)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_an_unreadable_children_file_is_reported_not_traced(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "plan.md")
+            open(src, "w").write(ARTIFACT_V1)
+            r = self._run("check", src, "--children-file",
+                          os.path.join(d, "no-such-children.json"))
+            self.assertNotEqual(r.returncode, 0)
+            self.assertNotIn("Traceback", r.stdout + r.stderr)
 
     def test_ui_epic_reads_the_signal_off_the_cards(self):
         # The run must not ask the planner whether its own epic is UI work.
