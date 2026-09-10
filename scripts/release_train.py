@@ -729,7 +729,20 @@ def _gh_json(path: str, jq: str, what: str):
     return json.loads(text) if text else None
 
 
-def fetch_channel(repo: str, surface, head: str, gate_run=None) -> Channel:
+def default_branch_head(repo: str, branch: str) -> str:
+    """The default branch's head from `git/ref/heads/<branch>` — one read.
+    `promote-channel.yml` has no checkout of the branch at the moment it
+    runs (it is triggered by a harness run on the CANDIDATE), so the promote
+    path resolves the head it measures against here."""
+    ref = _gh_json(f"repos/{repo}/git/ref/heads/{branch}", ".object | {sha}",
+                   f"git/ref/heads/{branch}")
+    if not ref or not ref.get("sha"):
+        raise RuntimeError(f"git/ref/heads/{branch} could not be read")
+    return ref["sha"]
+
+
+def fetch_channel(repo: str, surface, head: str, gate_run=None,
+                  default_branch: str = "main") -> Channel:
     """The channel's four reads, at most: the ref, the compare, the gate's
     run and — only when that run concluded anything but success — its log.
     Read-only, and every read is `gh`, so a test puts a fake on PATH.
@@ -743,8 +756,17 @@ def fetch_channel(repo: str, surface, head: str, gate_run=None) -> Channel:
     (the train's checkout is fetch-depth 0 with `fetch-tags: false`), and
     the operator's command works from any checkout with no fetch first.
 
-    `gate_run` is a run id: promote-channel hands in the run that triggered
-    it, so the receipt names THAT run rather than whichever is newest.
+    BOTH RECEIPTS ANSWER THE SAME QUESTION. The train's plan and
+    promote-channel measure against the DEFAULT BRANCH HEAD and name the
+    branch's NEWEST gate run — never the candidate promote-channel was
+    triggered on. Measured against the candidate, the receipt right after
+    the 2026-09-10 12:13 PT promotion of b7e9e2c would have read `current
+    behind=0 head=b7e9e2c` while main was already four ahead at 657651b
+    with its gate running, and the console (which reads state from
+    promote-channel's log and `behind` from a live tag-vs-main read) would
+    have shown "4 behind · current". `gate_run` — the run that triggered
+    promote-channel — is only the fallback when the branch's listing
+    answers nothing; when it IS the newest run it is the one named anyway.
     """
     channel_ref = surface.tag_series[0] if surface.tag_series else "stable"
     ref = _gh_json(f"repos/{repo}/git/ref/tags/{channel_ref}",
@@ -760,15 +782,14 @@ def fetch_channel(repo: str, surface, head: str, gate_run=None) -> Channel:
         return read_channel(head=head, ref=ref, compare=compare, run=None)
 
     fields = "{id, html_url, status, conclusion, head_sha, head_branch, event}"
-    if gate_run:
+    # `branch=<default>` so a PR-head run never reads as the branch's latest.
+    run = _gh_json(
+        f"repos/{repo}/actions/workflows/{CHANNEL_GATE}/runs"
+        f"?branch={default_branch}&per_page=1",
+        f".workflow_runs[0] | {fields}", f"the latest {CHANNEL_GATE} run")
+    if not run and gate_run:
         run = _gh_json(f"repos/{repo}/actions/runs/{int(gate_run)}", fields,
                        f"run {gate_run}")
-    else:
-        # `branch=main` so a PR-head run never reads as the branch's latest.
-        run = _gh_json(
-            f"repos/{repo}/actions/workflows/{CHANNEL_GATE}/runs"
-            f"?branch=main&per_page=1",
-            f".workflow_runs[0] | {fields}", f"the latest {CHANNEL_GATE} run")
     log_text = None
     if run and run.get("status") == "completed" \
             and run.get("conclusion") in LOGGED_CONCLUSIONS:
@@ -1616,11 +1637,17 @@ def _cmd_channel(args) -> int:
         print(f"{TAG}: {args.file} declares no `channel` surface")
         return 0
     entry = channels[0]
+    head = args.head
     try:
-        channel = fetch_channel(args.repo, entry, args.head,
-                                gate_run=args.gate_run or None)
+        if not head:
+            # The promote path: measure against the DEFAULT BRANCH HEAD, the
+            # same question the train's plan answers — never the candidate.
+            head = default_branch_head(args.repo, args.default_branch)
+        channel = fetch_channel(args.repo, entry, head,
+                                gate_run=args.gate_run or None,
+                                default_branch=args.default_branch)
     except RuntimeError as err:
-        channel = Channel(CHANNEL_UNKNOWN, None, None, None, args.head, None,
+        channel = Channel(CHANNEL_UNKNOWN, None, None, None, head or None, None,
                           (), str(err))
     decision = decide(entry, datetime.now(tz=PT), None, "behind",
                       ASSUMED_GREEN, None, channel=channel)
@@ -1688,12 +1715,18 @@ def main(argv=None) -> int:
     channel = sub.add_parser(
         "channel", help="where the channel stands — the one receipt line "
                         "promote-channel.yml prints (DRE-3568)")
-    channel.add_argument("--head", required=True,
-                         help="the default branch's head, or the candidate")
+    channel.add_argument("--head", default="",
+                         help="the default branch's head; absent, it is read "
+                              "from git/ref/heads/<default-branch> (the "
+                              "promote path)")
+    channel.add_argument("--default-branch", default="main",
+                         help="the default branch the channel is measured "
+                              "against — github.event.repository.default_branch")
     channel.add_argument("--gate-run", default="",
-                         help="the gating run's id — the run that triggered "
-                              "the promotion attempt; absent reads the "
-                              "branch's latest")
+                         help="the run that triggered the promotion attempt; "
+                              "named only when the branch's listing answers "
+                              "nothing — the newest gate run on the default "
+                              "branch wins, the train's own rule")
 
     args = parser.parse_args(argv)
     return {

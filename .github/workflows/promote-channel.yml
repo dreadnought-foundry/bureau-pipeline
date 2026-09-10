@@ -169,20 +169,30 @@ jobs:
       # also prints (DRE-3568) — through release_train.py, so the console
       # parses one format from either run. Main runs only: a PR-head run is
       # not about the channel and spends no reads (the DRE-3070 rule above).
-      # Three reads at most (the ref, the compare, this run) plus this run's
-      # `--log-failed` when it went red — that is where the scenario names
-      # come from. Reporting only: exit 0 always, and a read that fails
-      # prints `unknown`, never a number nobody fetched.
+      #
+      # Measured against the DEFAULT BRANCH HEAD, never the candidate this
+      # run was triggered on, and naming the branch's NEWEST harness run —
+      # the same question the train's plan answers, so the two receipts can
+      # never contradict each other. Against the candidate, the receipt
+      # right after a promotion reads `current behind=0` while main is
+      # already ahead with its gate running — and the console, which takes
+      # the state from this log and `behind` from a live tag-vs-main read,
+      # would show "4 behind · current" on the ordinary half-hour cadence.
+      # Five reads at most (the branch head, the ref, the compare, the
+      # newest run, and that run's `--log-failed` when it went red — that is
+      # where the scenario names come from). Reporting only: exit 0 always,
+      # and a read that fails prints `unknown`, never a number nobody
+      # fetched.
       - name: Where the channel stands
         id: channel
         if: github.event.workflow_run.head_branch == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GATE_RUN: ${{ github.event.workflow_run.id }}
         run: |
           python3 scripts/release_train.py --repo "$GITHUB_REPOSITORY" \
-            channel --head "$CANDIDATE" --gate-run "$GATE_RUN"
+            channel --default-branch "$DEFAULT_BRANCH" --gate-run "$GATE_RUN"
 
       # A no-op is the ordinary outcome and must not read as a failure. The
       # reason is printed either way so "why did the channel not move?" is

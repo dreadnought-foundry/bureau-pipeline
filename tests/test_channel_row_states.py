@@ -364,13 +364,16 @@ def test_no_channel_ref_at_all_is_unknown_not_current():
 # 4. The CLI: a fake `gh` on PATH, the way `fetch_checks` is driven.
 # --------------------------------------------------------------------------
 
-def _fake_gh(tmp_path, monkeypatch, *, run_override=None, fail_on=None):
-    """A `gh` that answers the four reads from the fixture and logs each call.
+def _fake_gh(tmp_path, monkeypatch, *, run_override=None, fail_on=None,
+             data=None):
+    """A `gh` that answers the reads from the fixture and logs each call.
 
     `run_override` replaces the fixture's run; `fail_on` makes the call whose
-    arguments contain that substring exit non-zero, the way a real 5xx does.
+    arguments contain that substring exit non-zero, the way a real 5xx does;
+    `data` replaces the fixture wholesale (`ref`, `compare`, `run`,
+    `log_failed`, and `heads` for `git/ref/heads/<default>`).
     """
-    fixture = _fixture()
+    fixture = data if data is not None else _fixture()
     if run_override is not None:
         fixture["run"] = run_override
     data = tmp_path / "fixture.json"
@@ -386,6 +389,8 @@ def _fake_gh(tmp_path, monkeypatch, *, run_override=None, fail_on=None):
         f"{fail}"
         "  *git/ref/tags/stable*) python3 -c 'import json; "
         f"print(json.dumps(json.load(open(\"{data}\"))[\"ref\"]))' ;;\n"
+        "  *git/ref/heads/*) python3 -c 'import json; "
+        f"print(json.dumps(json.load(open(\"{data}\")).get(\"heads\")))' ;;\n"
         "  *compare/*) python3 -c 'import json; "
         f"print(json.dumps(json.load(open(\"{data}\"))[\"compare\"]))' ;;\n"
         "  *workflows/harness.yml/runs*) python3 -c 'import json; "
@@ -506,8 +511,10 @@ def test_a_channel_read_that_fails_is_unknown_warns_and_does_not_redden_the_trai
 def test_the_channel_subcommand_prints_the_same_receipt_for_promote_channel(
         tmp_path, monkeypatch, capsys):
     """`promote-channel.yml` prints the SAME line through the same code, so
-    the console never needs a second format. `--gate-run` names the harness
-    run that triggered the promotion attempt instead of listing runs."""
+    the console never needs a second format. `--gate-run` is the harness
+    run that triggered the promotion attempt; when it is the branch's
+    latest it is the run named, read from the same listing the train
+    reads."""
     calls = _fake_gh(tmp_path, monkeypatch)
     output = tmp_path / "output.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
@@ -529,8 +536,68 @@ def test_the_channel_subcommand_prints_the_same_receipt_for_promote_channel(
     assert "state=blocked\n" in written
     assert "scenarios=agent_task_parses,bot_pr_flow,dependabot_flow,gate_paths,lane_contract\n" in written
     logged = calls.read_text().splitlines()
-    assert any("actions/runs/34483381786" in line for line in logged)
-    assert not any("workflows/harness.yml/runs" in line for line in logged)
+    assert any("workflows/harness.yml/runs" in line and "branch=main" in line
+               for line in logged)
+    # The triggering run IS the latest — no second read of it by id.
+    assert not any("actions/runs/34483381786" in line for line in logged)
+
+
+def _promoted_to_x_while_main_is_at_y():
+    """The console (DRE-3569) reads the channel's state from promote-channel's
+    log and `behind` from a live tag-vs-main read. Measured against the
+    CANDIDATE, the receipt right after the 12:13 PT promotion of b7e9e2c
+    would have said `state=current behind=0 head=b7e9e2c` while main was
+    already four ahead at 657651b with its gate running — "4 behind ·
+    current" on the console, contradictory on the normal cadence. So the
+    promote path measures against the DEFAULT BRANCH HEAD, resolved from
+    `git/ref/heads/<default>` when `--head` is omitted, and names the
+    branch's newest gate run — the same rule the train's plan uses."""
+    x = "b7e9e2c978302a60fb424312477171853629f216"     # promoted to X …
+    y = "657651b56a86a5e9f8b0bbfa3fa936da47dab881"     # … while main is at Y
+    latest = {"id": 34519112325,
+              "html_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34519112325",
+              "status": "in_progress", "conclusion": None,
+              "head_sha": y, "head_branch": "main", "event": "push"}
+    data = {
+        "heads": {"sha": y, "type": "commit"},
+        "ref": {"sha": x, "type": "commit"},
+        "compare": {"status": "ahead", "ahead_by": 4, "behind_by": 0,
+                    "base_sha": x, "base_date": "2026-09-10T16:02:57Z"},
+        "run": latest,
+        "log_failed": "",
+    }
+    return x, y, latest, data
+
+
+def test_the_promote_path_replays_promoted_to_x_while_main_is_four_ahead_at_y(
+        tmp_path, monkeypatch, capsys):
+    x, y, latest, data = _promoted_to_x_while_main_is_at_y()
+    calls = _fake_gh(tmp_path, monkeypatch, data=data)
+    output = tmp_path / "output.txt"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    # The triggering run proved X (the promotion), and it is NOT the latest.
+    code = release_train.main([
+        "--repo", REPO, "channel", "--default-branch", "main",
+        "--gate-run", "34499606949",
+    ])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert out.splitlines()[0] == (
+        "pipeline-channel: state=advancing behind=4 since=2026-09-10T16:02:57Z "
+        "tag=b7e9e2c head=657651b "
+        "gate=https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34519112325 "
+        "scenarios=none"
+    )
+    logged = calls.read_text().splitlines()
+    assert any("git/ref/heads/main" in line for line in logged)
+    assert any(f"compare/stable...{y}" in line for line in logged)
+    assert any("workflows/harness.yml/runs" in line and "branch=main" in line
+               for line in logged)
+    assert not any("actions/runs/34499606949" in line for line in logged), (
+        "the newest run on the default branch wins; the triggering run is "
+        "not re-read by id")
+    assert "state=advancing\n" in output.read_text()
 
 
 # --------------------------------------------------------------------------
@@ -567,6 +634,10 @@ def test_promote_channel_prints_the_channel_receipt_through_release_train():
     assert " channel " in step["run"] or step["run"].rstrip().endswith("channel") \
         or "channel \\" in step["run"]
     assert "--gate-run" in step["run"]
+    # Measured against the DEFAULT BRANCH HEAD, never the candidate.
+    assert "--default-branch" in step["run"]
+    assert "--head" not in step["run"]
+    assert "github.event.repository.default_branch" in str(step.get("env", {}))
     assert "head_branch == 'main'" in str(step.get("if", "")), (
         "a PR-head run is not about the channel and spends no reads")
     assert "GH_TOKEN" in step.get("env", {})
