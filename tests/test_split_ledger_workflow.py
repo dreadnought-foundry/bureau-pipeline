@@ -68,6 +68,17 @@ def _text() -> str:
     return WORKFLOW.read_text()
 
 
+def _uncommented(text: str) -> str:
+    """`text` with its comment lines dropped — YAML's and the shell's alike.
+
+    The tests below assert on what the workflow DOES. A file this heavily
+    commented would otherwise fail them for explaining the rule it follows,
+    which is the opposite of the incentive we want.
+    """
+    return "\n".join(line for line in text.splitlines()
+                     if not line.lstrip().startswith("#"))
+
+
 def _on(doc: dict) -> dict:
     # YAML 1.1 parses the bare key `on` as boolean True.
     on = doc.get("on", doc.get(True))
@@ -153,7 +164,7 @@ class WhatItRunsTest(unittest.TestCase):
         cards plus whatever the successor search turns up. A card list in the
         workflow would freeze the ledger at the day it was written, and the
         discovery rules live in split_ledger.py, not here."""
-        self.assertNotIn("--card", _text())
+        self.assertNotIn("--card", _uncommented(_text()))
 
     def test_it_declares_whose_linear_budget_it_spends(self):
         """The workspace's 2,500 requests/hour are per Linear user and shared
@@ -207,8 +218,10 @@ class ItCommitsOnlyWhatItGeneratesTest(unittest.TestCase):
     def test_it_does_not_skip_a_timestamp_only_change(self):
         """The timestamp IS the freshness the readers check. A run that
         compared the ledger while ignoring `generated_at` would decide a fresh
-        derivation was a no-op and leave the reader reporting UNKNOWN."""
-        self.assertNotIn("generated_at", self.script)
+        derivation was a no-op and leave the reader reporting UNKNOWN. Comments
+        are stripped first — the script is welcome to EXPLAIN the rule, it just
+        may not implement an exception to it."""
+        self.assertNotIn("generated_at", _uncommented(self.script))
 
     def test_the_checkout_and_the_push_use_the_app_token(self):
         """Not github.token: a push made with GITHUB_TOKEN triggers no
