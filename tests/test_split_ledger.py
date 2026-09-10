@@ -23,6 +23,25 @@ What these tests pin, and why each one exists:
     ten seed rows the card names, and `docs/split-ledger.md` IS the render of
     that file — the same discipline `docs/routing-verdicts.md` is held to.
 
+DRE-3356 adds three things and these tests pin each of them:
+
+  * **The population is DISCOVERED, not named.** `discover()` asks Linear for
+    the cards whose own comments carry a turn-cap or hand-back receipt and for
+    the cards a successor cites as the one it was cut from, inside a
+    `--window-days` window — and the seeds stay in whatever the window says. A
+    search that failed is NAMED, never quietly dropped: a discovery that loses
+    a search reports a smaller history in exactly the same shape.
+  * **Every row is dated.** `created_at` is the card's Linear `createdAt` as
+    ISO-8601 UTC, or the literal `UNKNOWN` — never the empty string, which is
+    what a reader sorting "the last N splits" would silently sort first.
+  * **`monthly` counts the splits by month**, with `complete` saying whether
+    the record covers the whole month, and `planner_children` saying `UNKNOWN`
+    rather than `0` when the read failed.
+
+And one test guards the contract DRE-3022's other children read: every field
+`config/split-ledger.json` carried before this card still has its name and its
+type.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_split_ledger.py -v
 """
 
@@ -46,6 +65,7 @@ import split_ledger  # noqa: E402
 
 LEDGER = ROOT / "config" / "split-ledger.json"
 DOC = ROOT / "docs" / "split-ledger.md"
+CONFIG_README = ROOT / "config" / "README.md"
 
 # The ten cards the card names as seed rows. Written out rather than read from
 # the module: a constant that checks itself checks nothing.
@@ -537,6 +557,7 @@ class _FakeLops:
             "identifier": variables["id"],
             "title": "The planner sizes against the ledger",
             "url": f"https://linear.app/x/issue/{variables['id']}",
+            "createdAt": "2026-08-12T09:33:21.482Z",
             "description": "**A card.**\n\n**Files:** `scripts/a.py`\n",
             "state": {"name": "Backlog", "type": "backlog"},
             "labels": {"nodes": [{"name": "agent:engineer"}, {"name": "size:M"}]},
@@ -581,3 +602,412 @@ def test_collect_never_believes_a_pr_search_in_a_repo_it_cannot_see():
     successor = out["cards"][0]["successors"][0]
     assert successor["pr"] is None
     assert "cannot read" in successor["pr_unreadable"]
+
+
+# --------------------------------------------------------------------------- #
+# DRE-3356 — the population discovers itself                                   #
+# --------------------------------------------------------------------------- #
+
+# The four successor openings `test_a_successor_citing_the_card_is_a_split`
+# already pins as real, with the origin each one names. They are reused here
+# because the search and the reader must agree: a needle that finds nothing
+# `cites()` accepts is a spent Linear call, and a spelling `cites()` accepts
+# that no needle finds is a card the ledger never hears about.
+REAL_CITATIONS = (
+    ("**Split from** [DRE-3022](https://linear.app/x) by its author", "DRE-3022"),
+    ("**Piece 1 of 3 of DRE-3022** — the ledger itself.", "DRE-3022"),
+    ("**One of three cards splitting DRE-2871, which SIX runs could not "
+     "finish.**", "DRE-2871"),
+    ("**Backend half of** [DRE-2937](https://linear.app/x)", "DRE-2937"),
+)
+
+
+class _DiscoveryLops:
+    """Linear as `discover` asks it: comment searches, description searches and
+    the planner-children count, each answered from a canned page.
+
+    Every filter it is handed is recorded, so a test can assert the window is
+    on the query rather than trusting that it was.
+    """
+
+    def __init__(self, *, comment_hits=None, citation_hits=None,
+                 children=None, raise_on=None):
+        self.comment_hits = comment_hits or {}
+        self.citation_hits = citation_hits or {}
+        self.children = children or {}
+        self.raise_on = raise_on or ()
+        self.filters: list = []
+        self.calls = 0
+
+    def gql(self, query: str, variables: dict) -> dict:
+        self.calls += 1
+        filter_ = (variables or {}).get("filter") or {}
+        self.filters.append(filter_)
+        if any(needle in json.dumps(filter_) for needle in self.raise_on):
+            raise RuntimeError("Linear refused the search: RATELIMITED")
+        if "parent" in filter_:
+            since = (filter_.get("createdAt") or {}).get("gte") or ""
+            nodes = [{"identifier": f"DRE-{n}"}
+                     for n in range(self.children.get(since[:7], 0))]
+        elif "comments" in filter_:
+            needle = filter_["comments"]["body"]["containsIgnoreCase"]
+            nodes = [{"identifier": card}
+                     for card in self.comment_hits.get(needle, ())]
+        else:
+            needle = filter_["description"]["containsIgnoreCase"]
+            nodes = [{"identifier": ident, "description": body}
+                     for ident, body in self.citation_hits.get(needle, ())]
+        return {"issues": {"nodes": nodes,
+                           "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+
+
+def test_every_real_citation_is_found_by_a_needle_and_accepted_by_cites():
+    """The search and the reader, pinned to each other. `containsIgnoreCase`
+    takes a literal, so the needle is the fixed part of the phrase and `cites()`
+    is what decides afterwards — but a phrase no needle reaches is a card the
+    discovery cannot see at all."""
+    for body, origin in REAL_CITATIONS:
+        assert split_ledger.cites(body, origin), body
+        assert any(needle.lower() in body.lower()
+                   for needle in split_ledger.CITATION_NEEDLES), body
+
+
+def test_the_cited_origin_is_the_card_the_successor_names():
+    for body, origin in REAL_CITATIONS:
+        assert split_ledger.cited_origins(body) == [origin]
+
+
+def test_a_mention_below_the_opening_paragraph_names_no_origin():
+    body = ("**A card about something else entirely.**\n\n"
+            "Background: this was split from DRE-2719's design work.\n")
+    assert split_ledger.cited_origins(body) == []
+
+
+def test_discovery_finds_turn_cap_handback_and_cited_split_origins():
+    lops = _DiscoveryLops(
+        comment_hits={
+            split_ledger.TURN_TAG: ["DRE-4001"],
+            split_ledger.TURN_HOLD_MARK: ["DRE-4001", "DRE-4002"],
+            split_ledger.HANDBACK_RECEIPT_PREFIX: ["DRE-4003"],
+        },
+        citation_hits={"split from": [
+            ("DRE-4005", "**Split from** [DRE-4004](https://linear.app/x)"),
+        ]},
+    )
+    found = split_ledger.discover(lops=lops, now="2026-09-10T00:00:00Z")
+    assert set(found["cards"]) >= {"DRE-4001", "DRE-4002", "DRE-4003",
+                                   "DRE-4004"}
+    # The successor itself is not the origin — the card it NAMES is.
+    assert "DRE-4005" not in found["cards"]
+    assert split_ledger.REASON_TURN_CAP in found["found"]["DRE-4001"]
+    assert split_ledger.REASON_HANDBACK in found["found"]["DRE-4003"]
+    assert split_ledger.REASON_SPLIT in found["found"]["DRE-4004"]
+
+
+def test_discovery_keeps_every_seed_whatever_the_window_says():
+    """The seeds are in the ledger because DRE-3077 named them, and a 1-day
+    window does not un-name them."""
+    found = split_ledger.discover(lops=_DiscoveryLops(), window_days=1,
+                                  now="2026-09-10T00:00:00Z")
+    assert set(split_ledger.SEED_CARDS) <= set(found["cards"])
+
+
+def test_every_discovery_search_is_bounded_by_the_window():
+    lops = _DiscoveryLops()
+    split_ledger.discover(lops=lops, window_days=90, now="2026-09-10T00:00:00Z")
+    assert lops.filters, "discovery asked Linear nothing"
+    for filter_ in lops.filters:
+        assert filter_["createdAt"]["gte"] == "2026-06-12T00:00:00Z", filter_
+
+
+def test_a_discovery_search_that_failed_is_named_not_silently_dropped():
+    """A lost search reports a smaller history in exactly the same shape —
+    the silent zero this whole module is written against."""
+    lops = _DiscoveryLops(
+        comment_hits={split_ledger.HANDBACK_RECEIPT_PREFIX: ["DRE-4003"]},
+        raise_on=[split_ledger.TURN_TAG])
+    found = split_ledger.discover(lops=lops, now="2026-09-10T00:00:00Z")
+    assert found["unreadable"], "a refused search left no trace"
+    assert any(split_ledger.TURN_TAG in note for note in found["unreadable"])
+    # The searches that DID answer still count — one unknown does not poison
+    # the population.
+    assert "DRE-4003" in found["cards"]
+
+
+def test_discovery_follows_every_page_it_is_offered():
+    """Linear serves at most 100 nodes per page and says so only in `pageInfo`
+    (DRE-2681). A discovery that reads page one is a population decided by
+    Linear's default ordering."""
+    pages = [
+        {"issues": {"nodes": [{"identifier": "DRE-5001"}],
+                    "pageInfo": {"hasNextPage": True, "endCursor": "c1"}}},
+        {"issues": {"nodes": [{"identifier": "DRE-5002"}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None}}},
+    ]
+
+    class _Paged(_DiscoveryLops):
+        def gql(self, query, variables):
+            filter_ = (variables or {}).get("filter") or {}
+            if "comments" not in filter_ or not pages:
+                return super().gql(query, variables)
+            return pages.pop(0)
+
+    found = split_ledger.discover(lops=_Paged(), now="2026-09-10T00:00:00Z")
+    assert {"DRE-5001", "DRE-5002"} <= set(found["cards"])
+
+
+# --------------------------------------------------------------------------- #
+# DRE-3356 — every row is dated                                                #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_row_carries_the_cards_creation_date_as_iso_utc():
+    row = split_ledger.row(_record(created_at="2026-08-12T09:33:21.482Z"))
+    assert row["created_at"] == "2026-08-12T09:33:21Z"
+
+
+def test_a_creation_date_that_could_not_be_read_is_unknown_not_empty():
+    """`""` is what a reader sorting "the last N splits" silently sorts first."""
+    row = split_ledger.row(_record(created_at=""))
+    assert row["created_at"] == split_ledger.UNKNOWN
+    assert row["created_at"] != ""
+    assert any("creation date" in note for note in row["unreadable"])
+
+
+def test_collect_reads_the_creation_date_off_the_card():
+    lops = _FakeLops()
+    out = split_ledger.collect(["DRE-3022"], lops=lops,
+                               finder=lambda *a, **k: None,
+                               readable=lambda repo, run=None: True)
+    assert out["cards"][0]["created_at"] == "2026-08-12T09:33:21.482Z"
+    assert "createdAt" in split_ledger._CARD_QUERY
+
+
+# --------------------------------------------------------------------------- #
+# DRE-3356 — the window and the months                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_ledger_records_the_window_it_was_derived_over():
+    doc = split_ledger.ledger([_record()], generated_at="2026-09-10T00:00:00Z",
+                              window_days=90)
+    assert doc["window_days"] == 90
+    assert isinstance(doc["window_days"], int)
+
+
+def test_the_default_window_is_ninety_days():
+    assert split_ledger.DEFAULT_WINDOW_DAYS == 90
+
+
+def test_monthly_pins_a_complete_month_an_incomplete_one_and_an_unread_one():
+    """The three shapes the card names, in one ledger.
+
+      * `2026-07` — wholly inside the window and wholly in the past: complete,
+        with a children count the read answered.
+      * `2026-06` — the window opens mid-month, so the count is a partial one
+        and `complete` says so rather than the number pretending otherwise.
+      * `2026-08` — the children read failed: `UNKNOWN`, never `0`.
+    """
+    split = _record(identifier="DRE-7001", created_at="2026-07-14T00:00:00Z",
+                    state_type="canceled", comments=[])
+    died = _record(identifier="DRE-7002", created_at="2026-07-20T00:00:00Z")
+    doc = split_ledger.ledger(
+        [split, died], generated_at="2026-09-10T00:00:00Z", window_days=90,
+        children_by_month={"2026-06": 41, "2026-07": 228, "2026-09": 90})
+
+    months = {record["month"]: record for record in doc["monthly"]}
+    assert [record["month"] for record in doc["monthly"]] == sorted(months)
+
+    july = months["2026-07"]
+    assert july["planner_children"] == 228
+    assert july["split"] == 1
+    assert july["died"] == 1
+    assert july["complete"] is True
+
+    june = months["2026-06"]
+    assert june["planner_children"] == 41
+    assert june["complete"] is False
+
+    august = months["2026-08"]
+    assert august["planner_children"] == split_ledger.UNKNOWN
+    assert august["planner_children"] != 0
+    assert august["complete"] is True
+
+    # The month the file was generated in is not over, so it is not complete.
+    assert months["2026-09"]["complete"] is False
+
+
+def test_every_monthly_record_carries_the_contract_shape():
+    doc = split_ledger.ledger([_record(created_at="2026-08-12T00:00:00Z")],
+                              generated_at="2026-09-10T00:00:00Z")
+    assert doc["monthly"], "the ledger carries no monthly block"
+    for record in doc["monthly"]:
+        assert set(record) == {"month", "planner_children", "split", "died",
+                               "complete"}
+        assert isinstance(record["month"], str)
+        assert isinstance(record["complete"], bool)
+        for field in ("planner_children", "split", "died"):
+            assert (isinstance(record[field], int)
+                    or record[field] == split_ledger.UNKNOWN)
+
+
+def test_the_month_windows_clamp_to_the_window_and_say_when_they_did_not():
+    windows = split_ledger.month_windows("2026-06-12T00:00:00Z",
+                                         "2026-09-10T00:00:00Z")
+    by_month = {w["month"]: w for w in windows}
+    assert list(by_month) == ["2026-06", "2026-07", "2026-08", "2026-09"]
+    assert by_month["2026-06"]["since"] == "2026-06-12T00:00:00Z"
+    assert by_month["2026-06"]["complete"] is False
+    assert by_month["2026-07"]["since"] == "2026-07-01T00:00:00Z"
+    assert by_month["2026-07"]["until"] == "2026-08-01T00:00:00Z"
+    assert by_month["2026-07"]["complete"] is True
+    assert by_month["2026-09"]["until"] == "2026-09-10T00:00:00Z"
+
+
+def test_the_children_count_is_a_planner_child_query_per_month():
+    lops = _DiscoveryLops(children={"2026-07": 3, "2026-08": 5})
+    windows = split_ledger.month_windows("2026-07-01T00:00:00Z",
+                                         "2026-09-01T00:00:00Z")
+    counts = split_ledger.child_counts(windows, lops=lops)
+    assert counts["2026-07"] == 3
+    assert counts["2026-08"] == 5
+    for filter_ in lops.filters:
+        assert filter_["parent"] == {"null": False}
+
+
+def test_a_children_count_that_failed_is_unknown_in_the_month_never_zero():
+    lops = _DiscoveryLops(children={"2026-07": 3}, raise_on=["2026-08"])
+    windows = split_ledger.month_windows("2026-07-01T00:00:00Z",
+                                         "2026-09-01T00:00:00Z")
+    notes: list = []
+    counts = split_ledger.child_counts(windows, lops=lops, unreadable=notes)
+    assert counts["2026-07"] == 3
+    assert counts.get("2026-08") is None
+    assert any("2026-08" in note for note in notes)
+    record = split_ledger.monthly([], counts, since="2026-07-01T00:00:00Z",
+                                  generated_at="2026-09-01T00:00:00Z")
+    august = [r for r in record if r["month"] == "2026-08"][0]
+    assert august["planner_children"] == split_ledger.UNKNOWN
+    assert august["planner_children"] != 0
+
+
+# --------------------------------------------------------------------------- #
+# DRE-3356 — the render                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_render_shows_the_by_month_table():
+    doc = split_ledger.ledger(
+        [_record(created_at="2026-07-14T00:00:00Z")],
+        generated_at="2026-09-10T00:00:00Z", window_days=90,
+        children_by_month={"2026-07": 228})
+    text = split_ledger.render_markdown(doc)
+    assert "## By month" in text
+    assert "| 2026-07 | 228 |" in text
+
+
+def test_the_render_prints_the_creation_date_of_every_row():
+    doc = split_ledger.ledger(
+        [_record(created_at="2026-07-14T09:00:00Z")],
+        generated_at="2026-09-10T00:00:00Z")
+    text = split_ledger.render_markdown(doc)
+    assert "2026-07-14T09:00:00Z" in text
+
+
+def test_the_render_says_the_window_it_was_derived_over():
+    doc = split_ledger.ledger([_record()], generated_at="2026-09-10T00:00:00Z",
+                              window_days=45)
+    assert "45" in split_ledger.render_markdown(doc)
+
+
+# --------------------------------------------------------------------------- #
+# DRE-3356 — the committed artifacts and the contract                          #
+# --------------------------------------------------------------------------- #
+
+#: Every field `config/split-ledger.json` carried on `main` before this card,
+#: with the type it carried. Written out rather than derived: this is the
+#: contract DRE-3022's other children read (the context renderer DRE-3358 and
+#: the plan critic's ledger check DRE-3079), and a list computed from the file
+#: under test would agree with whatever the file happens to say.
+CONTRACT_TOP_LEVEL = {
+    "generated_at": str,
+    "generated_by": str,
+    "source": str,
+    "seed_cards": list,
+    "rows": list,
+    "rates": dict,
+}
+
+CONTRACT_ROW = {
+    "card": str, "title": str, "url": str, "state": str, "reasons": list,
+    "size": str, "role": str, "declared_files": (list, str),
+    "declared_file_count": (int, str), "piece_files": (list, str),
+    "pieces": (int, str), "pieces_named": (list, str), "deaths": (int, str),
+    "dollars": (int, float, str), "tells": list, "tell_evidence": dict,
+    "unreadable": list,
+}
+
+CONTRACT_BAND = {"more_than": int, "of": int, "died": int, "cards": list,
+                 "sentence": str}
+CONTRACT_TELL_BAND = {"tell": str, "of": int, "died": int, "sentence": str}
+
+
+def _committed() -> dict:
+    return json.loads(LEDGER.read_text(encoding="utf-8"))
+
+
+def test_the_committed_ledger_keeps_every_field_name_and_type_it_had():
+    doc = _committed()
+    for field, kind in CONTRACT_TOP_LEVEL.items():
+        assert field in doc, f"the ledger lost {field}"
+        assert isinstance(doc[field], kind), f"{field} changed type"
+    for row in doc["rows"]:
+        for field, kind in CONTRACT_ROW.items():
+            assert field in row, f"{row.get('card')} lost {field}"
+            assert isinstance(row[field], kind), (
+                f"{row.get('card')}.{field} changed type")
+    for band in doc["rates"]["by_declared_files"]:
+        for field, kind in CONTRACT_BAND.items():
+            assert isinstance(band.get(field), kind), f"by_declared_files.{field}"
+    for band in doc["rates"]["by_tell"]:
+        for field, kind in CONTRACT_TELL_BAND.items():
+            assert isinstance(band.get(field), kind), f"by_tell.{field}"
+
+
+def test_the_committed_ledger_has_more_than_the_ten_seed_rows():
+    """The population discovered itself. Ten rows is what `--card`-less derive
+    used to produce, and it is the number this card exists to beat."""
+    doc = _committed()
+    assert len(doc["rows"]) > len(SEEDS), (
+        f"the committed ledger still has {len(doc['rows'])} rows — derive did "
+        "not discover a population")
+
+
+def test_every_committed_row_is_dated():
+    for row in _committed()["rows"]:
+        assert "created_at" in row, f"{row.get('card')} has no created_at"
+        assert isinstance(row["created_at"], str)
+        assert row["created_at"] != ""
+
+
+def test_the_committed_ledger_carries_its_window_and_its_months():
+    doc = _committed()
+    assert isinstance(doc["window_days"], int)
+    assert isinstance(doc["monthly"], list)
+    assert doc["monthly"], "the committed ledger has no monthly block"
+    assert [r["month"] for r in doc["monthly"]] == sorted(
+        r["month"] for r in doc["monthly"])
+    for record in doc["monthly"]:
+        assert set(record) == {"month", "planner_children", "split", "died",
+                               "complete"}
+
+
+def test_the_config_readme_describes_discovery_the_window_and_the_new_blocks():
+    """A change that contradicts a document updates that document in the same
+    PR (`standards/engineering.md`). The registry entry said the ledger reads
+    the ten cards it was told about."""
+    text = CONFIG_README.read_text(encoding="utf-8")
+    entry = text.split("**`split-ledger.json`**", 1)[1].split("- **`", 1)[0]
+    for phrase in ("discover", "window", "monthly", "created_at"):
+        assert phrase in entry.lower(), (
+            f"config/README.md's split-ledger entry never mentions {phrase}")
