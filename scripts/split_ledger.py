@@ -61,6 +61,15 @@ could not be read is NAMED in the ledger's `source` sentence — a discovery
 that quietly loses a search reports a smaller history in exactly the same
 shape, which is the silent zero this module exists to refuse.
 
+**Discovery proposes; the row's own readers dispose** (`belongs`). Linear's
+`containsIgnoreCase` cannot anchor, so a search matches a comment that merely
+QUOTES a receipt — about half the candidates the board returned on 2026-09-09
+were a critic verdict or a medic diagnosis naming the turn tag. The anchored
+readings decide, so the net can be wide without the ledger going soft. What is
+never dropped is a card whose comments or successors could not be READ: that
+row stays with its UNKNOWNs, because "this card did not die" and "we could not
+look" are different facts.
+
 ## Dated rows and a monthly count
 
 Every row carries `created_at` — the card's Linear `createdAt` as ISO-8601 UTC,
@@ -912,12 +921,41 @@ DEFAULT_SOURCE = ("Linear card bodies, labels and comment receipts, plus the "
                   "merged pull requests of each card's split pieces")
 
 
+def belongs(row_: dict, named=()) -> bool:
+    """Does this row belong in the ledger? Discovery PROPOSES; the row's own
+    readers DISPOSE (DRE-3356).
+
+    Linear's `containsIgnoreCase` cannot anchor, so a discovery search matches
+    a comment that merely QUOTES a receipt — a critic verdict citing
+    `turn-exhaustion-requeue`, a medic diagnosis naming it. Read off the board
+    on 2026-09-09, about half the candidates were exactly that. The anchored
+    readings (`_is_turn_cap_receipt`, `handed_back`, `cites`) are what decide,
+    the same way `cites` already decides the successor search — so the net can
+    be wide without the ledger going soft.
+
+    A row is dropped only when the two reads that DECIDE its reasons both
+    succeeded and both said no. A card whose comments or successors could not
+    be read stays, carrying its UNKNOWNs: "this card did not die" and "we could
+    not look" are different facts, and dropping the second is the silent zero
+    in its purest form. A card named on the command line stays whatever the
+    board says — `--card` is a person asking to see one.
+    """
+    if row_.get("reasons") or row_.get("card") in set(named or ()):
+        return True
+    return UNKNOWN in (row_.get("deaths"), row_.get("pieces"))
+
+
 def ledger(records: list, *, generated_at: str | None = None,
            source: str = "", window_days: int = DEFAULT_WINDOW_DAYS,
-           children_by_month=None) -> dict:
+           children_by_month=None, keep=()) -> dict:
     """The whole ledger: when it was derived, over what window, every row, the
-    by-month counts and the rates."""
+    by-month counts and the rates.
+
+    `keep` names the cards that stay whatever history says — the `--card`
+    arguments. Everything else is held to `belongs`.
+    """
     rows = [row(record) for record in records]
+    rows = [r for r in rows if belongs(r, keep)]
     rows.sort(key=lambda r: r["card"])
     generated = generated_at or now_iso()
     return {
@@ -1518,6 +1556,7 @@ def main(argv=None) -> int:
             window_days=window_days,
             children_by_month=gathered.get("children_by_month"),
             source=derived_source(window_days, notes),
+            keep=args.card,
         )
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, indent=2)

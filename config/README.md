@@ -117,8 +117,12 @@ of it is ever a runtime lookup.
   receipt the pipeline already writes: a comment carrying the turn-cap tag or
   the hold receipt, a comment opening with the hand-back receipt, and a
   description citing the card it was cut from (the origin taken from the
-  successor's own words, kept only when `split_ledger.cites` agrees). The seeds
-  stay in whatever the search says; `--card` ADDS to the population rather than
+  successor's own words, kept only when `split_ledger.cites` agrees). Those
+  searches are a NET, not a verdict — Linear cannot anchor a text match, so
+  about half of what they return is a comment QUOTING a receipt — and the row's
+  own anchored readers decide what stays. A card whose comments or successors
+  could not be READ stays either way, carrying its `UNKNOWN`s. The seeds stay
+  in whatever the search says; `--card` ADDS to the population rather than
   replacing it. Every search is bounded by **`--window-days`** on `createdAt`
   (90 by default, recorded at the top level as `window_days`), which is what
   keeps a full derive inside a few hundred Linear calls — the budget
