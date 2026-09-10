@@ -88,9 +88,11 @@ Two facts fall straight out of it.
 **The buckets are separate, and this is the measurement that says so.** 2499
 against 39 at the same instant, on one workspace, is not a shared quota.
 
-**The fleet was already at the floor before the proof began.** Nothing in this
-procedure had spent a fleet request at 07:40:20 PT. Three more readings over
-the next minute — 42 at 07:40:30, 41 at 07:40:51, 45 at 07:41:11 — show it
+**The fleet was already at the floor before the proof began.** This procedure
+had spent about five fleet-user requests by 07:40:20 PT — the identity check in
+§1 resolves the fleet key and the relay key, and the two credential-doctor runs
+resolve them again — against roughly 2,461 already gone. Three more readings
+over the next minute — 42 at 07:40:30, 41 at 07:40:51, 45 at 07:41:11 — show it
 pinned there and trickling back a few at a time, which is what a leaky bucket
 at its limit looks like.
 
@@ -118,10 +120,12 @@ Against it, the operator's: 2,499 at 07:40:20, **0** at 07:53:54, 1,042 at
 08:20:07 — refilling steadily at roughly the documented 2,500/hour while the
 fleet stayed pinned at its floor for the whole hour.
 
-**What the instrument cost.** Those readings are seven `viewer` calls on the
-fleet key across the hour (four in the first minute, one refused at 07:54:24,
-one at 08:20:07, one at 08:40:02). Six of the fleet's spend is this document's
-own; everything else below is traffic the fleet produced on its own.
+**What the instrument cost.** About **twelve** fleet-user requests across the
+hour, eleven of them answered: five from §1's identity check and the two
+credential-doctor runs, and seven bare `viewer` reads for the table above (four
+in the first minute, one refused at 07:54:24, one at 08:20:07, one at
+08:40:02). Roughly eleven of the fleet's spend is this document's own;
+everything else below is traffic the fleet produced without any help.
 
 **The reset header is rolling, not a wall clock.** Every reading returned
 exactly one hour ahead of the moment it was taken. `window resets HH:MM PT` in
