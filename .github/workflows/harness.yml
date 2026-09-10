@@ -38,9 +38,10 @@ on:
         default: main
       scenarios:
         description: >-
-          comma-separated scenario names. Empty = the default sweep (the
-          three cheap scenarios). The DRE-2490 adversarial scenarios each
-          spend a REAL build-agent run and are opt-in BY NAME here —
+          comma-separated scenario names. Empty = the default sweep — every
+          discovered scenario that does not spend a build-agent run. The
+          DRE-2490 adversarial scenarios each spend one and are opt-in BY NAME
+          here —
           noop_resubmission, partial_delivery, checklist_gaming,
           already_live, unverified_claim. Each is capped at 45 minutes by
           the driver, so name at most two per dispatch (job timeout below).
@@ -67,8 +68,11 @@ on:
   # the whole repo, so every commit on main changes what they get — a channel
   # that only advances for pipeline-path commits would sit stale on a docs
   # merge and trip its own staleness alarm. This is the cheap default sweep
-  # (three scenarios), and it is affordable because Step 1 cut the CI burn
-  # first — decision D4, in this order, for this reason.
+  # (the scenarios that spend no build-agent run — `agent_task_parses` among
+  # them since DRE-3486, because this sweep IS the channel gate and an opt-in
+  # rehearsal would leave agent-task.yml exactly as uncovered as it was on
+  # 2026-09-09), and it is affordable because Step 1 cut the CI burn first —
+  # decision D4, in this order, for this reason.
   push:
     branches: [main]
 
@@ -146,7 +150,7 @@ jobs:
     # dependabot PRs, and dependency bumps are not harness business).
     if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
-    # Scenario budget for all three scenarios: each verdict wait is bounded
+    # Scenario budget for the whole default sweep: each verdict wait is bounded
     # by the critic job's own timeout — 65m since DRE-2466, not the 25m this
     # comment and the driver's default were both written against —
     # dependabot_flow adds one reconcile cron interval (~15m, DRE-2100), and
@@ -395,6 +399,15 @@ jobs:
           HARNESS_QA_APP_ID: ${{ secrets.BUREAU_QA_APP_ID }}
           HARNESS_QA_APP_PRIVATE_KEY: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
           HARNESS_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          # The commit this run PROVES — the same sha the stamp below binds,
+          # resolved from the actual checkout (DRE-3486). The
+          # `agent_task_parses` rehearsal reports it beside the commit the
+          # sandbox actually compiled: the sandbox's stubs ride @main and
+          # GitHub resolves that ref at dispatch, so the two agree on a
+          # quiet push to main and deliberately do not on a pull request's
+          # proving run. Recorded either way; the rehearsal never fails on
+          # the difference.
+          HARNESS_TESTED_SHA: ${{ steps.tested.outputs.sha }}
           # The slice of the sandbox this run owns (DRE-3075). It opens the
           # run id, so every branch and probe file lands inside it, and the
           # driver's sweep collects nothing outside it — which is what lets

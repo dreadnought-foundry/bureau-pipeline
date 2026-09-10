@@ -347,6 +347,70 @@ class GitHub:
         runs = out.get("workflow_runs") if isinstance(out, dict) else None
         return runs if isinstance(runs, list) else []
 
+    def list_workflow_runs_for(
+        self, repo, workflow_file: str, event: str | None = None,
+        per_page: int = 30,
+    ) -> list[dict]:
+        """Runs of ONE workflow file, newest first — the rehearsal's way of
+        finding the run its dispatch produced (DRE-3486).
+
+        A `repository_dispatch` answers 204 with no run id, so the run has to
+        be found afterwards; scoping the listing to the workflow file and the
+        event keeps that search to one page. A 404 here means the sandbox has
+        no such workflow at all, and the caller says so rather than reporting
+        a workflow that does not parse.
+        """
+        query = f"per_page={int(per_page)}"
+        if event:
+            query += f"&event={urllib.parse.quote(event)}"
+        out = self.request(
+            "GET",
+            f"/repos/{repo}/actions/workflows/"
+            f"{urllib.parse.quote(workflow_file)}/runs?{query}",
+        )
+        runs = out.get("workflow_runs") if isinstance(out, dict) else None
+        return runs if isinstance(runs, list) else []
+
+    def get_workflow_run(self, repo, run_id) -> dict:
+        """One run record. Carries `referenced_workflows` — which reusable
+        workflow a caller actually compiled, and at which commit."""
+        out = self.request("GET", f"/repos/{repo}/actions/runs/{int(run_id)}")
+        return out if isinstance(out, dict) else {}
+
+    def list_run_jobs(self, repo, run_id) -> dict:
+        """The run's jobs, as GitHub's `{total_count, jobs}` envelope.
+
+        The COUNT is the load-bearing part: a workflow GitHub refused to
+        compile concludes having started nothing, and `total_count: 0` on a
+        completed run is that refusal's signature (2026-09-09, DRE-3484).
+        """
+        out = self.request(
+            "GET", f"/repos/{repo}/actions/runs/{int(run_id)}/jobs?per_page=100"
+        )
+        return out if isinstance(out, dict) else {}
+
+    def run_timing(self, repo, run_id) -> dict:
+        """Billable runner time for a run. Corroborates a zero-job refusal:
+        GitHub bills nothing at all for a run that never started a job."""
+        out = self.request("GET", f"/repos/{repo}/actions/runs/{int(run_id)}/timing")
+        return out if isinstance(out, dict) else {}
+
+    def cancel_workflow_run(self, repo, run_id) -> bool:
+        """Cancel a run; False when GitHub says it is already finished.
+
+        The rehearsal proves the workflow PARSES and stops there — it must not
+        leave a real build agent running in the sandbox behind it.
+        """
+        try:
+            self.request(
+                "POST", f"/repos/{repo}/actions/runs/{int(run_id)}/cancel"
+            )
+            return True
+        except GitHubError as e:
+            if e.status in (404, 409):
+                return False
+            raise
+
     def run_log_text(self, repo, run_id) -> str | None:
         """A completed run's logs as text, or None when GitHub will not serve
         them (410 past retention, 403 without `actions: read`, 404).
@@ -440,6 +504,22 @@ class GitHub:
     def create_comment(self, repo, number: int, body: str) -> dict:
         return self.request(
             "POST", f"/repos/{repo}/issues/{number}/comments", {"body": body}
+        )
+
+    # ── repository_dispatch (the relay's own door, DRE-3486) ────────────
+    def repository_dispatch(self, repo, event_type: str, client_payload: dict) -> None:
+        """Fire the event the bureau-linear-relay fires.
+
+        The rehearsal uses the same door the fleet does on purpose: GitHub
+        validates a CALLED workflow only at dispatch, so a stub that parses as
+        YAML and passes every linter can still be refused at the moment it is
+        used — which is exactly what happened to `agent-task.yml` on
+        2026-09-09. Answers 204 with no body and no run id.
+        """
+        self.request(
+            "POST",
+            f"/repos/{repo}/dispatches",
+            {"event_type": event_type, "client_payload": dict(client_payload or {})},
         )
 
     # ── issues (the sandbox's carrier for a seeded card, DRE-2490) ───────

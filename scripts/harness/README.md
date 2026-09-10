@@ -191,6 +191,15 @@ is about writes and is unchanged: no mutation, and still no card addressed.
   `workflow_run` list) with the sandbox's own secrets, plus at least one
   CI workflow that reports a check run on PR heads — the merge gate
   fail-closes to `wait` when no non-review checks exist.
+
+* An **`agent-task.yml` stub** on `repository_dispatch: [agent-execute]`,
+  same shape as its siblings (operator card DRE-3486). Until 2026-09-09 this
+  was the one missing stub, and `agent-task.yml` is the one workflow that
+  builds every card in the fleet — so the workflow the whole pipeline depends
+  on was the one the pre-production gate never fired. `agent_task_parses`
+  reports a MISSING STUB rather than a parse failure when it is absent. The
+  full intended set, and what each stub covers, is
+  `docs/harness.md`.
 * For `dependabot_flow` (DRE-2100): a reconcile stub on its ~15-min cron
   (the workflow_dispatch review route under test) and a stale pinned
   dependency that keeps a genuine Dependabot PR filed — chosen
@@ -208,6 +217,26 @@ is about writes and is unchanged: no mutation, and still no card addressed.
 `pipeline_ref` pins the **driver** checkout. Which pipeline ref the
 sandbox's stubs consume is pinned in the sandbox's own stub files — the
 wiring card's business.
+
+## Scenario `agent_task_parses` (DRE-3486)
+
+Fires the same `agent-execute` `repository_dispatch` the relay fires, at a
+seeded sandbox card, and asserts a job ACTUALLY STARTED: `jobs > 0` on the
+run, and `referenced_workflows` naming
+`dreadnought-foundry/bureau-pipeline/.github/workflows/agent-task.yml` with a
+resolved commit. GitHub validates a called workflow only at dispatch, so
+nothing short of firing it reaches that check — a file can be valid YAML,
+pass every linter here, and still be refused when it is used. A completed run
+with zero jobs is that refusal, named rather than timed out
+(*"agent-task.yml was refused before any job started…"*), inside one sandbox
+wait budget.
+
+It never waits for the agent to build: a started job is the whole claim, and
+cleanup cancels the run. The commit GitHub compiled is RECORDED beside
+`HARNESS_TESTED_SHA`, not asserted equal to it — the sandbox rides `@main`,
+resolved at dispatch, while this workflow queues runs rather than cancelling
+them, so on a pull request's proving run the two deliberately differ.
+`docs/harness.md` carries the full reasoning.
 
 ## Scenario `bot_pr_flow`
 
@@ -299,8 +328,9 @@ outcome. The agent's transcript is never an input to a pass.
 
 **Opt-in by name.** `harness.yml` runs on every boundary PR and its check run
 holds this repo's merge gate; five agent runs per PR would hold every merge
-for hours. So the default sweep (empty `scenarios` input) is exactly the three
-cheap scenarios, and these are selected by name through the same input —
+for hours. So the default sweep (empty `scenarios` input) is exactly the cheap
+scenarios — every discovered scenario whose `requires_agent` is false, listed
+in `docs/harness.md` — and these are selected by name through the same input —
 `--scenarios unverified_claim`. The driver caps each agent at 45 minutes and
 prints what the default sweep skipped, so the cap is never silent. Name at
 most two per dispatch (the job's 120-minute ceiling). Two of them outlast the

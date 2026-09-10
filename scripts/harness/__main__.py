@@ -27,6 +27,10 @@ Env (harness.yml sets all of these):
                         29795108949 401ed its late scenarios). Absent:
                         the initial tokens are static and a long run
                         will 401 past the hour.
+  HARNESS_TESTED_SHA    the commit this run PROVES — the sha harness.yml
+                        stamps `integration-harness` on. The
+                        agent_task_parses rehearsal reports it beside the
+                        commit the sandbox actually compiled (DRE-3486).
   HARNESS_REPO          default --repo
   HARNESS_RUN_ID        default --run-id (else a local one is generated)
   HARNESS_NAMESPACE     default --namespace: the slice of the sandbox this
@@ -282,6 +286,10 @@ def main(argv=None) -> int:
             # The agent scenarios clone the sandbox as the worker bot; every
             # other scenario ignores this.
             worker_token=token,
+            # The commit this run proves (DRE-3486). harness.yml resolves it
+            # from the ACTUAL checkout and stamps it; the agent_task_parses
+            # rehearsal reports it beside the commit the sandbox compiled.
+            tested_sha=os.environ.get("HARNESS_TESTED_SHA", "").strip(),
             # Defaults live in framework.py, never a second literal here —
             # the env vars are the operator's override, not a second copy of
             # the budget (the one the critic's cap is pinned against).

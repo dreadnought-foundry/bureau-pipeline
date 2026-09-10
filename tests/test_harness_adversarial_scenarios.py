@@ -207,7 +207,7 @@ class DiscoveryTest(unittest.TestCase):
         # harness.yml is load-bearing on EVERY boundary PR (merge gate +
         # release stamp). Five real agent runs per PR would hold every merge
         # in this repo for hours, so the default (empty input) sweep stays
-        # exactly the three cheap scenarios.
+        # exactly the cheap scenarios.
         available = scenarios.discover()
         default = harness_main.select_names(available, [])
         for name in AGENT_SCENARIOS:
@@ -215,9 +215,15 @@ class DiscoveryTest(unittest.TestCase):
                 self.assertNotIn(name, default)
         # lane_contract joined the cheap sweep with DRE-2726: two API reads,
         # no build-agent run, and every trunk commit is the point.
+        # agent_task_parses joined with DRE-3486: it fires agent-task.yml and
+        # asserts a job STARTED, then cancels the run — a job start, not a
+        # build. It has to be here, because this sweep IS the channel gate,
+        # and on 2026-09-09 the workflow that builds every card was the one
+        # workflow nothing in the sweep ever installed or fired.
         self.assertEqual(
             default,
-            ["bot_pr_flow", "dependabot_flow", "gate_paths", "lane_contract"],
+            ["agent_task_parses", "bot_pr_flow", "dependabot_flow",
+             "gate_paths", "lane_contract"],
         )
 
     def test_the_opt_in_flag_is_the_scenario_s_own_declaration(self):
