@@ -877,11 +877,50 @@ def parse_review_turns(bodies: list) -> list[dict]:
     return rows
 
 
+#: The action's own enum for a run cut off at its ceiling. It is one of the
+#: two ways a row reads as the turn cap and no longer the only one — see
+#: `hit_the_turn_cap`.
+TURN_CAP_SUBTYPE = "error_max_turns"
+
+#: The enum an action reports when it FINISHED. It reaches a tombstone at all
+#: only because the step was marked failed for some other reason, so it is
+#: never printed as what the review died OF: *died (success)* is a sentence
+#: about a run that did not die of succeeding (DRE-3501).
+FINISHED_SUBTYPE = "success"
+
+
+def hit_the_turn_cap(row: dict) -> bool:
+    """Did this tombstone's run end AT its turn ceiling?
+
+    Two ways, and the second is the one run 34144302622 needed (DRE-3501): the
+    action said `error_max_turns`, OR the row's own numbers say the run reached
+    the ceiling it was given. That run FINISHED — `subtype: success`, turn 51
+    of a 48-turn ceiling — and the enum alone read it as a death that was not
+    a turn cap, so `review_rerun.after_death` left it to a medic that refuses
+    turn caps and nothing re-ran the review.
+
+    UNKNOWN IS NOT OVER (standards/console-honesty.md rule 2): with either
+    number missing there is nothing to compare, and the subtype is all there
+    is. One predicate, here, because `_death_sentence` and
+    `review_rerun.after_death` both ask it of the same row — a second copy of
+    `turns >= ceiling` is how two files come to disagree about one run.
+    """
+    row = row or {}
+    if row.get("subtype") == TURN_CAP_SUBTYPE:
+        return True
+    turns, ceiling = row.get("turns"), row.get("ceiling")
+    return turns is not None and ceiling is not None and turns >= ceiling
+
+
 def _death_sentence(row: dict) -> str:
     """The death as one predicate — `ran out of turns — 41 of its 40-turn
     ceiling in run 34008698027 (attempt 2), step \\`posta\\`` — with the
     subject left to the caller. The sweep's detail and the note's opening
-    share it, so the two never describe the same run differently."""
+    share it, so the two never describe the same run differently.
+
+    The TURNS decide, not the enum (`hit_the_turn_cap`), and no row ever
+    prints `(success)`.
+    """
     turns = row.get("turns")
     ceiling = row.get("ceiling")
     subtype = row.get("subtype")
@@ -890,9 +929,13 @@ def _death_sentence(row: dict) -> str:
         f" (attempt {attempt})" if attempt is not None else "")
     spent = f"{turns} turns" if turns is not None else "an unknown number of turns"
     cap = f" of its {ceiling}-turn ceiling" if ceiling is not None else ""
-    if subtype == "error_max_turns":
-        how = f"ran out of turns — {spent}{cap}"
-    elif subtype:
+    if hit_the_turn_cap(row):
+        # Both numbers known is the whole of the reading, so it is the whole
+        # of the sentence: `51 of its 48-turn ceiling`.
+        at_cap = f"{turns} of its {ceiling}-turn ceiling" \
+            if turns is not None and ceiling is not None else f"{spent}{cap}"
+        how = f"ran out of turns — {at_cap}"
+    elif subtype and subtype != FINISHED_SUBTYPE:
         how = f"died ({subtype}) after {spent}{cap}"
     else:
         how = f"died after {spent}{cap}"
@@ -2240,6 +2283,27 @@ def _cmd_decide(args) -> int:
     return 0
 
 
+def _cmd_read_result(args) -> int:
+    """Which of the three verdicts is in a critic's result file (DRE-3501).
+
+    The step that reads this answer decides whether the review DIED, so it
+    reads the FILE rather than the action's step outcome: on run 34144302622
+    the review finished at turn 51 of a 48-turn ceiling, the action marked its
+    step failed, and a `PLAN-CRITIC: PASS` nobody read was buried under a
+    tombstone. `read_result`, not a second parser — the decision step reads
+    the same file through the same function, and two readings of one file is
+    how they would come to disagree.
+
+    ALWAYS 0, and a missing file is `NO_RESULT`: the whole point is to answer
+    about a run that may have crashed, and an answer that crashes with it
+    would leave the rail exactly where it started.
+    """
+    result, _reason = read_result(_read(args.result_file))
+    _write_outputs(args.github_output, [("verdict", result)])
+    print(f"the second critic's result file says: {result}")
+    return 0
+
+
 def _cmd_sight(args) -> int:
     epics = _stdin_json([])
     print(sight_block(args.this, epics), end="")
@@ -2352,6 +2416,12 @@ def main(argv: list[str]) -> int:
     # pass — `planning_escalation.py escalate --reason-file` reads it.
     d.add_argument("--escalation-file", default=None)
     d.set_defaults(fn=_cmd_decide)
+
+    v = sub.add_parser("read-result",
+                       help="which verdict a critic's result file holds")
+    v.add_argument("--result-file", required=True)
+    v.add_argument("--github-output", default=None)
+    v.set_defaults(fn=_cmd_read_result)
 
     s = sub.add_parser("sight", help="cross-epic scope; epics on stdin")
     s.add_argument("--this", required=True)

@@ -1590,15 +1590,29 @@ jobs:
             echo "max_turns=100" >> "$GITHUB_OUTPUT"
           }
 
-      # NO `continue-on-error` here, on purpose (DRE-3241). With it, a review
-      # that died would reach the decision step below, which reads an empty
-      # result file as NO_RESULT — "a crash is not a rejection" — and would
-      # ACTIVATE the epic with no review at all. Without it the job goes red,
-      # the decision and the activation stay skipped, and the tombstone step
-      # after this one is the only thing that runs.
+      # `continue-on-error`, because THE RESULT FILE DECIDES and this step's
+      # outcome does not (DRE-3501). On 2026-09-07 run 34144302622 FINISHED —
+      # `"subtype": "success"` at turn 51 of a 48-turn ceiling — and the action
+      # marked its step failed anyway. The rail read the step, skipped the
+      # decision, and buried a review that had already written
+      # `PLAN-CRITIC: PASS` under a tombstone reading *died (success)*. Nobody
+      # ever opened the file.
+      #
+      # So `postverdict` below reads it, and the two steps after it are gated
+      # on the verdict: a review that wrote PASS or SEND_BACK before the cut
+      # reaches the decision whatever this step's outcome, and a review that
+      # died with nothing parseable reaches the tombstone.
+      #
+      # THE DRE-3241 TRAP STAYS CLOSED. That trap is an EMPTY result file
+      # reaching the decision as NO_RESULT — "a crash is not a rejection" —
+      # and activating the epic with no review at all. It cannot happen here:
+      # on a FAILED review the decision is reachable only through a parsed
+      # verdict, and NO_RESULT goes to the tombstone step, which ends by
+      # exiting non-zero so the job is as red for the medic as it was before.
       - name: Second critic — review (after approval)
         id: posta
         if: steps.route.outputs.mode == 'activate'
+        continue-on-error: true
         uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -1725,6 +1739,31 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$RECEIPT")"
 
+      # DID THE REVIEW DECIDE? (DRE-3501). One question, asked of the FILE the
+      # critic was told to write, because the step outcome above answers a
+      # different one. Run 34144302622 ended `success` at turn 51 of a 48-turn
+      # ceiling with its step marked failed and `PLAN-CRITIC: PASS` already in
+      # this file, and the rail buried the pass under a tombstone.
+      #
+      # `plan_critic.py read-result` is `read_result` — the same function the
+      # decision step below parses the same file with, never a second reading
+      # of one file — and it answers in that function's own three words:
+      # PASS, SEND_BACK, NO_RESULT. It never exits non-zero, so a review that
+      # crashed cannot take this answer down with it; it carries NO
+      # `continue-on-error`, so on the one path where it could not answer at
+      # all the job goes red and everything below keeps its implied
+      # `success()` — the DRE-3241 behaviour, exactly.
+      #
+      # It runs wherever the receipt above runs, and for the same reason: both
+      # paths need the answer.
+      - name: Second critic — verdict or death?
+        id: postverdict
+        if: always() && steps.route.outputs.mode == 'activate' && (steps.posta.outcome == 'success' || steps.posta.outcome == 'failure')
+        run: |
+          python3 .bureau-pipeline/scripts/plan_critic.py read-result \
+            --result-file "${{ runner.temp }}/plan-critic-post.md" \
+            --github-output "$GITHUB_OUTPUT"
+
       # The review DIED — the action ended without a decision (DRE-3241). On
       # 2026-09-05 that left nothing on the epic: the job went red, every
       # sweep read the newest trusted marker — round ONE's send-back, already
@@ -1737,9 +1776,13 @@ jobs:
       # children under its own tag, and names the move that re-runs the
       # review. A dead round spends nothing of the two-round bound.
       #
-      # Gated on `failure()` AND this step's own outcome: it runs only when
-      # the review itself failed, never on an earlier step's failure, and the
-      # job stays red so the medic behaves exactly as before. The decision and
+      # Gated on the review's own outcome AND on there being no verdict to
+      # read (DRE-3501): a review that FAILED after writing PASS or SEND_BACK
+      # decided, and a decided round is not a death. `failure()` is gone from
+      # this condition because `continue-on-error` on the review keeps the job
+      # green there — it would never be true, and the tombstone would never be
+      # written. The job goes red HERE instead, on the `exit 1` this step ends
+      # with, so the medic sees what it has always seen and the decision and
       # the activation below keep their implied `success()` and stay skipped.
       # ...and then it asks for the review again, ITSELF (DRE-3289). Until this
       # card a death left the epic In Progress with nothing scheduled, and the
@@ -1774,7 +1817,7 @@ jobs:
       # dispatch does, and queues behind this one on the stub's `agent-<id>`
       # concurrency group.
       - name: Second critic — the review died
-        if: failure() && steps.route.outputs.mode == 'activate' && steps.posta.outcome == 'failure'
+        if: steps.route.outputs.mode == 'activate' && steps.posta.outcome == 'failure' && steps.postverdict.outputs.verdict == 'NO_RESULT'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -1839,10 +1882,25 @@ jobs:
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
               "$(cat "$PARK_NOTE")"
           fi
+          # RED, from here (DRE-3501). The review step no longer fails the
+          # job, so the death does — LAST, after the record, the note and the
+          # dispatch, because everything above is what the medic and the sweep
+          # read and a job that died before writing them would leave the epic
+          # exactly as silent as 2026-09-05.
+          exit 1
 
+      # The review DECIDED — either it ran to its decision, or it was cut off
+      # after writing its verdict (DRE-3501). The second half of that gate is
+      # what makes a `continue-on-error` review safe: on a FAILED review this
+      # step is reachable ONLY through a verdict `read_result` actually parsed,
+      # so the DRE-3241 trap — an empty result file read as NO_RESULT, and the
+      # epic activated with no review — has no path here. A review whose step
+      # SUCCEEDED is admitted as it always was, NO_RESULT included: a critic
+      # that ran to its decision and wrote nothing usable is a round, and a
+      # crash is not a rejection (standards/console-honesty.md rule 1).
       - name: Second critic — decision
         id: post1
-        if: steps.route.outputs.mode == 'activate'
+        if: steps.route.outputs.mode == 'activate' && (steps.posta.outcome == 'success' || steps.postverdict.outputs.verdict != 'NO_RESULT')
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |

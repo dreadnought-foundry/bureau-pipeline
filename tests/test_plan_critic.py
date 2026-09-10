@@ -2939,7 +2939,10 @@ class ATombstoneNeverSaysSuccess(unittest.TestCase):
         return pc.parse_deaths([ours(pc.death_marker(**fields))])[0]
 
     def _sentence(self, **kw):
-        return pc.death_note("DRE-3257", self._row(**kw))
+        """The note's OPENING — the death sentence itself. The paragraphs
+        under it are the standing prose every death carries, and one of them
+        says what a run that ran out of turns gets."""
+        return pc.death_note("DRE-3257", self._row(**kw)).split("\n\n")[0]
 
     def test_the_run_that_finished_over_its_ceiling_ran_out_of_turns(self):
         note = self._sentence()

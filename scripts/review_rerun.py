@@ -101,9 +101,13 @@ RETRY = "retry"
 PARK = "park"
 LEAVE = "leave"
 
-#: The one death subtype this module acts on. Every other subtype is the
-#: medic's, which retries it once already.
-TURN_CAP_SUBTYPE = "error_max_turns"
+#: The subtype an action reports for a run cut off at its ceiling — one of the
+#: two ways a death reads as the turn cap, and `plan_critic`'s, not a second
+#: copy of the string. The other way is the row's own numbers
+#: (`plan_critic.hit_the_turn_cap`), which is what run 34144302622 needed:
+#: it FINISHED at turn 51 of a 48-turn ceiling and reported `success`.
+#: Every death that is neither is the medic's, which retries it once already.
+TURN_CAP_SUBTYPE = plan_critic.TURN_CAP_SUBTYPE
 
 
 # --- The ceilings ------------------------------------------------------------
@@ -188,8 +192,8 @@ def after_death(bodies: list, epic: str | None,
     Read AFTER the tombstone is on the epic, so the death being decided is the
     newest row `deaths_since_last_round` returns.
 
-      * `leave` — any subtype but the turn cap. That death is the medic's: it
-        retries a non-turn death once already, and it refuses a turn-cap one
+      * `leave` — a death that is not the turn cap. That death is the medic's:
+        it retries a non-turn death once already, and it refuses a turn-cap one
         (`medic_retry.RULE_TURN_EXHAUSTION`). Checked FIRST, so the two never
         both act on one death whatever the count says.
       * `retry` — the first turn-cap death since the last round. The re-run
@@ -198,13 +202,23 @@ def after_death(bodies: list, epic: str | None,
       * `park` — the second or later. Naming every run in the tombstones,
         because "it died twice" is the fact that asks a person to split the
         plan rather than pay for a third attempt.
+
+    WHAT MAKES IT THE TURN CAP is the RECORD, not the enum alone (DRE-3501):
+    the subtype the action reported, OR the tombstone's own
+    `turns >= ceiling` — the question `plan_critic.hit_the_turn_cap` answers
+    for the tombstone sentence too, asked of the row this run just wrote
+    rather than of a flag the workflow would have to pass twice. Run
+    34144302622 reported `success` at turn 51 of a 48-turn ceiling: `success`
+    is not `error_max_turns`, so this answered `leave`, the medic refuses a
+    turn cap, and nothing re-ran the review.
     """
     deaths = deaths_since_last_round(bodies, epic)
-    if subtype != TURN_CAP_SUBTYPE:
+    newest = deaths[-1] if deaths else {}
+    if subtype != TURN_CAP_SUBTYPE and not plan_critic.hit_the_turn_cap(newest):
         return LEAVE, (
-            f"the review died `{subtype or '?'}`, which is not a turn cap — "
-            "that death belongs to the medic, which retries it once; nothing "
-            "here acts on it"
+            f"the review died `{subtype or '?'}` inside its ceiling, which is "
+            "not a turn cap — that death belongs to the medic, which retries "
+            "it once; nothing here acts on it"
         )
     if len(deaths) >= MAX_DEATHS:
         listed = ", ".join(_runs(deaths))
