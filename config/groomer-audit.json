@@ -1,0 +1,114 @@
+{
+  "_readme": [
+    "THE GROOMER JUDGEMENT'S AUDIT VOCABULARY (DRE-3155). One file, read by",
+    "scripts/groomer_score.py, declaring what the ranked read is scored on, what",
+    "each answer may say, and the ONE dimension that must never be scored.",
+    "",
+    "THE HELD-OUT ANSWER IS THE CEO'S OWN. DRE-3151 records it as a table in a",
+    "comment, written BEFORE he reads the model's reasons. The scorer never",
+    "fetches it — the audit card's comments arrive on stdin — so nothing here",
+    "names an API, a token or a repo.",
+    "",
+    "`constraints` IS EXCLUDED AS CONTAMINATED. Collisions, blockers, epic units",
+    "and capacity are decided by groomer.sequence and the functions it calls, and",
+    "the groomer's tests hold them there. The judgement cannot break one of them",
+    "however it reads the board, so scoring the dimension grades the CODE rather",
+    "than the judgement — exactly the way `proof-and-demo` flatters the planner's",
+    "audit and `hand-built` flattered the critic's (DRE-2685, DRE-3016).",
+    "",
+    "The exclusion CHECKS ITSELF: `enforces` names the constraint functions, and",
+    "reference_problems() reads scripts/groomer.py for each one, the way the",
+    "planner's reads .github/workflows/plan.yml for its gate. Take one of those",
+    "functions away and the dimension stops being contaminated — this file is",
+    "then refused rather than quietly keeping a stale exclusion.",
+    "",
+    "Check this file against the parser and the groomer:",
+    "  python3 scripts/groomer_score.py check"
+  ],
+  "version": 1,
+  "source": {
+    "card": "DRE-3151",
+    "record": "the hand audit's own comment thread on DRE-3151, read on stdin",
+    "why_it_is_blind": "The CEO writes the `CEO said` column before he reads the judgement's reasons, on a card the groomer never sees. The proposal the run posted is the other half, and it was written first — so neither side could be written to match the other."
+  },
+  "contract": {
+    "header": [
+      "Card",
+      "Rules said",
+      "Judgement said",
+      "CEO said",
+      "Agree?"
+    ],
+    "calls": [
+      "now",
+      "not-now",
+      "likely-done",
+      "unranked"
+    ],
+    "ceo_may_also_write": [
+      "unsure",
+      ""
+    ],
+    "count_lines": [
+      "false-done",
+      "unranked"
+    ],
+    "why": "One contract, written once: DRE-3151 records the table, DRE-3150 writes the proposal JSON, and this block is where the shape is declared. `Rules said` and `Judgement said` are ONE COLUMN APART, so a table read in the wrong order scores the rules against the CEO and reports the number as the judgement's — which is why the header is matched exactly rather than by width."
+  },
+  "dimensions": {
+    "placement": {
+      "question": "Did the judgement put the card where the CEO would have put it?",
+      "scored": true,
+      "values": [
+        "now",
+        "not-now",
+        "likely-done"
+      ],
+      "why": "The `Judgement said` column against the `CEO said` column, and the only dimension in the agreement rate. A blank or `unsure` CEO column is the ABSENCE of an answer — reported as unknown and left out of the rate, never counted as agreement."
+    },
+    "likely-done": {
+      "question": "When the judgement called a card likely done, was it?",
+      "scored": true,
+      "values": [
+        "confirmed",
+        "false-done"
+      ],
+      "why": "The expensive miss, so it is counted on a line of its own rather than folded into the rate: a card the judgement calls done and the CEO says is live work leaves real work unscheduled. A dead row the card's OWN description condemned (`source: superseded-line`) is not the judgement's call and is not counted here — groomer._mark never re-judges it."
+    },
+    "trigger": {
+      "question": "Does a not-now name something a person will notice, or a date nobody watches?",
+      "scored": false,
+      "values": [
+        "event",
+        "date",
+        "unknown"
+      ],
+      "not_scored_why": "Reported as a split, never as agreement. The contract's table carries no column for it — the CEO answers WHERE a card goes, not whether its trigger was well chosen — so scoring it would compare the judgement against nobody. The split is the number to read: a not-now with a date nobody watches comes back on its own, and a not-now with no trigger at all comes back never."
+    },
+    "unranked": {
+      "question": "How often did the judgement decline to rank a card?",
+      "scored": false,
+      "values": [
+        "unranked"
+      ],
+      "not_scored_why": "A refusal is the DESIGNED answer (groom_judgement.WITHHELD_REASON), not a miss. Scoring it as a disagreement would push the model towards answering when it should not, which is the one failure this whole rail exists to avoid. Counted on its own line and left out of the rate."
+    },
+    "constraints": {
+      "question": "Did the batch honour collisions, blockers, epic units and capacity?",
+      "scored": false,
+      "values": [
+        "held",
+        "broken"
+      ],
+      "not_scored_why": "Excluded as contaminated — see `contaminated` below.",
+      "contaminated": "groomer.sequence applies the constraints AFTER the model's order and the groomer's own tests hold them there, so every row this dimension could produce is the code's answer rather than the judgement's. The rules constrain the read; they do not re-rank it.",
+      "enforces": [
+        "collision_report",
+        "blockers_of",
+        "units",
+        "sequence",
+        "cycle_plan"
+      ]
+    }
+  }
+}
