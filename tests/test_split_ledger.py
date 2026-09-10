@@ -1013,3 +1013,69 @@ def test_the_config_readme_describes_discovery_the_window_and_the_new_blocks():
     for phrase in ("discover", "window", "monthly", "created_at"):
         assert phrase in entry.lower(), (
             f"config/README.md's split-ledger entry never mentions {phrase}")
+
+
+# --------------------------------------------------------------------------- #
+# DRE-3356 — discovery proposes, the row's own readers dispose                  #
+# --------------------------------------------------------------------------- #
+
+#: A comment that MENTIONS the turn-cap tag without being the receipt. Both are
+#: real shapes read off the board on 2026-09-09 while deriving this ledger: a
+#: critic verdict quoting the tag, and a medic diagnosis naming it. Linear's
+#: `containsIgnoreCase` cannot anchor, so the discovery search matches both —
+#: about half the candidates it returned were exactly this.
+QUOTING_COMMENT = (
+    "🔎 QA Critic — VERDICT: APPROVE @6211b3b\n\n## Summary\n\nWhen an "
+    f"automated comment carries {split_ledger.TURN_TAG} the sweep must not "
+    "read it as a death.\n"
+)
+
+
+def test_a_candidate_whose_comments_only_quote_a_receipt_is_not_a_row():
+    """The discovery searches are a NET, not a verdict. `_is_turn_cap_receipt`
+    is anchored at the start of the comment and it is what decides."""
+    candidate = _record(identifier="DRE-8001", comments=[QUOTING_COMMENT],
+                        successors=[], created_at="2026-08-01T00:00:00Z")
+    assert split_ledger.reasons(candidate) == []
+    doc = split_ledger.ledger([candidate], generated_at="2026-09-10T00:00:00Z")
+    assert [r["card"] for r in doc["rows"]] == []
+
+
+def test_a_candidate_whose_comments_could_not_be_read_stays_with_its_unknowns():
+    """"This card did not die" and "we could not look" are different facts.
+    Dropping the second is the silent zero in its purest form."""
+    unread = _record(identifier="DRE-8002", comments=None, successors=[],
+                     comments_unreadable="Linear refused the read",
+                     created_at="2026-08-01T00:00:00Z")
+    doc = split_ledger.ledger([unread], generated_at="2026-09-10T00:00:00Z")
+    assert [r["card"] for r in doc["rows"]] == ["DRE-8002"]
+    assert doc["rows"][0]["deaths"] == split_ledger.UNKNOWN
+
+
+def test_a_candidate_whose_successor_search_failed_stays_too():
+    unread = _record(identifier="DRE-8003", comments=[], successors=None,
+                     successors_unreadable="Linear refused the search",
+                     created_at="2026-08-01T00:00:00Z")
+    doc = split_ledger.ledger([unread], generated_at="2026-09-10T00:00:00Z")
+    assert [r["card"] for r in doc["rows"]] == ["DRE-8003"]
+
+
+def test_a_card_named_on_the_command_line_stays_whatever_history_says():
+    """`--card` is a person saying "look at this one". A row that vanished
+    because the board had nothing to say about it would look like a bug."""
+    quiet = _record(identifier="DRE-8004", comments=[], successors=[],
+                    created_at="2026-08-01T00:00:00Z")
+    doc = split_ledger.ledger([quiet], generated_at="2026-09-10T00:00:00Z",
+                              keep=["DRE-8004"])
+    assert [r["card"] for r in doc["rows"]] == ["DRE-8004"]
+    assert doc["rows"][0]["reasons"] == []
+
+
+def test_every_committed_row_says_why_it_is_there():
+    """The ledger is "every card that did not fit one run". A row that answers
+    none of the three ways, and was not named as a seed, is a candidate the
+    search proposed and the readers never confirmed."""
+    for row in _committed()["rows"]:
+        assert row["reasons"] or split_ledger.UNKNOWN in (
+            row["deaths"], row["pieces"]), (
+            f"{row['card']} is in the ledger for no readable reason")
