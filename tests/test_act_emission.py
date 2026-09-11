@@ -46,6 +46,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import check_act_receipts  # noqa: E402
 import pipeline_act  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -446,12 +447,32 @@ class TestEveryPythonSiteEmitsItsTrailer:
     def test_every_python_emitted_act_has_a_site(self):
         """No act declared as emitted from a `scripts/` file may go undriven —
         otherwise the guard proves the call site is wrapped and nothing proves
-        what it posts."""
+        what it posts.
+
+        The one exception is an act nothing POSTS yet: a pure decision module
+        that composes a body and hands it back, whose wiring into the sweep is
+        a sibling card. There is no write to record, so there is nothing to
+        drive. It is `check_act_receipts.pending_acts()` — derived from "no
+        file that posts has heard of this act", never a list here — so the
+        exemption closes by itself when the wiring lands (DRE-3433).
+        """
+        pending = check_act_receipts.pending_acts()
         driven = {act for act, _ in SITES.values()}
         for name in pipeline_act.acts():
             emitter = pipeline_act.record(name)["emits"]["file"]
-            if emitter.startswith("scripts/"):
+            if emitter.startswith("scripts/") and name not in pending:
                 assert name in driven, f"{name} is emitted from {emitter} and never driven"
+
+    def test_nothing_driven_here_is_exempt(self):
+        """The two halves cannot both be true of one act, and saying so out
+        loud is what stops the exemption quietly swallowing a real site: an act
+        with a driver is an act something posts."""
+        pending = check_act_receipts.pending_acts()
+        for act, _ in SITES.values():
+            assert act not in pending, (
+                f"{act} has a driver here and is exempt as posted-by-nothing — "
+                "one of the two is wrong"
+            )
 
 
 # --------------------------------------------------------------------------- #
