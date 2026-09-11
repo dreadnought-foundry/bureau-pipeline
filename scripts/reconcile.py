@@ -5161,7 +5161,7 @@ def _fleet_outage_first_run(outcome, prs: list[dict]) -> reviewer_down.FirstRun:
             "api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
             "[.check_runs[] | select(.name == %s) | .details_url][0] // \"\""
             % json.dumps(HEAD_REVIEW_CHECK_NAME),
-        ).strip().strip('"')
+        ).strip()
     log_line = f"log tail unreadable — see {run_url}" if run_url else "log tail unreadable"
     run_id = _RUN_ID.search(run_url)
     if run_id:

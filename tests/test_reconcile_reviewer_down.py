@@ -190,7 +190,9 @@ def _gh_factory(state):
                 raise RuntimeError("HTTP 403: rate limited")
             return json.dumps(state["prs"])
         if args[0] == "api" and "/check-runs" in args[1]:
-            return json.dumps(state.get("details_url", RUN_URL))
+            # `gh api --jq` prints a STRING raw, the way `.default_branch` and
+            # `.sha` are already read in this file — no quotes to strip.
+            return state.get("details_url", RUN_URL)
         raise AssertionError(f"unexpected gh call: {args}")
 
     return fake_gh
@@ -497,6 +499,21 @@ def test_a_failed_create_lands_in_write_failures():
     assert any("fleet-reviewer-outage" in f for f in reconcile._write_failures), (
         f"got {reconcile._write_failures}"
     )
+
+
+def test_a_recorded_write_failure_takes_the_whole_sweep_red():
+    """The other half of the criterion above: `_write_failures` is the rail
+    `main()` exits non-zero on, so a failed create is a red run the medic
+    sees rather than a silent miss (the DRE-1254 discipline)."""
+    written, _ = _run_outage(create_fails=True, **_file_world(_medic_note()))
+    assert reconcile._write_failures
+    with patch.object(reconcile, "active_cards", return_value=[]), \
+        patch.object(reconcile, "merged_card_scope", return_value=None), \
+        patch.object(reconcile, "promote_ready", return_value=0), \
+        patch.object(reconcile.linear_ops, "open_pass"), \
+        pytest.raises(SystemExit) as exit_info:
+        reconcile.main(promote_only=True)
+    assert "write failure" in str(exit_info.value)
 
 
 def test_a_hold_receipt_alone_contributes_zero_outcomes():
