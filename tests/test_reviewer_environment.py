@@ -725,13 +725,18 @@ class TestTheCli:
 class TestTheSiblingsAreUntouched:
     @pytest.mark.parametrize("path", [
         "scripts/reconcile.py",
-        ".github/workflows/medic.yml",
         ".github/workflows/qa-review.yml",
     ])
     def test_the_sweep_and_the_two_workflows_never_name_the_new_module(self, path):
         """DRE-3428 ships the vocabulary and its one writer. Wiring the medic
         and the sweep to it is the siblings' work, and a half-wire here is a
-        second answer to the question this card exists to make single."""
+        second answer to the question this card exists to make single.
+
+        `.github/workflows/medic.yml` was on this list until DRE-3430 wired
+        it — that sibling is the one that reads the class, names the cause on
+        the card and holds after the one retry, and its own wiring is pinned in
+        `tests/test_medic_environment_hold.py`. The sweep (DRE-3435) is still
+        unwired, so `reconcile.py` stays fenced."""
         text = (ROOT / path).read_text("utf-8")
         assert "reviewer_environment" not in text
         assert renv.HOLD_TAG not in text
