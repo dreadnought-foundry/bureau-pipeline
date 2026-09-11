@@ -75,7 +75,10 @@ repo can't be inferred deterministically. Get it right and the gate is a no-op.
   and none was prose-only — `python3 scripts/check_prose_blockers.py`
   recomputes that, and the number is never remembered.
 - **Labels:** `initiative:<x>` (the cross-project filter); `no-code` for
-  operator/non-build cards.
+  operator/non-build cards — and a card filed `needs-human` carries `no-code`
+  with it (`needs-human` requires `no-code`; the create seam refuses the lone
+  label, DRE-3512), because a card a person finishes by hand may not also
+  describe a diff.
 - **`break-glass`** — the ONE sanctioned way past the Todo-entry gate at 2am
   (DRE-2737). **Operator-only**: applied by hand, in Linear, by a person; the
   pipeline's own label writes refuse it, so **no agent may apply it**. The

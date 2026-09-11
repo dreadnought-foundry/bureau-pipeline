@@ -68,6 +68,7 @@ import sys
 from pathlib import Path
 
 import break_glass
+import dead_run  # the hold label has ONE definition (dead_run.HOLD_LABEL)
 
 # IMPORTANT: this regex MUST stay in lockstep with the relay's _card_repo_slug
 # (cloud/relay/lambda_function.py in agent-bureau) so routing and validation
@@ -182,6 +183,51 @@ def repo_title_mismatch(title: str, labels: list[str]) -> str | None:
         + f" — title: {(title or '').strip()!r}. A card's `repo:` label is the "
         "repo its FILES live in (standards/card-quality.md); fix whichever of "
         "the two is wrong."
+    )
+
+
+# The label pair that says "a person finishes this by hand and there is no code
+# in it" (standards/card-quality.md). `needs-human` is the SAME word the
+# pipeline stamps as its hold label, so it is read from the module that owns
+# that label; `no-code` is a literal here because `linear_ops` (which carries
+# the other copy, NO_CODE_LABEL) imports this module lazily and the pure core
+# must import without it — tests/test_needs_human_requires_no_code.py pins the
+# two copies to each other.
+NEEDS_HUMAN_LABEL = dead_run.HOLD_LABEL  # "needs-human"
+NO_CODE_LABEL = "no-code"
+
+
+def needs_human_without_no_code(labels: list[str]) -> str | None:
+    """The card is filed as a human's to finish (`needs-human`) without saying
+    there is no code in it (`no-code`) — the problem, with both labels named
+    and the rule cited, or None (DRE-3512).
+
+    `needs-human` REQUIRES `no-code`: a card claiming a person finishes it by
+    hand may not also describe a diff. The standard pairs the two everywhere it
+    names such a card, and the console offers a one-click hand-completion on
+    what it reads as one — on 2026-09-09 that was two ordinary build cards,
+    DRE-3356 and DRE-3357, marked Done unbuilt. `no-code` alone is ordinary
+    (it rides on every standards card); only the other half is the claim.
+
+    Judged at the create seam ONLY (`linear_ops._reject_unless_creatable`),
+    where the label can mean nothing but what the planner meant by it. Not in
+    `missing()` and not in `child_problems()`: both read cards already on the
+    board, and there the same word is the pipeline's own hold — the stranded
+    watchdog, the turn-cap park and the fix loop stamp `dead_run.HOLD_LABEL` on
+    cards that describe a diff by design (which is exactly how those two cards
+    came to wear it). Refusing that would bounce a held build card to Planning
+    at the Todo gate, or fail a re-plan over a child the turn cap parked.
+    `plan_seam._OBSERVATION_LABELS` reads the pair for the same reason.
+    """
+    low = {str(l).strip().lower() for l in labels or []}
+    if NEEDS_HUMAN_LABEL not in low or NO_CODE_LABEL in low:
+        return None
+    return (
+        f"labelled '{NEEDS_HUMAN_LABEL}' without '{NO_CODE_LABEL}' — a card a "
+        f"person finishes by hand carries both (`{NEEDS_HUMAN_LABEL}` requires "
+        f"`{NO_CODE_LABEL}`, standards/card-quality.md), and a card that "
+        f"describes a diff carries neither. Add '{NO_CODE_LABEL}' if an operator "
+        f"does this, or drop '{NEEDS_HUMAN_LABEL}' if an agent builds it."
     )
 
 
