@@ -407,6 +407,10 @@ class TestTheVerdictRelease:
         assert "verdict" in log.lower(), (
             "an operator reading the sweep log must see WHICH signal fired"
         )
+        assert f"1/{reconcile.CRASHED_REVIEW_RETRY_CAP} for this head" not in log, (
+            "a released head is not on its FIRST re-dispatch, and a line "
+            "saying it is would be the reassuring log DRE-1254 was made of"
+        )
 
     def test_a_verdict_older_than_the_hold_releases_nothing(self):
         """The verdict has to be NEWER than the hold, or every held head would

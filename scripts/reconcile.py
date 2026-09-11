@@ -5357,12 +5357,20 @@ def recover_crashed_reviews() -> None:
             "review re-joins the dispatch queue"
         )
         eligible.append(pr)
+    from_a_hold = {pr["number"] for pr, _ in released}
     eligible.sort(key=lambda p: p["number"])  # oldest first — drain in arrival order
     for pr in eligible[:CRASHED_REVIEW_SWEEP_CAP]:
+        # A released head is NOT on its first re-dispatch, and a line saying
+        # so would be the kind of reassuring log DRE-1254 was made of.
+        budget = (
+            "the runner-environment hold is released"
+            if pr["number"] in from_a_hold
+            else f"1/{CRASHED_REVIEW_RETRY_CAP} for this head"
+        )
         print(
             f"crashed-review: PR #{pr['number']} head {pr['headRefOid'][:8]} — "
             f"review crashed with no verdict; re-dispatching {review_workflow()} "
-            f"(1/{CRASHED_REVIEW_RETRY_CAP} for this head)"
+            f"({budget})"
         )
         if _nudge(review_workflow(), pr["number"]):
             _post_rereview_receipt(pr)
