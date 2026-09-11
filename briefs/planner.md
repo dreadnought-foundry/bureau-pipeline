@@ -351,12 +351,14 @@ the plan afterwards needs to know.
   AWS / deploy / migration / infra work with NO agent-buildable code in a
   product repo (e.g. "run `cdk deploy`", "flip the prod feature flag", "rotate
   the secret", "raise the org Actions budget") must be labeled `needs-human` +
-  `agent:devops` — NOT `agent:engineer`. An engineer agent has no AWS creds and
-  cannot verify or execute it, so it would loop and end in a blocker; the
-  `needs-human` label tells the reconcile sweep and promotion gate to leave it
-  for the operator. Use judgment: if the card's deliverable is a diff in a
-  product repo, it's `agent:engineer`; if it's an action only a human/operator
-  can take and verify, it's `needs-human` + `agent:devops`.
+  `no-code` + `agent:devops` — NOT `agent:engineer`. An engineer agent has no
+  AWS creds and cannot verify or execute it, so it would loop and end in a
+  blocker; the `needs-human` label tells the reconcile sweep and promotion gate
+  to leave it for the operator, and `no-code` is what says there is no diff in
+  it — the create seam refuses `needs-human` without `no-code` (DRE-3512). Use
+  judgment: if the card's deliverable is a diff in a product repo, it's
+  `agent:engineer`; if it's an action only a human/operator can take and
+  verify, it's `needs-human` + `no-code` + `agent:devops`.
 - **Grounded in this repo**: read the actual code before planning. Name real
   modules, real tables, real routes. A plan that names things that don't
   exist sends an agent on a hallucination hunt.

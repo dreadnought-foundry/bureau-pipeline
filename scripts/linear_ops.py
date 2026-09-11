@@ -1542,7 +1542,13 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
     SO IS THE TITLE/LABEL REPO AGREEMENT (DRE-3278). The repo is written twice —
     the title's `<slug>: …` prefix and the `repo:` label that routes — and
     nothing compared them, so DRE-3275 was filed for the repo its files live in
-    and labelled for the one its epic happened to carry."""
+    and labelled for the one its epic happened to carry.
+
+    AND SO IS THE `needs-human` / `no-code` PAIR (DRE-3512). A card filed as a
+    human's to finish carries both or neither; this is the ONE seam that judges
+    it, because on the board the same word is the pipeline's hold label — see
+    `validate_card.needs_human_without_no_code` for why the Todo gate and the
+    post-plan sweep deliberately do not."""
     problem = body_problem(description)
     if problem is not None:
         raise LinearError(
@@ -1567,6 +1573,10 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
             f"{kind} REJECTED ({title!r}): {mismatch} Re-label the card (or "
             "re-title it) so the two name the same repo, and retry."
         )
+
+    lone_hold = validate_card.needs_human_without_no_code(labels)
+    if lone_hold is not None:
+        raise LinearError(f"{kind} REJECTED ({title!r}): {lone_hold} Then retry.")
 
     unresolvable = _unresolvable_blockers(blockers or [])
     if unresolvable:
