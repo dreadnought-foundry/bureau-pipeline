@@ -80,6 +80,12 @@ note that dropped the phrase would blind the fleet alarm for exactly the crash
 class this epic names — so the phrase comes first and the environment detail
 after it, and a test reads medic.yml and asserts the phrase is still there.
 
+Both READS of that note live here too — `evidence_for_head` for "is there one
+for this head" and `signature_from_evidence` for "what does it say the cause
+is" (DRE-3431). The sweep needs the second to compose a hold at all, and a
+module that wrote a format somebody else parsed would have handed out two
+answers about one sentence.
+
 The **hold receipt**, composed through `pipeline_act.receipt()` and posted by
 `post_hold()` to the pull request (the sha-bound counter the sweep reads) and
 mirrored to the card (what the console and the fleet alarm read). It carries
@@ -339,6 +345,45 @@ def evidence_for_head(bodies, sha: str) -> list:
     """
     marker = f"{EVIDENCE_MARKER} @{sha}:"
     return [b for b in (bodies or []) if marker in (b or "")]
+
+
+#: The slug out of a note this module wrote, anchored on the same marker + sha
+#: pair `evidence_for_head` matches, so the two reads can never disagree about
+#: which note they are looking at. `evidence_note` writes
+#: `<marker> @<sha>: <slug> — <meaning>`; the em-dash is what ends the slug.
+_EVIDENCE_SLUG = re.compile(
+    re.escape(EVIDENCE_MARKER) + r" @[0-9a-fA-F]+: ([a-z0-9-]+) — "
+)
+
+
+def signature_from_evidence(bodies, sha: str) -> Signature | None:
+    """The cause the NEWEST evidence note for this head names, or None.
+
+    The reconcile sweep (DRE-3431) holds a crashed review by composing
+    `hold_receipt`, which takes a `Signature`, and all the sweep has is the
+    note. So the note is parsed HERE, in the module that writes it, and never
+    at the reader: one place knows the note's shape, which is the whole
+    argument for this module existing.
+
+    Newest wins, because a head can be crashed twice by two different halves
+    of the boundary and the current cause is the one just observed.
+
+    None when no note covers this head, or when the newest one that parses
+    names a slug this table does not carry — a hand-edited note, or a note
+    left by a newer release of the pipeline. A hold receipt naming the wrong
+    cause sends an operator to the wrong check, which is precisely what
+    DRE-3416 cost, so an unreadable cause is never guessed at: the caller
+    falls back to the report that names none.
+    """
+    for body in reversed(evidence_for_head(bodies, sha)):
+        found = _EVIDENCE_SLUG.search(body or "")
+        if not found:
+            continue
+        try:
+            return by_slug(found.group(1))
+        except KeyError:
+            continue
+    return None
 
 
 # --------------------------------------------------------------------------- #

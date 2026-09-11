@@ -180,7 +180,10 @@ class _World:
         self.nudges: list = []
         self.pr_posts: list = []
         self.card_posts: list = []
-        self.clock = 0.0
+        #: Well past every seeded timestamp, so a write is always newer than
+        #: the history it lands on — which is the real ordering and the one the
+        #: hold/release comparisons turn on.
+        self.clock = 1000.0
 
     # --- the clock: every write is newer than everything already there ----
     def _stamp(self) -> str:
@@ -522,7 +525,8 @@ def test_a_new_release_signal_re_arms_a_twice_held_head(capsys):
     world.sweep(capsys)
     world.cards[CARD].append(_note())
     world.sweep(capsys)  # held again after release
-    world._find(2370)["comments"].append(_act_comment(_at(30)))
+    # the operator types it again, AFTER the second hold
+    world._find(2370)["comments"].append(_act_comment(world._stamp()))
     assert [n for _, n in world.sweep(capsys).nudges] == [2370]
 
 

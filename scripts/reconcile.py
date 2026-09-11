@@ -179,6 +179,14 @@ import routing_verdict  # noqa: E402
 # file/append/close decision and every line the card carries live there, pure.
 # This file is the wrapper (DRE-3435): it reads the payloads, makes the writes.
 import reviewer_down  # noqa: E402
+# DRE-3428: ONE reading of "the runner cannot run Claude" — the four
+# signatures, the medic's evidence note and how to read a cause back off it,
+# the hold receipt and its one writer, and the operator act that releases a
+# hold. This file is the wrapper (DRE-3431): it reads the cause off the card
+# the sweep already reads, decides whether the head is held, and posts through
+# that module's writer. It composes no hold body and spells none of its
+# strings.
+import reviewer_environment  # noqa: E402
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -4908,12 +4916,18 @@ def _post_rereview_receipt(pr: dict) -> None:
         print(f"ERROR: {err}", file=sys.stderr)
 
 
-def _report_reviewer_down(pr: dict, receipts: int) -> None:
+def _report_reviewer_down(pr: dict, receipts: int, bodies=None) -> None:
     """Cap spent = a real outage, not a flake: ONE plain-English report on
     the linked card per head sha (the flag_no_checks_prs shape — the
     TAG + "PR #N @sha:" marker is the idempotency key). Report-only: no
     hold label, no state move, and above all no dispatch — the budget is
-    spent and looping past it is the DRE-1921 quota burn."""
+    spent and looping past it is the DRE-1921 quota burn.
+
+    `bodies` is the card's comments when the caller has already read them —
+    `_report_crashed_review_cap` reads them to ask what CAUSED the crash
+    (DRE-3431) and this idempotency check asks the same list a second
+    question. Omitted, they are read here exactly as they always were, which
+    is what the CLI and any future caller get."""
     card = branch_card(pr["headRefName"])
     print(
         f"ERROR: crashed-review: PR #{pr['number']} head "
@@ -4929,7 +4943,9 @@ def _report_reviewer_down(pr: dict, receipts: int) -> None:
         )
         return
     marker = f"{REVIEWER_DOWN_TAG} PR #{pr['number']} @{pr['headRefOid']}:"
-    if any(marker in b for b in linear_ops.comment_bodies(card)):
+    if bodies is None:
+        bodies = linear_ops.comment_bodies(card)
+    if any(marker in b for b in bodies):
         return  # reported once for this head already — idempotent forever
     linear_ops.cmd_comment(card, pipeline_act.receipt("reviewer-unavailable", (
         f"🚨 {marker} the adversarial reviewer is DOWN for open PR "
@@ -4945,6 +4961,221 @@ def _report_reviewer_down(pr: dict, receipts: int) -> None:
     print(
         f"crashed-review: PR #{pr['number']} reviewer-down reported on {card}"
     )
+
+
+# The runner-environment hold (DRE-3431, the sweep half of epic DRE-3420).
+# `reviewer-down` above is right about a reviewer whose CREDENTIAL broke: a
+# person has to fix it, and nothing the sweep can do will. It is wrong about
+# the other cause. On 2026-09-08 (DRE-3416) the floating claude-code-action
+# tag moved and every Claude-running job in the fleet died about thirteen
+# seconds in — the report told the operator to check the critic's auth/token,
+# the one thing that was not wrong, and when the pin landed nothing re-armed
+# the four held heads: they waited for a hand push or a hand dispatch.
+#
+# So when the medic's evidence note (DRE-3430) says the cause is the runner's
+# environment, the cap posts a HOLD that names the cause and the one command
+# that confirms it — and the sweep releases the hold by itself on the first
+# proof that Claude can run here again. Two refinements the receipts make
+# cheap: a hold already STANDING anywhere in this repository holds the next
+# crashed head for free (one runner, one environment — the retry has already
+# been spent next door and has already crashed), and a head whose hold was
+# released and crashed again is held a second time rather than dispatched a
+# third.
+#
+# Every string is `reviewer_environment`'s. This region reads receipts and
+# timestamps, decides, and posts through that module's one writer.
+
+
+def _newest_worker_receipt_at(pr: dict, tag: str) -> str:
+    """When the NEWEST worker-bot receipt carrying `tag` and bound to this
+    head was posted, or "" when there is none.
+
+    `_worker_receipt_count`'s question asked about time instead of a count,
+    with the same three discriminations for the same reasons: the worker
+    bot's authorship (DRE-1998 — a forged receipt can neither manufacture a
+    hold nor release one), the tag, and the FULL head sha (a receipt on a
+    superseded commit is history and a new commit re-arms everything).
+
+    ISO-8601 UTC strings sort as text, which is how `_hold_state` below
+    compares two comment times; every timestamp here comes from the same
+    `gh pr list --json comments` payload, so they are one clock.
+    """
+    sha = pr.get("headRefOid") or ""
+    if not sha:
+        return ""
+    times = [
+        (c.get("createdAt") or "")
+        for c in pr.get("comments", [])
+        if is_worker_bot_comment(c)
+        and tag in (c.get("body") or "")
+        and sha in (c.get("body") or "")
+    ]
+    return max(times) if times else ""
+
+
+def _newest_repo_verdict(prs: list[dict]) -> tuple[str, int] | None:
+    """When the newest critic VERDICT landed anywhere in this repository, and
+    on which pull request — release signal (a).
+
+    The sweep runs per repository under that repository's credentials, so
+    "the reviewer can run again anywhere in the fleet" is read as "anywhere
+    in this repository": the open-PR listing it already holds, for zero extra
+    requests. `critic_comments` is the authorship read (DRE-1998 — a forged
+    QA Critic comment is invisible, so nobody releases a hold by writing
+    one), and `VERDICT:` is what makes such a comment a verdict rather than
+    one of the critic's own notices.
+    """
+    newest = None
+    for pr in prs:
+        for comment in critic_comments(pr):
+            if "VERDICT:" not in (comment.get("body") or ""):
+                continue
+            at = comment.get("createdAt") or ""
+            if at and (newest is None or at > newest[0]):
+                newest = (at, pr.get("number"))
+    return newest
+
+
+def _newest_release_act(pr: dict) -> str:
+    """When the re-run act was last posted on THIS pull request, or "".
+
+    Release signal (b), and the route for a repository with nothing else left
+    to review — a verdict cannot arrive where no review can run. The
+    whole-body rule is `reviewer_environment.is_release_act`'s, and the act is
+    accepted from ANY author on purpose (the DRE-3428 contract): the bounded
+    harm is one review dispatch, the same caveat `_review_checks_at_head`
+    already accepts on this surface.
+    """
+    times = [
+        (c.get("createdAt") or "")
+        for c in pr.get("comments", [])
+        if reviewer_environment.is_release_act(c.get("body"))
+    ]
+    return max(times) if times else ""
+
+
+class _HoldState(NamedTuple):
+    """Where one head stands with its runner-environment hold."""
+
+    #: When the hold that covers this head was posted; "" = no hold stands.
+    held_at: str
+    #: The signal that released it, in words for the log; "" while it stands.
+    release: str
+
+
+def _hold_state(pr: dict, verdict: tuple | None) -> _HoldState:
+    """Is this head HELD, RELEASED, or neither of the two?
+
+    The card's definition, read off the receipts and nothing else: a head is
+    held when its newest worker-bot `runner-environment-hold` receipt for the
+    current head is newer than any `crashed-review-redispatch` receipt for it
+    and newer than any release signal. A re-dispatch receipt NEWER than the
+    hold is a hold already spent — that head is back on the ordinary bounded
+    path, which is exactly how a crash after a release comes to be held a
+    second time rather than dispatched a third.
+
+    The signal is named in the answer because the log line has to say WHICH
+    one fired: an operator who typed the act wants to see the act, and a hold
+    that lifted because a verdict posted on some other pull request is a
+    different story with the same outcome.
+    """
+    held_at = _newest_worker_receipt_at(pr, reviewer_environment.HOLD_TAG)
+    if not held_at:
+        return _HoldState("", "")
+    if _newest_worker_receipt_at(pr, CRASHED_REVIEW_DISPATCH_TAG) > held_at:
+        return _HoldState("", "")  # released once already, and re-dispatched
+    if _newest_release_act(pr) > held_at:
+        return _HoldState(held_at, f"the re-run act on PR #{pr['number']}")
+    if verdict and verdict[0] > held_at:
+        return _HoldState(held_at, f"a critic verdict on PR #{verdict[1]}")
+    return _HoldState(held_at, "")
+
+
+def _hold_crashed_review(pr: dict, card: str, bodies: list[str]) -> bool:
+    """Hold this crashed head with the cause NAMED — or answer False.
+
+    False means the card carries no evidence note for this head, or one whose
+    cause this pipeline cannot resolve, and the caller then takes the path
+    that was here before it. A hold receipt naming the wrong cause sends an
+    operator to the wrong check — that is the whole of what DRE-3416 cost —
+    so an unreadable cause is reported, never invented.
+
+    `reviewer_environment` owns every string: the cause is read through it,
+    the body is composed by its one writer, and `post_hold` writes the
+    sha-bound PR counter this sweep reads back and the card mirror the console
+    and the fleet alarm read. A failed post is recorded there and drained onto
+    this sweep's fail-loudly rail here, so the run goes red — a hold nobody
+    can see is a stall nobody can act on (DRE-1254).
+    """
+    sha = pr["headRefOid"]
+    signature = reviewer_environment.signature_from_evidence(bodies, sha)
+    if signature is None:
+        return False
+    # `twice` for the second crash on a head, `again after release` for a
+    # later one — `reviewer_environment._how_many` tells them apart off this
+    # number, so existing holds + 2: the first hold IS the second crash.
+    count = _worker_receipt_count(pr, reviewer_environment.HOLD_TAG) + 2
+    print(
+        f"crashed-review: PR #{pr['number']} head {sha[:8]} — "
+        f"{signature.slug}: this runner cannot run Claude, so the review is "
+        "HELD and nothing is being re-dispatched. It releases on the first "
+        "critic verdict in this repository, or on the re-run act posted on "
+        "the pull request"
+    )
+    reviewer_environment.post_hold(
+        repo=REPO,
+        pr_number=pr["number"],
+        card=card,
+        body=reviewer_environment.hold_receipt(signature, sha, count),
+    )
+    while reviewer_environment.POST_FAILURES:
+        err = f"crashed-review hold: {reviewer_environment.POST_FAILURES.pop(0)}"
+        _write_failures.append(err)
+    return True
+
+
+def _hold_without_spending_the_retry(pr: dict) -> bool:
+    """A crashed head that carries evidence, while an unreleased hold already
+    stands somewhere in this repository: hold it now, for free.
+
+    One runner, one environment — the re-dispatch this head would spend has
+    already been spent on the pull request next door and has already crashed,
+    and the second identical failure anywhere on this runner is the proof.
+    Without this the outage costs one wasted critic run per open PR, which is
+    the DRE-2049 burst the pacing cap exists to prevent.
+
+    False (and the ordinary one re-dispatch) when the card carries no evidence
+    for this head: a crash with no named cause is not this class, however
+    broken the runner next door is.
+    """
+    card = branch_card(pr["headRefName"])
+    if not card:
+        return False
+    return _hold_crashed_review(pr, card, linear_ops.comment_bodies(card))
+
+
+def _report_crashed_review_cap(pr: dict, receipts: int) -> None:
+    """The one automatic re-dispatch is spent: HOLD when the cause is the
+    runner's environment, `reviewer-down` when it is not.
+
+    ONE card read serves both questions. `_report_reviewer_down`'s
+    idempotency check already fetched `linear_ops.comment_bodies(card)`, and
+    the cause is read off the same bodies, so naming the cause costs nothing
+    new: an evidence note for THIS head means the medic has already said this
+    runner cannot run Claude here, and the report that named no cause and no
+    check is replaced by the hold that names both.
+
+    With no evidence the existing path runs exactly as it did — the behaviour
+    `tests/test_crashed_review_recovery.py` holds unchanged.
+    """
+    card = branch_card(pr["headRefName"])
+    if not card:
+        _report_reviewer_down(pr, receipts)  # its own no-card warning
+        return
+    bodies = linear_ops.comment_bodies(card)
+    if _hold_crashed_review(pr, card, bodies):
+        return
+    _report_reviewer_down(pr, receipts, bodies=bodies)
 
 
 def _report_stale_verdict(pr: dict) -> None:
@@ -5003,10 +5234,19 @@ def recover_crashed_reviews() -> None:
         never accumulate dispatches the way the DRE-1921 loop did.
       * cap spent → the outage is REPORTED, once per head, on the linked
         card in plain English (_report_reviewer_down) — never looped on.
+      * cap spent AND the medic's evidence note says the cause is the
+        RUNNER'S ENVIRONMENT (DRE-3431) → a HOLD naming the cause and the one
+        command that confirms it, instead of that report. A hold standing
+        anywhere in this repository holds the next crashed head with evidence
+        for free, and the sweep RELEASES held heads itself on the first critic
+        verdict in this repository after the hold, or the re-run act posted on
+        the held pull request. A released head that crashes again is held a
+        second time, never dispatched a third.
       * no crashed check but the newest verdict binds an older sha →
         reported once per head (_report_stale_verdict).
 
-    Dispatches are paced per sweep (CRASHED_REVIEW_SWEEP_CAP, oldest PR
+    Dispatches — the first re-dispatch and the released ones alike — are paced
+    per sweep (CRASHED_REVIEW_SWEEP_CAP, oldest PR
     first — the DRE-2049 burst lesson) and the deferred tail is logged,
     never silently dropped. DIRTY PRs belong to unstick_conflicts; a PR
     with unreadable check runs is skipped (DRE-2034). This path never
@@ -5023,6 +5263,13 @@ def recover_crashed_reviews() -> None:
         return  # unreadable listing — recorded there, never acted on here
     in_flight = None  # lazy — one workflow_dispatch listing per sweep, only if needed
     eligible = []  # crashed heads with retry budget, dispatched paced below
+    # DRE-3431, all three read off the listing already in hand and BEFORE the
+    # loop: a hold standing on the last pull request must hold the first one
+    # too, so this cannot be an answer that accumulates as the loop walks.
+    verdict = _newest_repo_verdict(prs)  # release signal (a), repo-wide
+    holds = {p.get("number"): _hold_state(p, verdict) for p in prs}
+    standing = any(h.held_at and not h.release for h in holds.values())
+    released = []  # held heads whose signal arrived — they join `eligible`
     for pr in prs:
         try:
             if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
@@ -5058,10 +5305,28 @@ def recover_crashed_reviews() -> None:
                         "waiting, never double-dispatching"
                     )
                     continue
+                # DRE-3431: a runner-environment hold on this head answers the
+                # question before the retry budget is consulted — it is an
+                # explicit decision to stop, and it stands until a signal
+                # says Claude can run here again.
+                hold = holds.get(pr.get("number")) or _HoldState("", "")
+                if hold.held_at and not hold.release:
+                    print(
+                        f"crashed-review: PR #{pr['number']} head {sha[:8]} — "
+                        "HELD: this runner cannot run Claude and nothing has "
+                        "been re-dispatched. Waiting for a critic verdict in "
+                        "this repository or the re-run act on the pull request"
+                    )
+                    continue
+                if hold.held_at:
+                    released.append((pr, hold.release))
+                    continue
                 receipts = _worker_receipt_count(pr, CRASHED_REVIEW_DISPATCH_TAG)
                 if receipts >= CRASHED_REVIEW_RETRY_CAP:
-                    _report_reviewer_down(pr, receipts)
+                    _report_crashed_review_cap(pr, receipts)
                     continue
+                if standing and _hold_without_spending_the_retry(pr):
+                    continue  # the crash next door already spent this retry
                 eligible.append(pr)
                 continue
             # No crashed review at this head and nothing in flight at it:
@@ -5081,6 +5346,17 @@ def recover_crashed_reviews() -> None:
                 f"ERROR: crashed-review recovery on PR #{pr.get('number')}: {e}",
                 file=sys.stderr,
             )
+    # DRE-3431: the released heads join the SAME list, so they inherit the
+    # pacing, the oldest-first order and the `crashed-review-redispatch`
+    # receipt — and that receipt is the counter that lets a head which crashes
+    # again be held again rather than dispatched a third time.
+    for pr, signal in released:
+        print(
+            f"crashed-review: PR #{pr['number']} head {pr['headRefOid'][:8]} — "
+            f"the runner-environment hold was RELEASED by {signal}; the held "
+            "review re-joins the dispatch queue"
+        )
+        eligible.append(pr)
     eligible.sort(key=lambda p: p["number"])  # oldest first — drain in arrival order
     for pr in eligible[:CRASHED_REVIEW_SWEEP_CAP]:
         print(
@@ -5257,12 +5533,12 @@ def report_fleet_reviewer_outage() -> None:
          listing. Only the neutral could-not-run receipt and critic verdicts
          count; the runner-environment HOLD receipt (DRE-3428) is NOT an
          outcome — it records a second crash whose evidence note is already
-         counted, so reading it would count one outage twice. Neither that
-         module nor its tag is named anywhere in this file, deliberately: a
-         sibling card owns wiring the sweep to it, its own suite holds this
-         file to that, and this backstop needs neither — the reading it
-         depends on lives in `reviewer_down.outcomes_from_pr`, which counts
-         only the neutral receipt and verdicts.
+         counted, so reading it would count one outage twice. DRE-3431 has
+         since wired the sibling above to that module — this file names it now
+         — and this backstop is untouched by that: the reading it depends on
+         is still `reviewer_down.outcomes_from_pr`, which counts only the
+         neutral receipt and verdicts, so every hold the sweep above now posts
+         is invisible here by that module's own rule.
       2. THE FLEET WITNESS — a second repository's crashes reach this sweep
          only through the medic's note on the Linear card, and `active_cards()`
          has already been read once for this sweep and is served from the pass
