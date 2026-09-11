@@ -1,0 +1,96 @@
+{
+  "_header": [
+    "The 2026-09-08 fleet reviewer outage, as a replay input for",
+    "scripts/reviewer_down.py (DRE-3433). Between 15:19 and 16:27 PT every",
+    "critic run in the fleet died in about thirteen seconds with `ReferenceError:",
+    "Claude Code native binary not found at /home/runner/.local/bin/claude`",
+    "(DRE-3416). Per-run detection worked — each pull request got the neutral",
+    "could-not-run receipt — and nothing aggregated it, which is the hole this",
+    "module fills.",
+    "",
+    "PROVENANCE, said plainly, because it is not a log capture. This repository's",
+    "three failed runs that afternoon (22:16, 22:23 and 22:26 UTC) were PLANNER",
+    "and ENGINEER runs, not critic runs, and the agent-bureau receipts on #2367,",
+    "#2369 and #2370 are not readable from this repository's token. So the seven",
+    "outcomes below record the incident AS EPIC DRE-3420 STATES IT — seven",
+    "could-not-run outcomes across two repositories, the first at 15:19 PT — and",
+    "the comment urls are reconstructions of the shape `pr list --json",
+    "number,comments` emits, not urls anybody fetched. What is verbatim is the",
+    "error line and the action reference: both are quoted from DRE-3416.",
+    "",
+    "The split between `local` and `witness` is the real one. The sweep runs once",
+    "per repository, so it reads this repository's pull requests directly; the",
+    "other repository's crashes are seen only through the medic's note on the",
+    "Linear card, which every sweep already reads."
+  ],
+  "now": "2026-09-08T22:49:00Z",
+  "open_card": null,
+  "first_run": {
+    "repo": "agent-bureau",
+    "pr": 2367,
+    "at": "2026-09-08T22:19:00Z",
+    "run_url": "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/34512000001",
+    "log_line": "ReferenceError: Claude Code native binary not found at /home/runner/.local/bin/claude. Please ensure Claude Code is installed via native installer or specify a valid path",
+    "action_ref": "anthropics/claude-code-action@v1"
+  },
+  "local": [
+    {
+      "repo": "bureau-pipeline",
+      "at": "2026-09-08T22:20:00Z",
+      "kind": "could-not-run",
+      "src": "https://github.com/dreadnought-foundry/bureau-pipeline/pull/351#issuecomment-3350000001",
+      "pr": 351,
+      "detail": "🔎 QA Critic could not run (infra error) @0f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f60718293"
+    },
+    {
+      "repo": "bureau-pipeline",
+      "at": "2026-09-08T22:23:00Z",
+      "kind": "could-not-run",
+      "src": "https://github.com/dreadnought-foundry/bureau-pipeline/pull/352#issuecomment-3350000002",
+      "pr": 352,
+      "detail": "🔎 QA Critic could not run (infra error) @1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
+    },
+    {
+      "repo": "bureau-pipeline",
+      "at": "2026-09-08T22:26:00Z",
+      "kind": "could-not-run",
+      "src": "https://github.com/dreadnought-foundry/bureau-pipeline/pull/353#issuecomment-3350000003",
+      "pr": 353,
+      "detail": "🔎 QA Critic could not run (infra error) @2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e"
+    }
+  ],
+  "witness": [
+    {
+      "repo": "agent-bureau",
+      "at": "2026-09-08T22:19:00Z",
+      "kind": "could-not-run",
+      "src": "linear:DRE-3409:2026-09-08T22:19:00Z",
+      "pr": null,
+      "detail": "🔌 The code reviewer was temporarily unavailable (an infrastructure rate-limit, not a problem with the work). The failed run was on agent-bureau#2367."
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-09-08T22:24:00Z",
+      "kind": "could-not-run",
+      "src": "linear:DRE-3411:2026-09-08T22:24:00Z",
+      "pr": null,
+      "detail": "🔌 The code reviewer was temporarily unavailable (an infrastructure rate-limit, not a problem with the work). The failed run was on agent-bureau#2369."
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-09-08T22:31:00Z",
+      "kind": "could-not-run",
+      "src": "linear:DRE-3412:2026-09-08T22:31:00Z",
+      "pr": null,
+      "detail": "🔌 The code reviewer was temporarily unavailable (an infrastructure rate-limit, not a problem with the work). The failed run was on agent-bureau#2370."
+    },
+    {
+      "repo": "agent-bureau",
+      "at": "2026-09-08T22:47:00Z",
+      "kind": "could-not-run",
+      "src": "linear:DRE-3409:2026-09-08T22:47:00Z",
+      "pr": null,
+      "detail": "🔌 The code reviewer was temporarily unavailable (an infrastructure rate-limit, not a problem with the work). The failed run was on agent-bureau#2367, re-dispatched."
+    }
+  ]
+}

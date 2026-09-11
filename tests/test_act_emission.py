@@ -46,6 +46,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import check_act_receipts  # noqa: E402
 import pipeline_act  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -444,14 +445,40 @@ class TestEveryPythonSiteEmitsItsTrailer:
         assert fields["tag"] == pipeline_act.tag(act)
 
     def test_every_python_emitted_act_has_a_site(self):
-        """No act declared as emitted from a `scripts/` file may go undriven —
-        otherwise the guard proves the call site is wrapped and nothing proves
-        what it posts."""
+        """No act declared as emitted from a `scripts/` file that POSTS may go
+        undriven — otherwise the guard proves the call site is wrapped and
+        nothing proves what it posts.
+
+        "that posts" is derived, never listed. `check_act_receipts.sites()` is
+        the one discovery of every place this repo writes a comment from, and a
+        file it finds nothing in has nothing to drive: a PURE decision module
+        composes a body and hands it back, and the sibling card that wires it
+        into the sweep brings the poster and the capture together. Deriving the
+        exemption rather than naming the module is what stops it becoming a
+        list somebody adds a real poster to (DRE-3433 — `reviewer_down.py` is
+        the first of these, and its reconcile wiring is another card).
+        """
+        posting = {s.path for s in check_act_receipts.sites()}
         driven = {act for act, _ in SITES.values()}
         for name in pipeline_act.acts():
             emitter = pipeline_act.record(name)["emits"]["file"]
-            if emitter.startswith("scripts/"):
+            if emitter.startswith("scripts/") and emitter in posting:
                 assert name in driven, f"{name} is emitted from {emitter} and never driven"
+
+    def test_the_pure_modules_exempted_above_really_post_nothing(self):
+        """The exemption is only safe while it is true, so it is checked rather
+        than trusted: an act whose emitter is exempt must carry no comment
+        write at all, in any of the forms the receipt guard discovers."""
+        posting = {s.path for s in check_act_receipts.sites()}
+        driven = {act for act, _ in SITES.values()}
+        for name in pipeline_act.acts():
+            emitter = pipeline_act.record(name)["emits"]["file"]
+            if not emitter.startswith("scripts/") or name in driven:
+                continue
+            assert emitter not in posting, (
+                f"{name} is exempt from a driver because {emitter} posts "
+                "nothing, and it posts something"
+            )
 
 
 # --------------------------------------------------------------------------- #

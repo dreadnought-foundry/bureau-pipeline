@@ -95,7 +95,7 @@ def _first(doc: dict) -> dict:
 
 
 class TestEveryActDeclaresItsCadence:
-    def test_the_registry_still_declares_twenty_nine_acts(self):
+    def test_the_registry_still_declares_thirty_acts(self):
         """The card counts them. If an act is added, it declares a cadence with
         the rest of its row or this goes red — which is the whole point of the
         field being data rather than a default.
@@ -104,8 +104,9 @@ class TestEveryActDeclaresItsCadence:
         three LIFECYCLE acts under the `progress` kind; twenty-eight since
         DRE-3521 added the six RELEASE acts under the same kind, one per stage
         of a train run; twenty-nine since DRE-3428 added the
-        runner-environment hold."""
-        assert len(pipeline_act.acts()) == 29
+        runner-environment hold; thirty since DRE-3433 added the fleet-wide
+        reviewer outage."""
+        assert len(pipeline_act.acts()) == 30
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
