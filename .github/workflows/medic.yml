@@ -41,6 +41,23 @@
 # sweep's own run still exits non-zero, so a board that has stopped being
 # reconciled never goes quiet.
 #
+# FOURTH EXCEPTION (DRE-3428/DRE-3430): THIS RUNNER CANNOT RUN CLAUDE. On
+# 2026-09-08 the floating `claude-code-action@v1` tag moved and all six kinds
+# of Claude-running job in the fleet died about thirteen seconds in with
+# `Claude Code native binary not found` (DRE-3416). The classifier called it a
+# critic infra crash — only because the crashed review posts the neutral marker
+# into the same log — so the back-off note blamed "an infrastructure
+# rate-limit" on three held cards, and the operator was sent to check the
+# critic's token, the one thing that was not wrong. `class=environment_crash`
+# names it, and the medic acts on it in three places: `backoff` posts
+# DRE-3428's evidence note instead of the rate-limit literal (the signature,
+# what it means, and the ONE command that confirms it); `diagnose` is gated off
+# it, because the diagnosis agent is itself a Claude run and dies on the same
+# wall; and `environment_hold` posts the hold receipt on attempt 2 and ends
+# green. The one automatic retry on attempt 1 of a non-review run is
+# deliberately UNCHANGED: a transient blip deserves it, and the second
+# identical death is the proof that the environment is the cause.
+#
 # Reusable workflow: the workflow_run trigger list (which workflows to watch)
 # lives in the calling stub — it can include product-specific CI workflows.
 name: Pipeline Medic (reusable)
@@ -96,6 +113,14 @@ jobs:
       rule: ${{ steps.r.outputs.rule }}
       card: ${{ steps.r.outputs.card }}
       detail: ${{ steps.r.outputs.detail }}
+      # DRE-3428/DRE-3430: WHICH environment failure this was, when the class
+      # is `environment_crash` — the slug, the one command that confirms it,
+      # and the plain-English meaning, all three straight off the classifier's
+      # own lines (`reviewer_environment.report_lines`). Empty for every other
+      # class, which is how the branches below read "not this one".
+      signature: ${{ steps.c.outputs.signature }}
+      check: ${{ steps.c.outputs.check }}
+      meaning: ${{ steps.c.outputs.meaning }}
       # DRE-3171: was this a WALL rather than a death — the Claude account's
       # usage limit or Linear's request budget? `true` blocks the retry AND
       # the diagnosis: a rerun walks into the same wall, and the marker the
@@ -308,6 +333,23 @@ jobs:
   # The reviewer was DOWN (infra), this is NOT a code rejection; a later natural
   # trigger (a new push, or the rate-limit window resetting) re-reviews. Runs on
   # attempt 1 only so it posts the note ONCE per failed run, not on every rerun.
+  #
+  # …and the note NAMES THE CAUSE when the class says which it was (DRE-3430).
+  # The literal below blames "an infrastructure rate-limit", and on 2026-09-08
+  # that sentence went on three held cards while the real cause was a vendor
+  # action that left no Claude launcher on the runner (DRE-3416) — an operator
+  # sent to check the critic's token, the one thing that was not wrong. So on
+  # `environment_crash` the note is DRE-3428's evidence note, which names the
+  # signature, what it means and the ONE command that confirms it; every other
+  # infra crash keeps the literal, where the rate-limit wording is still right.
+  #
+  # EXACTLY ONE NOTE PER FAILED RUN, on either branch, and both open with the
+  # same words. That is a contract with epic DRE-3420, not decoration: its
+  # fleet-wide outage detector (`reviewer_down.witness_from_comments`,
+  # DRE-3433) counts every card comment STARTING with
+  # `reviewer_environment.CRITIC_UNAVAILABLE_MARKER` as one could-not-run
+  # outcome, and that count is how a second repository's crash is seen at all.
+  # The evidence note's first words are that same phrase, byte-identical.
   backoff:
     needs: classify
     if: >
@@ -327,12 +369,43 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # DRE-1996: env, not inline ${{ }} — branch names are agent-chosen
           # and git refnames may contain $ and backticks (shell injection).
+          # The classifier's three lines and the run's own facts come the same
+          # way: `meaning` is a sentence and `check` is a shell command, and
+          # neither belongs on a shell line.
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CLASS: ${{ needs.classify.outputs.class }}
+          CLASSIFIED_CARD: ${{ needs.classify.outputs.card }}
+          SIGNATURE: ${{ needs.classify.outputs.signature }}
+          CHECK: ${{ needs.classify.outputs.check }}
+          MEANING: ${{ needs.classify.outputs.meaning }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
-          # The card (if any) is encoded in the head branch (agent/DRE-N).
-          CARD=$(printf '%s' "$HEAD_BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-          echo "critic infra-crash on ${{ github.event.workflow_run.html_url }} — backing off (no rerun, no diagnosis); card=${CARD:-none}"
-          if [ -n "$CARD" ]; then
+          # The card the retry gate already resolved (DRE-2954) — the head
+          # branch first, then the card a planner run names in its own log
+          # (DRE-3223). ONE extraction, and the grep below is the fallback for
+          # the one case that gate can fail to answer: it exits non-zero and
+          # publishes nothing, and this note must still reach the card exactly
+          # as it did before that card existed.
+          CARD="${CLASSIFIED_CARD:-}"
+          if [ -z "$CARD" ]; then
+            CARD=$(printf '%s' "$HEAD_BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          fi
+          echo "critic infra-crash on ${RUN_URL} — backing off (no rerun, no diagnosis); class=${CLASS:-unknown} card=${CARD:-none}"
+          if [ -z "$CARD" ]; then
+            exit 0
+          fi
+          if [ "${CLASS:-}" = "environment_crash" ] && [ -n "${SIGNATURE:-}" ]; then
+            # THIS RUNNER CANNOT RUN CLAUDE (DRE-3428/DRE-3430). Name the
+            # cause and the check on the card; the same phrase leads the note,
+            # so DRE-3420's witness counts it exactly as it counts the literal
+            # below. `|| true`: a note is not worth a red medic run.
+            echo "environment crash (${SIGNATURE}): ${MEANING} — check: ${CHECK}"
+            python3 .bureau-pipeline/scripts/reviewer_environment.py note \
+              --card "$CARD" --sha "$HEAD_SHA" --signature "$SIGNATURE" \
+              --run-url "$RUN_URL" \
+              || echo "::warning title=Environment evidence note not written::$CARD crashed on the runner's environment (${SIGNATURE}) and the note could not be posted. Nothing was retried and nothing was rejected; the cause is in this run's log."
+          else
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
               "🔌 The code reviewer was temporarily unavailable (an infrastructure rate-limit, not a problem with the work). The pipeline is deliberately NOT retrying right now — retrying would make the rate-limit worse. The review will run again on its own once the limit resets or the next change is pushed. No action needed from you; nothing was rejected." || true
           fi
@@ -391,12 +464,77 @@ jobs:
         run: |
           echo "::notice::Linear rate limit — the workspace request quota is exhausted, so ${FAILED_WORKFLOW} could not finish. This is a transient, self-healing condition, NOT a defect in the estate: not retrying (the retry deepens the limit) and not diagnosing (there is no defect to find). The quota refills on its own and the workflow runs again. Failed run: ${RUN_URL}"
 
+  # The second identical death, held (DRE-3430). The one automatic retry above
+  # is untouched for this class: a transient blip deserves it, and the second
+  # death of the same run at the same commit is the PROOF that the environment
+  # is the cause. So there is nothing left to try — `reviewer_environment.py
+  # hold` posts the receipt naming the signature, what it means and the one
+  # command that confirms it, and the job ENDS GREEN: this is a decision the
+  # pipeline made on purpose (the `retry_declined` shape), and a red medic run
+  # is an operator email about it.
+  #
+  # No `gh run rerun` here and no diagnosis agent (gated off below): the
+  # diagnosis agent is itself a Claude run, so on this class it dies about
+  # thirteen seconds in on the same wall — a runner-minute spent proving
+  # nothing, which is half of what this card is for.
+  #
+  # `--count twice` is the SECOND crash on this head; the sweep (DRE-3435)
+  # posts the later ones. `--subject` is the failed workflow's own name,
+  # because all six kinds of Claude-running job die of this and a receipt that
+  # always said "reviewer" would misname five of them. No `--repo`/`--pr`: the
+  # sha-bound PR counter is the sweep's, and the medic mirrors to the card.
+  environment_hold:
+    needs: classify
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt >= 2 &&
+      needs.classify.outputs.class == 'environment_crash'
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+      - name: Hold — this runner cannot run Claude, twice on this commit
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # env, not inline ${{ }} (DRE-1996): the workflow name is
+          # agent-influenced text, `meaning` is a sentence and `check` is a
+          # shell command. The card came through the retry gate's own
+          # resolution, which is the ONE extraction (DRE-3171).
+          CARD: ${{ needs.classify.outputs.card }}
+          SIGNATURE: ${{ needs.classify.outputs.signature }}
+          CHECK: ${{ needs.classify.outputs.check }}
+          MEANING: ${{ needs.classify.outputs.meaning }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          SUBJECT: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          echo "environment crash twice on ${HEAD_SHA} (${SIGNATURE}): ${MEANING}"
+          echo "check: ${CHECK}"
+          echo "holding ${SUBJECT} — no rerun, no diagnosis; failed run ${RUN_URL}"
+          # No card, no receipt: a planner run's head is the default branch,
+          # so there is nowhere to mirror the hold to. The decision is still
+          # said out loud, because a hold nobody can see is a stall nobody can
+          # act on (the DRE-3171 shape for the same case).
+          if [ -z "${CARD:-}" ]; then
+            echo "::notice::Environment crash on ${SUBJECT} at ${HEAD_SHA} (${SIGNATURE}: ${MEANING}) — twice, so nothing is being retried and no diagnosis agent is spent on it. There is no card in the head branch, so the hold receipt cannot be mirrored anywhere. Check: ${CHECK}. Failed run: ${RUN_URL}"
+            exit 0
+          fi
+          python3 .bureau-pipeline/scripts/reviewer_environment.py hold \
+            --card "$CARD" --sha "$HEAD_SHA" --signature "$SIGNATURE" \
+            --count twice --subject "$SUBJECT" \
+            || echo "::warning title=Environment hold not written::$CARD is held because ${SUBJECT} could not run Claude twice on ${HEAD_SHA} (${SIGNATURE}), and the receipt could not be posted. Nothing has been re-dispatched. Check: ${CHECK}."
+
   diagnose:
     needs: classify
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt >= 2 &&
       needs.classify.outputs.infra_crash != 'true' &&
+      needs.classify.outputs.class != 'environment_crash' &&
       needs.classify.outputs.class != 'upstream_5xx' &&
       needs.classify.outputs.class != 'linear_ratelimited' &&
       needs.classify.outputs.limit != 'true'
