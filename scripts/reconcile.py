@@ -5255,9 +5255,14 @@ def report_fleet_reviewer_outage() -> None:
 
       1. LOCAL outcomes — `reviewer_down.outcomes_from_pr` over the shared
          listing. Only the neutral could-not-run receipt and critic verdicts
-         count; a `runner-environment-hold` receipt (DRE-3428) is NOT an
+         count; the runner-environment HOLD receipt (DRE-3428) is NOT an
          outcome — it records a second crash whose evidence note is already
-         counted, so reading it would count one outage twice.
+         counted, so reading it would count one outage twice. Neither that
+         module nor its tag is named anywhere in this file, deliberately: a
+         sibling card owns wiring the sweep to it, its own suite holds this
+         file to that, and this backstop needs neither — the reading it
+         depends on lives in `reviewer_down.outcomes_from_pr`, which counts
+         only the neutral receipt and verdicts.
       2. THE FLEET WITNESS — a second repository's crashes reach this sweep
          only through the medic's note on the Linear card, and `active_cards()`
          has already been read once for this sweep and is served from the pass
