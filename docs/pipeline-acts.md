@@ -144,6 +144,43 @@ exhausted` or `holding for a human` — the console's `enrich.HOLD_MARKERS` read
 either phrase as a fix-budget hold, and the card would render as the wrong kind
 of stuck on a surface nobody would think to check.
 
+## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
+
+| Field | Value |
+| -- | -- |
+| tag | `fleet-reviewer-outage` |
+| act name | `reviewer-outage-fleet-wide` |
+| kind · state · next actor | `hold` · `escalated` · `operator` |
+| discharges | nothing — a hold starts an obligation, it does not end one |
+| emitted by | `scripts/reviewer_down.py`, `outage_receipt()` |
+| threshold | `{"window_s": 1800, "consecutive": 3, "repos": 2}` |
+
+On 2026-09-08, 15:19–16:27 PT, every critic run in the fleet died in about
+thirteen seconds with `Claude Code native binary not found` (DRE-3416).
+**Per-run detection worked** — each pull request got the neutral could-not-run
+receipt — and nothing aggregated it, so seven runs across two repositories
+failed identically and no surface anywhere said the reviewer was down. This act
+is that missing sentence, said once, as one card in a human queue lane.
+
+Two things about the row are worth reading before the next one is written.
+
+**`kind` is `hold`, and the epic asked for `alert`.** The kind vocabulary is
+closed — `refusal` / `recovery` / `hold` / `progress` — and the console mirrors
+it, so a fifth kind is a cross-repo change, not a word. What the act actually
+does is the hold definition verbatim: the pipeline stopped and handed the work
+to a person. That it is the fleet-wide alarm is said in `means` and `why`,
+which is where a reader looks for it.
+
+**`state` is `escalated`, which no other hold here declares.** Every other hold
+leaves the work where it was and lives entirely in its receipt; this one FILES
+A CARD into a human queue lane, and that card is the whole deliverable.
+
+**The threshold is DATA on the row** — `window_s`, `consecutive` and `repos`,
+plus a `threshold_why` saying where each came from — read through
+`reviewer_down.threshold_from_registry()`. The registry tolerates extra keys,
+and putting the numbers here is what lets an operator retune the alarm by
+editing a file they can read instead of a comparison buried in a decision.
+
 ## Why this exists
 
 The console has always checked this. Its

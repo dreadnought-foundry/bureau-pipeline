@@ -521,6 +521,34 @@ def declarations(doc: dict | None = None) -> tuple:
     return tuple((doc or pipeline_act.load()).get("unconverted") or ())
 
 
+def pending_acts(doc: dict | None = None, root: str | None = None) -> frozenset:
+    """The acts nothing that POSTS has heard of yet.
+
+    A declared act is normally composed somewhere this guard can see, and the
+    two emission guards in `tests/` hold it to that. The one honest exception
+    is an act whose pure DECISION module has landed and whose wiring is a
+    sibling card: there is no poster yet, so there is nothing for those guards
+    to prove about what it posts.
+
+    Derived, never listed. While no file that writes a comment mentions the
+    act's name or its tag, nothing in the corpus can be posting it raw either,
+    which is the only thing those guards are protecting against. And the
+    exemption closes BY ITSELF the moment the wiring lands: `_receipt_act`
+    reads the composing call's first argument off the AST and can only read a
+    constant, so the file that composes an act has to spell its name.
+    """
+    doc = doc if doc is not None else pipeline_act.load()
+    texts = {}
+    for site in sites(root):
+        if site.path not in texts:
+            texts[site.path] = _read(os.path.join(root or ROOT, site.path))
+    return frozenset(
+        name for name in pipeline_act.acts(doc)
+        if not any(name in text or pipeline_act.tag(name, doc) in text
+                   for text in texts.values())
+    )
+
+
 def _matches(declaration: dict, site: Site) -> bool:
     """Does this declaration name this site — file, step (if given), anchor?
 

@@ -699,6 +699,30 @@
         "file": "standards/release-train.md",
         "anchor": "4. **Tag with the standard annotation.**"
       }
+    },
+    {
+      "name": "reviewer-outage-fleet-wide",
+      "tag": "fleet-reviewer-outage",
+      "adopted": true,
+      "kind": "hold",
+      "means": "The code reviewer is down across the FLEET, not on one pull request: enough runs could not run, recently enough and in enough repositories, that the pipeline has stopped and handed the outage to a person as ONE card.",
+      "state": "escalated",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the fleet-wide alarm hands the outage to an operator and nothing is re-dispatched until a person acts, so scripts/reviewer_down.py declares no bound on how long they take — the same null every hold that ends with a human carries.",
+      "threshold": {
+        "window_s": 1800,
+        "consecutive": 3,
+        "repos": 2
+      },
+      "threshold_why": "Read off the 2026-09-08 incident (DRE-3416): seven could-not-run outcomes landed across two repositories inside 68 minutes, the first three of them inside seven — so a half-hour window, three consecutive crashes or two repositories at once would have fired at 15:26 PT instead of never. The numbers are DATA on this row rather than literals in code, so an operator can retune the alarm without a pull request against the decision.",
+      "why": "DRE-3433, from the hole DRE-3416 left. On 2026-09-08 15:19–16:27 PT every critic run in the fleet died in about thirteen seconds with 'Claude Code native binary not found'. PER-RUN DETECTION WORKED — each pull request got the neutral could-not-run receipt (medic_classify.CRITIC_NEUTRAL_MARKER) — and nothing aggregated it, so seven runs across two repositories failed identically and no surface anywhere said the reviewer was down. This act is that missing sentence, said once. A HOLD and not a recovery: re-dispatching reviews into a reviewer that cannot start is the DRE-1921 loop with a new cause. The epic asked for an 'alert' kind; the registry's kind vocabulary is closed (refusal / recovery / hold / progress) and the console mirrors it, so this is declared the thing it actually is and `means` says out loud that it is the fleet-wide alarm. ESCALATED rather than held, because unlike the other holds here this one MOVES something — it files one card into a human queue lane, which is the whole deliverable. The witness reads BOTH shapes of the medic's note, the generic infra-crash line and (after DRE-3430) reviewer_environment.evidence_note for the environment class, because a detector reading only the generic literal would be blind to exactly the crash class this epic is named after. It discharges nothing: a hold starts an obligation, it does not end one, and what ends this one is the first successful verdict posted after the card was filed.",
+      "emits": {
+        "file": "scripts/reviewer_down.py",
+        "anchor": "def outage_receipt("
+      }
     }
   ],
   "console": {

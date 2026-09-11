@@ -445,39 +445,33 @@ class TestEveryPythonSiteEmitsItsTrailer:
         assert fields["tag"] == pipeline_act.tag(act)
 
     def test_every_python_emitted_act_has_a_site(self):
-        """No act declared as emitted from a `scripts/` file that POSTS may go
-        undriven — otherwise the guard proves the call site is wrapped and
-        nothing proves what it posts.
+        """No act declared as emitted from a `scripts/` file may go undriven —
+        otherwise the guard proves the call site is wrapped and nothing proves
+        what it posts.
 
-        "that posts" is derived, never listed. `check_act_receipts.sites()` is
-        the one discovery of every place this repo writes a comment from, and a
-        file it finds nothing in has nothing to drive: a PURE decision module
-        composes a body and hands it back, and the sibling card that wires it
-        into the sweep brings the poster and the capture together. Deriving the
-        exemption rather than naming the module is what stops it becoming a
-        list somebody adds a real poster to (DRE-3433 — `reviewer_down.py` is
-        the first of these, and its reconcile wiring is another card).
+        The one exception is an act nothing POSTS yet: a pure decision module
+        that composes a body and hands it back, whose wiring into the sweep is
+        a sibling card. There is no write to record, so there is nothing to
+        drive. It is `check_act_receipts.pending_acts()` — derived from "no
+        file that posts has heard of this act", never a list here — so the
+        exemption closes by itself when the wiring lands (DRE-3433).
         """
-        posting = {s.path for s in check_act_receipts.sites()}
+        pending = check_act_receipts.pending_acts()
         driven = {act for act, _ in SITES.values()}
         for name in pipeline_act.acts():
             emitter = pipeline_act.record(name)["emits"]["file"]
-            if emitter.startswith("scripts/") and emitter in posting:
+            if emitter.startswith("scripts/") and name not in pending:
                 assert name in driven, f"{name} is emitted from {emitter} and never driven"
 
-    def test_the_pure_modules_exempted_above_really_post_nothing(self):
-        """The exemption is only safe while it is true, so it is checked rather
-        than trusted: an act whose emitter is exempt must carry no comment
-        write at all, in any of the forms the receipt guard discovers."""
-        posting = {s.path for s in check_act_receipts.sites()}
-        driven = {act for act, _ in SITES.values()}
-        for name in pipeline_act.acts():
-            emitter = pipeline_act.record(name)["emits"]["file"]
-            if not emitter.startswith("scripts/") or name in driven:
-                continue
-            assert emitter not in posting, (
-                f"{name} is exempt from a driver because {emitter} posts "
-                "nothing, and it posts something"
+    def test_nothing_driven_here_is_exempt(self):
+        """The two halves cannot both be true of one act, and saying so out
+        loud is what stops the exemption quietly swallowing a real site: an act
+        with a driver is an act something posts."""
+        pending = check_act_receipts.pending_acts()
+        for act, _ in SITES.values():
+            assert act not in pending, (
+                f"{act} has a driver here and is exempt as posted-by-nothing — "
+                "one of the two is wrong"
             )
 
 

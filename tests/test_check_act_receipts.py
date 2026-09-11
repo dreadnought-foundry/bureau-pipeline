@@ -799,12 +799,33 @@ class TestTheShippedTree:
         body for this writer to compose."""
         composed = {s.composed_as for s in guard.sites() if s.composed_as}
         flagged = {act for _, _, act in guard.shell_act_flags()}
+        pending = guard.pending_acts()
         for name in pipeline_act.acts():
-            if pipeline_act.kind(name) == _PROGRESS:
+            if pipeline_act.kind(name) == _PROGRESS or name in pending:
                 continue
             assert name in composed or name in flagged, (
                 f"{name} is declared but nothing the guard can see composes it"
             )
+
+    def test_a_pending_act_is_one_no_poster_has_heard_of(self):
+        """The second exemption above, stated as the claim it actually is.
+
+        An act whose pure decision module has landed and whose wiring is a
+        sibling card has no poster yet, so there is nothing to compose. That is
+        only safe while nothing that posts even NAMES it — otherwise it could
+        be going out raw from a pathway this test is meant to catch — so the
+        set is derived from that condition rather than written down, and it
+        closes by itself when the wiring lands (DRE-3433)."""
+        posting = {s.path for s in guard.sites()}
+        assert posting, "the guard found no receipt sites at all"
+        for name in guard.pending_acts():
+            tag = pipeline_act.tag(name)
+            for path in posting:
+                text = (ROOT / path).read_text(encoding="utf-8")
+                assert name not in text and tag not in text, (
+                    f"{name} is exempt because nothing that posts has heard of "
+                    f"it, and {path} has"
+                )
 
     def test_a_progress_act_composes_nothing(self):
         """The exemption above, stated as the claim it actually is rather than
