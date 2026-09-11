@@ -47,6 +47,7 @@ os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import check_act_receipts  # noqa: E402
+import medic_classify  # noqa: E402 — the neutral could-not-run receipt's marker
 import pipeline_act  # noqa: E402
 import reconcile  # noqa: E402
 
@@ -390,6 +391,64 @@ def _drive_reviewer_environment_hold(mp):
             2,
         ),
     )
+
+
+@site("reviewer-outage-fleet-wide", "reviewer-outage-fleet-wide")
+def _drive_fleet_reviewer_outage(mp):
+    """The fleet-wide outage card (DRE-3433's decision, DRE-3435's wiring).
+
+    Drives the real sweep backstop: three could-not-run receipts on open pull
+    requests, no open card, so the decision is `file` and the receipt is what
+    `report_fleet_reviewer_outage` posts on the card it just created.
+
+    The CLOCK is frozen, which the other captures do not need. Every line of
+    this body is derived from the outcomes' own timestamps — the title's `since
+    15:19 PT`, the run and repo counts, the `@<first_at>` idempotency key — so
+    a wall clock would make the capture unfreezable rather than merely fragile.
+    """
+    from datetime import UTC as _UTC  # noqa: PLC0415 — the frozen clock, below
+    from datetime import datetime as _datetime  # noqa: PLC0415
+
+    frozen = _datetime(2026, 9, 8, 22, 40, tzinfo=_UTC)
+
+    class _Clock:
+        @staticmethod
+        def now(_tz=None):
+            return frozen
+
+    def _pr(number, minute):
+        return {
+            "number": number,
+            "headRefName": f"agent/DRE-{number}-widget",
+            "headRefOid": "d34db33fcafe1234d34db33fcafe1234d34db33f",
+            "baseRefName": "main",
+            "mergeStateStatus": "CLEAN",
+            "isDraft": False,
+            "comments": [{
+                "body": f"{medic_classify.CRITIC_NEUTRAL_MARKER} — the run died",
+                "createdAt": f"2026-09-08T22:{minute}:00Z",
+                "url": f"https://github.com/x/y/pull/{number}#issuecomment-{number}",
+            }],
+        }
+
+    listing = json.dumps([_pr(141, 19), _pr(142, 24), _pr(143, 31)])
+    mp.setattr(reconcile, "datetime", _Clock)
+    mp.setattr(reconcile, "REPO_SLUG", "bureau-pipeline")
+    mp.setattr(reconcile, "gh", lambda *a: (
+        listing if a[:2] == ("pr", "list")
+        else "https://github.com/x/y/actions/runs/34512000001/job/9"
+    ))
+    mp.setattr(reconcile, "gh_actions_read", lambda *a: (
+        "job\tstep\t2026-09-08T22:19:03.1234567Z ReferenceError: Claude Code "
+        "native binary not found at /home/runner/.local/bin/claude"
+    ))
+    mp.setattr(reconcile, "active_cards", lambda *_a, **_k: [])
+    mp.setattr(reconcile.linear_ops, "find_open_prefix", lambda _p: None)
+    mp.setattr(reconcile.linear_ops, "create_card",
+               lambda *_a, **_k: {"identifier": "DRE-1", "url": "u"})
+    _card_recorder(mp)
+    reconcile.reset_sweep_cards()
+    reconcile.report_fleet_reviewer_outage()
 
 
 @site("proof-observation-pending", "proof-observation-pending")

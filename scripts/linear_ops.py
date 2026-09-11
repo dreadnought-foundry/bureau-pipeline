@@ -89,6 +89,12 @@ Subcommands:
                                        non-terminal (not Done/Canceled) card
                                        with exactly this title, else nothing —
                                        red-main-repair's escalation dedup
+  find-open-prefix <title-prefix>      the same, for a title nobody can spell in
+                                       advance: print the identifier of the
+                                       OLDEST non-terminal card whose title
+                                       STARTS WITH this prefix — the sweep
+                                       finding its own fleet-outage card, whose
+                                       title carries counts that change
   children <DRE-N>                     print the number of child issues
   count-comments <DRE-N> <needle> [--since <marker>]
                                        print how many comments contain <needle>.
@@ -950,6 +956,25 @@ def set_description(identifier: str, body: str) -> None:
         {"id": issue["id"], "input": {"description": body}},
     )
     print(f"{identifier} description updated")
+
+
+def set_title(identifier: str, title: str) -> None:
+    """Overwrite a card's title — the `set_description` seam for the other
+    field a card states itself in.
+
+    One caller today (DRE-3435): the fleet-outage card's title carries the run
+    and repo counts, so an append that adds a ledger line and left the title
+    saying `3 runs` would leave the card's headline contradicting its own
+    record. A crash between the ledger comment and this write is harmless —
+    the next sweep recomputes the title from the ledger it can read.
+    """
+    issue = get_issue(identifier)
+    gql(
+        """mutation($id: String!, $input: IssueUpdateInput!) {
+             issueUpdate(id: $id, input: $input) { success } }""",
+        {"id": issue["id"], "input": {"title": title}},
+    )
+    print(f"{identifier} title updated")
 
 
 def cmd_comment(identifier: str, body: str, *flags: str) -> None:
@@ -1961,6 +1986,62 @@ def find_open(title: str) -> str | None:
     return nodes[0]["identifier"] if nodes else None
 
 
+def cmd_find_open_prefix(prefix: str) -> None:
+    """Print the identifier of the OLDEST open card whose title starts with
+    `prefix`, else print nothing — `find-open` for a title nobody can spell in
+    advance."""
+    found = find_open_prefix(prefix)
+    if found:
+        print(found["identifier"])
+
+
+def find_open_prefix(prefix: str) -> dict | None:
+    """The OLDEST non-terminal DRE card whose title STARTS WITH `prefix`.
+
+    `find_open` above matches a title exactly, which is all the red-main repair
+    loop needs — its card is titled from the workflow that broke. The
+    fleet-outage card (DRE-3433/DRE-3435) cannot be looked up that way: its
+    title carries the first crash's clock time and its run and repo counts, and
+    it is REWRITTEN on every append. The prefix is the only stable part of it,
+    so the prefix is what the sweep finds its own card by.
+
+    Returns the card itself — `identifier`, `createdAt`, `description`, `url`
+    and the shared comment window — because the caller reconstructs the ledger
+    from the description AND the comments, and printing an identifier would
+    only buy the rest of it back one request later.
+
+    `duplicates` carries the NEWER open matches, oldest first. They are a real
+    state: two repos' sweeps can cross the threshold in the same minute and
+    each file a card, and the caller's remedy is to append to the oldest and
+    cancel the rest. Answering with the oldest alone would leave the second
+    alarm standing with nothing able to see it.
+
+    OLDEST rather than newest, and sorted here rather than in the query:
+    Linear's `orderBy` takes one of two named fields with a direction this
+    query has no way to state, so the order that matters is applied where it
+    can be read. `first: 20` is a fleet-wide alarm's whole plausible range —
+    there is one outage at a time, and a listing that ever filled this would
+    itself be the finding.
+    """
+    data = gql(
+        """query($prefix: String!) {
+             issues(first: 20, filter: {
+               team: {key: {eq: "DRE"}},
+               title: {startsWith: $prefix},
+               state: {type: {nin: ["completed", "canceled"]}}
+             }) { nodes { identifier createdAt description url %s } } }"""
+        % COMMENT_WINDOW_GQL,
+        {"prefix": prefix},
+    )
+    nodes = sorted(
+        (data.get("issues") or {}).get("nodes") or [],
+        key=lambda n: n.get("createdAt") or "",
+    )
+    if not nodes:
+        return None
+    return {**nodes[0], "duplicates": nodes[1:]}
+
+
 def cmd_children(identifier: str) -> None:
     data = gql(
         """query($id: String!) { issue(id: $id) { children { nodes { id } } } }""",
@@ -2761,6 +2842,7 @@ if __name__ == "__main__":
             "oneoff": cmd_oneoff,
             "create": cmd_create,
             "find-open": cmd_find_open,
+            "find-open-prefix": cmd_find_open_prefix,
             "children": cmd_children,
             "count-comments": cmd_count_comments,
             "unpark": cmd_unpark,

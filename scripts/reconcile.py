@@ -174,6 +174,11 @@ from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E
 # DRE-2724: ONE source for the routing vocabulary — where a verdict sends a
 # card, who picks it up there, and which of the five may be dispatched at all.
 import routing_verdict  # noqa: E402
+# DRE-3433: ONE reading of "is the reviewer down across the FLEET, and what
+# should the ONE card say?" — the threshold, the two witness shapes, the
+# file/append/close decision and every line the card carries live there, pure.
+# This file is the wrapper (DRE-3435): it reads the payloads, makes the writes.
+import reviewer_down  # noqa: E402
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -943,12 +948,23 @@ def drain_retiring_lanes() -> None:
 # process — which is what a test run is — never inherits the first one's board.
 _swept_cards: list[dict] | None = None
 
+# ONE open-pull-request listing per sweep for the crashed-review region
+# (DRE-3435), the board snapshot's GitHub-side twin. `recover_crashed_reviews`
+# walks it per head and re-dispatches; `report_fleet_reviewer_outage` counts
+# could-not-run outcomes across it — the same thirty pull requests, asked two
+# questions. Filled and read ONLY through `_open_pr_listing()` below, and reset
+# here for the same reason `_swept_cards` is: in production a sweep is a
+# process, in a test run one process is hundreds of sweeps.
+_pr_listing: list[dict] | None = None
+
 
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
-    in linear_ops (DRE-3236). Called once at the top of main()."""
-    global _swept_cards
+    in linear_ops (DRE-3236) and the sweep's open-PR listing (DRE-3435).
+    Called once at the top of main()."""
+    global _swept_cards, _pr_listing
     _swept_cards = None
+    _pr_listing = None
     linear_ops.reset_pass_cache()
 
 
@@ -4779,6 +4795,46 @@ STALE_VERDICT_TAG = "stale-verdict-watchdog"
 _REVIEW_CRASH_CONCLUSIONS = ("failure", "timed_out", "cancelled")
 
 
+def _open_pr_listing() -> list[dict] | None:
+    """The crashed-review region's open pull requests, read ONCE per sweep.
+
+    Lifted verbatim out of `recover_crashed_reviews()` (DRE-3435), which is the
+    only edit this card makes inside that function: same repo, same `--state
+    open --limit 30`, the same seven `--json` fields, and the same failure path
+    — a failed listing records the same `crashed-review recovery: PR listing
+    failed: …` line on the fail-loudly rail, prints it, and answers **None**
+    rather than `[]`, so no caller can mistake unreadable for "no open pull
+    requests" (the DRE-2034 discipline).
+
+    Two readers now ask the same thirty pull requests two different questions —
+    `recover_crashed_reviews` re-dispatches per head, `report_fleet_reviewer_outage`
+    counts could-not-run outcomes across the fleet — so a sweep that listed
+    twice would pay twice and, worse, could get two different answers about one
+    moment. The memo is the sweep's (`_pr_listing`, cleared by
+    `reset_sweep_cards`).
+
+    A FAILURE is not memoised. Caching None would turn one transient 403 into a
+    silent skip for every later reader in the sweep, and the rail already
+    records each failure loudly; the honest cost of an unreadable listing is
+    that the next caller tries again.
+    """
+    global _pr_listing
+    if _pr_listing is not None:
+        return _pr_listing
+    try:
+        prs = json.loads(gh(
+            "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
+            "--json", "number,headRefName,headRefOid,baseRefName,"
+            "mergeStateStatus,isDraft,comments",
+        ) or "[]")
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _write_failures.append(f"crashed-review recovery: PR listing failed: {e}")
+        print(f"ERROR: crashed-review recovery: PR listing failed: {e}", file=sys.stderr)
+        return None
+    _pr_listing = prs
+    return prs
+
+
 def _review_checks_at_head(sha: str) -> list[tuple[str, ...]] | None:
     """[(status, conclusion, name)] of the review-named check runs at `sha`,
     or None when the read fails (DRE-2034: a 403 parsed as emptiness is not
@@ -4962,16 +5018,9 @@ def recover_crashed_reviews() -> None:
     A backstop must never take the sweep down with it: per-PR failures are
     recorded on the fail-loudly rail and the sweep continues (the DRE-2035
     isolation discipline)."""
-    try:
-        prs = json.loads(gh(
-            "pr", "list", "--repo", REPO, "--state", "open", "--limit", "30",
-            "--json", "number,headRefName,headRefOid,baseRefName,"
-            "mergeStateStatus,isDraft,comments",
-        ) or "[]")
-    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
-        _write_failures.append(f"crashed-review recovery: PR listing failed: {e}")
-        print(f"ERROR: crashed-review recovery: PR listing failed: {e}", file=sys.stderr)
-        return
+    prs = _open_pr_listing()
+    if prs is None:
+        return  # unreadable listing — recorded there, never acted on here
     in_flight = None  # lazy — one workflow_dispatch listing per sweep, only if needed
     eligible = []  # crashed heads with retry budget, dispatched paced below
     for pr in prs:
@@ -5048,6 +5097,321 @@ def recover_crashed_reviews() -> None:
             f"per-sweep dispatch cap ({CRASHED_REVIEW_SWEEP_CAP}) — the next "
             "sweep picks them up oldest-first (DRE-2049)"
         )
+
+
+# The fleet-outage backstop (DRE-3435, the sweep half of epic DRE-3420).
+# recover_crashed_reviews() above answers "is THIS pull request's review
+# stuck?" and re-dispatches per head. It cannot answer the question the
+# 2026-09-08 outage actually asked (DRE-3416): seven runs across two
+# repositories died the same way inside 68 minutes, every one of them got its
+# neutral could-not-run receipt, and NOTHING aggregated them — so no surface
+# anywhere said "the reviewer is down". This is that sentence, said once, as
+# ONE Linear card that appends to itself and closes itself.
+#
+# The DECISION is not here. `scripts/reviewer_down.py` (DRE-3433) is pure:
+# given the outcomes a sweep can see, it answers file / append / close /
+# nothing, with the threshold read off the act row in config/pipeline-acts.json
+# so an operator retunes the alarm by editing a number. This is the wrapper.
+#
+# THE ACT IS NAMED BY ITS LITERAL at every composing call below, and that is
+# not a slip of the "ONE literal for one fact" rule — it is what the rule's own
+# enforcer requires. `check_act_receipts._receipt_act` reads the composing
+# call's first argument off the AST and can only read a CONSTANT, so
+# `pipeline_act.receipt(reviewer_down.ACT, …)` composes as `<computed>` and the
+# registry's emission guard goes blind on the one act this file adds — the
+# exact silence epic DRE-3420 is named after. `pending_acts()` says so in its
+# own docstring: "the file that composes an act has to spell its name". Every
+# other receipt in this file spells it the same way, and
+# tests/test_reconcile_reviewer_down.py pins the four spellings to
+# `reviewer_down.ACT` so the two cannot drift.
+
+#: How many outage cards ONE sweep may file. `0` disables FILING fleet-wide —
+#: appends and closes still run, so an open card is never orphaned by the off
+#: switch. Default 1 because there is one outage at a time: the card appends to
+#: itself, and a sweep that could file two would be filing the noise this
+#: mechanism exists to remove.
+FLEET_OUTAGE_SWEEP_CAP = int(os.environ.get("FLEET_OUTAGE_SWEEP_CAP", "1"))
+
+
+def _fleet_outage_first_run(outcome, prs: list[dict]) -> reviewer_down.FirstRun:
+    """The evidence the FIRST crashed run leaves, for the card's body.
+
+    Read only when the decision is `file` — this is three reads (a check-run
+    listing, an Actions log, a file) and an outage card is filed once. Every
+    one of them degrades to a stated absence rather than to a guess:
+
+      * the run url comes off the head's own review check run, the record
+        qa-review publishes against the reviewed sha (HEAD_REVIEW_CHECK_NAME,
+        DRE-2291) — not off the run that happens to be newest;
+      * the log tail goes through `gh_actions_read`, i.e. the GH_DISPATCH_TOKEN
+        swap, because the App token 403s the Actions API (DRE-2525). `None`
+        there means UNREADABLE, and an unreadable log says so and points at the
+        run. A fabricated error line on an outage card would send the operator
+        to the wrong one of the three suspects, which is exactly what DRE-3416
+        cost;
+      * the action reference is read off THIS checkout's own qa-review.yml —
+        the pipeline repo is where the pin lives, and the vendor tag moving
+        under us is suspect number one.
+    """
+    pr = next((p for p in prs if p.get("number") == outcome.pr), None)
+    sha = (pr or {}).get("headRefOid") or ""
+    run_url = ""
+    if sha:
+        run_url = gh(
+            "api", f"repos/{REPO}/commits/{sha}/check-runs", "--jq",
+            "[.check_runs[] | select(.name == %s) | .details_url][0] // \"\""
+            % json.dumps(HEAD_REVIEW_CHECK_NAME),
+        ).strip()
+    log_line = f"log tail unreadable — see {run_url}" if run_url else "log tail unreadable"
+    run_id = _RUN_ID.search(run_url)
+    if run_id:
+        tail = gh_actions_read("run", "view", run_id.group(1), "--log-failed")
+        if tail is not None:
+            log_line = reviewer_down.error_line(tail)
+    workflow = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".github", "workflows", "qa-review.yml",
+    )
+    try:
+        with open(workflow, encoding="utf-8") as handle:
+            ref = reviewer_down.action_ref(handle.read())
+    except OSError:
+        ref = ""  # a product-repo checkout has no qa-review.yml of its own
+    return reviewer_down.FirstRun(
+        repo=outcome.repo, pr=outcome.pr, at=outcome.at,
+        run_url=run_url, log_line=log_line, action_ref=ref,
+    )
+
+
+def _fleet_outage_failed(what: str, exc: BaseException) -> None:
+    """One failed write on this path, RECORDED rather than raised.
+
+    A failed write lands on the fail-loudly rail and takes the sweep red (the
+    DRE-1254 discipline), and its caller stops rather than carrying on: a sweep
+    that kept going after a failed create would comment onto an identifier it
+    does not have. Nothing is lost by stopping — a card created but not yet
+    moved to Triage is found by prefix on the next sweep and moved then.
+
+    Only the FAILURE is a helper. Every `linear_ops.cmd_comment` on this path
+    is written out as its own call with `pipeline_act.receipt()` around its
+    body, because `check_act_receipts` reads posting sites off the AST: a
+    `cmd_comment` handed to a helper as a callable is a form that guard cannot
+    see, and a form nobody scans is a form nobody converts.
+    """
+    err = f"fleet-reviewer-outage: {what} failed: {exc}"
+    _write_failures.append(err)
+    print(f"ERROR: {err}", file=sys.stderr)
+
+
+def _fleet_outage_state(what: str, identifier: str, lane: str) -> bool:
+    """Move the outage card, recording a refusal rather than raising."""
+    try:
+        linear_ops.cmd_state(identifier, lane)
+        return True
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _fleet_outage_failed(what, e)
+        return False
+
+
+def _fleet_outage_resolve_duplicates(keep: str, duplicates: list) -> None:
+    """The cross-repo filing race, resolved on the next sweep.
+
+    Two repositories' sweeps can cross the threshold in the same minute and
+    each file a card — neither read the other, because neither existed yet.
+    The remedy is not a lock: it is that the NEXT sweep finds both, keeps the
+    oldest (which is the one carrying the ledger) and says on the newer where
+    the outage is being tracked before cancelling it. One outage, one alarm,
+    without anything having to be atomic.
+    """
+    for dupe in duplicates or []:
+        identifier = (dupe or {}).get("identifier")
+        if not identifier or identifier == keep:
+            continue
+        try:
+            linear_ops.cmd_comment(identifier, pipeline_act.receipt(
+                "reviewer-outage-fleet-wide", (
+                    f"\U0001f6a8 {reviewer_down.OUTAGE_TAG}: this is a second "
+                    f"card for one fleet-wide reviewer outage — two sweeps "
+                    f"crossed the threshold in the same minute. {keep} is the "
+                    f"one being kept and appended to; this one is closed as a "
+                    f"duplicate so there is ONE alarm. Nothing is lost: every "
+                    f"counted run is recorded on {keep}."
+                )))
+        except Exception as e:  # noqa: BLE001 — record loudly, sweep the rest
+            _fleet_outage_failed(f"duplicate note on {identifier}", e)
+            continue
+        _fleet_outage_state(f"cancel {identifier}", identifier, "Canceled")
+
+
+def report_fleet_reviewer_outage() -> None:
+    """Is the reviewer down across the FLEET? File ONE card, append, or close.
+
+    FULL sweeps only, immediately after `recover_crashed_reviews` — the two
+    read the SAME open-pull-request listing (`_open_pr_listing`), that one
+    re-dispatching per head, this one counting across the fleet.
+
+    What it reads, in order, and nothing further until the previous answer
+    justifies it:
+
+      1. LOCAL outcomes — `reviewer_down.outcomes_from_pr` over the shared
+         listing. Only the neutral could-not-run receipt and critic verdicts
+         count; the runner-environment HOLD receipt (DRE-3428) is NOT an
+         outcome — it records a second crash whose evidence note is already
+         counted, so reading it would count one outage twice. Neither that
+         module nor its tag is named anywhere in this file, deliberately: a
+         sibling card owns wiring the sweep to it, its own suite holds this
+         file to that, and this backstop needs neither — the reading it
+         depends on lives in `reviewer_down.outcomes_from_pr`, which counts
+         only the neutral receipt and verdicts.
+      2. THE FLEET WITNESS — a second repository's crashes reach this sweep
+         only through the medic's note on the Linear card, and `active_cards()`
+         has already been read once for this sweep and is served from the pass
+         cache. So this step costs ZERO Linear requests, which is the whole
+         reason the fleet half is affordable at all.
+      3. EARLY EXIT. No could-not-run inside the window from either source and
+         the sweep says so in one line and stops. A quiet sweep — the common
+         case, every fifteen minutes, in every repo — must cost nothing.
+      4. Only past that: the open card, by title prefix.
+
+    The consequence of ordering it that way, stated rather than discovered: the
+    card is closed by a sweep that can still SEE a crash in the window. Once
+    every could-not-run outcome has aged past `window_s` there is nothing for
+    this to act on, and the card waits for the person it was filed for — which
+    is the same person the `escalated` act row already names as its next actor.
+
+    A backstop must never take the sweep down with it (DRE-2035): every write
+    is recorded on the fail-loudly rail and the sweep continues, red.
+    """
+    prs = _open_pr_listing()
+    if prs is None:
+        return  # unreadable listing — recorded there, never acted on here
+    local = []
+    for pr in prs:
+        local.extend(reviewer_down.outcomes_from_pr(pr, REPO_SLUG))
+    witness = []
+    for card in active_cards():
+        repo = card_repo(card)
+        if not repo:
+            continue
+        witness.extend(reviewer_down.witness_from_comments(
+            repo, card["identifier"], linear_ops.window_nodes(card.get("comments")),
+        ))
+    threshold = reviewer_down.threshold_from_registry()
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    # The DECIDER's own window question, asked with the decider's own function:
+    # a second "is this recent?" spelled here would be a second answer waiting
+    # to disagree with the one that files the card.
+    fresh = [
+        o for o in reviewer_down._window(local + witness, now, threshold.window_s)
+        if o.kind == reviewer_down.COULD_NOT_RUN
+    ]
+    if not fresh:
+        print(
+            "fleet-reviewer-outage: nothing to report — 0 could-not-run in "
+            f"the last {threshold.window_s // 60} min"
+        )
+        return
+
+    try:
+        found = linear_ops.find_open_prefix(reviewer_down.TITLE_PREFIX)
+    except Exception as e:  # noqa: BLE001 — an unreadable board is not an empty one
+        _read_failures.append(f"fleet-reviewer-outage: open-card lookup failed: {e}")
+        print(f"ERROR: fleet-reviewer-outage: open-card lookup failed: {e}",
+              file=sys.stderr)
+        return
+    open_card = None
+    if found:
+        bodies = [node.get("body") or ""
+                  for node in linear_ops.window_nodes(found.get("comments"))]
+        open_card = reviewer_down.OpenCard(
+            identifier=found["identifier"],
+            filed_at=found.get("createdAt") or "",
+            text="\n".join([found.get("description") or "", *bodies]),
+        )
+        _fleet_outage_resolve_duplicates(open_card.identifier,
+                                         found.get("duplicates") or [])
+
+    decision = reviewer_down.decide(local, witness, open_card, now, threshold)
+    if decision.action == reviewer_down.NOTHING:
+        print(
+            f"fleet-reviewer-outage: {len(fresh)} could-not-run in the window, "
+            "nothing to say" + (f" on {open_card.identifier}" if open_card else
+                                " — below the threshold")
+        )
+        return
+
+    if decision.action == reviewer_down.CLOSE:
+        try:
+            linear_ops.cmd_comment(open_card.identifier, pipeline_act.receipt(
+                "reviewer-outage-fleet-wide", decision.resolve_note))
+        except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+            _fleet_outage_failed(f"resolve note on {open_card.identifier}", e)
+            return
+        _fleet_outage_state(f"close {open_card.identifier}",
+                            open_card.identifier, "Done")
+        print(f"fleet-reviewer-outage: {open_card.identifier} closed — "
+              f"{decision.resolve_note}")
+        return
+
+    if decision.action == reviewer_down.APPEND:
+        for line in decision.lines:
+            try:
+                linear_ops.cmd_comment(open_card.identifier, pipeline_act.receipt(
+                    "reviewer-outage-fleet-wide", line))
+            except Exception as e:  # noqa: BLE001 — record loudly, sweep on
+                _fleet_outage_failed(f"ledger line on {open_card.identifier}", e)
+                return
+        try:
+            # The title carries the counts, so it is recomputed from the whole
+            # ledger. A crash between the comments above and this write is
+            # harmless: the next sweep reads the ledger and recomputes it.
+            linear_ops.set_title(open_card.identifier, decision.title)
+        except Exception as e:  # noqa: BLE001 — record loudly, sweep on
+            _fleet_outage_failed(f"retitle {open_card.identifier}", e)
+        print(
+            f"fleet-reviewer-outage: appended {len(decision.lines)} run(s) to "
+            f"{open_card.identifier} — {decision.title}"
+        )
+        return
+
+    # file
+    if FLEET_OUTAGE_SWEEP_CAP < 1:
+        print(
+            "fleet-reviewer-outage: FLEET_OUTAGE_SWEEP_CAP=0 — filing is off "
+            f"fleet-wide; would have filed {decision.title!r}"
+        )
+        return
+    # The evidence is read HERE and only here: three reads, on the one sweep in
+    # a fleet's week that files this card. The earliest LOCAL crash, because a
+    # witness outcome is a note about a run in another repository — this sweep
+    # can read neither its check runs nor its log, and the card would carry a
+    # first run with no evidence at all under it.
+    first = next((o for o in fresh if o.pr is not None and o.repo == REPO_SLUG),
+                 None)
+    decision = reviewer_down.decide(
+        local, witness, None, now, threshold,
+        first_run=_fleet_outage_first_run(first, prs) if first else None,
+    )
+    try:
+        issue = linear_ops.create_card(decision.title, decision.body,
+                                       repo_slug=REPO_SLUG)
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _fleet_outage_failed("create", e)
+        return
+    identifier = issue["identifier"]
+    try:
+        linear_ops.cmd_comment(identifier, pipeline_act.receipt(
+            "reviewer-outage-fleet-wide", reviewer_down.outage_receipt(decision)))
+    except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
+        _fleet_outage_failed(f"outage receipt on {identifier}", e)
+    else:
+        # Triage, the red-main-repair precedent: the CARD is not broken, the
+        # pipeline is, and this is the lane a person scans for a pipeline that
+        # cannot run. reconcile.py is a permitted Triage writer in
+        # config/lane-contract.json. A crash between the create and this move
+        # is recovered by the next sweep, which finds the card by prefix.
+        _fleet_outage_state(f"triage {identifier}", identifier, "Triage")
+    print(f"fleet-reviewer-outage: filed {identifier} — {decision.title}")
 
 
 # Dependabot slot-capacity monitor (DRE-2119, found by the DRE-2110
@@ -5731,6 +6095,11 @@ def main(
             restart_answered_blockers,
             review_dependabot_prs,
             recover_crashed_reviews,
+            # DRE-3435, immediately after it because the two read the SAME
+            # open-pull-request listing: that one re-dispatches per head, this
+            # one counts could-not-run outcomes across the fleet and files ONE
+            # card when the reviewer is down everywhere at once.
+            report_fleet_reviewer_outage,
             check_dependabot_capacity,
         ):
             try:

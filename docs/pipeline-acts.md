@@ -181,6 +181,19 @@ plus a `threshold_why` saying where each came from — read through
 and putting the numbers here is what lets an operator retune the alarm by
 editing a file they can read instead of a comparison buried in a decision.
 
+**Who posts it (DRE-3435).** The row's `emits` anchor points at the decision
+module, because that is where the body is composed; the WRITER is the reconcile
+sweep's `report_fleet_reviewer_outage()` backstop, on full sweeps only, sitting
+immediately after `recover_crashed_reviews` because the two read the same open
+pull requests — that one re-dispatching per head, this one counting across the
+fleet. It files ONE card into `Triage`, appends one comment per newly counted
+run and rewrites the title's counts, and closes the card on the first
+successful verdict posted after it was filed. Every one of those comments
+composes through this act, so the console's alert per open card is unchanged by
+the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
+FILING fleet-wide, and deliberately leaves appends and closes running, so an
+outage card that is already open is never orphaned by the switch.
+
 ## Why this exists
 
 The console has always checked this. Its
