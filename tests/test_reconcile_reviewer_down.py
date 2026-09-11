@@ -265,6 +265,50 @@ def test_a_quiet_sweep_reads_nothing_further_and_files_nothing():
     assert w.created == [] and w.comments == [] and w.states == []
 
 
+def test_a_quiet_sweep_makes_no_linear_request_at_all():
+    """The claim stated as a transport-level fact: with the board already read
+    for this sweep, a quiet backstop reaches `linear_ops.gql` ZERO times. The
+    two budget suites prove the same thing from inside a whole `main()` — this
+    one proves it where the failure would be loudest."""
+    reconcile.reset_sweep_cards()
+    reconcile._swept_cards = [_card(bodies=[("ordinary chatter", _iso(5))])]
+    calls: list = []
+
+    def refuse(query, variables=None):
+        calls.append(query)
+        raise AssertionError("a quiet sweep must not touch Linear")
+
+    with patch.object(reconcile, "gh",
+                      side_effect=lambda *a: json.dumps([_pr()])), \
+        patch.object(reconcile.linear_ops, "gql", side_effect=refuse):
+        reconcile.report_fleet_reviewer_outage()
+    assert calls == []
+
+
+def test_a_full_sweep_lists_the_open_pull_requests_once():
+    """ACCEPTANCE: the two functions in the crashed-review region, run in the
+    order `main()` runs them, cost ONE `gh pr list` between them."""
+    reconcile.reset_sweep_cards()
+    reconcile._swept_cards = []
+    calls: list = []
+
+    def fake_gh(*args):
+        calls.append(tuple(args))
+        if args[:2] == ("pr", "list"):
+            return json.dumps([_pr(comments=[_verdict_comment()])])
+        return "[]"
+
+    with patch.object(reconcile, "gh", side_effect=fake_gh), \
+        patch.object(reconcile, "verdict_bound", return_value=True), \
+        patch.object(reconcile.linear_ops, "gql",
+                     side_effect=AssertionError("no Linear read on a quiet sweep")):
+        reconcile.recover_crashed_reviews()
+        reconcile.report_fleet_reviewer_outage()
+    assert sum(1 for c in calls if c[:2] == ("pr", "list")) == 1, (
+        f"one listing per sweep, shared: {[c[:2] for c in calls]}"
+    )
+
+
 def test_the_quiet_log_line_names_the_registry_window():
     """The window is DATA on the act row, so the line quotes the number an
     operator would change rather than a literal."""
@@ -415,6 +459,26 @@ def test_the_check_run_read_asks_for_the_published_review_check():
     written, state = _run_outage(**_file_world(_medic_note()))
     api = next(c for c in state["gh_calls"] if c[0] == "api")
     assert publish_review_check.CHECK_NAME in " ".join(api)
+
+
+def test_the_evidence_is_the_earliest_LOCAL_crash():
+    """A witness outcome is a note about a run in ANOTHER repository — this
+    sweep can read neither its check runs nor its log — so the evidence comes
+    off the earliest crash this repo can actually prove."""
+    written, state = _run_outage(
+        prs=[
+            _pr(141, comments=[_neutral(141, _iso(12))]),
+            _pr(142, comments=[_neutral(142, _iso(8), n=2)]),
+        ],
+        # the OLDEST outcome of the three, and unreachable from here
+        cards=[_card(bodies=[(_medic_note(), _iso(20))])],
+    )
+    _, description, _ = written.created[0]
+    assert RUN_URL in description
+    assert "native binary not found" in description
+    assert "agent-bureau#141" in description, (
+        "the first run named is the earliest LOCAL crash, not the witness"
+    )
 
 
 def test_an_unreadable_actions_log_never_fabricates_a_line():
@@ -733,3 +797,23 @@ def test_this_card_edits_no_act_row():
     assert problems == [], problems
     record = pipeline_act.record(reviewer_down.ACT)
     assert record and record["tag"] == reviewer_down.OUTAGE_TAG
+
+
+def test_the_backstop_composes_the_act_by_a_name_the_guard_can_read():
+    """`check_act_receipts._receipt_act` reads the composing call's first
+    argument off the AST and can only read a CONSTANT, so an act named through
+    a module attribute composes as `<computed>` and the registry's emission
+    guard goes blind on it. The four calls therefore spell the literal — and
+    this is what stops the literal drifting away from `reviewer_down.ACT`."""
+    import check_act_receipts
+
+    ours = [
+        site for site in check_act_receipts.sites()
+        if site.path == "scripts/reconcile.py"
+        and site.composed_as == reviewer_down.ACT
+    ]
+    assert len(ours) == 4, (
+        "the file path, the ledger line, the close note and the duplicate "
+        "note — every comment this backstop posts composes through the ONE "
+        f"act, by a name the guard can read; found {len(ours)}"
+    )
