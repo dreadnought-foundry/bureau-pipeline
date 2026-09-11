@@ -358,6 +358,24 @@
       }
     },
     {
+      "name": "reviewer-environment-hold",
+      "tag": "runner-environment-hold",
+      "adopted": true,
+      "kind": "hold",
+      "means": "This runner cannot run Claude at all — the vendor action left no launcher, or the credential this run holds is refused — so the review is held rather than re-dispatched into the same broken runner.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": "review-retried-after-crash",
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: nothing is re-dispatched past the second crash, so scripts/reviewer_environment.py hands the runner to an operator and declares no bound on how long a person takes.",
+      "why": "DRE-3428, from DRE-3416. On 2026-09-08 the floating claude-code-action tag moved and all six kinds of Claude-running job died about thirteen seconds in with 'Claude Code native binary not found'. Nothing had a name for it: medic_classify read it as a critic infra crash because the neutral marker was in the same log, and the reviewer-down note sent the operator to check the critic's auth/token, which was the one thing that was not wrong. This act names the cause and the check that confirms it. A hold and not a recovery: re-dispatching into a runner that cannot start Claude is the DRE-1921 loop with a new cause. Nothing is labelled or moved — the hold lives in the receipt, exactly as reviewer-down's does. It discharges the re-dispatch for the same reason reviewer-unavailable does: the obligation that act created was 'a verdict will post', and this is the other way that obligation ends.",
+      "emits": {
+        "file": "scripts/reviewer_environment.py",
+        "anchor": "def hold_receipt("
+      }
+    },
+    {
       "name": "verdict-left-behind",
       "tag": "stale-verdict-watchdog",
       "adopted": true,
@@ -1733,6 +1751,13 @@
       "kind": "undeclared-act",
       "means": "The rescue push was refused on both of its own fresh mints, so the run says where the work is (artifact and run id) and hands the delivery to a follow-up job — and that job says when it landed.",
       "why": "Act-shaped, and the registry has no row for it — and a row cannot be added here first. `tests/test_pipeline_acts_consumers.py` enforces console-first sequencing (DRE-3091): a tag this repo declares before agent-bureau's console knows it turns every open PR in that repo red, which is the failure that guard exists to prevent. So the receipt carries its own machine-readable grammar in the meantime, the same shape `model-attempt:` uses: `rescue-push-failed:` names the artifact and the run, `rescue-delivery-dispatched:` records the hand-off and is its own idempotency key (reconcile counts it), `rescue-delivered:` closes it. scripts/deliver_rescue.py owns all three and parses back exactly what it writes. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": "scripts/reviewer_environment.py",
+      "anchor": "evidence_note(signature, args.sha, args.run_url)",
+      "kind": "not-an-act",
+      "means": "Which environment failure this runner hit on this commit, named in plain English with the one check that confirms it, after the FIRST crash.",
+      "why": "A REPORT about the commit, not something the pipeline did on its own. Nothing is held, nothing is re-dispatched and nothing moves — the sweep's ordinary retry still runs — so the three questions a trailer answers (what obligation does this create, who has the work now, what does it discharge) all read 'not applicable'. The act on this path is the HOLD that follows a second identical crash, and that one has a row (`reviewer-environment-hold`) and composes through the writer. This note also opens with `CRITIC_UNAVAILABLE_MARKER`, which epic DRE-3420's fleet-wide detector counts as one could-not-run outcome from this repository; a trailer would not break that, but declaring the note an act would make the pipeline claim it had stopped when it had not."
     }
   ]
 }

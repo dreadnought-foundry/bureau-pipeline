@@ -365,6 +365,32 @@ def _drive_retry_declined_turns(mp):
     }))
 
 
+@site("reviewer-environment-hold", "reviewer-environment-hold")
+def _drive_reviewer_environment_hold(mp):
+    """The runner-environment hold (DRE-3428). `post_hold` composes through
+    `pipeline_act.receipt()` and posts the PULL REQUEST first — the sha-bound
+    counter the sweep reads — so the recorder stops it there, and the card
+    mirror the console reads carries the same bytes."""
+    import reviewer_environment
+
+    def record(argv, **_kwargs):
+        if argv[:3] == ["gh", "pr", "comment"]:
+            raise _Posted(argv[argv.index("--body") + 1])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    mp.setattr(reviewer_environment.subprocess, "run", record)
+    reviewer_environment.post_hold(
+        repo="dreadnought-foundry/bureau-pipeline",
+        pr_number=7,
+        card="DRE-1",
+        body=reviewer_environment.hold_receipt(
+            reviewer_environment.by_slug("native-binary-missing"),
+            "d34db33fcafe1234d34db33fcafe1234d34db33f",
+            2,
+        ),
+    )
+
+
 @site("proof-observation-pending", "proof-observation-pending")
 def _drive_proof_waiting(mp):
     """The proof hold (DRE-3275). The only capture here whose wording was not

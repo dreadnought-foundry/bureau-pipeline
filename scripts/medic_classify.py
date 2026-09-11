@@ -72,18 +72,43 @@ same reason as the class above: DRE-2923's own card body quotes the
 RATELIMITED payload, so an agent-task log that merely repeats it must NOT
 classify, or a genuine failure would be silently swallowed.
 
+FOURTH CLASS — THE RUNNER CANNOT RUN CLAUDE (DRE-3428). On 2026-09-08
+(DRE-3416) the floating `claude-code-action@v1` tag moved and all six kinds of
+Claude-running job in the fleet died about thirteen seconds in with `Claude
+Code native binary not found`. This classifier called it a critic infra crash
+— and only because the neutral marker happened to be in the same log, so
+nothing here named the cause; the sweep's `reviewer-down` note then sent the
+operator to "check the critic's auth/token", the one thing that was not wrong.
+
+`scripts/reviewer_environment.py` owns that vocabulary — four positive
+signatures, each with the plain-English meaning and the check that confirms
+it — and this file asks it BEFORE `critic_infra_crash`, because the neutral
+marker is in the same log and would otherwise win again.
+
+The DRE-1921 GATE IS UNCHANGED by it: `infra_crash=true` is still printed for
+a QA-review run, so the medic's three gates (retry, diagnose, backoff) behave
+exactly as they did. What is new is that the run now also says WHICH
+environment failure it was, and where to go and look.
+
 CLI:
     python3 medic_classify.py <workflow-name> <log-file>
-prints two lines — `infra_crash=true|false` (the DRE-1921 gate, unchanged) and
-`class=critic_infra_crash|upstream_5xx|linear_ratelimited|normal` — plus a
-human line on stderr; exit 0 either way. The caller (medic.yml) reads the
-stdout lines.
+prints `infra_crash=true|false` (the DRE-1921 gate, unchanged),
+`class=environment_crash|critic_infra_crash|upstream_5xx|linear_ratelimited|normal`,
+and then `signature=`, `check=` and `meaning=` — the last three empty unless
+the class is `environment_crash` — plus a human line on stderr; exit 0 either
+way. The caller (medic.yml) appends the stdout lines to `$GITHUB_OUTPUT`, so
+every value is one line.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import reviewer_environment  # noqa: E402
 
 # The exact neutral marker qa-review.yml posts + echoes when the critic crashes
 # on infra (qa-review.yml "Post verdict or neutral status" step). Matching this
@@ -174,14 +199,20 @@ def is_linear_rate_limited(log_text: str) -> bool:
 
 
 def classify(workflow_name: str, log_text: str) -> str:
-    """The failed run's class: `critic_infra_crash` (DRE-1921 — back off, the
+    """The failed run's class: `environment_crash` (DRE-3428 — this runner
+    cannot run Claude at all), `critic_infra_crash` (DRE-1921 — back off, the
     reviewer was down), `upstream_5xx` (DRE-2488 — GitHub is down, back off),
     `linear_ratelimited` (DRE-2923 — the workspace quota is exhausted, back
     off), or `normal` (retry once, then diagnose).
 
-    The critic infra-crash is checked FIRST so its established handling (the
-    plain-English "reviewer down" note on the card) is untouched.
+    The environment crash is checked FIRST and that ordering is the whole
+    point of DRE-3428: the crashed review posts the neutral marker into the
+    same log, so `critic_infra_crash` won on 2026-09-08 and the cause was
+    never named. The DRE-1921 gate below is unaffected — a QA-review run
+    still prints `infra_crash=true`.
     """
+    if reviewer_environment.detect(log_text) is not None:
+        return "environment_crash"
     if is_critic_infra_crash(workflow_name, log_text):
         return "critic_infra_crash"
     if is_upstream_5xx(log_text):
@@ -224,10 +255,31 @@ def main(argv: list[str]) -> int:
     workflow_name, log_file = (argv + ["", ""])[:2]
     log_text = _read(log_file)
     kind = classify(workflow_name, log_text)
-    crash = kind == "critic_infra_crash"
+    environment = (
+        reviewer_environment.detect(log_text)
+        if kind == "environment_crash" else None
+    )
+    # The DRE-1921 gate, unchanged in meaning: a QA-review run that crashed on
+    # infrastructure. An environment crash of the review IS one — the medic
+    # must not rerun it and must not spend a diagnosis agent on it — so it
+    # keeps the gate, and the three jobs in medic.yml are untouched by this
+    # card. A non-review run says `false`, exactly as it did before.
+    crash = kind == "critic_infra_crash" or (
+        kind == "environment_crash" and _is_qa_review(workflow_name)
+    )
     print(f"infra_crash={'true' if crash else 'false'}")
     print(f"class={kind}")
-    if crash:
+    for line in reviewer_environment.report_lines(environment):
+        print(line)
+    if environment is not None:
+        print(
+            "medic classify: ENVIRONMENT CRASH — this runner cannot run "
+            f"Claude ({environment.slug}): {environment.meaning}. Not the "
+            "critic's credential and not a code rejection. Check: "
+            f"{environment.check}.",
+            file=sys.stderr,
+        )
+    elif crash:
         print(
             "medic classify: QA critic INFRA-CRASH (rate-limit/auth) — backing "
             "off, NOT rerunning (would deepen the limit and loop).",
