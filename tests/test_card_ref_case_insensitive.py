@@ -32,12 +32,17 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 def card_extraction_line(workflow: str) -> str:
-    """The literal `CARD=$(...)` line from a workflow file."""
+    """The literal `CARD=$(...)` line from a workflow file — the one that
+    extracts from the branch/title text. linear-sync.yml carries a second,
+    fenced `CARD=$(...)` since DRE-3665 (the dependabot join, which delegates
+    to `dependabot_card.py` and extracts from no shell text itself); it is
+    pinned by tests/test_dependabot_card.py and is not an extraction site in
+    the DRE-2003 sense."""
     text = (WORKFLOWS / workflow).read_text()
     lines = [
         ln.strip()
         for ln in text.splitlines()
-        if re.match(r"\s*CARD=\$\(", ln)
+        if re.match(r"\s*CARD=\$\(", ln) and "dependabot_card.py" not in ln
     ]
     assert len(lines) == 1, (
         f"expected exactly one CARD=$(...) extraction in {workflow}, "
