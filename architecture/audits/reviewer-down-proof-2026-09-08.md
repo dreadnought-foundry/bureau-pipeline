@@ -206,8 +206,12 @@ linear-budget: 2499 → 2499 (spent 0 this run; window resets 10:55 PT; budget: 
 Exit 0, and no identifier printed. That silence is the answer by design —
 `cmd_find_open_prefix`'s docstring: *"Print the identifier of the OLDEST open
 card whose title starts with `prefix`, else print nothing."* The budget line
-is the wrapper's accounting, and `spent 0` says the lookup was served from
-the pass cache.
+proves the query went out: `linear_ops.budget_line()` prints `unknown (no
+rate-limit headers seen)` when no request reached Linear, and `2499 → 2499`
+is the remaining-quota header read off a real response. `spent N` is
+`first − last` across the process's responses, so a one-request process reads
+`spent 0` by construction — it is not a claim that the call was free, and not
+a cache.
 
 **A full-text search** of the DRE team for `Reviewer down since` (archived
 included), read through the Linear MCP at 09:55 PT, returned 20 issues — the
