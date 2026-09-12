@@ -417,10 +417,13 @@ class _Card:
     """
 
     def __init__(self, comments, *, description: str = ONE_OFF_BODY,
-                 labels=ONE_OFF_LABELS):
+                 labels=ONE_OFF_LABELS, lane: str = "Planning"):
         self.comments = list(comments)
         self.description = description
         self.labels = list(labels)
+        #: Where the board says the card is — the escalation re-reads this
+        #: before it parks (DRE-3654).
+        self.lane = lane
         self.posted: list[tuple[str, str]] = []
         self.labelled: list[tuple[str, str]] = []
         self.states: list[tuple[str, str]] = []
@@ -433,6 +436,19 @@ class _Card:
             self.posted.append((identifier, body))
             self.comments.append(body)
 
+        def move(identifier, lane, *flags):
+            self.states.append((identifier, lane))
+            self.lane = lane
+
+        def read(identifier, **kw):
+            return {
+                "id": "issue-id", "identifier": identifier, "title": "a card",
+                "team": {"id": "team-id"},
+                "state": {"name": self.lane, "type": "unstarted"},
+                "labels": {"nodes": [{"name": n} for n in self.labels]},
+                "children": {"nodes": []},
+            }
+
         with patch.object(
             linear_ops, "comment_bodies", side_effect=lambda i: list(self.comments)
         ), patch.object(
@@ -441,8 +457,9 @@ class _Card:
             linear_ops, "add_label",
             side_effect=lambda i, label: self.labelled.append((i, label)),
         ), patch.object(
-            linear_ops, "cmd_state",
-            side_effect=lambda i, lane, *f: self.states.append((i, lane)),
+            linear_ops, "cmd_state", side_effect=move,
+        ), patch.object(
+            linear_ops, "get_issue", side_effect=read,
         ), patch.object(
             linear_ops, "count_comments",
             side_effect=lambda i, needle, **kw: sum(
@@ -848,6 +865,21 @@ class TestTheExitCommandEscalates:
         first = list(card.posted)
         card.run(lambda: planning_route.main(["exit", CARD]))
         assert card.posted == first
+
+    def test_a_card_that_already_left_planning_is_left_there(self, capsys):
+        """DRE-3654: the exit route's escalation is the same `escalate()`, so
+        a card someone moved to be built before the run reached this step is
+        not dragged back — and the run log says which way it went."""
+        import planning_escalation
+
+        card = _Card([_stamp("one-off")], description=FD4B_BODY,
+                     labels=FD4B_LABELS, lane="In Progress")
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert card.states == []
+        assert planning_escalation.STOOD_DOWN_TAG in card.bodies()
+        out = capsys.readouterr().out
+        assert "In Progress" in out
+        assert "It is escalated to" not in out, out
 
     def test_a_buildable_one_off_is_still_stamped_and_moved(self):
         """Guard the guard: the ordinary path is untouched."""

@@ -102,15 +102,22 @@ class _Card:
     The same harness `tests/test_planning_route.py` uses — the CLI imports
     `linear_ops` inside the function body, so patching the module object is
     what reaches it.
+
+    `lane` is where the board says the card is (DRE-3654): the escalation
+    re-reads it before it parks, and a move here updates it, so a retried call
+    reads the lane the first call left the card in rather than a constant.
     """
 
-    def __init__(self, comments=()):
+    def __init__(self, comments=(), *, lane: str = planning_escalation.ORIGIN):
         self.comments = list(comments)
+        self.lane = lane
         self.posted: list[tuple[str, str]] = []
         self.states: list[tuple[str, str]] = []
         #: Every write in the order it was made, so "the question lands before
         #: the card moves" is asserted against the sequence rather than assumed.
         self.events: list[str] = []
+        #: Every `get_issue` read, with the flags it was made with.
+        self.reads: list[dict] = []
 
     def run(self, fn):
         def post(identifier, body):
@@ -121,6 +128,17 @@ class _Card:
         def move(identifier, lane, *rest):
             self.states.append((identifier, lane))
             self.events.append("state")
+            self.lane = lane
+
+        def read(identifier, **kw):
+            self.reads.append(dict(kw))
+            self.events.append("read")
+            return {
+                "id": "issue-id", "identifier": identifier, "title": "a card",
+                "team": {"id": "team-id"},
+                "state": {"name": self.lane, "type": "unstarted"},
+                "labels": {"nodes": []}, "children": {"nodes": []},
+            }
 
         with patch.object(
             linear_ops, "comment_bodies", side_effect=lambda i: list(self.comments)
@@ -128,6 +146,8 @@ class _Card:
             linear_ops, "cmd_comment", side_effect=post
         ), patch.object(
             linear_ops, "cmd_state", side_effect=move,
+        ), patch.object(
+            linear_ops, "get_issue", side_effect=read,
         ), patch.object(
             linear_ops, "count_comments",
             side_effect=lambda i, needle, **kw: sum(
@@ -179,10 +199,11 @@ class TestTheEscalationParksInGreenLight:
 
     def test_the_question_lands_before_the_card_moves(self):
         """Moving the card without the question is a silent park: the CEO sees
-        a card appear in their queue with nothing to answer."""
+        a card appear in their queue with nothing to answer. Since DRE-3654 the
+        live lane read comes first, before either write."""
         card = _Card()
         card.run(lambda: planning_escalation.main(["escalate", CARD, "--why", REASON]))
-        assert card.events == ["comment", "state"], card.events
+        assert card.events == ["read", "comment", "state"], card.events
 
     def test_the_note_names_what_the_ceo_is_being_asked_for(self):
         note = planning_escalation.escalation_comment(CARD, REASON)
@@ -241,6 +262,266 @@ class TestTheEscalationParksInGreenLight:
             )
         ) == 0
         assert card.states == [(CARD, planning_escalation.destination())]
+
+
+# ===========================================================================
+# 1b. The escalation re-reads the lane before it parks (DRE-3654)
+# ===========================================================================
+#
+# The DRE-3604 timeline, 2026-09-11 PT, is the regression fixture:
+#
+#   18:04:57  created in Planning
+#   18:05:32  `planning-classify-transport` note — the classifier could not
+#             reach its model; "the card has not moved"
+#   18:05:33  a `🧭 routing-verdict: WORKBENCH` stamped by hand
+#   18:05:38  moved Planning → In Progress by hand; its build started
+#   18:06:23  `planning-escalation` note, and the card dragged In Progress →
+#             Green Light — 45 seconds after it had left Planning
+#
+# `escalate()` re-asserted the move without re-reading the lane. The rule it
+# was written for (a crash between the note and the move converges on a retry)
+# still stands; what it must not do is park a card that is no longer in the
+# segment the escalation is about, or one already carrying a verdict.
+DRE_3604 = "DRE-3604"
+HAND_MOVE_AT = "2026-09-11T18:05:38-07:00"
+ESCALATION_AT = "2026-09-11T18:06:23-07:00"
+WORKBENCH_WHY = (
+    "It needs someone at a live screen to drive the flow and read what comes "
+    "back, which is not something a headless build can do."
+)
+
+
+def _seconds_between(earlier: str, later: str) -> float:
+    from datetime import datetime
+
+    return (datetime.fromisoformat(later) - datetime.fromisoformat(earlier)).total_seconds()
+
+
+def _dre_3604(lane: str = "In Progress") -> _Card:
+    """The card exactly as the board had it at 18:06:23: the transport note,
+    a routing verdict written by the vocabulary's own composer, and the lane
+    the hand move left it in."""
+    return _Card(
+        comments=[
+            planning_escalation.transport_comment(DRE_3604, "HTTP 429 answered"),
+            routing_verdict.verdict_comment("WORKBENCH", WORKBENCH_WHY),
+        ],
+        lane=lane,
+    )
+
+
+def _escalate(card: _Card, identifier: str = CARD, *flags: str):
+    return card.run(
+        lambda: planning_escalation.main(
+            ["escalate", identifier, "--why", REASON, *flags]
+        )
+    )
+
+
+class TestTheEscalationReReadsTheLaneBeforeItParks:
+    def test_the_fixture_is_the_timeline(self):
+        """Pinned so the fixture cannot drift into a made-up case: the hand
+        move and the escalation's writes were 45 seconds apart."""
+        assert _seconds_between(HAND_MOVE_AT, ESCALATION_AT) == 45
+
+    # --- unchanged: a card still in Planning parks, and a retry converges ---
+    def test_a_card_still_in_planning_is_parked_as_before(self):
+        card = _Card()
+        assert _escalate(card) == 0
+        assert card.states == [(CARD, planning_escalation.destination())]
+        assert planning_escalation.ESCALATION_TAG in card.bodies()
+        assert planning_escalation.STOOD_DOWN_TAG not in card.bodies()
+
+    def test_a_retry_re_asserts_the_move_and_writes_no_second_note(self):
+        """The rule the move was written for: a crash between the note and the
+        move converges on the retry. The card is then in the destination — the
+        planning segment still — so the move is re-asserted, once more."""
+        card = _Card()
+        _escalate(card)
+        assert card.lane == planning_escalation.destination()
+        first = list(card.posted)
+        _escalate(card)
+        assert card.posted == first
+        assert card.states == [
+            (CARD, planning_escalation.destination()),
+            (CARD, planning_escalation.destination()),
+        ]
+
+    def test_a_card_in_intake_is_still_the_escalations_to_park(self):
+        """The segment, not the one lane: Intake is the other planning-segment
+        lane, and a card escalated from there parks the same way."""
+        assert lane_contract.lane("Intake")["segment"] == lane_contract.lane(
+            planning_escalation.ORIGIN)["segment"]
+        card = _Card(lane="Intake")
+        _escalate(card)
+        assert card.states == [(CARD, planning_escalation.destination())]
+
+    def test_the_lane_is_read_live_immediately_before_the_writes(self):
+        """The read that decides is a LIVE one (`fresh=True` — the command's
+        memo is the state the card was in when the run began, which is the
+        read DRE-3604 was wrong by), and it sits before both writes: the note
+        is the honest one from the start rather than an escalation followed by
+        a retraction."""
+        card = _Card()
+        _escalate(card)
+        assert card.reads and all(r.get("fresh") is True for r in card.reads)
+        assert card.events.index("read") < card.events.index("comment") < card.events.index("state")
+
+    # --- DRE-3604: the card had already left ---------------------------------
+    def test_dre_3604_a_card_already_in_progress_with_a_verdict_is_left_alone(self):
+        card = _dre_3604()
+        assert _escalate(card, DRE_3604, "--transport") == 0
+        assert card.states == [], "the card was dragged out of In Progress"
+        assert len(card.posted) == 1
+        note = card.bodies()
+        assert planning_escalation.STOOD_DOWN_TAG in note
+        assert "In Progress" in note
+        assert planning_escalation.ORIGIN in note
+        assert planning_escalation.ESCALATION_TAG not in note, (
+            "a note that reads back as the escalation is a park nobody made"
+        )
+
+    def test_dre_3604_a_retry_converges_on_left_alone(self):
+        card = _dre_3604()
+        _escalate(card, DRE_3604, "--transport")
+        first = list(card.posted)
+        _escalate(card, DRE_3604, "--transport")
+        assert card.posted == first
+        assert card.states == []
+
+    @pytest.mark.parametrize("lane", [
+        entry["name"] for entry in lane_contract.lanes()
+        if entry["segment"] != lane_contract.lane(planning_escalation.ORIGIN)["segment"]
+    ])
+    def test_a_card_anywhere_outside_the_planning_segment_is_left_there(self, lane):
+        """No verdict on the card at all — the lane alone is enough. Every
+        live lane outside the segment, work and off-flow alike, read from the
+        contract rather than listed here."""
+        card = _Card(lane=lane)
+        _escalate(card)
+        assert card.states == []
+        note = card.bodies()
+        assert planning_escalation.STOOD_DOWN_TAG in note
+        assert lane in note and planning_escalation.ORIGIN in note
+
+    def test_a_verdict_stops_the_park_whatever_the_lane(self):
+        """A card carrying a routing verdict is past classification — even one
+        the board still shows in Planning, as DRE-3604 was for five seconds."""
+        card = _dre_3604(lane=planning_escalation.ORIGIN)
+        _escalate(card, DRE_3604)
+        assert card.states == []
+        assert "WORKBENCH" in card.bodies()
+
+    def test_the_verdict_is_read_by_the_vocabularys_own_reader(self):
+        """A body that merely QUOTES a verdict — the sweep's refusal notice
+        does — carries none, and `routing_verdict.verdicts_on` is what knows
+        that. A card whose only marker is a quoted one still parks."""
+        quoted = (
+            "The sweep declined to promote this: it does not carry a "
+            f"{routing_verdict.VERDICT_MARK} {routing_verdict.VERDICT_TAG}: "
+            "**FLEET** line that opens a comment."
+        )
+        assert routing_verdict.verdicts_on([quoted]) == ()
+        card = _Card(comments=[quoted])
+        _escalate(card)
+        assert card.states == [(CARD, planning_escalation.destination())]
+
+    def test_a_follow_up_is_posted_when_the_note_landed_and_the_card_then_left(self):
+        """The crash-between-the-writes case, with a hand move in the gap: the
+        escalation note is on the card, the card is then moved to be built,
+        and the retry must not drag it back — it withdraws the ask instead,
+        once."""
+        card = _Card()
+        _escalate(card)  # note posted, card parked
+        card.lane = "In Progress"  # ...and then picked up by hand
+        _escalate(card)
+        assert card.states == [(CARD, planning_escalation.destination())]
+        assert len(card.posted) == 2
+        follow_up = card.posted[-1][1]
+        assert planning_escalation.STOOD_DOWN_TAG in follow_up
+        assert "In Progress" in follow_up
+        _escalate(card)
+        assert len(card.posted) == 2, "the follow-up was posted twice"
+
+    # --- the segment is read from the contract, never enumerated -------------
+    def test_the_segment_test_reads_the_contract(self):
+        doc = _mutated_contract()
+        _lane(doc, "Todo")["segment"] = lane_contract.lane(
+            planning_escalation.ORIGIN)["segment"]
+        assert planning_escalation.in_escalation_segment("Todo", contract=doc)
+        assert not planning_escalation.in_escalation_segment("Todo")
+
+    def test_a_lane_the_contract_does_not_carry_is_not_ours(self):
+        """Unknown is never a pass: a lane nobody declared cannot be shown to
+        be in the segment, so the card is left where it is."""
+        assert not planning_escalation.in_escalation_segment("Somewhere New")
+        card = _Card(lane="Somewhere New")
+        _escalate(card)
+        assert card.states == []
+        assert "Somewhere New" in card.bodies()
+
+    def test_a_retired_board_name_resolves_through_the_contracts_aliases(self):
+        for old, new in lane_contract.aliases().items():
+            assert planning_escalation.in_escalation_segment(old) == \
+                planning_escalation.in_escalation_segment(new)
+
+    def test_no_lane_is_named_in_the_functions_that_decide(self):
+        import inspect
+
+        source = inspect.getsource(planning_escalation.in_escalation_segment) + \
+            inspect.getsource(planning_escalation.moved_on)
+        for name in lane_contract.lane_names():
+            assert f'"{name}"' not in source and f"'{name}'" not in source, (
+                f"{name!r} is enumerated in the segment test — read the contract"
+            )
+        for segment in ("planning", "work", "off-flow"):
+            assert f'"{segment}"' not in source and f"'{segment}'" not in source
+
+    # --- the note itself -----------------------------------------------------
+    def test_the_stand_down_note_is_plain_english_and_carries_no_marker(self):
+        note = planning_escalation.stood_down_comment(
+            DRE_3604, "it is in In Progress", REASON, withdrawn=False)
+        for leaked in (".py", "git ", "```", "tests/", "force-push", "rebase"):
+            assert leaked not in note, f"the note leaks {leaked!r}"
+        assert planning_shape.shapes_on([note]) == ()
+        assert routing_verdict.verdicts_on([note]) == ()
+        for marker in ("VERDICT:", "QA Critic", "QA Verifier"):
+            assert marker not in note
+
+    def test_the_stand_down_note_cannot_be_counted_as_anything_else(self):
+        """Counting is substring-based. A note carrying the escalation tag
+        would make `already` true on the card's next real escalation — a
+        silent park; one carrying the transport tag would spend that budget."""
+        for withdrawn in (False, True):
+            note = planning_escalation.stood_down_comment(
+                DRE_3604, "it is in In Progress", REASON, withdrawn=withdrawn)
+            assert planning_escalation.ESCALATION_TAG not in note
+            assert planning_escalation.TRANSPORT_TAG not in note
+        assert planning_escalation.ESCALATION_TAG not in planning_escalation.STOOD_DOWN_TAG
+        assert planning_escalation.TRANSPORT_TAG not in planning_escalation.STOOD_DOWN_TAG
+        assert planning_escalation.STOOD_DOWN_TAG not in planning_escalation.ESCALATION_TAG
+
+    def test_the_refused_reason_never_reaches_the_stand_down_note_either(self):
+        leak = "the fix belongs in scripts/reconcile.py, around promote_ready()"
+        note = planning_escalation.stood_down_comment(
+            DRE_3604, "it is in In Progress", leak, withdrawn=False)
+        assert "scripts/reconcile.py" not in note
+        assert planning_escalation.NOT_PLAIN_ENGLISH in note
+
+    def test_the_cli_says_the_card_was_left_alone(self, capsys):
+        card = _dre_3604()
+        _escalate(card, DRE_3604, "--transport")
+        out = capsys.readouterr().out
+        assert "In Progress" in out
+        assert "escalated out of" not in out, out
+
+    def test_the_outcome_says_which_way_it_went(self):
+        parked = _Card().run(
+            lambda: planning_escalation.escalate(linear_ops, CARD, REASON))
+        assert parked.parked and parked.posted and parked.stood_down is None
+        left = _dre_3604().run(
+            lambda: planning_escalation.escalate(linear_ops, DRE_3604, REASON))
+        assert not left.parked and left.posted and "In Progress" in left.stood_down
 
 
 # ===========================================================================

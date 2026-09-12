@@ -1777,6 +1777,16 @@ class _Lops:
     def count_comments(self, identifier, needle, **kwargs):
         return sum(1 for body in self.bodies if needle in body)
 
+    def get_issue(self, identifier, *, fresh=False):  # the escalation's lane re-read (DRE-3654)
+        return {
+            "id": "issue-id", "identifier": identifier,
+            "team": {"id": "team-id"},
+            "state": {"name": self.states[-1] if self.states else "Planning",
+                      "type": "unstarted"},
+            "labels": {"nodes": [{"name": n} for n in self.probe["labels"]]},
+            "children": {"nodes": []},
+        }
+
     def cmd_comment(self, identifier, body, *flags):
         self.comments.append(body)
         self.bodies.append(body)
