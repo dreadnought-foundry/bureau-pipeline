@@ -37,6 +37,7 @@ os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
+import plan_run  # noqa: E402
 import reconcile  # noqa: E402
 import wave_commitment as wc  # noqa: E402
 
@@ -257,6 +258,96 @@ class OneAskForThePlannerRunTest(unittest.TestCase):
         env = step_named("commit the approved wave").get("env") or {}
         self.assertIn("GH_TOKEN", env)
         self.assertIn("REPO", env)
+
+
+class OneDispatchPerPlanningEntryTest(unittest.TestCase):
+    """One planner dispatch per Planning entry, counted across BOTH dispatchers
+    (DRE-3659).
+
+    The relay dispatches `agent-plan` for every card entering Planning — it has
+    since DRE-1913 (2026-06-29), label or no label since DRE-3030 — and the
+    wave's commit dispatched the same event for the same entry. When the
+    DRE-3530 wave was approved on 2026-09-11 at 18:50 PT the commit started
+    three epics and SIX Agent Plan runs fired within eight seconds. The three
+    the commit sent won by two to six seconds; the three the relay sent queued,
+    each started a hosted runner twenty-odd minutes later, and skipped as
+    duplicates. `dedupe_dispatch.py plan-gate` decided that correctly, inside
+    a job that had already billed a runner. It stays as the backstop; these
+    tests pin that it stops being the common path.
+
+    The relay lives in agent-bureau, so it is modelled here at the seam it
+    listens on: the state webhook for a card entering the lane that owes a
+    plan artifact. Every `cmd_advance` INTO that lane is one relay dispatch,
+    and every `plan_run.fire` is one of the commit's own. The sum is the
+    number, and the number is the count of Planning entries.
+    """
+
+    TWO_READY = """# Wave
+
+```epics
+[
+  {"key": "quiet", "title": "The relay goes quiet", "depends_on": []},
+  {"key": "fence", "title": "The fence", "depends_on": []},
+  {"key": "sweep", "title": "The sweep", "depends_on": ["quiet", "fence"]}
+]
+```
+"""
+
+    def dispatches_for(self, plan_md: str):
+        """Commit an approved wave planned as `plan_md`; return every
+        `agent-plan` dispatch either dispatcher made, as (who, epic)."""
+        from unittest.mock import patch
+        from test_wave_commitment import APPROVED, WAVE, _FakeOps
+
+        ops = _FakeOps(
+            description=wc.render_ledger(wc.ledger_from_plan(WAVE, plan_md)),
+            green_lit_at=APPROVED)
+        fired: list = []
+        moved = ops.cmd_advance
+
+        def relay_listens(identifier, to_state, from_states):
+            moved(identifier, to_state, from_states)
+            if to_state == wc.turn_lane():
+                fired.append(("relay", identifier))
+
+        def commit_asks(card, repo, **kwargs):
+            fired.append(("commit", card["identifier"]))
+            return True, ""
+
+        ops.cmd_advance = relay_listens
+        with patch.object(plan_run, "fire", commit_asks):
+            wc.commit(ops, WAVE)
+        return fired, ops
+
+    def test_one_planning_entry_is_one_dispatch_across_relay_and_commit(self):
+        from test_wave_commitment import PLAN
+
+        fired, _ = self.dispatches_for(PLAN)
+        self.assertEqual(
+            len(fired), 1,
+            f"one epic entered {wc.turn_lane()!r} and {len(fired)} planner "
+            f"dispatches were made: {fired} — the duplicate is decided before "
+            "the dispatch, not inside a job that already started a runner")
+
+    def test_two_ready_epics_are_two_dispatches_not_four(self):
+        from collections import Counter
+
+        fired, _ = self.dispatches_for(self.TWO_READY)
+        per_epic = Counter(epic for _, epic in fired)
+        self.assertEqual(len(fired), 2, f"dispatches: {fired}")
+        self.assertEqual(set(per_epic.values()), {1},
+                         f"an epic was dispatched more than once: {fired}")
+
+    def test_the_arrival_note_claims_no_run_the_commit_did_not_start(self):
+        """The commit no longer starts the run, so it must not say it did —
+        a receipt nobody can check is the DRE-1254 false-receipt class."""
+        from test_wave_commitment import PLAN
+
+        _, ops = self.dispatches_for(PLAN)
+        moved = [ident for ident, lane in ops.advanced_to if lane == wc.turn_lane()]
+        said = "\n".join(ops.comments_on(moved[0]))
+        self.assertNotIn("has been started", said)
+        self.assertIn(wc.turn_lane(), said)
 
 
 class NoSecondVocabularyTest(unittest.TestCase):
