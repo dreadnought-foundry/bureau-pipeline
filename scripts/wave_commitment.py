@@ -73,7 +73,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lane_contract  # noqa: E402
 import mid_epic  # noqa: E402
 import plan_artifact  # noqa: E402
-import plan_run  # noqa: E402
 import planning_shape  # noqa: E402
 import wave_plan  # noqa: E402
 
@@ -742,8 +741,7 @@ def _epic_body(wave: str, record_: dict, ledger: dict) -> str:
     return "\n".join(lines)
 
 
-def commit(linear_ops, wave: str, if_approved: bool = False,
-           dispatch=None) -> list:
+def commit(linear_ops, wave: str, if_approved: bool = False) -> list:
     """Turn an APPROVED wave's recorded sequence into epics, each committed in
     sequence, and start the one whose turn it is.
 
@@ -828,33 +826,42 @@ def commit(linear_ops, wave: str, if_approved: bool = False,
             commitment_comment(wave, record_, position, total))
     _write_ledger(linear_ops, wave, issue, ledger)
     print(f"wave commitment: {wave} committed {len(created)} epic(s) in sequence")
-    advance(linear_ops, wave, dispatch)
+    advance(linear_ops, wave)
     return created
 
 
-def _redispatch(card: dict) -> bool:
-    """The default ask, at the repo this run is for. `reconcile.redispatch` is
-    the same call with the sweep's write ledger behind it."""
-    return plan_run.dispatch(card)
+def lane_starts_the_run() -> str:
+    """The sentence the arrival note ends on, in place of a receipt for a run
+    this module no longer starts. It claims nothing it cannot check (the
+    DRE-1254 false-receipt class): the dispatcher is the relay, and the
+    evidence of the run is the run."""
+    return (
+        f"\n\nArriving in `{turn_lane()}` is what starts its planner run: the "
+        "relay dispatches one for every card that enters the lane. Nothing here "
+        "claims that run started — if it has not within the lane's stall "
+        "window, the stalled-planning alarm asks."
+    )
 
 
-def advance(linear_ops, wave: str, dispatch=None) -> list:
+def advance(linear_ops, wave: str) -> list:
     """Move every epic whose turn has come to the lane that owes a plan
-    artifact, AND ask for its planner run. Idempotent: only a card still in
-    Backlog is moved.
+    artifact. Idempotent: only a card still in Backlog is moved.
 
-    The move is not the trigger — nothing dispatches off that lane, which is
-    why `plan_run` exists and why the sweep's own turn path asks through it
-    too. This is the path a wave's FIRST epic takes: it has no predecessor
-    whose completion would carry it through the sweep, so without the ask here
-    the very first step of every wave was a card moved into a lane and left
-    there, silent until the stalled-planning alarm asked a human hours later.
+    The move IS the trigger. The relay dispatches `agent-plan` for every card
+    entering that lane (agent-bureau `cloud/relay/lambda_function.py` —
+    DRE-1913, and label or no label since DRE-3030), so this path asks for
+    nothing itself. It used to (DRE-2846), on the belief that nothing
+    dispatched off the lane, and every wave epic then cost two Agent Plan
+    runs: on the DRE-3530 approval (2026-09-11, 19:01 PT) six fired for three
+    epics, and the three the relay sent each started a hosted runner to learn
+    they were the duplicate. One dispatcher per transition (DRE-3659);
+    `dedupe_dispatch.py plan-gate` stays as the backstop, not the common path.
 
-    A failed ask is said on the card and printed, never raised: the epics are
-    already created and recorded, and aborting here would take the rest of the
-    wave's publish down with it.
+    This is the path a wave's FIRST epic takes — it has no predecessor whose
+    completion would carry it through the sweep. The sweep's own turn path
+    (`reconcile.advance_unblocked_epics`) makes the same move for every epic
+    after it.
     """
-    dispatch = dispatch or _redispatch
     issue = read_wave(linear_ops, wave)
     ledger = _ledger_of(issue, wave)
     lanes = {
@@ -873,12 +880,8 @@ def advance(linear_ops, wave: str, dispatch=None) -> list:
         if not card or lanes.get(card) != "Backlog":
             continue
         linear_ops.cmd_advance(card, turn_lane(), "Backlog")
-        linear_ops.cmd_comment(card, arrival_note(card, wave) + plan_run.note(
-            linear_ops, card, dispatch,
-            if_not_started="Nothing retries it: this epic waits in "
-                           f"`{turn_lane()}` until someone starts its planner "
-                           "run, and the stalled-planning alarm will ask.",
-        ))
+        linear_ops.cmd_comment(
+            card, arrival_note(card, wave) + lane_starts_the_run())
         moved.append(card)
     print(
         f"wave commitment: {wave} — {len(moved)} epic(s) reached their turn"

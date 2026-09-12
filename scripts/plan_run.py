@@ -5,20 +5,22 @@
 Two paths send an epic to the lane that owes a plan artifact:
 
   * `reconcile.advance_unblocked_epics` — the predecessor epic reached Done, so
-    the next one's turn has come;
+    the next one's turn has come; it asks through `note` below.
   * `wave_commitment.advance` — an approved wave's FIRST epic, which has no
     predecessor to wait for and therefore never passes through the sweep path
-    at all.
+    at all. Since DRE-3659 it asks for NOTHING: the relay dispatches
+    `agent-plan` on every entry into that lane (DRE-1913, label or no label
+    since DRE-3030), and its explicit ask here was the second dispatch for one
+    entry — on the DRE-3530 approval, three epics, six Agent Plan runs, three
+    hosted runners started to skip as duplicates.
 
-For both of them the lane move is NOT the trigger. Nothing dispatches off that
-lane: it is not in `reconcile.SWEEP_STATES` and it has no nudge (DRE-2736). Its
-only other automated attention is `flag_stalled_planning`, which after
-`PLANNING_MINUTES` asks a HUMAN to look — well past the point anyone expected
-work to have started. So the turn asks for the run, and it asks HERE, because
-the alternative is two copies of the ask and one of them quietly not being
-made: that is exactly what happened — the sweep asked, the wave's own turn did
-not, and every wave's first epic sat silently in the lane it had just been
-moved to.
+The lane is not in `reconcile.SWEEP_STATES` and has no nudge (DRE-2736); its
+other automated attention is `flag_stalled_planning`, which after
+`PLANNING_MINUTES` asks a HUMAN to look. This module was written on the belief
+that nothing dispatched off the lane at all, which the six runs disproved. The
+sweep's ask is the same second dispatch and is DRE-3659's named twin, left to
+its own card; the ask is still written HERE and only here, so that when it
+goes it goes from one place.
 
 The repository_dispatch itself runs under the default App token on purpose: the
 dispatches API needs contents:write, which the App token holds — the stub's
