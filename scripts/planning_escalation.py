@@ -86,6 +86,31 @@ a person dragging a card — and both modules say so. What this module guarantee
 is that nothing HERE declares a way past
 Planning.
 
+## The card may have moved on (DRE-3654)
+
+`escalate()` posts its note and then re-asserts the move every time, so a crash
+between the two writes converges on the retry. On 2026-09-11 that rule parked a
+card that was no longer Planning's to park: DRE-3604's classifier could not
+reach its model at 18:05:32 PT, a routing verdict was stamped by hand at
+18:05:33, the card was moved to In Progress by hand at 18:05:38 and its build
+started — and at 18:06:23 the escalation dragged it In Progress → Green Light,
+45 seconds after it had left, with a PR on the way. The move never re-read the
+lane; it wrote from the state the run began in.
+
+So the lane is read LIVE, once, immediately before both writes, and the card is
+parked only if it is still in the segment the escalation is about — the one
+`ORIGIN` sits in, read from the lane contract rather than named here — and
+carries no routing verdict. A verdict means Planning has already answered, so
+the card is past this step whatever lane the board shows it in; the verdict is
+read by `routing_verdict`'s own reader, never matched here. A card that has
+moved on gets NO state write. It gets one note saying it had moved on and
+where to (or a follow-up withdrawing the ask, if the escalation note had landed
+before the hand move), and a retry converges on "left alone" the way it
+converges on "parked". The read sits before the note as well as the move, so
+the first note is the honest one rather than an escalation and a retraction;
+the residual window is the comment write itself. The "re-assert every time"
+rule stands for the case it was written for: a card still in the segment.
+
 CLI:
 
     python3 scripts/planning_escalation.py check
@@ -104,6 +129,7 @@ import glob
 import os
 import re
 import sys
+from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402
@@ -171,6 +197,16 @@ TRANSPORT_MARK = "🔌"
 #: human. One: an infrastructure failure that survives a retry has stopped being
 #: transient, and a card nobody can classify still owes somebody an answer.
 TRANSPORT_CAP = 1
+
+# The record a card gets when the escalation reaches it too late (DRE-3654): it
+# had already left the segment, or already carries a verdict, so nothing was
+# parked. THE STRING MATTERS: counting is substring-based, so this must not
+# contain ESCALATION_TAG (the card's next real escalation would read it as
+# already posted and park silently) or TRANSPORT_TAG (it would spend that
+# budget), and neither may contain it. `tests/test_planning_escalation.py` pins
+# all three directions.
+STOOD_DOWN_TAG = "escalation-stood-down"
+STOOD_DOWN_MARK = "✋"
 
 #: What may appear in the parenthesis the CEO reads — a status and a word, never
 #: a response body. The raw error stays in the run log (`standards/comms.md`:
@@ -427,24 +463,151 @@ def requeue(linear_ops, identifier: str, reason: str | None) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def escalate(linear_ops, identifier: str, reason: str | None,
-             transport: bool = False) -> bool:
-    """Post the escalation and park the card. True when the note was written.
+@dataclass(frozen=True)
+class Outcome:
+    """What `escalate()` did, so a caller can say it in its own words.
 
-    The note lands BEFORE the move, always: moving the card without the
-    question is a silent park, and the CEO sees something appear in their queue
-    with nothing to answer. Posted at most once per card, keyed on the tag —
-    a retried run must converge rather than turn one decision into a thread —
-    and the move is re-asserted every time, because the crash this guards
-    against is the one between the two writes.
+    `parked` — the move to the decision queue was written (or re-asserted).
+    `posted` — a note was written THIS call: the escalation, or the stand-down.
+    `stood_down` — why the card was left where it is, in the words the note
+    used, or None when it parked. Exactly one of `parked` / `stood_down` holds.
+    """
+
+    parked: bool
+    posted: bool
+    stood_down: str | None
+
+
+def in_escalation_segment(name: str, contract: dict | None = None) -> bool:
+    """Is this lane in the segment the escalation is about?
+
+    The segment is the one `ORIGIN` sits in, read from the lane contract — no
+    lane is named here, so a lane added to or moved out of that segment moves
+    this answer with it. A retired board name resolves through the contract's
+    aliases first. A lane the contract does not carry is NOT in the segment:
+    unknown is never a pass, because the only thing this answer licenses is
+    moving a card, and a card nobody can place is left where it is.
+    """
+    name = lane_contract.aliases(contract).get(name, name)
+    try:
+        ours = lane_contract.lane(ORIGIN, contract=contract)["segment"]
+        return lane_contract.lane(name, contract=contract).get("segment") == ours
+    except lane_contract.UnknownLane:
+        return False
+
+
+def moved_on(issue: dict, comment_bodies, contract: dict | None = None) -> str | None:
+    """Why this card is past the escalation, or None when it is still ours.
+
+    Two facts, and both are said when both hold: the lane the board shows the
+    card in is outside the segment (`in_escalation_segment`), and/or the card
+    already carries a routing verdict — read by `routing_verdict`'s own reader,
+    never matched here, so a note that merely quotes one carries none. A
+    verdict means the classification this escalation stands in for has already
+    been answered, so the card is past this step whatever lane it is in.
+    """
+    lane = ((issue or {}).get("state") or {}).get("name") or ""
+    facts: list[str] = []
+    if not in_escalation_segment(lane, contract):
+        facts.append(f"it is in {lane or 'no lane the board reports'}")
+    verdicts = routing_verdict.verdicts_on(comment_bodies)
+    if verdicts:
+        facts.append(
+            "it already carries a routing verdict (" + ", ".join(verdicts) + ")"
+        )
+    return " and ".join(facts) or None
+
+
+def stood_down_comment(identifier: str, where: str, reason: str | None,
+                       withdrawn: bool = False, transport: bool = False) -> str:
+    """The record a card gets when the escalation reached it too late.
+
+    `where` is `moved_on()`'s sentence. `withdrawn` is the crash-between-the-
+    writes case with a hand move in the gap: the escalation note is already on
+    the card, so this one withdraws the ask instead of leaving a question
+    standing over a card someone is building. Same plain-English rule as the
+    escalation note — the reason is shown only if `refusal()` lets it through.
     """
     lane = destination()
+    if withdrawn:
+        lines = [
+            f"{STOOD_DOWN_MARK} {STOOD_DOWN_TAG}: {identifier} — the ask above "
+            f"is withdrawn. Since that note was posted the card has moved on "
+            f"from {ORIGIN}: {where}. It has been left there and was not moved "
+            f"back to **{lane}**.",
+            "",
+        ]
+    else:
+        lines = [
+            f"{STOOD_DOWN_MARK} {STOOD_DOWN_TAG}: {identifier} was not parked — "
+            f"by the time this run went to escalate it, the card had already "
+            f"moved on from {ORIGIN}: {where}. It has been left there.",
+            "",
+        ]
+    why = refusal(reason)
+    heading = "**What this run had found:**" if transport else \
+        "**What this run had to ask:**"
+    if why is None:
+        lines += [f"{heading} {(reason or '').strip()}", ""]
+    elif not (reason or "").strip():
+        lines += [f"{heading} {NO_REASON_STATED}", ""]
+    else:
+        lines += [f"{heading} {NOT_PLAIN_ENGLISH}", ""]
+    lines.append(
+        "Nothing is needed from you. A card past this step is being handled by "
+        "whoever moved it on, and parking it now would only have dragged it "
+        "back out of their hands."
+    )
+    return "\n".join(lines)
+
+
+def escalate(linear_ops, identifier: str, reason: str | None,
+             transport: bool = False) -> Outcome:
+    """Post the escalation and park the card — if the card is still ours.
+
+    The lane is read LIVE first (`fresh=True`, never the command's memo — the
+    memo is the state the card was in when the run began, and that is the read
+    DRE-3604 was wrong by), and nothing is written until it has been. A card
+    that has moved on — out of the segment, or already carrying a verdict —
+    gets NO state write and one stand-down note, keyed on its own tag so a
+    retry converges on "left alone"; if the escalation note had already
+    landed, the stand-down withdraws it. A failed read raises: nothing has
+    been written yet, the run goes red, and the retry converges — the same
+    shape as the pre-write re-read in `linear_ops.guarded_state_write`.
+
+    For a card still ours the rule is unchanged: the note lands BEFORE the
+    move, always — moving the card without the question is a silent park, and
+    the CEO sees something appear in their queue with nothing to answer.
+    Posted at most once per card, keyed on the tag — a retried run must
+    converge rather than turn one decision into a thread — and the move is
+    re-asserted every time, because the crash this guards against is the one
+    between the two writes.
+    """
+    lane = destination()
+    issue = linear_ops.get_issue(identifier, fresh=True)
+    bodies = linear_ops.comment_bodies(identifier)
+    elsewhere = moved_on(issue, bodies)
     already = 0
     try:
         already = linear_ops.count_comments(identifier, ESCALATION_TAG)
     except Exception as exc:  # noqa: BLE001 — a read failure must not strand the card
         print(f"{identifier}: could not read prior escalations ({exc})", file=sys.stderr)
     posted = False
+    if elsewhere is not None:
+        recorded = 0
+        try:
+            recorded = linear_ops.count_comments(identifier, STOOD_DOWN_TAG)
+        except Exception as exc:  # noqa: BLE001 — same rule: report, do not strand
+            print(f"{identifier}: could not read prior stand-downs ({exc})",
+                  file=sys.stderr)
+        if recorded:
+            print(f"{identifier}: already recorded, under {STOOD_DOWN_TAG}")
+        else:
+            linear_ops.cmd_comment(identifier, stood_down_comment(
+                identifier, elsewhere, reason,
+                withdrawn=bool(already), transport=transport))
+            posted = True
+        return Outcome(parked=False, posted=posted, stood_down=elsewhere)
     if already:
         print(f"{identifier}: already escalated, under {ESCALATION_TAG}")
     else:
@@ -452,7 +615,7 @@ def escalate(linear_ops, identifier: str, reason: str | None,
             identifier, escalation_comment(identifier, reason, transport))
         posted = True
     linear_ops.cmd_state(identifier, lane)
-    return posted
+    return Outcome(parked=True, posted=posted, stood_down=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -711,8 +874,14 @@ def _cmd_escalate(args) -> int:
         # The raw text goes to the run log and nowhere near the card.
         print(f"the stated reason is not fit for the card: {why}", file=sys.stderr)
         print(f"--- the planner wrote ---\n{reason}", file=sys.stderr)
-    escalate(linear_ops, args.identifier, reason, args.transport)
-    print(f"{args.identifier} escalated out of {ORIGIN} → {destination()}")
+    outcome = escalate(linear_ops, args.identifier, reason, args.transport)
+    if outcome.parked:
+        print(f"{args.identifier} escalated out of {ORIGIN} → {destination()}")
+    else:
+        print(
+            f"{args.identifier} left where it is — by the time this run went to "
+            f"escalate it, the card had moved on from {ORIGIN}: {outcome.stood_down}"
+        )
     return 0
 
 

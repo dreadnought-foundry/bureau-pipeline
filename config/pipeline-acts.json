@@ -1006,6 +1006,13 @@
       "why": "Act-shaped, and the registry has no row for it — the same debt as its sibling above, which this receipt was split out of (DRE-3074). Giving it a row is a REGISTRY change: a tag, a kind, a state, a next actor and a subscriber, and the state it would declare is the one the registry has no word for yet — the card did not move and nobody was asked. Named here so the debt is countable rather than invisible. It already carries its own idempotency key (planning-classify-transport), read back by planning_classify.py, which BUDGETS off it: a trailer beside that key would be a second grammar over a comment whose count is load-bearing."
     },
     {
+      "file": "scripts/planning_escalation.py",
+      "anchor": "stood_down_comment(",
+      "kind": "undeclared-act",
+      "means": "The escalation reached the card after it had already left Planning, or after it carried a routing verdict, so the card was left where it is and nothing was parked.",
+      "why": "Act-shaped, and the registry has no row for it — the third receipt on this file, split out of the escalation above by DRE-3654 when that one was found dragging a card in build back into the decision queue. Giving it a row is a REGISTRY change: a tag, a kind, a state, a next actor and a subscriber, and the state it would declare is the same one its transport sibling has no word for yet — the card did not move and nobody was asked. Named here so the debt is countable rather than invisible. It already carries its own idempotency key (escalation-stood-down), read back by planning_escalation.py itself so a retry converges on left-alone rather than a second note: a trailer beside that key would be a second grammar over a comment whose count is load-bearing."
+    },
+    {
       "file": "scripts/repair_card.py",
       "anchor": "attempt_note(run_url, attempt)",
       "kind": "not-an-act",

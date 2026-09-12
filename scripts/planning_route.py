@@ -577,11 +577,22 @@ def _cmd_exit(identifier: str) -> int:
         # move re-asserted, by the module that owns that route.
         import planning_escalation
 
-        planning_escalation.escalate(linear_ops, identifier, plan.escalation)
-        print(
-            f"{identifier} does not leave Planning on the {plan.route.shape} "
-            f"route — {plan.reason} It is escalated to {plan.destination}."
-        )
+        outcome = planning_escalation.escalate(
+            linear_ops, identifier, plan.escalation)
+        if outcome.parked:
+            print(
+                f"{identifier} does not leave Planning on the {plan.route.shape} "
+                f"route — {plan.reason} It is escalated to {plan.destination}."
+            )
+        else:
+            # DRE-3654: the card had already been moved on by the time this
+            # run reached it — the escalation read the lane live and stood
+            # down rather than drag it back.
+            print(
+                f"{identifier} was not escalated on the {plan.route.shape} "
+                f"route — {plan.reason} By the time this run reached it the "
+                f"card had moved on: {outcome.stood_down}. It was left there."
+            )
         return 0
 
     if plan.verdict:
