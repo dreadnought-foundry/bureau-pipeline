@@ -444,6 +444,33 @@ the build if any workflow re-hardcodes a cap, if a promotion path stops taking
 the input, if the declared default drifts from the script's, or if this repo's
 own stubs disagree with each other.
 
+## A dependabot pull request gets a card of its own (DRE-3665)
+
+Every carded pull request is joined to its card by the **head ref**
+(`agent/DRE-<n>-<slug>`, `repair/DRE-<n>-<sha12>`): `linear-sync` closes the
+card on merge by reading the id there, and the console shows a row's card the
+same way. Dependabot names its own branches, so its pull requests had no card
+anywhere — atlas #154 read "CARD —" on the console and its merge closed
+nothing. Now the `*/15` reconcile sweep (`card_dependabot_prs`, with the fleet
+Linear key, because a dependabot-triggered run gets GitHub's empty Dependabot
+secrets store — DRE-2047) files **one card per dependabot pull request** in
+**In Review**, labelled `repo:<slug>` + `automation` + a role, and joins the two
+by prepending one machine-written line to the pull request body:
+`**Card:** DRE-<n> — filed by the reconcile sweep …` (`scripts/dependabot_card.py`
+is the one reader). `linear-sync`'s Card → Done step reads that line only when
+the head ref gave no card and the head is a dependabot-authored `dependabot/*`
+branch — the DRE-2027 rule that a body is prose still holds for every branch a
+person can name. Merge → Done through that path (the sweep backstops it);
+closed unmerged → the sweep cancels the card with the reason on it; a re-opened
+pull request keeps the same card (idempotent on the pull request URL, looked up
+in Linear across every state, so a body dependabot regenerated is re-stamped,
+never re-filed). An `automation` card is out of the WIP base and out of the
+nudge loop — it has no agent run to count and no `agent/` head for the loop to
+find. Filing is paced at `DEPENDABOT_CARD_CAP` per sweep, oldest first, and a
+repo off the repo map (the harness sandbox) files nothing. The console's own
+readers derive a row's card from the head ref alone and learn this line under
+a sibling agent-bureau card.
+
 ## The sweep reads every row (DRE-2681)
 
 Linear serves at most 100 nodes per page and says another page exists only in

@@ -211,6 +211,7 @@ def _sweep(cards, dispatch_ok=True, prior=0):
         "retry_dead_fix_runs": mock.MagicMock(),
         "restart_answered_blockers": mock.MagicMock(),
         "review_dependabot_prs": mock.MagicMock(),
+        "card_dependabot_prs": mock.MagicMock(),
         "recover_crashed_reviews": mock.MagicMock(),
         "check_dependabot_capacity": mock.MagicMock(),
         "close_finished_epics": mock.MagicMock(),

@@ -374,6 +374,7 @@ def test_main_sweep_runs_the_capacity_check():
         "fix_approved_but_red": MagicMock(),
         "retry_dead_fix_runs": MagicMock(),
         "review_dependabot_prs": MagicMock(),
+        "card_dependabot_prs": MagicMock(),
         "check_dependabot_capacity": MagicMock(),
         "close_finished_epics": MagicMock(),
         "flag_stranded": MagicMock(return_value=set()),

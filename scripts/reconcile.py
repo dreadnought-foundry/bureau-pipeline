@@ -111,6 +111,7 @@ import os
 import re
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from typing import NamedTuple
@@ -123,6 +124,7 @@ import card_pr  # noqa: E402 — ONE source for "does this card have a PR?" (DRE
 # marker from the module that writes it.
 import critic_score  # noqa: E402
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
+import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and its card (DRE-3665)
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
 import deliver_rescue  # noqa: E402
@@ -487,6 +489,27 @@ def hand_built(card: dict) -> bool:
     """
     return any(
         lbl["name"].lower() == HAND_BUILT_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes", [])
+    )
+
+
+def automation_card(card: dict) -> bool:
+    """True if the card carries `dependabot_card.LABEL` (DRE-3665): the sweep
+    filed it for a dependabot pull request, and that pull request is
+    shepherded by `card_dependabot_prs`, not by the nudge loop.
+
+    Read in exactly one place — where `main()` builds `mine` — with two
+    effects: the card is out of the WIP base (a dependabot batch of 27 would
+    otherwise saturate MAX_WIP and stop promotion fleet-wide), and out of the
+    nudge loop, whose In Review no-PR branch would requeue it into Todo after
+    STALE_MINUTES and dispatch an agent onto a dependency bump (`pr_for`
+    searches `head:agent/DRE-n`, which a dependabot head never matches).
+    Distinct from `hand_built` on purpose: that label means a PERSON does the
+    work and no run is coming; this one means a bot's pull request that the
+    critic and the gate already handle.
+    """
+    return any(
+        lbl["name"].lower() == dependabot_card.LABEL
         for lbl in (card.get("labels") or {}).get("nodes", [])
     )
 
@@ -4768,6 +4791,193 @@ def review_dependabot_prs() -> None:
         )
 
 
+# A dependabot pull request gets a Linear card of its own (DRE-3665). The
+# pipeline reads a pull request's card out of its head ref, and dependabot
+# cannot name its branch after a card — so every dependency bump in the fleet
+# was a bare pull request row on the console ("CARD —", atlas #154), nothing
+# advanced on its journey and nothing went Done on its merge. THIS sweep is
+# the filer, because the pull request's own events cannot be: a run triggered
+# by dependabot[bot] gets GitHub's empty Dependabot secrets store (DRE-2047),
+# and the fleet Linear key lives here. The join is one machine-written first
+# line in the pull request body (`dependabot_card.marker_line`), read by
+# linear-sync's Card → Done step, by this sweep, and — its own sibling card —
+# by the console.
+#
+# Per-sweep filing pace (the DRE-2049 lesson): a dependabot batch opens
+# dozens of pull requests at once, and each card is several Linear requests
+# (team, lane, one per label, the create). At most this many per sweep,
+# oldest first; the tail waits for the next sweep and is reported.
+DEPENDABOT_CARD_CAP = 5
+
+
+def _dependabot_pr_listing() -> list[dict]:
+    """Dependabot's recent pull requests in EVERY state — open ones to file
+    for, closed ones to close the card of. `gh pr list --state all` does not
+    filter by author, so the search qualifier does; `sort:updated-desc` keeps
+    the 30 most recently touched, which is where every transition is.
+
+    The SILENT `gh()`, exactly as `review_dependabot_prs` reads the same
+    listing: this is a PR-level backstop where an empty answer means "do
+    nothing" — no card is filed, none is closed, and the next sweep asks
+    again. That is the one place the silent helper is sanctioned (see `gh`);
+    the loud read discipline (DRE-2034) is for readers whose fabricated
+    emptiness would be ACTED on, which a filer's never is.
+    """
+    out = gh(
+        "pr", "list", "--repo", REPO, "--state", "all", "--limit", "30",
+        "--search", "author:app/dependabot sort:updated-desc",
+        "--json", "number,url,title,body,headRefName,author,state",
+    )
+    try:
+        return json.loads(out or "[]")
+    except ValueError:
+        print("dependabot cards: listing unparseable — nothing filed this sweep",
+              file=sys.stderr)
+        return []
+
+
+def _stamp_dependabot_pr(pr: dict, identifier: str) -> bool:
+    """Prepend the join line to the pull request body (as the worker bot).
+    `--body-file`, never argv: a grouped bump's body is tens of KB of quoted
+    release notes. A failed edit is recorded, not raised — the card exists,
+    and the next sweep finds it by URL and stamps again."""
+    body = dependabot_card.stamped_body(identifier, pr.get("body") or "")
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".md", prefix="dependabot-card-", delete=False,
+        dir=os.environ.get("RUNNER_TEMP") or None, encoding="utf-8",
+    ) as fh:
+        fh.write(body)
+        path = fh.name
+    try:
+        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+            ["gh", "pr", "edit", str(pr["number"]), "--repo", REPO, "--body-file", path],
+            capture_output=True, text=True, check=False,
+        )
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if p.returncode != 0:
+        err = (
+            f"dependabot card: stamping PR #{pr['number']} with {identifier} failed "
+            f"rc={p.returncode}: {p.stderr.strip()[:400]}"
+        )
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return False
+    print(f"dependabot card: PR #{pr['number']} now names {identifier} on its first line")
+    return True
+
+
+def card_dependabot_prs() -> None:
+    """DRE-3665: one Linear card per dependabot pull request, joined by the
+    body's first line, and closed the way its pull request closed.
+
+    Per pull request, in arrival order:
+
+      * no marker, OPEN  → find the card by URL in Linear (any state — a wiped
+        marker on a regenerated body, or a re-opened pull request whose card
+        is Canceled, must be found rather than re-filed); file one if none;
+        stamp the body. Paced by DEPENDABOT_CARD_CAP.
+      * no marker, closed → nothing. A pull request that closed before any
+        sweep saw it never had a card to carry; filing one now would put a
+        finished bump on the board as work.
+      * marker, OPEN     → nothing. (A re-opened pull request whose card is
+        Canceled keeps that card: a finished card is never reopened by an
+        automated transition — DRE-1877 — and its merge moves it to Done.)
+      * marker, MERGED   → `card-done`, if the card is still live: the merge
+        event's linear-sync normally did this already; this is the backstop
+        for a marker the event could not read.
+      * marker, CLOSED   → Canceled, if the card is still live, with the
+        reason on the card. Dependabot supersedes its own pull requests; a
+        person may close one; either way the work is not being done.
+
+    "Still live" is read off the sweep's ONE board read (`active_cards`),
+    so a settled board costs zero Linear requests: a card absent from the
+    swept lanes is terminal or a person moved it, and either way it is not
+    this sweep's to touch. Only a dependabot-authored `dependabot/*` head is
+    ever considered (`is_dependabot_pr`); a pull request that already carries
+    a card in its head ref, or a human's branch merely named dependabot/…, is
+    left alone. Fleet repos only: the harness sandbox runs this sweep and is
+    not on the repo map, and a refused create every 15 minutes would be a red
+    run every 15 minutes. Every Linear failure is recorded on the sweep's
+    rails and the next pull request is still handled.
+    """
+    if REPO_SLUG not in validate_card.VALID_SLUGS:
+        print(
+            f"dependabot cards: {REPO_SLUG!r} is not a repo on the repo map — "
+            "no card is filed here (the harness sandbox runs this sweep too)"
+        )
+        return
+    prs = sorted(
+        (p for p in _dependabot_pr_listing() if is_dependabot_pr(p)),
+        key=lambda p: p.get("number") or 0,
+    )
+    if not prs:
+        return
+    live = {c["identifier"] for c in active_cards()}
+    filed = 0
+    deferred = 0
+    for pr in prs:
+        number, url = pr.get("number"), pr.get("url") or ""
+        state = (pr.get("state") or "").upper()
+        card = dependabot_card.marker_card(pr.get("body"))
+        if card is None:
+            if state != "OPEN":
+                continue  # closed before any card existed: nothing to carry
+            if filed >= DEPENDABOT_CARD_CAP:
+                deferred += 1
+                continue
+            try:
+                card = linear_ops.find_by_pr_url(url)
+                if card:
+                    print(f"dependabot card: PR #{number} already has {card} in Linear "
+                          "(its marker was wiped — dependabot regenerates a grouped "
+                          "body); re-stamping, not re-filing")
+                else:
+                    issue = linear_ops.create_card(
+                        dependabot_card.card_title(REPO_SLUG, pr.get("title")),
+                        dependabot_card.card_body(pr, REPO_SLUG),
+                        repo_slug=REPO_SLUG,
+                        labels=dependabot_card.card_labels(REPO_SLUG),
+                        lane=dependabot_card.LANE,
+                    )
+                    card = issue["identifier"]
+                    filed += 1
+            except linear_ops.LinearRateLimited:
+                raise  # the run's own exit code (DRE-2923), never swallowed here
+            except linear_ops.LinearError as e:
+                err = f"dependabot card: PR #{number} — Linear refused: {e}"
+                _write_failures.append(err)
+                print(f"ERROR: {err}", file=sys.stderr)
+                continue
+            _stamp_dependabot_pr(pr, card)
+            continue
+        if state == "OPEN" or card not in live:
+            continue
+        try:
+            if state == "MERGED":
+                print(f"dependabot card: PR #{number} merged and {card} is still open — closing it")
+                linear_ops.cmd_card_done(card, url)
+            elif state == "CLOSED":
+                print(f"dependabot card: PR #{number} closed unmerged — canceling {card}")
+                linear_ops.cmd_state(card, "Canceled")
+                linear_ops.cmd_comment(card, dependabot_card.cancel_note(url))
+        except linear_ops.LinearRateLimited:
+            raise
+        except linear_ops.LinearError as e:
+            err = f"dependabot card: PR #{number} — closing {card} failed: {e}"
+            _write_failures.append(err)
+            print(f"ERROR: {err}", file=sys.stderr)
+    if deferred:
+        print(
+            f"dependabot cards: {deferred} pull request(s) deferred past the "
+            f"per-sweep filing cap ({DEPENDABOT_CARD_CAP}) — the next sweep files "
+            "them oldest-first"
+        )
+
+
 # Crashed-review recovery for agent PRs (DRE-2282). A PR whose critic
 # CRASHED — as opposed to returning a verdict — has green CI, a FAILURE
 # review check, and no verdict: nothing anywhere goes red for a human, and
@@ -6377,6 +6587,13 @@ def main(
             # its own once the wall is down — the stage it died in, re-entered.
             recover_limit_deaths,
             restart_answered_blockers,
+            # DRE-3665, beside the review dispatch because they read the same
+            # pull requests: this one gets a dependabot PR its card — and
+            # closes the card the way the PR closed — and the next one gets
+            # it its critic. Card FIRST, so the join line is on the body
+            # before the dispatched review snapshots it (DRE-3005's footer
+            # would otherwise flag the stamp as an edit after the read).
+            card_dependabot_prs,
             review_dependabot_prs,
             recover_crashed_reviews,
             # DRE-3435, immediately after it because the two read the SAME
@@ -6411,7 +6628,17 @@ def main(
             # exits red, so medic sees it and the next sweep retries.
             _read_failures.append(f"intake: {e}")
             print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
-    mine = [c for c in active_cards() if card_repo(c) == REPO_SLUG]
+    # Automation cards (DRE-3665) are out of `mine` — and `mine` is BOTH the
+    # WIP base promotion is budgeted against and the list the nudge loop
+    # walks. A dependabot card has no agent run to count and no `agent/`
+    # head for `pr_for` to find: counted, a dependabot batch saturates
+    # MAX_WIP; walked, the In Review no-PR branch below requeues it into Todo
+    # and dispatches an agent onto a dependency bump. `card_dependabot_prs`
+    # shepherds those cards off the pull request itself.
+    mine = [
+        c for c in active_cards()
+        if card_repo(c) == REPO_SLUG and not automation_card(c)
+    ]
     epics = repo_epics(mine)
     if not promote_only:
         close_finished_epics(epics)

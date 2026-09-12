@@ -330,6 +330,7 @@ class SweepWiringTest(unittest.TestCase):
              mock.patch.object(reconcile, "fix_approved_but_red"), \
              mock.patch.object(reconcile, "retry_dead_fix_runs"), \
              mock.patch.object(reconcile, "review_dependabot_prs"), \
+             mock.patch.object(reconcile, "card_dependabot_prs"), \
              mock.patch.object(reconcile, "recover_crashed_reviews"), \
              mock.patch.object(reconcile, "check_dependabot_capacity"), \
              mock.patch.object(reconcile, "restart_answered_blockers") as r, \

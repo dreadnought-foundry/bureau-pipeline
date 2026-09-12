@@ -443,6 +443,7 @@ def _sweep_mocks():
             "flag_unlanded_work", "fix_approved_but_red", "retry_dead_fix_runs",
             "redispatch_standing_verdicts", "recover_limit_deaths",
             "restart_answered_blockers", "review_dependabot_prs",
+            "card_dependabot_prs",
             "recover_crashed_reviews", "check_dependabot_capacity",
             "report_break_glass", "report_fix_concurrency",
             "report_evicted_fix_runs", "report_epic_growth",

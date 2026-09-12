@@ -422,6 +422,7 @@ def _run_merged_sweep(card, note_already_posted=False):
         "fix_approved_but_red": MagicMock(),
         "retry_dead_fix_runs": MagicMock(),
         "review_dependabot_prs": MagicMock(),
+        "card_dependabot_prs": MagicMock(),
         "recover_crashed_reviews": MagicMock(),
         "flag_no_checks_prs": MagicMock(),
         "flag_unowned_prs": MagicMock(),
