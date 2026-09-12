@@ -1174,7 +1174,11 @@ def test_the_stub_grants_the_three_permissions_the_train_needs():
     perms = _reference_stub()["permissions"]
     assert perms["id-token"] == "write"
     assert perms["contents"] == "write"
-    assert perms["actions"] == "read"
+    # `write`, not `read`, since DRE-3559: a no-op on the spacing dispatches
+    # this stub again for the minute it names, and `gh workflow run` under
+    # github.token needs actions: write. It still covers the workflow-runs
+    # reads green-at-SHA makes.
+    assert perms["actions"] == "write"
 
 
 # --------------------------------------------------------------------------
