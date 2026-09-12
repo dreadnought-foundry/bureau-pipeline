@@ -2042,6 +2042,37 @@ def find_open_prefix(prefix: str) -> dict | None:
     return {**nodes[0], "duplicates": nodes[1:]}
 
 
+def find_by_pr_url(pr_url: str) -> str | None:
+    """The OLDEST DRE card whose description carries `pr_url`, in ANY state, or
+    None — the idempotency key of the dependabot filer (DRE-3665).
+
+    Every state on purpose, unlike `find_open`: the question is "was a card
+    ever filed for this pull request", and a Canceled card whose pull request
+    was re-opened is exactly the one that must be found rather than re-filed.
+
+    `contains` is a substring test, so `.../pull/12` is inside `.../pull/123`;
+    the card body writes the URL delimited (`<url>`, see
+    `dependabot_card.card_body`) and the match is confirmed here on the
+    delimited form. Oldest first, sorted here for the same reason
+    `find_open_prefix` sorts: the order that matters is applied where it can
+    be read.
+    """
+    data = gql(
+        """query($u: String!) {
+             issues(first: 20, filter: {
+               team: {key: {eq: "DRE"}},
+               description: {contains: $u}
+             }) { nodes { identifier createdAt description } } }""",
+        {"u": pr_url},
+    )
+    exact = [
+        n for n in (data.get("issues") or {}).get("nodes") or []
+        if f"<{pr_url}>" in (n.get("description") or "")
+    ]
+    exact.sort(key=lambda n: n.get("createdAt") or "")
+    return exact[0]["identifier"] if exact else None
+
+
 def cmd_children(identifier: str) -> None:
     data = gql(
         """query($id: String!) { issue(id: $id) { children { nodes { id } } } }""",

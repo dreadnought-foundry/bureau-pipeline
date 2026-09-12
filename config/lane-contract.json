@@ -450,7 +450,7 @@
           "pending": "needs the transition history Phase 5 records"
         },
         "writers": {
-          "text": "The build run puts cards here; the critic, the gate, the fix run and the sweep move them on.",
+          "text": "The build run puts cards here; the critic, the gate, the fix run and the sweep move them on. The sweep also FILES a card straight into this lane for every dependabot pull request (DRE-3665): the pull request already exists and is already being checked, so there is nothing to plan or dispatch.",
           "who": ["agent-task.yml", "qa-review.yml", "merge-gate.yml", "agent-fix.yml", "reconcile.py"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
@@ -533,7 +533,7 @@
       "off_flow_reason": "terminal and off the path; the card makes no claim to justify",
       "clauses": {
         "entrance": {
-          "text": "A human decided the work will not be done.",
+          "text": "A human decided the work will not be done — or, for a dependabot card, the pull request it was filed for closed unmerged (DRE-3665).",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs the transition history Phase 5 records"
@@ -545,8 +545,8 @@
           "pending": "needs the transition history Phase 5 records"
         },
         "writers": {
-          "text": "A human, only. The pipeline never cancels a card.",
-          "who": ["operator"],
+          "text": "A human — and the sweep, for exactly one class: a card it filed for a dependabot pull request that then closed without merging (DRE-3665). Dependabot superseding its own pull request, or a person closing it, is the decision; the sweep records it.",
+          "who": ["operator", "reconcile.py"],
           "enforced_from": "2",
           "assertion": "lane.writers_exist"
         },

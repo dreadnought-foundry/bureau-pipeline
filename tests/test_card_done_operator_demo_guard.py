@@ -210,6 +210,7 @@ def _run_merged_sweep(card, marker_already_posted=False):
         "fix_approved_but_red": MagicMock(),
         "retry_dead_fix_runs": MagicMock(),
         "review_dependabot_prs": MagicMock(),
+        "card_dependabot_prs": MagicMock(),
         "close_finished_epics": MagicMock(),
         "flag_stranded": MagicMock(return_value=set()),
         "promote_ready": MagicMock(return_value=0),

@@ -1789,6 +1789,13 @@
       "kind": "not-an-act",
       "means": "Which environment failure this runner hit on this commit, named in plain English with the one check that confirms it, after the FIRST crash.",
       "why": "A REPORT about the commit, not something the pipeline did on its own. Nothing is held, nothing is re-dispatched and nothing moves — the sweep's ordinary retry still runs — so the three questions a trailer answers (what obligation does this create, who has the work now, what does it discharge) all read 'not applicable'. The act on this path is the HOLD that follows a second identical crash, and that one has a row (`reviewer-environment-hold`) and composes through the writer. This note also opens with `CRITIC_UNAVAILABLE_MARKER`, which epic DRE-3420's fleet-wide detector counts as one could-not-run outcome from this repository; a trailer would not break that, but declaring the note an act would make the pipeline claim it had stopped when it had not."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "dependabot_card.cancel_note(url)",
+      "kind": "not-an-act",
+      "means": "The dependabot card's record that its pull request closed without merging and the card was canceled with it (DRE-3665).",
+      "why": "It reports an outcome of the work — dependabot superseded its own pull request, or a person closed it — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself; the same class as the merge→Done seam's `✅ Merged` line, from the other end. Its only reader is a person looking at the card, and the state change beside it is the machine-readable half."
     }
   ]
 }

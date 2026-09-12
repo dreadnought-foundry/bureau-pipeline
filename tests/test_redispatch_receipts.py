@@ -162,6 +162,7 @@ def _sweep_mocks(extra=None):
         # DRE-2047 added the dependabot review backstop; same treatment
         # (its own coverage lives in test_dependabot_review_dispatch.py).
         "review_dependabot_prs": MagicMock(),
+        "card_dependabot_prs": MagicMock(),
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
         "age_minutes": MagicMock(return_value=999),  # always stale

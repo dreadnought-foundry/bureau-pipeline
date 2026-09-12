@@ -114,7 +114,10 @@ class TestTheFileExists:
             "plan.yml", "mid_epic.py", "reconcile.py", "dead_run.py",
             "linear_ops.py", "agent-task.yml",
         )
-        assert lane_contract.lane_writers("Canceled") == ("operator",)
+        # `reconcile.py` joined Canceled on DRE-3665: it cancels the card it
+        # filed for a dependabot pull request when that pull request closes
+        # unmerged — the one class the pipeline cancels on its own.
+        assert lane_contract.lane_writers("Canceled") == ("operator", "reconcile.py")
 
     def test_every_lanes_permitted_writers_are_defined_in_the_glossary(self):
         known = set(lane_contract.writers())

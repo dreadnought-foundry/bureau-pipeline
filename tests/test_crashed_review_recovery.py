@@ -435,7 +435,7 @@ def _main_mocks():
         mock.patch.object(reconcile, name) for name in (
             "unstick_conflicts", "retrigger_dead_heads", "flag_no_checks_prs",
             "fix_approved_but_red", "retry_dead_fix_runs",
-            "review_dependabot_prs", "check_dependabot_capacity",
+            "review_dependabot_prs", "card_dependabot_prs", "check_dependabot_capacity",
             "promote_ready",
         )
     ] + [

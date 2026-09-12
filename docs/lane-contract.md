@@ -117,7 +117,7 @@ _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promis
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 | **exit** | GitHub merges the pull request and linear-sync writes Done — or the pull request is gone and the card is requeued under the dead-run cap.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **writers** | The build run puts cards here; the critic, the gate, the fix run and the sweep move them on.  
+| **writers** | The build run puts cards here; the critic, the gate, the fix run and the sweep move them on. The sweep also FILES a card straight into this lane for every dependabot pull request (DRE-3665): the pull request already exists and is already being checked, so there is nothing to plan or dispatch.  
 Permitted writers: `agent-task.yml`, `qa-review.yml`, `merge-gate.yml`, `agent-fix.yml`, `reconcile.py` | Phase 2 — live |
 | **evidence** | An open pull request; and, once the critic has run, a verdict bound to the head sha.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
@@ -152,12 +152,12 @@ _Waiting on: DRE-2723._ | Phase 5 — promised |
 
 | Clause | What it requires | Enforcement |
 | --- | --- | --- |
-| **entrance** | A human decided the work will not be done.  
+| **entrance** | A human decided the work will not be done — or, for a dependabot card, the pull request it was filed for closed unmerged (DRE-3665).  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 | **exit** | None. Terminal.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
-| **writers** | A human, only. The pipeline never cancels a card.  
-Permitted writers: `operator` | Phase 2 — live |
+| **writers** | A human — and the sweep, for exactly one class: a card it filed for a dependabot pull request that then closed without merging (DRE-3665). Dependabot superseding its own pull request, or a person closing it, is the decision; the sweep records it.  
+Permitted writers: `operator`, `reconcile.py` | Phase 2 — live |
 | **evidence** | A human's decision, on the card.  
 _Waiting on: needs the transition history Phase 5 records._ | Phase 5 — promised |
 

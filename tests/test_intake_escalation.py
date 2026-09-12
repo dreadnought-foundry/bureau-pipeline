@@ -108,6 +108,7 @@ def _main_mocks():
             "flag_no_checks_prs", "flag_unowned_prs", "flag_unlanded_work",
             "fix_approved_but_red", "retry_dead_fix_runs",
             "restart_answered_blockers", "review_dependabot_prs",
+            "card_dependabot_prs",
             "recover_crashed_reviews", "check_dependabot_capacity",
             "promote_ready", "close_finished_epics", "report_break_glass",
             "report_fix_concurrency", "report_evicted_fix_runs",

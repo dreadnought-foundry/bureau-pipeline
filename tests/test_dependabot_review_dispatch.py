@@ -205,6 +205,8 @@ def test_in_qa_nudge_dispatches_the_selfhost_stub():
     }
     if hasattr(reconcile, "review_dependabot_prs"):
         mocks["review_dependabot_prs"] = MagicMock()
+    if hasattr(reconcile, "card_dependabot_prs"):
+        mocks["card_dependabot_prs"] = MagicMock()
     with patch.multiple(reconcile, **mocks), patch.object(reconcile.linear_ops, "cmd_comment"):
         reconcile.main()
     targets = [c.args[0] for c in mocks["_nudge"].call_args_list]
@@ -398,6 +400,7 @@ def test_main_runs_the_dependabot_backstop():
         "fix_approved_but_red": MagicMock(),
         "retry_dead_fix_runs": MagicMock(),
         "review_dependabot_prs": MagicMock(),
+        "card_dependabot_prs": MagicMock(),
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
         "flag_stranded": MagicMock(return_value=set()),

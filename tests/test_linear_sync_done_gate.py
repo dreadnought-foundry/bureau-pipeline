@@ -18,6 +18,17 @@ Live-extraction style (pattern: tests/test_card_ref_case_insensitive.py,
 old-shell-parity like the merge-gate decision tests): each case EXECUTES the
 actual `CARD=$(...)` line lifted from linear-sync.yml, so a diff that weakens
 the shipped shell turns these red — no re-implementation, no copied fixture.
+
+The dependabot arm (DRE-3665) is the one deliberate narrowing of the rule
+above, and it lives in a SECOND, fenced `CARD=$(...)` line that runs only when
+this one answered nothing: a `dependabot/*` head can never carry a card id, so
+the reconcile sweep files the card and writes its id on the first line of the
+pull request body, and `dependabot_card.py card-from-pr` reads it back — for a
+dependabot-authored dependabot head only. The head-ref line pinned here is
+untouched and still consumes nothing but `$HEAD_REF`; `card_extraction_line`
+selects it by that variable. The arm has its own executed pins in
+tests/test_dependabot_card.py, including that a human pull request's body is
+still prose.
 """
 
 import re
@@ -30,14 +41,17 @@ LINEAR_SYNC = ROOT / ".github" / "workflows" / "linear-sync.yml"
 
 
 def card_extraction_line() -> str:
-    """The literal `CARD=$(...)` line from linear-sync.yml."""
+    """The literal head-ref `CARD=$(...)` line from linear-sync.yml — the one
+    that reads `$HEAD_REF`. The fenced dependabot arm (DRE-3665) is the only
+    other `CARD=$(...)` in the file and reads no head ref itself; it is pinned
+    separately (tests/test_dependabot_card.py)."""
     lines = [
         ln.strip()
         for ln in LINEAR_SYNC.read_text().splitlines()
-        if re.match(r"\s*CARD=\$\(", ln)
+        if re.match(r"\s*CARD=\$\(", ln) and "$HEAD_REF" in ln
     ]
     assert len(lines) == 1, (
-        "expected exactly one CARD=$(...) extraction in linear-sync.yml, "
+        "expected exactly one head-ref CARD=$(...) extraction in linear-sync.yml, "
         f"found {len(lines)}"
     )
     return lines[0]

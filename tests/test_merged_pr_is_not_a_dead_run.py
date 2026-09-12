@@ -355,6 +355,7 @@ def test_sweep_never_requeues_a_card_whose_pr_merged(state):
         "fix_approved_but_red": MagicMock(),
         "flag_no_checks_prs": MagicMock(),
         "review_dependabot_prs": MagicMock(),
+        "card_dependabot_prs": MagicMock(),
         "recover_crashed_reviews": MagicMock(),
         "retry_dead_fix_runs": MagicMock(),
         "close_finished_epics": MagicMock(),

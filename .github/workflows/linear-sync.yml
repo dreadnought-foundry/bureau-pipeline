@@ -33,6 +33,21 @@
 # merge on the epic and leaves the state alone. Name the branch for the card
 # the work delivers.
 #
+# Dependabot arm (DRE-3665): the one branch that can never carry a card id is
+# `dependabot/*` — dependabot names its own branches — so every dependency
+# bump in the fleet merged with no card to close (atlas #154 read "CARD —" on
+# the console). The reconcile sweep now files one card per dependabot pull
+# request and prepends ONE machine-written line to the pull request body
+# (`scripts/dependabot_card.py`, `**Card:** DRE-<n> — filed by the reconcile
+# sweep …`). The fenced arm below reads that line — and ONLY when the head ref
+# gave no card, the head is `dependabot/*` and the author is dependabot[bot],
+# all checked inside `dependabot_card.py card-from-pr`. That is not the
+# DRE-2027 hole re-opened: a person cannot author a dependabot pull request,
+# and for every branch a person CAN name the body stays prose. The head-ref
+# line is untouched and still reads only `$HEAD_REF`
+# (tests/test_linear_sync_done_gate.py); the arm is pinned by
+# tests/test_dependabot_card.py.
+#
 # Reusable workflow: permissions live in the calling stub.
 name: Linear Sync (reusable)
 
@@ -102,6 +117,10 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          # The dependabot arm's inputs (DRE-3665), through env and never
+          # interpolated into the shell: the body is untrusted text.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           # The caller's cap, never a literal (DRE-2529). Through env, not
           # interpolated into the shell line.
           MAX_WIP: ${{ inputs.max_wip }}
@@ -118,6 +137,17 @@ jobs:
           # repair/<sha> fallback (Linear unreachable) matches nothing here and
           # still closes nothing, which is correct: there is no card to close.
           CARD=$(printf '%s' "$HEAD_REF" | grep -oiE '^(agent|repair)/DRE-[0-9]+-' | grep -oiE 'DRE-[0-9]+' | tr '[:lower:]' '[:upper:]' || true)
+          # >>> DRE-3665 dependabot join — executed verbatim by tests/test_dependabot_card.py
+          # A dependabot head carries no card id and cannot be renamed; the
+          # reconcile sweep filed its card and wrote the id on the first line
+          # of the pull request body. Read ONLY when the head ref gave nothing,
+          # and the script answers only for a `dependabot/*` head authored by
+          # dependabot[bot] (see the header). Reads HEAD_REF, PR_AUTHOR, PR_BODY
+          # from the step env.
+          if [ -z "$CARD" ]; then
+            CARD=$(python3 .bureau-pipeline/scripts/dependabot_card.py card-from-pr || true)
+          fi
+          # <<< DRE-3665 dependabot join
           if [ -z "$CARD" ]; then
             echo "head branch '$HEAD_REF' is not a card's own branch (agent/DRE-<n>-<slug> or repair/DRE-<n>-<sha12>) — no automatic Done"
             echo "card references in PR titles/bodies never transition cards; hand-named branches are closed by the operator"
