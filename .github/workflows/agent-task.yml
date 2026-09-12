@@ -389,7 +389,7 @@ jobs:
       - name: Implement card
         id: claude
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
-        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
+        uses: anthropics/claude-code-action@19dda84776b3518d98b8798e591daee763049ed3 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
         env:
           # For the brief's progress heartbeats (⏳ n/5 phase comments that
           # drive the dashboard's per-card progress bar).
