@@ -2335,16 +2335,16 @@ def _plan_run_note(identifier: str) -> str:
     """Start the planner run for an epic whose turn has come, and say honestly
     whether it started (DRE-2846).
 
-    The lane move is NOT the trigger. The lane a turn sends an epic to is the
-    one that owes a plan artifact, and nothing dispatches off that lane — it is
-    not in SWEEP_STATES and has no nudge (DRE-2736). Triage happened to
-    dispatch, which is the only reason the path above uses it, and a healthy
-    epic does not belong in the broken-card lane (DRE-2776). So the turn asks
-    for the run explicitly rather than relying on a lane's side effect.
+    The lane a turn sends an epic to is the one that owes a plan artifact. It
+    is not in SWEEP_STATES and has no nudge (DRE-2736), but the RELAY does
+    dispatch `agent-plan` on every entry into it (agent-bureau's
+    lambda_function.py — DRE-1913, label or no label since DRE-3030), so this
+    explicit ask is the second of two dispatches for one lane entry: the same
+    pair DRE-3659 removed from `wave_commitment.advance`, where it cost every
+    wave's first epic a hosted runner that started only to skip. DRE-3659
+    names this path as the twin and leaves it to its own card.
 
-    The ask itself is `plan_run.note` — shared with `wave_commitment.advance`,
-    which is where a wave's FIRST epic reaches its turn. Two copies of it is
-    how one path stops asking without anything saying so.
+    The ask itself is `plan_run.note`, and this is now its one caller.
 
     What the sweep adds is its own half: the failure goes in the write ledger
     so the run turns red, and the next sweep comes round again.
