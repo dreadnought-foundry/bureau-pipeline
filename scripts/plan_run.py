@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
-"""Ask for an epic's planner run, explicitly — the ONE place that asks
-(DRE-2846).
+"""The planner's dispatch — ONE payload and ONE `repository_dispatch` for the
+callers that genuinely make one.
 
-Two paths send an epic to the lane that owes a plan artifact:
+Two of them remain:
 
-  * `reconcile.advance_unblocked_epics` — the predecessor epic reached Done, so
-    the next one's turn has come; it asks through `note` below.
-  * `wave_commitment.advance` — an approved wave's FIRST epic, which has no
-    predecessor to wait for and therefore never passes through the sweep path
-    at all. Since DRE-3659 it asks for NOTHING: the relay dispatches
-    `agent-plan` on every entry into that lane (DRE-1913, label or no label
-    since DRE-3030), and its explicit ask here was the second dispatch for one
-    entry — on the DRE-3530 approval, three epics, six Agent Plan runs, three
-    hosted runners started to skip as duplicates.
+  * `reconcile.redispatch` — the sweep re-firing a Todo card's dispatch, with
+    the failure kept in its write ledger so the run goes red;
+  * `review_rerun.py dispatch` — the retry of a dead post-approval review,
+    which asks for the ACTIVATE route with `trigger_state` / `reason`
+    (DRE-3286).
 
-The lane is not in `reconcile.SWEEP_STATES` and has no nudge (DRE-2736); its
-other automated attention is `flag_stalled_planning`, which after
-`PLANNING_MINUTES` asks a HUMAN to look. This module was written on the belief
-that nothing dispatched off the lane at all, which the six runs disproved. The
-sweep's ask is the same second dispatch and is DRE-3659's named twin, left to
-its own card; the ask is still written HERE and only here, so that when it
-goes it goes from one place.
+This module began as the ONE place that asked for an epic's planner run when
+its turn came in a wave (DRE-2846, `note`), on the belief that nothing
+dispatched off the lane that owes a plan artifact — it is not in
+`reconcile.SWEEP_STATES` and has no nudge (DRE-2736). The relay does dispatch
+`agent-plan` on every entry into that lane (agent-bureau's
+lambda_function.py — DRE-1913, label or no label since DRE-3030), so the ask
+was the second of two dispatches for one lane move: on the DRE-3530 approval
+three epics drew six Agent Plan runs, and the duplicates each started a hosted
+runner to learn they had nothing to do. `wave_commitment.advance` stopped
+asking in DRE-3659 and `reconcile.advance_unblocked_epics` in DRE-3664, and
+the ask went with its last caller — from the one place it was written. The
+lane's stall is still watched by `flag_stalled_planning`, which after
+`PLANNING_MINUTES` asks a HUMAN to look.
 
 The repository_dispatch itself runs under the default App token on purpose: the
 dispatches API needs contents:write, which the App token holds — the stub's
@@ -33,25 +35,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
-import sys
 import tempfile
 
-# The epic the ask is about, read fresh: the dispatch payload is built from it,
-# and `children` is the one thing that makes the ask illegal (see `note`).
+# The epic a dispatch is about, read fresh: the payload is built from it.
+# `review_rerun.py dispatch` reads the card with this query before it fires.
 CARD_QUERY = """query($id: String!) { issue(id: $id) {
      id identifier title description
      labels { nodes { name } }
      children(first: 1) { nodes { identifier } } } }"""
-
-STARTED = "\n\nThe planner run has been started."
-
-NOT_STARTED = ("\n\n🚨 The planner run could NOT be started — the dispatch did "
-               "not go through.")
-
-ALREADY_PLANNED = ("\n\nThis epic already carries a plan, so no planner run "
-                   "was started: re-planning it from here would activate it "
-                   "instead, and its green light is the CEO's. Read the plan "
-                   "and move it on when you are ready.")
 
 
 def payload(card: dict, *, trigger_state: str | None = None,
@@ -119,44 +110,3 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
             f"failed rc={p.returncode}: {p.stderr.strip()[:400]}"
         )
     return True, ""
-
-
-def dispatch(card: dict) -> bool:
-    """`fire` at the repo this run is for, printing a failure rather than
-    swallowing it. The default ask for a caller with no failure ledger of its
-    own — the sweep passes its own, so its failures still turn the run red."""
-    ok, err = fire(card, os.environ.get("REPO", ""))
-    if not ok:
-        print(f"ERROR: {err}", file=sys.stderr)
-    return ok
-
-
-def note(linear_ops, identifier: str, ask=dispatch, *,
-         if_not_started: str = "", record_failure=None) -> str:
-    """Ask for `identifier`'s planner run, and return the sentence to append to
-    its arrival note — saying honestly whether the run started.
-
-    Childless epics only. `plan.yml` routes an epic WITH children to ACTIVATE,
-    which green-lights it and promotes its children — the exact blank cheque
-    DRE-2846 removes. An epic committed in sequence is created childless, so
-    that is the whole of the normal path; one that somehow has children already
-    is moved and left for a human, and says so.
-
-    Never raises: a failed dispatch is a receipt to be honest about, not a
-    reason to stop advancing the rest of the chain. `record_failure` is the
-    caller's ledger for the error (the sweep's, which turns the run red);
-    `if_not_started` is the caller's own sentence about what happens next,
-    because what happens next is not the same on both paths.
-    """
-    try:
-        card = linear_ops.gql(CARD_QUERY, {"id": identifier})["issue"]
-        if (card.get("children") or {}).get("nodes"):
-            return ALREADY_PLANNED
-        started = ask(card)
-    except Exception as e:  # noqa: BLE001 — an unreadable card is not a crash
-        if record_failure is not None:
-            record_failure(f"{identifier} plan dispatch: {e}")
-        started = False
-    if started:
-        return STARTED
-    return NOT_STARTED + (f" {if_not_started}" if if_not_started else "")

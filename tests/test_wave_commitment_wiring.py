@@ -62,6 +62,47 @@ def body_of(step: dict) -> str:
     return str(step.get("run") or (step.get("with") or {}).get("prompt") or "")
 
 
+def sweep_turn(*dependents: str, children: tuple = ()):
+    """Run the sweep's turn for real: `DRE-2900` reached Done and it blocks
+    `dependents`, each a committed-in-sequence epic still in Backlog with every
+    blocker met. Returns the `cmd_advance`, `cmd_comment` and `gql` mocks.
+
+    `gql` answers by the QUERY it is asked, not from a list — the Done epic's
+    forward relations, or the card itself (with `children`) — so the fake
+    serves the same number of reads whether or not the turn still reads the
+    card to decide a dispatch (DRE-3664 removed that read with the dispatch).
+    """
+    from unittest.mock import patch
+
+    record = wc.commitment_comment(
+        "DRE-2719",
+        {"key": "route", "title": "The wave route", "depends_on": ["standard"],
+         "status": wc.COMMITTED},
+        position=2, total=3)
+
+    def answer(query, variables=None):
+        if "relations" in query:
+            return {"issue": {"relations": {"nodes": [
+                {"type": "blocks", "issue": {"identifier": dep}}
+                for dep in dependents]}}}
+        ident = (variables or {}).get("id", "DRE-2901")
+        return {"issue": {"id": "u", "identifier": ident, "title": "route",
+                          "description": "x",
+                          "labels": {"nodes": [{"name": "agent:planner"}]},
+                          "children": {"nodes": [{"identifier": kid}
+                                                 for kid in children]}}}
+
+    with patch.object(reconcile.linear_ops, "gql", side_effect=answer) as gql, \
+        patch.object(reconcile.linear_ops, "comment_bodies", return_value=[record]), \
+        patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
+        patch.object(reconcile, "card_state", return_value="Backlog"), \
+        patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
+        patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+        patch.object(reconcile.linear_ops, "cmd_comment") as comment:
+        reconcile.advance_unblocked_epics("DRE-2900")
+    return advance, comment, gql
+
+
 class TheRunRecordsTheCommitmentTest(unittest.TestCase):
     def test_the_run_records_the_commitment_from_the_plan_it_checked(self):
         step = step_named("record the commitment")
@@ -123,94 +164,54 @@ class TheSweepReadsTheRecordTest(unittest.TestCase):
         """The sweep, run for real. Its predecessor is Done and its turn has
         come — and it goes to the lane that owes a plan artifact, never onward
         into the build path and never to Triage, which is the broken-card lane
-        and not a turn."""
+        and not a turn. The move is the whole of what the sweep does about the
+        planner run: it fires nothing itself (DRE-3664)."""
         from unittest.mock import patch
 
-        record = wc.commitment_comment(
-            "DRE-2719",
-            {"key": "route", "title": "The wave route", "depends_on": ["standard"],
-             "status": wc.COMMITTED},
-            position=2, total=3)
-        answers = [
-            {"issue": {"relations": {"nodes": [
-                {"type": "blocks", "issue": {"identifier": "DRE-2901"}}]}}},
-            {"issue": {"id": "u", "identifier": "DRE-2901", "title": "route",
-                       "description": "x",
-                       "labels": {"nodes": [{"name": "agent:planner"}]},
-                       "children": {"nodes": []}}},
-        ]
-        with patch.object(reconcile.linear_ops, "gql", side_effect=answers), \
-            patch.object(reconcile.linear_ops, "comment_bodies", return_value=[record]), \
-            patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
-            patch.object(reconcile, "card_state", return_value="Backlog"), \
-            patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
-            patch.object(reconcile, "redispatch", return_value=True) as dispatch, \
-            patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
-            patch.object(reconcile.linear_ops, "cmd_comment") as comment:
-            reconcile.advance_unblocked_epics("DRE-2900")
+        with patch.object(plan_run, "fire") as fire:
+            advance, comment, _ = sweep_turn("DRE-2901")
         advance.assert_called_once_with("DRE-2901", wc.turn_lane(), "Backlog")
         self.assertIn("plan artifact", comment.mock_calls[0].args[1].lower())
-        dispatch.assert_called_once()
+        fire.assert_not_called()
 
-    def test_the_turn_starts_the_planner_rather_than_relying_on_a_lane(self):
-        """Nothing dispatches off the lane that owes a plan artifact — Triage
-        happened to, which is the only reason the old path used it. The turn
-        asks for the run, and says honestly when it did not start."""
+    def test_the_turn_relies_on_the_lane_entry_and_starts_nothing_itself(self):
+        """INVERTED by DRE-3664. This test used to pin that the turn asked for
+        the planner run explicitly — on the belief that nothing dispatched off
+        the lane that owes a plan artifact — and said "could NOT be started"
+        when the ask failed. The relay DOES dispatch `agent-plan` on every
+        entry into that lane (DRE-1913, label or no label since DRE-3030), so
+        the sweep's ask was the second of two dispatches for one lane move, and
+        the second one found out on a hosted runner that had already billed a
+        minute. Now the note says what starts the run and what asks if nothing
+        has; it never claims a run the sweep did not start (the DRE-1254
+        false-receipt class)."""
         from unittest.mock import patch
 
-        answers = [
-            {"issue": {"relations": {"nodes": [
-                {"type": "blocks", "issue": {"identifier": "DRE-2901"}}]}}},
-            {"issue": {"id": "u", "identifier": "DRE-2901", "title": "route",
-                       "description": "x",
-                       "labels": {"nodes": [{"name": "agent:planner"}]},
-                       "children": {"nodes": []}}},
-        ]
-        record = wc.commitment_comment(
-            "DRE-2719",
-            {"key": "route", "title": "The wave route", "depends_on": ["standard"],
-             "status": wc.COMMITTED},
-            position=2, total=3)
-        with patch.object(reconcile.linear_ops, "gql", side_effect=answers), \
-            patch.object(reconcile.linear_ops, "comment_bodies", return_value=[record]), \
-            patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
-            patch.object(reconcile, "card_state", return_value="Backlog"), \
-            patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
-            patch.object(reconcile, "redispatch", return_value=False), \
-            patch.object(reconcile.linear_ops, "cmd_advance"), \
-            patch.object(reconcile.linear_ops, "cmd_comment") as comment:
-            reconcile.advance_unblocked_epics("DRE-2900")
-        self.assertIn("could NOT be started", comment.mock_calls[0].args[1])
+        with patch.object(plan_run, "fire") as fire:
+            _, comment, _ = sweep_turn("DRE-2901")
+        fire.assert_not_called()
+        said = comment.mock_calls[0].args[1]
+        self.assertNotIn("has been started", said)
+        self.assertNotIn("could NOT be started", said)
+        self.assertIn(f"`{wc.turn_lane()}`", said)
+        self.assertIn("stalled-planning alarm", said)
 
     def test_an_epic_that_already_has_a_plan_is_not_re_dispatched(self):
         """`plan.yml` routes an epic with children to ACTIVATE — which
-        green-lights it and promotes its children. That is the blank cheque
-        this card removes, so the turn never asks for that run."""
+        green-lights it and promotes its children — but ONLY off an In
+        Progress entry (DRE-3100); a Planning entry always plans. The sweep
+        used to read the card's children to refuse its own ask for such an
+        epic. It makes no ask now (DRE-3664), so it reads nothing for one: the
+        one Linear read the turn makes is the Done epic's forward relations."""
         from unittest.mock import patch
 
-        answers = [
-            {"issue": {"relations": {"nodes": [
-                {"type": "blocks", "issue": {"identifier": "DRE-2901"}}]}}},
-            {"issue": {"id": "u", "identifier": "DRE-2901", "title": "route",
-                       "description": "x",
-                       "labels": {"nodes": [{"name": "agent:planner"}]},
-                       "children": {"nodes": [{"identifier": "DRE-2950"}]}}},
-        ]
-        record = wc.commitment_comment(
-            "DRE-2719",
-            {"key": "route", "title": "The wave route", "depends_on": ["standard"],
-             "status": wc.COMMITTED},
-            position=2, total=3)
-        with patch.object(reconcile.linear_ops, "gql", side_effect=answers), \
-            patch.object(reconcile.linear_ops, "comment_bodies", return_value=[record]), \
-            patch.object(reconcile.mid_epic, "last_green_light", return_value=None), \
-            patch.object(reconcile, "card_state", return_value="Backlog"), \
-            patch.object(reconcile, "epic_blockers_unmet", return_value=False), \
-            patch.object(reconcile, "redispatch") as dispatch, \
-            patch.object(reconcile.linear_ops, "cmd_advance"), \
-            patch.object(reconcile.linear_ops, "cmd_comment"):
-            reconcile.advance_unblocked_epics("DRE-2900")
-        dispatch.assert_not_called()
+        with patch.object(plan_run, "fire") as fire:
+            _, _, gql = sweep_turn("DRE-2901", children=("DRE-2950",))
+        fire.assert_not_called()
+        self.assertEqual(
+            gql.call_count, 1,
+            "the turn read the card again — the only reason it ever did was "
+            "to decide a dispatch it no longer makes")
 
     def test_the_sweep_never_sends_a_committed_epic_to_an_active_lane(self):
         """Its turn is a turn to be PLANNED, not a turn to be built: an
@@ -231,22 +232,30 @@ class OneAskForThePlannerRunTest(unittest.TestCase):
     """Two paths send an epic to the lane that owes a plan artifact — the
     sweep, when the predecessor reaches Done, and the wave commitment itself,
     for the epic that has no predecessor to wait for. The lane entry itself is
-    a planner dispatch (the relay's, DRE-1913 / DRE-3030), and the wave's own
-    turn relies on that alone since DRE-3659: its explicit ask was the second
-    of two dispatches for one entry. The sweep's turn still asks through
-    `plan_run.note` — the same pair, named in DRE-3659 as the twin and left to
-    its own card — and there is ONE place that ask is written."""
+    a planner dispatch (the relay's, DRE-1913 / DRE-3030), and NEITHER path
+    asks for a second one: the wave's own turn stopped in DRE-3659, the
+    sweep's in DRE-3664. `plan_run.note` — the one place the ask used to be
+    written, kept there so that it would go from one place — is gone with its
+    last caller; what `plan_run` still holds is the payload and the dispatch
+    the Todo re-dispatch and the review re-run genuinely make."""
 
     def source_of(self, module: str, func: str) -> str:
         src = open(os.path.join(SCRIPTS, module), encoding="utf-8").read()
         return src.split(f"def {func}", 1)[1].split("\ndef ", 1)[0]
 
-    def test_there_is_one_place_that_asks(self):
-        self.assertTrue(callable(plan_run.note))
+    def test_there_is_no_place_that_asks(self):
+        """INVERTED by DRE-3664: this pinned `callable(plan_run.note)`."""
+        self.assertFalse(hasattr(plan_run, "note"),
+                         "plan_run.note is back — an ask nothing should make")
 
-    def test_the_sweeps_turn_asks_through_it(self):
-        self.assertIn("plan_run.note",
-                      self.source_of("reconcile.py", "_plan_run_note"))
+    def test_the_sweeps_turn_does_not_ask_at_all(self):
+        """INVERTED by DRE-3664: this pinned `plan_run.note` inside
+        `reconcile._plan_run_note`. The turn is a lane move and a note; a
+        `plan_run` reference in it is the second dispatcher coming back."""
+        src = open(os.path.join(SCRIPTS, "reconcile.py"), encoding="utf-8").read()
+        self.assertNotIn("def _plan_run_note", src)
+        self.assertNotIn("plan_run",
+                         self.source_of("reconcile.py", "advance_unblocked_epics"))
 
     def test_the_waves_own_turn_does_not_ask_at_all(self):
         """The lane move is the dispatch. A second ask here is the DRE-3659
@@ -343,6 +352,78 @@ class OneDispatchPerPlanningEntryTest(unittest.TestCase):
         said = "\n".join(ops.comments_on(moved[0]))
         self.assertNotIn("has been started", said)
         self.assertIn(wc.turn_lane(), said)
+
+
+class OneDispatchPerTurnTest(unittest.TestCase):
+    """One planner dispatch per Planning entry, counted across BOTH
+    dispatchers, for the SWEEP's turn (DRE-3664) — the twin DRE-3659 named
+    and left to its own card.
+
+    Every epic after a wave's first reaches its turn here: its predecessor
+    reached Done, `reconcile.advance_unblocked_epics` moves it Backlog → the
+    lane that owes a plan artifact, and the relay dispatches `agent-plan` on
+    that entry (DRE-1913 / DRE-3030). The sweep then ALSO asked, through
+    `plan_run.fire`, so every such epic got two Agent Plan runs and the second
+    learned it was the duplicate inside a job that had already started a
+    hosted runner. `dedupe_dispatch.py plan-gate` decided that correctly and
+    stays as the backstop; these tests pin that it stops being the common
+    path.
+
+    As in `OneDispatchPerPlanningEntryTest`, the relay is modelled at the seam
+    it listens on — every `cmd_advance` INTO the lane is one relay dispatch —
+    and every `plan_run.fire` is one of the sweep's own. The sum is the
+    number, and the number is the count of Planning entries.
+    """
+
+    def dispatches_for(self, *dependents: str):
+        """The sweep's turn for `dependents`; every `agent-plan` dispatch
+        either dispatcher made, as (who, epic)."""
+        from unittest.mock import patch
+
+        fired: list = []
+
+        def relay_listens(identifier, to_state, from_states):
+            if to_state == wc.turn_lane():
+                fired.append(("relay", identifier))
+
+        def sweep_asks(card, repo, **kwargs):
+            fired.append(("sweep", card["identifier"]))
+            return True, ""
+
+        with patch.object(plan_run, "fire", sweep_asks):
+            advance, comment, _ = sweep_turn(*dependents)
+        for call in advance.mock_calls:
+            relay_listens(*call.args)
+        return fired, comment
+
+    def test_one_turn_is_one_dispatch_across_relay_and_sweep(self):
+        fired, _ = self.dispatches_for("DRE-2901")
+        self.assertEqual(
+            len(fired), 1,
+            f"one epic entered {wc.turn_lane()!r} and {len(fired)} planner "
+            f"dispatches were made: {fired} — the duplicate is decided before "
+            "the dispatch, not inside a job that already started a runner")
+
+    def test_two_epics_reaching_their_turn_are_two_dispatches_not_four(self):
+        from collections import Counter
+
+        fired, _ = self.dispatches_for("DRE-2901", "DRE-2902")
+        per_epic = Counter(epic for _, epic in fired)
+        self.assertEqual(len(fired), 2, f"dispatches: {fired}")
+        self.assertEqual(set(per_epic.values()), {1},
+                         f"an epic was dispatched more than once: {fired}")
+
+    def test_the_arrival_note_claims_no_run_the_sweep_did_not_start(self):
+        """The sweep no longer starts the run, so it must not say it did — a
+        receipt nobody can check is the DRE-1254 false-receipt class. It says
+        the same sentence the wave's own turn says, from the same function:
+        one wording for one fact."""
+        _, comment = self.dispatches_for("DRE-2901")
+        said = comment.mock_calls[0].args[1]
+        self.assertNotIn("has been started", said)
+        self.assertTrue(said.endswith(wc.lane_starts_the_run()),
+                        "the sweep's note does not end on the sentence the "
+                        "wave's own turn ends on")
 
 
 class NoSecondVocabularyTest(unittest.TestCase):

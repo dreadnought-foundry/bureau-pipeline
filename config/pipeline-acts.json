@@ -1049,10 +1049,10 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "arrival.note + _plan_run_note(dep)",
+      "anchor": "arrival.note + wave_commitment.lane_starts_the_run()",
       "kind": "undeclared-act",
-      "means": "An epic whose blocker epics all finished arrives in the planning lane, with whether its planner run actually started.",
-      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
+      "means": "An epic whose blocker epics all finished arrives in the planning lane. The lane entry is what starts its planner run (the relay's dispatch, DRE-3664), so the note names that and the stalled-planning alarm rather than claiming a run the sweep did not start.",
+      "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. Since DRE-3664 the sweep no longer dispatches the run itself — the relay does, on the lane entry, as it already did for the wave's first epic since DRE-3659 — so the receipt carries no started/not-started half: a receipt that vouched for the relay's dispatch would be the DRE-1254 false-receipt class."
     },
     {
       "file": "scripts/reconcile.py",

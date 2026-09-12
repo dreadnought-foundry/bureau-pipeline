@@ -157,8 +157,10 @@ import mid_epic  # noqa: E402
 # say about releasing an epic's children. The sweep reads them; it never
 # re-derives the grammar.
 import plan_critic  # noqa: E402
-# DRE-2846: ONE source for "ask for this epic's planner run" — shared with the
-# wave's own turn, because nothing dispatches off the lane either path uses.
+# ONE source for the planner's dispatch payload and the dispatch itself
+# (`redispatch` below, and `review_rerun.py dispatch`). The wave's turns no
+# longer ask through it — the relay dispatches on the lane entry (DRE-3659,
+# DRE-3664).
 import plan_run  # noqa: E402
 # DRE-2825/2826: ONE writer for an act's receipt. Every notice this sweep posts
 # for one of the ten acts declared in config/pipeline-acts.json goes through
@@ -2016,10 +2018,12 @@ def redispatch(card: dict) -> bool:
     stub's github.token) is contents:read and exists only for
     `gh workflow run` (actions:write), so gh_dispatch would 403 here.
 
-    The dispatch itself is `plan_run.fire`, shared with the wave's own turn
-    (DRE-2846) — one payload, one event rule, one place to fix. What stays here
-    is the sweep's half: a failure lands in the write ledger, so the run goes
-    red for medic.
+    The dispatch itself is `plan_run.fire`, shared with `review_rerun.py
+    dispatch` — one payload, one event rule, one place to fix. (It was shared
+    with the wave's turns too, until DRE-3659 and DRE-3664 found those were
+    the second of two dispatches for one lane entry.) What stays here is the
+    sweep's half: a failure lands in the write ledger, so the run goes red
+    for medic.
     """
     ok, err = plan_run.fire(card, REPO)
     if not ok:
@@ -2342,8 +2346,19 @@ def advance_unblocked_epics(done_epic: str) -> None:
             print(f"epic-advance: could not read {dep}'s wave commitment: {e}")
             arrival = None
         if arrival is not None:
+            # The move IS the trigger. The relay dispatches `agent-plan` for
+            # every card entering the lane (agent-bureau's lambda_function.py
+            # — DRE-1913, label or no label since DRE-3030), so the sweep asks
+            # for nothing itself. It used to (DRE-2846), on the belief that
+            # nothing dispatched off the lane, and every
+            # epic after a wave's first then cost two Agent Plan runs — the
+            # second starting a hosted runner to learn it was the duplicate.
+            # One dispatcher per transition (DRE-3659 for the wave's own turn,
+            # DRE-3664 here); `dedupe_dispatch.py plan-gate` stays as the
+            # backstop, not the common path.
             linear_ops.cmd_advance(dep, arrival.lane, "Backlog")
-            linear_ops.cmd_comment(dep, arrival.note + _plan_run_note(dep))
+            linear_ops.cmd_comment(
+                dep, arrival.note + wave_commitment.lane_starts_the_run())
             continue
         linear_ops.cmd_advance(dep, "Triage", "Backlog")
         linear_ops.cmd_comment(
@@ -2352,31 +2367,6 @@ def advance_unblocked_epics(done_epic: str) -> None:
             "and all blocker epics are now complete. The planner will take it from "
             "here; a human still approves the plan (→ In Progress).",
         )
-
-
-def _plan_run_note(identifier: str) -> str:
-    """Start the planner run for an epic whose turn has come, and say honestly
-    whether it started (DRE-2846).
-
-    The lane a turn sends an epic to is the one that owes a plan artifact. It
-    is not in SWEEP_STATES and has no nudge (DRE-2736), but the RELAY does
-    dispatch `agent-plan` on every entry into it (agent-bureau's
-    lambda_function.py — DRE-1913, label or no label since DRE-3030), so this
-    explicit ask is the second of two dispatches for one lane entry: the same
-    pair DRE-3659 removed from `wave_commitment.advance`, where it cost every
-    wave's first epic a hosted runner that started only to skip. DRE-3659
-    names this path as the twin and leaves it to its own card.
-
-    The ask itself is `plan_run.note`, and this is now its one caller.
-
-    What the sweep adds is its own half: the failure goes in the write ledger
-    so the run turns red, and the next sweep comes round again.
-    """
-    return plan_run.note(
-        linear_ops, identifier, redispatch,
-        if_not_started="The sweep run is red; the next sweep retries.",
-        record_failure=_write_failures.append,
-    )
 
 
 def has_unresolved_blocker(card: dict) -> bool:

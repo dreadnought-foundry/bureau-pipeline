@@ -2410,12 +2410,11 @@ jobs:
       # it is, which goes to the lane that owes a plan artifact and comes back
       # for its OWN green light. It never green-lights an epic.
       #
-      # GH_TOKEN + REPO because "starts" is a repository_dispatch, not a lane
-      # move: nothing dispatches off the lane the turn sends the epic to
-      # (DRE-2736), so the turn asks for the planner run explicitly through
-      # `plan_run.py` — the same ask the reconcile sweep makes for every LATER
-      # epic in the sequence. The App token, because the dispatches API needs
-      # contents:write.
+      # "Starts" IS the lane move: the relay dispatches `agent-plan` for every
+      # card entering the lane the turn sends the epic to (DRE-1913 / DRE-3030).
+      # Neither this step nor the reconcile sweep, which makes the same move
+      # for every LATER epic in the sequence, asks for the run itself any more
+      # (DRE-3659, DRE-3664) — each ask was the second dispatch for one entry.
       - name: Wave route — commit the approved wave
         if: steps.shape.outputs.route == 'wave'
         # Linear only. The commit no longer fires a repository_dispatch for the
