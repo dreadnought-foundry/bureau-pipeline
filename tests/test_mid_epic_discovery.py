@@ -550,8 +550,10 @@ class TestACardHasNoChildren:
 # count of jammed work lie.
 #
 # So `--verdict` makes the two writes one motion. The order stays load-bearing:
-# card → routing stamp → growth → mid-epic verdict, so a crash leaves the safe
-# half.
+# card → routing stamp → mid-epic verdict → growth, so a crash leaves the safe
+# half. (The last two swapped in DRE-3343 — an epic at Linear's comment cap
+# fails the growth write EVERY time, not just on a crash, and with growth
+# second it took the verdict with it.)
 class TestBornWithItsRoutingVerdict:
     def _file(self, ops, **kw):
         return mid_epic.discovery(
@@ -596,19 +598,27 @@ class TestBornWithItsRoutingVerdict:
         assert routing_verdict.verdict_on(ops.comments_on(ident)) == "FLEET"
         assert ops.labels_on(ident) == []
 
-    def test_the_stamp_lands_before_the_growth_record(self):
-        """ORDER IS LOAD-BEARING: card → routing stamp → growth → mid-epic
-        verdict. A crash between any two leaves the safe half — a card whose
+    def test_the_stamp_lands_first_of_the_writes(self):
+        """ORDER IS LOAD-BEARING: card → routing stamp → mid-epic verdict →
+        growth. A crash between any two leaves the safe half — a card whose
         growth the epic never recorded is surfaced on the next sweep, and one
-        with no mid-epic verdict cannot promote."""
+        with no mid-epic verdict cannot promote.
+
+        The stamp is what THIS card pins, and it is first because the lane
+        guard judges the create itself and reads that comment. The two writes
+        after it swapped in DRE-3343: an epic at Linear's 2,000-comment cap
+        fails the growth write every time, and with growth second that took
+        four discovery cards' verdicts with it. The safe half of a permanent
+        failure is the verdict, so the verdict goes first.
+        """
         ops = _FakeOps(epic_description="The epic.")
         with _stamping_into(ops):
             ident = self._file(ops, verdict="WORKBENCH")
         created = ops.first("subissue", ident)
         stamped = ops.first("comment", ident, routing_verdict.VERDICT_MARK)
-        growth = ops.first("description", "DRE-2700")
         judged = ops.first("comment", ident, mid_epic.VERDICT_TAG)
-        assert created < stamped < growth < judged
+        growth = ops.first("description", "DRE-2700")
+        assert created < stamped < judged < growth
 
     def test_the_mid_epic_verdict_still_lands(self):
         """The routing verdict answers "who builds this"; the 🔎 mid-epic
@@ -652,16 +662,21 @@ class TestBornWithItsRoutingVerdict:
         assert _routing_stamps(ops, ident) == []
         assert ops.labels_on(ident) == []
 
-    def test_without_the_flag_the_motion_is_what_it_always_was(self):
-        """The whole write log, pinned: create the card, record the growth on
-        the epic, post the mid-epic verdict. Nothing added, nothing reordered."""
+    def test_without_the_flag_nothing_is_added_to_the_motion(self):
+        """The whole write log, pinned: create the card, post the mid-epic
+        verdict, record the growth on the epic. The flag adds nothing when it
+        is absent — no stamp, no label, no extra write.
+
+        The last two were the other way round until DRE-3343 reversed them;
+        this test pins that the routing flag is not what reordered them.
+        """
         ops = _FakeOps(epic_description="The epic.")
         with _stamping_into(ops):
             ident = self._file(ops)
         assert [(kind, target) for kind, target, _ in ops.log] == [
             ("subissue", ident),
-            ("description", "DRE-2700"),
             ("comment", ident),
+            ("description", "DRE-2700"),
         ]
 
     # --- refused before anything is created --------------------------------

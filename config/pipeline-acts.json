@@ -992,6 +992,13 @@
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible. It is an alarm the pipeline raises on its own, and the one act on this file whose whole point is that no single decision was wrong."
     },
     {
+      "file": "scripts/mid_epic.py",
+      "anchor": "growth_capped_comment(epic, report[\"capped\"])",
+      "kind": "undeclared-act",
+      "means": "The epic is at Linear's 2,000-comment cap, so the growth notice it owed is written on the sibling card instead.",
+      "why": "Act-shaped, and the registry has no row for it — the same debt the `was added to this epic after it was green-lit` row above records, arriving the same way (DRE-3343 converts an emission, not the registry). Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber — and the console reads the tag set FIRST (docs/pipeline-acts.md: console-first), so a row added here would declare an act agent-bureau cannot read. Named here so the debt is countable rather than invisible. It reports a refusal the pipeline hit on its own and where the record went instead; nobody is asked for anything, and the card promotes normally on the verdict above it."
+    },
+    {
       "file": "scripts/planning_escalation.py",
       "anchor": "escalation_comment(identifier, reason, transport)",
       "kind": "undeclared-act",
