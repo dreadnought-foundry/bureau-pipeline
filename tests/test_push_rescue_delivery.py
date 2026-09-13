@@ -362,6 +362,44 @@ class TheDelivery(unittest.TestCase):
         self.assertFalse(outcome.pushed)
         self.assertTrue(outcome.error)
 
+    def test_the_needle_refuses_the_subcommand_and_never_a_path(self):
+        """DRE-3490: `failing=("am",)` names the command `git am`, so it must
+        refuse that and nothing else. It used to be looked for anywhere in the
+        joined argv, where a patch path, a branch name or a temp directory
+        could answer for it."""
+        run = self._run(failing=("am",))
+        self.assertEqual(run(["git", "-C", ".", "am", "-3", "p.patch"])[0], 1)
+        self.assertEqual(
+            run(["git", "-C", "/tmp/spamdir", "apply", "--3way",
+                 "/tmp/spamdir/rescue-DRE-3165.patch"])[0], 0)
+        self.assertEqual(
+            run(["git", "-C", ".", "push", "origin",
+                 "agent/DRE-am:refs/heads/agent/DRE-am"])[0], 0)
+
+    def test_two_needles_still_refuse_both_commands(self):
+        """The other caller in this file, pinned: narrowing the match must not
+        narrow it past what `failing=("am", "apply")` already means."""
+        run = self._run(failing=("am", "apply"))
+        self.assertEqual(run(["git", "-C", ".", "am", "-3", "p.patch"])[0], 1)
+        self.assertEqual(run(["git", "-C", ".", "apply", "--3way", "p.patch"])[0], 1)
+
+    def test_a_patch_directory_named_for_the_needle_still_falls_back(self):
+        """The failure this card fixes, pinned to a directory name rather than
+        to whatever `tempfile` happened to pick: with `TMPDIR=/tmp/spamdir`
+        this scenario refused `git apply` as well as `git am` and the delivery
+        reported that neither could replay the patch."""
+        with tempfile.TemporaryDirectory(prefix="rescue-am-") as td:
+            self.assertIn("am", os.path.basename(td))
+            with open(os.path.join(td, ARTIFACT), "w", encoding="utf-8") as fh:
+                fh.write("From 0000 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] work\n")
+            outcome = deliver_rescue.deliver(
+                CARD, repo=REPO, run_id=RUN_ID, patch_dir=td, base="main",
+                token="fresh-token", card_url="https://linear/DRE-3165",
+                run=self._run(failing=("am",)), post=lambda body: None,
+            )
+        self.assertTrue(outcome.pushed, outcome.error)
+        self.assertTrue(any("apply" in c for c in self.calls), self.calls)
+
     def test_the_card_is_told_the_delivery_landed(self):
         posted: list[str] = []
         deliver_rescue.deliver(
