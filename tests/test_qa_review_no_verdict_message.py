@@ -105,8 +105,16 @@ def gate_outputs(td: Path, execution: dict | None, verdict_text=None) -> dict:
 
 
 def run_post(td: Path, gate2: dict, *, gate1: dict | None = None,
-             real: str = "false") -> tuple[subprocess.CompletedProcess, str]:
-    """Execute the post step's shell with the gate's own outputs as env."""
+             real: str = "false",
+             extra_env: dict | None = None,
+             ) -> tuple[subprocess.CompletedProcess, str]:
+    """Execute the post step's shell with the gate's own outputs as env.
+
+    `extra_env` carries the step's other interpolations (DRE-3414 added the
+    shared install step's outcome). Callers that do not pass it get the shell
+    with those variables UNSET, which is the state this suite has always run
+    in and the state a fresh workflow branch must survive.
+    """
     bin_dir = td / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
@@ -134,6 +142,7 @@ def run_post(td: Path, gate2: dict, *, gate1: dict | None = None,
         "A2_TURNS": gate2.get("turns", ""),
         "A2_COST": gate2.get("cost", ""),
     })
+    env.update(extra_env or {})
     proc = subprocess.run(["bash", str(script)], cwd=td, env=env,
                           capture_output=True, text=True)
     comment = (td / "qa-comment.md")
