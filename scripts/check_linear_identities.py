@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""The two non-human Linear identities are what the declaration says (DRE-3172).
+"""The non-human Linear identities are what the declaration says (DRE-3172).
 
-Since 2026-09-05 the workspace has three Linear users: the FLEET user every
-sweep, planner, merge-sync, relay and console run as; the OPERATOR-TOOLS user
-the operator's scripts and assistant sessions run as; and the CEO, who
-approves. Linear's 2,500 requests/hour limit is PER USER, so the two non-human
-users are two separate budgets — the whole point of there being two.
+The workspace's Linear users: the FLEET user every sweep, planner,
+merge-sync, relay and console run as; the OPERATOR-TOOLS user the operator's
+scripts and assistant sessions run as; the SANDBOX user `bureau-harness`'s
+stubs and this repo's `harness.yml` driver run as (DRE-3628); and the CEO, who
+approves. Linear's 2,500 requests/hour limit is PER USER, so the three
+non-human users are three separate budgets — the whole point of there being
+three.
 
 Nothing in code declared that before this card, and so nothing could notice
 the two ways it silently stops being true: a key rotated onto an admin's user
-(an unattended actor that can now do anything on the board), or both keys
-resolving to ONE user (one budget again, and every sweep starves the operator's
-terminal). `config/linear-identities.json` declares each identity — its display
-name, the variable this check reads its key from, where the key lives, what it
-is for — and the rules it owes: `must_not_be_admin`, `must_differ_from`.
+(an unattended actor that can now do anything on the board), or two keys
+resolving to ONE user (one budget again — every sweep starving the operator's
+terminal, or probe traffic on `main` sharing the fleet's hour with every
+planner and review the way it did on 2026-09-09, wave DRE-3530).
+`config/linear-identities.json` declares each identity — its display name, the
+variable this check reads its key from, where the key lives, what it is for —
+and the rules it owes: `must_not_be_admin`, `must_differ_from`.
 
 ## Every home of a key, not just the first (DRE-3334)
 
@@ -69,7 +73,7 @@ because a 401 body or a URLError is where a key fragment would leak.
 
 `scripts/ready_lane_writers.py check` is the existing assertion about the
 Linear writers, but it is STATIC: it reads code and runs in CI with no
-credentials. This one needs two live keys and the operator's machine, so
+credentials. This one needs every live key and the operator's machine, so
 folding it in would turn the writer check red on every keyless run or hand it
 a skip. One `check_<thing>.py` per concern is the repo's shape.
 
@@ -84,7 +88,7 @@ is the easiest way to misfile a key.
 CLI:
 
     LINEAR_API_KEY_FLEET=… LINEAR_API_KEY_RELAY=… LINEAR_API_KEY=… \
-        python3 scripts/check_linear_identities.py check
+        LINEAR_API_KEY_SANDBOX=… python3 scripts/check_linear_identities.py check
 """
 
 from __future__ import annotations
@@ -273,7 +277,8 @@ def viewer_of(key: str) -> dict:
     """Who `key` is, straight from Linear: `{"id", "name", "admin"}`.
 
     Not `linear_ops.gql`, which reads its key from `LINEAR_API_KEY` — this
-    check holds two keys at once and must present each one deliberately.
+    check holds every declared key at once and must present each one
+    deliberately.
     Same endpoint, same timeout; a failure raises with the response body,
     which the caller redacts before it is printed.
     """

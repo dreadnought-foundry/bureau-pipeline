@@ -152,16 +152,18 @@ of it is ever a runtime lookup.
   says `UNKNOWN` rather than `0`. Every field the file carried before DRE-3356
   keeps its name and its type — the context renderer (DRE-3358) and the plan
   critic's ledger check (DRE-3079) read them.
-- **`linear-identities.json`** — the two non-human Linear users (DRE-3172):
-  `fleet` (`Agent-Bureau` — every sweep, planner, merge-sync, the relay and
-  the console) and `operator-tools` (`bureau-tools` — the operator's scripts
-  and assistant sessions). Per identity: the display name it must resolve to,
-  the environment variable the check reads its key from, where the key
-  actually lives, what it is for, and the rules `must_not_be_admin` and
-  `must_differ_from` the other. Linear's 2,500 requests/hour limit is PER
-  USER, so two users are two budgets — that is the point, and it is what
-  silently stops being true when a key lands on an admin or both keys land on
-  one user. **No ids in the file**: an id pinned in a file is what goes stale
+- **`linear-identities.json`** — the three non-human Linear users (DRE-3172,
+  DRE-3628): `fleet` (`Agent-Bureau` — every sweep, planner, merge-sync, the
+  relay and the console), `operator-tools` (`bureau-tools` — the operator's
+  scripts and assistant sessions) and `sandbox` (`bureau-sandbox` —
+  `bureau-harness`'s stubs and this repo's `harness.yml` driver). Per
+  identity: the display name it must resolve to, the environment variable the
+  check reads its key from, where the key actually lives, what it is for, and
+  the rules `must_not_be_admin` and `must_differ_from` the others. Linear's
+  2,500 requests/hour limit is PER USER, so three users are three budgets —
+  that is the point, and it is what silently stops being true when a key lands
+  on an admin or two keys land on one user (probe traffic on `main` spent the
+  fleet's hour that way on 2026-09-09, wave DRE-3530). **No ids in the file**: an id pinned in a file is what goes stale
   on rotation; the check prints the id it resolved. Read by
   `scripts/check_linear_identities.py`, and by `scripts/linear_ops.py` for the
   one thing it needs from it: the set of names a run may DECLARE in

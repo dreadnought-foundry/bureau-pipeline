@@ -14,11 +14,12 @@ requests it sent, and on exit prints ONE line:
 
     linear-budget: <first> → <last> (spent <N> this run; window resets <HH:MM> PT; budget: <identity>)
 
-The last part names WHOSE hour was spent (DRE-3321): since DRE-3172 there are
-two non-human Linear users on two separate 2,500/hour budgets, so "the quota
-is exhausted" is not a fact about the workspace — it names one of two buckets,
-and a reader has to know which. The run declares it in `LINEAR_IDENTITY`; a run
-that declares nothing says `undeclared`, never a guess.
+The last part names WHOSE hour was spent (DRE-3321): since DRE-3172 — and the
+sandbox seat since DRE-3628 — there are three non-human Linear users on three
+separate 2,500/hour budgets, so "the quota is exhausted" is not a fact about
+the workspace — it names one of three buckets, and a reader has to know which.
+The run declares it in `LINEAR_IDENTITY`; a run that declares nothing says
+`undeclared`, never a guess.
 
 Once a process is rate-limited it stops asking: every later call raises
 `LinearRateLimited` at once, with no request sent — asking again spends the
@@ -386,13 +387,14 @@ def test_a_genuine_roll_that_ends_above_the_start_still_reports_window_rolled(tr
 
 
 # ── DRE-3321: the lines name WHOSE budget is spent ──────────────────────────
-# Since DRE-3172 there are two non-human Linear users and the 2,500/hour limit
-# is PER USER, so a rate-limited run that says only "the quota is exhausted"
-# names one of two buckets without saying which. The run DECLARES which key it
-# holds in `LINEAR_IDENTITY` — the label cannot be verified from inside a run
-# without spending a request — and the word rides both lines as a final
-# `; budget: <identity>` part. Absent means `undeclared`: never a guess, and
-# never a default to `fleet` (DRE-3172's contract).
+# Since DRE-3172 — and DRE-3628's sandbox seat — there are three non-human
+# Linear users and the 2,500/hour limit is PER USER, so a rate-limited run that
+# says only "the quota is exhausted" names one of three buckets without saying
+# which. The run DECLARES which key it holds in `LINEAR_IDENTITY` — the label
+# cannot be verified from inside a run without spending a request — and the
+# word rides both lines as a final `; budget: <identity>` part. Absent means
+# `undeclared`: never a guess, and never a default to `fleet` (DRE-3172's
+# contract).
 def test_the_refusal_ends_with_the_declared_identity(transport, monkeypatch):
     monkeypatch.setenv(linear_ops.IDENTITY_ENV, "operator-tools")
     t = transport(_ratelimited_400(_headers(0, RESET_MS_1632)))
@@ -479,6 +481,39 @@ def test_every_name_the_declaration_carries_is_accepted(transport, monkeypatch):
     for name in declared:
         monkeypatch.setenv(linear_ops.IDENTITY_ENV, name)
         assert linear_ops.declared_identity() == name
+
+
+def test_the_declaration_carries_the_three_non_human_seats(transport):
+    """The sandbox is the third declared seat (DRE-3628) — `bureau-harness`'s
+    stubs and this repo's `harness.yml` driver spend a budget of their own, so
+    a dry bucket has three possible owners, not two."""
+    assert linear_ops.declared_identity_names() == (
+        "fleet", "operator-tools", "sandbox",
+    )
+
+
+def test_a_sandbox_run_names_the_sandbox_budget(transport, monkeypatch):
+    """The word a sandbox run declares is `sandbox` — the identity's `name`,
+    never its display name — and it rides the budget line like any other."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "sandbox")
+    transport(
+        _Resp(headers=_headers(2400, RESET_MS_1632)),
+        _Resp(headers=_headers(2399, RESET_MS_1632)),
+    )
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert linear_ops.declared_identity() == "sandbox"
+    assert linear_ops.budget_line() == (
+        f"linear-budget: 2400 → 2399 (spent 1 this run; "
+        f"window resets {RESET_PT_1632} PT; budget: sandbox)"
+    )
+
+
+def test_the_display_name_is_not_a_word_a_run_may_declare(transport, monkeypatch):
+    """`bureau-sandbox` is what Linear calls the user; `sandbox` is what a run
+    declares. A run that declares the display name declared nothing."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "bureau-sandbox")
+    assert linear_ops.declared_identity() == "undeclared"
 
 
 def test_a_name_the_declaration_does_not_carry_is_not_a_declaration(

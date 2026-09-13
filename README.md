@@ -109,8 +109,10 @@ not that it is hard to use.
 **No agent may apply it.** The relay, reconcile, the planner and every agent
 write to Linear as ONE fleet user, `Agent-Bureau` (non-admin, its own key and
 its own 2,500/hour budget); the operator's scripts and assistant sessions write
-as `bureau-tools` (non-admin, its own key and budget); the CEO approves from
-his own identity. The two non-human users are declared in
+as `bureau-tools` (non-admin, its own key and budget); the sandbox — the
+harness stubs and this repo's `harness.yml` driver — writes as
+`bureau-sandbox` (non-admin, its own key and budget, DRE-3628); the CEO
+approves from his own identity. The three non-human users are declared in
 `config/linear-identities.json` and `scripts/check_linear_identities.py check`
 holds the live keys to it (DRE-3172). But actor identity still cannot tell an
 agent's write from an operator-tool write for THIS purpose — the operator's
