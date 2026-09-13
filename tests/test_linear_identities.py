@@ -1,20 +1,29 @@
-"""The two non-human Linear identities are data, and a check holds them apart (DRE-3172).
+"""The three non-human Linear identities are data, and a check holds them apart (DRE-3172).
 
-Since 2026-09-05 the workspace has three Linear users. The FLEET user
-(`Agent-Bureau`) is the one every sweep, planner, merge-sync, relay and
-console run as; the OPERATOR-TOOLS user (`bureau-tools`) is the one the
-operator's scripts and assistant sessions run as; the CEO approves. Linear's
-2,500 requests/hour limit is PER USER, so the two non-human users are two
-separate budgets — that is the whole point of having two.
+The FLEET user (`Agent-Bureau`) is the one every sweep, planner, merge-sync,
+relay and console run as; the OPERATOR-TOOLS user (`bureau-tools`) is the one
+the operator's scripts and assistant sessions run as; the SANDBOX user
+(`bureau-sandbox`) is the one `bureau-harness`'s stubs and this repo's
+`harness.yml` driver run as; the CEO approves. Linear's 2,500 requests/hour
+limit is PER USER, so the three non-human users are three separate budgets —
+that is the whole point of having three.
 
 Nothing in code declared that before this card, so nothing could notice the
 two ways it silently stops being true: a key rotated onto an admin's user (a
-non-human actor that can now do anything on the board), or both keys resolving
+non-human actor that can now do anything on the board), or two keys resolving
 to the SAME user (one budget again, and every sweep starves the operator's
-terminal the way DRE-3060 did). `config/linear-identities.json` declares each
-identity and its rules; `scripts/check_linear_identities.py check` asks Linear
-who each key really is and fails, naming the rule, when the declaration and
-the truth disagree.
+terminal the way DRE-3060 did, or probe traffic on `main` shares the fleet's
+hour the way it did on 2026-09-09). `config/linear-identities.json` declares
+each identity and its rules; `scripts/check_linear_identities.py check` asks
+Linear who each key really is and fails, naming the rule, when the declaration
+and the truth disagree.
+
+THE SANDBOX SEAT (DRE-3628). The third seat is declared here as data, so the
+check that already holds the fleet and operator-tools apart holds this one
+apart from both — and so `linear_ops.declared_identity()` accepts the word
+`sandbox` on a run's `linear-budget:` line. Its key is minted by the operator
+card in this epic; until then the check reports `[UNKNOWN] sandbox` and exits
+non-zero, which is its designed behaviour for an absent key.
 
 ONE IDENTITY, SEVERAL HOMES (DRE-3334). The fleet key is not kept in one
 place: the Actions secret is one copy and the relay Lambda's own copy, in
@@ -59,11 +68,14 @@ CONFIG = ROOT / "config" / "linear-identities.json"
 FLEET_KEY = "lin_api_FLEETFLEETFLEETFLEET0001"
 TOOLS_KEY = "lin_api_TOOLSTOOLSTOOLSTOOLS0002"
 RELAY_KEY = "lin_api_RELAYRELAYRELAYRELAY0003"
+SANDBOX_KEY = "lin_api_SANDBOXSANDBOXSANDB0004"
 FLEET_ID = "cebc4c53-fad2-410f-be31-f920b6ad773f"
 TOOLS_ID = "0913a8db-0000-4000-8000-000000000002"
+SANDBOX_ID = "0913a8db-0000-4000-8000-000000000003"
 
 
-def _env(fleet=FLEET_KEY, tools=TOOLS_KEY, relay=RELAY_KEY) -> dict:
+def _env(fleet=FLEET_KEY, tools=TOOLS_KEY, relay=RELAY_KEY,
+         sandbox=SANDBOX_KEY) -> dict:
     env = {}
     if fleet is not None:
         env["LINEAR_API_KEY_FLEET"] = fleet
@@ -71,21 +83,26 @@ def _env(fleet=FLEET_KEY, tools=TOOLS_KEY, relay=RELAY_KEY) -> dict:
         env["LINEAR_API_KEY"] = tools
     if relay is not None:
         env["LINEAR_API_KEY_RELAY"] = relay
+    if sandbox is not None:
+        env["LINEAR_API_KEY_SANDBOX"] = sandbox
     return env
 
 
 def _viewer(fleet: dict | None = None, tools: dict | None = None,
-            relay: dict | None = None):
+            relay: dict | None = None, sandbox: dict | None = None):
     """A fake `viewer { id name admin }` keyed on which key was presented.
 
     The relay's key is a SECOND copy of the fleet key, so its default answer
     is the fleet user — the same id, which is exactly what
-    `one_user_per_identity` asserts.
+    `one_user_per_identity` asserts. The sandbox's key is a THIRD user, which
+    is what `must_differ_from` asserts.
     """
     answers = {
         FLEET_KEY: fleet or {"id": FLEET_ID, "name": "Agent-Bureau", "admin": False},
         TOOLS_KEY: tools or {"id": TOOLS_ID, "name": "bureau-tools", "admin": False},
         RELAY_KEY: relay or {"id": FLEET_ID, "name": "Agent-Bureau", "admin": False},
+        SANDBOX_KEY: sandbox or {"id": SANDBOX_ID, "name": "bureau-sandbox",
+                                 "admin": False},
     }
 
     def viewer(key: str) -> dict:
@@ -103,21 +120,47 @@ def _run(env: dict, viewer) -> tuple[int, str]:
 
 
 class TheDeclaration(unittest.TestCase):
-    def test_the_shipped_file_declares_both_non_human_identities(self):
+    def test_the_shipped_file_declares_the_three_non_human_identities(self):
         doc = json.loads(CONFIG.read_text(encoding="utf-8"))
         names = [i["name"] for i in doc["identities"]]
-        self.assertEqual(names, ["fleet", "operator-tools"])
+        self.assertEqual(names, ["fleet", "operator-tools", "sandbox"])
         by_name = {i["name"]: i for i in doc["identities"]}
         self.assertEqual(by_name["fleet"]["display_name"], "Agent-Bureau")
         self.assertEqual(by_name["fleet"]["env"], "LINEAR_API_KEY_FLEET")
         self.assertEqual(by_name["operator-tools"]["display_name"], "bureau-tools")
         self.assertEqual(by_name["operator-tools"]["env"], "LINEAR_API_KEY")
+        self.assertEqual(by_name["sandbox"]["display_name"], "bureau-sandbox")
+        self.assertEqual(by_name["sandbox"]["env"], "LINEAR_API_KEY_SANDBOX")
         for identity in doc["identities"]:
             self.assertTrue(identity["must_not_be_admin"], identity["name"])
             self.assertTrue(identity["purpose"].strip(), identity["name"])
             self.assertTrue(identity["lives_in"].strip(), identity["name"])
-        self.assertEqual(by_name["fleet"]["must_differ_from"], ["operator-tools"])
-        self.assertEqual(by_name["operator-tools"]["must_differ_from"], ["fleet"])
+        # Symmetric on purpose: the check judges each pair once, but a reader
+        # asking "who must this one differ from" gets the same answer from
+        # whichever row they open.
+        self.assertEqual(by_name["fleet"]["must_differ_from"],
+                         ["operator-tools", "sandbox"])
+        self.assertEqual(by_name["operator-tools"]["must_differ_from"],
+                         ["fleet", "sandbox"])
+        self.assertEqual(by_name["sandbox"]["must_differ_from"],
+                         ["fleet", "operator-tools"])
+
+    def test_the_sandbox_seat_says_where_its_key_lives(self):
+        """The one key with three copies: the harness repo's Actions secret
+        (read by every stub as `secrets.LINEAR_API_KEY`), this repo's
+        `LINEAR_API_KEY_SANDBOX` (read only by `harness.yml`), and the
+        operator's `.env`. All three are the sandbox seat, so `lives_in` names
+        each — misfiling this key is how probe traffic lands on the fleet's
+        hour (DRE-3530, 2026-09-09)."""
+        doc = json.loads(CONFIG.read_text(encoding="utf-8"))
+        sandbox = {i["name"]: i for i in doc["identities"]}["sandbox"]
+        lives_in = sandbox["lives_in"]
+        self.assertIn("bureau-harness", lives_in)
+        self.assertIn("bureau-pipeline", lives_in)
+        self.assertIn("LINEAR_API_KEY_SANDBOX", lives_in)
+        # One home, not a `homes` list: the check reads exactly one variable
+        # for this seat, on the operator's machine.
+        self.assertEqual(sandbox.get("homes", []), [])
         # The fleet key has a SECOND home: the relay Lambda's own copy
         # (DRE-3334). operator-tools has none.
         homes = by_name["fleet"]["homes"]
@@ -128,6 +171,17 @@ class TheDeclaration(unittest.TestCase):
 
     def test_the_shipped_file_passes_its_own_check(self):
         self.assertEqual(cli.config_problems(cli.load()), [])
+
+    def test_nothing_still_says_the_workspace_has_two_non_human_identities(self):
+        """The count is load-bearing prose: a reader who believes there are two
+        files the third key wherever the second one lives. The declaration's
+        own readme and the check's docstring are where that sentence lived."""
+        readme = "\n".join(json.loads(CONFIG.read_text(encoding="utf-8"))["_readme"])
+        docstring = cli.__doc__ or ""
+        for text, where in ((readme, "_readme"), (docstring, "check docstring")):
+            self.assertNotIn("two non-human", text.lower(), where)
+            self.assertNotIn("WHY TWO", text, where)
+        self.assertIn("sandbox", readme)
 
     def test_a_home_env_colliding_with_another_env_is_a_config_problem(self):
         doc = json.loads(CONFIG.read_text(encoding="utf-8"))
@@ -260,14 +314,15 @@ class TheCheck(unittest.TestCase):
 class TheRelayHome(unittest.TestCase):
     """The fleet key's second home — the relay Lambda's copy (DRE-3334)."""
 
-    def test_three_good_keys_are_three_ok_lines_and_exit_zero(self):
+    def test_every_good_key_is_its_own_ok_line_and_exit_zero(self):
         code, text = _run(_env(), _viewer())
         self.assertEqual(code, 0, text)
         oks = [line for line in text.splitlines() if "[OK]" in line]
-        self.assertEqual(len(oks), 3, text)
+        self.assertEqual(len(oks), 4, text)
         self.assertIn("[OK] fleet:", text)
         self.assertIn("[OK] fleet/relay:", text)
         self.assertIn("[OK] operator-tools:", text)
+        self.assertIn("[OK] sandbox:", text)
         self.assertIn("LINEAR_API_KEY_RELAY", text)
 
     def test_a_relay_on_the_operators_user_breaks_one_user_per_identity(self):
@@ -355,10 +410,90 @@ class TheRelayHome(unittest.TestCase):
         self.assertNotIn(RELAY_KEY, text)
 
 
+class TheSandboxSeat(unittest.TestCase):
+    """The third declared identity — `bureau-sandbox` (DRE-3628).
+
+    `bureau-harness`'s stubs and this repo's `harness.yml` driver spend a
+    budget of their own, which is how probe traffic on `main` came to sit in
+    the fleet's 2,500/hour bucket beside every planner and review on
+    2026-09-09 (wave DRE-3530). Declaring the seat is what makes the existing
+    check hold it apart from both others.
+    """
+
+    def test_three_distinct_non_admin_users_are_four_ok_lines_and_exit_zero(self):
+        code, text = _run(_env(), _viewer())
+        self.assertEqual(code, 0, text)
+        oks = [line for line in text.splitlines() if "[OK]" in line]
+        self.assertEqual(len(oks), 4, text)
+        self.assertIn("[OK] sandbox: LINEAR_API_KEY_SANDBOX resolves to "
+                      "'bureau-sandbox'", text)
+        self.assertIn(SANDBOX_ID, text)
+        self.assertNotIn("[FAIL]", text)
+
+    def test_the_sandbox_key_on_the_fleets_user_fails_must_differ_from(self):
+        """The failure this seat exists to catch: the sandbox key rotated onto
+        (or minted as) the fleet's user is one budget again, with nothing on
+        the board looking any different."""
+        is_fleet = {"id": FLEET_ID, "name": "Agent-Bureau", "admin": False}
+        code, text = _run(_env(), _viewer(sandbox=is_fleet))
+        self.assertEqual(code, 1, text)
+        differ = [line for line in text.splitlines() if "must_differ_from" in line]
+        self.assertEqual(len(differ), 1, text)
+        self.assertIn("[FAIL] sandbox", differ[0])
+        self.assertIn("fleet", differ[0])
+        self.assertIn("sandbox", differ[0])
+        self.assertIn(FLEET_ID, differ[0])
+        self.assertIn("LINEAR_API_KEY_SANDBOX", differ[0])
+        # The seats that ARE what they say they are still say so.
+        self.assertIn("[OK] fleet:", text)
+        self.assertIn("[OK] operator-tools:", text)
+
+    def test_the_sandbox_key_on_the_operators_user_fails_must_differ_from(self):
+        is_tools = {"id": TOOLS_ID, "name": "bureau-tools", "admin": False}
+        code, text = _run(_env(), _viewer(sandbox=is_tools))
+        self.assertEqual(code, 1, text)
+        differ = [line for line in text.splitlines() if "must_differ_from" in line]
+        self.assertEqual(len(differ), 1, text)
+        self.assertIn("operator-tools", differ[0])
+        self.assertIn("sandbox", differ[0])
+
+    def test_a_sandbox_key_on_an_admin_fails_must_not_be_admin(self):
+        admin = {"id": SANDBOX_ID, "name": "bureau-sandbox", "admin": True}
+        code, text = _run(_env(), _viewer(sandbox=admin))
+        self.assertEqual(code, 1, text)
+        broke = [line for line in text.splitlines() if "must_not_be_admin" in line]
+        self.assertEqual(len(broke), 1, text)
+        self.assertIn("[FAIL] sandbox", broke[0])
+        self.assertIn("LINEAR_API_KEY_SANDBOX", broke[0])
+
+    def test_the_key_not_yet_minted_is_unknown_and_non_zero(self):
+        """The designed behaviour until the operator card mints the key: the
+        seat reports UNKNOWN and the check exits non-zero — never a pass, and
+        never a `[FAIL] config:` line, because the declaration itself is
+        sound."""
+        code, text = _run(_env(sandbox=None), _viewer())
+        self.assertNotEqual(code, 0, text)
+        self.assertIn("[UNKNOWN] sandbox: LINEAR_API_KEY_SANDBOX is not set", text)
+        self.assertNotIn("[FAIL] config:", text)
+        self.assertIn("unknown is not a pass", text)
+        self.assertIn("[OK] fleet:", text)
+        self.assertIn("[OK] operator-tools:", text)
+
+    def test_nothing_printed_carries_the_sandbox_key(self):
+        def viewer(key: str) -> dict:
+            raise RuntimeError(f"unauthorized: bad key {key}")
+
+        code, text = _run(_env(), viewer)
+        self.assertNotEqual(code, 0)
+        self.assertNotIn(SANDBOX_KEY, text)
+        self.assertIn("<redacted>", text)
+
+
 class TheCli(unittest.TestCase):
     def test_check_with_no_keys_in_the_environment_is_unknown_and_non_zero(self):
         saved = {k: os.environ.pop(k, None) for k in
-                 ("LINEAR_API_KEY", "LINEAR_API_KEY_FLEET", "LINEAR_API_KEY_RELAY")}
+                 ("LINEAR_API_KEY", "LINEAR_API_KEY_FLEET", "LINEAR_API_KEY_RELAY",
+                  "LINEAR_API_KEY_SANDBOX")}
         try:
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(out):
@@ -368,9 +503,14 @@ class TheCli(unittest.TestCase):
                 if v is not None:
                     os.environ[k] = v
         self.assertNotEqual(code, 0)
+        # One line per key home, and no config problem: an absent key is
+        # UNKNOWN, which is the state this repo ships in until the sandbox key
+        # is minted.
         self.assertIn("[UNKNOWN] fleet:", out.getvalue())
         self.assertIn("[UNKNOWN] fleet/relay:", out.getvalue())
         self.assertIn("[UNKNOWN] operator-tools:", out.getvalue())
+        self.assertIn("[UNKNOWN] sandbox:", out.getvalue())
+        self.assertNotIn("[FAIL] config:", out.getvalue())
 
     def test_an_unknown_subcommand_is_usage(self):
         out = io.StringIO()

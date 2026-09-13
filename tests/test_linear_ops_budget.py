@@ -481,6 +481,39 @@ def test_every_name_the_declaration_carries_is_accepted(transport, monkeypatch):
         assert linear_ops.declared_identity() == name
 
 
+def test_the_declaration_carries_the_three_non_human_seats(transport):
+    """The sandbox is the third declared seat (DRE-3628) — `bureau-harness`'s
+    stubs and this repo's `harness.yml` driver spend a budget of their own, so
+    a dry bucket has three possible owners, not two."""
+    assert linear_ops.declared_identity_names() == (
+        "fleet", "operator-tools", "sandbox",
+    )
+
+
+def test_a_sandbox_run_names_the_sandbox_budget(transport, monkeypatch):
+    """The word a sandbox run declares is `sandbox` — the identity's `name`,
+    never its display name — and it rides the budget line like any other."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "sandbox")
+    transport(
+        _Resp(headers=_headers(2400, RESET_MS_1632)),
+        _Resp(headers=_headers(2399, RESET_MS_1632)),
+    )
+    linear_ops.gql(QUERY)
+    linear_ops.gql(QUERY)
+    assert linear_ops.declared_identity() == "sandbox"
+    assert linear_ops.budget_line() == (
+        f"linear-budget: 2400 → 2399 (spent 1 this run; "
+        f"window resets {RESET_PT_1632} PT; budget: sandbox)"
+    )
+
+
+def test_the_display_name_is_not_a_word_a_run_may_declare(transport, monkeypatch):
+    """`bureau-sandbox` is what Linear calls the user; `sandbox` is what a run
+    declares. A run that declares the display name declared nothing."""
+    monkeypatch.setenv(linear_ops.IDENTITY_ENV, "bureau-sandbox")
+    assert linear_ops.declared_identity() == "undeclared"
+
+
 def test_a_name_the_declaration_does_not_carry_is_not_a_declaration(
     transport, monkeypatch
 ):
