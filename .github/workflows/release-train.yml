@@ -74,6 +74,37 @@
 #      which the next trigger reads and releases; a crash after it leaves the
 #      surface CURRENT, which the next trigger reads as a no-op. Nothing here
 #      writes a marker that could block its own recovery.
+#
+# A NO-OP THAT NAMES A MINUTE RE-ARMS ITSELF (DRE-3559). A run that no-ops on
+# the spacing names the minute the next release may be cut, and one that
+# no-ops on the window names its next open — and neither minute is a trigger.
+# On 2026-09-12 four runs (15:23, 15:25, 15:31, 15:35:52 PT) each named 15:36
+# PT and the release waited for a hand dispatch at 15:38:58 PT. So the plan
+# dispatches the CALLER's stub once, `-f not_before=<UTC minute>`, with this
+# run's own `github.token` (a `workflow_dispatch` is one of the two events a
+# GITHUB_TOKEN may start a run with); the re-armed run's `wait` job sleeps
+# until the minute — bounded by the largest spacing plus two minutes — and
+# `plan` then decides as ever, nothing bypassed. The stub must therefore
+# declare, beside `surface`:
+#
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         not_before:
+#           type: string
+#           required: false
+#           default: ""
+#   permissions:
+#     actions: write            # was `read`; write covers the reads too
+#
+# and it need not pass `not_before` to this workflow: a called workflow's
+# `github` context is the caller's, so `github.event.inputs.not_before` is
+# read here directly — the same way `github.event.workflow_run.head_sha` is.
+# A stub without either is a `re-arm skipped: …` clause on the no-op's line,
+# never a failed run. NOTE for the caller's permissions: this workflow never
+# declares a job-level `permissions:` block, because a called job asking for
+# more than its caller granted fails the WHOLE run at startup — an old stub
+# with `actions: read` would lose its train, not just its re-arm.
 name: Release Train (reusable)
 
 on:
@@ -111,6 +142,51 @@ on:
         required: false
 
 jobs:
+  # A RE-ARMED run's first job (DRE-3559), and skipped on every other event.
+  # It sleeps until the minute the no-op named — never longer than the
+  # caller's largest `spacing_minutes` plus two minutes, straight on if the
+  # minute has passed or cannot be read — and then `plan` decides as ever.
+  #
+  # Its own job, not a step in `plan`, so `plan` keeps the 10-minute bound
+  # config/pipeline-acts.json reads `release-ci-green`'s cadence off.
+  #
+  # THE NAME IS LOAD-BEARING: the plan finds a run already armed for a minute
+  # by `Wait until <that minute>` in the jobs API (release_train.armed_run),
+  # which is how two no-ops inside one spacing window produce one re-arm. The
+  # concurrency group is the backstop for a race past that read: keyed on the
+  # repository and the minute, never cancelling, so at most one run SLEEPS for
+  # a minute and a second queues without holding a runner. A run with no
+  # minute keys on its own run id and shares a lane with nothing.
+  wait:
+    name: Wait until ${{ github.event.inputs.not_before }}
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.not_before != ''
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # Above release_train.WAIT_CEILING_MINUTES (60) plus the slack and the two
+    # checkouts; tests/test_release_train_re_arm.py holds it there.
+    timeout-minutes: 70
+    concurrency:
+      group: release-re-arm:${{ github.repository }}:${{ github.event.inputs.not_before || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      # Only the data: the bound is read off the caller's own release.json.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/bureau
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      - name: Wait until the minute the train named
+        env:
+          # Through env, never interpolated into the shell line (tests.yml).
+          NOT_BEFORE: ${{ github.event.inputs.not_before }}
+        run: |
+          python3 .bureau-pipeline/scripts/release_train.py \
+            --repo "$GITHUB_REPOSITORY" wait --not-before "$NOT_BEFORE"
+
   # The head of the default branch at the moment the run starts (the COLLAPSE
   # rule), every surface's decision made from it, and — for each surface
   # that releases — the COMMIT it releases: the newest green one on the
@@ -119,6 +195,12 @@ jobs:
   # is ever created.
   plan:
     name: Plan the surfaces
+    # Behind the wait on a re-armed run; on every other event the wait is
+    # skipped, and a skipped need skips its dependants unless they say
+    # otherwise — so this says otherwise. A wait cancelled by its concurrency
+    # group is the collapse working, and plans nothing.
+    needs: wait
+    if: ${{ !cancelled() && needs.wait.result != 'cancelled' }}
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     outputs:
@@ -182,6 +264,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           CI_SHA: ${{ github.event.workflow_run.head_sha }}
           CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          # The re-arm (DRE-3559): the ref the caller's stub is dispatched on.
+          # Empty on a schedule's thin payload, where the script falls back to
+          # GITHUB_REF_NAME — which on a schedule IS the default branch. The
+          # stub itself is named by GITHUB_WORKFLOW_REF, the caller's.
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # A CI run that concluded anything but success is a no-op that says
           # so — in the step's own shell, not a job-level `if:`, because a
@@ -202,14 +289,18 @@ jobs:
           fi
           python3 .bureau-pipeline/scripts/release_train.py \
             --repo "$GITHUB_REPOSITORY" plan \
-            --head "$HEAD_SHA" --surface "$SURFACE"
+            --head "$HEAD_SHA" --surface "$SURFACE" --re-arm
 
   # One job per surface that is actually releasing, each in its own lane, at
   # the commit the plan chose for it: the matrix is `[{surface, sha}, …]`.
   release:
     name: Release ${{ matrix.surface }}
     needs: plan
-    if: needs.plan.outputs.matrix != '[]' && needs.plan.outputs.matrix != ''
+    # The status check is explicit (DRE-3559): the implicit `success()` is
+    # false when ANY ancestor was skipped (actions/runner#491), and `wait` is
+    # skipped on every run that was not re-armed. A failed plan (a refusal)
+    # still releases nothing, exactly as before.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.matrix != '[]' && needs.plan.outputs.matrix != '' }}
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     strategy:

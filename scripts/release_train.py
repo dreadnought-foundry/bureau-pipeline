@@ -127,6 +127,29 @@ where a number would be a lie, and exits 0 — the row releases nothing, and a
 red train on an API blip would be a second kind of noise. Both this plan and
 `promote-channel.yml` print ONE machine-readable receipt line for it
 (`Channel.receipt`), byte-stable, which agent-bureau's console parses.
+
+A NO-OP THAT NAMES A MINUTE RE-ARMS FOR IT (DRE-3559). The triggers are CI
+completing on the default branch, the 07:00 PT schedule and a hand dispatch —
+so a run that no-op'd on the spacing named the exact minute the next release
+could be cut, and then nothing existed to cut it. On 2026-09-12 four runs
+(15:23, 15:25, 15:31 and 15:35:52 PT) each said "may be cut at 15:36 PT" and
+the release waited for the CEO's hand dispatch at 15:38:58 PT. Now `decide()`
+carries a `re_arm_at` on a spacing no-op — the first WHOLE minute at which the
+spacing has elapsed, moved to the window's next open if that minute falls
+outside it — and on a window no-op, the window's next open on the PT clock.
+The plan dispatches the CALLER's own stub once for the earliest of them
+(`gh workflow run <stub> -f not_before=<UTC>` under the train's own token),
+the re-armed run's `wait` job sleeps until that minute — never longer than the
+largest spacing plus `WAIT_SLACK_MINUTES` — and then the ordinary decision
+runs: green-at-SHA, the spacing, the window, the brake, nothing bypassed. A
+hold, the brake, `auto: false`, "reads current", a still-checking commit, a
+refusal and a release re-arm nothing: a person, or the next CI completion,
+owns those. Two no-ops inside one spacing window produce ONE waiting re-arm —
+the plan looks for an in-flight run already armed for the minute (by the
+minute in its wait job's name) before it dispatches, and the wait job's
+concurrency group is keyed on the minute as the backstop. A stub that cannot
+be dispatched that way (no `not_before` input, or `actions: read`) is a
+`re-arm skipped: …` clause on the line, never a failed run.
 """
 
 from __future__ import annotations
@@ -138,6 +161,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -179,6 +203,29 @@ IGNORED_WORKFLOWS = merge_gate.DEFAULT_REVIEW_WORKFLOWS + (TRAIN_WORKFLOW,)
 #: distance to the tag: a surface ninety commits behind whose head's parent
 #: is green costs two reads. Thirty is ~2x the live fixture's twenty.
 WALK_BOUND = 30
+
+#: The re-arm's wait (DRE-3559). A re-armed run sleeps until the minute its
+#: no-op named, and never longer than the largest `spacing_minutes` among the
+#: surfaces that can re-arm plus this slack — the minute is at most one
+#: spacing away by construction, and two minutes covers a runner that picked
+#: the job up late. A re-arm further away than that is not dispatched at all:
+#: a sleeping run holds a runner the whole time.
+WAIT_SLACK_MINUTES = 2
+#: The hard ceiling on that wait, whatever a caller declares, and the number
+#: the `wait` job's `timeout-minutes` is held above by a test. A surface whose
+#: spacing is longer is re-armed only by a no-op inside the last hour of it;
+#: an earlier one says `not re-armed` and why, rather than holding a runner
+#: for hours.
+WAIT_CEILING_MINUTES = 60
+#: How a run already armed for a minute is recognised: the `wait` job's name in
+#: `.github/workflows/release-train.yml` is this prefix plus the minute, and
+#: the jobs API reports it (as `call / Wait until <minute>` in the caller).
+WAIT_JOB_PREFIX = "Wait until"
+
+#: The two ways a stub refuses a re-arm, named once so the line and the test
+#: agree on the words.
+LACKS_NOT_BEFORE = "caller stub lacks not_before"
+LACKS_ACTIONS_WRITE = "caller stub lacks actions: write"
 
 #: Where a caller declares its surfaces, and where this repo declares its own.
 DATA_PATH = ".github/bureau/release.json"
@@ -355,6 +402,10 @@ class Decision(NamedTuple):
     #: Where the channel stands, on a `record: channel` surface (DRE-3568) —
     #: what the second receipt line and the step summary are printed from.
     channel: Channel | None = None
+    #: The minute this surface may next be released, when the no-op is one a
+    #: timer can end — the spacing or the window (DRE-3559). `None` for every
+    #: decision a person or the next CI completion owns. Timezone-aware.
+    re_arm_at: datetime | None = None
 
     @property
     def ok(self) -> bool:
@@ -877,22 +928,33 @@ def decide(surface, now, newest_tag_at, lag_state, ci_green, brake, *,
     if newest_tag_at is not None and surface.spacing_minutes > 0:
         elapsed = now - newest_tag_at
         if elapsed < timedelta(minutes=surface.spacing_minutes):
-            next_at = (newest_tag_at + timedelta(minutes=surface.spacing_minutes))
+            # The FIRST WHOLE minute at which the spacing has elapsed
+            # (DRE-3559). Run 34723138488 named 15:36 PT for a spacing that
+            # ended at 15:36:xx — a run woken at the minute it was told would
+            # have no-op'd all over again. Rounded up, the named minute is
+            # always one at which a release may actually be cut.
+            next_at = ceil_minute(
+                newest_tag_at + timedelta(minutes=surface.spacing_minutes))
             minutes = max(0, int(elapsed.total_seconds() // 60))
             return Decision(
                 NO_OP, "spacing",
                 f"{surface.name} was released {minutes} minutes ago and its "
                 f"spacing is {surface.spacing_minutes} minutes — the next "
                 f"release may be cut at "
-                f"{next_at.astimezone(PT):%H:%M} PT")
+                f"{next_at.astimezone(PT):%H:%M} PT",
+                re_arm_at=_spacing_re_arm(surface, next_at))
 
     if not dispatched and surface.window != WINDOW_ALWAYS:
         start, end = window_bounds(surface.window)
         if not in_window(surface.window, now):
+            # Only an `auto: true` surface reaches here undispatched — an
+            # `auto: false` one returned above — so the re-armed run, an
+            # ordinary run, is one that would release it.
             return Decision(
                 NO_OP, "window",
                 f"the clock reads {local:%H:%M} PT and {surface.name}'s window "
-                f"is {surface.window} — this defers to {start} PT")
+                f"is {surface.window} — this defers to {start} PT",
+                re_arm_at=next_window_open(surface.window, now))
 
     checks = ci_green if isinstance(ci_green, Checks) else (
         Checks("green", "the caller said so") if ci_green is True
@@ -1022,6 +1084,238 @@ def in_window(window: str, now: datetime) -> bool:
     if start <= end:
         return start <= clock < end
     return clock >= start or clock < end
+
+
+# ---------------------------------------------------------------------------
+# The re-arm (DRE-3559) — the minute a no-op names, and the one run it wakes
+# ---------------------------------------------------------------------------
+
+def ceil_minute(when: datetime) -> datetime:
+    """`when` rounded UP to a whole minute, in UTC. Done in UTC on purpose:
+    arithmetic on a `ZoneInfo` datetime is wall-clock arithmetic, which is
+    wrong by an hour across a DST change."""
+    at = when.astimezone(timezone.utc)
+    whole = at.replace(second=0, microsecond=0)
+    return whole if whole == at else whole + timedelta(minutes=1)
+
+
+def next_window_open(window: str, after: datetime) -> datetime | None:
+    """The first moment strictly after `after` at which `window` opens, on the
+    America/Los_Angeles WALL clock, returned in UTC. Built from the local date
+    plus the window's start rather than by adding hours, so 07:00 PT the
+    morning after a DST change is 07:00 PT and not 06:00 or 08:00."""
+    if window == WINDOW_ALWAYS:
+        return None
+    start, _ = window_bounds(window)
+    hour, minute = (int(part) for part in start.split(":"))
+    day = after.astimezone(PT).date()
+    for ahead in range(3):
+        on = day + timedelta(days=ahead)
+        opens = datetime(on.year, on.month, on.day, hour, minute, tzinfo=PT)
+        if opens > after:
+            return opens.astimezone(timezone.utc)
+    return None
+
+
+def _spacing_re_arm(surface, ready: datetime) -> datetime | None:
+    """The re-arm for a spacing no-op: the minute the spacing ends, or the
+    window's next open when that minute falls outside the window — re-arming
+    for a minute the window refuses would only buy a window no-op. Nothing
+    for an `auto: false` surface: the re-armed run is an ordinary run, which
+    skips it, and a person owns a hand dispatch."""
+    if not surface.auto:
+        return None
+    if not in_window(surface.window, ready):
+        return next_window_open(surface.window, ready)
+    return ready
+
+
+def _pt_minute(when: datetime) -> str:
+    return f"{when.astimezone(PT):%H:%M} PT"
+
+
+def iso_utc(when: datetime) -> str:
+    """The `not_before` input's shape: `YYYY-MM-DDTHH:MM:SSZ`."""
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_not_before(raw) -> datetime | None:
+    """The `not_before` input as an aware UTC datetime, or `None` when it is
+    empty, malformed or naive — a naive time cannot be placed on any clock."""
+    if not raw or not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        at = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if at.tzinfo is None or at.utcoffset() is None:
+        return None
+    return at.astimezone(timezone.utc)
+
+
+def wait_bound_minutes(data) -> int:
+    """How long a re-armed run may wait: the largest `spacing_minutes` among
+    the surfaces that can re-arm (`auto: true`, `record: tag`), plus
+    `WAIT_SLACK_MINUTES`, never above `WAIT_CEILING_MINUTES`."""
+    spacings = []
+    for entry in ((data or {}).get("surfaces") or {}).values():
+        if not isinstance(entry, dict) or entry.get("auto") is not True:
+            continue
+        if (entry.get("record") or "tag") != "tag":
+            continue
+        spacing = entry.get("spacing_minutes")
+        if isinstance(spacing, int) and not isinstance(spacing, bool):
+            spacings.append(max(0, spacing))
+    return min(max(spacings, default=0) + WAIT_SLACK_MINUTES,
+               WAIT_CEILING_MINUTES)
+
+
+class ReArm(NamedTuple):
+    """What the plan does about re-arming: the minute (the earliest any
+    surface named), whether it is dispatched, and the clause every re-arming
+    surface's line gains."""
+
+    at: datetime | None
+    dispatch: bool
+    note: str
+
+
+def re_arm_plan(planned, *, now: datetime, bound_minutes: int) -> ReArm:
+    """ONE re-arm per run, for the earliest minute any surface named. The
+    re-armed run decides every surface afresh, and re-arms again for the next
+    one if it must — so one dispatch per run is enough and never a fan-out.
+    A minute further away than the wait bound is not dispatched: a sleeping
+    run holds a runner the whole time, and the line says what wakes the train
+    instead."""
+    wanted = [d.re_arm_at for _, d in planned if d.re_arm_at is not None]
+    if not wanted:
+        return ReArm(None, False, "")
+    at = min(wanted)
+    when = _pt_minute(at)
+    if at <= now:
+        return ReArm(at, False, f"not re-armed: {when} has already passed")
+    if at - now > timedelta(minutes=bound_minutes):
+        return ReArm(
+            at, False,
+            f"not re-armed: {when} is more than the {bound_minutes}-minute "
+            f"wait a re-armed run may hold a runner for — the next CI "
+            f"completion on the default branch or the daily 07:00 PT "
+            f"schedule wakes the train")
+    return ReArm(at, True, f"re-armed for {when}")
+
+
+def armed_run(runs, not_before: str, own_run_id=None) -> str | None:
+    """The URL of an in-flight run already armed for `not_before`, found by
+    the minute in its wait job's name — the COLLAPSE rule for re-arms: two
+    no-ops inside one spacing window name the same minute, and the second
+    finds the first's run waiting. The asking run is never its own answer: a
+    re-armed run that must re-arm again is still in flight, and would
+    otherwise read itself as the run already waiting."""
+    marker = f"{WAIT_JOB_PREFIX} {not_before}"
+    for run in runs or ():
+        if run.get("status") == "completed":
+            continue
+        if own_run_id and str(run.get("id")) == str(own_run_id):
+            continue
+        if any(marker in (name or "") for name in run.get("jobs") or ()):
+            return run.get("html_url") or "an in-flight run"
+    return None
+
+
+_NOT_BEFORE_INPUT = re.compile(r"^\s+not_before\s*:", re.M)
+
+
+def stub_declares_not_before(text: str) -> bool:
+    """Does the caller's stub declare the `not_before` dispatch input? Read as
+    text, not YAML — the plan runs on a bare `python3` with no PyYAML, and a
+    false positive is caught anyway by the API's 422."""
+    return bool(_NOT_BEFORE_INPUT.search(text or ""))
+
+
+def caller_workflow_path(workflow_ref: str) -> str:
+    """The caller's stub, from `GITHUB_WORKFLOW_REF`
+    (`owner/repo/.github/workflows/x.yml@refs/heads/main`) — in a reusable
+    workflow that context is the CALLER's, which is the file to dispatch."""
+    match = re.match(r"^[^/]+/[^/]+/(.+?)@", workflow_ref or "")
+    return match.group(1) if match else TRAIN_WORKFLOW
+
+
+def re_arm_failure(detail: str) -> str:
+    """A refused dispatch as the one clause the line gains. Never a failure:
+    the no-op stands and the next trigger still comes."""
+    text = " ".join(str(detail or "").split())
+    if "not accessible by integration" in text or "HTTP 403" in text:
+        reason = (f"{LACKS_ACTIONS_WRITE} — the train's token cannot dispatch "
+                  f"it (standards/release-train.md)")
+    elif "Unexpected inputs" in text:
+        reason = (f"{LACKS_NOT_BEFORE} — its workflow_dispatch declares no "
+                  f"`not_before` input (standards/release-train.md)")
+    else:
+        reason = f"the dispatch failed: {text[:300] or 'no reason given'}"
+    return f"re-arm skipped: {reason}"
+
+
+def wait_seconds(raw, now: datetime, bound_minutes: int):
+    """(seconds to sleep, the line to print) for a re-armed run's wait. A
+    minute already past, or one that cannot be read, is no wait at all — the
+    ordinary decision runs straight away and decides for itself."""
+    at = parse_not_before(raw)
+    if at is None:
+        return 0, (f"{TAG}: not_before {raw!r} is not a UTC time — going "
+                   f"straight on to the ordinary decision")
+    remaining = (at - now).total_seconds()
+    when = _pt_minute(at)
+    if remaining <= 0:
+        return 0, (f"{TAG}: re-armed for {when}, which has passed — going "
+                   f"straight on to the ordinary decision")
+    bound = bound_minutes * 60
+    if remaining > bound:
+        return bound, (
+            f"{TAG}: re-armed for {when}, more than the {bound_minutes}-minute "
+            f"bound away — waiting {bound_minutes} minutes, and the decision "
+            f"after it re-arms again if it must")
+    return remaining, (
+        f"{TAG}: re-armed for {when} — waiting {int(remaining)} seconds, then "
+        f"the ordinary decision (green-at-SHA, the spacing, the window, the "
+        f"brake; nothing bypassed)")
+
+
+def fetch_armed_runs(repo: str, workflow: str) -> list:
+    """The caller stub's in-flight dispatched runs, each with its job names —
+    at most twenty runs and one jobs read each, and in practice none or one.
+    A `RuntimeError` when unreadable; the caller dispatches anyway."""
+    name = workflow.rsplit("/", 1)[-1]
+    runs = _gh_json(
+        f"repos/{repo}/actions/workflows/{name}/runs"
+        f"?event=workflow_dispatch&per_page=20",
+        '[.workflow_runs[] | select(.status != "completed") '
+        '| {id, status, html_url}]',
+        "the train's dispatched runs") or []
+    out = []
+    for run in runs:
+        jobs = _gh_json(f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100",
+                        "[.jobs[].name]", f"the jobs of run {run['id']}") or []
+        out.append({**run, "jobs": jobs})
+    return out
+
+
+def dispatch_re_arm(repo: str, workflow: str, ref: str, not_before: str) -> None:
+    """Dispatch the caller's stub once for `not_before`, under the train's own
+    token (`GH_TOKEN`, the stub's `actions: write`). A `workflow_dispatch` is
+    one of the two events a `GITHUB_TOKEN` may create a run with. No `surface`:
+    the re-armed run is an ordinary run and bypasses nothing. A `RuntimeError`
+    carrying GitHub's answer on refusal."""
+    name = workflow.rsplit("/", 1)[-1]
+    done = subprocess.run(
+        ["gh", "workflow", "run", name, "--repo", repo, "--ref", ref,
+         "-f", f"not_before={not_before}"],
+        capture_output=True, text=True)
+    if done.returncode != 0:
+        raise RuntimeError(done.stderr.strip()
+                           or f"gh workflow run exited {done.returncode}")
 
 
 # ---------------------------------------------------------------------------
@@ -1469,6 +1763,13 @@ def render_markdown() -> str:
     w("        type: string")
     w("        required: false")
     w('        default: ""')
+    w("      not_before:")
+    w("        type: string")
+    w("        required: false")
+    w('        default: ""')
+    w("")
+    w("permissions:")
+    w("  actions: write")
     w("```")
     w("")
     w(
@@ -1493,6 +1794,49 @@ def render_markdown() -> str:
         "default branch's head without being about it, and are ignored by "
         "that origin — never by name. Every no-op and refusal line names what "
         "was read and what was ignored, by producing workflow file."
+    )
+    w("")
+    w("## A no-op that names a minute re-arms itself")
+    w("")
+    w(
+        "**DRE-3559.** A run that no-ops on the spacing names the minute the "
+        "next release may be cut; one that no-ops on the window names the "
+        "window's next open. Neither is a trigger, so the run re-arms itself: "
+        "it dispatches the caller's own stub once, `gh workflow run "
+        "<stub> -f not_before=<UTC minute>`, under the train's own "
+        "`github.token` — which is why the stub grants `actions: write` and "
+        "declares the `not_before` dispatch input. The re-armed run's `wait` "
+        "job sleeps until that minute, never longer than the largest "
+        f"`spacing_minutes` among the `auto: true` surfaces plus "
+        f"{WAIT_SLACK_MINUTES} minutes (at most {WAIT_CEILING_MINUTES}), and "
+        "then the ordinary decision runs — green-at-SHA, the spacing, the "
+        "window and the brake, nothing bypassed. A minute further away than "
+        "that bound is not re-armed: a sleeping run holds a runner the whole "
+        "time, and the line says the next CI completion or the 07:00 PT "
+        "schedule wakes the train instead."
+    )
+    w("")
+    w(
+        "The no-op's line gains one clause: `— re-armed for HH:MM PT`, `— "
+        "re-armed for HH:MM PT (already waiting: <run>)` when a run is "
+        "already armed for that minute, `— not re-armed: …` past the bound, "
+        f"or `— re-arm skipped: {LACKS_NOT_BEFORE}` / `— re-arm skipped: "
+        f"{LACKS_ACTIONS_WRITE}` for a stub that cannot be dispatched that "
+        "way. None of them fails the run. A hold, the brake, `auto: false`, "
+        "`current`, `ci-pending`, a refusal and a release re-arm nothing: a "
+        "person, or the next CI completion, owns those."
+    )
+    w("")
+    w(
+        "**Two no-ops inside one spacing window produce one re-arm.** Both "
+        "name the same minute; before dispatching, the plan reads the stub's "
+        "in-flight dispatched runs and finds one whose wait job is named "
+        f"`{WAIT_JOB_PREFIX} <that minute>`. The wait job's concurrency group "
+        "is keyed on the repository and the minute as the backstop: if two "
+        "plans race past that read, one run sleeps and the other queues "
+        "behind it without holding a runner, then finds the minute passed and "
+        "goes straight to a decision the per-surface release lane serialises "
+        "— the second reads current, and nothing is released twice."
     )
     w("")
     return "\n".join(out)
@@ -1523,9 +1867,13 @@ _ORDER = (
     ("current", NO_OP, "nothing under the surface's `paths` has changed since "
                        "its newest tag"),
     ("spacing", NO_OP, "the newest tag in the series is younger than "
-                       "`spacing_minutes`"),
+                       "`spacing_minutes`; the line names the first whole "
+                       "minute a release may be cut, and the run re-arms "
+                       "itself for it (DRE-3559)"),
     ("window", NO_OP, "the America/Los_Angeles clock is outside the window; a "
-                      "hand dispatch runs anyway"),
+                      "hand dispatch runs anyway, and an unattended run "
+                      "re-arms itself for the window's next open when that is "
+                      "inside the wait bound"),
     ("ci-pending", NO_OP, "no candidate is green yet — the newest still "
                           "checking is named, the train leaves without it, "
                           "and the run its CI completion fires takes it "
@@ -1592,6 +1940,68 @@ def _announce_channel(decision: Decision, out=print) -> None:
     _step_summary(heading, [decision.reason, "", f"`{channel.receipt()}`"])
 
 
+def _now() -> datetime:
+    """The clock the CLI reads — one seam, so a test can set it."""
+    return datetime.now(tz=PT)
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _re_arm(args, data, planned, now) -> tuple:
+    """Act on the plan's re-arm: (the clause for the line, the minute armed
+    or `""`). Every path returns; none raises and none fails the run.
+
+    Order: the stub is read for its `not_before` input first (an old stub is
+    skipped without spending a call it would refuse); then the in-flight runs
+    are read for one already armed for the minute (the collapse); only then
+    is the stub dispatched. An unreadable listing still dispatches — a
+    duplicate is collapsed by the wait job's concurrency group, whereas a
+    missing re-arm is the bug this exists to fix."""
+    outcome = re_arm_plan(planned, now=now, bound_minutes=wait_bound_minutes(data))
+    if not outcome.dispatch:
+        return outcome.note, ""
+    not_before = iso_utc(outcome.at)
+    try:
+        stub = (Path(args.repo_root) / args.workflow).read_text(encoding="utf-8")
+    except OSError:
+        stub = None   # unreadable here: let GitHub answer the dispatch
+    if stub is not None and not stub_declares_not_before(stub):
+        return (f"re-arm skipped: {LACKS_NOT_BEFORE} — {args.workflow} declares "
+                f"no `not_before` dispatch input (standards/release-train.md)"), ""
+    unread = ""
+    try:
+        waiting = armed_run(fetch_armed_runs(args.repo, args.workflow), not_before,
+                            own_run_id=os.environ.get("GITHUB_RUN_ID"))
+    except RuntimeError as err:
+        waiting = None
+        unread = (f" (the in-flight runs could not be read — {err}; dispatched "
+                  f"anyway, and the wait job's concurrency group collapses a "
+                  f"duplicate)")
+    if waiting:
+        return f"{outcome.note} (already waiting: {waiting})", not_before
+    try:
+        dispatch_re_arm(args.repo, args.workflow, args.default_branch, not_before)
+    except RuntimeError as err:
+        return re_arm_failure(str(err)), ""
+    return f"{outcome.note}{unread}", not_before
+
+
+def _cmd_wait(args) -> int:
+    """A re-armed run's first job: sleep until the minute, bounded, then let
+    the plan decide. Exits 0 on every path — a wait never stops the train."""
+    try:
+        bound = wait_bound_minutes(load(args.file))
+    except (OSError, ValueError, TypeError):
+        bound = WAIT_CEILING_MINUTES
+    seconds, line = wait_seconds(args.not_before, _now(), bound)
+    print(line)
+    if seconds > 0:
+        _sleep(seconds)
+    return 0
+
+
 def _cmd_schema(args) -> int:
     problems = check_schema(load(args.file), repo_root=args.repo_root)
     if problems:
@@ -1612,14 +2022,24 @@ def _cmd_plan(args) -> int:
         for problem in problems:
             print(f"  {problem}")
         return 1
+    now = _now()
     planned = plan(data, repo_root=args.repo_root, head=args.head,
-                   now=datetime.now(tz=PT), brake=brake(),
+                   now=now, brake=brake(),
                    dispatched_surface=args.surface or None, repo=args.repo)
+    note, armed = _re_arm(args, data, planned, now) if args.re_arm else ("", "")
     for entry, decision in planned:
-        print(decision.receipt(args.repo, entry.name, decision.sha))
+        shown = decision
+        if note and decision.re_arm_at is not None:
+            # The clause rides on the no-op's own line, after the sentence the
+            # console's release row reads its code from (DRE-3336), so the row
+            # still reads the spacing or window hold — now with its re-arm.
+            shown = decision._replace(reason=f"{decision.reason} — {note}")
+        print(shown.receipt(args.repo, entry.name, decision.sha))
         _announce_channel(decision)
     _emit_output("matrix", json.dumps(matrix(planned)))
     _emit_output("head", args.head)
+    if args.re_arm:
+        _emit_output("re_arm", armed)
     # A refusal is loud here too — a red-only or too-far-behind surface
     # fails the plan, the way it would fail the surface job.
     return 0 if all(decision.ok for _, decision in planned) else 1
@@ -1704,6 +2124,25 @@ def main(argv=None) -> int:
                          help="the default branch's head — the walk starts here")
     planner.add_argument("--surface", default="",
                          help="a hand dispatch: plan only this surface")
+    planner.add_argument("--re-arm", action="store_true",
+                         help="dispatch the caller's stub once for the minute a "
+                              "spacing or window no-op names (DRE-3559)")
+    planner.add_argument("--workflow",
+                         default=caller_workflow_path(
+                             os.environ.get("GITHUB_WORKFLOW_REF", "")),
+                         help="the caller's stub, as a repo path — from "
+                              "GITHUB_WORKFLOW_REF by default")
+    planner.add_argument("--default-branch",
+                         default=(os.environ.get("DEFAULT_BRANCH")
+                                  or os.environ.get("GITHUB_REF_NAME")
+                                  or "main"),
+                         help="the ref the re-arm dispatches the stub on")
+
+    waiter = sub.add_parser(
+        "wait", help="a re-armed run's wait: until not_before, bounded by the "
+                     "caller's largest spacing plus two minutes (DRE-3559)")
+    waiter.add_argument("--not-before", default="",
+                        help="the UTC minute the no-op named")
 
     runner = sub.add_parser("release", help="release ONE surface")
     runner.add_argument("--sha", required=True)
@@ -1735,6 +2174,7 @@ def main(argv=None) -> int:
         "release": _cmd_release,
         "render": _cmd_render,
         "channel": _cmd_channel,
+        "wait": _cmd_wait,
     }[args.command](args)
 
 

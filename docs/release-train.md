@@ -55,8 +55,8 @@ One rule set, asked twice: once to build the matrix, and once inside each surfac
 | 3 | `no-script` | `no-op` | the surface declares no script |
 | 4 | `auto-false` | `no-op` | unattended runs skip an `auto: false` surface; a hand dispatch runs it |
 | 5 | `current` | `no-op` | nothing under the surface's `paths` has changed since its newest tag |
-| 6 | `spacing` | `no-op` | the newest tag in the series is younger than `spacing_minutes` |
-| 7 | `window` | `no-op` | the America/Los_Angeles clock is outside the window; a hand dispatch runs anyway |
+| 6 | `spacing` | `no-op` | the newest tag in the series is younger than `spacing_minutes`; the line names the first whole minute a release may be cut, and the run re-arms itself for it (DRE-3559) |
+| 7 | `window` | `no-op` | the America/Los_Angeles clock is outside the window; a hand dispatch runs anyway, and an unattended run re-arms itself for the window's next open when that is inside the wait bound |
 | 8 | `ci-pending` | `no-op` | no candidate is green yet — the newest still checking is named, the train leaves without it, and the run its CI completion fires takes it (never a wait: the train is never stopped) |
 | 9 | `ci-red / ci-absent` | `refuse` | every candidate is red, or no gating check has reported on it — each named in the refusal, with what was read and what was ignored; a red commit is never released |
 | 10 | `walk-bound` | `refuse` | 30 candidates read newest-first and none green, with more behind them — the surface is too far behind to walk; release it by hand, or raise the bound |
@@ -84,8 +84,23 @@ on:
         type: string
         required: false
         default: ""
+      not_before:
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  actions: write
 ```
 
 `workflows: ["CI"]` is the `name:` of the caller's CI workflow, and `branches: [main]` is the branch that CI ran on. On that event the reusable workflow reads the commit from `github.event.workflow_run.head_sha` and proceeds only when `github.event.workflow_run.conclusion` is `success`; a CI run that concluded anything else is a `no-op` that says so, and the commit waits for the repair the medic files. The schedule and the hand dispatch read the head of the branch at that moment, as before.
 
 Which check runs on the commit COUNT is decided in one place — `merge_gate.gating_check_runs`, the same classifier the merge gate's all-green rule rests on. A check run counts when GitHub's own workflow-runs record says the commit itself triggered it (`push`, `pull_request`, `pull_request_target`) and it is not a review workflow or the train's own stub; a fix agent, the medic, the sweep, a hand dispatch and the train's own run all report against the default branch's head without being about it, and are ignored by that origin — never by name. Every no-op and refusal line names what was read and what was ignored, by producing workflow file.
+
+## A no-op that names a minute re-arms itself
+
+**DRE-3559.** A run that no-ops on the spacing names the minute the next release may be cut; one that no-ops on the window names the window's next open. Neither is a trigger, so the run re-arms itself: it dispatches the caller's own stub once, `gh workflow run <stub> -f not_before=<UTC minute>`, under the train's own `github.token` — which is why the stub grants `actions: write` and declares the `not_before` dispatch input. The re-armed run's `wait` job sleeps until that minute, never longer than the largest `spacing_minutes` among the `auto: true` surfaces plus 2 minutes (at most 60), and then the ordinary decision runs — green-at-SHA, the spacing, the window and the brake, nothing bypassed. A minute further away than that bound is not re-armed: a sleeping run holds a runner the whole time, and the line says the next CI completion or the 07:00 PT schedule wakes the train instead.
+
+The no-op's line gains one clause: `— re-armed for HH:MM PT`, `— re-armed for HH:MM PT (already waiting: <run>)` when a run is already armed for that minute, `— not re-armed: …` past the bound, or `— re-arm skipped: caller stub lacks not_before` / `— re-arm skipped: caller stub lacks actions: write` for a stub that cannot be dispatched that way. None of them fails the run. A hold, the brake, `auto: false`, `current`, `ci-pending`, a refusal and a release re-arm nothing: a person, or the next CI completion, owns those.
+
+**Two no-ops inside one spacing window produce one re-arm.** Both name the same minute; before dispatching, the plan reads the stub's in-flight dispatched runs and finds one whose wait job is named `Wait until <that minute>`. The wait job's concurrency group is keyed on the repository and the minute as the backstop: if two plans race past that read, one run sleeps and the other queues behind it without holding a runner, then finds the minute passed and goes straight to a decision the per-surface release lane serialises — the second reads current, and nothing is released twice.

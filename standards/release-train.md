@@ -83,12 +83,17 @@ on:
         type: string
         required: false
         default: ""
+      not_before:
+        description: Set by the train itself when it re-arms (DRE-3559). Leave empty.
+        type: string
+        required: false
+        default: ""
 
 permissions:
   id-token: write
   contents: write
   checks: read
-  actions: read
+  actions: write
 
 jobs:
   call:
@@ -117,8 +122,29 @@ GATE A MERGE count — the merge gate's own set, read from one place; a fix
 agent, the medic, the sweep and the train's own run on the same SHA are
 ignored by verified origin, and every no-op and refusal names what was read
 and what was ignored. `checks: read` is the permission green-at-SHA reads
-`commits/{sha}/check-runs` with; `actions: read` is the workflow-runs record
-that says which of those runs gate.
+`commits/{sha}/check-runs` with; `actions: write` covers the workflow-runs
+record that says which of those runs gate, and the re-arm below dispatches
+the stub with it.
+
+**A no-op that names a minute re-arms itself (DRE-3559).** A run that no-ops
+on the spacing names the minute the next release may be cut — the first whole
+minute at which the spacing has elapsed — and one that no-ops on the window
+names the window's next open. Neither minute is a trigger: on 2026-09-12 four
+runs between 15:23 and 15:35:52 PT each said "may be cut at 15:36 PT" and the
+release waited for a hand dispatch at 15:38:58 PT. So the run dispatches this
+stub once, `gh workflow run release-train.yml -f not_before=<UTC minute>`,
+under its own `github.token` — hence `actions: write`, and the `not_before`
+input, which the train reads straight from the dispatch event, so the `with:`
+block does not pass it. The re-armed run waits until that minute (never longer
+than the largest `spacing_minutes` plus two minutes) and then decides exactly
+as any other run: green-at-SHA, the spacing, the window and the brake, nothing
+bypassed. The no-op's line says `— re-armed for HH:MM PT`; two no-ops inside
+one spacing window produce one re-arm, and the second line names the run
+already waiting. A hold, the brake, `auto: false`, a surface that reads
+current and a commit still checking re-arm nothing — a person, or the next CI
+completion, owns those. A stub without `not_before` or with `actions: read`
+still works: its line says `re-arm skipped: caller stub lacks not_before` (or
+`lacks actions: write`), and the run is as green as it was.
 
 **Ready is a commit, not the head (DRE-3266, the CEO's amendment of the same
 day).** The train releases the newest commit on the default branch whose
