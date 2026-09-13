@@ -78,8 +78,9 @@ jobs:
       group: reconcile
       cancel-in-progress: false
     # Whose Linear hour this sweep spends (DRE-3321). Linear's 2,500/hour
-    # limit is PER USER and there are two non-human users (DRE-3172), so a
-    # rate-limited run has to name the bucket that ran dry. Job level, beside
+    # limit is PER USER and there are three non-human users (DRE-3172,
+    # DRE-3628: fleet, operator-tools, sandbox), so a rate-limited run has to
+    # name the bucket that ran dry. Job level, beside
     # the job that reads secrets.LINEAR_API_KEY: every step inherits it and no
     # step has to be edited — including the next one somebody adds. DECLARED,
     # not verified: the label cannot be checked against Linear from inside a

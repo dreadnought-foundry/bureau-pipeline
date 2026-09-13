@@ -144,6 +144,13 @@ class TheDeclaration(unittest.TestCase):
                          ["fleet", "sandbox"])
         self.assertEqual(by_name["sandbox"]["must_differ_from"],
                          ["fleet", "operator-tools"])
+        # The fleet key has a SECOND home: the relay Lambda's own copy
+        # (DRE-3334). operator-tools has none.
+        homes = by_name["fleet"]["homes"]
+        self.assertEqual([h["name"] for h in homes], ["relay"])
+        self.assertEqual(homes[0]["env"], "LINEAR_API_KEY_RELAY")
+        self.assertIn("bureau/relay/linear-api-key", homes[0]["lives_in"])
+        self.assertEqual(by_name["operator-tools"].get("homes", []), [])
 
     def test_the_sandbox_seat_says_where_its_key_lives(self):
         """The one key with three copies: the harness repo's Actions secret
@@ -161,13 +168,6 @@ class TheDeclaration(unittest.TestCase):
         # One home, not a `homes` list: the check reads exactly one variable
         # for this seat, on the operator's machine.
         self.assertEqual(sandbox.get("homes", []), [])
-        # The fleet key has a SECOND home: the relay Lambda's own copy
-        # (DRE-3334). operator-tools has none.
-        homes = by_name["fleet"]["homes"]
-        self.assertEqual([h["name"] for h in homes], ["relay"])
-        self.assertEqual(homes[0]["env"], "LINEAR_API_KEY_RELAY")
-        self.assertIn("bureau/relay/linear-api-key", homes[0]["lives_in"])
-        self.assertEqual(by_name["operator-tools"].get("homes", []), [])
 
     def test_the_shipped_file_passes_its_own_check(self):
         self.assertEqual(cli.config_problems(cli.load()), [])
@@ -431,21 +431,28 @@ class TheSandboxSeat(unittest.TestCase):
         self.assertNotIn("[FAIL]", text)
 
     def test_the_sandbox_key_on_the_fleets_user_fails_must_differ_from(self):
-        """The failure this seat exists to catch: the sandbox key rotated onto
-        (or minted as) the fleet's user is one budget again, with nothing on
-        the board looking any different."""
+        """The failure this seat exists to catch: the sandbox key minted onto
+        (or rotated onto) the fleet's user is one budget again, with nothing on
+        the board looking any different.
+
+        ONE line, naming BOTH seats and BOTH variables — the pair is judged
+        once, exactly as the fleet/operator-tools pair has been since DRE-3172,
+        and a second line restating the same fact is noise an operator reads
+        mid-incident. The line is labelled with the first of the pair in
+        declaration order because that is where the rule is judged; what tells
+        the operator which key to rotate is `LINEAR_API_KEY_SANDBOX` inside it.
+        """
         is_fleet = {"id": FLEET_ID, "name": "Agent-Bureau", "admin": False}
         code, text = _run(_env(), _viewer(sandbox=is_fleet))
         self.assertEqual(code, 1, text)
         differ = [line for line in text.splitlines() if "must_differ_from" in line]
         self.assertEqual(len(differ), 1, text)
-        self.assertIn("[FAIL] sandbox", differ[0])
-        self.assertIn("fleet", differ[0])
-        self.assertIn("sandbox", differ[0])
+        self.assertIn("[FAIL]", differ[0])
+        self.assertIn("rule must_differ_from broke", differ[0])
+        self.assertIn("fleet and sandbox", differ[0])
         self.assertIn(FLEET_ID, differ[0])
         self.assertIn("LINEAR_API_KEY_SANDBOX", differ[0])
-        # The seats that ARE what they say they are still say so.
-        self.assertIn("[OK] fleet:", text)
+        # The seat that IS what it says it is still says so.
         self.assertIn("[OK] operator-tools:", text)
 
     def test_the_sandbox_key_on_the_operators_user_fails_must_differ_from(self):
@@ -454,8 +461,9 @@ class TheSandboxSeat(unittest.TestCase):
         self.assertEqual(code, 1, text)
         differ = [line for line in text.splitlines() if "must_differ_from" in line]
         self.assertEqual(len(differ), 1, text)
-        self.assertIn("operator-tools", differ[0])
-        self.assertIn("sandbox", differ[0])
+        self.assertIn("operator-tools and sandbox", differ[0])
+        self.assertIn("LINEAR_API_KEY_SANDBOX", differ[0])
+        self.assertIn("[OK] fleet:", text)
 
     def test_a_sandbox_key_on_an_admin_fails_must_not_be_admin(self):
         admin = {"id": SANDBOX_ID, "name": "bureau-sandbox", "admin": True}
