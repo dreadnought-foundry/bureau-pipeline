@@ -17,7 +17,8 @@ payload), it selects, identity-filters, and renders into one markdown file:
     opens with 🛑. Attempt N reads what attempt N-1 concluded instead of
     rediscovering it.
   * THE OPERATOR DECISION — the newest HUMAN-authored comment posted
-    strictly AFTER the latest blocker whose first line LEADS with the
+    strictly AFTER the critic verdict this escalation is about (DRE-3412,
+    see _decision_window_start) whose first line LEADS with the
     phrase "operator decision" (DRE-2409: matched by intent, not by an
     exact byte string — see is_decision_body). Human means GitHub's
     server-assigned user.type != "Bot" and a non-null user: the qa-bot,
@@ -25,12 +26,12 @@ payload), it selects, identity-filters, and renders into one markdown file:
     (DRE-1988/1995 — authorship decides meaning). The phrase is ANCHORED
     like the DRE-1992 verdict markers: quoting or mentioning it mid-prose
     selects nothing.
-  * NEAR MISSES — human comments newer than the latest blocker that
-    MENTION the phrase but do not parse as a decision (DRE-2409). A near
+  * NEAR MISSES — human comments in that same window that MENTION the
+    phrase but do not parse as a decision (DRE-2409). A near
     miss is the exact shape that burned both live incidents, and it is
     reported rather than swallowed: silence is indistinguishable from
     "the operator has not answered yet".
-  * HUMAN CONTEXT — other non-bot comments newer than the latest blocker.
+  * HUMAN CONTEXT — other non-bot comments in the window.
   * ORDERING, stated mechanically: the render carries exactly one status
     line — STATUS_OVERRIDE when a decision answers the latest blocker
     (implement per it, do not re-escalate) or STATUS_UNANSWERED when the
@@ -67,6 +68,11 @@ import re
 import sys
 from typing import Optional
 
+# The verdict grammar lives in ONE module (DRE-3412): the anchor below reads a
+# critic verdict with the SAME anchored predicate the merge gate reads one
+# with, so "this comment is a verdict" cannot mean two things on one PR.
+import merge_gate
+
 # The exact card-text sentinels (tests/test_untrusted_content_wiring.py) —
 # reusing them means sanitize_body's defang regex already catches spoofs.
 BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
@@ -81,8 +87,8 @@ BLOCKER_PREFIX = "🛑"
 # match, silently, and the loop held again with the same message (portico #132
 # / DRE-2199, 2026-08-11; agent-bureau #2034 / DRE-2399, 2026-08-12; two
 # people, two hand dispatches). The strictness bought nothing: authorship
-# (non-bot human) and ordering (newer than the latest blocker) carry all the
-# authority, and both are unchanged.
+# (non-bot human) and ordering (newer than the verdict the escalation is
+# about, DRE-3412) carry all the authority, and both are unchanged.
 #
 # What is tolerated: leading whitespace and markdown emphasis/heading/list
 # markers, any case, and the rest of the sentence continuing on that same
@@ -245,22 +251,102 @@ def _latest_blocker_index(comments, worker_login: str) -> int:
     return latest
 
 
-def _humans_after_latest_blocker(comments, worker_login: str) -> list:
-    """Non-bot comments strictly newer than the latest blocker. No blocker →
-    empty: without an escalation there is nothing a decision could answer."""
-    idx = _latest_blocker_index(comments, worker_login)
+def _is_critic_verdict(c: dict, worker_login: str) -> bool:
+    """True when this comment IS a critic verdict — the event an escalation is
+    about, and so the thing an operator's answer answers (DRE-3412).
+
+    Read with merge_gate's own grammar, because the anchor decides which
+    answers are live and a looser reading here is a way to cancel someone's
+    answer from a comment box. Three things it therefore is not: a QUOTED
+    verdict (merge_gate's `_ANCHOR` excludes a leading ">"), the critic's
+    neutral could-not-run notice (it carries the marker but no `VERDICT:`
+    token — it decided nothing, so it anchors nothing), and a verdict-shaped
+    comment from anyone but a bot. Authorship is the coarse half of that last
+    one: this module is handed the worker login and no critic login, so it
+    admits Bot-typed authors other than the worker rather than one name. A
+    human planting the critic's words must not move the anchor — that is this
+    card's own defect handed to anyone who can leave a comment."""
+    user = c.get("user") or {}
+    if user.get("type") != "Bot" or _is_worker(c, worker_login):
+        return False
+    return merge_gate.verdict_token(
+        first_line(c.get("body")), merge_gate.CRITIC_MARKER
+    ) is not None
+
+
+def _latest_verdict_index(comments, worker_login: str) -> int:
+    latest = -1
+    for i, c in enumerate(comments):
+        if _is_critic_verdict(c, worker_login):
+            latest = i
+    return latest
+
+
+def _decision_window_start(comments, worker_login: str) -> int:
+    """The index a decision must be strictly NEWER than to count, or -1 for
+    "no window at all" (DRE-3412).
+
+    Two conditions, and they are deliberately different questions:
+
+      * SCOPE is still the 🛑 blocker. No escalation anywhere in the thread →
+        nothing for a decision to answer, and a stray decision comment on a
+        healthy PR steers nothing (the DRE-2030 rule, untouched).
+      * ORDERING is the critic's VERDICT. The escalation is two acts that are
+        not simultaneous — the verdict lands, the loop runs, and seconds to
+        minutes later the worker bot posts its 🛑 receipt saying it is holding
+        for a human. An operator reads the verdict and answers it. Anchoring
+        on the receipt threw away every answer that landed in that gap: on
+        DRE-3412's own thread the answer was 10s after the verdict and the
+        receipt 6s after the answer, so a correct, timely answer was
+        cancelled by the bot's own later paperwork and nothing said so.
+
+    No verdict in the thread — a fix loop started by a merge conflict, say —
+    leaves the pre-DRE-3412 reading exactly as it was: the blocker anchors."""
+    blocker = _latest_blocker_index(comments, worker_login)
+    if blocker < 0:
+        return -1
+    verdict = _latest_verdict_index(comments, worker_login)
+    return verdict if verdict >= 0 else blocker
+
+
+def _round_receipt_index(comments, worker_login: str) -> int:
+    """The 🛑 receipt for the round being answered: the FIRST worker-bot
+    blocker after the anchoring verdict, or -1 when there is none.
+
+    It is the QUESTION, not the loop moving on the answer, so it alone does
+    not consume a decision (see decision_consumed). Reading it as consumption
+    is the same DRE-3412 bug one layer down — the window would admit the
+    answer and the arming rule would immediately spend it."""
+    verdict = _latest_verdict_index(comments, worker_login)
+    if verdict < 0:
+        return -1
+    for i in range(verdict + 1, len(comments)):
+        c = comments[i]
+        if _is_worker(c, worker_login) and first_line(
+            c.get("body")
+        ).startswith(BLOCKER_PREFIX):
+            return i
+    return -1
+
+
+def _humans_in_the_decision_window(comments, worker_login: str) -> list:
+    """Non-bot comments strictly newer than the decision window's start. No
+    blocker → empty: without an escalation there is nothing a decision could
+    answer."""
+    idx = _decision_window_start(comments, worker_login)
     if idx < 0:
         return []
     return [c for c in comments[idx + 1 :] if _is_human(c)]
 
 
 def operator_decision(comments, worker_login: str) -> Optional[dict]:
-    """THE decision: the newest human comment after the latest blocker whose
-    first line reads as a decision (is_decision_body). None when the blocker
-    is the newest relevant item (unanswered) — a decision the loop escalated
-    PAST (an even newer blocker exists) is stale and selects nothing."""
+    """THE decision: the newest human comment in the decision window whose
+    first line reads as a decision (is_decision_body). None when nothing in
+    the window reads as one — a decision older than the verdict the
+    escalation is about answered an EARLIER round, and the loop has been told
+    something new since."""
     decision = None
-    for c in _humans_after_latest_blocker(comments, worker_login):
+    for c in _humans_in_the_decision_window(comments, worker_login):
         if is_decision_body(c.get("body")):
             decision = c
     return decision
@@ -276,7 +362,15 @@ def is_noop_notice(c: dict, worker_login: str) -> bool:
 def decision_consumed(comments, decision: dict, worker_login: str) -> bool:
     """True when the loop has already moved on `decision`: any worker-bot
     comment newer than it — this sweep's restart receipt, a fix attempt, a
-    push marker, a fresh blocker — except a no-work notice (DRE-2813).
+    push marker, a fresh blocker — except a no-work notice (DRE-2813) and the
+    🛑 receipt for the round being answered (DRE-3412).
+
+    That second exemption is exactly one comment: the hold the loop posted
+    for the verdict the answer is against (_round_receipt_index). It is the
+    question, not the loop moving. A LATER 🛑 is a fresh escalation — the loop
+    ran again on this answer and blocked again — and still consumes, so
+    DRE-2813's rule is otherwise untouched and one answer still buys exactly
+    one dispatch.
 
     Located by IDENTITY, not list.index: dicts compare by value, so an
     operator who re-posts the same answer verbatim would otherwise be measured
@@ -286,9 +380,13 @@ def decision_consumed(comments, decision: dict, worker_login: str) -> bool:
     at = next((i for i, c in enumerate(comments) if c is decision), -1)
     if at < 0:
         return False
+    receipt = _round_receipt_index(comments, worker_login)
     return any(
-        _is_worker(c, worker_login) and not is_noop_notice(c, worker_login)
-        for c in comments[at + 1 :]
+        i != receipt
+        and _is_worker(c, worker_login)
+        and not is_noop_notice(c, worker_login)
+        for i, c in enumerate(comments)
+        if i > at
     )
 
 
@@ -332,7 +430,7 @@ TRIGGER_STANDING = "standing-decision"
 
 SKIP_NO_BLOCKER = "no-blocker"
 SKIP_BOT_AUTHOR = "bot-author"
-SKIP_BEFORE_BLOCKER = "older-than-latest-blocker"
+SKIP_BEFORE_VERDICT = "older-than-latest-verdict"
 SKIP_MENTION_ONLY = "mention-only"
 SKIP_CONSUMED = "decision-consumed"
 SKIP_NO_DECISION = "no-decision"
@@ -354,9 +452,10 @@ SKIP_REASONS = {
         "written by a bot — authorship decides meaning, and no bot may "
         "release a held PR."
     ),
-    SKIP_BEFORE_BLOCKER: (
-        "the decision is older than the latest blocker — the loop escalated "
-        "past it, so it is stale and answers nothing."
+    SKIP_BEFORE_VERDICT: (
+        "the decision is older than the critic verdict this escalation is "
+        "about — it answered an earlier round, and the loop has been told "
+        "something new since."
     ),
     SKIP_MENTION_ONLY: (
         "a comment MENTIONS an operator decision but does not lead with the "
@@ -377,16 +476,17 @@ SKIP_REASONS = {
 def _skip_reason(comments, worker_login: str) -> str:
     """WHICH predicate turned this comment away. Read newest evidence first,
     so the answer names the thing the operator can act on."""
-    at = _latest_blocker_index(comments, worker_login)
-    if at < 0:
+    if _latest_blocker_index(comments, worker_login) < 0:
         return SKIP_NO_BLOCKER
+    at = _decision_window_start(comments, worker_login)
     after = comments[at + 1:]
     if any(is_decision_body(c.get("body")) and not _is_human(c) for c in after):
         return SKIP_BOT_AUTHOR
     if any(
-        is_decision_body(c.get("body")) and _is_human(c) for c in comments[:at]
+        is_decision_body(c.get("body")) and _is_human(c)
+        for c in comments[: at + 1]
     ):
-        return SKIP_BEFORE_BLOCKER
+        return SKIP_BEFORE_VERDICT
     if near_misses(comments, worker_login):
         return SKIP_MENTION_ONLY
     return SKIP_NO_DECISION
@@ -426,7 +526,7 @@ def near_misses(comments, worker_login: str) -> list:
     answer format back at the operator and must not flag itself."""
     return [
         c
-        for c in _humans_after_latest_blocker(comments, worker_login)
+        for c in _humans_in_the_decision_window(comments, worker_login)
         if mentions_decision(c.get("body")) and not is_decision_body(c.get("body"))
     ]
 
@@ -462,7 +562,7 @@ def human_context(comments, worker_login: str) -> list:
     decision = operator_decision(comments, worker_login)
     return [
         c
-        for c in _humans_after_latest_blocker(comments, worker_login)
+        for c in _humans_in_the_decision_window(comments, worker_login)
         if c is not decision
     ]
 

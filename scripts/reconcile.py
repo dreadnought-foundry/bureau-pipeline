@@ -4466,16 +4466,21 @@ def restart_answered_blockers() -> None:
     The decision is read by fix_context — the SAME predicate the fix agent's
     own thread render uses, so "the sweep saw an answer" and "the fixer sees
     an answer" can never disagree. Everything that grants the answer its
-    authority is unchanged: a non-bot human author, newer than the latest
-    worker-bot 🛑 blocker.
+    authority is unchanged: a non-bot human author, on a PR the loop has
+    escalated, newer than the critic verdict that escalation is about
+    (DRE-3412 — the 🛑 receipt lands seconds to minutes after the verdict an
+    operator reads, and anchoring on the receipt discarded every answer
+    written in that gap).
 
     This sweep deliberately does NOT consult fix_dispatch_blocked. The card is
     human-parked precisely BECAUSE the loop escalated, and DRE-2024's gate
     exists to stop identical doomed re-runs — an operator decision is new
     input and the human act that gate is waiting for. Runaway is bounded by
     the receipt instead: the restart posts a worker-bot comment, and the sweep
-    only fires when NO worker-bot comment is newer than the decision, so each
-    answer buys exactly one dispatch (a further answer re-arms it).
+    only fires when NO worker-bot comment is newer than the decision (bar the
+    🛑 receipt for the round being answered, which is the question rather than
+    the loop moving), so each answer buys exactly one dispatch (a further
+    answer re-arms it).
 
     The one exception is DRE-2813's no-work notice. That arming rule was
     satisfied in the wrong direction by a hand `workflow_dispatch` on a
@@ -4536,14 +4541,14 @@ def restart_answered_blockers() -> None:
             continue
         print(
             f"answered blocker: PR #{pr['number']} has an operator decision "
-            "newer than its latest blocker — restarting the fix loop"
+            "newer than the verdict it answers — restarting the fix loop"
         )
         gh_dispatch("workflow", "run", fix_workflow(), "--repo", REPO,
                     "-f", f"pr_number={pr['number']}")
         _post_pr_note(pr["number"], pipeline_act.receipt(
             "fix-loop-restarted", (
             f"🔓 {DECISION_RESTART_TAG}: an operator decision landed after the "
-            "last blocker, so the reconcile sweep re-dispatched the fix agent "
+            "verdict it answers, so the reconcile sweep re-dispatched the fix agent "
             "(DRE-2409) — no hand dispatch needed. One restart per answer; a "
             "further decision comment re-arms it."
         )))
