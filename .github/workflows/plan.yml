@@ -545,14 +545,25 @@ jobs:
       # run answers "what was the planner given" without opening a file nothing
       # commits. The wave route is untouched: it decomposes into epics, not
       # cards, and sizes nothing.
+      #
+      # And what PEOPLE said on the epic (DRE-3785), appended the same way:
+      # the CEO's console-signed answer is labelled "the CEO, via the console"
+      # only when its signature verifies, and nothing the pipeline wrote is
+      # passed off as a person's. Card and key through env, so the script
+      # stays expression-free; the renderer always exits 0.
       - name: Assemble planner context
         id: ctx
         if: steps.route.outputs.mode == 'plan'
+        env:
+          CARD: ${{ github.event.client_payload.identifier }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/assemble_context.py assemble planner \
             > .bureau-pipeline/agent-context.md
           python3 .bureau-pipeline/scripts/ledger_context.py render --mulch .mulch/expertise/planning.jsonl >> .bureau-pipeline/agent-context.md
           grep -E '^(LEDGER|MULCH) STATUS:' .bureau-pipeline/agent-context.md || echo "no LEDGER STATUS: or MULCH STATUS: line in the assembled context"
+          python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
+          grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
 
       # DRE-1996: make the DRE-1989 sentinel fence mechanical. Epic title and
@@ -670,7 +681,7 @@ jobs:
               The shape stamp and the one sentence it gives for calling this a
               one-off:
                 python3 .bureau-pipeline/scripts/planning_shape.py read "${{ github.event.client_payload.identifier }}"
-              Thread: python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "${{ github.event.client_payload.identifier }}"
+              Thread: python3 .bureau-pipeline/scripts/spoken_thread.py thread "${{ github.event.client_payload.identifier }}"
 
             You are the LAST reader before this is built. There is no plan
             document, no green light and no CEO on this route: a pass sends the
@@ -1216,7 +1227,7 @@ jobs:
               Epic: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
               Cards: python3 .bureau-pipeline/scripts/linear_ops.py children-json "${{ github.event.client_payload.identifier }}"
               Artifact: ${{ runner.temp }}/plan-artifact.md — what the CEO actually reads
-              Thread: python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "${{ github.event.client_payload.identifier }}"
+              Thread: python3 .bureau-pipeline/scripts/spoken_thread.py thread "${{ github.event.client_payload.identifier }}"
 
             EVERY CARD RECORD CARRIES ITS `state`. Read it: a child in Done,
             Canceled or Duplicate is delivered or dropped and never to-build,
@@ -1706,7 +1717,7 @@ jobs:
             The approved plan — read the APPROVED TEXT, not a summary of it:
               Epic: ${{ github.event.client_payload.identifier }} — ${{ steps.card.outputs.title }}
               Cards: python3 .bureau-pipeline/scripts/linear_ops.py children-json "${{ github.event.client_payload.identifier }}"
-              Thread: python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "${{ github.event.client_payload.identifier }}"
+              Thread: python3 .bureau-pipeline/scripts/spoken_thread.py thread "${{ github.event.client_payload.identifier }}"
 
             EVERY CARD RECORD CARRIES ITS `state`, and by the time you read a
             re-planned epic some children have already shipped. A child in

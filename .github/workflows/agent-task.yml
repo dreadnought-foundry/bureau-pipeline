@@ -304,13 +304,28 @@ jobs:
       # files from this checkout AT RUN TIME — so a `@main` edit to any standard
       # propagates to every product repo's agents on the next run with no
       # workflow change. The blob is written to a file the prompt points at.
+      #
+      # Then what PEOPLE said on the card (DRE-3785), appended: the CEO's
+      # answer to an escalation, posted by the console on the fleet's key and
+      # signed as him, labelled "the CEO, via the console" only when its
+      # signature verifies — and nothing the pipeline wrote, whatever it says.
+      # Before this the agent was handed no comment at all, so "answer, move
+      # the card to Todo, and a fresh run reads your guidance" had nothing
+      # behind it. The renderer always exits 0 (an unreadable thread renders
+      # `SPOKEN STATUS: UNKNOWN`); the card and the key come through env, so
+      # the line adds nothing to the compiled expression (DRE-3484).
       - name: Assemble agent context
         id: ctx
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        env:
+          CARD: ${{ github.event.client_payload.identifier }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           ROLE="${{ steps.gate.outputs.role }}"; [ -n "$ROLE" ] || ROLE=engineer
           python3 .bureau-pipeline/scripts/assemble_context.py assemble "$ROLE" \
             > .bureau-pipeline/agent-context.md
+          python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
+          grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of context for role: $ROLE"
 
       # DRE-1996: make the DRE-1989 sentinel fence mechanical. Card title and

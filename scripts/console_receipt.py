@@ -18,6 +18,14 @@ line: `groomer.vouch` asks it about every fleet-authored decision marker, and
 a marker whose receipt does not verify is refused exactly as a fleet marker
 always was — with the reason named in the drain's record.
 
+A SECOND KIND, THE ANSWER (DRE-3785). The CEO's answer to a question on a
+card goes out the same way — on the fleet's key, signed by the console — and
+`ANSWER_SPEC` is its format: the SHA-256 of his words (the "Answer from" line
+included), the card, the console user and the time, under its own trailer tag
+and its own domain line so no signature carries between the two kinds. The
+groom format above is untouched. `Verifier.check_answer` is its check;
+`spoken_thread.py` is the reader that asks it.
+
 WHY THE FLEET CANNOT FORGE ONE. The fleet's Linear key can write any comment,
 including one carrying this trailer. It cannot produce the signature: the
 private key lives only in the console backend's database, encrypted at rest,
@@ -103,10 +111,76 @@ says why. A marker authored by anybody other than the fleet is read exactly as
 before and never makes the drain fetch the key.
 """
 
+#: The ANSWER receipt (DRE-3785 / DRE-3786) — a second kind beside the groom
+#: receipt above, never folded into it: agent-bureau pins SPEC's SHA-256, and a
+#: groom decision already on a card must keep verifying byte for byte. The
+#: console half (`console/backend/console_receipt.py`) carries this text too,
+#: character for character, and both suites pin its hash.
+ANSWER_SPEC = """\
+CONSOLE ANSWER RECEIPT, WIRE FORMAT v1 (DRE-3785 / DRE-3786) — the one definition.
+
+The CEO's answer to a question on a card, written by the console on the
+fleet's Linear key, is ONE comment:
+
+    Answer from <name> (signed in to the console), <YYYY-MM-DD HH:MM> PT:
+    <blank line>
+    <the words the CEO typed, any number of lines>
+    <blank line>
+    🔏 console-answer: v1 card=<CARD> sha256=<SHA256> user=<USER> at=<AT> kid=<KID> sig=<SIG>
+
+  answer text   everything ABOVE the trailer, the "Answer from" line
+                included, so the name and the time the CEO reads are signed
+                with his words
+  trailer       the LAST non-empty line. Emoji optional. Fields in this order,
+                one space apart. Exactly one per comment.
+  CARD          the card the comment is posted on, e.g. DRE-3700
+  SHA256        64 lowercase hex: sha256 over the UTF-8 of the CANONICAL
+                answer text
+  canonical     the answer text with every run of whitespace folded to one
+                space and the ends trimmed, exactly Python's
+                `" ".join(text.split())`. Linear may store blank lines and
+                trailing spaces differently from how they were sent; no word
+                can change.
+  USER          the console user id (the Cognito sub), [A-Za-z0-9._:@+-]{1,128}
+  AT            the signing time, UTC, to the second: YYYY-MM-DDTHH:MM:SSZ
+  KID           the first 16 hex characters of sha256(raw 32-byte public key)
+  SIG           Ed25519 signature, base64url with no padding (86 characters)
+
+THE SIGNED BYTES are UTF-8, five lines, each ending in a single "\\n":
+
+    bureau-console-answer/v1
+    card: <CARD>
+    sha256: <SHA256>
+    user: <USER>
+    at: <AT>
+
+The domain line is not the groom receipt's, so no signature carries from one
+kind to the other, although one key signs both.
+
+THE PUBLIC KEY is the groom receipt's: the same key, from the same URL,
+
+    GET https://app.agent-bureau.com/api/v1/receipt-key
+
+A READER takes a comment as the CEO's own words only when every one holds:
+the trailer parses; CARD is the card being read; AT is no more than 10
+minutes before and no more than 2 minutes after the comment's own Linear
+createdAt; the answer text has words; SHA256 is the hash of the answer text
+as it stands now; the key could be read and its kid is KID; the signature
+verifies; and no earlier comment in the thread carried the same signed
+content. Anything else is refused, says why, and the comment's text is shown
+to no agent as anybody's answer. Who POSTED the comment is not part of the
+check: the signature is the proof.
+"""
+
 VERSION = "v1"
 TAG = "console-receipt"
 MARK = "🔏"
 DOMAIN = "bureau-console-receipt/v1"
+
+#: The answer receipt's trailer tag and domain line (ANSWER_SPEC).
+ANSWER_VERSION = "v1"
+ANSWER_TAG = "console-answer"
+ANSWER_DOMAIN = "bureau-console-answer/v1"
 
 #: The console's published key. A constant, not a variable — see the module
 #: docstring for why no variable may move it.
@@ -130,6 +204,11 @@ _TRAILER_SHAPED = re.compile(rf"^\s*(?:{MARK}\s*)?{TAG}\s*:", re.M)
 _TRAILER = re.compile(
     rf"^\s*(?:{MARK}\s*)?{TAG}:\s*{VERSION}"
     rf" card=({_CARD}) proposal=({_PROPOSAL}) user=({_USER})"
+    rf" at=({_AT}) kid=([0-9a-f]{{16}}) sig=([A-Za-z0-9_-]{{86}})\s*$")
+_ANSWER_TRAILER_SHAPED = re.compile(rf"^\s*(?:{MARK}\s*)?{ANSWER_TAG}\s*:", re.M)
+_ANSWER_TRAILER = re.compile(
+    rf"^\s*(?:{MARK}\s*)?{ANSWER_TAG}:\s*{ANSWER_VERSION}"
+    rf" card=({_CARD}) sha256=([0-9a-f]{{64}}) user=({_USER})"
     rf" at=({_AT}) kid=([0-9a-f]{{16}}) sig=([A-Za-z0-9_-]{{86}})\s*$")
 
 #: The DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410): the raw 32
@@ -199,6 +278,69 @@ def parse(body: str | None) -> Receipt | None:
 def sig_bytes(sig: str) -> bytes:
     """The 64 raw signature bytes from their base64url form."""
     return base64.urlsafe_b64decode(sig + "=" * (-len(sig) % 4))
+
+
+# --------------------------------------------------------------------------- #
+# the ANSWER wire format (DRE-3785)                                            #
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class AnswerReceipt:
+    card: str
+    sha256: str
+    user: str
+    at: str
+    kid: str
+    sig: str
+
+
+def answer_text(body: str | None) -> str:
+    """Everything above the trailer — the comment with its last non-empty line
+    removed, trimmed. The "Answer from" line is part of it: the name and the
+    time the CEO reads are signed with his words."""
+    text = (body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    return text.rsplit("\n", 1)[0].strip() if "\n" in text else ""
+
+
+def answer_canonical(text: str) -> str:
+    """The answer text with every whitespace run folded to one space and the
+    ends trimmed — what the hash is taken over (ANSWER_SPEC)."""
+    return " ".join((text or "").split())
+
+
+def answer_sha256(text: str) -> str:
+    return hashlib.sha256(answer_canonical(text).encode("utf-8")).hexdigest()
+
+
+def answer_signed_bytes(card: str, sha256: str, user: str, at: str) -> bytes:
+    """The canonical bytes, exactly as ANSWER_SPEC declares them."""
+    return (f"{ANSWER_DOMAIN}\n"
+            f"card: {card}\n"
+            f"sha256: {sha256}\n"
+            f"user: {user}\n"
+            f"at: {at}\n").encode("utf-8")
+
+
+def answer_trailer(*, card: str, sha256: str, user: str, at: str, kid: str,
+                   sig: str) -> str:
+    """The answer trailer line, composed — the writer half of `parse_answer`."""
+    return (f"{MARK} {ANSWER_TAG}: {ANSWER_VERSION} card={card} sha256={sha256} "
+            f"user={user} at={at} kid={kid} sig={sig}")
+
+
+def has_answer_trailer(body: str | None) -> bool:
+    """Does any line of `body` LOOK like an answer receipt?"""
+    return bool(_ANSWER_TRAILER_SHAPED.search(body or ""))
+
+
+def parse_answer(body: str | None) -> AnswerReceipt | None:
+    """The answer receipt on the last non-empty line, or None — including when
+    the comment carries more than one answer-receipt-shaped line."""
+    text = (body or "").strip()
+    if len(_ANSWER_TRAILER_SHAPED.findall(text)) != 1:
+        return None
+    found = _ANSWER_TRAILER.match(text.rsplit("\n", 1)[-1])
+    return AnswerReceipt(*found.groups()) if found else None
 
 
 # --------------------------------------------------------------------------- #
@@ -432,4 +574,52 @@ class Verifier:
         ok, why = verify_signature(
             key, signed_bytes(marker_line(body), card, proposal, receipt.user,
                               receipt.at), sig_bytes(receipt.sig))
+        return None if ok else why
+
+    def check_answer(self, body: str | None, *, card: str,
+                     created_at: str | None) -> str | None:
+        """None when `body` carries a valid console ANSWER receipt for `card`
+        (ANSWER_SPEC), else why not — in words a reader can record as written.
+
+        The groom `check` above is untouched: the two kinds share the key and
+        the time window, and nothing else. The order is the cheap checks first,
+        so a comment that is obviously not the CEO's never costs a key fetch."""
+        if not has_answer_trailer(body):
+            return "it carries no console answer receipt"
+        receipt = parse_answer(body)
+        if receipt is None:
+            return ("its console answer receipt is malformed, or is not the one "
+                    "last line of the comment")
+        if receipt.card != card:
+            return (f"its console answer receipt was signed for {receipt.card}, "
+                    f"and it sits on {card}")
+        signed, posted = _moment(receipt.at), _moment(created_at)
+        if signed is None or posted is None:
+            return ("the comment carries no creation time to hold its console "
+                    "answer receipt's time against")
+        if signed > posted + CLOCK_SKEW:
+            return (f"its console answer receipt is dated {receipt.at}, after "
+                    f"the comment was posted — a receipt is signed before its "
+                    f"comment exists")
+        if posted - signed > MAX_AGE:
+            return (f"its console answer receipt is stale — signed {receipt.at}, "
+                    f"posted {created_at}, more than "
+                    f"{int(MAX_AGE.total_seconds() // 60)} minutes apart")
+        text = answer_text(body)
+        if not answer_canonical(text):
+            return "its console answer receipt signs an answer with no words"
+        digest = answer_sha256(text)
+        if digest != receipt.sha256:
+            return (f"its words were changed after the console signed them — "
+                    f"signed sha256 {receipt.sha256[:12]}…, the comment now "
+                    f"hashes to {digest[:12]}…")
+        key, why = self.key()
+        if key is None:
+            return why
+        if receipt.kid != key.kid:
+            return (f"its console answer receipt names key {receipt.kid}, and "
+                    f"the console publishes {key.kid}")
+        ok, why = verify_signature(
+            key, answer_signed_bytes(card, digest, receipt.user, receipt.at),
+            sig_bytes(receipt.sig))
         return None if ok else why
