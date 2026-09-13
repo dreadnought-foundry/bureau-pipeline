@@ -2463,8 +2463,13 @@ def comment_records(identifier: str, *, whole_thread: bool = False) -> list[dict
     `whole_thread` pages past the fifty-comment window outside a pass too, for
     a reader whose answer a truncated thread makes WRONG rather than stale —
     see `_fetch_thread` (DRE-3370, the groomer's drain).
+
+    `created_at` is Linear's own stamp on the comment (DRE-3754). The groomer
+    holds a console receipt's signed time against it — the comment's time, not
+    the reader's clock, so a week-old decision still verifies when the drain
+    reads it and a copy posted later does not. None when Linear named none.
     """
-    nodes, me = _thread_and_viewer(identifier, "body", "user",
+    nodes, me = _thread_and_viewer(identifier, "body", "user", "createdAt",
                                    whole=whole_thread)
     rows = []
     for c in nodes:
@@ -2472,6 +2477,7 @@ def comment_records(identifier: str, *, whole_thread: bool = False) -> list[dict
         rows.append({
             "body": c.get("body") or "",
             "authored_by_pipeline": bool(me) and author == me,
+            "created_at": c.get("createdAt") or None,
         })
     return rows
 

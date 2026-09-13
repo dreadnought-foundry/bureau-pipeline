@@ -110,6 +110,17 @@ back`, `repo held: <slug>`) while the rest of the batch moves. Not to be
 confused with the per-repo work-in-progress cap, which stops BUILDS after
 classification; this stops the cards being proposed at all.
 
+And a decision the CONSOLE writes counts as the CEO's (DRE-3754). The console
+holds only the fleet's Linear key, so a signed-in owner's Approve, Decline or
+"not this one" is authored by the pipeline's own identity — and refused by the
+rule above, which is how the CEO came to be told to paste a Linear key before
+every decision. Now the console signs: an Ed25519 receipt on the comment's last
+line, over the marker, the card, the batch, the console user and the time,
+made with a key no workflow or agent holds (`console_receipt.SPEC`). A
+pipeline-written marker carrying a receipt that verifies decides; one without a
+receipt is refused exactly as before; one whose receipt fails is refused with
+the reason in the record. The CEO's own Linear user is read as it always was.
+
 And the next proposal ANSWERS the last decline (DRE-3373). `propose --post`
 reads the card first, and when it finds a decline newer than the last proposal
 there — unapproved, reasoned, not written by the pipeline — the page opens with
@@ -193,6 +204,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_prose  # noqa: E402 — ONE anchored blocker-prose grammar (DRE-2922)
+import console_receipt  # noqa: E402 — ONE reader of a console-signed decision (DRE-3754)
 import dead_run  # noqa: E402 — ONE Pacific clock for a time a person reads
 import groom_context  # noqa: E402 — the context pack (DRE-3150)
 import groom_judgement  # noqa: E402 — the one ranked read (DRE-3150)
@@ -318,7 +330,7 @@ DRAIN_REFUSED_TAG = "groom-drain-refused"
 # `propose` renders back into a Linear comment, and a Linear comment is exactly
 # where all of these are read from.
 ALL_MARKERS = (PROPOSAL_TAG, *DECISION_TAGS, *REPO_TAGS, DRAINED_TAG,
-               DRAIN_REFUSED_TAG)
+               DRAIN_REFUSED_TAG, console_receipt.TAG)
 
 # The answering paragraph's opener (DRE-3373). A constant because the console
 # finds the answer by this string, so a rename here is a rename there.
@@ -1618,7 +1630,7 @@ def decline_to_answer(records: list[dict]) -> dict | None:
         if _PROPOSAL_LINE.match(body.strip()):
             newest_proposal = index
             continue
-        if record.get("authored_by_pipeline"):
+        if not _decides(record):
             continue
         approval = decision_match(APPROVAL_TAG, body)
         if approval:
@@ -2141,6 +2153,131 @@ _BY_THE_PIPELINE = ("written by the pipeline's own Linear identity — the "
                     "proposer decides nothing about its own proposal")
 
 
+def _by_the_pipeline(tag: str, record: dict) -> str:
+    """Why a pipeline-written marker was dropped — and, when it carried a
+    console receipt that failed, which check it failed (DRE-3754)."""
+    why = f"`{tag}` {_BY_THE_PIPELINE}"
+    refused = record.get("receipt_refused")
+    return f"{why}; its console receipt was refused: {refused}" if refused else why
+
+
+# --------------------------------------------------------------------------- #
+# the console receipt (DRE-3754)                                               #
+# --------------------------------------------------------------------------- #
+#
+# The CEO, 2026-09-12 21:28 PT: "If I sign in, I am who I am by definition."
+# The console writes a signed-in owner's decision on the only Linear key it
+# holds — the fleet's — so the comment's AUTHOR is the pipeline, and the gate
+# above refuses it. What makes it the owner's is the console's Ed25519
+# signature on its last line, over the marker, the card, the batch, the user
+# and the time (`console_receipt.SPEC`). No workflow or agent holds the key
+# that makes one, so the fleet still cannot approve its own proposal.
+#
+# `vouch` is the ONE place a receipt is checked, at the three places a thread
+# is read for decisions (`_drain`, `read_holds`, `main`'s propose read). The
+# readers themselves ask `_decides`, which reads the verdict `vouch` left — so
+# a reader handed a thread nobody vouched for reads every fleet marker as the
+# fleet's, whatever it carries. Fail closed at the seam.
+
+#: The verdict `vouch` leaves on a record whose receipt verified.
+VOUCHED_BY_CONSOLE = "console receipt"
+
+#: One verifier per run: the console's key is fetched at most once, lazily, on
+#: the first receipt that needs it — never for a marker with no receipt.
+_VERIFIER: console_receipt.Verifier | None = None
+
+
+def _verifier() -> console_receipt.Verifier:
+    global _VERIFIER
+    if _VERIFIER is None:
+        _VERIFIER = console_receipt.Verifier()
+    return _VERIFIER
+
+
+def _decides(record: dict) -> bool:
+    """Is this comment a decision somebody other than the proposer made?
+
+    Yes when a person wrote it (the author is not the pipeline's own Linear
+    identity, exactly as before), or when the pipeline's key wrote it and
+    `vouch` verified the console's receipt on it."""
+    return (not record.get("authored_by_pipeline")
+            or record.get("vouched_by") == VOUCHED_BY_CONSOLE)
+
+
+def _marker_subject(body: str) -> str | None:
+    """The batch a decision marker opening `body` names — `console_receipt.
+    NO_PROPOSAL` for a repo switch, which names none — or None when the
+    comment is not one of the CEO's markers at all."""
+    for tag in DECISION_TAGS:
+        found = decision_match(tag, body)
+        if found:
+            return found.group(1)
+    for tag in REPO_TAGS:
+        if repo_switch_match(tag, body):
+            return console_receipt.NO_PROPOSAL
+    return None
+
+
+def vouch(records: list[dict], *, card: str,
+          verifier: console_receipt.Verifier | None = None) -> list[dict]:
+    """The thread, with every pipeline-written marker's console receipt checked.
+
+    Returns copies. A record the pipeline did not write is untouched — the
+    CEO's own marker decides exactly as it always has, and never makes this
+    fetch a key. A pipeline-written marker with NO receipt is untouched too,
+    and so refused exactly as today. One WITH a receipt gets either
+    `vouched_by` (it decides) or `receipt_refused` (why it does not).
+
+    A receipt decides ONCE, at the first comment in the thread that carries
+    it. The key is the SIGNED CONTENT, not the signature's spelling — base64
+    has more than one spelling of the same bytes — so the fleet re-posting the
+    CEO's approval after the CEO declined cannot make the copy the newest word.
+    """
+    honoured: set[str] = set()
+    out = []
+    for record in records:
+        row = dict(record)
+        out.append(row)
+        if not row.get("authored_by_pipeline"):
+            continue
+        body = row.get("body") or ""
+        proposal = _marker_subject(body)
+        if proposal is None or not console_receipt.has_trailer(body):
+            continue
+        receipt = console_receipt.parse(body)
+        signed = (hashlib.sha256(console_receipt.signed_bytes(
+            console_receipt.marker_line(body), card, proposal, receipt.user,
+            receipt.at)).hexdigest() if receipt else None)
+        if signed and signed in honoured:
+            row["receipt_refused"] = (
+                "its console receipt was already honoured on an earlier "
+                "comment in this thread — a receipt decides once")
+            continue
+        why = (verifier or _verifier()).check(
+            body, card=card, proposal=proposal,
+            created_at=row.get("created_at"))
+        if why:
+            row["receipt_refused"] = why
+            print(f"groomer: `{console_receipt.marker_line(body)}` on {card} "
+                  f"was not honoured — {why}", file=sys.stderr)
+            continue
+        honoured.add(signed)
+        row["vouched_by"] = VOUCHED_BY_CONSOLE
+        print(f"groomer: `{console_receipt.marker_line(body)}` on {card} is "
+              f"honoured on a console receipt — console user {receipt.user}, "
+              f"signed {receipt.at}", file=sys.stderr)
+    return out
+
+
+def decision_records(lops, card: str, *, whole_thread: bool = False) -> list[dict]:
+    """`lops.comment_records(card)`, vouched — the ONE read of a thread the
+    CEO's decisions are taken from. The window read is asked for exactly as
+    it always was, so a caller's reader sees the same call it did before."""
+    raw = (lops.comment_records(card, whole_thread=True) if whole_thread
+           else lops.comment_records(card))
+    return vouch(raw, card=card)
+
+
 def read_decisions(records: list[dict]) -> dict:
     """Every decision the CEO wrote on this card, read in one pass.
 
@@ -2162,13 +2299,17 @@ def read_decisions(records: list[dict]) -> dict:
     approvals: list[tuple[int, str]] = []
     declines: list[tuple[int, str, str]] = []
     by_pipeline_approval = False
+    # Why the pipeline's own approval did not count when it carried a console
+    # receipt that failed (DRE-3754) — named in the refusal, so a click that
+    # did not count says which check it failed rather than only who wrote it.
+    approval_receipt_refused: str | None = None
     per_card: list[tuple[str, str, str, str | None]] = []   # tag, pid, card, why
     ignored: list[dict] = []
     drained: list[str] = []
 
     for index, record in enumerate(records):
         body = record.get("body") or ""
-        mine = bool(record.get("authored_by_pipeline"))
+        mine = not _decides(record)
 
         drain = decision_match(DRAINED_TAG, body)
         if drain:
@@ -2183,12 +2324,15 @@ def read_decisions(records: list[dict]) -> dict:
             if mine:
                 # The gate, applied to the whole vocabulary and not only to the
                 # approval: the proposer cannot approve, decline, exclude or
-                # add anything.
+                # add anything — unless the console signed it (DRE-3754), in
+                # which case `_decides` already said so.
                 if tag == APPROVAL_TAG:
                     by_pipeline_approval = True
+                    approval_receipt_refused = (record.get("receipt_refused")
+                                                or approval_receipt_refused)
                 else:
                     ignored.append(_ignored(
-                        tag, f"`{tag}` {_BY_THE_PIPELINE}",
+                        tag, _by_the_pipeline(tag, record),
                         _named_card(tail)))
                 break
             if tag == APPROVAL_TAG:
@@ -2217,7 +2361,8 @@ def read_decisions(records: list[dict]) -> dict:
             break
 
     approved, problem = _current_decision(approvals, declines,
-                                          by_pipeline_approval)
+                                          by_pipeline_approval,
+                                          approval_receipt_refused)
     excluded, added = {}, {}
     for tag, pid, identifier, reason in per_card:
         if approved and pid != approved:
@@ -2244,7 +2389,9 @@ def _named_card(tail: str) -> str | None:
 
 def _current_decision(approvals: list[tuple[int, str]],
                       declines: list[tuple[int, str, str]],
-                      by_pipeline_approval: bool) -> tuple[str | None, str | None]:
+                      by_pipeline_approval: bool,
+                      receipt_refused: str | None = None,
+                      ) -> tuple[str | None, str | None]:
     """The last word on this card: `(approved id, None)` or `(None, why not)`.
 
     A CEO who approves a batch and then declines it has declined it, and one
@@ -2260,9 +2407,11 @@ def _current_decision(approvals: list[tuple[int, str]],
                           f"batch `{pid}`: {reason}")
         return approvals[-1][1], None
     if by_pipeline_approval:
+        refused = (f"; its console receipt was refused: {receipt_refused}"
+                   if receipt_refused else "")
         return None, ("the only approval on this card was written by the "
                       "pipeline's own Linear identity — the proposer cannot "
-                      "approve its own proposal")
+                      f"approve its own proposal{refused}")
     return None, (f"no comment on this card opens with "
                   f"`{MARK} {APPROVAL_TAG}: <proposal id>` — nothing leaves "
                   f"Intake without the CEO approving a batch")
@@ -2331,15 +2480,18 @@ def held_repos(records: list[dict]) -> list[str]:
             match = repo_switch_match(tag, body)
             if not match:
                 continue
-            if record.get("authored_by_pipeline"):
-                ignored.append((tag, match.group(1)))
+            if not _decides(record):
+                ignored.append((tag, match.group(1),
+                                record.get("receipt_refused")))
             else:
                 switch[match.group(1)] = tag == REPO_HOLD_TAG
             break
-    for tag, slug in ignored:
+    for tag, slug, refused in ignored:
+        receipt = (f" (its console receipt was refused: {refused})"
+                   if refused else "")
         print(f"groomer: `{MARK} {tag}: {slug}` was written by the pipeline's "
-              f"own Linear identity, so it was ignored — the proposer does not "
-              f"switch a repo off or back on", file=sys.stderr)
+              f"own Linear identity{receipt}, so it was ignored — the proposer "
+              f"does not switch a repo off or back on", file=sys.stderr)
     return sorted(slug for slug, held in switch.items() if held)
 
 
@@ -2523,7 +2675,7 @@ def _drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict
     # exists now is the record itself. The WHOLE thread, paginated: a proposal
     # card carries one comment per per-card decision, and the approval is the
     # OLDEST of them — the first thing to fall out of a fifty-comment window.
-    records = lops.comment_records(card, whole_thread=True)
+    records = decision_records(lops, card, whole_thread=True)
     decisions = read_decisions(records)
     pid, problem = decisions["approved"], decisions["problem"]
     record = proposal_record(pid, records) if pid else None
@@ -2949,7 +3101,7 @@ def read_holds(lops, args) -> list[str]:
     if not card:
         return sorted(flags)
     return sorted(flags | set(held_repos(
-        lops.comment_records(card, whole_thread=True))))
+        decision_records(lops, card, whole_thread=True))))
 
 
 def main(argv=None) -> int:
@@ -3002,7 +3154,7 @@ def main(argv=None) -> int:
     # both "is there a decline to open with" (DRE-3373) and "is this batch
     # already proposed here". Before `--out`, so the artifact the console reads
     # carries the answer the comment does.
-    records = linear_ops.comment_records(args.post) if args.post else None
+    records = decision_records(linear_ops, args.post) if args.post else None
     if records is not None:
         answer_decline(proposal, records)
     if args.out:
