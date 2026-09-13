@@ -125,6 +125,35 @@ def report_code() -> str:
     )
 
 
+# Options that carry a value, so the value is never mistaken for the command.
+# `-C <dir>` is the one the delivery actually uses; the rest are here because a
+# stub that is wrong about git's grammar is the bug this list exists to prevent.
+_OPTS_WITH_VALUES = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--repo"}
+)
+
+
+def _subcommand(argv: list[str]) -> str:
+    """The command being run, not the line it was run on: `git -C <dir> am -3
+    <patch>` is `am`.
+
+    Options and their values are skipped, so a needle can only ever match the
+    command itself — never a path, a branch name, or the random name of the
+    temp directory the patch happens to sit in (DRE-3490).
+    """
+    rest = list(argv[1:])
+    while rest:
+        token = rest.pop(0)
+        if token in _OPTS_WITH_VALUES:
+            if rest:
+                rest.pop(0)
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return ""
+
+
 # --------------------------------------------------------------------------
 # 1. THE LINE — one grammar, written and parsed by one module
 # --------------------------------------------------------------------------
@@ -294,10 +323,8 @@ class TheDelivery(unittest.TestCase):
     def _run(self, failing=(), pr_json="[]"):
         def run(argv, **kw):
             self.calls.append(list(argv))
-            joined = " ".join(argv)
-            for needle in failing:
-                if needle in joined:
-                    return 1, "", f"refused: {needle}"
+            if _subcommand(argv) in failing:
+                return 1, "", f"refused: {_subcommand(argv)}"
             if "pr" in argv and "list" in argv:
                 return 0, pr_json, ""
             if "pr" in argv and "create" in argv:
