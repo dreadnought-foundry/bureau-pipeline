@@ -146,6 +146,16 @@ completion, owns those. A stub without `not_before` or with `actions: read`
 still works: its line says `re-arm skipped: caller stub lacks not_before` (or
 `lacks actions: write`), and the run is as green as it was.
 
+**A re-armed run releases what is green when it wakes (DRE-3791).** A
+dispatched run's commit is fixed when it is dispatched, so a run that slept
+would otherwise walk from a head half an hour old. On 2026-09-13 the waiter
+dispatched at 09:34 PT released `v1.6.61` at 10:00 PT from that commit, and
+two merges that had gone green while it waited were left out. So a run that
+carries `not_before` re-reads the default branch's tip when it wakes and walks
+from there, and its line says which head it walked from and which it was
+dispatched at. A merge that is green when the train fires is in the release;
+one still checking is stepped past, as always. Nothing in the stub changes.
+
 **Ready is a commit, not the head (DRE-3266, the CEO's amendment of the same
 day).** The train releases the newest commit on the default branch whose
 gating checks are all green and which is newer than the surface's deployed
