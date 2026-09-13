@@ -553,5 +553,82 @@ class DocumentationTest(unittest.TestCase):
             self.assertIn(heading, proof)
 
 
+class JudgedBatchRecordTest(unittest.TestCase):
+    """The judged groom's record (DRE-3260), and the half of it that was owed.
+
+    `docs/groomer-judged-batch.md` landed on 2026-09-10 naming three criteria it
+    could not meet, the first of which was the scorer's report: DRE-3155 was not
+    on `main`, so `groomer_score.py` could not be run over DRE-3151's audit table
+    and the agreement rate had nobody to compute it. Both halves exist now — the
+    scorer is in `scripts/` and the CEO's calls are on DRE-3151 — so the record
+    owes the report rather than the note saying why it is missing.
+
+    These assertions are on the RECORD, not on the groomer: a proof document
+    whose findings nothing reads is a document that can be quietly emptied.
+    """
+
+    def setUp(self):
+        self.doc = (ROOT / "docs" / "groomer-judged-batch.md").read_text(
+            encoding="utf-8")
+
+    def test_the_record_pastes_the_scorers_report_over_the_hand_audit(self):
+        """The report verbatim, both halves, named as the scorer's own output.
+
+        `render_report` always prints Agreement AND Disagreement; a record that
+        pasted only the agreeing half would be the marketing document
+        `groomer_score.py`'s own docstring refuses to be.
+        """
+        self.assertIn("groomer_score.py score", self.doc)
+        self.assertIn("# The groomer's judgement, scored against DRE-3151",
+                      self.doc)
+        for heading in ("## Agreement", "## Disagreement", "## Unranked",
+                        "## Excluded as contaminated"):
+            self.assertIn(heading, self.doc)
+
+    def test_the_record_carries_the_three_numbers_the_scorer_computed(self):
+        """Agreement rate, false-done and unranked, as the scorer printed them.
+
+        The card pins these three; quoting the rate without the two counts
+        beside it is how a false done stops being the expensive miss and becomes
+        a rounding error in a percentage.
+        """
+        self.assertIn("agreement: 15 of 25 scored row(s) (60.0%)", self.doc)
+        self.assertIn("false-done: 1 (the audit declared 1)", self.doc)
+        self.assertIn("unranked: 1 (the audit declared 1)", self.doc)
+
+    def test_the_record_no_longer_claims_the_likely_dones_were_all_good(self):
+        """`false-done: 0` was the worksheet's count, and the audit says 2.
+
+        The first pass read the six `likely-done` calls against the board and
+        found none contradicted. The CEO's own audit contradicts two of them
+        (DRE-2598, DRE-2657), so the record's own headline number was wrong and
+        a record that keeps it is worse than no record.
+        """
+        self.assertNotIn("**false-done: 0.**", self.doc)
+        for card in ("DRE-2598", "DRE-2657"):
+            self.assertIn(card, self.doc)
+
+    def test_the_record_names_the_cards_the_two_findings_were_filed_as(self):
+        """A finding a record reports and nobody owns is a note in a file.
+
+        DRE-3544 owns the declined card that was in the batch anyway; DRE-3737
+        owns the batch being mostly not the model's picks. Both are named here
+        so the record says who carries each finding forward.
+        """
+        for card in ("DRE-3544", "DRE-3737"):
+            self.assertIn(card, self.doc)
+
+    def test_the_record_still_says_nothing_was_moved_in_either_pass(self):
+        """The one thing a PROOF of a read-only mechanism must keep saying.
+
+        Asserted for the second pass as well as the first: the record now spans
+        two observation sittings, and the second one read a live board and ran a
+        scorer over a live comment thread. A read-only claim that covers only the
+        first sitting covers the half nobody was going to doubt.
+        """
+        self.assertIn("The drain was not run", self.doc)
+        self.assertIn("2026-09-12", self.doc)
+
+
 if __name__ == "__main__":                      # pragma: no cover
     unittest.main()
