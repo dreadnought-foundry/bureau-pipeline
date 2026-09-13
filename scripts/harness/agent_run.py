@@ -261,6 +261,11 @@ def run_agent(
     The token reaches git through the clone URL and the agent through GH_TOKEN,
     and is never logged: every log line here is built from `repo`, never from
     the URL.
+
+    The PROMPT reaches the CLI on stdin (DRE-3330), which is what `input=` is:
+    the argv is bounds only, so a prompt of any size can be driven. Still an
+    argv list and still `shell=False` — a pipe here is a file descriptor, not a
+    shell.
     """
     workdir = workdir or tempfile.mkdtemp(prefix="harness-agent-")
     if os.path.exists(workdir):
@@ -301,7 +306,21 @@ def run_agent(
     model = os.environ.get("HARNESS_AGENT_MODEL") or _select_model(
         pipeline_root, runner, log
     )
-    argv = [*cli, "-p", prompt, "--max-turns", str(MAX_TURNS)]
+    # The prompt rides STDIN, never the argv list (DRE-3330). `-p` / `--print`
+    # is a boolean flag — it selects non-interactive print mode — and the CLI
+    # reads the prompt from stdin behind it. What is in the argv here is a fixed
+    # handful of bounds whose size does not move with the prompt.
+    #
+    # It used to carry the prompt, so the SIZE of the prompt decided whether the
+    # agent could be started at all. Every kernel caps argv (macOS ~1 MiB in
+    # total, Linux 128 KiB for any single argument) and a pipe has no such
+    # ceiling. DRE-3328 watched the identical shape kill a live run next door in
+    # planning_classify.py: 260 cards came back "could not rank — needs a
+    # person" behind `[Errno 7] Argument list too long: 'npx'` (run
+    # 34183475867), which reads like a broken runner rather than a prompt that
+    # outgrew the argument vector. Nothing about the shipped prompt is smaller
+    # by nature — more context, a longer brief, a bigger seeded card.
+    argv = [*cli, "-p", "--max-turns", str(MAX_TURNS)]
     if model:
         argv += ["--model", model]
     argv += ["--allowedTools", ALLOWED_TOOLS]
@@ -314,6 +333,7 @@ def run_agent(
     try:
         done = runner(
             argv,
+            input=prompt,
             cwd=workdir,
             env=child_env,
             capture_output=True,
