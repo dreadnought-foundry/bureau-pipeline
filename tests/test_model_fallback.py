@@ -340,6 +340,91 @@ class CliTest(unittest.TestCase):
         self.assertEqual(role_of("repo:atlas"), "engineer")
 
 
+class AvoidAModelThatJustDiedTest(unittest.TestCase):
+    """`avoid` skips a rung the card's previous attempt died on (DRE-3824).
+
+    The probe cannot see a refusal: in subscription mode it calls raw
+    /v1/messages with the OAuth token, which answers 429 for EVERY model by
+    design, and 429 reads "available". So when `claude-fable-5-1` refused every
+    planner run with a monthly spend limit (2026-09-12/13), the probe kept
+    choosing it, and the `model-error:` marker plan.yml wrote — "the medic rerun
+    will switch to the alternate model" — was read by nothing. `avoid` is the
+    selector half of reading it: the workflow finds the marker, the selector
+    walks past that rung, loudly."""
+
+    ALL_UP = staticmethod(lambda m: True)
+
+    def setUp(self):
+        mf.clear_availability_cache()
+
+    def tearDown(self):
+        mf.clear_availability_cache()
+
+    def test_avoiding_the_top_rung_walks_to_the_next(self):
+        self.assertEqual(
+            mf.select("planner", probe=self.ALL_UP, avoid=[FABLE51]), OPUS
+        )
+
+    def test_without_avoid_the_top_rung_is_still_chosen(self):
+        # "It stays on Fable whenever Fable works": avoid is opt-in per call.
+        self.assertEqual(mf.select("planner", probe=self.ALL_UP), FABLE51)
+
+    def test_an_avoided_rung_is_degraded_and_named_in_the_note(self):
+        decision = mf.select_with_reasons(
+            "planner", probe=self.ALL_UP, avoid=[FABLE51]
+        )
+        self.assertTrue(decision["degraded"])
+        self.assertFalse(decision["exhausted"])
+        self.assertEqual([s["model"] for s in decision["skipped"]], [FABLE51])
+        note = mf.selection_note(decision)
+        self.assertTrue(note.startswith("DEGRADED"), note)
+        self.assertIn(FABLE51, note)
+        self.assertIn("died", note)
+
+    def test_the_note_never_carries_a_death_marker(self):
+        # The note rides the planner heartbeat comment; a `model-error: <id>`
+        # substring inside it would be counted as a death by the next read.
+        decision = mf.select_with_reasons(
+            "planner", probe=self.ALL_UP, avoid=[FABLE51]
+        )
+        self.assertNotIn(mf.ERROR_MARKER_PREFIX, mf.selection_note(decision))
+
+    def test_avoid_does_not_probe_the_avoided_model(self):
+        calls = []
+
+        def probe(m):
+            calls.append(m)
+            return True
+
+        mf.select("planner", probe=probe, avoid=[FABLE51])
+        self.assertNotIn(FABLE51, calls)
+
+    def test_avoiding_every_rung_still_never_blocks(self):
+        chosen = mf.select("planner", probe=self.ALL_UP,
+                           avoid=[FABLE51, OPUS, SONNET])
+        self.assertEqual(chosen, SONNET)
+
+    def test_an_unknown_or_empty_avoid_changes_nothing(self):
+        self.assertEqual(
+            mf.select("planner", probe=self.ALL_UP, avoid=["", "gpt-9"]), FABLE51
+        )
+
+    def test_cli_avoid_flag(self):
+        env = dict(os.environ)
+        env["BUREAU_FAKE_AVAILABLE"] = json.dumps(
+            {FABLE51: True, OPUS: True, SONNET: True}
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            why = os.path.join(tmp, "why.txt")
+            out = subprocess.run(
+                [sys.executable, CliTest.SCRIPT, "select", "planner",
+                 "--avoid", FABLE51, "--explain-file", why],
+                capture_output=True, text=True, env=env,
+            )
+            self.assertEqual(out.stdout.strip(), OPUS, out.stderr)
+            self.assertTrue(open(why).read().startswith("DEGRADED"))
+
+
 class CallerSuppliedLadderTest(unittest.TestCase):
     """`select(ladder=...)` walks a caller-supplied order instead of the module
     LADDER.
