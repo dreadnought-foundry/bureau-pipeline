@@ -150,6 +150,24 @@ minute in its wait job's name) before it dispatches, and the wait job's
 concurrency group is keyed on the minute as the backstop. A stub that cannot
 be dispatched that way (no `not_before` input, or `actions: read`) is a
 `re-arm skipped: …` clause on the line, never a failed run.
+
+A RE-ARMED RUN WALKS FROM THE HEAD IT WAKES TO (DRE-3791). A dispatched
+run's `GITHUB_SHA` is fixed when it is dispatched, and actions/checkout with
+no `ref:` checks out exactly that — so a run that slept twenty-five minutes
+woke to a checkout of the commit it was dispatched at. On 2026-09-13 re-arm
+run 34768967919 was dispatched at 09:34 PT on 8559db0; #2527 and #2528 merged
+and went green at 09:47 and 09:58 PT; the 09:58 PT run walked from their head
+635617a and deferred to the waiter ("already waiting"); and at 10:00 PT the
+waiter released agent-bureau-console-v1.6.61 at 8559db0, without either of
+them, and nothing re-armed after it. So the plan is handed the run's
+`not_before`, and a run that carries one re-reads the default branch's tip
+from `origin` before it decides anything (`wake_head`), moves its checkout
+there, and walks from it — the ordinary green-at-SHA walk, nothing else
+changed. The invariant: a merge that is green when the train fires is in the
+release. A tip that cannot be re-read is a `::warning::` naming the
+dispatch-time commit the run walks from instead — never a silent fall-back to
+this bug, and never a stopped train. Every run that did not sleep walks from
+the head it was handed, as before.
 """
 
 from __future__ import annotations
@@ -1318,6 +1336,63 @@ def dispatch_re_arm(repo: str, workflow: str, ref: str, not_before: str) -> None
                            or f"gh workflow run exited {done.returncode}")
 
 
+class Woken(NamedTuple):
+    """Where a re-armed run's walk starts once it has woken (DRE-3791): the
+    head, the line the run prints, and a warning when the tip could not be
+    re-read and the run walks from its dispatch-time commit instead."""
+
+    head: str
+    line: str
+    warning: str = ""
+
+
+def branch_tip(repo_root, branch: str) -> str:
+    """The branch's tip on `origin` NOW, with the checkout moved to it.
+
+    The `+` is load-bearing: actions/checkout has already forced
+    `refs/remotes/origin/<branch>` back to the event's sha, and this puts it
+    where `origin` says it is. The checkout moves too, detached, so the
+    caller's `release.json` and stub are read at the commit the walk starts
+    from rather than the dispatch-time tree. A `RuntimeError` on any failure.
+    """
+    ref = f"refs/remotes/origin/{branch}"
+    _git(repo_root, "fetch", "--quiet", "--no-tags", "origin",
+         f"+refs/heads/{branch}:{ref}")
+    tip = _git(repo_root, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    _git(repo_root, "checkout", "--quiet", "--detach", tip)
+    return tip
+
+
+def wake_head(repo_root, branch: str, dispatched_at: str, not_before) -> Woken:
+    """A re-armed run's head, re-read when it wakes (DRE-3791).
+
+    `dispatched_at` is the head the run was handed — its `GITHUB_SHA`, fixed
+    when the re-arm dispatched it, possibly half an hour and several merges
+    ago. The walk starts from `branch`'s tip as `origin` has it now, so a
+    merge that went green while the run slept is a candidate like any other.
+    Unreadable is never a silent stale walk: the run walks from
+    `dispatched_at` and says so as a warning — the train is never stopped,
+    and the green commit it does have still goes."""
+    at = parse_not_before(not_before)
+    armed = f"re-armed for {_pt_minute(at)}" if at else "re-armed"
+    short = dispatched_at[:7]
+    try:
+        tip = branch_tip(repo_root, branch)
+    except RuntimeError as err:
+        text = (f"a {armed} run woke and could not re-read {branch}'s head "
+                f"({' '.join(str(err).split())[:300]}) — walking from {short}, "
+                f"the commit it was dispatched at; a merge since then waits "
+                f"for the next trigger")
+        return Woken(dispatched_at, f"{TAG}: {text}", text)
+    if tip == dispatched_at:
+        return Woken(tip, (f"{TAG}: {armed} and woke — {branch}'s head is "
+                           f"still {short}, the commit it was dispatched at; "
+                           f"walking from it"))
+    return Woken(tip, (f"{TAG}: {armed} and woke — {branch}'s head is now "
+                       f"{tip[:7]}, not {short} as when it was dispatched; "
+                       f"walking from {tip[:7]} (DRE-3791)"))
+
+
 # ---------------------------------------------------------------------------
 # The caller's git — the newest tag, and what has changed since it
 # ---------------------------------------------------------------------------
@@ -1839,6 +1914,21 @@ def render_markdown() -> str:
         "— the second reads current, and nothing is released twice."
     )
     w("")
+    w(
+        "**A re-armed run walks from the head it wakes to (DRE-3791).** A "
+        "dispatched run's `github.sha` is fixed at dispatch, and the plan's "
+        "checkout has no `ref:` — so a run that slept would walk from the "
+        "commit it was dispatched at. The plan is handed the run's "
+        "`not_before`; a run that carries one fetches the default branch's "
+        "tip from `origin`, moves its checkout there, and walks from it, so a "
+        "merge that is green when the train fires is in the release and one "
+        "still checking is stepped past as ever. The run's line names the "
+        "head it walked from and the one it was dispatched at. A tip that "
+        "cannot be re-read is a `::warning::` naming the dispatch-time commit "
+        "the run walks from instead. Every run that was not re-armed walks "
+        "from the head it was handed."
+    )
+    w("")
     return "\n".join(out)
 
 
@@ -2015,6 +2105,19 @@ def _cmd_schema(args) -> int:
 
 
 def _cmd_plan(args) -> int:
+    # A re-armed run re-reads the head BEFORE anything is read off the
+    # checkout (DRE-3791): its event sha is the commit it was dispatched at,
+    # and the release.json, the stub and the walk all belong to the head it
+    # woke to. Every other run walks from the head it was handed.
+    head = args.head
+    if (args.not_before or "").strip():
+        woken = wake_head(args.repo_root, args.default_branch, args.head,
+                          args.not_before)
+        if woken.warning:
+            _warning("Release train walked from its dispatch-time commit",
+                     woken.warning)
+        print(woken.line)
+        head = woken.head
     data = load(args.file)
     problems = check_schema(data, repo_root=args.repo_root)
     if problems:
@@ -2023,7 +2126,7 @@ def _cmd_plan(args) -> int:
             print(f"  {problem}")
         return 1
     now = _now()
-    planned = plan(data, repo_root=args.repo_root, head=args.head,
+    planned = plan(data, repo_root=args.repo_root, head=head,
                    now=now, brake=brake(),
                    dispatched_surface=args.surface or None, repo=args.repo)
     note, armed = _re_arm(args, data, planned, now) if args.re_arm else ("", "")
@@ -2037,7 +2140,7 @@ def _cmd_plan(args) -> int:
         print(shown.receipt(args.repo, entry.name, decision.sha))
         _announce_channel(decision)
     _emit_output("matrix", json.dumps(matrix(planned)))
-    _emit_output("head", args.head)
+    _emit_output("head", head)
     if args.re_arm:
         _emit_output("re_arm", armed)
     # A refusal is loud here too — a red-only or too-far-behind surface
@@ -2136,7 +2239,12 @@ def main(argv=None) -> int:
                          default=(os.environ.get("DEFAULT_BRANCH")
                                   or os.environ.get("GITHUB_REF_NAME")
                                   or "main"),
-                         help="the ref the re-arm dispatches the stub on")
+                         help="the ref the re-arm dispatches the stub on, and "
+                              "the branch a woken re-armed run re-reads")
+    planner.add_argument("--not-before", default="",
+                         help="a re-armed run's minute (the dispatch input); "
+                              "set, the run walks from the default branch's "
+                              "tip as it is now, not --head (DRE-3791)")
 
     waiter = sub.add_parser(
         "wait", help="a re-armed run's wait: until not_before, bounded by the "

@@ -217,6 +217,14 @@ jobs:
       # actions/checkout's default is the default branch's head, which is
       # where the walk starts — the commit CI just ran on is one candidate,
       # and a newer merge already on the branch is another.
+      #
+      # The one run this default is WRONG for is a re-armed one (DRE-3791):
+      # its `github.sha` was fixed when it was dispatched, up to an hour ago,
+      # and with no `ref:` this checkout lands on exactly that commit. The
+      # plan step hands the script the run's `not_before`, and the script
+      # re-reads the branch's tip and moves this checkout there itself —
+      # tested in tests/test_release_train_woken_head.py, where a `ref:`
+      # expression here could only be pinned as text.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -269,6 +277,10 @@ jobs:
           # GITHUB_REF_NAME — which on a schedule IS the default branch. The
           # stub itself is named by GITHUB_WORKFLOW_REF, the caller's.
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # A re-armed run's minute (DRE-3791), empty on every other event.
+          # Set, the script walks from DEFAULT_BRANCH's tip as it stands when
+          # the run woke, never from the dispatch-time HEAD_SHA below.
+          NOT_BEFORE: ${{ github.event.inputs.not_before }}
         run: |
           # A CI run that concluded anything but success is a no-op that says
           # so — in the step's own shell, not a job-level `if:`, because a
@@ -282,14 +294,17 @@ jobs:
           fi
           # The walk starts at the branch's head. On a CI completion the
           # commit CI ran on is a candidate by construction; it and the head
-          # legitimately differ when a newer merge has landed since.
+          # legitimately differ when a newer merge has landed since. On a
+          # re-armed run HEAD_SHA is the commit it was dispatched at, and the
+          # script re-reads the head it woke to (DRE-3791).
           HEAD_SHA=$(git rev-parse HEAD)
           if [ "$EVENT" = "workflow_run" ] && [ -n "$CI_SHA" ]; then
             echo "release-train: CI on ${CI_SHA:0:7} concluded success; walking from the head ${HEAD_SHA:0:7}"
           fi
           python3 .bureau-pipeline/scripts/release_train.py \
             --repo "$GITHUB_REPOSITORY" plan \
-            --head "$HEAD_SHA" --surface "$SURFACE" --re-arm
+            --head "$HEAD_SHA" --surface "$SURFACE" --re-arm \
+            --not-before "$NOT_BEFORE"
 
   # One job per surface that is actually releasing, each in its own lane, at
   # the commit the plan chose for it: the matrix is `[{surface, sha}, …]`.
