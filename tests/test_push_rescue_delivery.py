@@ -125,6 +125,35 @@ def report_code() -> str:
     )
 
 
+# Options that carry a value, so the value is never mistaken for the command.
+# `-C <dir>` is the one the delivery actually uses; the rest are here because a
+# stub that is wrong about git's grammar is the bug this list exists to prevent.
+_OPTS_WITH_VALUES = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--repo"}
+)
+
+
+def _subcommand(argv: list[str]) -> str:
+    """The command being run, not the line it was run on: `git -C <dir> am -3
+    <patch>` is `am`.
+
+    Options and their values are skipped, so a needle can only ever match the
+    command itself — never a path, a branch name, or the random name of the
+    temp directory the patch happens to sit in (DRE-3490).
+    """
+    rest = list(argv[1:])
+    while rest:
+        token = rest.pop(0)
+        if token in _OPTS_WITH_VALUES:
+            if rest:
+                rest.pop(0)
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return ""
+
+
 # --------------------------------------------------------------------------
 # 1. THE LINE — one grammar, written and parsed by one module
 # --------------------------------------------------------------------------
@@ -294,10 +323,8 @@ class TheDelivery(unittest.TestCase):
     def _run(self, failing=(), pr_json="[]"):
         def run(argv, **kw):
             self.calls.append(list(argv))
-            joined = " ".join(argv)
-            for needle in failing:
-                if needle in joined:
-                    return 1, "", f"refused: {needle}"
+            if _subcommand(argv) in failing:
+                return 1, "", f"refused: {_subcommand(argv)}"
             if "pr" in argv and "list" in argv:
                 return 0, pr_json, ""
             if "pr" in argv and "create" in argv:
@@ -361,6 +388,44 @@ class TheDelivery(unittest.TestCase):
         outcome = self.deliver(failing=("am", "apply"))
         self.assertFalse(outcome.pushed)
         self.assertTrue(outcome.error)
+
+    def test_the_needle_refuses_the_subcommand_and_never_a_path(self):
+        """DRE-3490: `failing=("am",)` names the command `git am`, so it must
+        refuse that and nothing else. It used to be looked for anywhere in the
+        joined argv, where a patch path, a branch name or a temp directory
+        could answer for it."""
+        run = self._run(failing=("am",))
+        self.assertEqual(run(["git", "-C", ".", "am", "-3", "p.patch"])[0], 1)
+        self.assertEqual(
+            run(["git", "-C", "/tmp/spamdir", "apply", "--3way",
+                 "/tmp/spamdir/rescue-DRE-3165.patch"])[0], 0)
+        self.assertEqual(
+            run(["git", "-C", ".", "push", "origin",
+                 "agent/DRE-am:refs/heads/agent/DRE-am"])[0], 0)
+
+    def test_two_needles_still_refuse_both_commands(self):
+        """The other caller in this file, pinned: narrowing the match must not
+        narrow it past what `failing=("am", "apply")` already means."""
+        run = self._run(failing=("am", "apply"))
+        self.assertEqual(run(["git", "-C", ".", "am", "-3", "p.patch"])[0], 1)
+        self.assertEqual(run(["git", "-C", ".", "apply", "--3way", "p.patch"])[0], 1)
+
+    def test_a_patch_directory_named_for_the_needle_still_falls_back(self):
+        """The failure this card fixes, pinned to a directory name rather than
+        to whatever `tempfile` happened to pick: with `TMPDIR=/tmp/spamdir`
+        this scenario refused `git apply` as well as `git am` and the delivery
+        reported that neither could replay the patch."""
+        with tempfile.TemporaryDirectory(prefix="rescue-am-") as td:
+            self.assertIn("am", os.path.basename(td))
+            with open(os.path.join(td, ARTIFACT), "w", encoding="utf-8") as fh:
+                fh.write("From 0000 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] work\n")
+            outcome = deliver_rescue.deliver(
+                CARD, repo=REPO, run_id=RUN_ID, patch_dir=td, base="main",
+                token="fresh-token", card_url="https://linear/DRE-3165",
+                run=self._run(failing=("am",)), post=lambda body: None,
+            )
+        self.assertTrue(outcome.pushed, outcome.error)
+        self.assertTrue(any("apply" in c for c in self.calls), self.calls)
 
     def test_the_card_is_told_the_delivery_landed(self):
         posted: list[str] = []

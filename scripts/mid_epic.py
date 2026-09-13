@@ -81,9 +81,29 @@ dispatched to `plan.yml` from Planning carries it, and reading it as epic-ness
 answered "epic, no verdict" for every one-off — which is how one fixed FLEET
 sentence came to be stamped on cards whose criteria said otherwise (DRE-3038).
 
+## Born with its routing verdict (DRE-3342)
+
+The 🔎 verdict above answers "has anyone read this card"; the 🧭 routing verdict
+answers "who builds it". Two different facts, and the second one used to be a
+SECOND command: file the discovery, then `routing_verdict.py stamp`, then set the
+state. The window between the first two belongs to the lane guard — it judges the
+CREATE as a transition, finds no `🧭 routing-verdict` comment (this module stamps
+`🔎 mid-epic-verdict`, a tag the guard does not read) and returns the card to Intake
+with `guard:returned` before the stamp can land. Every hand-built card of the
+week of 2026-09-08 carries that tag for this reason, which makes the guard's own
+count of jammed work lie.
+
+So `--verdict` makes the two writes ONE motion, through
+`routing_verdict.stamp_card` — the one write path, never a second one — and the
+verdict's own `marks()` come with it, so the caller cannot half-stamp the card.
+Only a verdict whose destination is the lane a sibling is picked up in may be
+carried (`fileable_verdicts()`): PARKED files a card nobody comes for and NEEDS
+WORK one the plan does not describe yet. Without the flag nothing changes.
+
 CLI:
   discovery <EPIC> --kind addition --because "<one line>" \\
-                   --title "<title>" --body <file> [--label <name>]
+                   --title "<title>" --body <file> [--label <name>] \\
+                   [--verdict FLEET|WORKBENCH|OPERATOR] [--why "<one line>"]
   discovery <EPIC> --kind amendment --because "<one line>"
   audit <EPIC>     refresh the epic's growth artifact and report what it found
 """
@@ -146,6 +166,13 @@ EPIC_ACTIVE_LANES = ("Todo", "In Progress")
 GREEN_LIGHT_LANES = ("Green Light",) + tuple(
     old for old, new in lane_scope.LANE_ALIASES.items() if new == "Green Light"
 )
+
+# The lane a filed discovery is PICKED UP in — the destination that decides which
+# routing verdicts a discovery may be born carrying (DRE-3342). Named once here
+# and read against the lane contract by tests/test_mid_epic_discovery.py, so a
+# lane renamed out from under it fails there rather than silently emptying
+# `fileable_verdicts()`.
+DISCOVERY_LANE = "Todo"
 
 # The managed region in the epic's description. Fenced by HTML comments so it is
 # invisible in rendered Linear and unambiguous to parse.
@@ -246,6 +273,52 @@ def growth_capped_comment(epic: str, condition: str) -> str:
         f"**What to do about {epic}:** docs/epic-comment-cap.md — the receipts "
         f"move to a continuation card; the epic itself is not the problem."
     )
+
+
+def fileable_verdicts() -> tuple:
+    """The routing verdicts a discovery may be born with.
+
+    DERIVED from the vocabulary, never restated: they are exactly the verdicts
+    whose destination is the lane a sibling is picked up in. PARKED sends the
+    card to Backlog and NEEDS WORK back to Planning — either one files a sibling
+    nobody comes for, which is the silent accretion this route replaces wearing
+    a verdict. A route added to `config/routing-verdicts.json` becomes fileable
+    here on its own, or does not, according to where it sends the card.
+    """
+    import routing_verdict
+
+    return tuple(
+        name for name in routing_verdict.verdicts()
+        if routing_verdict.destination(name) == DISCOVERY_LANE
+    )
+
+
+def verdict_problem(kind: str, verdict) -> str | None:
+    """Why this discovery cannot be born carrying `verdict`, or None.
+
+    Pre-creation like every refusal here, and refused rather than ignored: a
+    flag that silently did nothing would read, to whoever typed it, as a card
+    that was routed.
+    """
+    if verdict is None:
+        return None
+    if kind == AMENDMENT:
+        return (
+            f"an {AMENDMENT} creates no card, so there is nothing to stamp a "
+            f"routing verdict on — refusing --verdict {verdict!r}. An "
+            f"{AMENDMENT} sends the epic back to {AMENDMENT_STATE}; the cards "
+            "the amended plan asks for are filed after it is re-green-lit, and "
+            "each of those may carry a verdict."
+        )
+    fileable = fileable_verdicts()
+    if verdict.strip().upper() not in fileable:
+        return (
+            f"a discovery may be born carrying {', '.join(fileable)} — refusing "
+            f"{verdict.strip() or 'nothing'!r}. Those are the verdicts whose "
+            f"destination is `{DISCOVERY_LANE}`, the lane a sibling is picked up "
+            "in; every other route files a card nobody comes for."
+        )
+    return None
 
 
 def carries_verdict(comment_bodies) -> bool:
@@ -517,14 +590,20 @@ def last_green_light(linear_ops, epic: str) -> str | None:
 
 
 def discovery(linear_ops, epic: str, *, kind, because, title=None, body=None,
-              labels=()) -> str | None:
+              labels=(), verdict=None, why=None) -> str | None:
     """File a mid-build finding against an already-approved epic.
 
     Returns the new sibling's identifier for an addition, None for an amendment
     (which creates no card — it sends the epic back for a decision).
 
-    Refuses BEFORE touching Linear when the classification is missing: a sibling
-    created and then questioned is already promotable.
+    `verdict` is the ROUTING verdict the new sibling is born carrying (DRE-3342)
+    — who builds it — with `why` the one line that stamp states, defaulting to
+    the classification justification. Absent it nothing is stamped and the motion
+    is what it always was.
+
+    Refuses BEFORE touching Linear when the classification is missing, or when
+    the verdict is one this route cannot file: a sibling created and then
+    questioned is already promotable.
     """
     problem = classification_problem(kind, because)
     if problem is not None:
@@ -533,6 +612,9 @@ def discovery(linear_ops, epic: str, *, kind, because, title=None, body=None,
     # It is a ONE-LINE justification, and it is written into a line-oriented
     # record on the epic: a pasted paragraph must not break the record open.
     because = _one_line(because)
+    problem = verdict_problem(kind, verdict)
+    if problem is not None:
+        raise DiscoveryRefused(problem)
     if kind == AMENDMENT:
         return _amend(linear_ops, epic, because)
     if not (title or "").strip() or not (body or "").strip():
@@ -541,33 +623,46 @@ def discovery(linear_ops, epic: str, *, kind, because, title=None, body=None,
             "--title and a --body. (An amendment needs neither — it creates no "
             "card.)"
         )
-    return _add(linear_ops, epic, because, title, body, labels)
+    return _add(linear_ops, epic, because, title, body, labels,
+                verdict and verdict.strip().upper(), _one_line(why) or because)
 
 
-def _add(linear_ops, epic, because, title, body, labels) -> str:
-    """The addition: a sibling under the same epic, its verdict, and the growth
-    recorded on the epic — one motion.
+def _add(linear_ops, epic, because, title, body, labels, verdict, why) -> str:
+    """The addition: a sibling under the same epic, its routing stamp, its
+    verdict, and the growth recorded on the epic — one motion.
 
-    ORDER IS LOAD-BEARING: card, THEN the verdict on the sibling, THEN the
-    epic's growth. A crash between any two leaves the safe half — a card with
-    no verdict cannot promote (promotion_refusal), and a card the artifact
-    never recorded is surfaced on the next sweep.
+    ORDER IS LOAD-BEARING. The card is created, THEN it is stamped with its
+    routing verdict, THEN the mid-epic verdict is posted, THEN the epic's
+    artifact is updated. A crash between any two leaves the safe half: a card
+    with no mid-epic verdict cannot promote (promotion_refusal), and a card the
+    artifact never recorded is surfaced on the next sweep.
 
-    The verdict moved AHEAD of the growth on 2026-09-08 (DRE-3343). The old
-    order was card → growth → verdict, and it was safe against a CRASH: what
-    it was not safe against was a step that fails EVERY TIME. DRE-2668 reached
-    Linear's 2,000-comment cap, the growth write raised, and four discovery
-    cards in a row were created without ever reaching their verdict — the one
-    thing a mid-epic card cannot promote without. Both orders leave a
-    verdict-less card on a crash; only this one leaves a promotable card when
-    the epic itself is the thing that is broken, and the growth it could not
-    write is recorded on the sibling below.
+    The routing stamp sits FIRST of the three because the lane guard judges the
+    create itself and reads that comment (DRE-3342): every write after it can be
+    re-derived, and that one cannot be made early enough.
+
+    The mid-epic verdict moved ahead of the growth on 2026-09-08 (DRE-3343).
+    Until then the growth went second, and that order was safe against a CRASH:
+    what it was not safe against was a step that fails EVERY TIME. DRE-2668
+    reached Linear's 2,000-comment cap, the growth write raised, and four
+    discovery cards in a row were created without ever reaching the verdict they
+    cannot promote without. Both orders leave a verdict-less card on a crash;
+    only this one leaves a promotable card when the EPIC is the thing that is
+    broken, and the growth it could not write is recorded on the sibling below.
     """
     flags: list[str] = []
     for label in labels or []:
         flags += ["--label", label]
     issue = linear_ops.cmd_subissue(epic, title, body, *flags)
     identifier = issue["identifier"]
+
+    if verdict:
+        # THE one write path (routing_verdict.stamp_card) — the comment and the
+        # verdict's own marks together, so the caller cannot half-stamp the card.
+        # Imported late: routing_verdict reads this module for `is_epic`.
+        import routing_verdict
+
+        routing_verdict.stamp_card(identifier, verdict, why)
 
     linear_ops.cmd_comment(identifier, verdict_comment(ADDITION, because, epic))
     record = {"id": identifier, "because": because}
@@ -742,11 +837,12 @@ def _leading_int(text: str) -> int | None:
 
 
 def _parse_argv(argv) -> dict:
-    """--kind/--because/--title/--body/--label. Hand-rolled to match the rest of
-    scripts/ (linear_ops._parse_flags), which takes no argparse dependency."""
+    """--kind/--because/--title/--body/--label/--verdict/--why. Hand-rolled to
+    match the rest of scripts/ (linear_ops._parse_flags), which takes no argparse
+    dependency."""
     out: dict = {"labels": []}
     keys = {"--kind": "kind", "--because": "because", "--title": "title",
-            "--body": "body"}
+            "--body": "body", "--verdict": "verdict", "--why": "why"}
     it = iter(argv)
     for tok in it:
         if tok == "--label":
@@ -771,6 +867,7 @@ def cmd_discovery(epic: str, *argv) -> None:
             linear_ops, epic,
             kind=args.get("kind"), because=args.get("because"),
             title=args.get("title"), body=body, labels=args["labels"],
+            verdict=args.get("verdict"), why=args.get("why"),
         )
     except DiscoveryRefused as exc:
         raise SystemExit(f"❌ discovery REFUSED: {exc}")

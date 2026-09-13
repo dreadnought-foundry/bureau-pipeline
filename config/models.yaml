@@ -170,7 +170,11 @@ ladders:
         the LOUD fallback — selection note prefixed DEGRADED, workflow raises a
         ::warning::, exactly as the advisory ladder does it. Read it as "the
         planner did not get the model it was promised", which is a plan worth
-        looking at, not a broken run.
+        looking at, not a broken run. Confirmed as the planner's fallback by the
+        CEO on 2026-09-13 (DRE-3709), after Fable refused every planner run on a
+        monthly spend limit. The probe cannot see that refusal, so the planner
+        reaches this rung by reading its own `model-error:` death marker
+        (plan.yml "Select model", DRE-3824).
     - model: claude-sonnet-4-6
       reason: "last resort — never block a plan on availability"
 
