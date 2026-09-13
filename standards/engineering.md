@@ -22,7 +22,10 @@ is the floor. Every rule here exists because its violation shipped a bug.
   **STRICTLY BEFORE** the first commit that changes non-test code.* One RED
   commit before the FIRST implementation commit — **not one before every
   implementation commit**. Docs-only and ops-only branches are exempt, and so
-  is a `.py` change that is docstrings alone. **Reviewers: hold a branch to
+  is a `.py` change that is docstrings alone. A static design record — a
+  `.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/`.json` file under
+  `console/design/` or a root `design/` — counts as docs; `.css` and source
+  there stay code (DRE-3763). **Reviewers: hold a branch to
   that rule and no other.** "A RED test immediately before each implementation
   commit" is a stricter standard nothing enforces, and blocking on it rejects a
   compliant branch — it cost agent-bureau #2247 ~22 hours, a fix-loop attempt
