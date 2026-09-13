@@ -167,10 +167,13 @@ of it is ever a runtime lookup.
   one thing it needs from it: the set of names a run may DECLARE in
   `LINEAR_IDENTITY` (DRE-3321), which the seam prints as the last part of its
   rate-limit refusal and its `linear-budget:` line so a dry bucket names its
-  owner. `reconcile.yml`, `linear-sync.yml` and `plan.yml` declare
-  `LINEAR_IDENTITY: fleet` at job level, and `split-ledger.yml` declares it on
-  the one step that reads the board; a run that declares nothing prints
-  `undeclared`, never a guess. No workflow reads the file itself — CI holds
+  owner. `linear-sync.yml` and `plan.yml` declare `LINEAR_IDENTITY: fleet` at
+  job level and `split-ledger.yml` declares it on the one step that reads the
+  board; `reconcile.yml` takes the word from its CALLER instead, as the
+  `linear_identity` workflow_call input defaulting to `fleet` (DRE-3630), so a
+  stub on its own Linear key — the sandbox's — names its own budget rather
+  than printing the fleet's while spending its own hour. A run that declares
+  nothing prints `undeclared`, never a guess. No workflow reads the file itself — CI holds
   only the fleet key, as `secrets.LINEAR_API_KEY`, which is the name the
   operator-tools key wears on the operator's machine.
   **An identity may have several HOMES** (DRE-3334): one key is not kept in

@@ -54,6 +54,19 @@ on:
         type: string
         required: false
         default: ""
+      linear_identity:
+        description: >-
+          WHOSE Linear hour this sweep spends (DRE-3321). Must be a `name`
+          from `config/linear-identities.json` — `linear_ops` prints
+          `undeclared` for any other word rather than guessing, because a
+          confident wrong name sends the reader to the wrong bucket. The
+          default is `fleet`, the user every product repo's sweep runs as, so
+          a production stub passes nothing and is unchanged. A caller on its
+          own Linear key passes its own name (the sandbox's stub passes
+          `sandbox`).
+        type: string
+        required: false
+        default: "fleet"
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -85,8 +98,15 @@ jobs:
     # not verified: the label cannot be checked against Linear from inside a
     # run without spending a request from the budget in question
     # (check_linear_identities.py is the live proof the key is who this says).
+    #
+    # From the CALLER since DRE-3630, never a literal here: this file is the
+    # shared channel, and a stub on its own Linear key — the sandbox's — would
+    # otherwise print `budget: fleet` while spending its own hour, mis-filing
+    # every one of its lines in check_linear_budget.py. The word `fleet` is
+    # written once, as the input's default, so every production stub inherits
+    # it with no edit.
     env:
-      LINEAR_IDENTITY: fleet
+      LINEAR_IDENTITY: ${{ inputs.linear_identity }}
     steps:
       - name: Mint bot token
         id: app
