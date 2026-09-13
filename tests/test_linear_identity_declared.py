@@ -37,16 +37,34 @@ os.environ.setdefault("REPO", "dreadnought-foundry/test")
 os.environ.setdefault("REPO_SLUG", "test")
 os.environ.setdefault("GH_TOKEN", "test")
 
+import check_wip_cap  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 IDENTITIES = os.path.join(ROOT, "config", "linear-identities.json")
 
-# The epic's spend table: the three fleet consumers that read the fleet key.
-# Named here because the card names them — other workflows print `undeclared`
-# until they declare, which is honest rather than wrong.
-SPENDERS = ("reconcile.yml", "linear-sync.yml", "plan.yml")
+# The epic's spend table: the three fleet consumers that read the fleet key,
+# and the value each one's job-level declaration must carry. Named here
+# because the card names them — other workflows print `undeclared` until they
+# declare, which is honest rather than wrong.
+#
+# `reconcile.yml` is the one that takes the word from its CALLER (DRE-3630):
+# the sandbox's hand-installed stub spends the sandbox's Linear hour, and a
+# literal on the shared job would have it print `budget: fleet` while doing so
+# — the confident wrong name this whole epic exists to prevent. Its `fleet` is
+# written once, as the input's default, so every production stub is unchanged.
+# `linear-sync.yml` and `plan.yml` have no sandbox caller and keep the literal:
+# an input nobody passes is a knob with nobody's hand on it.
+IDENTITY_INPUT = "linear_identity"
+
+DECLARATION = {
+    "reconcile.yml": "${{ inputs.%s }}" % IDENTITY_INPUT,
+    "linear-sync.yml": "fleet",
+    "plan.yml": "fleet",
+}
+
+SPENDERS = tuple(DECLARATION)
 
 KEY = "secrets.LINEAR_API_KEY"
 
@@ -54,6 +72,14 @@ KEY = "secrets.LINEAR_API_KEY"
 def _workflow(name: str) -> dict:
     with open(os.path.join(WORKFLOWS, name), encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def _call_inputs(doc: dict) -> dict:
+    """The workflow's `workflow_call` inputs — read through `check_wip_cap`'s
+    trigger-table reader, because `on:` parses as boolean True under YAML 1.1
+    and a second spelling of that quirk is a second place to get it wrong."""
+    call = check_wip_cap._on_block(doc).get("workflow_call") or {}
+    return call.get("inputs") or {}
 
 
 def _jobs_reading_the_key(doc: dict) -> list[tuple[str, dict]]:
@@ -67,9 +93,9 @@ def _jobs_reading_the_key(doc: dict) -> list[tuple[str, dict]]:
 
 
 class DeclaredInTheWorkflowsTest(unittest.TestCase):
-    def test_every_job_that_reads_the_fleet_key_declares_fleet(self):
+    def test_every_job_that_reads_the_fleet_key_declares_whose_budget_it_is(self):
         seen = 0
-        for name in SPENDERS:
+        for name, expected in DECLARATION.items():
             doc = _workflow(name)
             jobs = _jobs_reading_the_key(doc)
             self.assertTrue(jobs, f"{name} reads no Linear key — the list is stale")
@@ -77,14 +103,59 @@ class DeclaredInTheWorkflowsTest(unittest.TestCase):
                 seen += 1
                 env = job.get("env") or {}
                 self.assertEqual(
-                    env.get("LINEAR_IDENTITY"),
-                    "fleet",
-                    f"{name}:{job_id} spends the fleet's budget without saying so",
+                    str(env.get("LINEAR_IDENTITY")).strip(),
+                    expected,
+                    f"{name}:{job_id} spends a Linear budget without saying whose",
                 )
         # Five jobs today: reconcile's sweep, linear-sync's card-done and
         # conflict-sweep, plan's plan and publish. Asserted as a floor so a
         # renamed job cannot make this test pass by finding nothing.
         self.assertGreaterEqual(seen, 5)
+
+    def test_the_reconcile_sweep_takes_its_identity_from_the_caller(self):
+        """DRE-3630: the shared sweep's word is an input, so the sandbox's stub
+        can say `sandbox` while every production stub passes nothing and keeps
+        `fleet`. Declared like the pen's three knobs: string, optional, and
+        with the only copy of `fleet` in the default."""
+        spec = _call_inputs(_workflow("reconcile.yml")).get(IDENTITY_INPUT)
+        self.assertIsInstance(
+            spec,
+            dict,
+            f"{IDENTITY_INPUT} is not a workflow_call input, so a caller that "
+            f"spends its own Linear hour cannot say so",
+        )
+        self.assertEqual(spec.get("type"), "string")
+        self.assertIs(spec.get("required"), False)
+        self.assertEqual(
+            spec.get("default"),
+            "fleet",
+            "the default is what every production stub inherits without an edit",
+        )
+
+    def test_the_reconcile_input_says_which_words_are_declarations(self):
+        """The description is where a stub author learns that the value is a
+        `name` from the declaration file and that anything else prints
+        `undeclared` — the seam does not guess, so an unexplained typo would
+        read as a silent demotion rather than as a mistake."""
+        description = _call_inputs(_workflow("reconcile.yml"))[IDENTITY_INPUT].get(
+            "description", ""
+        )
+        self.assertIn("config/linear-identities.json", description)
+        self.assertIn(linear_ops.UNDECLARED, description)
+
+    def test_this_repos_own_stub_passes_no_identity_and_so_stays_fleet(self):
+        """self-reconcile.yml is untouched by DRE-3630 and still resolves to
+        `fleet` — read off the stub rather than asserted: it passes no
+        `linear_identity`, and the reusable's default is the word."""
+        call = (_workflow("self-reconcile.yml")["jobs"]["call"].get("with")) or {}
+        self.assertNotIn(
+            IDENTITY_INPUT,
+            call,
+            "the control-plane repo spends the fleet's hour — it has nothing to "
+            "override",
+        )
+        spec = _call_inputs(_workflow("reconcile.yml"))[IDENTITY_INPUT]
+        self.assertEqual(spec.get("default"), "fleet")
 
     def test_the_declaration_sits_on_the_job_so_no_step_carries_it(self):
         """No step is edited: the value is inherited. A step-level copy is the
