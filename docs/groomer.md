@@ -200,6 +200,22 @@ Linear identity is ignored and named in the record, exactly as a self-written
 approval is refused. A marker the proposer can write is a credential the
 proposer can mint, so it decides nothing (DRE-2721).
 
+**Unless the console signed it (DRE-3754).** The console holds only the fleet's
+Linear key, so a decision a signed-in owner makes there is authored by the
+pipeline's identity. It carries a console receipt on its last line — an
+Ed25519 signature over the marker line, the card, the batch, the console user
+and the time — and a pipeline-written marker whose receipt verifies decides
+like the CEO's own. The format, byte for byte, is `scripts/console_receipt.py`
+`SPEC`; the public key is read from `https://app.agent-bureau.com/api/v1/receipt-key`
+and from nowhere else (no repository or organisation variable can move it — the
+fleet's GitHub App can write those). A receipt that fails any check — another
+card, another batch, more than ten minutes between its signed time and the
+comment's own Linear time, a copy of one already honoured in the thread, a key
+that cannot be read, a signature that does not verify — is refused with the
+reason in the record, and a pipeline-written marker with no receipt is refused
+exactly as before. The drain verifies with the runner's `openssl` (OpenSSL 3);
+a machine with only LibreSSL refuses every receipted marker and says so.
+
 What each one does:
 
 - **declined** — the batch is not drained, and the refusal quotes the reason.
