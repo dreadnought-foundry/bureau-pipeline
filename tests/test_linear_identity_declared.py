@@ -1,10 +1,11 @@
 """The fleet consumers DECLARE whose Linear budget they spend (DRE-3321).
 
-Since DRE-3172 the workspace has two non-human Linear users and Linear's
-2,500-requests-per-hour limit is PER USER, so "the quota is exhausted" names
-one of two buckets and a reader has to know which. The run says so itself: a
-job-level `LINEAR_IDENTITY` beside the job that reads `secrets.LINEAR_API_KEY`,
-inherited by every step in it, and printed as the last part of the two lines
+Since DRE-3172 — and DRE-3628's sandbox seat — the workspace has three
+non-human Linear users and Linear's 2,500-requests-per-hour limit is PER USER,
+so "the quota is exhausted" names one of three buckets and a reader has to know
+which. The run says so itself: a job-level `LINEAR_IDENTITY` beside the job
+that reads `secrets.LINEAR_API_KEY`, inherited by every step in it, and
+printed as the last part of the two lines
 `linear_ops` writes when the bucket runs dry.
 
 DECLARED, not verified: the label cannot be checked against Linear from inside

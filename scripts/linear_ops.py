@@ -208,12 +208,13 @@ def rate_limit_condition(body: str) -> str | None:
 
 
 # ── Whose budget is it? (DRE-3321) ──────────────────────────────────────────
-# Since DRE-3172 the workspace has TWO non-human Linear users and the
-# 2,500-requests-per-hour limit is PER USER, so "the quota is exhausted" is no
-# longer a fact about the workspace: it names one of two buckets, and a reader
-# has to know WHICH. The run says so itself — the label cannot be verified
-# against Linear from inside a run without spending a request from the very
-# budget in question (`standards/vendor-boundaries.md` Q4), so it is DECLARED
+# Since DRE-3172 — and DRE-3628's sandbox seat — the workspace has THREE
+# non-human Linear users and the 2,500-requests-per-hour limit is PER USER, so
+# "the quota is exhausted" is no longer a fact about the workspace: it names
+# one of three buckets, and a reader has to know WHICH. The run says so
+# itself — the label cannot be verified against Linear from inside a run
+# without spending a request from the very budget in question
+# (`standards/vendor-boundaries.md` Q4), so it is DECLARED
 # and `scripts/check_linear_identities.py check` stays the live proof that the
 # keys are who the labels say.
 IDENTITY_ENV = "LINEAR_IDENTITY"
@@ -403,7 +404,7 @@ def budget_line() -> str:
     carries `refused after <N> calls`. Never a key, never a URL.
 
     The budget owner is the LAST part and it is on every one of these lines,
-    the headerless one included (DRE-3321): two non-human users mean two
+    the headerless one included (DRE-3321): three non-human users mean three
     hourly budgets, and a spend nobody can attribute is the thing this line
     exists to end. Everything before it keeps its place, so
     `check_linear_budget.py` reads `spent N` / `window rolled` unchanged."""

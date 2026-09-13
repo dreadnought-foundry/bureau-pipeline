@@ -277,7 +277,8 @@ def viewer_of(key: str) -> dict:
     """Who `key` is, straight from Linear: `{"id", "name", "admin"}`.
 
     Not `linear_ops.gql`, which reads its key from `LINEAR_API_KEY` — this
-    check holds two keys at once and must present each one deliberately.
+    check holds every declared key at once and must present each one
+    deliberately.
     Same endpoint, same timeout; a failure raises with the response body,
     which the caller redacts before it is printed.
     """
