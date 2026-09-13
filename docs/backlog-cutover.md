@@ -133,7 +133,7 @@ place available.
 
 ## Controlling the inflow — the pen the operator holds
 
-Three things control how fast work enters the pipeline after the cutover, and
+Four things control how fast work enters the pipeline after the cutover, and
 between them the inflow is exactly the batches the CEO approves, at the capacity
 he sets, and nothing else:
 
@@ -147,12 +147,23 @@ he sets, and nothing else:
    than committed into the stub — see below; the other two are stub data,
    because widening the window is a considered change and a pull request is the
    right price for it.
+4. **The off-rail refusal** — the fence behind the dial, and the only one of the
+   four nobody sets. A sandbox sweep moves no Intake card, whatever the three
+   inputs say. In the table below.
 
-| Input | What it does | Empty means |
+| Control | What it does | Empty means |
 | -- | -- | -- |
 | `intake_hold` | **The switch.** Set it — ideally to the date you set it — and the age-out moves nothing and the groomer's `drain` refuses. Each prints one line per pass: *"Intake held by the operator since &lt;date&gt;; N cards waiting, M past the window"*. The pen is visibly closed, not silently stuck. | open |
 | `intake_max_age_minutes` | How long a card may sit in Intake before the sweep escalates it. | the lane contract's own 48-hour window |
 | `intake_escalation_cap` | How many aged cards **one sweep** may move. | three |
+| **the off-rail refusal** — not an input | **The fence behind the dial (DRE-3629).** A sweep running as a repo that is not on the routing rail — a sandbox such as `bureau-harness` — moves no Intake card at all, and prints one line per pass opening `off-rail:`, naming the repo and what it declined. It is read **before** the lane is, so a refused pass spends no request, and the refusal is a normal green pass: a red sandbox sweep reads to the harness as a dead sandbox and blocks `main`'s proving run. | nothing to set — the rail is `config/repo-map.json` |
+
+The fourth is not an operator knob and has no empty state: the rail is the same
+bundled routing snapshot the relay routes on and the Todo gate validates
+against, so onboarding a repo gives its sweep the age-out and nothing else has
+to be turned on. `agent-bureau-demo` **is** on the rail — cards route to it — so
+the fence does not cover it, and the operator's dated `INTAKE_HOLD` on that stub
+is what holds it until one production sweep is made the age-out owner.
 
 `intake_hold` belongs on **both** stubs — `reconcile.yml` and `groomer.yml` —
 because the age-out and the drain are the two things that move a card out of

@@ -1547,6 +1547,10 @@ def escalate_aged_intake() -> set[str]:
     remainder in Intake — still the oldest, so the next sweep takes them. It
     may hold a card; it may not forget one.
 
+    A sweep that is not on the routing rail at all is refused at the door
+    instead — `intake_controls.may_escalate`, before the walk, printing one
+    `off-rail` line and moving nothing (DRE-3629).
+
     NO REPO FILTER, deliberately, and it has two consequences worth stating.
     An Intake card has no `repo:` label yet — assigning one is what Planning
     does — so filtering by repo would make this fire on nothing at all.
@@ -1572,6 +1576,9 @@ def escalate_aged_intake() -> set[str]:
 
     Returns the identifiers escalated this sweep.
     """
+    if not intake_controls.may_escalate(REPO_SLUG, validate_card.VALID_SLUGS):
+        print(intake_controls.off_rail_notice(REPO_SLUG, "the Intake age-out"))
+        return set()
     escalated: set[str] = set()
     waiting, aged = _intake_candidates()
 

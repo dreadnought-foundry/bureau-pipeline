@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The operator's controls on Intake — one reading of them, two readers (DRE-3035).
 
-Intake is a pen, and this module is the gate hardware. Three knobs, and the
-whole point of putting them here rather than in `reconcile.py` is that the
+Intake is a pen, and this module is the gate hardware. FOUR readings of it, and
+the whole point of putting them here rather than in `reconcile.py` is that the
 sweep's age-out and `groomer.py drain` are the two things that move a card OUT
 of Intake, and an operator who closes the pen has closed it against both. A
 second reading of the same switch is a pen with a hole in it.
@@ -14,8 +14,14 @@ second reading of the same switch is a pen with a hole in it.
     so the number a reader finds in `docs/lane-contract.md` is the number that
     runs (the PLANNING_MINUTES rule).
   * `INTAKE_ESCALATION_CAP` — how many aged cards ONE sweep may move.
+  * `may_escalate(slug, rail)` — the fourth, and the only one that is not an
+    operator knob at all (DRE-3629). It asks whether the repo the sweep is
+    RUNNING AS is on the routing rail, and a sweep that is not moves no board
+    card it does not own: it prints `off_rail_notice` and stops. The first
+    three are the operator's dial; this one is the fence behind the dial, and
+    it needs no operator at all.
 
-Every one of them arrives as a `workflow_call` input, which is why nothing here
+The first three arrive as `workflow_call` inputs, which is why nothing here
 uses a bare `int()`. On any event where the `inputs` context is empty the
 interpolation yields the EMPTY STRING, and `int("")` raises — that would turn a
 window question into a red sweep across the fleet. Unset, empty and unparseable
@@ -29,6 +35,13 @@ the exact reason five cards were frozen and nobody read one. Here the reverse
 risk applies: a silent pen is a stall with an alibi. So the pen is VISIBLY
 closed, once per pass, naming the date it was closed, how much is behind it and
 which switch opens it.
+
+AND WHY THE OFF-RAIL REFUSAL PRINTS, for the same reason and with the same
+shape: one `off-rail` line per pass, naming the repo and what it declined. The
+difference is where it lands — the hold is read AFTER the walk so it can say
+how much is behind the pen, and the fence is read BEFORE it, because a sweep
+that may move nothing should not spend a read finding out what it would have
+moved.
 """
 
 from __future__ import annotations
@@ -58,6 +71,12 @@ DEFAULT_CAP = 3
 #: Opens every hold line, so a held pass is greppable in a run log and the
 #: tests can count the lines rather than match the prose.
 TAG = "intake-hold"
+
+#: Opens every off-rail line, for the same reason (DRE-3629). One constant,
+#: because the sibling card that fences the sweep's OTHER writers prints this
+#: same notice and nothing else — two modules spelling a tag separately is how
+#: a grep for "what did the sandbox refuse tonight" comes back half-empty.
+TAG_OFF_RAIL = "off-rail"
 
 #: Spellings of "the pen is open". EMPTY IS THE LOAD-BEARING ONE: an unset
 #: workflow input is the empty string, and a hold that read that as "closed"
@@ -98,6 +117,53 @@ def max_age_minutes(raw=None) -> int:
 def escalation_cap(raw=None) -> int:
     """How many aged cards one sweep may move."""
     return _int(os.environ.get(ENV_CAP) if raw is None else raw, DEFAULT_CAP)
+
+
+def may_escalate(slug: str, rail) -> bool:
+    """May a sweep running as repo `slug` move a board card it does not own?
+
+    The answer is `slug in rail`, and `rail` is the routing snapshot's slug set
+    — `validate_card.VALID_SLUGS`, the bundled `config/repo-map.json` keys.
+    Deterministic and network-free on purpose: a sweep must not spend a request
+    to decide whether it may spend requests, which is why the caller passes this
+    and not `live_rail_slugs()` (a network read with a `None` answer).
+
+    WHY IT EXISTS. Intake cards carry no `repo:` label, so the age-out reads the
+    whole lane and every repo's sweep is entitled to move the oldest three.
+    That was true of production sweeps and was never meant to be true of the
+    sandboxes, which run the same reusable `reconcile.yml` — on the night of
+    2026-09-09/10 sandbox sweeps helped age 130+ cards into the CEO's queue.
+    Being ON the rail is what makes a sweep one of the board's owners.
+
+    `agent-bureau-demo` IS on the rail — cards route to it — so this predicate
+    does not fence it, and the operator's dated `INTAKE_HOLD` on the demo stub
+    is what holds it until the wave's third epic narrows this same function to
+    "the declared age-out owner". That epic adds a clause HERE; it does not add
+    a second predicate.
+
+    Pure: it reads no environment, so it can be asked about a repo other than
+    the one this process is running as. An empty or `None` rail returns `False`
+    — the caller passes the bundled snapshot, which is never empty, so that is
+    a caller defect and the safe answer is the one that moves no card.
+    """
+    if not rail:
+        return False
+    return str(slug or "").strip().lower() in rail
+
+
+def off_rail_notice(slug: str, detail: str) -> str:
+    """The one line a refused pass prints, opening with the `off-rail` tag.
+
+    `detail` is the caller's own words for what it declined — the age-out
+    declines the Intake walk, the sibling card's writers each decline something
+    else — because a shared sentence with one of them guessed would be worse
+    than four accurate ones. Same rule `notice` already follows.
+    """
+    return (
+        f"{TAG_OFF_RAIL}: this sweep runs as {slug!r}, which is not on the "
+        f"routing rail — it moves no board card it does not own, so it "
+        f"declined {detail}"
+    )
 
 
 def notice(since: str, waiting: int, detail: str) -> str:
