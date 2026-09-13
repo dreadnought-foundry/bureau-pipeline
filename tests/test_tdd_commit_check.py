@@ -144,6 +144,105 @@ class ClassifyPathTest(unittest.TestCase):
         # new source tree can't silently dodge the discipline.
         self.assertEqual(check_tdd_commits.classify_path("relay/handler.py"), "code")
 
+    # --- static design records (DRE-3763) --------------------------------
+    #
+    # agent-bureau #2523 was one commit adding one file — the CEO-approved
+    # Green Light page, `console/design/screens/web-green-light-after-2026-09-13.html`
+    # — and it classified as `code`, so "no test commit precedes the
+    # implementation" failed a check no added commit can clear (DRE-2694). The
+    # only RED test you can write for a static page is a vacuous one, which the
+    # engineering standard bans. A design record is documentation of a decision;
+    # it is docs by the same reasoning as `docs/` and `*.md`.
+
+    def test_a_design_screen_under_console_design_is_docs(self):
+        # The exact path that stranded #2523.
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "console/design/screens/web-green-light-after-2026-09-13.html"
+            ),
+            "docs",
+        )
+
+    def test_every_static_design_record_extension_is_docs(self):
+        for path in (
+            "console/design/screens/web-one-river-header-2026-09-11.html",
+            "console/design/DESIGN.md",
+            "console/design/images/one-river-1280-light.png",
+            "console/design/images/pulse.jpg",
+            "console/design/images/pulse.jpeg",
+            "console/design/brand/logomark.svg",
+            "console/design/bureau-console.pen",
+            "console/design/_ds_manifest.json",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "docs")
+
+    def test_a_top_level_design_directory_is_docs_too(self):
+        # project-template (what every new repo is built from) and deltasolv
+        # keep the same record at the repo root, not under console/.
+        self.assertEqual(
+            check_tdd_commits.classify_path("design/screens/web-dashboard.html"),
+            "docs",
+        )
+        self.assertEqual(
+            check_tdd_commits.classify_path("design/foundations/colors.html"),
+            "docs",
+        )
+
+    def test_an_uppercase_image_extension_is_still_a_record(self):
+        # A screenshot saved as `.PNG` is the same record as one saved `.png`.
+        self.assertEqual(
+            check_tdd_commits.classify_path("console/design/images/shot.PNG"),
+            "docs",
+        )
+
+    def test_source_under_a_design_directory_is_still_code(self):
+        # The limit of the exemption, pinned. CSS tokens feed the app build and
+        # a `.ts`/`.tsx`/`.js`/`.py` file is source wherever it sits — the
+        # extension allowlist, not the directory, is what makes a file a record.
+        for path in (
+            "console/design/tokens.css",
+            "console/design/fonts.css",
+            "console/design/logomark.js",
+            "console/design/components/Badge.ts",
+            "console/design/components/react/StatusBadge.tsx",
+            "console/design/build_manifest.py",
+            "design/tokens.css",
+            "design/tailwind.preset.js",
+            "design/components/react/StatusBadge.tsx",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
+    def test_unlisted_extensions_under_design_stay_code(self):
+        # Fail-closed: only the listed record formats move out of `code`.
+        for path in (
+            "console/design/agent-field.glsl",
+            "console/design/specs/web-sign-up.txt",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
+    def test_a_design_directory_nested_inside_source_is_not_a_record(self):
+        # Matched by PREFIX, not by directory segment the way test trees are: a
+        # `design/` folder inside an application's source is part of the app, and
+        # its JSON can be imported by the build.
+        for path in (
+            "web/src/design/theme.json",
+            "console/frontend/src/design/screen.html",
+            "packages/ui/design/tokens.json",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
+    def test_the_existing_docs_rules_are_unchanged(self):
+        self.assertEqual(check_tdd_commits.classify_path("docs/runbook.html"), "docs")
+        self.assertEqual(check_tdd_commits.classify_path("docs/self-hosting.md"), "docs")
+        self.assertEqual(check_tdd_commits.classify_path("console/backend/NOTES.md"), "docs")
+        # A non-.md file outside docs/ and outside a design record is still code.
+        self.assertEqual(check_tdd_commits.classify_path("console/index.html"), "code")
+        self.assertEqual(check_tdd_commits.classify_path("brand/logo.svg"), "code")
+
 
 class CheckCommitsTest(unittest.TestCase):
     """The ordering rule on an oldest-first commit list."""
@@ -200,6 +299,49 @@ class CheckCommitsTest(unittest.TestCase):
         # PR — the code still needs a preceding test commit.
         ok, reason = check_tdd_commits.check_commits([
             commit(["README.md", "scripts/widget.py"], "feat: with docs"),
+        ])
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
+
+    # --- design records (DRE-3763) ----------------------------------------
+
+    def test_a_design_record_only_branch_passes_without_a_test_commit(self):
+        # agent-bureau #2523's shape: one commit, one static design page.
+        ok, _ = check_tdd_commits.check_commits([
+            commit(
+                ["console/design/screens/web-green-light-after-2026-09-13.html"],
+                "docs(DRE-3762): the CEO-approved Green Light design page",
+            ),
+        ])
+        self.assertTrue(ok)
+
+    def test_a_design_record_with_its_screenshots_and_manifest_passes(self):
+        ok, _ = check_tdd_commits.check_commits([
+            commit([
+                "console/design/screens/web-x-2026-09-13.html",
+                "console/design/images/web-x-1280-light.png",
+                "console/design/_ds_manifest.json",
+            ], "docs: design record"),
+        ])
+        self.assertTrue(ok)
+
+    def test_a_design_record_beside_code_does_not_exempt(self):
+        # A mixed commit is still code — the page rides along with a real
+        # change that needs its RED test first.
+        ok, reason = check_tdd_commits.check_commits([
+            commit([
+                "console/design/screens/web-x-2026-09-13.html",
+                "console/frontend/src/views/GreenLight.tsx",
+            ], "feat: page and build together"),
+        ])
+        self.assertFalse(ok)
+        self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
+
+    def test_a_token_stylesheet_under_design_still_needs_a_test(self):
+        # tokens.css feeds the app build; it is code, and a branch that changes
+        # only it still needs a preceding test commit.
+        ok, reason = check_tdd_commits.check_commits([
+            commit(["console/design/tokens.css"], "style: new accent"),
         ])
         self.assertFalse(ok)
         self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
@@ -338,6 +480,28 @@ class GitCliTest(GitRepoMixin, unittest.TestCase):
         self.add_commit("docs/notes.md", "docs(DRE-3): notes")
         p = self.run_check()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_design_record_only_branch_exits_0(self):
+        # DRE-3763: agent-bureau #2523, reproduced commit for commit — one
+        # commit adding one static design page, no test anywhere.
+        self.git("checkout", "-q", "-b", "agent/DRE-3762-green-light-design-record")
+        self.add_commit(
+            "console/design/screens/web-green-light-after-2026-09-13.html",
+            "docs(DRE-3762): the CEO-approved Green Light design page",
+        )
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("[docs]", p.stdout)
+
+    def test_design_record_with_code_and_no_test_exits_1(self):
+        self.git("checkout", "-q", "-b", "agent/DRE-3763-mixed")
+        self.write("console/design/screens/web-x.html", "<html></html>")
+        self.write("console/frontend/src/views/X.tsx", "export const X = 1;")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "feat: page and build together")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
 
     def test_merging_advanced_main_into_the_branch_does_not_flag(self):
         # main moves on (someone else's code-only squash-merge) while the

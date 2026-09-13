@@ -14,7 +14,9 @@ The rule (engineering standard: "commit the failing test FIRST"):
     BEFORE the first commit that changes non-test code. Same-commit doesn't
     count — history must SHOW the test existed before the fix.
   • Docs-only and ops-only PRs are exempt, classified by changed paths:
-    docs = `docs/` + any `*.md` (README, standards/, briefs/);
+    docs = `docs/` + any `*.md` (README, standards/, briefs/) + a static
+           design record (`.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/
+           `.json` under `console/design/` or a root `design/`, DRE-3763);
     ops  = `.github/` + `config/` + `agents.yaml`.
     Anything unrecognized counts as code — fail-closed, so a new source tree
     can't silently dodge the discipline.
@@ -104,6 +106,23 @@ _TEST_SUFFIXES = (
     "_test.py", "_test.go", "_test.rb",
 )
 _DOCS_PREFIXES = ("docs/",)
+# Static design records are docs too (DRE-3763). agent-bureau #2523 was one
+# commit adding one CEO-approved design page under `console/design/screens/`,
+# and it classified as code — a failure no added commit can clear (DRE-2694),
+# for a file whose only possible RED test is a vacuous one. A design record
+# documents a decision, the way `docs/` does.
+#
+# Two limits keep this fail-closed. The directory is matched by PREFIX, not by
+# segment the way test trees are: `console/design/` is agent-bureau's shape and
+# a root `design/` is project-template's (what new repos are built from) and
+# deltasolv's, while a `design/` folder inside application source is part of the
+# app. And the EXTENSION decides, not the directory: `tokens.css` feeds the app
+# build and `.ts`/`.tsx`/`.js`/`.py` are source wherever they sit, so only the
+# record formats below move out of `code` — everything else there stays code.
+_DESIGN_RECORD_PREFIXES = ("console/design/", "design/")
+_DESIGN_RECORD_SUFFIXES = (
+    ".html", ".md", ".png", ".jpg", ".jpeg", ".svg", ".pen", ".json",
+)
 _OPS_PREFIXES = (".github/", "config/")
 _OPS_FILES = frozenset({"agents.yaml"})
 
@@ -206,6 +225,18 @@ def is_test_path(path: str) -> bool:
     return name.startswith("test_") or name.endswith(_TEST_SUFFIXES)
 
 
+def is_design_record(path: str) -> bool:
+    """True iff `path` is a static design record (DRE-3763): a record format
+    under `console/design/` or a root `design/`. Like `is_test_path`, this only
+    ever moves a path OUT of `code`; source and stylesheets under those
+    directories stay code. The extension is compared case-insensitively — a
+    screenshot saved as `.PNG` is the same record as one saved as `.png`."""
+    return (
+        path.startswith(_DESIGN_RECORD_PREFIXES)
+        and path.lower().endswith(_DESIGN_RECORD_SUFFIXES)
+    )
+
+
 def classify_path(
     path: str, before: str | None = None, after: str | None = None
 ) -> str:
@@ -216,7 +247,11 @@ def classify_path(
     them keeps the pre-DRE-2409 path-only answer, which is the strict one."""
     if is_test_path(path):
         return "test"
-    if path.startswith(_DOCS_PREFIXES) or path.endswith(".md"):
+    if (
+        path.startswith(_DOCS_PREFIXES)
+        or path.endswith(".md")
+        or is_design_record(path)
+    ):
         return "docs"
     if path.startswith(_OPS_PREFIXES) or path in _OPS_FILES:
         return "ops"
