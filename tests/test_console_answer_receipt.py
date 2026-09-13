@@ -161,6 +161,13 @@ def test_the_emoji_is_optional_on_the_answer_trailer():
     assert console_receipt.parse_answer(plain) is not None
 
 
+def test_the_answer_spec_is_pinned_byte_for_byte():
+    """agent-bureau's console carries a copy of ANSWER_SPEC and pins this same
+    hash, so an edit to either copy goes red on that side's suite."""
+    got = hashlib.sha256(console_receipt.ANSWER_SPEC.encode("utf-8")).hexdigest()
+    assert got == V.ANSWER_SPEC_SHA256
+
+
 def test_the_answer_spec_is_its_own_and_names_every_signed_line():
     spec = console_receipt.ANSWER_SPEC
     for label in ("bureau-console-answer/v1", "card: ", "sha256: ", "user: ",

@@ -78,6 +78,11 @@ SPEC_SHA256 = "8de5187c77781e0eeccbaf4c1ccefe70e936a98a9248b6edc6d40cfd051ae207"
 # constants and must SIGN them to exactly ANSWER_SIG with `cryptography`; this
 # side VERIFIES them with the runner's `openssl`.
 
+#: The SHA-256 of `console_receipt.ANSWER_SPEC`, pinned here and in
+#: agent-bureau's suite, so the two copies of the answer format cannot drift.
+ANSWER_SPEC_SHA256 = (
+    "636e864233000dcab3267c316590948b96ae5f9a569df94ff9ed528386b2d0c0")
+
 ANSWER_CARD = "DRE-3700"
 ANSWER_USER = USER
 ANSWER_AT = "2026-09-13T16:52:07Z"          # 09:52 PT
