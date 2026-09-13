@@ -425,6 +425,22 @@ def budget_line() -> str:
     return f"linear-budget: {first} → {last} ({'; '.join(parts)})"
 
 
+def requests_made() -> int:
+    """How many Linear requests this process has sent so far (DRE-3639).
+
+    The count `gql` already keeps above, read out — NOT a second ledger. The
+    `linear-budget:` line at exit is computed from the same number, so the two
+    can never disagree about the same hour, and nothing here resets it: a
+    reader able to zero the count would be able to make a pass's whole spend
+    disappear from the fleet's log.
+
+    A caller measuring one PHASE takes the difference between two readings
+    (`reconcile.SweepSpend`) — the same arithmetic the budget line does over
+    the whole run, at the granularity a cut can be seen in.
+    """
+    return _budget["calls"]
+
+
 def _report_budget_at_exit() -> None:
     """Print the budget line ONCE, on stderr, if any Linear call was made.
     Registered with atexit; a process that never touched Linear says nothing."""

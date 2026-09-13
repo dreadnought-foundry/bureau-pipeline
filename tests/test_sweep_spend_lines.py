@@ -229,16 +229,24 @@ def _instrument(stack, fake: FakeLinear, spent: dict, *names: str):
         stack.enter_context(mock.patch.object(reconcile, name, wrap(name, real)))
 
 
-def _run_sweep(fake: FakeLinear, *, spent: dict | None = None, mocks=(), **main_kw):
+def _run_sweep(
+    fake: FakeLinear, *, spent: dict | None = None, mocks=(), replace=(), **main_kw
+):
     """One pass over `fake`, with the GitHub seams stubbed. Returns nothing;
-    the caller reads the lines off capsys."""
+    the caller reads the lines off capsys. `replace` stands a named seam in
+    for itself with a real function, where a stub that spends nothing would
+    measure nothing."""
+    replaced = {fn.__name__ for fn in replace}
     with contextlib.ExitStack() as stack:
-        for m in _sweep_mocks(mocks):
+        for m in _sweep_mocks(n for n in mocks if n not in replaced):
             stack.enter_context(m)
+        for fn in replace:
+            stack.enter_context(mock.patch.object(reconcile, fn.__name__, fn))
         stack.enter_context(mock.patch.object(reconcile, "MAX_WIP", 1000))
         stack.enter_context(mock.patch.object(reconcile, "redispatch", return_value=True))
         stack.enter_context(mock.patch.object(reconcile, "_nudge", return_value=False))
-        stack.enter_context(mock.patch.object(reconcile, "pr_for", return_value=None))
+        if "pr_for" not in replaced:
+            stack.enter_context(mock.patch.object(reconcile, "pr_for", return_value=None))
         stack.enter_context(_linear(fake))
         if spent is not None:
             _instrument(stack, fake, spent, *MEASURED_PHASES)
@@ -403,6 +411,50 @@ def test_the_total_prints_even_when_the_pass_spent_nothing(capsys):
     assert lines == ["sweep-spend: total 0 request(s) over 0 phase(s)"], lines
 
 
+def test_a_phase_reports_the_number_it_spent_not_a_constant(capsys):
+    """Guard the guard: every phase in the fixture above happens to cost one
+    request, so a line hard-coding `1` would pass it. A backstop that makes
+    three reads says three, under its own function's name."""
+    def flag_no_checks_prs():  # the name is the phase name, by the contract
+        for _ in range(3):
+            # A lane outside SWEPT_LANES is a real read every time — the cache
+            # serves the union it read and nothing else (DRE-2929).
+            reconcile.active_cards(("Duplicate",))
+
+    fake = FakeLinear(*_busy_board())
+    _run_sweep(fake, replace=(flag_no_checks_prs,))
+    printed = _phase_lines(_spend_lines(capsys))
+    assert printed.get("flag_no_checks_prs") == 3, (
+        f"a backstop that made three requests must say three: {printed}"
+    )
+
+
+def test_the_nudge_loop_is_one_phase(capsys):
+    """`nudge_loop` is the contract's name for the per-card walk: one line for
+    the whole loop, because a line per card is a log nobody greps. Every read
+    the loop makes is charged to it."""
+    walked: list[str] = []
+
+    def pr_for(ident):  # the loop's own read, one request a card
+        walked.append(ident)
+        reconcile.active_cards(("Duplicate",))
+        return None
+
+    active, backlog = _busy_board()
+    active += [
+        _card(f"DRE-{9000 + n}", state=reconcile.REVIEW_LANE,
+              minutes_stale=reconcile.STALE_MINUTES[reconcile.REVIEW_LANE] + 60)
+        for n in range(2)
+    ]
+    fake = FakeLinear(active, backlog)
+    _run_sweep(fake, replace=(pr_for,))
+    printed = _phase_lines(_spend_lines(capsys))
+    assert len(walked) == 2, f"the loop must reach both stale cards: {walked}"
+    assert printed.get("nudge_loop") == 2, (
+        f"the loop spent two requests and the sweep printed {printed}"
+    )
+
+
 def test_the_board_read_is_its_own_phase(capsys):
     """`board_read` is one of the contract's phase names. The board snapshot is
     read once per pass and shared (DRE-2929), so the line appears when this is
@@ -431,6 +483,34 @@ def test_promote_only_prints_the_gate_and_the_total_only(capsys):
     )
     total, phases = _total_line(lines)
     assert (total, phases) == (fake.requests, 1)
+
+
+def test_close_epics_prints_the_phase_it_runs(capsys):
+    """`--close-epics` is the epic close, scope read included — one phase, and
+    the total."""
+    fake = FakeLinear(*_busy_board())
+    with _linear(fake):
+        reconcile.main(close_only=True)
+    lines = _spend_lines(capsys)
+    assert list(_phase_lines(lines)) == ["close_finished_epics"], lines
+    assert _total_line(lines) == (fake.requests, 1)
+
+
+def test_conflicts_only_charges_the_backstop_it_runs(capsys):
+    """And `--conflicts-only` is the DIRTY-PR backstop, under its own name."""
+    def unstick_conflicts():
+        reconcile.active_cards(("Duplicate",))
+
+    fake = FakeLinear(*_busy_board())
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(
+            mock.patch.object(reconcile, "unstick_conflicts", unstick_conflicts)
+        )
+        stack.enter_context(_linear(fake))
+        reconcile.main(conflicts_only=True)
+    lines = _spend_lines(capsys)
+    assert _phase_lines(lines) == {"unstick_conflicts": 1}, lines
+    assert _total_line(lines) == (1, 1)
 
 
 def test_promote_only_charges_the_gate_what_the_gate_spent(capsys):

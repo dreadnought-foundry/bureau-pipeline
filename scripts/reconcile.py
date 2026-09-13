@@ -105,6 +105,8 @@ Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import json
 import math
 import os
@@ -6482,6 +6484,123 @@ def merged_card_scope() -> MergeScope | None:
     )
 
 
+# ── What the pass spent, phase by phase (DRE-3639) ──────────────────────────
+# `linear_ops`' own `linear-budget:` line says what the whole PROCESS spent and
+# nothing about where it went. Measured read-only on 2026-09-12 against this
+# repo's board, one full pass cost 65 Linear reads: 18 in `promote_ready`, 18
+# in `report_epic_growth`, 15 in `escalate_aged_intake`, 9 in
+# `close_finished_epics`, 4 for the board itself and 1 for the break-glass
+# count. Not one of those numbers was readable from the run log, so a cut could
+# not show its effect live and a regression could not be placed against a
+# single total.
+#
+# So every phase a pass runs is wrapped, and the difference between two
+# readings of `linear_ops.requests_made()` is what that phase cost. A phase
+# that spent nothing says nothing — a quiet sweep must not grow a screenful of
+# zeroes to be greppable — and the total is printed on every pass, zero
+# included, because a pass that says nothing at all reads exactly like a pass
+# nobody instrumented.
+class SweepSpend:
+    """One pass's Linear spend, attributed to the phase that made it.
+
+    Both lines go to STDOUT, unlike the `linear-budget:` trailer, which stays
+    on stderr because the workflows read some of this script's stdout through
+    `$(...)` — the sweep's own stdout is a run log nobody parses.
+
+    The phase name is the function's name as it appears in this file
+    (`promote_ready`, `escalate_aged_intake`, …), plus `board_read` and
+    `nudge_loop` for the two phases that are not a single call. A phase is
+    charged where the request is actually sent, which matters for the board
+    snapshot: it is read once per pass and shared (DRE-2929), so whichever
+    phase reaches it first pays for it and the later `board_read` line is
+    absent rather than double-counted.
+    """
+
+    def __init__(self) -> None:
+        # A DIFFERENCE, never the raw count: `requests_made()` is the
+        # process's ledger, and in production one process is one pass but a CLI
+        # caller — or a test session, which is hundreds of passes — is neither.
+        self._start = linear_ops.requests_made()
+        self._phases = 0
+
+    @contextlib.contextmanager
+    def phase(self, name: str, enabled: bool = True):
+        """Charge what happens inside to `name`, and print the one line.
+
+        In a `finally`, so a phase that raises is still charged: the sweep's
+        backstops swallow their own failures and a pass that died mid-phase is
+        exactly when the number is worth having.
+
+        `enabled=False` runs the body uncharged — the `--promote-only` board
+        read, which exists only to size the gate's own WIP budget. It stays in
+        the total; it does not earn a line of its own.
+        """
+        before = linear_ops.requests_made()
+        try:
+            yield
+        finally:
+            spent = linear_ops.requests_made() - before
+            if enabled and spent > 0:
+                self._phases += 1
+                print(f"sweep-spend: {name} {spent} request(s)")
+
+    def report_total(self) -> None:
+        """The last line of every pass. `<k>` counts the phase lines above it,
+        so a reader can add them up and see what is unattributed."""
+        total = linear_ops.requests_made() - self._start
+        print(f"sweep-spend: total {total} request(s) over {self._phases} phase(s)")
+
+
+def _phase_name(fn) -> str:
+    """A backstop's own name, for the line that says what it cost. `getattr`
+    rather than `fn.__name__`: several suites stand a backstop in for itself
+    with a stub that has no `__name__`, and a spend line is telemetry — it must
+    never be the thing that fails a sweep."""
+    return getattr(fn, "__name__", "backstop")
+
+
+# The pass in flight, or None between passes. One process is one pass in
+# production; a test session is hundreds, and each opens its own.
+_pass_spend: SweepSpend | None = None
+
+
+def _phase(name: str, enabled: bool = True):
+    """The spend context for `name` in the pass in flight (`SweepSpend.phase`).
+
+    A no-op when there is no pass — nothing in `main()` reaches it that way,
+    and a helper called straight from a CLI or a test must not have to know
+    the sweep exists to run.
+    """
+    if _pass_spend is None:
+        return contextlib.nullcontext()
+    return _pass_spend.phase(name, enabled)
+
+
+def _reports_spend(pass_fn):
+    """Open a spend ledger for the pass, and print its total on every way out.
+
+    A decorator rather than a `try` wrapped round `main()`'s body, for one
+    blunt reason: that body is some four hundred lines and several suites read
+    it out of this file as TEXT (`for backstop in (`, `repo_epics(mine)`,
+    `drain_retiring_lanes,`). Indenting all of it into a `try` would rewrite
+    the file under them for no change in behaviour. Here the body keeps its
+    shape and every exit still prints the total last — the three event-driven
+    modes' early returns, the red `sys.exit`, and an exception on its way up.
+    """
+    @functools.wraps(pass_fn)
+    def wrapper(*args, **kwargs):
+        global _pass_spend
+        _pass_spend = SweepSpend()
+        try:
+            return pass_fn(*args, **kwargs)
+        finally:
+            spend, _pass_spend = _pass_spend, None
+            spend.report_total()
+
+    return wrapper
+
+
+@_reports_spend
 def main(
     promote_only: bool = False, conflicts_only: bool = False, close_only: bool = False
 ) -> None:
@@ -6511,6 +6630,10 @@ def main(
     sibling PRs touching the same files, so linear-sync invokes this on
     every merge. Needs a dispatch-capable GH token, unlike promote_only.
     (Origin: PR #1348 / DRE-1277 sat conflicted ~1h waiting on the cron.)
+
+    Every mode says what it spent: one `sweep-spend:` line per phase that
+    made a Linear request, and a total as the pass's last line (DRE-3639 —
+    `SweepSpend` and `_reports_spend` above).
     """
     # One board read serves this whole sweep (DRE-2929), and the next sweep
     # must not inherit it — every invocation starts from a fresh snapshot,
@@ -6522,33 +6645,37 @@ def main(
     linear_ops.open_pass()
     if conflicts_only:
         try:
-            unstick_conflicts()
+            with _phase("unstick_conflicts"):
+                unstick_conflicts()
         except ReconcileWriteError as e:
             sys.exit(f"reconcile --conflicts-only: {e}")
         return
     if close_only:
-        # Scoped to the merged card's own parent on the merge path (DRE-3236):
-        # that is the only epic this merge can have finished, and the gate
-        # that chose this pass already read that it has. The parent is closed
-        # wherever it is labelled — the same close its own repo's cron would
-        # make — and only from a lane the cron sweeps.
-        scope = merged_card_scope()
-        if scope is not None:
-            epics = (
-                {scope.parent}
-                if scope.parent and scope.parent_state in SWEPT_LANES
-                else set()
-            )
+        # The epic close is the whole of this pass, scope read included, so it
+        # is one phase (DRE-3639) — the same shape `--promote-only` takes below.
+        with _phase("close_finished_epics"):
+            # Scoped to the merged card's own parent on the merge path
+            # (DRE-3236): that is the only epic this merge can have finished,
+            # and the gate that chose this pass already read that it has. The
+            # parent is closed wherever it is labelled — the same close its own
+            # repo's cron would make — and only from a lane the cron sweeps.
+            scope = merged_card_scope()
+            if scope is not None:
+                epics = (
+                    {scope.parent}
+                    if scope.parent and scope.parent_state in SWEPT_LANES
+                    else set()
+                )
+                close_finished_epics(epics)
+                print(
+                    f"close-only: epic close evaluated for {scope.card}'s parent "
+                    f"({len(epics)} epic(s))"
+                )
+                return
+            epics = repo_epics(active_cards())
             close_finished_epics(epics)
-            print(
-                f"close-only: epic close evaluated for {scope.card}'s parent "
-                f"({len(epics)} epic(s))"
-            )
+            print(f"close-only: epic close evaluated ({len(epics)} active epic(s))")
             return
-        epics = repo_epics(active_cards())
-        close_finished_epics(epics)
-        print(f"close-only: epic close evaluated ({len(epics)} active epic(s))")
-        return
     nudges = 0
     flagged: set[str] = set()
     if not promote_only:
@@ -6594,21 +6721,24 @@ def main(
             check_dependabot_capacity,
         ):
             try:
-                backstop()
+                with _phase(_phase_name(backstop)):
+                    backstop()
             except ReconcileWriteError as e:
                 _write_failures.append(str(e))
                 print(f"ERROR: {backstop.__name__}: {e}", file=sys.stderr)
         # Stranded-card watchdog (DRE-1993) — BEFORE the nudge loop, so a
         # card flagged this very sweep is skipped below (its fetched labels
         # predate the hold label the watchdog just added).
-        flagged = flag_stranded()
+        with _phase("flag_stranded"):
+            flagged = flag_stranded()
         # The Intake gate (DRE-2687). Full sweeps only: the event hooks run
         # the dependency gate alone, and moving cards on every merge is not a
         # code path anybody asked for one on. Its own try, like the backstops
         # above — an Intake read that fails must not cost the sweep the rest
         # of its work.
         try:
-            escalate_aged_intake()
+            with _phase("escalate_aged_intake"):
+                escalate_aged_intake()
         except ReconcileWriteError as e:
             _write_failures.append(str(e))
             print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
@@ -6625,29 +6755,40 @@ def main(
     # MAX_WIP; walked, the In Review no-PR branch below requeues it into Todo
     # and dispatches an agent onto a dependency bump. `card_dependabot_prs`
     # shepherds those cards off the pull request itself.
-    mine = [
-        c for c in active_cards()
-        if card_repo(c) == REPO_SLUG and not automation_card(c)
-    ]
-    epics = repo_epics(mine)
+    #
+    # `enabled=not promote_only` (DRE-3639): on the event-driven gate path this
+    # read exists only to size the gate's own WIP budget, and that pass says
+    # `promote_ready` and its total, nothing else. The requests are still in
+    # the total. On a full sweep the snapshot is usually already warm — the
+    # backstops and the watchdog above read the same one board (DRE-2929) — so
+    # this line appears only when this is the phase that paid for it.
+    with _phase("board_read", enabled=not promote_only):
+        mine = [
+            c for c in active_cards()
+            if card_repo(c) == REPO_SLUG and not automation_card(c)
+        ]
+        epics = repo_epics(mine)
     if not promote_only:
-        close_finished_epics(epics)
+        with _phase("close_finished_epics"):
+            close_finished_epics(epics)
     mine = [c for c in mine if c["identifier"] not in epics]
     # On the merge path the candidates are the merged card's own dependents
     # (DRE-3236) — read in one request by identifier, through the same gates.
     # A card promotable for any other reason waits for the cron, which
     # merge_sweep_gate already made the backstop for what the gate declines.
-    scope = merged_card_scope() if promote_only else None
-    if scope is not None:
-        print(
-            f"promote-only: scoped to {scope.card}'s "
-            f"{len(scope.dependents)} dependent(s)"
-        )
-        promote_ready(
-            active_count=len(mine), candidates=backlog_children(only=scope.dependents)
-        )
-    else:
-        promote_ready(active_count=len(mine))
+    with _phase("promote_ready"):
+        scope = merged_card_scope() if promote_only else None
+        if scope is not None:
+            print(
+                f"promote-only: scoped to {scope.card}'s "
+                f"{len(scope.dependents)} dependent(s)"
+            )
+            promote_ready(
+                active_count=len(mine),
+                candidates=backlog_children(only=scope.dependents),
+            )
+        else:
+            promote_ready(active_count=len(mine))
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {len(mine)})")
         # The event-driven gate runs the epic gate too, so it can find a stale
@@ -6659,230 +6800,238 @@ def main(
                 f"{len(_stale_defects)} unfixed card defect(s) — see ERROR lines above"
             )
         return
-    for card in mine:
-        ident, state = card["identifier"], card["state"]["name"]
-        if held(card) or ident in flagged:
-            continue  # human-hold: untouched until a human removes the label
-        if limit_recovery.waiting(card_comment_bodies(card)):
-            continue  # DRE-3171: a limit death is a wait, and the wall is not down yet
-        if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
-            continue
+    # The nudge loop (DRE-3639): one phase, because a sweep's per-card
+    # work is one question — what is stuck and what does it need — and a
+    # line per card is a log nobody greps.
+    with _phase("nudge_loop"):
+        for card in mine:
+            ident, state = card["identifier"], card["state"]["name"]
+            if held(card) or ident in flagged:
+                continue  # human-hold: untouched until a human removes the label
+            if limit_recovery.waiting(card_comment_bodies(card)):
+                continue  # DRE-3171: a limit death is a wait, and the wall is not down yet
+            if age_minutes(card["updatedAt"]) < STALE_MINUTES.get(state, 9999):
+                continue
 
-        try:
-            pr = pr_for(ident)
-        except ReconcileReadError as e:
-            # An unreadable answer is NOT "no PR": act on nothing for this
-            # card (no requeue, no receipt), sweep the rest, exit red at the
-            # end so medic sees it (DRE-2034; happened live twice 2026-06-28).
-            _read_failures.append(str(e))
-            print(f"ERROR: pr_for {ident}: {e}", file=sys.stderr)
-            continue
-        # card_pr.has_work_pr is the ONE "this card produced a PR" predicate
-        # (DRE-2316): OPEN or MERGED. Every no-PR branch below is reachable
-        # only when it is False, so a merged PR can never read as a dead run
-        # here — the mistake the run's own Report step made ten seconds after
-        # PR #137 merged.
-        has_pr = card_pr.has_work_pr(pr)
-        merged = has_pr and card_pr.pr_state(pr) == card_pr.MERGED
-        is_open = has_pr and card_pr.pr_state(pr) == card_pr.OPEN
-        print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
+            try:
+                pr = pr_for(ident)
+            except ReconcileReadError as e:
+                # An unreadable answer is NOT "no PR": act on nothing for this
+                # card (no requeue, no receipt), sweep the rest, exit red at the
+                # end so medic sees it (DRE-2034; happened live twice 2026-06-28).
+                _read_failures.append(str(e))
+                print(f"ERROR: pr_for {ident}: {e}", file=sys.stderr)
+                continue
+            # card_pr.has_work_pr is the ONE "this card produced a PR" predicate
+            # (DRE-2316): OPEN or MERGED. Every no-PR branch below is reachable
+            # only when it is False, so a merged PR can never read as a dead run
+            # here — the mistake the run's own Report step made ten seconds after
+            # PR #137 merged.
+            has_pr = card_pr.has_work_pr(pr)
+            merged = has_pr and card_pr.pr_state(pr) == card_pr.MERGED
+            is_open = has_pr and card_pr.pr_state(pr) == card_pr.OPEN
+            print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
 
-        if hand_built(card) and not has_pr:
-            # DRE-2524, second half: the label suppresses the sweep's own
-            # dispatch, not just the watchdog's alarm about it. Every no-PR
-            # branch below starts or restarts an agent — Todo redispatches, In
-            # Progress requeues to Todo (which redispatches next sweep) and
-            # then parks to Backlog with HOLD_LABEL. On hand-built work that is
-            # a competing run on a card the label says no run is coming for.
-            # Scoped to `not has_pr` on purpose: once there IS a pull request
-            # the branches below are ordinary PR shepherding (merged → Done,
-            # open → In Review) and stay label-blind like every PR-level backstop.
-            print(
-                f"hand-built: {ident} in {state} with no PR — no dispatched "
-                "run is coming by design, leaving alone"
-            )
-            continue
-
-        if merged:
-            # Same guard as linear-sync's card-done (the six portico false
-            # closes — DRE-2242 ×2, DRE-2241, DRE-2218, DRE-2253, DRE-2252):
-            # for a `no-code` operator card or a `DEMO:`-titled card the merge
-            # is not the work, and this backstop must not re-close one sweep
-            # later what linear-sync deliberately left open. The marker
-            # comment posts at most once (card-done normally already did);
-            # the card then sits here, correctly open, until the operator
-            # closes it by hand.
-            skip = linear_ops.auto_done_skip_reason(
-                card.get("title") or "",
-                [l["name"] for l in (card.get("labels") or {}).get("nodes", [])],
-            )
-            if skip is not None:
+            if hand_built(card) and not has_pr:
+                # DRE-2524, second half: the label suppresses the sweep's own
+                # dispatch, not just the watchdog's alarm about it. Every no-PR
+                # branch below starts or restarts an agent — Todo redispatches, In
+                # Progress requeues to Todo (which redispatches next sweep) and
+                # then parks to Backlog with HOLD_LABEL. On hand-built work that is
+                # a competing run on a card the label says no run is coming for.
+                # Scoped to `not has_pr` on purpose: once there IS a pull request
+                # the branches below are ordinary PR shepherding (merged → Done,
+                # open → In Review) and stay label-blind like every PR-level backstop.
                 print(
-                    f"AUTO-DONE SKIPPED for {ident}: {skip} — the operator "
-                    "closes this card by hand (see linear_ops.auto_done_skip_reason)."
+                    f"hand-built: {ident} in {state} with no PR — no dispatched "
+                    "run is coming by design, leaving alone"
                 )
-                if not linear_ops.count_comments(
-                    ident, linear_ops.MERGED_NOT_CLOSED_MARKER
+                continue
+
+            if merged:
+                # Same guard as linear-sync's card-done (the six portico false
+                # closes — DRE-2242 ×2, DRE-2241, DRE-2218, DRE-2253, DRE-2252):
+                # for a `no-code` operator card or a `DEMO:`-titled card the merge
+                # is not the work, and this backstop must not re-close one sweep
+                # later what linear-sync deliberately left open. The marker
+                # comment posts at most once (card-done normally already did);
+                # the card then sits here, correctly open, until the operator
+                # closes it by hand.
+                skip = linear_ops.auto_done_skip_reason(
+                    card.get("title") or "",
+                    [l["name"] for l in (card.get("labels") or {}).get("nodes", [])],
+                )
+                if skip is not None:
+                    print(
+                        f"AUTO-DONE SKIPPED for {ident}: {skip} — the operator "
+                        "closes this card by hand (see linear_ops.auto_done_skip_reason)."
+                    )
+                    if not linear_ops.count_comments(
+                        ident, linear_ops.MERGED_NOT_CLOSED_MARKER
+                    ):
+                        linear_ops.cmd_comment(
+                            ident,
+                            linear_ops.merged_not_closed_comment(
+                                f"https://github.com/{REPO}/pull/{pr['number']}", skip
+                            ),
+                        )
+                    continue
+                # Break-glass debt (DRE-2737): the same call linear-sync's
+                # card-done makes, for the same reason the no-code guard is
+                # mirrored here — linear-sync can be down, and this backstop must
+                # not close a card that owes the classification it skipped. Read
+                # off the `break-glass:used` receipt, so a marker removed
+                # mid-flight neither strands the card nor cancels the debt.
+                if break_glass.owes_review(
+                    [l["name"] for l in (card.get("labels") or {}).get("nodes", [])]
                 ):
-                    linear_ops.cmd_comment(
-                        ident,
-                        linear_ops.merged_not_closed_comment(
-                            f"https://github.com/{REPO}/pull/{pr['number']}", skip
-                        ),
-                    )
-                continue
-            # Break-glass debt (DRE-2737): the same call linear-sync's
-            # card-done makes, for the same reason the no-code guard is
-            # mirrored here — linear-sync can be down, and this backstop must
-            # not close a card that owes the classification it skipped. Read
-            # off the `break-glass:used` receipt, so a marker removed
-            # mid-flight neither strands the card nor cancels the debt.
-            if break_glass.owes_review(
-                [l["name"] for l in (card.get("labels") or {}).get("nodes", [])]
-            ):
-                if not linear_ops.count_comments(ident, break_glass.REVIEW_TAG):
-                    linear_ops.cmd_comment(
-                        ident,
-                        break_glass.review_notice(
-                            f"https://github.com/{REPO}/pull/{pr['number']}"
-                        ),
-                    )
-                linear_ops.cmd_state(ident, break_glass.REVIEW_STATE)
-                continue
-            linear_ops.cmd_state(ident, "Done")
-            linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
-        elif state == "Todo" and not is_open:
-            # The receipt follows the dispatch's REAL outcome: a 🧹 success
-            # receipt on a 403'd dispatch is the DRE-1254 false-receipt class.
-            # The success note is _TODO_REDISPATCH_NOTE so the watchdog's
-            # prior-redispatch detection (see flag_stranded) still matches it.
-            if redispatch(card):
-                linear_ops.cmd_comment(ident, f"🧹 Reconcile: {_TODO_REDISPATCH_NOTE}.")
-            else:
-                linear_ops.cmd_comment(
-                    ident,
-                    "🚨 Reconcile: re-dispatch FAILED — the dispatch call did not "
-                    "go through, so no run was started. The sweep run is red; "
-                    "medic will pick it up, and the next sweep retries.",
-                )
-        elif state == "In Progress":
-            if is_open:
-                linear_ops.cmd_advance(ident, REVIEW_LANE, "In Progress")
-                if _nudge(review_workflow(), pr["number"]):
-                    linear_ops.cmd_comment(
-                        ident,
-                        "🧹 Reconcile: PR exists but card was stuck In Progress — "
-                        f"advanced to {REVIEW_LANE}, critic re-triggered.",
-                    )
-            else:
-                # No PR past the staleness window: dead (silent crash), HUNG
-                # (timed out — never reached agent-task's report step, so only
-                # we see it) — or STILL RUNNING a legitimately long build.
-                # Check liveness FIRST: a queued/in_progress run means not
-                # dead regardless of elapsed time, and a requeue would kill it
-                # (the Todo transition re-dispatches; the fresh run cancels
-                # the live one via the per-card concurrency group — DRE-2032,
-                # run 29125285930 / DRE-2023's three-loop death). Otherwise
-                # requeue a couple of times; after the shared cap, HOLD
-                # instead of looping forever (DRE-1403).
-                if agent_run_alive(ident):
-                    print(f"live: {ident} agent run still going — leaving alone")
+                    if not linear_ops.count_comments(ident, break_glass.REVIEW_TAG):
+                        linear_ops.cmd_comment(
+                            ident,
+                            break_glass.review_notice(
+                                f"https://github.com/{REPO}/pull/{pr['number']}"
+                            ),
+                        )
+                    linear_ops.cmd_state(ident, break_glass.REVIEW_STATE)
                     continue
-                # THE ARTIFACT FACT, BEFORE THE ABSENT PR (DRE-3262). "No pull
-                # request" is the only thing this branch could see, and on
-                # 2026-09-06 it was true of a card whose 93 minutes of green
-                # work were sitting in `rescue-DRE-3165.patch` — the rescue push
-                # was refused with 400 on both of its own fresh mints. A requeue
-                # there rebuilds from nothing what the artifact is holding. The
-                # card's own marker says where the work is; dispatch the
-                # delivery, once, and requeue only if that route is spent.
-                if redeliver_rescued_work(ident, card_comment_bodies(card)):
-                    continue
+                linear_ops.cmd_state(ident, "Done")
+                linear_ops.cmd_comment(ident, "🧹 Reconcile: PR was already merged — moved to Done.")
+            elif state == "Todo" and not is_open:
+                # The receipt follows the dispatch's REAL outcome: a 🧹 success
+                # receipt on a 403'd dispatch is the DRE-1254 false-receipt class.
+                # The success note is _TODO_REDISPATCH_NOTE so the watchdog's
+                # prior-redispatch detection (see flag_stranded) still matches it.
+                if redispatch(card):
+                    linear_ops.cmd_comment(ident, f"🧹 Reconcile: {_TODO_REDISPATCH_NOTE}.")
+                else:
+                    linear_ops.cmd_comment(
+                        ident,
+                        "🚨 Reconcile: re-dispatch FAILED — the dispatch call did not "
+                        "go through, so no run was started. The sweep run is red; "
+                        "medic will pick it up, and the next sweep retries.",
+                    )
+            elif state == "In Progress":
+                if is_open:
+                    linear_ops.cmd_advance(ident, REVIEW_LANE, "In Progress")
+                    if _nudge(review_workflow(), pr["number"]):
+                        linear_ops.cmd_comment(
+                            ident,
+                            "🧹 Reconcile: PR exists but card was stuck In Progress — "
+                            f"advanced to {REVIEW_LANE}, critic re-triggered.",
+                        )
+                else:
+                    # No PR past the staleness window: dead (silent crash), HUNG
+                    # (timed out — never reached agent-task's report step, so only
+                    # we see it) — or STILL RUNNING a legitimately long build.
+                    # Check liveness FIRST: a queued/in_progress run means not
+                    # dead regardless of elapsed time, and a requeue would kill it
+                    # (the Todo transition re-dispatches; the fresh run cancels
+                    # the live one via the per-card concurrency group — DRE-2032,
+                    # run 29125285930 / DRE-2023's three-loop death). Otherwise
+                    # requeue a couple of times; after the shared cap, HOLD
+                    # instead of looping forever (DRE-1403).
+                    if agent_run_alive(ident):
+                        print(f"live: {ident} agent run still going — leaving alone")
+                        continue
+                    # THE ARTIFACT FACT, BEFORE THE ABSENT PR (DRE-3262). "No pull
+                    # request" is the only thing this branch could see, and on
+                    # 2026-09-06 it was true of a card whose 93 minutes of green
+                    # work were sitting in `rescue-DRE-3165.patch` — the rescue push
+                    # was refused with 400 on both of its own fresh mints. A requeue
+                    # there rebuilds from nothing what the artifact is holding. The
+                    # card's own marker says where the work is; dispatch the
+                    # delivery, once, and requeue only if that route is spent.
+                    if redeliver_rescued_work(ident, card_comment_bodies(card)):
+                        continue
+                    # since=RESET_TAG: only deaths after the last un-park count.
+                    dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
+                    if dead >= REQUEUE_CAP:
+                        linear_ops.add_label(ident, HOLD_LABEL)
+                        # --park: a deliberate HOLD-cap park (DRE-1403). Without it
+                        # the DRE-1885 building-card guard would re-route this
+                        # In Progress → Backlog move to Todo and re-loop forever.
+                        linear_ops.cmd_state(ident, "Backlog", "--park")
+                        linear_ops.cmd_comment(
+                            ident,
+                            f"🚨 held-for-human: agent keeps dying with no PR (hung or "
+                            f"silent) after {dead} requeues — parked in Backlog with the "
+                            f"'{HOLD_LABEL}' label so the sweep stops looping. A human must "
+                            "split/fix the card and clear the label to retry.",
+                        )
+                    else:
+                        linear_ops.cmd_state(ident, "Todo")
+                        linear_ops.cmd_comment(
+                            ident,
+                            f"🪦 {DEAD_TAG}: In Progress with no PR past the "
+                            f"{STALE_MINUTES['In Progress']}-minute window — agent run "
+                            f"appears dead (hung or lost). Requeued to Todo "
+                            f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
+                        )
+            elif state == REVIEW_LANE and is_open:
+                # ONE review lane since DRE-2726, and the branch it takes is decided
+                # by the EVIDENCE rather than by which of two lanes the card sat in.
+                # The two lanes both meant "a pull request is open and being
+                # checked"; what actually differs is whether a verdict is bound to
+                # the head yet.
+                if verdict_bound(pr):
+                    if _nudge(gate_workflow(), pr["number"]):
+                        linear_ops.cmd_comment(
+                            ident,
+                            "🧹 Reconcile: verdict present but merge never happened — merge gate re-triggered.",
+                        )
+                else:
+                    # review_workflow(), not a hardcoded qa-review.yml: in the
+                    # self-host repo that filename is the reusable and the
+                    # dispatch would 422 silently into _write_failures (DRE-2047).
+                    if _nudge(review_workflow(), pr["number"]):
+                        linear_ops.cmd_comment(
+                            ident,
+                            "🧹 Reconcile: no critic verdict after "
+                            f"{STALE_MINUTES[REVIEW_LANE] // 60}h — review re-triggered.",
+                        )
+            elif state == REVIEW_LANE and not is_open:
+                # Capped like the In Progress dead-run path (DRE-1403 mechanics,
+                # same shared DEAD_TAG counter): uncapped, a card whose PR keeps
+                # reading as gone laps the review lane → Todo → In Progress → the
+                # review lane forever, burning an agent run per lap (DRE-2034).
                 # since=RESET_TAG: only deaths after the last un-park count.
                 dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
                 if dead >= REQUEUE_CAP:
                     linear_ops.add_label(ident, HOLD_LABEL)
-                    # --park: a deliberate HOLD-cap park (DRE-1403). Without it
-                    # the DRE-1885 building-card guard would re-route this
-                    # In Progress → Backlog move to Todo and re-loop forever.
+                    # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as
+                    # the In Progress hold.
                     linear_ops.cmd_state(ident, "Backlog", "--park")
                     linear_ops.cmd_comment(
                         ident,
-                        f"🚨 held-for-human: agent keeps dying with no PR (hung or "
-                        f"silent) after {dead} requeues — parked in Backlog with the "
-                        f"'{HOLD_LABEL}' label so the sweep stops looping. A human must "
-                        "split/fix the card and clear the label to retry.",
+                        f"🚨 held-for-human: {REVIEW_LANE} with no PR after {dead} "
+                        f"requeues — parked in Backlog with the '{HOLD_LABEL}' label "
+                        "so the sweep stops looping. A human must split/fix the card "
+                        "and clear the label to retry.",
                     )
                 else:
                     linear_ops.cmd_state(ident, "Todo")
                     linear_ops.cmd_comment(
                         ident,
-                        f"🪦 {DEAD_TAG}: In Progress with no PR past the "
-                        f"{STALE_MINUTES['In Progress']}-minute window — agent run "
-                        f"appears dead (hung or lost). Requeued to Todo "
+                        f"🪦 {DEAD_TAG}: {REVIEW_LANE} with no PR — requeued to Todo "
                         f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
                     )
-        elif state == REVIEW_LANE and is_open:
-            # ONE review lane since DRE-2726, and the branch it takes is decided
-            # by the EVIDENCE rather than by which of two lanes the card sat in.
-            # The two lanes both meant "a pull request is open and being
-            # checked"; what actually differs is whether a verdict is bound to
-            # the head yet.
-            if verdict_bound(pr):
-                if _nudge(gate_workflow(), pr["number"]):
-                    linear_ops.cmd_comment(
-                        ident,
-                        "🧹 Reconcile: verdict present but merge never happened — merge gate re-triggered.",
-                    )
-            else:
-                # review_workflow(), not a hardcoded qa-review.yml: in the
-                # self-host repo that filename is the reusable and the
-                # dispatch would 422 silently into _write_failures (DRE-2047).
-                if _nudge(review_workflow(), pr["number"]):
-                    linear_ops.cmd_comment(
-                        ident,
-                        "🧹 Reconcile: no critic verdict after "
-                        f"{STALE_MINUTES[REVIEW_LANE] // 60}h — review re-triggered.",
-                    )
-        elif state == REVIEW_LANE and not is_open:
-            # Capped like the In Progress dead-run path (DRE-1403 mechanics,
-            # same shared DEAD_TAG counter): uncapped, a card whose PR keeps
-            # reading as gone laps the review lane → Todo → In Progress → the
-            # review lane forever, burning an agent run per lap (DRE-2034).
-            # since=RESET_TAG: only deaths after the last un-park count.
-            dead = linear_ops.count_comments(ident, DEAD_TAG, since=RESET_TAG)
-            if dead >= REQUEUE_CAP:
-                linear_ops.add_label(ident, HOLD_LABEL)
-                # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as
-                # the In Progress hold.
-                linear_ops.cmd_state(ident, "Backlog", "--park")
-                linear_ops.cmd_comment(
-                    ident,
-                    f"🚨 held-for-human: {REVIEW_LANE} with no PR after {dead} "
-                    f"requeues — parked in Backlog with the '{HOLD_LABEL}' label "
-                    "so the sweep stops looping. A human must split/fix the card "
-                    "and clear the label to retry.",
-                )
-            else:
-                linear_ops.cmd_state(ident, "Todo")
-                linear_ops.cmd_comment(
-                    ident,
-                    f"🪦 {DEAD_TAG}: {REVIEW_LANE} with no PR — requeued to Todo "
-                    f"(dead run {dead + 1}/{REQUEUE_CAP + 1}).",
-                )
-        nudges += 1
+            nudges += 1
     # The break-glass KPI, beside the sweep's own numbers (DRE-2737): a rising
     # count is a finding about the front door, not about the people using it.
-    report_break_glass()
+    with _phase("report_break_glass"):
+        report_break_glass()
     # The epic-growth KPI (DRE-2739), beside the sweep's own numbers: green-lit
     # at N, running M, and any card that joined without the plan moving with it.
-    report_epic_growth(epics)
+    with _phase("report_epic_growth"):
+        report_epic_growth(epics)
     # The fix loop's own grouping (DRE-2810), audited where the stub lives —
     # the only way "every stub in the fleet carries it" is checked rather than
     # remembered — and any REQUEST_CHANGES trigger GitHub cancelled before it
     # could start, which otherwise reads as a harmless duplicate dispatch.
-    report_fix_concurrency()
-    report_evicted_fix_runs()
+    with _phase("report_fix_concurrency"):
+        report_fix_concurrency()
+    with _phase("report_evicted_fix_runs"):
+        report_evicted_fix_runs()
     print(f"sweep complete: {nudges} nudge(s)")
     if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
