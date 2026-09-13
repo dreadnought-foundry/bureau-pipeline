@@ -164,6 +164,21 @@ class LinearRateLimited(LinearError):
     `except LinearError` keeps isolating it exactly as before."""
 
 
+class CommentCapReached(LinearError):
+    """This issue holds Linear's maximum of 2,000 comments (DRE-3343).
+
+    Its own type for the same reason `LinearRateLimited` has one: the response
+    is unlike every other Linear failure. A malformed query needs a code
+    change and a quota exhaustion needs a wait; a full comment thread needs
+    NEITHER — the write will never succeed on that issue, and the only correct
+    behaviour for a receipt writer is to say so and carry on. A LinearError
+    still, so every existing `except LinearError` keeps isolating it as before.
+
+    It is a fact about ONE issue, which is why it does not arm the
+    process-wide rate-limit stop: the next card's receipt is unaffected.
+    """
+
+
 # How much of the response body a raised error carries. Truncated because a
 # Linear error body can be a whole schema dump and the log line has to stay
 # readable; 500 rather than 300 because the quota sentence sits behind the
@@ -205,6 +220,114 @@ def rate_limit_condition(body: str) -> str | None:
             f"{quota.group(2).lower()} exhausted"
         )
     return "rate limited: workspace request quota exhausted"
+
+
+# ── The comment cap (DRE-3343) ──────────────────────────────────────────────
+# An issue holds at most 2,000 comments, enforced server-side, and the wave
+# epic DRE-2668 reached it on 2026-09-08. Every automation that writes on that
+# epic — the sweep's receipts, the growth record, the no-verdict alarm, a
+# critic's verdict — raised from that moment on, and nothing anywhere reported
+# the cap: it surfaced as a stack trace in whichever job happened to comment
+# next.
+#
+# Classified off the BODY for the same reason the rate limit above is: Linear
+# answers with the same 400 a malformed query gets, and also with a 200
+# carrying an `errors` payload, so the status cannot tell the two apart.
+COMMENT_CAP = 2_000
+
+# Warn here, not at the line. A thread that has filled cannot be emptied, so
+# the only cheap moment to move the receipts is BEFORE the last 200 land — at
+# wave 1.5's observed rate, roughly a fortnight of warning.
+COMMENT_CAP_WARN = 1_800
+
+#: The condition, named once and read back by every degrade path in the fleet
+#: (`mid_epic`, the reconcile sweep). Named, never the vendor's prose: the
+#: sentence is Linear's to reword and the number is the contract.
+COMMENT_CAP_CONDITION = (
+    f"comment cap reached: this issue holds Linear's maximum of "
+    f"{COMMENT_CAP:,} comments, so no further comment can be written to it"
+)
+
+# THE PAIR is the classification, and both halves are load-bearing.
+# `QUOTA_EXCEEDED` alone is the code Linear returns for every quota it
+# enforces — issues per team, and whatever it adds next — and swallowing those
+# into a degrade path written for this one would turn an unknown limit into
+# silence. The `meta.quota` value is the fact that names THIS quota.
+_COMMENT_CAP_MARKERS = ("QUOTA_EXCEEDED", "max-comments-per-issue")
+
+
+def comment_cap_condition(body: str) -> str | None:
+    """`COMMENT_CAP_CONDITION` when `body` is Linear's comment-cap payload,
+    else None.
+
+    Read over the FULL body, exactly as `rate_limit_condition` is: the
+    `extensions` block sits behind the message and the truncated copy a raised
+    error carries would cut it off.
+    """
+    text = body or ""
+    return COMMENT_CAP_CONDITION if all(m in text for m in _COMMENT_CAP_MARKERS) else None
+
+
+# HOW THE COUNT IS READ, and why it is not one field. DRE-3343 was written
+# expecting `comments { totalCount }` — one field on a query the sweep already
+# makes, no extra request. Linear has no such field, proved against the live
+# API on 2026-09-13:
+#
+#     $ … issue(id: "DRE-2668") { comments { totalCount } }
+#     Cannot query field "totalCount" on type "CommentConnection".
+#     $ … __type(name: "CommentConnection") { fields { name } }
+#     edges, nodes, pageInfo
+#
+# `Issue` carries no comment count either (`sourceComment`,
+# `customerTicketCount`, `comments` — introspected the same way). So the count
+# has to be paged, and the CAP is what makes that affordable: at 250 ids a
+# page an issue cannot exceed eight pages, by Linear's own limit. An epic
+# below the line costs ONE request — page one returns `hasNextPage: false` —
+# and only an epic near the cap costs eight, which is exactly the epic the
+# warning exists for. Measured live: DRE-2668, 2,000 comments, 8 requests.
+_COMMENT_COUNT_QUERY = """query($id: ID!, $after: String) {
+     comments(filter: { issue: { id: { eq: $id } } }, first: 250, after: $after) {
+       nodes { id }
+       pageInfo { hasNextPage endCursor }
+     } }"""
+
+
+def comment_count(issue_id: str) -> int | None:
+    """How many comments the issue with UUID `issue_id` holds, or None when
+    Linear could not say.
+
+    Fail-soft, and that is load-bearing rather than defensive: this is read on
+    the path that FILES a mid-epic discovery card (`mid_epic._add`) as well as
+    on the sweep's KPI path. A count is telemetry — it must never be the thing
+    that stops a card being created, which is the failure this whole card
+    exists to end.
+
+    `issue_id` is the UUID, not the `DRE-…` identifier: the filter takes an
+    `ID!`, and `read_epic` selects `id` alongside the identifier so no caller
+    needs a second lookup for it.
+    """
+    try:
+        return len(gql_paged(_COMMENT_COUNT_QUERY, {"id": issue_id},
+                             connection="comments"))
+    except LinearError as exc:
+        print(f"comment-count: unknown for {issue_id} ({exc})", file=sys.stderr)
+        return None
+
+
+def comment_cap_warning(identifier: str, total: int | None) -> str | None:
+    """The warning line for an issue at or above `COMMENT_CAP_WARN`, else None.
+
+    `total is None` means Linear did not say, and an unknown count says nothing
+    rather than guessing (console-honesty rule 2). Silence here is what keeps
+    the sweep's summary a list of epics that really are near the line.
+    """
+    if total is None or total < COMMENT_CAP_WARN:
+        return None
+    return (
+        f"epic-comment-cap: {identifier} is at {total} of {COMMENT_CAP} comments "
+        f"— at the cap Linear refuses every further comment on it, and the "
+        f"receipts have to move (docs/epic-comment-cap.md)"
+    )
 
 
 # ── Whose budget is it? (DRE-3321) ──────────────────────────────────────────
@@ -283,6 +406,12 @@ def _api_error(code: int | str, body: str) -> LinearError:
         return LinearRateLimited(
             f"{detail}: {condition} — body: {body[:BODY_CHARS]!r}; {_budget_part()}"
         )
+    # The comment cap arrives as a 400 on the wire too (DRE-3343), and it does
+    # NOT arm the stop: a full thread is a fact about one issue, and refusing
+    # the next card's receipt for it would be a reason that is not true of it.
+    cap = comment_cap_condition(body)
+    if cap:
+        return CommentCapReached(f"{detail}: {cap} — body: {body[:BODY_CHARS]!r}")
     return LinearError(f"{detail}: {body[:BODY_CHARS]!r}")
 
 
@@ -572,6 +701,15 @@ def gql(query: str, variables: dict | None = None) -> dict:
             raise LinearRateLimited(
                 f"linear error from {API}: {condition} — "
                 f"{errors[:BODY_CHARS]}; {_budget_part()}"
+            )
+        # The comment cap, same two shapes and the same rule (DRE-3343): the
+        # classification lives with the body, not with the status. Named on
+        # the line so `cmd_comment`'s degrade — and a human reading the log —
+        # sees the condition rather than a quoted vendor sentence.
+        cap = comment_cap_condition(errors)
+        if cap:
+            raise CommentCapReached(
+                f"linear error from {API}: {cap} — {errors[:BODY_CHARS]}"
             )
         raise LinearError(f"linear error from {API}: {out['errors']}")
     return out["data"]
@@ -994,7 +1132,7 @@ def set_title(identifier: str, title: str) -> None:
     print(f"{identifier} title updated")
 
 
-def cmd_comment(identifier: str, body: str, *flags: str) -> None:
+def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
     """Comment on a card. `--act=<name>` composes the body as that act's
     receipt (DRE-2826).
 
@@ -1003,6 +1141,14 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> None:
     a trailer in bash would be a second grammar for the same line. Without the
     flag the body is posted exactly as it always was — every other caller of
     this command is unchanged, which is what keeps the seam safe to add here.
+
+    Returns None when the comment landed, and `COMMENT_CAP_CONDITION` when the
+    issue is full (DRE-3343) — it does NOT raise on that one condition. This
+    is the one place a comment is posted, so degrading here is what lets every
+    receipt writer in the fleet keep going: the sweep, the critic and the medic
+    all reached DRE-2668 through this function and all of them died in it.
+    A caller that ignores the return value is unaffected, which is every
+    caller that has nothing better to do than carry on.
     """
     act = None
     for flag in flags:
@@ -1016,15 +1162,23 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> None:
         # mechanism exists to end.
         body = pipeline_act.receipt(act, body)
     issue = get_issue(identifier)
-    gql(
-        """mutation($input: CommentCreateInput!) {
-             commentCreate(input: $input) { success } }""",
-        {"input": {"issueId": issue["id"], "body": body}},
-    )
+    try:
+        gql(
+            """mutation($input: CommentCreateInput!) {
+                 commentCreate(input: $input) { success } }""",
+            {"input": {"issueId": issue["id"], "body": body}},
+        )
+    except CommentCapReached:
+        # Named on stderr, for the same reason the budget line is: some of this
+        # script's stdout is read through `$(...)` by the workflows, and a
+        # degrade must never corrupt an answer a caller is parsing.
+        print(f"comment-cap: {identifier} — {COMMENT_CAP_CONDITION}", file=sys.stderr)
+        return COMMENT_CAP_CONDITION
     # The pass's cached thread is stale the moment this lands (DRE-3236): the
     # next reader in the pass must see the comment it just posted.
     _pass["threads"].pop(identifier, None)
     print(f"commented on {identifier}")
+    return None
 
 
 def cmd_actor(identifier: str, role: str) -> None:

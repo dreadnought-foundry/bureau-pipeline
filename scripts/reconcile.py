@@ -6351,7 +6351,7 @@ def report_evicted_fix_runs(now: str | None = None) -> None:
     )
 
 
-def report_epic_growth(epics: set[str]) -> None:
+def report_epic_growth(epics: set[str]) -> list[tuple[str, int]]:
     """Refresh each active epic's growth artifact on every full sweep (DRE-2739).
 
     The epic shows what it was green-lit at and what it is now — approved at
@@ -6362,7 +6362,14 @@ def report_epic_growth(epics: set[str]) -> None:
 
     A read that fails prints and moves on: a KPI is never worth failing a sweep
     for, and one epic's unreadable history must not cost the others theirs.
+
+    Returns the epics at or above `COMMENT_CAP_WARN` comments, as
+    `(identifier, count)` pairs, for the one summary line at the end of the
+    sweep (DRE-3343). An epic whose count Linear did not answer with is NOT in
+    that list: absent data is not a number, and a warning nobody can act on is
+    worse than the silence it replaces.
     """
+    near_cap: list[tuple[str, int]] = []
     for epic in sorted(epics):
         try:
             report = mid_epic.refresh_epic_growth(linear_ops, epic)
@@ -6374,6 +6381,19 @@ def report_epic_growth(epics: set[str]) -> None:
                 f"epic-growth: {epic} grew without its plan changing — "
                 + ", ".join(report["unrecorded"])
             )
+        if report.get("capped"):
+            # The epic refused the notices this refresh owed it. The sweep says
+            # so and carries on — before DRE-3343 this raised, and one full epic
+            # took the whole phase down with it.
+            print(f"epic-growth: {epic} took no comment — {report['capped']}")
+        total = report.get("comments")
+        if total is None:
+            continue
+        warning = linear_ops.comment_cap_warning(epic, total)
+        if warning:
+            print(warning)
+            near_cap.append((epic, total))
+    return near_cap
 
 
 def repo_epics(active: list[dict]) -> set[str]:
@@ -7030,7 +7050,7 @@ def main(
     # The epic-growth KPI (DRE-2739), beside the sweep's own numbers: green-lit
     # at N, running M, and any card that joined without the plan moving with it.
     with _phase("report_epic_growth"):
-        report_epic_growth(epics)
+        near_cap = report_epic_growth(epics)
     # The fix loop's own grouping (DRE-2810), audited where the stub lives —
     # the only way "every stub in the fleet carries it" is checked rather than
     # remembered — and any REQUEST_CHANGES trigger GitHub cancelled before it
@@ -7039,6 +7059,17 @@ def main(
         report_fix_concurrency()
     with _phase("report_evicted_fix_runs"):
         report_evicted_fix_runs()
+    # The epics approaching Linear's comment cap, in the sweep's own summary
+    # (DRE-3343). One line, and only when there is one to write: a thread that
+    # fills cannot be emptied, so the warning has to arrive while moving the
+    # receipts is still cheap. Silent below the line, by design.
+    if near_cap:
+        print(
+            "epic-comment-cap: "
+            + ", ".join(f"{epic} at {total}" for epic, total in near_cap)
+            + f" of {linear_ops.COMMENT_CAP} comments — move the receipts "
+            "before the line (docs/epic-comment-cap.md)"
+        )
     print(f"sweep complete: {nudges} nudge(s)")
     if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0

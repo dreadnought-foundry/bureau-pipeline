@@ -31,9 +31,12 @@ WHAT THIS PINS, one section per acceptance criterion:
      the cap, and records the growth it could not write ON THE SIBLING. The safe
      order becomes card → sibling verdict → epic growth.
   D. The sweep's receipt path logs the cap and the sweep completes.
-  E. The reconcile sweep reads `comments.totalCount` off the epic — one field on
-     the query it already makes — warns at 1,800, and names every epic above the
-     line in its summary.
+  E. The reconcile sweep reads how many comments the epic holds, warns at
+     1,800, and names every epic above the line in its summary. The card says
+     that count is `comments.totalCount`, one field on a query the sweep
+     already makes. Linear has no such field — see
+     `test_the_epic_query_carries_the_uuid_the_count_is_read_by` — so it is
+     paged instead, bounded by the cap itself at eight requests.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_epic_comment_cap.py -v
 """
@@ -317,12 +320,34 @@ class TestMidEpicDiscoveryDegrades:
         report = mid_epic.refresh_epic_growth(ops, EPIC)
         assert report["capped"] == linear_ops.COMMENT_CAP_CONDITION
 
-    def test_the_epic_query_reads_the_comment_count(self):
-        """One field on a query the sweep already makes — the number the
-        warning in Section E is computed from."""
-        assert "totalCount" in mid_epic._EPIC_QUERY
+    def test_the_epic_query_carries_the_uuid_the_count_is_read_by(self):
+        """The number Section E's warning is computed from, and the one fact
+        the epic read has to carry for it.
+
+        THIS TEST WAS WRITTEN AGAINST A FIELD LINEAR DOES NOT HAVE. The card
+        specifies `comments { totalCount }` — one field on a query the sweep
+        already makes — and the RED half of this suite pinned that literal in
+        `_EPIC_QUERY`. Run against the live API on 2026-09-13 it is a
+        validation error, not a count:
+
+            Cannot query field "totalCount" on type "CommentConnection".
+            __type(name: "CommentConnection") { fields { name } }
+              -> edges, nodes, pageInfo
+
+        Shipping the literal would have made EVERY epic read fail — and
+        `read_epic` is what `mid_epic.discovery` files a card through, so the
+        query would have broken the exact motion this card exists to repair.
+        So the count is paged (`linear_ops.comment_count`) and what the epic
+        read must carry is the UUID its filter takes.
+        """
+        assert " id identifier" in mid_epic._EPIC_QUERY
         ops = _FakeOps(children=[("DRE-2701", BEFORE)], comment_total=1_850)
         assert mid_epic.refresh_epic_growth(ops, EPIC)["comments"] == 1_850
+
+    def test_an_epic_read_without_a_uuid_counts_nothing_rather_than_guessing(self):
+        ops = _FakeOps(children=[("DRE-2701", BEFORE)], comment_total=1_850)
+        ops.epic_uuid = None
+        assert mid_epic.refresh_epic_growth(ops, EPIC)["comments"] is None
 
 
 # ===========================================================================
@@ -388,6 +413,67 @@ class TestTheSweepWarnsBeforeTheLine:
 
 
 # ===========================================================================
+# E (cont.): the count itself — paged, bounded by the cap, and fail-soft
+# ===========================================================================
+def _comment_page(n: int, *, more: bool, cursor: str = "c1") -> _Resp:
+    return _Resp(
+        body=json.dumps(
+            {
+                "data": {
+                    "comments": {
+                        "nodes": [{"id": f"c{i}"} for i in range(n)],
+                        "pageInfo": {"hasNextPage": more, "endCursor": cursor},
+                    }
+                }
+            }
+        ).encode()
+    )
+
+
+class TestTheCountIsPaged:
+    """`comments { totalCount }` does not exist in Linear's schema, so the
+    count is the length of the paged id list — and the cap is what bounds it:
+    2,000 comments at 250 a page is eight requests, worst case, by Linear's
+    own limit."""
+
+    def test_a_quiet_epic_costs_one_request(self, transport):
+        t = transport(_comment_page(12, more=False))
+        assert linear_ops.comment_count("uuid-1") == 12
+        assert t.calls == 1
+
+    def test_the_pages_are_followed_and_summed(self, transport):
+        t = transport(
+            _comment_page(250, more=True, cursor="c-a"),
+            _comment_page(250, more=True, cursor="c-b"),
+            _comment_page(31, more=False),
+        )
+        assert linear_ops.comment_count("uuid-1") == 531
+        assert t.calls == 3
+
+    def test_a_failed_read_is_unknown_rather_than_an_exception(
+        self, transport, capsys
+    ):
+        """It is read on the path that FILES a discovery card. A count must
+        never be the thing that stops a card being created."""
+        transport(_Resp(body=b'{"errors":[{"message":"Field does not exist"}]}'))
+        assert linear_ops.comment_count("uuid-1") is None
+        assert "comment-count" in capsys.readouterr().err
+
+    def test_the_query_can_actually_page(self):
+        """`gql_paged` refuses a query with no `$after` — a count that could
+        only ever read the first page would report every epic as quiet."""
+        assert "$after" in linear_ops._COMMENT_COUNT_QUERY
+        assert "pageInfo" in linear_ops._COMMENT_COUNT_QUERY
+
+    def test_the_filter_takes_the_uuid_type_linear_demands(self):
+        """`$id: String!` is what the epic read uses and it is REJECTED here —
+        `Variable "$id" of type "String!" used in position expecting type
+        "ID!"`, live, 2026-09-13. The two reads take different types for the
+        same card, which is exactly the kind of fact a fake cannot teach."""
+        assert "$id: ID!" in linear_ops._COMMENT_COUNT_QUERY
+
+
+# ===========================================================================
 # The runbook: what to do when a live epic hits the cap
 # ===========================================================================
 class TestTheRunbookExists:
@@ -420,6 +506,7 @@ class _FakeOps:
         self.green_lit_at = green_lit_at
         self.capped = set(capped)
         self.comment_total = comment_total
+        self.epic_uuid = "uuid-2668"
         self.created: list[dict] = []
         self.comments: list[tuple[str, str]] = []
         self.states: list[tuple[str, str]] = []
@@ -466,6 +553,12 @@ class _FakeOps:
         self.epic_description = body
         self.order.append(f"description:{identifier}")
 
+    def comment_count(self, issue_id):
+        """The paged count, by UUID — `linear_ops.comment_count`'s contract.
+        Answers only for the epic it stands in for; anything else is unknown,
+        which is what the real one returns when Linear cannot say."""
+        return self.comment_total if issue_id == self.epic_uuid else None
+
     def count_comments(self, identifier, needle, **kw):
         return sum(1 for i, b in self.comments if i == identifier and needle in b)
 
@@ -480,10 +573,10 @@ class _FakeOps:
         )
         return {
             "issue": {
+                "id": self.epic_uuid,
                 "identifier": EPIC,
                 "description": self.epic_description,
                 "state": {"name": self.epic_state},
-                "comments": {"totalCount": self.comment_total},
                 "children": {
                     "nodes": [
                         {"identifier": i, "createdAt": at} for i, at in self.children

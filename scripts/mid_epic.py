@@ -111,6 +111,7 @@ AMENDMENT_TAG = "mid-epic-amendment"    # on the EPIC: the plan no longer holds
 REAPPROVAL_TAG = "mid-epic-re-green-lit"  # on the EPIC: the re-approval, observed
 NO_VERDICT_TAG = "mid-epic-no-verdict"  # on the SIBLING: promotion refused
 UNRECORDED_TAG = "mid-epic-unrecorded"  # on the EPIC: it grew, its plan did not
+GROWTH_CAPPED_TAG = "mid-epic-growth-capped"  # on the SIBLING: the epic is full
 
 # Where an amendment sends the epic. Planning, not Intake: the epic exists, it
 # is the RECOMMENDATION that changed.
@@ -223,6 +224,27 @@ def verdict_comment(kind: str, because: str, epic: str) -> str:
         f"decision was already made for {epic}, and re-asking on every second "
         "call site is how the queue becomes the bottleneck again. Without this "
         "verdict the sweep refuses to promote the card."
+    )
+
+
+def growth_capped_comment(epic: str, condition: str) -> str:
+    """The record the EPIC could not take, written on the SIBLING instead.
+
+    An epic at Linear's comment cap refuses every further comment, so the
+    growth notices this motion owes it have nowhere to land. They land here,
+    on the card that was just created — the one place a reader following this
+    discovery will actually look — rather than being lost to a stack trace.
+    """
+    return (
+        f"🚨 {GROWTH_CAPPED_TAG}: epic at comment cap — growth record not "
+        f"written to {epic}.\n\n"
+        f"**What Linear said:** {condition}\n\n"
+        f"**What this means:** this card's verdict is recorded above and it "
+        f"promotes normally — the epic's growth ARTIFACT (its description) was "
+        f"still updated, because the cap is on comments only. What could not be "
+        f"written is the notice {epic} owes about growing: read it here.\n\n"
+        f"**What to do about {epic}:** docs/epic-comment-cap.md — the receipts "
+        f"move to a continuation card; the epic itself is not the problem."
     )
 
 
@@ -445,8 +467,14 @@ def unrecorded_additions(children, green_lit_at, recorded_ids) -> list[str]:
 # convention break_glass and validate_card._bounce already use, so the pure core
 # above needs no API key and the tests need no network.
 
+# `id` — the UUID — is selected for ONE reason (DRE-3343): the comment count
+# the 1,800 cap warning is computed from is read by
+# `linear_ops.comment_count()`, whose filter takes an `ID!`. Bought here for no
+# extra request, so the count costs its own pages and nothing more. The count
+# itself is NOT a field on this query: Linear's `CommentConnection` has no
+# `totalCount` — proved against the live API, see `linear_ops`.
 _EPIC_QUERY = """query($id: String!) { issue(id: $id) {
-     identifier description state { name }
+     id identifier description state { name }
      children(first: 250) { nodes { identifier createdAt } }
      history(last: 50) { nodes { createdAt toState { name } } }
    } }"""
@@ -520,12 +548,20 @@ def _add(linear_ops, epic, because, title, body, labels) -> str:
     """The addition: a sibling under the same epic, its verdict, and the growth
     recorded on the epic — one motion.
 
-    ORDER IS LOAD-BEARING. The card is created, THEN the epic's artifact is
-    updated, THEN the verdict is posted. A crash between any two leaves the safe
-    half: a card with no verdict cannot promote (promotion_refusal), and a card
-    the artifact never recorded is surfaced on the next sweep. The reverse order
-    would leave a promotable card the plan never mentioned — the exact silent
-    accretion this route exists to replace.
+    ORDER IS LOAD-BEARING: card, THEN the verdict on the sibling, THEN the
+    epic's growth. A crash between any two leaves the safe half — a card with
+    no verdict cannot promote (promotion_refusal), and a card the artifact
+    never recorded is surfaced on the next sweep.
+
+    The verdict moved AHEAD of the growth on 2026-09-08 (DRE-3343). The old
+    order was card → growth → verdict, and it was safe against a CRASH: what
+    it was not safe against was a step that fails EVERY TIME. DRE-2668 reached
+    Linear's 2,000-comment cap, the growth write raised, and four discovery
+    cards in a row were created without ever reaching their verdict — the one
+    thing a mid-epic card cannot promote without. Both orders leave a
+    verdict-less card on a crash; only this one leaves a promotable card when
+    the epic itself is the thing that is broken, and the growth it could not
+    write is recorded on the sibling below.
     """
     flags: list[str] = []
     for label in labels or []:
@@ -533,12 +569,21 @@ def _add(linear_ops, epic, because, title, body, labels) -> str:
     issue = linear_ops.cmd_subissue(epic, title, body, *flags)
     identifier = issue["identifier"]
 
-    record = {"id": identifier, "because": because}
-    refresh_epic_growth(linear_ops, epic, add=record)
     linear_ops.cmd_comment(identifier, verdict_comment(ADDITION, because, epic))
+    record = {"id": identifier, "because": because}
+    report = refresh_epic_growth(linear_ops, epic, add=record)
+    if report["capped"]:
+        linear_ops.cmd_comment(
+            identifier, growth_capped_comment(epic, report["capped"])
+        )
+    growth = (
+        f"growth record refused ({report['capped']}) and recorded on the card"
+        if report["capped"]
+        else "growth recorded"
+    )
     print(
         f"mid-epic: {identifier} joined {epic} as an {ADDITION} — verdict "
-        "recorded, growth recorded, no new green light needed"
+        f"recorded, {growth}, no new green light needed"
     )
     return identifier
 
@@ -577,10 +622,18 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
         seen in an active lane again, never assumed from the return to Planning;
       * surfaces every mid-epic child the artifact does not account for.
 
-    Returns {"green_lit", "current", "unrecorded", "re_approved"}.
+    Returns {"green_lit", "current", "unrecorded", "re_approved", "capped",
+    "comments"}. `capped` is the named condition when the epic refused a
+    comment this call tried to write (DRE-3343) and None otherwise; `comments`
+    is how many the epic holds, or None when Linear did not say.
     """
     issue = read_epic(linear_ops, epic)
     description = issue.get("description") or ""
+    # None, not 0, when Linear could not say: an epic reported at zero comments
+    # reads as a quiet one, which is the opposite of unknown. An epic whose
+    # UUID this read did not carry is not counted at all rather than guessed.
+    uuid = issue.get("id")
+    comment_count = linear_ops.comment_count(uuid) if uuid else None
     children = (issue.get("children") or {}).get("nodes") or []
     lane = (issue.get("state") or {}).get("name")
     green_lit_at = green_light_from((issue.get("history") or {}).get("nodes"))
@@ -620,8 +673,14 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
     if merged != description:
         linear_ops.set_description(epic, merged)
 
+    # What the epic refused, if it refused anything. `cmd_comment` returns the
+    # named condition instead of raising once an epic is full (DRE-3343), so
+    # every write below reports rather than ending the motion — and the caller
+    # gets ONE answer for "did this epic take its notices".
+    capped: str | None = None
+
     if re_approved and not linear_ops.count_comments(epic, REAPPROVAL_TAG):
-        linear_ops.cmd_comment(
+        capped = linear_ops.cmd_comment(
             epic,
             f"✅ {REAPPROVAL_TAG}: this epic went back to `{AMENDMENT_STATE}` on "
             "an amendment and has been green-lit again — observed in an active "
@@ -632,7 +691,7 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
         needle = f"{UNRECORDED_TAG}: {ident}"
         if linear_ops.count_comments(epic, needle):
             continue
-        linear_ops.cmd_comment(
+        capped = linear_ops.cmd_comment(
             epic,
             f"🚨 {needle} was added to this epic after it was green-lit, and the "
             "epic's plan did not change with it. Silent accretion turns an "
@@ -644,7 +703,7 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
             "the work, file the card as an addition (`scripts/mid_epic.py "
             f"discovery {epic} --kind {ADDITION} --because \"…\"`) so it carries "
             f"a verdict; if it does not, file an {AMENDMENT}.",
-        )
+        ) or capped
 
     print(growth_line(epic, green_lit, len(children)))
     return {
@@ -652,6 +711,8 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
         "current": len(children),
         "unrecorded": unrecorded,
         "re_approved": re_approved,
+        "capped": capped,
+        "comments": comment_count,
     }
 
 
