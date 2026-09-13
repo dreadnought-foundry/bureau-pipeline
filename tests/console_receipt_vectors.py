@@ -63,6 +63,59 @@ COMMENT = (f"{MARKER}\n\n"
            "2026-09-13 08:15 PT.\n"
            f"{TRAILER}")
 
+#: The SHA-256 of the groom receipt's SPEC, pinned (DRE-3785). The answer
+#: receipt is added BESIDE it, never into it: agent-bureau's suite pins this
+#: same hash, and a groom receipt already on a card must keep verifying byte
+#: for byte.
+SPEC_SHA256 = "8de5187c77781e0eeccbaf4c1ccefe70e936a98a9248b6edc6d40cfd051ae207"
+
+# --- the ANSWER receipt v1 (DRE-3785 / DRE-3786) -----------------------------
+#
+# The CEO's answer to a question on a card, as the console writes it on the
+# fleet's Linear key. Same test key, same console user; its own domain line, so
+# no signature carries between the two kinds. agent-bureau's
+# `console/backend/tests/test_console_answer_signing.py` carries these same
+# constants and must SIGN them to exactly ANSWER_SIG with `cryptography`; this
+# side VERIFIES them with the runner's `openssl`.
+
+ANSWER_CARD = "DRE-3700"
+ANSWER_USER = USER
+ANSWER_AT = "2026-09-13T16:52:07Z"          # 09:52 PT
+ANSWER_HEAD = ("Answer from Test Owner (signed in to the console), "
+               "2026-09-13 09:52 PT:")
+ANSWER_WORDS = ("Go with option B — keep the old export for one more month.\n"
+                "Then remove it.")
+#: Everything above the trailer — the "Answer from" line included.
+ANSWER_TEXT = f"{ANSWER_HEAD}\n\n{ANSWER_WORDS}"
+#: The answer text with every whitespace run folded to one space — typed out.
+ANSWER_CANONICAL = (
+    "Answer from Test Owner (signed in to the console), 2026-09-13 09:52 PT: "
+    "Go with option B — keep the old export for one more month. "
+    "Then remove it.")
+ANSWER_SHA256 = (
+    "c3cd4b0e5a1c1ce0568732501c02a20a3d4226579fe71770dcb57cb74af49c8f")
+
+#: The exact bytes signed — typed out, never derived.
+ANSWER_SIGNED_BYTES = (
+    "bureau-console-answer/v1\n"
+    "card: DRE-3700\n"
+    "sha256: c3cd4b0e5a1c1ce0568732501c02a20a3d4226579fe71770dcb57cb74af49c8f\n"
+    "user: 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0\n"
+    "at: 2026-09-13T16:52:07Z\n"
+).encode("utf-8")
+ANSWER_SIGNED_BYTES_SHA256 = (
+    "2172a62045f99037db2695e7467a64f366b85d67214d2f5986efcab5c11d3f99")
+
+#: Ed25519 over ANSWER_SIGNED_BYTES with the test key — `cryptography` and
+#: OpenSSL 3 both produce exactly this (Ed25519 is deterministic).
+ANSWER_SIG = ("o07OWJxgFCMOt6RLBzWcwuA6yAJ5tCl8_JXjXcREter5opyudt194HOUk3FsvonT"
+              "_s04y8XNWaDQfu1DIOGqDQ")
+
+ANSWER_TRAILER = (f"🔏 console-answer: v1 card={ANSWER_CARD} sha256={ANSWER_SHA256} "
+                  f"user={ANSWER_USER} at={ANSWER_AT} kid={KID} sig={ANSWER_SIG}")
+#: The whole comment the console writes for that answer.
+ANSWER_COMMENT = f"{ANSWER_TEXT}\n\n{ANSWER_TRAILER}"
+
 # --- signing variants, for tests only ---------------------------------------
 
 _PKCS8_ED25519_PREFIX = bytes.fromhex("302e020100300506032b657004220420")
