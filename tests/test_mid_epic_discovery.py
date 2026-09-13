@@ -37,6 +37,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_mid_epic_discovery.py -v
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -51,9 +52,11 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import mid_epic  # noqa: E402
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
 
 GREEN_LIGHT = "2026-08-20T09:00:00.000Z"
 BEFORE = "2026-08-19T12:00:00.000Z"
@@ -534,6 +537,225 @@ class TestACardHasNoChildren:
 
 
 # ===========================================================================
+# 8: a hand-built card is BORN with its routing verdict (DRE-3342)
+# ===========================================================================
+#
+# The recipe that worked was three commands in one minute — discovery, then
+# `routing_verdict.py stamp`, then set-state — and the window between the first
+# two belongs to the lane guard: it judges the CREATE as a transition, finds no
+# 🧭 routing-verdict comment (discovery stamps 🔎 mid-epic-verdict, a different
+# tag the guard does not read) and returns the card to Intake with
+# `guard:returned` before the stamp can land. Every hand-built card of the week
+# of 2026-09-08 carries that tag for this reason, which makes the guard's own
+# count of jammed work lie.
+#
+# So `--verdict` makes the two writes one motion. The order stays load-bearing:
+# card → routing stamp → growth → mid-epic verdict, so a crash leaves the safe
+# half.
+class TestBornWithItsRoutingVerdict:
+    def _file(self, ops, **kw):
+        return mid_epic.discovery(
+            ops, "DRE-2700",
+            kind=mid_epic.ADDITION,
+            because="a second call site needs the same fix",
+            title="fix the second call site",
+            body="## What\n- the same fix, one call site along",
+            **kw,
+        )
+
+    def test_the_card_is_born_carrying_the_routing_verdict(self):
+        """One 🧭 comment, and exactly one — the stamp is a verdict, and a card
+        leaving Planning carries one."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="WORKBENCH")
+        assert len(_routing_stamps(ops, ident)) == 1
+        assert routing_verdict.verdict_on(ops.comments_on(ident)) == "WORKBENCH"
+
+    def test_a_non_promotable_verdict_brings_its_marks_with_it(self):
+        """`--verdict` implies the labels the verdict declares, via `marks()`,
+        so the caller cannot half-stamp the card."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="WORKBENCH")
+        assert ops.labels_on(ident) == list(routing_verdict.marks("WORKBENCH"))
+        assert "hand-built" in ops.labels_on(ident)
+
+    def test_an_operator_card_is_born_hand_built_and_no_code(self):
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="OPERATOR")
+        assert ops.labels_on(ident) == ["hand-built", "no-code"]
+
+    def test_a_fleet_card_is_stamped_and_marked_with_nothing(self):
+        """Guard the guard: the marks come from the verdict, not from the flag
+        being present — FLEET declares none."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="FLEET")
+        assert routing_verdict.verdict_on(ops.comments_on(ident)) == "FLEET"
+        assert ops.labels_on(ident) == []
+
+    def test_the_stamp_lands_before_the_growth_record(self):
+        """ORDER IS LOAD-BEARING: card → routing stamp → growth → mid-epic
+        verdict. A crash between any two leaves the safe half — a card whose
+        growth the epic never recorded is surfaced on the next sweep, and one
+        with no mid-epic verdict cannot promote."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="WORKBENCH")
+        created = ops.first("subissue", ident)
+        stamped = ops.first("comment", ident, routing_verdict.VERDICT_MARK)
+        growth = ops.first("description", "DRE-2700")
+        judged = ops.first("comment", ident, mid_epic.VERDICT_TAG)
+        assert created < stamped < growth < judged
+
+    def test_the_mid_epic_verdict_still_lands(self):
+        """The routing verdict answers "who builds this"; the 🔎 mid-epic
+        verdict is the layer-1 judgement the card carries into an approved
+        epic. Two different facts — the new flag replaces neither."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="WORKBENCH")
+        assert mid_epic.carries_verdict(ops.comments_on(ident))
+
+    def test_the_stamp_reads_the_justification_when_no_why_is_given(self):
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="WORKBENCH")
+        assert "a second call site needs the same fix" in _routing_stamps(ops, ident)[0]
+
+    def test_an_explicit_why_is_what_the_stamp_says(self):
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="WORKBENCH",
+                               why="it needs a live console session to check")
+        assert "it needs a live console session to check" in _routing_stamps(ops, ident)[0]
+
+    def test_a_second_stamp_on_that_card_is_refused(self):
+        """The card is stamped, so `routing_verdict.py stamp` afterwards is the
+        no-op it should be — the recipe's second command now finds the work
+        done rather than doubling the verdict."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict="WORKBENCH")
+            before = len(ops.comments_on(ident))
+            assert routing_verdict.stamp_card(ident, "WORKBENCH", "again") == 1
+        assert len(ops.comments_on(ident)) == before
+        assert len(_routing_stamps(ops, ident)) == 1
+
+    # --- without the flag, nothing moves -----------------------------------
+    def test_without_the_flag_no_routing_verdict_is_written(self):
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops)
+        assert _routing_stamps(ops, ident) == []
+        assert ops.labels_on(ident) == []
+
+    def test_without_the_flag_the_motion_is_what_it_always_was(self):
+        """The whole write log, pinned: create the card, record the growth on
+        the epic, post the mid-epic verdict. Nothing added, nothing reordered."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops)
+        assert [(kind, target) for kind, target, _ in ops.log] == [
+            ("subissue", ident),
+            ("description", "DRE-2700"),
+            ("comment", ident),
+        ]
+
+    # --- refused before anything is created --------------------------------
+    @pytest.mark.parametrize("name", ["PARKED", "NEEDS WORK", "SOMEDAY", ""])
+    def test_a_verdict_the_route_cannot_file_is_refused_before_creation(self, name):
+        """A verdict that sends the card anywhere but the build lane makes a
+        sibling nobody picks up. Refused pre-creation, like every other refusal
+        here: a card created and then questioned is already in Backlog."""
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops), pytest.raises(mid_epic.DiscoveryRefused) as err:
+            self._file(ops, verdict=name)
+        assert ops.created == []
+        assert ops.comments == []
+        for fileable in mid_epic.fileable_verdicts():
+            assert fileable in str(err.value)
+
+    def test_the_verdicts_a_discovery_may_carry_are_the_ones_that_build(self):
+        """Derived from the vocabulary, never restated: the fileable verdicts
+        are exactly those whose destination is the lane a sibling is picked up
+        in. PARKED goes to Backlog and NEEDS WORK to Planning — neither is a
+        card anybody builds."""
+        assert mid_epic.fileable_verdicts() == ("FLEET", "WORKBENCH", "OPERATOR")
+        for name in mid_epic.fileable_verdicts():
+            assert routing_verdict.destination(name) == mid_epic.DISCOVERY_LANE
+        assert mid_epic.DISCOVERY_LANE in lane_contract.lane_names()
+
+    def test_the_verdict_name_is_read_case_insensitively(self):
+        ops = _FakeOps(epic_description="The epic.")
+        with _stamping_into(ops):
+            ident = self._file(ops, verdict=" workbench ")
+        assert routing_verdict.verdict_on(ops.comments_on(ident)) == "WORKBENCH"
+
+    def test_an_amendment_cannot_be_given_a_verdict(self):
+        """An amendment creates no card, so there is nothing to stamp — and a
+        flag that silently did nothing would read as a card that was routed."""
+        ops = _FakeOps(epic_description="The epic.", epic_state="In Progress")
+        with pytest.raises(mid_epic.DiscoveryRefused) as err:
+            mid_epic.discovery(ops, "DRE-2700", kind=mid_epic.AMENDMENT,
+                               because="the fix must be split", verdict="WORKBENCH")
+        assert mid_epic.AMENDMENT in str(err.value)
+        assert ops.states == [] and ops.comments == []
+
+    # --- the CLI the recipe is typed at ------------------------------------
+    def test_the_cli_takes_the_verdict_and_its_reason(self):
+        args = mid_epic._parse_argv(
+            ["--kind", "addition", "--because", "a second call site",
+             "--verdict", "WORKBENCH", "--why", "it needs a live session"]
+        )
+        assert args["verdict"] == "WORKBENCH"
+        assert args["why"] == "it needs a live session"
+
+    def test_the_cli_passes_them_through(self):
+        """The flag is only real if `cmd_discovery` hands it to `discovery` —
+        the seam a person actually types at."""
+        with patch.object(mid_epic, "discovery", return_value="DRE-2740") as filed:
+            mid_epic.cmd_discovery(
+                "DRE-2700", "--kind", "addition", "--because", "a second call site",
+                "--title", "one", "--body", "- work",
+                "--verdict", "WORKBENCH", "--why", "it needs a live session",
+            )
+        assert filed.call_args.kwargs["verdict"] == "WORKBENCH"
+        assert filed.call_args.kwargs["why"] == "it needs a live session"
+
+    def test_the_module_hands_a_writer_the_flag(self):
+        """A flag nobody can find is a flag nobody types: the CLI section of
+        the module's own docstring is where the recipe is read."""
+        assert "--verdict" in (mid_epic.__doc__ or "")
+
+
+def _routing_stamps(ops, identifier) -> list:
+    """Every 🧭 routing-verdict comment on `identifier`. The marker must OPEN
+    the body — `routing_verdict.verdicts_on` reads it the same way, because a
+    body that merely quotes a verdict carries none."""
+    return [
+        body for body in ops.comments_on(identifier)
+        if body.lstrip().startswith(routing_verdict.VERDICT_MARK)
+    ]
+
+
+def _stamping_into(ops):
+    """`routing_verdict.stamp_card` takes its I/O from the `linear_ops` module
+    it imports, not from the ops module `mid_epic` is handed — it is THE one
+    write path and DRE-3342 adds a caller to it, not a second one. So the fake
+    stands in for `linear_ops` too, and every write the stamp makes lands in
+    the same log the rest of the motion is read from."""
+    stack = contextlib.ExitStack()
+    for name, verb in (("comment_bodies", ops.comment_bodies),
+                       ("cmd_comment", ops.cmd_comment),
+                       ("add_label", ops.add_label)):
+        stack.enter_context(patch.object(linear_ops, name, side_effect=verb))
+    return stack
+
+
+# ===========================================================================
 # The record: the route only exists for a writer who can find it
 # ===========================================================================
 class TestTheRouteIsWrittenDown:
@@ -587,6 +809,10 @@ class _FakeOps:
         self.comments: list[tuple[str, str]] = []
         self.states: list[tuple[str, str]] = []
         self.descriptions: list[tuple[str, str]] = []
+        self.labels: list[tuple[str, str]] = []
+        # Every write, in the order it happened — the order of the motion is
+        # load-bearing (DRE-3342) and the per-verb lists above cannot show it.
+        self.log: list[tuple[str, str, str]] = []
         self._next = 2740
         self.LinearError = linear_ops.LinearError
 
@@ -599,19 +825,27 @@ class _FakeOps:
                  "parent": parent, "title": title}
         self.created.append(issue)
         self.children.append((ident, AFTER))
+        self.log.append(("subissue", ident, title))
         return issue
 
     def cmd_comment(self, identifier, body):
         self.comments.append((identifier, body))
+        self.log.append(("comment", identifier, body))
 
     def cmd_state(self, identifier, state, *flags):
         self.states.append((identifier, state))
+        self.log.append(("state", identifier, state))
         if identifier == "DRE-2700":
             self.epic_state = state
 
     def set_description(self, identifier, body):
         self.descriptions.append((identifier, body))
+        self.log.append(("description", identifier, body))
         self.epic_description = body
+
+    def add_label(self, identifier, label):
+        self.labels.append((identifier, label))
+        self.log.append(("label", identifier, label))
 
     def count_comments(self, identifier, needle, **kw):
         return sum(1 for i, b in self.comments if i == identifier and needle in b)
@@ -645,6 +879,16 @@ class _FakeOps:
     # --- assertions helpers ----------------------------------------------
     def comments_on(self, identifier):
         return [b for i, b in self.comments if i == identifier]
+
+    def labels_on(self, identifier):
+        return [name for i, name in self.labels if i == identifier]
+
+    def first(self, kind, identifier, needle=""):
+        """Where in the motion a write happened, so an order can be asserted."""
+        return next(
+            n for n, (k, i, payload) in enumerate(self.log)
+            if k == kind and i == identifier and needle in (payload or "")
+        )
 
     def created_state(self, identifier):
         return next(c["state"] for c in self.created if c["identifier"] == identifier)
