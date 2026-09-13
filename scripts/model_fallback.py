@@ -712,10 +712,14 @@ def _normalize_ladder(ladder) -> list[str]:
 # gamble the run on it.
 _SKIP_UNAVAILABLE = "probe reported it unavailable (404 / not found)"
 _SKIP_INCONCLUSIVE = "probe inconclusive — could not confirm it is up"
+# DRE-3824. Worded WITHOUT the death-marker prefix on purpose: this note rides
+# the planner heartbeat comment, and a marker substring in it would be counted
+# as a death by the next attempt's read.
+_SKIP_DIED = "died on this card's last attempt (is_error death recorded)"
 
 
 def select_with_reasons(
-    role: str = "engineer", *, probe=None, clock=None, ladder=None
+    role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=()
 ) -> dict:
     """The full selection DECISION, not just the answer (DRE-2317).
 
@@ -734,15 +738,28 @@ def select_with_reasons(
     `degraded` is True whenever anything above the chosen model was skipped.
     `exhausted` is True when NOTHING probed available and we fell through to the
     lowest rung rather than block the build.
+
+    `avoid` names rungs to walk past WITHOUT probing — models the caller has
+    evidence just died for this card (DRE-3824). The probe cannot see a refusal:
+    in subscription mode raw /v1/messages answers 429 for every model, which
+    reads "available", so a model refusing every run on a monthly spend limit
+    kept being chosen. The caller reads the card's own `model-error:` marker and
+    passes that model here. An avoided rung is a skip like any other — degraded,
+    named in the note — and avoiding every rung still falls through to the
+    lowest one rather than block the run.
     """
     if probe is None:
         probe = _probe_real
     if clock is None:
         clock = time.monotonic
     walk = _normalize_ladder(ladder) or ladder_for(role)
+    avoided = {m for m in (avoid or ()) if isinstance(m, str) and m}
 
     skipped: list[dict[str, str]] = []
     for model in walk:
+        if model in avoided:
+            skipped.append({"model": model, "reason": _SKIP_DIED})
+            continue
         available = _is_available(model, probe, clock)
         if available:
             return {
@@ -804,7 +821,9 @@ def selection_note(decision: Mapping) -> str:
     return " ".join(note.split())
 
 
-def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> str:
+def select(
+    role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=()
+) -> str:
     """The model the next attempt should use: the first AVAILABLE model walking
     that agent's ordered ladder best→worst.
 
@@ -834,7 +853,9 @@ def select(role: str = "engineer", *, probe=None, clock=None, ladder=None) -> st
     (lowest, most-likely-up) known-good model rather than block the build or
     return a model just confirmed 404.
     """
-    return select_with_reasons(role, probe=probe, clock=clock, ladder=ladder)["model"]
+    return select_with_reasons(
+        role, probe=probe, clock=clock, ladder=ladder, avoid=avoid
+    )["model"]
 
 
 # --------------------------------------------------------------------------- #
@@ -902,12 +923,14 @@ def _fake_probe_from_env():
 def main(argv: list[str]) -> int:
     """CLI for the workflows — the entry point every agent workflow calls.
 
-      select [<agent>] [--explain-file <path>]
+      select [<agent>] [--explain-file <path>] [--avoid <model>]...
                                    print the model the next attempt should use
                                    (walks that agent's ladder from
                                    config/models.yaml, probes availability) and,
                                    with --explain-file, write the one-line
-                                   selection note beside it
+                                   selection note beside it. --avoid walks past
+                                   a model this card's last attempt died on
+                                   (DRE-3824), without probing it
       role-of <label,label,...>    print engineer|planner|devops|frontend from
                                    a card's labels
 
@@ -934,19 +957,24 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "select":
         explain_path = None
+        avoid: list[str] = []
         args: list[str] = []
         pending = list(rest)
         while pending:
             arg = pending.pop(0)
             if arg == "--explain-file":
                 explain_path = pending.pop(0) if pending else None
+            elif arg == "--avoid":
+                avoid.append(pending.pop(0) if pending else "")
             else:
                 args.append(arg)
         # Ignore a legacy comments-file 2nd arg if the workflow still passes one
         # — selection no longer reads card history; availability drives it.
         role = args[0] if args else "engineer"
         clear_availability_cache()
-        decision = select_with_reasons(role, probe=_fake_probe_from_env())
+        decision = select_with_reasons(
+            role, probe=_fake_probe_from_env(), avoid=avoid
+        )
         note = selection_note(decision)
         print(decision["model"])
         print(note, file=sys.stderr)
