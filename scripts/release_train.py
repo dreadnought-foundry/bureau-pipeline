@@ -188,6 +188,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import intake_controls  # noqa: E402
 import merge_gate  # noqa: E402
+import release_linear  # noqa: E402 — the Linear release every declared surface gets (DRE-3854)
 
 #: The clock every window is read on. GitHub's `schedule:` takes UTC only and
 #: has no timezone field, so the STUB carries two cron lines and knows nothing
@@ -531,6 +532,9 @@ def check_schema(data, repo_root=None) -> list:
             problems.append(f"{name}: a surface must be an object")
             continue
         problems.extend(_check_surface(name, entry, repo_root))
+    # The top-level `linear_pipelines` key: which surfaces write a Linear
+    # release, and to which pipeline (release_linear.py). Absent is fine.
+    problems.extend(release_linear.check(data))
     return problems
 
 
@@ -1651,7 +1655,7 @@ def run_surface(surface, *, repo_root, sha, before=None, env=None,
 
 
 def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
-            dispatched=False, env=None, out=print) -> Decision:
+            dispatched=False, env=None, out=print, on_released=None) -> Decision:
     """Decide about ONE surface with the real checks, then act — and print the
     one receipt line either way.
 
@@ -1659,6 +1663,12 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
     called when the local rules have already said this surface would release:
     a job that queued behind another release and now reads current must not
     spend two API reads to be told the same thing.
+
+    `on_released(previous_tag, decision)` is called once the script has cut a
+    tag and the train has VERIFIED it — the moment the surface is live — and
+    before the receipt, so the receipt stays the run's last line. It is how
+    the Linear release is written (release_linear.py). It can never change
+    the decision: whatever it raises is one warning line.
     """
     tag, tag_at = newest_tag(repo_root, surface.tag_series)
     lag = lag_state(repo_root, tag, sha, surface.paths)
@@ -1671,6 +1681,12 @@ def release(surface, *, repo, repo_root, sha, now, checks, brake=None,
     if decision.releases:
         decision = run_surface(surface, repo_root=repo_root, sha=sha,
                                before=tag, env=env, out=out)
+    if on_released is not None and decision.act == RELEASE and decision.tag:
+        try:
+            on_released(tag, decision)
+        except Exception as error:  # noqa: BLE001 — the surface is already live
+            out(f"{TAG}: [{surface.name}] WARNING the after-release step failed "
+                f"({error}) — the release itself is unaffected")
     out(decision.receipt(repo, surface.name, sha))
     return decision
 
@@ -1772,6 +1788,28 @@ def render_markdown() -> str:
     w("| --- | --- | --- |")
     for field in SCHEMA:
         w(f"| `{field.name}` | {field.kind} | {field.means} |")
+    w("")
+    w("## A Linear release, by declaring one key")
+    w("")
+    w(
+        f"A surface whose releases should appear in Linear names its release "
+        f"pipeline in the top-level `{release_linear.DATA_KEY}` key — never a "
+        "field of the surface, so the key can land before a caller's train "
+        "reads this schema. Once the surface's script has cut its tag and the "
+        "train has verified it, the train writes the release to that pipeline "
+        "itself: `releaseSync` with the tag as the version and the cards the "
+        "surface's own changes named since its previous tag, `releaseComplete`, "
+        "then one release note. It uses the caller's `LINEAR_API_KEY` and never "
+        "an access key. Nothing it does can fail the release: a missing key or "
+        "a refusal is one warning line. A `channel` surface cuts no tag and "
+        "cannot name one."
+    )
+    w("")
+    w("```json")
+    w(json.dumps({"surfaces": {"<name>": {"...": "..."}},
+                  release_linear.DATA_KEY: {"<name>": "<Linear release pipeline id>"}},
+                 indent=2))
+    w("```")
     w("")
     w("## What the train decides, in order")
     w("")
@@ -2193,6 +2231,11 @@ def _cmd_release(args) -> int:
             entry, repo=args.repo, repo_root=args.repo_root, sha=args.sha,
             now=datetime.now(tz=PT), brake=brake(), dispatched=args.dispatched,
             checks=lambda: fetch_checks(args.repo, args.sha),
+            on_released=lambda previous, decided: release_linear.write(
+                data=data, surface_name=args.surface, repo=args.repo,
+                repo_root=args.repo_root, version=decided.tag, sha=args.sha,
+                previous_tag=previous,
+                out=lambda line: print(f"{TAG}: [{args.surface}] {line}")),
         )
     except RuntimeError as err:
         # FAIL CLOSED. An unreadable answer is not a green one — the same rule

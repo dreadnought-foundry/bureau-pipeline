@@ -42,6 +42,23 @@ Every repo the train serves declares its surfaces in `.github/bureau/release.jso
 | `identity` | role name | Who the script runs as: the caller's own OIDC role, fed from the one required secret `RELEASE_ROLE_ARN`. On a `channel` surface it names whatever advances the ref, since nothing is assumed. |
 | `record` | `tag` or `channel` | `tag` is the default and the deployment record is the annotated tag the script cuts. `channel` is a moving tag another train advances: the release train never runs it, and deploy-lag measures it by compare. |
 
+## A Linear release, by declaring one key
+
+A surface whose releases should appear in Linear names its release pipeline in the top-level `linear_pipelines` key — never a field of the surface, so the key can land before a caller's train reads this schema. Once the surface's script has cut its tag and the train has verified it, the train writes the release to that pipeline itself: `releaseSync` with the tag as the version and the cards the surface's own changes named since its previous tag, `releaseComplete`, then one release note. It uses the caller's `LINEAR_API_KEY` and never an access key. Nothing it does can fail the release: a missing key or a refusal is one warning line. A `channel` surface cuts no tag and cannot name one.
+
+```json
+{
+  "surfaces": {
+    "<name>": {
+      "...": "..."
+    }
+  },
+  "linear_pipelines": {
+    "<name>": "<Linear release pipeline id>"
+  }
+}
+```
+
 ## What the train decides, in order
 
 One rule set, asked twice: once to build the matrix, and once inside each surface's own concurrency lane. `no-op` and `held` conclude the job green — they are the train working; only `refuse` is red.
