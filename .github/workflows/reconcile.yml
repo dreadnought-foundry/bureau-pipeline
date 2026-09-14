@@ -67,6 +67,29 @@ on:
         type: string
         required: false
         default: "fleet"
+      sweep_reason:
+        description: >-
+          WHY this pass was asked for (DRE-3640) — the scope the sweep reads
+          off `SWEEP_REASON`. The words it recognises are `card-done` and
+          `epic-activated`; anything else, EMPTY INCLUDED, means a full board
+          pass. Empty is the whole safety of it: on `schedule` and
+          `workflow_dispatch` the `inputs` context is empty, both this and
+          `sweep_card` interpolate to "", and the sweep does exactly what it
+          does today. A caller that knows why it fired — the relay's
+          `repository_dispatch`, fired because ONE card went Done — passes the
+          reason and buys a scoped pass instead of the full price.
+        type: string
+        required: false
+        default: ""
+      sweep_card:
+        description: >-
+          WHICH card the pass is about (`DRE-1234`), read off `SWEEP_CARD`.
+          Empty means the whole board. Paired with `sweep_reason`: a reason
+          with no card is still a full pass, because the sweep has nothing to
+          narrow to.
+        type: string
+        required: false
+        default: ""
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -144,9 +167,46 @@ jobs:
           INTAKE_HOLD: ${{ inputs.intake_hold }}
           INTAKE_MAX_AGE_MINUTES: ${{ inputs.intake_max_age_minutes }}
           INTAKE_ESCALATION_CAP: ${{ inputs.intake_escalation_cap }}
+          # WHY this pass was asked for and WHICH card it is about (DRE-3640),
+          # threaded from the caller's inputs and never a literal here — a
+          # scope baked into the shared channel would narrow every repo's
+          # SCHEDULED sweep, which is the one pass that must stay full. Empty
+          # on schedule/workflow_dispatch, which the sweep reads as a full
+          # pass.
+          SWEEP_REASON: ${{ inputs.sweep_reason }}
+          SWEEP_CARD: ${{ inputs.sweep_card }}
         run: |
           # Cards carry `**Repo:** <slug>` — reconcile.py compares against the
           # lowercase repo basename.
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG
-          python3 .bureau-pipeline/scripts/reconcile.py
+          # The pass's output, kept (DRE-3640). Every line still flows to the
+          # run log exactly as before; `tee` only keeps a copy so the spend
+          # lines can be lifted out of it below. `pipefail` is what keeps a red
+          # sweep red — without it `tee`'s zero would mask reconcile.py's exit
+          # — and the status is carried PAST the summary rather than aborting
+          # on it, because a failed pass is exactly when somebody wants to know
+          # what the hour cost.
+          set -o pipefail
+          STATUS=0
+          python3 .bureau-pipeline/scripts/reconcile.py 2>&1 | tee sweep.log || STATUS=$?
+          # The sweep's own lines, verbatim: the `linear-budget:` trailer it
+          # prints as it exits, and every `sweep-spend:` phase line. Reading a
+          # pass's spend used to mean opening the run log, which at four passes
+          # an hour nobody does. A pass that printed no trailer says so — a
+          # blank page reads as "nothing was spent" when it means "unknown".
+          BUDGET=$(grep '^linear-budget:' sweep.log || true)
+          SPEND=$(grep '^sweep-spend:' sweep.log || true)
+          {
+            echo "### Reconcile sweep — spend"
+            echo
+            echo '```'
+            if [ -n "$SPEND" ]; then printf '%s\n' "$SPEND"; fi
+            if [ -n "$BUDGET" ]; then
+              printf '%s\n' "$BUDGET"
+            else
+              echo "no linear-budget: line — the pass exited before its trailer, so this run's spend is unknown"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"
