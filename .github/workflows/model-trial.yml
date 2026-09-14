@@ -1,0 +1,327 @@
+# Model trial (DRE-3897) — ONE real agent run on a candidate model, before any
+# adoption PR is written.
+#
+# `model-drift.yml` (DRE-2236) discovers a model and opens a card; a human then
+# edits config/models.yaml. Nothing in between has ever RUN the candidate. The
+# CEO rejected "auto without a test run" for exactly that gap: a model that
+# ships a breaking API change would otherwise reach every build agent untested.
+# Opus 5 is the worked example — it turned thinking on by default, so a tight
+# `max_tokens` truncated answers, and it returned 400 when thinking was disabled
+# above `high` effort. Neither fault is visible in a catalog listing, and both
+# would kill a bounded, tool-using Claude Code turn loop. So that loop is the
+# test, and this workflow is it.
+#
+# WHAT IT REPORTS, AND WHAT IT DOES NOT DO. Three outputs — `outcome`,
+# `run_url`, `summary` — and nothing else. It never fails the calling workflow
+# on a failed trial: a model that dies is the ANSWER this run exists to
+# produce, so the caller (`model-adoption.yml`, DRE-3903) decides what to do
+# with it. A trial that went red would take the adoption rail down with the
+# candidate.
+#
+# WORKFLOW_CALL ONLY, deliberately: no schedule and no dispatch. It never runs
+# under its own name, which is why `scripts/check_workflow_watchers.py` exempts
+# it as reusable-only and `self-medic.yml` needs no entry for it — a watch
+# entry would be a dangling name. It also means the trial cannot start without
+# the adoption workflow asking for it, at the moment a human-reviewed rail
+# wants an answer.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — nothing here is initiated by this workflow: it inherits the
+#      caller's event. `allowed_bots` is copied verbatim from agent-task.yml's
+#      `Implement card` step, so every identity that already dispatches work in
+#      this fleet (the four pool bots and `github-actions`, DRE-2053) is
+#      admitted here too.
+#   Q2 secrets — BOTH credential shapes are declared optional and selected by
+#      `vars.CLAUDE_AUTH_MODE`, exactly as agent-task.yml selects them. And the
+#      endpoint matters as much as the store: the model call goes through
+#      `claude-code-action`, NEVER a raw POST to the Messages API, because a
+#      subscription OAuth token answers 429 to every one of those at any load
+#      (DRE-3074 — three planner runs escalated to the CEO inside twenty
+#      seconds on that exact mistake).
+#   Q3 re-run — the trial is stateless. It writes no card, no receipt and no
+#      marker, pushes nothing, and leaves `trial-answer.txt` on a runner that
+#      is destroyed. Re-running it costs one more bounded run and nothing else.
+#   Q4 command limits — `--max-turns 10` is the ceiling, and hitting it is a
+#      REPORTED outcome (`turn_exhaustion`) rather than an error: a model that
+#      cannot read one file and write one line inside ten turns is the finding.
+#   Q5 our crash — the model step is `continue-on-error` and the scoring step
+#      is `if: always()`, so a dead trial still produces all three outputs. A
+#      failure of the shared install step is deliberately NOT swallowed: that
+#      is an install failure, not a verdict on the model (DRE-3416), and
+#      blaming the candidate for it is the mistake that action exists to end.
+name: Model Trial (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: >-
+          The candidate model id to trial, e.g. the id a `model-drift.yml`
+          discovery card names. It arrives as an INPUT so no literal model id
+          is pinned in this file (tests/test_model_config.py::
+          test_no_workflow_hardcodes_a_model_id).
+        type: string
+        required: true
+      pipeline_ref:
+        description: >-
+          bureau-pipeline ref for the INTERNAL checkout (the shared install
+          action and the scripts the scoring step runs). REQUIRED since
+          DRE-2689: a caller must pass the same ref it pins in `uses:`, or it
+          runs channel workflow YAML over another ref's scripts.
+        type: string
+        required: true
+    outputs:
+      outcome:
+        description: '"passed" when the answer file matched AND the run did not die; "failed" otherwise.'
+        value: ${{ jobs.trial.outputs.outcome }}
+      run_url:
+        description: This run, so the caller's PR body can link the evidence.
+        value: ${{ jobs.trial.outputs.run_url }}
+      summary:
+        description: >-
+          One line: "<model>: <passed|failed> — <death class or 'completed'>,
+          <turns> turns, <seconds>s".
+        value: ${{ jobs.trial.outputs.summary }}
+    secrets:
+      # Optional on purpose, and exactly as agent-task.yml declares them: a
+      # repo runs ONE auth mode, so requiring both would fail every caller.
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+
+# Nothing is pushed, no card text is read, no comment is written. `contents:
+# read` is the whole permission set the trial needs.
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # Ten turns on one file cannot take long; a model that hangs must not hold
+    # a runner while the adoption rail waits on it.
+    timeout-minutes: 20
+    outputs:
+      outcome: ${{ steps.verify.outputs.outcome }}
+      run_url: ${{ steps.verify.outputs.run_url }}
+      summary: ${{ steps.verify.outputs.summary }}
+    steps:
+      # The caller's repo — the one holding config/models.yaml, which is the
+      # file the trial task reads.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The pipeline's own checkout: the shared install action below and the
+      # shared predicates the scoring step runs come out of it, at the ref the
+      # caller pinned (DRE-2026).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+
+      # Claude Code, installed ONCE and PROVED (DRE-3414/DRE-3416). It fails
+      # loudly rather than continue-on-error: an install that left no launcher
+      # reads downstream exactly like a stale credential or a dead model, and
+      # reporting it as "the candidate failed" is the one wrong answer this
+      # whole workflow exists to avoid.
+      - name: Install Claude Code (asserted)
+        id: install_claude
+        uses: ./.bureau-pipeline/.github/actions/install-claude-code
+
+      # THE TRIAL. One bounded, tool-using turn loop on the candidate — the
+      # shape a breaking API change actually kills. Never a raw Messages API
+      # call (DRE-3074); always the sha every other workflow here pins
+      # (DRE-3416).
+      #
+      # `continue-on-error`: a model that 400s, hangs or exhausts its turns is
+      # the FINDING. The scoring step below reads what happened and reports it;
+      # this step going red would fail the caller instead.
+      #
+      # NO `LINEAR_API_KEY`, DELIBERATELY (DRE-2696 is the rule this omits).
+      # Every other agent step in the fleet gets that key because its agent
+      # runs `linear_ops.py` from Bash for its heartbeats. This one has no Bash
+      # — the tool set below is Read/Glob/Grep/Write — so it could not use the
+      # key if it held it, it posts no heartbeat and reads no card, and the
+      # caller is what reports. The waiver and its reason are pinned in
+      # tests/test_agent_linear_key.py's DOCUMENTED_EXCEPTIONS.
+      - name: Trial the candidate model
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
+        with:
+          # The launcher the step above PROVED runs — without it the vendor
+          # action installs a second copy nobody asserted.
+          path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
+          anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          github_token: ${{ github.token }}
+          # Copied verbatim from agent-task.yml's `Implement card` step — a
+          # second, drifting list is how DRE-2020/DRE-2053 happened.
+          allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
+          # The bounds. Ten turns is plenty for one read and one write, and it
+          # is the ceiling whose breach IS the report. The tool set carries no
+          # Bash and no network: the trial must not be able to do anything but
+          # read this repo and write its answer.
+          claude_args: |
+            --max-turns 10
+            --model ${{ inputs.model }}
+            --allowedTools "Read,Glob,Grep,Write"
+          # FIXED TEXT, AND NOTHING INTERPOLATED INTO IT. No card body, no PR
+          # body, no run context — so there is no untrusted string for a
+          # prompt injection to ride in on, and the task is identical for every
+          # candidate, which is what makes two trials comparable at all
+          # (standards/untrusted-content.md).
+          prompt: |
+            You are a bounded trial run on a candidate model. Do exactly the
+            task below, and nothing else.
+
+            1. Read the file config/models.yaml in this repository.
+            2. Count the entries under its top-level `ladders:` key — how many
+               named ladders the file declares, NOT how many models are on
+               them.
+            3. Write a single line of the form
+
+                   ladders=<n>
+
+               to a file named trial-answer.txt in the repository root, where
+               <n> is that count in decimal digits. Nothing else in the file,
+               no prose around it.
+
+            Change no other file. Run no commands. Do not commit, do not push,
+            and do not open a pull request. When trial-answer.txt holds that
+            one line, you are done — stop.
+
+      # THE VERDICT, and it is DATA the caller acts on. Two independent
+      # questions, and `passed` needs both:
+      #
+      #   1. did the agent get the answer right — the count recomputed HERE
+      #      with PyYAML, compared against the line it wrote; and
+      #   2. did the run die — from `check_agent_result.py classify`, the ONE
+      #      shared death predicate (DRE-2312), never a test of its own.
+      #
+      # AND IT WANTS A RECORD TO HAVE READ. `classify` returns `none` both for
+      # "it did not die" and for "there is no result record to say so" — its
+      # own docstring says exactly that. Absence is not health, so a trial with
+      # no execution record, or whose step GitHub itself reports as failed,
+      # is `failed` however good the answer file looks: an adoption gate must
+      # not certify a candidate on evidence it never saw. (The summary's
+      # `<turns> turns, <seconds>s` comes out of that same record, so without
+      # it there is no trial report to give the caller either.)
+      #
+      # `if: always()` so a dead trial still fills the outputs, and the block
+      # always exits 0 so a failed trial leaves a GREEN job. It fails CLOSED:
+      # an unreadable config, a missing answer file or an unreadable execution
+      # record all report `failed` with the reason named, because our own
+      # tooling breaking must never read as "the candidate passed".
+      #
+      # NO ${{ }} BELOW THIS LINE (DRE-3484): a `run:` block carrying an
+      # interpolation is compiled into one `format()` expression with a 21,000
+      # character ceiling. Every value arrives through `env:` instead, which
+      # also lets tests/test_model_trial_workflow.py execute this exact script.
+      - name: Score the trial
+        id: verify
+        if: always()
+        env:
+          MODEL: ${{ inputs.model }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          # The task's two files, named once so the prompt above, this script
+          # and the tests cannot drift apart.
+          ANSWER_FILE: trial-answer.txt
+          CONFIG_FILE: config/models.yaml
+          BUREAU_SERVER_URL: ${{ github.server_url }}
+          BUREAU_REPOSITORY: ${{ github.repository }}
+          BUREAU_RUN_ID: ${{ github.run_id }}
+        run: |
+          EXEC_FILE="$CLAUDE_EXECUTION_FILE"
+          [ -n "$EXEC_FILE" ] || EXEC_FILE="${RUNNER_TEMP:-/tmp}/claude-execution-output.json"
+          # Fail closed: a classifier that cannot answer is not innocence.
+          DEATH_CLASS=$(python3 .bureau-pipeline/scripts/check_agent_result.py classify "$EXEC_FILE" 2>/dev/null || echo api_death)
+          export EXEC_FILE DEATH_CLASS
+          python3 <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          sys.path.insert(0, ".bureau-pipeline/scripts")
+          from execution_result import load_execution
+
+          model = os.environ["MODEL"]
+          answer_file = os.environ["ANSWER_FILE"]
+          config_file = os.environ["CONFIG_FILE"]
+          death = (os.environ.get("DEATH_CLASS") or "none").strip() or "none"
+
+          # 1. The true count, recomputed here. The agent's answer is never
+          #    trusted to define what it should have been.
+          expected = None
+          config_error = ""
+          try:
+              import yaml
+              doc = yaml.safe_load(pathlib.Path(config_file).read_text())
+              ladders = (doc or {}).get("ladders")
+              if not isinstance(ladders, dict) or not ladders:
+                  raise ValueError(f"{config_file} declares no ladders mapping")
+              expected = len(ladders)
+          except Exception as exc:
+              config_error = f"could not count the ladders in {config_file}: {exc}"
+
+          # 2. What the agent actually wrote. Capped before it is quoted: the
+          #    file is agent output, so it is the one untrusted string in this
+          #    script, and an unbounded one would be quoted into a step output
+          #    and a run summary.
+          try:
+              answer = pathlib.Path(answer_file).read_text().strip()[:120]
+          except OSError:
+              answer = ""
+
+          # 3. How much the run did, for the summary line — and whether there
+          #    is a record at all, which is the evidence `classify` needs to
+          #    have meant "it did not die" rather than "I cannot tell".
+          record = load_execution(os.environ["EXEC_FILE"]) or {}
+          turns = record.get("num_turns", "?")
+          duration = record.get("duration_ms")
+          seconds = round(duration / 1000) if isinstance(duration, (int, float)) else "?"
+          step_outcome = (os.environ.get("CLAUDE_OUTCOME") or "").strip()
+
+          matched = expected is not None and answer == f"ladders={expected}"
+          outcome = "passed" if (
+              matched and death == "none" and record and step_outcome != "failure"
+          ) else "failed"
+
+          if outcome == "passed":
+              why = "completed"
+          elif death != "none":
+              why = death
+          elif step_outcome == "failure":
+              why = "the trial step failed"
+          elif not record:
+              why = "no execution record — nothing proves the trial ran"
+          elif config_error:
+              why = config_error
+          elif not answer:
+              why = f"no {answer_file}"
+          else:
+              why = f"{answer_file} says {answer!r}, expected 'ladders={expected}'"
+          # One LINE, whatever an exception or a hostile answer file contained.
+          why = " ".join(why.split())
+
+          run_url = "{}/{}/actions/runs/{}".format(
+              os.environ["BUREAU_SERVER_URL"],
+              os.environ["BUREAU_REPOSITORY"],
+              os.environ["BUREAU_RUN_ID"],
+          )
+          summary = f"{model}: {outcome} — {why}, {turns} turns, {seconds}s"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"outcome={outcome}\n")
+              fh.write(f"run_url={run_url}\n")
+              fh.write(f"summary={summary}\n")
+          print(summary)
+          step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if step_summary:
+              with open(step_summary, "a") as fh:
+                  fh.write(f"### Model trial\n\n{summary}\n\n{run_url}\n")
+          # Never silent, and never red: the caller acts on the outcome.
+          if outcome == "failed":
+              print(f"::warning::{summary}")
+          PY
