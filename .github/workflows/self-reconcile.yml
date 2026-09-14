@@ -48,6 +48,18 @@ jobs:
       # move a card out of Intake and a switch only one of them reads is a pen
       # with a hole in it.
       intake_hold: ${{ vars.INTAKE_HOLD }}
+      # The dispatch's scope (DRE-3640). The relay fires `reconcile` because
+      # ONE card moved, and this stub is the adapter that carries that fact
+      # through: `reason` is why, `identifier` is the card. On `schedule` and
+      # `workflow_dispatch` the `client_payload` context is empty, both render
+      # as "", and the sweep runs the full board pass it always has — so these
+      # two lines narrow the dispatched pass and nothing else.
+      #
+      # The reusable's INPUT names are the contract it shares with the sweep
+      # that reads the env; the payload KEYS are the relay's, and mapping one
+      # to the other is this stub's job.
+      sweep_reason: ${{ github.event.client_payload.reason }}
+      sweep_card: ${{ github.event.client_payload.identifier }}
       # intake_max_age_minutes / intake_escalation_cap are left empty on
       # purpose — empty means the lane contract's own window and the script's
       # own cap, which are correct on their own. Widening the window is an
