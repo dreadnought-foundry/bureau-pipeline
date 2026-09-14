@@ -106,7 +106,15 @@ jobs:
        github.event.issue.pull_request &&
        contains(github.event.comment.body, 'QA Critic') &&
        github.event.comment.user.login == 'agent-bureau-qa-bot[bot]')
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The SHORT-job lane (DRE-3887). Every job in this file is bookkeeping that
+    # finishes in well under a minute, and until now it drew from the same
+    # `BUREAU_RUNS_ON` pool as the 20-minute agent, critic and verifier jobs: on
+    # 2026-09-13 twenty-two agent-bureau gate runs sat queued from 16:40 PT for
+    # about an hour while three heavy runners sat idle. A repo routes its short
+    # jobs elsewhere by setting `BUREAU_SHORT_RUNS_ON`; with it unset this is
+    # the same chain it has always been, so nothing changes until a repo opts
+    # in (`tests/test_short_runs_on_lane.py`).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     outputs:
       pr: ${{ steps.pr.outputs.pr }}
@@ -152,7 +160,8 @@ jobs:
     # number means the event pointed at nothing to gate. A custom `if`
     # replaces the implicit success() check, so it is spelled out.
     if: needs.resolve.result == 'success' && needs.resolve.outputs.pr != ''
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `resolve` above (DRE-3887).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # One group per PR, whatever woke the gate — the CI leg, the verdict
     # leg, and a dispatch all land here (DRE-2508). Never cancel-in-progress:
