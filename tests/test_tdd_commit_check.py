@@ -895,6 +895,14 @@ class AstDocsCliTest(GitRepoMixin, unittest.TestCase):
 # owes: regenerated inside the region, regenerated plus an edit outside it, a
 # marker line itself edited, a region whose END is missing, and source that
 # will not parse.
+#
+# The PATH matters as much as the content: the exemption only exists for files
+# a generator's `--check` proves, so every fixture below is exercised against
+# MIRROR — one of those files — and the unproven-path case is tested on its own.
+
+MIRROR = "scripts/model_fallback.py"          # proved by sync_model_config.py
+CARD_VALIDATOR = "scripts/validate_card.py"   # proved by sync_fallback_map.py
+UNPROVEN = "scripts/evil_auth.py"             # no generator; never exempt
 
 _PY_GENERATED = '''"""Widget with a generated mirror.
 
@@ -963,14 +971,14 @@ class GeneratedRegionChangeTest(unittest.TestCase):
     def test_regenerated_region_is_a_generated_change(self):
         self.assertTrue(
             check_tdd_commits.is_generated_region_change(
-                _PY_GENERATED, _PY_GENERATED_REGENERATED
+                MIRROR, _PY_GENERATED, _PY_GENERATED_REGENERATED
             )
         )
 
     def test_a_line_outside_the_region_is_not(self):
         self.assertFalse(
             check_tdd_commits.is_generated_region_change(
-                _PY_GENERATED, _PY_GENERATED_AND_OUTSIDE
+                MIRROR, _PY_GENERATED, _PY_GENERATED_AND_OUTSIDE
             )
         )
 
@@ -979,14 +987,14 @@ class GeneratedRegionChangeTest(unittest.TestCase):
         # about a region the generator never wrote.
         self.assertFalse(
             check_tdd_commits.is_generated_region_change(
-                _PY_GENERATED, _PY_GENERATED_MARKER_EDITED
+                MIRROR, _PY_GENERATED, _PY_GENERATED_MARKER_EDITED
             )
         )
 
     def test_a_region_with_no_closing_marker_is_not(self):
         self.assertFalse(
             check_tdd_commits.is_generated_region_change(
-                _PY_GENERATED, _PY_GENERATED_NO_END
+                MIRROR, _PY_GENERATED, _PY_GENERATED_NO_END
             )
         )
 
@@ -995,19 +1003,19 @@ class GeneratedRegionChangeTest(unittest.TestCase):
         # exempt every line below the BEGIN marker.
         self.assertFalse(
             check_tdd_commits.is_generated_region_change(
-                _PY_GENERATED_NO_END, _PY_GENERATED_NO_END_REGENERATED
+                MIRROR, _PY_GENERATED_NO_END, _PY_GENERATED_NO_END_REGENERATED
             )
         )
 
     def test_a_file_with_no_region_is_not(self):
         self.assertFalse(
-            check_tdd_commits.is_generated_region_change(_PY_BASE, _PY_CODE_ONLY)
+            check_tdd_commits.is_generated_region_change(MIRROR, _PY_BASE, _PY_CODE_ONLY)
         )
 
     def test_unparseable_before_fails_closed_to_code(self):
         self.assertFalse(
             check_tdd_commits.is_generated_region_change(
-                "def (\n", _PY_GENERATED_REGENERATED
+                MIRROR, "def (\n", _PY_GENERATED_REGENERATED
             )
         )
 
@@ -1016,19 +1024,19 @@ class GeneratedRegionChangeTest(unittest.TestCase):
         # that will not parse is never waved through as generated.
         self.assertFalse(
             check_tdd_commits.is_generated_region_change(
-                _PY_GENERATED,
+                MIRROR, _PY_GENERATED,
                 _PY_GENERATED.replace("_FALLBACK = {", "def ("),
             )
         )
 
     def test_added_file_has_no_base_version_and_is_not_generated(self):
         self.assertFalse(
-            check_tdd_commits.is_generated_region_change(None, _PY_GENERATED)
+            check_tdd_commits.is_generated_region_change(MIRROR, None, _PY_GENERATED)
         )
 
     def test_deleted_file_has_no_head_version_and_is_not_generated(self):
         self.assertFalse(
-            check_tdd_commits.is_generated_region_change(_PY_GENERATED, None)
+            check_tdd_commits.is_generated_region_change(MIRROR, _PY_GENERATED, None)
         )
 
     def test_wrapping_code_in_new_markers_is_not(self):
@@ -1040,7 +1048,7 @@ class GeneratedRegionChangeTest(unittest.TestCase):
             "# --- BEGIN generated ---\nVALUE = 2\n# --- END generated ---",
         )
         self.assertFalse(
-            check_tdd_commits.is_generated_region_change(_PY_BASE, wrapped)
+            check_tdd_commits.is_generated_region_change(MIRROR, _PY_BASE, wrapped)
         )
 
     def test_deleting_the_region_is_not(self):
@@ -1051,7 +1059,85 @@ class GeneratedRegionChangeTest(unittest.TestCase):
             if "generated model config" not in line
         ) + "\n"
         self.assertFalse(
-            check_tdd_commits.is_generated_region_change(_PY_GENERATED, without)
+            check_tdd_commits.is_generated_region_change(MIRROR, _PY_GENERATED, without)
+        )
+
+    def test_an_unproven_path_is_never_a_generated_change(self):
+        # The hole this exemption must not open: markers are comment lines,
+        # so any file can carry them. If marker-shape alone were enough, one
+        # ordinary reviewed commit adding them to an arbitrary file would buy
+        # that file a permanent untested edit channel — every later edit
+        # strictly inside the markers skipping the RED-test requirement, with
+        # no generator and no `--check` anywhere near it.
+        before = '''"""Totally unrelated helper."""
+
+# --- BEGIN generated evil (from nowhere) ---
+def is_authorized(user):
+    return False
+# --- END generated evil (from nowhere) ---
+'''
+        after = before.replace("return False", "return True")
+        # Confined to the region by shape — and still not exempt, because
+        # nothing proves what the region says.
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(UNPROVEN, before, after)
+        )
+        self.assertEqual(
+            check_tdd_commits.classify_path(UNPROVEN, before, after), "code"
+        )
+
+    def test_a_neighbour_of_a_proved_file_is_not_covered(self):
+        # The proof is per-file. Sitting in the same directory as a mirror,
+        # or being named like one, proves nothing.
+        for path in ("scripts/model_fallback_extra.py", "scripts/model_fallbac.py",
+                     "vendor/scripts/model_fallback.py"):
+            with self.subTest(path=path):
+                self.assertFalse(check_tdd_commits.has_generated_region_proof(path))
+                self.assertEqual(
+                    check_tdd_commits.classify_path(
+                        path, _PY_GENERATED, _PY_GENERATED_REGENERATED
+                    ),
+                    "code",
+                )
+
+    def test_every_proved_path_is_a_real_file_with_a_real_generator(self):
+        # A proof that does not exist is not a proof. Each entry must name a
+        # live file that actually carries generated markers, and a command
+        # whose script is in this repo — otherwise the allowlist drifts into
+        # exempting files nothing checks.
+        proofs = check_tdd_commits._GENERATED_REGION_PROOFS
+        self.assertTrue(proofs, "the allowlist must not be empty")
+        for path, command in proofs.items():
+            with self.subTest(path=path):
+                target = ROOT / path
+                self.assertTrue(target.is_file(), f"{path} is not in the repo")
+                self.assertIn("BEGIN generated", target.read_text())
+                self.assertIn("--check", command)
+                generator = command.split()[1]
+                self.assertTrue(
+                    (ROOT / generator).is_file(),
+                    f"{path}'s proof names a generator that is not here: {generator}",
+                )
+
+    def test_the_card_validator_mirror_is_covered(self):
+        # The repo's other proved mirror: sync_fallback_map.py renders
+        # _FALLBACK_REPO_MAP into validate_card.py from config/repo-map.json.
+        source = (ROOT / CARD_VALIDATOR).read_text()
+        self.assertIn("BEGIN generated repo mirror", source)
+        regenerated = source.replace(
+            '"bureau-pipeline": "dreadnought-foundry/bureau-pipeline",',
+            '"bureau-pipeline": "dreadnought-foundry/bureau-pipeline",\n'
+            '    "newco": "dreadnought-foundry/newco",',
+        )
+        self.assertNotEqual(source, regenerated, "fixture no longer matches")
+        self.assertTrue(
+            check_tdd_commits.is_generated_region_change(
+                CARD_VALIDATOR, source, regenerated
+            )
+        )
+        self.assertEqual(
+            check_tdd_commits.classify_path(CARD_VALIDATOR, source, regenerated),
+            "docs",
         )
 
     def test_the_real_model_fallback_mirror_is_covered(self):
@@ -1066,7 +1152,7 @@ class GeneratedRegionChangeTest(unittest.TestCase):
         )
         self.assertNotEqual(source, regenerated, "fixture no longer matches")
         self.assertTrue(
-            check_tdd_commits.is_generated_region_change(source, regenerated)
+            check_tdd_commits.is_generated_region_change(MIRROR, source, regenerated)
         )
         self.assertEqual(
             check_tdd_commits.classify_path(
@@ -1116,6 +1202,23 @@ class ClassifyPathGeneratedRegionTest(unittest.TestCase):
         self.assertEqual(
             check_tdd_commits.classify_path(
                 "scripts/reconcile.py", _PY_BASE, _PY_PROSE_ONLY
+            ),
+            "docs",
+        )
+
+    def test_a_path_with_no_proving_generator_stays_code(self):
+        # Same content, same markers, same confinement as the exempt case
+        # above — only the path differs, and the path is what carries the
+        # proof. This is the whole of the scoping rule in one assertion.
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                UNPROVEN, _PY_GENERATED, _PY_GENERATED_REGENERATED
+            ),
+            "code",
+        )
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                MIRROR, _PY_GENERATED, _PY_GENERATED_REGENERATED
             ),
             "docs",
         )
@@ -1182,6 +1285,33 @@ class GeneratedRegionCliTest(GitRepoMixin, unittest.TestCase):
         p = self.run_check()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
 
+    def test_the_two_commit_marker_squat_exits_1(self):
+        # The exploitable shape, end to end: commit 1 (on the base branch, an
+        # ordinary reviewable `code` commit) adds a file carrying the marker
+        # comments; commit 2 — the only commit the gate sees — hand-edits the
+        # behaviour strictly INSIDE those markers, no test, no generator.
+        # Confinement alone must not clear the gate.
+        squatted = '''"""An ordinary helper that happens to carry markers."""
+
+# --- BEGIN generated evil (from nowhere) ---
+def is_authorized(user):
+    return False
+# --- END generated evil (from nowhere) ---
+'''
+        self.write("scripts/evil_auth.py", squatted)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: add evil_auth with its markers")
+        self.git("checkout", "-q", "-b", "agent/DRE-3896-squat")
+        self.write(
+            "scripts/evil_auth.py",
+            squatted.replace("return False", "return True"),
+        )
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: regenerate evil_auth (hand edited)")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
+
     def test_a_region_without_its_end_marker_exits_1(self):
         self.seed_mirror()
         self.git("checkout", "-q", "-b", "agent/DRE-3896-unterminated")
@@ -1205,6 +1335,9 @@ class GeneratedRegionStandardTest(unittest.TestCase):
         self.assertIn("generated region", bullet)
         # …and the proof that makes the exemption safe, named.
         self.assertIn("sync_model_config.py --check", bullet)
+        # …and the scope of that proof. The standard claiming an exemption
+        # wider than the code grants is the document the code contradicts.
+        self.assertIn("_GENERATED_REGION_PROOFS", bullet)
 
 
 class WorkflowWiringTest(unittest.TestCase):
