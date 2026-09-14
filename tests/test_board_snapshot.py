@@ -22,8 +22,13 @@ WHAT IS UNDER TEST:
     blocker lines live anywhere in them), `user` reduced to its opaque `id`,
     and a card carrying exactly the contract keys — a key the sweep never reads
     is not in the file.
-  * The committed fixture itself: present, under 4 MB, and every card in it
-    validating against the contract keys spelled out below.
+  * The redaction: an email address is taken out of every free-text field
+    before it is written, and before the 200-character cut. This repository is
+    PUBLIC, a committed snapshot is permanent, and the board's prose quotes
+    real customer and personal addresses that no structural scrub can reach.
+  * The committed fixture itself: present, under 4 MB, carrying no address in
+    any free text, and every card in it validating against the contract keys
+    spelled out below.
 
 The contract keys are spelled out HERE, literally, rather than imported from
 the script: a test that reads the writer's own constant proves the writer
@@ -35,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -240,6 +246,69 @@ def test_a_description_is_kept_whole():
 def test_a_null_description_stays_null():
     assert board_snapshot.scrub_card(_raw_card("DRE-1", description=None))[
         "description"] is None
+
+
+# ---------------------------------------------------------------------------
+# the redaction: free text is where the addresses actually are
+# ---------------------------------------------------------------------------
+def test_an_address_in_a_description_is_redacted():
+    """The `user` scrub reaches a name and an address Linear hands over as a
+    FIELD. An address a human typed into a description is prose, and this
+    repository is public — so it is redacted too."""
+    card = board_snapshot.scrub_card(_raw_card(
+        "DRE-1",
+        description="ask yannan@oncor.com, cc hagen@oncor.com for the export",
+    ))
+    assert "@oncor.com" not in card["description"]
+    assert "yannan" not in card["description"]
+    assert card["description"] == (
+        f"ask {board_snapshot.REDACTED_EMAIL}, cc {board_snapshot.REDACTED_EMAIL} "
+        "for the export"
+    )
+
+
+def test_an_address_in_a_title_is_redacted():
+    card = board_snapshot.scrub_card(_raw_card("DRE-1", title="chase sid@vericorr.com"))
+    assert "vericorr.com" not in card["title"]
+    assert card["title"] == f"chase {board_snapshot.REDACTED_EMAIL}"
+
+
+def test_an_address_in_a_comment_body_is_redacted():
+    scrubbed = board_snapshot.scrub_comment(_comment("mail chiefitguru@gmail.com back"))
+    assert scrubbed["body"] == f"mail {board_snapshot.REDACTED_EMAIL} back"
+
+
+def test_an_address_is_redacted_before_the_cut_not_after():
+    """Cutting first would leave the front half of an address sitting at the
+    200-character boundary, and half an address is still the person."""
+    body = "word " * 38 + "marko@vericorr.com " + "y" * 50  # address straddles 200
+    assert body.index("marko@") < 200 < body.index("marko@") + len("marko@vericorr.com")
+    scrubbed = board_snapshot.scrub_comment(_comment(body))
+    assert "marko" not in scrubbed["body"]
+    assert "@vericorr" not in scrubbed["body"]
+    # what lands on the boundary is the placeholder, cut — never the address
+    assert scrubbed["body"].endswith("<redacted-")
+    assert len(scrubbed["body"]) == 200
+
+
+def test_redaction_leaves_the_at_signs_the_board_is_full_of_alone():
+    """`name@ref` is how this board spells a plugin, a channel and a tag. None
+    of them is a person, and eating them would change what the replay reads."""
+    kept = (
+        "claude plugin update dreadnought-standards@dreadnought",
+        "the fleet rides bureau-pipeline@main, never a tag",
+        "pin agent-bureau@v3 and @mention the operator",
+        "🧭 routing-verdict: FLEET",
+    )
+    for text in kept:
+        assert board_snapshot.redact_emails(text) == text
+
+
+def test_redaction_keeps_none_as_none_and_empty_as_empty():
+    """A card with no description is a different thing from one with an empty
+    description, and the contract writes the difference down."""
+    assert board_snapshot.redact_emails(None) is None
+    assert board_snapshot.redact_emails("") == ""
 
 
 def test_a_comment_user_keeps_only_its_id():
@@ -522,9 +591,35 @@ def test_every_card_in_the_fixture_validates_against_the_contract(snapshot):
             assert node["toState"] is None or _valid_ref(node["toState"], {"name"})
 
 
-def test_the_fixture_carries_no_display_name_and_no_email(snapshot):
-    """Structural, not a string search: the only thing written about a person
-    is the opaque id, so there is no field a name or an address could be in."""
+def test_the_fixture_gives_a_comment_author_no_field_but_its_id(snapshot):
+    """Structural: the only thing written about a comment's author is the
+    opaque id, so there is no FIELD a name or an address could be in.
+
+    Named for what it checks, and no more. It used to be called "carries no
+    display name and no email", which is what a reader would ask of it — and
+    it passed green over a fixture holding eighteen real addresses, because an
+    address in a description is prose, not a field. The string search that
+    actually answers that question is the test below."""
     for card in snapshot["cards"]:
         for node in card["comments"]["nodes"]:
             assert node["user"] is None or list(node["user"]) == ["id"]
+
+
+def test_the_fixture_carries_no_email_address_in_any_free_text(snapshot):
+    """The one that has to be a string search. This repository is PUBLIC and a
+    committed snapshot is permanent: an address the board's prose quotes is a
+    real customer's, and the structural test above cannot see it.
+
+    Scanned independently of `EMAIL_RE` — a bug in the writer's own pattern
+    would otherwise make both the redaction and its proof blind in the same
+    place."""
+    email_like = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+    found = []
+    for card in snapshot["cards"]:
+        for field in ("title", "description"):
+            found += [(card["identifier"], field, hit)
+                      for hit in email_like.findall(card.get(field) or "")]
+        for node in card["comments"]["nodes"]:
+            found += [(card["identifier"], "comment", hit)
+                      for hit in email_like.findall(node.get("body") or "")]
+    assert not found, f"email addresses in the committed fixture: {found[:10]}"

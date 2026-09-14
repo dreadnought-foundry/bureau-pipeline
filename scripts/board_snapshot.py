@@ -32,16 +32,25 @@ whoever calls it.
 
 ## The scrub (a pure function, `scrub_card`)
 
+  * **Email addresses are redacted out of every free-text field** — titles,
+    descriptions and comment bodies alike (`redact_emails`, `EMAIL_RE`). This
+    repository is PUBLIC and a snapshot is a permanent commit: the board's free
+    text quotes real customer and personal contact addresses, and the
+    structured scrub below does not reach them, because they are prose rather
+    than a field. Redaction happens BEFORE the 200-character cut, so the cut
+    can never leave half an address behind. Nothing the sweep reads is an
+    address, so replacing one with `REDACTED_EMAIL` costs the replay nothing.
   * **Comment bodies are cut to their first 200 characters.** Every marker
     this pipeline reads is anchored at the START of a body — the routing
     verdict, the run receipts, the critic's markers, the park receipt — so the
     prefix is the part the sweep reads, and the rest is what makes a board
     snapshot a megabyte per hundred cards.
-  * **Descriptions are kept whole.** The sweep reads growth records,
-    wave-commitment blocks and `Blocked by:` lines ANYWHERE in a description;
-    a truncated one would change what the replay sees. (Linear's list api
-    already truncates a description at 500 characters — that truncation is
-    part of what the sweep itself sees, and is left exactly as it arrives.)
+  * **Descriptions are kept whole** (redacted, but never truncated). The sweep
+    reads growth records, wave-commitment blocks and `Blocked by:` lines
+    ANYWHERE in a description; a truncated one would change what the replay
+    sees. (Linear's list api already truncates a description at 500 characters
+    — that truncation is part of what the sweep itself sees, and is left
+    exactly as it arrives.)
   * **A user is its `id` and nothing else.** The id is opaque and it is the
     authorship credential `comment_records` reads; the display name and the
     email are neither, and are not written.
@@ -77,6 +86,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -122,6 +132,17 @@ HISTORY_PAGE = 50
 #: A comment body is cut to this many characters. Every marker this pipeline
 #: reads is anchored at the start of a body.
 COMMENT_BODY_CHARS = 200
+
+#: An email address in free text. Deliberately the ordinary shape — a local
+#: part, an `@`, a dotted domain with a letters-only last label — because the
+#: things this must NOT eat are the `name@ref` forms the board's prose is full
+#: of (`dreadnought-standards@dreadnought`, `bureau-pipeline@main`,
+#: `agent-bureau@v3`), none of which carry a dotted letter TLD.
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+#: What an address becomes. A fixed token, not derived from the address in any
+#: way: a hash or a kept domain would still be the customer, one lookup later.
+REDACTED_EMAIL = "<redacted-email>"
 
 #: What taking the snapshot may cost in Linear requests. The card's number: a
 #: snapshot is a fixture-refresh a person runs, not a sweep, but it draws on
@@ -218,6 +239,19 @@ def _counted_seam():
 # --------------------------------------------------------------------------- #
 
 
+def redact_emails(text: str | None) -> str | None:
+    """Every email-shaped string in `text`, replaced by `REDACTED_EMAIL`.
+
+    The structured scrub below reaches a person's name and address when Linear
+    hands them over as FIELDS. It cannot reach the ones a human typed into a
+    description or a comment — "ask yannan@example.com for the export" is prose
+    to Linear and prose to us, and this repository is public. So the free text
+    is redacted too, and `None` stays `None` (a card with no description is a
+    different thing from one with an empty one).
+    """
+    return None if text is None else EMAIL_RE.sub(REDACTED_EMAIL, text)
+
+
 def _named(node) -> dict | None:
     """`{name}` off a node Linear may answer null for."""
     return None if node is None else {"name": node.get("name")}
@@ -229,11 +263,17 @@ def _identified(node) -> dict | None:
 
 
 def scrub_comment(node: dict) -> dict:
-    """One comment: its first `COMMENT_BODY_CHARS` characters, when it was
-    posted, and WHO by as an opaque id — no display name, no email."""
+    """One comment: its first `COMMENT_BODY_CHARS` characters with any address
+    redacted out, when it was posted, and WHO by as an opaque id — no display
+    name, no email, in the `user` field OR in the body.
+
+    Redacted BEFORE the cut, never after: cutting first would leave the front
+    half of an address sitting at the 200-character boundary, which is still
+    the person.
+    """
     user = node.get("user")
     return {
-        "body": (node.get("body") or "")[:COMMENT_BODY_CHARS],
+        "body": redact_emails(node.get("body") or "")[:COMMENT_BODY_CHARS],
         "createdAt": node.get("createdAt"),
         "user": None if user is None else {"id": user.get("id")},
     }
@@ -254,10 +294,12 @@ def scrub_card(card: dict) -> dict:
     return {
         "id": card.get("id"),
         "identifier": card.get("identifier"),
-        "title": card.get("title"),
+        "title": redact_emails(card.get("title")),
         # whole, never cut: the sweep reads growth records, wave-commitment
-        # blocks and blocker lines anywhere in a description.
-        "description": card.get("description"),
+        # blocks and blocker lines anywhere in a description. Redacted all the
+        # same — this file is committed to a public repo, and the addresses the
+        # board's prose quotes are real customers'.
+        "description": redact_emails(card.get("description")),
         "createdAt": card.get("createdAt"),
         "updatedAt": card.get("updatedAt"),
         "state": _named(card.get("state")),
