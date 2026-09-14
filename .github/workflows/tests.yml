@@ -250,14 +250,17 @@ jobs:
           # branch name must not become shell input.
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          # The author decides the dependabot exemption (DRE-2049) —
-          # GitHub-attested identity, never the spoofable branch name.
+          # The author decides BOTH exemptions — dependabot (DRE-2049) and the
+          # nightly standards-sync PR (DRE-3885) — because this is the
+          # GitHub-attested identity, never the spoofable branch name and never
+          # a commit's own author line, which anyone can set to anything. Where
+          # no workflow threads it, the check reads the same field out of the
+          # event payload at GITHUB_EVENT_PATH.
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          # The head branch is HALF of the standards-sync exemption (DRE-3885);
-          # the other half is every commit's own author, read from git, so the
-          # branch name alone exempts nothing. Threaded explicitly here;
-          # elsewhere in the fleet the check falls back to GITHUB_HEAD_REF,
-          # which GitHub sets itself on every pull_request run.
+          # The head branch NARROWS the standards-sync exemption to that one
+          # nightly job (DRE-3885); on its own it grants nothing. Threaded
+          # explicitly here; elsewhere in the fleet the check falls back to
+          # GITHUB_HEAD_REF, which GitHub sets itself on every pull_request run.
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           python3 scripts/check_tdd_commits.py "origin/$BASE_REF" "$HEAD_SHA"

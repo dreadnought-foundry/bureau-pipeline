@@ -425,9 +425,13 @@ class DependabotExemptionTest(unittest.TestCase):
             self.assertFalse(check_tdd_commits.is_dependabot_author(login))
 
 
+BOT = "agent-bureau-bot[bot]"
+
+
 class StandardsSyncExemptionTest(unittest.TestCase):
     """DRE-3885: the nightly standards-sync PR is exempt, the way a dependabot
-    bump is — but matched by BRANCH **and** AUTHOR together, never by path.
+    bump is — and, like dependabot's, decided by the GitHub-ATTESTED login that
+    opened the PR, never by path.
 
     The job (agent-bureau's `standards-sync.yml`) opens one PR a night on
     `bot/standards-sync` carrying two generated manifests and one instructions
@@ -436,29 +440,32 @@ class StandardsSyncExemptionTest(unittest.TestCase):
     and cannot fix itself: the finding is the commit ORDER, which no added
     commit clears (DRE-2694).
 
-    Both halves are load-bearing. A path exemption for `plugins/**` would let
-    real plugin code skip the discipline; the branch alone would exempt
-    anything anyone pushes there; the author alone would exempt every PR this
-    bot opens, which is most of the fleet's PRs."""
+    The branch and the per-commit git author NARROW the exemption to that one
+    job — the bot authors most of the fleet's PRs, and a human commit riding
+    along on the branch must end it — but neither authenticates anything: a
+    branch name is chosen by whoever pushes it and `git commit --author` asks
+    nobody's permission. Keying the exemption on those alone let ANY PR opener
+    take it (found in review of this card, reproduced below in
+    `test_forged_commit_authors_do_not_exempt_a_stranger_s_pr`)."""
 
-    def test_the_bot_login_shapes_all_count(self):
+    def test_the_bot_name_shapes_all_count(self):
         # Same normalization as the dependabot exemption: GitHub surfaces a Bot
         # identity as "agent-bureau-bot" (GraphQL), "agent-bureau-bot[bot]"
         # (REST / the git author line a workflow commit carries) or
         # "app/agent-bureau-bot" (gh's bot marker) — one actor, three spellings.
-        for author in (
+        for name in (
             "agent-bureau-bot",
             "agent-bureau-bot[bot]",
             "app/agent-bureau-bot",
         ):
-            with self.subTest(author=author):
-                self.assertTrue(check_tdd_commits.is_standards_sync_author(author))
+            with self.subTest(name=name):
+                self.assertTrue(check_tdd_commits.names_standards_sync_bot(name))
 
     def test_other_identities_are_not_the_sync_bot(self):
         # The pool bots and the merging identity are DIFFERENT actors, and the
         # match is exact on the normalized login so none of them inherits the
         # exemption (the DRE-2020 lesson, read the other way round).
-        for author in (
+        for name in (
             "agent-bureau-bot-3",
             "agent-bureau-qa-bot",
             "not-agent-bureau-bot",
@@ -468,32 +475,58 @@ class StandardsSyncExemptionTest(unittest.TestCase):
             "",
             None,
         ):
-            with self.subTest(author=author):
-                self.assertFalse(check_tdd_commits.is_standards_sync_author(author))
+            with self.subTest(name=name):
+                self.assertFalse(check_tdd_commits.names_standards_sync_bot(name))
 
-    def test_the_sync_branch_authored_entirely_by_the_bot_is_exempt(self):
+    def test_the_attested_bot_on_the_sync_branch_is_exempt(self):
         self.assertTrue(
             check_tdd_commits.is_standards_sync_pr(
-                "bot/standards-sync", ["agent-bureau-bot[bot]"] * 2
+                "bot/standards-sync", BOT, [BOT] * 2
             )
         )
 
+    def test_forged_commit_authors_do_not_exempt_a_stranger_s_pr(self):
+        # THE finding this exemption was rewritten for. Both narrowing signals
+        # are free text: anyone who can open a PR can name their branch
+        # `bot/standards-sync` and run `git commit --author "agent-bureau-bot
+        # [bot] <x>"`. With the attested opener required, the forgery buys
+        # nothing — and if this assertion is inverted, untested code merges
+        # behind the bot's name.
+        for opener in ("mallory", "agent-bureau-bot-3", "dependabot[bot]"):
+            with self.subTest(pr_author=opener):
+                self.assertFalse(
+                    check_tdd_commits.is_standards_sync_pr(
+                        "bot/standards-sync", opener, [BOT, BOT]
+                    )
+                )
+
+    def test_an_unknown_opener_is_not_exempt(self):
+        # Fail-closed: nothing threaded PR_AUTHOR and no event payload was
+        # readable (a pre-push local run), so there is no identity to trust.
+        for opener in (None, ""):
+            with self.subTest(pr_author=opener):
+                self.assertFalse(
+                    check_tdd_commits.is_standards_sync_pr(
+                        "bot/standards-sync", opener, [BOT]
+                    )
+                )
+
     def test_one_foreign_commit_on_the_sync_branch_ends_the_exemption(self):
-        # EVERY commit, not the first or the last: a branch anyone can push to
-        # would otherwise be a way to land unchecked code behind the bot's name.
+        # EVERY commit, not the first or the last: an operator's own commit
+        # pushed into the nightly PR is work the discipline still covers.
         self.assertFalse(
             check_tdd_commits.is_standards_sync_pr(
-                "bot/standards-sync", ["agent-bureau-bot[bot]", "alice"]
+                "bot/standards-sync", BOT, [BOT, "alice"]
             )
         )
         self.assertFalse(
             check_tdd_commits.is_standards_sync_pr(
-                "bot/standards-sync", ["alice", "agent-bureau-bot[bot]"]
+                "bot/standards-sync", BOT, ["alice", BOT]
             )
         )
 
     def test_the_bot_on_any_other_branch_is_still_checked(self):
-        # This bot authors nearly every PR in the fleet — the branch is what
+        # This bot opens nearly every PR in the fleet — the branch is what
         # narrows the exemption to the one nightly job.
         for ref in (
             "agent/DRE-3885-standards-sync-tdd-exemption",
@@ -506,17 +539,69 @@ class StandardsSyncExemptionTest(unittest.TestCase):
         ):
             with self.subTest(head_ref=ref):
                 self.assertFalse(
-                    check_tdd_commits.is_standards_sync_pr(
-                        ref, ["agent-bureau-bot[bot]"]
-                    )
+                    check_tdd_commits.is_standards_sync_pr(ref, BOT, [BOT])
                 )
 
     def test_no_commits_is_not_exempt(self):
         # Fail-closed: `all()` over an empty list is True, which would exempt a
         # branch whose commits could not be read at all.
         self.assertFalse(
-            check_tdd_commits.is_standards_sync_pr("bot/standards-sync", [])
+            check_tdd_commits.is_standards_sync_pr("bot/standards-sync", BOT, [])
         )
+
+
+class AttestedPrAuthorTest(unittest.TestCase):
+    """DRE-3885: where the one trustworthy signal comes from. `PR_AUTHOR` is
+    `github.event.pull_request.user.login` threaded by a workflow; the fallback
+    is the same field read out of the event payload GitHub itself writes, so
+    the exemption reaches agent-bureau — which runs this checker from
+    `.bureau-pipeline/scripts/` through a workflow this repo cannot edit."""
+
+    def _event(self, payload):
+        f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        self.addCleanup(os.unlink, f.name)
+        with f:
+            f.write(payload)
+        return f.name
+
+    def test_threaded_pr_author_wins(self):
+        self.assertEqual(
+            check_tdd_commits.attested_pr_author(
+                {"PR_AUTHOR": BOT,
+                 "GITHUB_EVENT_PATH": self._event(
+                     '{"pull_request": {"user": {"login": "alice"}}}')}
+            ),
+            BOT,
+        )
+
+    def test_the_event_payload_answers_when_nothing_threads_it(self):
+        path = self._event('{"pull_request": {"user": {"login": "%s"}}}' % BOT)
+        self.assertEqual(
+            check_tdd_commits.attested_pr_author({"GITHUB_EVENT_PATH": path}),
+            BOT,
+        )
+        # An empty PR_AUTHOR is "not threaded", not "authored by nobody".
+        self.assertEqual(
+            check_tdd_commits.attested_pr_author(
+                {"PR_AUTHOR": "", "GITHUB_EVENT_PATH": path}),
+            BOT,
+        )
+
+    def test_unreadable_or_non_pull_request_payloads_answer_nothing(self):
+        # Fail-closed, every way it can go wrong: no variable at all, a path
+        # that does not exist, JSON that does not parse, a push event's payload
+        # (no `pull_request` key), and a payload whose login is not a string.
+        cases = {
+            "nothing set": {},
+            "missing file": {"GITHUB_EVENT_PATH": "/nonexistent/event.json"},
+            "not json": {"GITHUB_EVENT_PATH": self._event("not json {")},
+            "push event": {"GITHUB_EVENT_PATH": self._event('{"ref": "main"}')},
+            "login not a string": {"GITHUB_EVENT_PATH": self._event(
+                '{"pull_request": {"user": {"login": null}}}')},
+        }
+        for label, env in cases.items():
+            with self.subTest(case=label):
+                self.assertIsNone(check_tdd_commits.attested_pr_author(env))
 
 
 class GitRepoMixin:
@@ -555,11 +640,17 @@ class GitRepoMixin:
         self.git("commit", "-q", "-m", msg, *extra)
 
     def run_check(self, base="main", head="HEAD", author=None, head_ref=None,
-                  github_head_ref=None):
+                  github_head_ref=None, event_author=None):
+        """Drive the script the way CI does. `author` threads PR_AUTHOR;
+        `event_author` instead writes a `pull_request` event payload and points
+        GITHUB_EVENT_PATH at it, the way the runner does for a workflow that
+        threads nothing."""
         env = {**os.environ}
         # Popped, never inherited: this suite runs inside a pull_request
-        # workflow, where GitHub sets GITHUB_HEAD_REF for real.
-        for var in ("PR_AUTHOR", "HEAD_REF", "GITHUB_HEAD_REF"):
+        # workflow, where GitHub sets GITHUB_HEAD_REF and GITHUB_EVENT_PATH for
+        # real — and that payload names whoever opened THIS PR.
+        for var in ("PR_AUTHOR", "HEAD_REF", "GITHUB_HEAD_REF",
+                    "GITHUB_EVENT_PATH"):
             env.pop(var, None)
         if author is not None:
             env["PR_AUTHOR"] = author
@@ -567,6 +658,12 @@ class GitRepoMixin:
             env["HEAD_REF"] = head_ref
         if github_head_ref is not None:
             env["GITHUB_HEAD_REF"] = github_head_ref
+        if event_author is not None:
+            payload = self.repo / "event.json"
+            payload.write_text(
+                '{"pull_request": {"user": {"login": "%s"}}}' % event_author
+            )
+            env["GITHUB_EVENT_PATH"] = str(payload)
         return subprocess.run(
             [sys.executable, str(SCRIPT), base, head],
             cwd=self.repo, capture_output=True, text=True, env=env,
@@ -663,8 +760,6 @@ class GitCliTest(GitRepoMixin, unittest.TestCase):
 
     # --- standards-sync exemption end-to-end (DRE-3885) --------------------
 
-    BOT = "agent-bureau-bot[bot]"
-
     def _standards_sync_commit(self, msg, author):
         """The nightly job's own commit, reproduced: two generated manifests
         and the instructions file, in one commit, with no test anywhere."""
@@ -681,51 +776,84 @@ class GitCliTest(GitRepoMixin, unittest.TestCase):
         self.git("commit", "-q", "-m", msg,
                  "--author", f"{author} <{author}@users.noreply.github.com>")
 
-    def test_sync_branch_authored_by_the_bot_exits_0_without_a_test_commit(self):
+    def test_sync_pr_opened_by_the_bot_exits_0_without_a_test_commit(self):
         # The live shape: one commit, code-classified manifests, no RED test —
         # the failure that repeated nightly and cannot fix itself.
         self.git("checkout", "-q", "-b", "bot/standards-sync")
-        self._standards_sync_commit("chore: sync dreadnought standards", self.BOT)
-        p = self.run_check(head_ref="bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", BOT)
+        p = self.run_check(head_ref="bot/standards-sync", author=BOT)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("exempt", p.stdout)
         self.assertIn("bot/standards-sync", p.stdout)
 
-    def test_sync_branch_with_a_foreign_commit_is_still_checked(self):
-        # Branch AND author: one commit by somebody else and the gate is back.
+    def test_a_forged_sync_branch_and_author_do_not_exempt_a_stranger_s_pr(self):
+        # The review finding, reproduced end-to-end against the real script:
+        # anyone can name a branch `bot/standards-sync` and pass
+        # `git commit --author "agent-bureau-bot[bot] <…>"`. The only thing
+        # they cannot fake is who GitHub says opened the PR, so a made-up
+        # feature with no test is checked like any other.
         self.git("checkout", "-q", "-b", "bot/standards-sync")
-        self._standards_sync_commit("chore: sync dreadnought standards", self.BOT)
+        self.add_commit("scripts/backdoor.py", "feat: totally not a backdoor",
+                        author=BOT)
+        p = self.run_check(head_ref="bot/standards-sync", author="mallory")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
+        self.assertNotIn("exempt", p.stdout)
+
+    def test_sync_branch_with_a_foreign_commit_is_still_checked(self):
+        # Every commit: one by somebody else and the gate is back, even when
+        # the bot did open the PR.
+        self.git("checkout", "-q", "-b", "bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", BOT)
         self.add_commit("scripts/widget.py", "feat: smuggled in", author="alice")
-        p = self.run_check(head_ref="bot/standards-sync")
+        p = self.run_check(head_ref="bot/standards-sync", author=BOT)
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
 
     def test_the_bot_on_another_branch_is_still_checked(self):
-        # The same author, an ordinary agent branch: the discipline holds.
+        # The same opener, an ordinary agent branch: the discipline holds.
         self.git("checkout", "-q", "-b", "agent/DRE-9-x")
         self.add_commit("scripts/widget.py", "feat(DRE-9): impl first",
-                        author=self.BOT)
-        p = self.run_check(head_ref="agent/DRE-9-x", author=self.BOT)
+                        author=BOT)
+        p = self.run_check(head_ref="agent/DRE-9-x", author=BOT)
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
 
-    def test_the_branch_can_arrive_on_githubs_own_head_ref_variable(self):
+    def test_both_signals_can_arrive_from_githubs_own_run_context(self):
         # The fleet runs this check from `.bureau-pipeline/scripts/` through
         # each product repo's OWN workflow, which this PR cannot edit. GitHub
-        # sets GITHUB_HEAD_REF itself on every pull_request run, so the
-        # exemption reaches agent-bureau — where the nightly PR is opened —
-        # without a workflow change there.
+        # sets GITHUB_HEAD_REF and writes the event payload itself on every
+        # pull_request run, so the exemption reaches agent-bureau — where the
+        # nightly PR is opened — with nothing threaded there.
         self.git("checkout", "-q", "-b", "bot/standards-sync")
-        self._standards_sync_commit("chore: sync dreadnought standards", self.BOT)
-        p = self.run_check(github_head_ref="bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", BOT)
+        p = self.run_check(github_head_ref="bot/standards-sync",
+                           event_author=BOT)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("exempt", p.stdout)
 
-    def test_the_sync_branch_with_no_branch_env_at_all_is_still_checked(self):
-        # Fail-closed: with neither variable set (the pre-push local run) the
-        # checker cannot know the branch, so it checks.
+    def test_the_event_payload_names_the_opener_not_the_committer(self):
+        # Same run context, but GitHub says someone else opened the PR — the
+        # payload is the attested answer and it overrides the commit line.
         self.git("checkout", "-q", "-b", "bot/standards-sync")
-        self._standards_sync_commit("chore: sync dreadnought standards", self.BOT)
+        self._standards_sync_commit("chore: sync dreadnought standards", BOT)
+        p = self.run_check(github_head_ref="bot/standards-sync",
+                           event_author="mallory")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_the_sync_branch_with_no_run_context_at_all_is_still_checked(self):
+        # Fail-closed: with nothing set (the pre-push local run) the checker
+        # knows neither the branch nor the opener, so it checks.
+        self.git("checkout", "-q", "-b", "bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", BOT)
         p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_the_branch_alone_does_not_exempt_without_an_opener(self):
+        # The branch is threaded but nothing names the opener: refused.
+        self.git("checkout", "-q", "-b", "bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", BOT)
+        p = self.run_check(head_ref="bot/standards-sync")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
 
 
