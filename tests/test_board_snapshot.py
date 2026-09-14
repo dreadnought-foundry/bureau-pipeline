@@ -1,5 +1,14 @@
 """RED-first: the board snapshot — the real board, in the shape the sweep
-reads, committed as a fixture (DRE-3638).
+reads (DRE-3638) — and, since DRE-3918, a SYNTHETIC board in that shape.
+
+DRE-3918: THE REAL BOARD IS NEVER COMMITTED HERE. This repository is public.
+DRE-3638 committed the real 2026-09-12 board (every card's text, customer names
+and, in one commit, real addresses) and it had to be taken back out. The tool
+still reads the real board for local use, but refuses to write it anywhere in
+this repository, and the tests below run on `board_snapshot.synthetic()`: the
+same contract and the same shapes, and no real words. The guard in
+`tests/test_no_real_board_in_repo.py` fails on any board snapshot or any real
+address under `tests/fixtures/`.
 
 WHY THIS EXISTS. The CI ceiling on the sweep's Linear spend passes at 30 while
 a live pass costs 65 on bureau-pipeline and 92 on agent-bureau, because the
@@ -26,13 +35,14 @@ WHAT IS UNDER TEST:
     before it is written, and before the 200-character cut. This repository is
     PUBLIC, a committed snapshot is permanent, and the board's prose quotes
     real customer and personal addresses that no structural scrub can reach.
-  * The committed fixture itself: present, under 4 MB, carrying no address in
-    any free text, and every card in it validating against the contract keys
-    spelled out below.
+  * The refusal: `take --out` inside this repository exits 3 before reading.
+  * The synthetic board: deterministic, under 4 MB, no real words and no
+    address, every card validating against the contract keys spelled out
+    below, and carrying the shapes a real board has.
 
 The contract keys are spelled out HERE, literally, rather than imported from
 the script: a test that reads the writer's own constant proves the writer
-agrees with itself. The sibling replay test reads the same file.
+agrees with itself. The sibling replay test reads `board_snapshot.synthetic()`.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_board_snapshot.py -v
 """
@@ -57,9 +67,10 @@ import board_snapshot  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 
-#: The committed fixture, at the path the contract fixes (shared with the
-#: replay-test sibling).
-FIXTURE = ROOT / "tests" / "fixtures" / "board-snapshot-2026-09-12.json"
+#: Where a real snapshot must NEVER be written (DRE-3918): anywhere inside this
+#: repository, which is public. The 2026-09-12 real board was committed here by
+#: DRE-3638 and had to be taken back out.
+REPO_ROOT = ROOT
 
 #: The contract, spelled out. Every card in the snapshot carries exactly these
 #: keys, in the shape the sweep's board reads return them.
@@ -257,10 +268,10 @@ def test_an_address_in_a_description_is_redacted():
     repository is public — so it is redacted too."""
     card = board_snapshot.scrub_card(_raw_card(
         "DRE-1",
-        description="ask yannan@oncor.com, cc hagen@oncor.com for the export",
+        description="ask ada@customer.example.com, cc bo@customer.example.com for the export",
     ))
-    assert "@oncor.com" not in card["description"]
-    assert "yannan" not in card["description"]
+    assert "@customer.example.com" not in card["description"]
+    assert "ada" not in card["description"]
     assert card["description"] == (
         f"ask {board_snapshot.REDACTED_EMAIL}, cc {board_snapshot.REDACTED_EMAIL} "
         "for the export"
@@ -268,24 +279,24 @@ def test_an_address_in_a_description_is_redacted():
 
 
 def test_an_address_in_a_title_is_redacted():
-    card = board_snapshot.scrub_card(_raw_card("DRE-1", title="chase sid@vericorr.com"))
-    assert "vericorr.com" not in card["title"]
+    card = board_snapshot.scrub_card(_raw_card("DRE-1", title="chase cy@vendor.example.org"))
+    assert "vendor.example.org" not in card["title"]
     assert card["title"] == f"chase {board_snapshot.REDACTED_EMAIL}"
 
 
 def test_an_address_in_a_comment_body_is_redacted():
-    scrubbed = board_snapshot.scrub_comment(_comment("mail chiefitguru@gmail.com back"))
+    scrubbed = board_snapshot.scrub_comment(_comment("mail dee.person@example.net back"))
     assert scrubbed["body"] == f"mail {board_snapshot.REDACTED_EMAIL} back"
 
 
 def test_an_address_is_redacted_before_the_cut_not_after():
     """Cutting first would leave the front half of an address sitting at the
     200-character boundary, and half an address is still the person."""
-    body = "word " * 38 + "marko@vericorr.com " + "y" * 50  # address straddles 200
-    assert body.index("marko@") < 200 < body.index("marko@") + len("marko@vericorr.com")
+    body = "word " * 38 + "eli@partner.example.com " + "y" * 50  # address straddles 200
+    assert body.index("eli@") < 200 < body.index("eli@") + len("eli@partner.example.com")
     scrubbed = board_snapshot.scrub_comment(_comment(body))
-    assert "marko" not in scrubbed["body"]
-    assert "@vericorr" not in scrubbed["body"]
+    assert "eli@" not in scrubbed["body"]
+    assert "@partner" not in scrubbed["body"]
     # what lands on the boundary is the placeholder, cut — never the address
     assert scrubbed["body"].endswith("<redacted-")
     assert len(scrubbed["body"]) == 200
@@ -427,7 +438,7 @@ def test_a_cardless_parent_and_a_stateless_history_entry_survive():
 def test_the_scrub_does_not_mutate_the_card_it_was_given():
     raw = _raw_card("DRE-1", comments={
         "pageInfo": {"hasNextPage": False, "endCursor": "c"},
-        "nodes": [_comment("q" * 500, user={"id": "u", "email": "e@x.io"})],
+        "nodes": [_comment("q" * 500, user={"id": "u", "email": "e@example.com"})],
     })
     before = json.dumps(raw)
     board_snapshot.scrub_card(raw)
@@ -462,8 +473,39 @@ def test_a_board_that_cannot_be_read_is_not_written_as_an_empty_snapshot(tmp_pat
     assert not out.exists()
 
 
+def test_take_refuses_to_write_inside_the_repository(tmp_path):
+    """DRE-3918. This repository is PUBLIC. A real board — every card's text,
+    customer names included — was committed to it once, and a commit here is
+    permanent. So the one tool that reads the real board refuses an output path
+    anywhere inside the repo, BEFORE it reads anything, and says why."""
+    fake = _board(3)
+    out = REPO_ROOT / "tests" / "fixtures" / "refused-board-snapshot.json"
+    try:
+        with patch.object(linear_ops, "gql", fake.gql):
+            code = board_snapshot.main(["take", "--out", str(out)])
+        assert code == 3
+        assert not out.exists()
+        assert fake.requests == 0, "the board must not be read at all"
+    finally:
+        out.unlink(missing_ok=True)
+
+
+def test_take_refuses_a_relative_path_that_resolves_inside_the_repository(
+        monkeypatch):
+    fake = _board(3)
+    monkeypatch.chdir(REPO_ROOT)
+    out = REPO_ROOT / "refused-relative.json"
+    try:
+        with patch.object(linear_ops, "gql", fake.gql):
+            code = board_snapshot.main(["take", "--out", "refused-relative.json"])
+        assert code == 3
+        assert not out.exists()
+    finally:
+        out.unlink(missing_ok=True)
+
+
 # ---------------------------------------------------------------------------
-# the committed fixture
+# the synthetic board: the shape of a real one, none of its words (DRE-3918)
 # ---------------------------------------------------------------------------
 def _valid_ref(node, keys) -> bool:
     return isinstance(node, dict) and set(node) == set(keys)
@@ -471,13 +513,30 @@ def _valid_ref(node, keys) -> bool:
 
 @pytest.fixture(scope="module")
 def snapshot() -> dict:
-    assert FIXTURE.exists(), f"the committed board snapshot is missing: {FIXTURE}"
-    return json.loads(FIXTURE.read_text())
+    return board_snapshot.synthetic()
 
 
-def test_the_fixture_is_under_four_megabytes():
-    assert FIXTURE.exists(), f"the committed board snapshot is missing: {FIXTURE}"
-    assert FIXTURE.stat().st_size < 4 * 1024 * 1024
+def test_the_synthetic_board_is_deterministic():
+    assert board_snapshot.synthetic() == board_snapshot.synthetic()
+    assert board_snapshot.render(board_snapshot.synthetic()) == board_snapshot.render(
+        board_snapshot.synthetic())
+
+
+def test_the_synthetic_board_carries_no_real_words(snapshot):
+    """Every free-text field is visibly synthetic: no title or description a
+    real card could have written, and no address of any kind."""
+    email_like = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+    for card in snapshot["cards"]:
+        assert card["title"].startswith("synthetic "), card["identifier"]
+        assert (card["description"] or "synthetic ").startswith("synthetic "), \
+            card["identifier"]
+        texts = [card["title"], card["description"] or ""] + [
+            n["body"] for n in card["comments"]["nodes"]]
+        assert not any(email_like.search(t) for t in texts), card["identifier"]
+
+
+def test_the_synthetic_board_renders_under_four_megabytes(snapshot):
+    assert len(board_snapshot.render(snapshot).encode("utf-8")) < 4 * 1024 * 1024
 
 
 def test_render_writes_one_card_per_line():
@@ -505,13 +564,13 @@ def test_render_writes_one_card_per_line():
     assert "café" in text  # written as the character, not an escape
 
 
-def test_the_committed_fixture_is_what_render_writes(snapshot):
-    """The committed bytes are the writer's bytes, so a re-take diffs by card
-    and the fixture stays inside the size a critic can review."""
+def test_the_synthetic_board_round_trips_through_render(snapshot):
+    """What render writes reads back as the same board, and stays inside the
+    size a critic can review."""
     import pr_size_strategy
 
-    text = FIXTURE.read_text(encoding="utf-8")
-    assert text == board_snapshot.render(snapshot)
+    text = board_snapshot.render(snapshot)
+    assert json.loads(text) == snapshot
     assert len(text.splitlines()) < pr_size_strategy.OVERSIZED_LINES
 
 
@@ -524,14 +583,22 @@ def test_the_fixture_says_when_it_was_taken_and_of_what(snapshot):
     assert taken.utcoffset().total_seconds() == 0
 
 
-def test_the_fixture_is_a_real_board_not_a_handful_of_cards(snapshot):
-    """The whole point: a board with the shapes nobody would have thought to
-    hand-build — epics, children, relations, exhausted comment windows."""
+def test_the_synthetic_board_has_a_real_boards_shapes(snapshot):
+    """The shapes a board carries that nobody hand-builds five of: epics with
+    children, relations both ways, exhausted comment and relation windows,
+    history, every lane the sweep reads."""
     cards = snapshot["cards"]
     assert len(cards) > 100
-    assert {c["state"]["name"] for c in cards} <= set(snapshot["lanes"])
-    assert any(c["children"]["nodes"] for c in cards)
+    assert {c["state"]["name"] for c in cards} == set(snapshot["lanes"])
+    assert any(len(c["children"]["nodes"]) >= 10 for c in cards)
     assert any(c["comments"]["nodes"] for c in cards)
+    assert any(c["comments"]["pageInfo"]["hasNextPage"] for c in cards)
+    assert any(c["relations"]["nodes"] for c in cards)
+    assert any(c["relations"]["pageInfo"]["hasNextPage"] for c in cards)
+    assert any(c["inverseRelations"]["nodes"] for c in cards)
+    assert any(c["history"]["nodes"] for c in cards)
+    assert any(c["parent"] for c in cards)
+    assert any(c["description"] is None for c in cards)
 
 
 def test_every_card_in_the_fixture_validates_against_the_contract(snapshot):
@@ -622,4 +689,4 @@ def test_the_fixture_carries_no_email_address_in_any_free_text(snapshot):
         for node in card["comments"]["nodes"]:
             found += [(card["identifier"], "comment", hit)
                       for hit in email_like.findall(node.get("body") or "")]
-    assert not found, f"email addresses in the committed fixture: {found[:10]}"
+    assert not found, f"email addresses in the synthetic board: {found[:10]}"
