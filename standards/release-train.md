@@ -50,8 +50,18 @@ repository checked out at `RELEASE_SHA`. In return:
    deploy-lag goes on reading BEHIND until whoever the reason names has acted.
    A deferral is not a failure and must never be dressed as one.
 
-Anything else the surface needs — a Linear release record, a smoke test, a
-cache invalidation — stays inside the script, where it already is.
+Anything else the surface needs — a smoke test, a cache invalidation — stays
+inside the script, where it already is.
+
+**The Linear release is the one exception, and it is the train's.** A surface
+that names its Linear release pipeline in `release.json`'s top-level
+`linear_pipelines` key gets its release written by the train
+(`scripts/release_linear.py`): after the script's tag is verified, the release
+is synced with the tag as its version and the cards its changes named since the
+previous tag, completed, and given one note. The script owes nothing for it and
+should not write one of its own, or the surface gets two. It never fails a
+release. A script that already writes its own Linear release (agent-bureau's
+three, from before this seam) declares no pipeline here and is untouched.
 
 ## The rollback
 
@@ -189,7 +199,8 @@ copy and these two lines are the contract.
 
 `RELEASE_ROLE_ARN` is the one required secret — the caller's own OIDC role, so
 a repo can only ever deploy itself. The two Linear keys are optional and pass
-through to the script's environment.
+through to the script's environment; `LINEAR_API_KEY` is also what the train
+writes a declared surface's Linear release with.
 
 ## The supervised first release
 
