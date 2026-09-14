@@ -253,5 +253,11 @@ jobs:
           # The author decides the dependabot exemption (DRE-2049) —
           # GitHub-attested identity, never the spoofable branch name.
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          # The head branch is HALF of the standards-sync exemption (DRE-3885);
+          # the other half is every commit's own author, read from git, so the
+          # branch name alone exempts nothing. Threaded explicitly here;
+          # elsewhere in the fleet the check falls back to GITHUB_HEAD_REF,
+          # which GitHub sets itself on every pull_request run.
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           python3 scripts/check_tdd_commits.py "origin/$BASE_REF" "$HEAD_SHA"

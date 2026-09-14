@@ -41,6 +41,22 @@ The rule (engineering standard: "commit the failing test FIRST"):
     The author arrives via the PR_AUTHOR env var, GitHub-attested identity
     (never the spoofable branch name). Live origin: bp #93's critic-APPROVEd
     pyyaml minor could not auto-merge behind a permanently red TDD check.
+  • The nightly standards-sync PR is exempt (DRE-3885), matched by BRANCH
+    AND AUTHOR together — head branch `bot/standards-sync` and every one of
+    the PR's own commits authored by `agent-bureau-bot[bot]`. agent-bureau's
+    `standards-sync.yml` opens one PR a night carrying two generated plugin
+    manifests and one instructions file; the manifests classify as code (they
+    are neither docs nor ops paths), so the gate failed every night on a
+    change with no behaviour of its own to RED-test, and the finding is the
+    commit ORDER, which no added commit clears (DRE-2694). Both halves are
+    load-bearing, and the CEO chose this shape over the path alternative on
+    2026-09-14: a path exemption for `plugins/**` would let real plugin code
+    skip the discipline, the branch alone would exempt whatever anyone pushes
+    there, and the author alone would exempt most of the fleet's PRs — this
+    bot authors nearly all of them. The branch arrives via HEAD_REF, or via
+    GITHUB_HEAD_REF, which GitHub itself sets on every `pull_request` run, so
+    a fleet repo whose own workflow was never edited still gets the
+    exemption; with neither set (a pre-push local run) the check proceeds.
   • Merge commits are skipped: merging an advanced main into the branch
     brings mainline commits that are not the PR's own work.
 
@@ -127,16 +143,56 @@ _OPS_PREFIXES = (".github/", "config/")
 _OPS_FILES = frozenset({"agents.yaml"})
 
 
+# The nightly standards-sync PR (DRE-3885) — the branch and the author it must
+# BOTH match. Neither half is sufficient on its own; see the module docstring.
+STANDARDS_SYNC_BRANCH = "bot/standards-sync"
+STANDARDS_SYNC_BOT = "agent-bureau-bot"
+
+
+def _normalized_bot_login(login: str) -> str:
+    """One actor's three spellings collapsed to one: GitHub surfaces a Bot
+    identity as "<name>" (GraphQL), "<name>[bot]" (REST / the Actions event
+    shape / the git author line a workflow commit carries) or "app/<name>"
+    (gh's bot marker)."""
+    return login.strip().removeprefix("app/").removesuffix("[bot]")
+
+
 def is_dependabot_author(login: str | None) -> bool:
     """True iff the PR author login is dependabot[bot]. Same normalization
-    as reconcile.is_dependabot_pr: GitHub surfaces a Bot login as
-    "dependabot" (GraphQL), "dependabot[bot]" (REST/Actions event shape) or
-    "app/dependabot" (gh's bot marker) — all the same actor. Exact match on
-    the normalized login, so a user account NAMED to look like the bot
-    doesn't dodge the discipline."""
+    as reconcile.is_dependabot_pr — all three spellings are the same actor.
+    Exact match on the normalized login, so a user account NAMED to look like
+    the bot doesn't dodge the discipline."""
     if not login:
         return False
-    return login.removeprefix("app/").removesuffix("[bot]") == "dependabot"
+    return _normalized_bot_login(login) == "dependabot"
+
+
+def is_standards_sync_author(author: str | None) -> bool:
+    """True iff `author` is the standards-sync bot, exactly. Same
+    normalization and the same exact match as the dependabot exemption, so
+    neither a pool bot (`agent-bureau-bot-3`) nor the merging identity
+    (`agent-bureau-qa-bot`) nor an account named to resemble either inherits
+    the exemption."""
+    if not author:
+        return False
+    return _normalized_bot_login(author) == STANDARDS_SYNC_BOT
+
+
+def is_standards_sync_pr(head_ref: str | None, authors) -> bool:
+    """True iff this is the nightly standards-sync PR: head branch exactly
+    `bot/standards-sync` AND every one of the PR's own commits authored by the
+    sync bot.
+
+    Fail-closed on both sides. An unknown branch (neither HEAD_REF nor
+    GITHUB_HEAD_REF set) is not a match, and an EMPTY commit list is not
+    either — `all()` over nothing is True, which would exempt a PR whose
+    commits could not be read."""
+    authors = list(authors)
+    if not authors:
+        return False
+    if (head_ref or "").strip() != STANDARDS_SYNC_BRANCH:
+        return False
+    return all(is_standards_sync_author(a) for a in authors)
 
 
 class _DocstringStripper(ast.NodeTransformer):
@@ -309,7 +365,9 @@ def _blob(rev: str, path: str) -> str | None:
 
 
 def pr_commits(base: str, head: str):
-    """The PR's own commits, oldest first, each with its changed paths and —
+    """The PR's own commits, oldest first, each with its changed paths, its
+    AUTHOR (the git author name, which is what the standards-sync exemption
+    reads — per commit, so one foreign commit on that branch ends it) and —
     for the `.py` paths a path-only read would call code — both versions of
     the file across the commit, so the AST-equivalence rule can see them.
     `base..head` excludes everything already on the base branch, and
@@ -322,6 +380,7 @@ def pr_commits(base: str, head: str):
     commits = []
     for sha in shas:
         subject = _git("log", "-1", "--format=%s", sha).strip()
+        author = _git("log", "-1", "--format=%an", sha).strip()
         paths = _git(
             "diff-tree", "--no-commit-id", "--name-only", "-r", sha
         ).split("\n")
@@ -334,6 +393,7 @@ def pr_commits(base: str, head: str):
         commits.append({
             "sha": sha,
             "subject": subject,
+            "author": author,
             "paths": paths,
             "sources": sources,
         })
@@ -358,6 +418,16 @@ def main(argv: list[str]) -> int:
     for c in commits:
         cats = sorted(commit_categories(c)) or ["empty"]
         print(f"{c['sha'][:7]} [{','.join(cats)}] {c['subject']}")
+    # The branch: explicit when the caller threads it, else GitHub's own
+    # pull_request variable, so a fleet repo running this from
+    # `.bureau-pipeline/scripts/` gets the exemption without a workflow edit.
+    head_ref = os.environ.get("HEAD_REF") or os.environ.get("GITHUB_HEAD_REF")
+    if is_standards_sync_pr(head_ref, [c.get("author") for c in commits]):
+        print(f"exempt: the nightly standards-sync PR — branch "
+              f"{STANDARDS_SYNC_BRANCH}, every commit authored by "
+              f"{STANDARDS_SYNC_BOT}[bot]; generated manifests with no "
+              f"behaviour of their own to RED-test")
+        return 0
     ok, reason = check_commits(commits)
     print(reason)
     if not ok:
