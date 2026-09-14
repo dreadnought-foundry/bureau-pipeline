@@ -1,18 +1,21 @@
-"""The proof/demo pair, wired into the plan run (DRE-2746).
+"""The proof card, wired into the plan run (DRE-2746, halved by DRE-3669).
 
 `scripts/proof_and_demo.py` is worth nothing unless a real planner is TOLD to
-emit the two cards and the run REFUSES an epic that has not. The card's own
+emit the closing card and the run REFUSES an epic that has not. The card's own
 reason for existing is that a brief line is not enough: "briefs are guidance a
 model can skip, and this wave's own finding is that a convention nothing checks
 is a convention that drifts."
 
 So these tests pin both halves, and the second one is the load-bearing one:
 
-  1. The BRIEF and the STANDARD say what the planner owes — the two cards, last,
-     blocked by every sibling, neither fleet-buildable.
+  1. The BRIEF and the STANDARD say what the planner owes — ONE closing card,
+     last, blocked by every sibling, not fleet-buildable. Neither may still ask
+     for a demo card: the CEO decided on 2026-09-12 that there is no demo
+     sitting, and the pre-approval critic reads the shape out of these two
+     documents.
   2. The RUN checks the PLANNER'S OUTPUT — the cards it created, read out of
-     Linear — and an epic missing either card is bounced back to Planning with
-     the reason named. The check does not read the brief.
+     Linear — and an epic missing the proof card is bounced back to Planning
+     with the reason named. The check does not read the brief.
   3. The read seam exists: `linear_ops.py children-detail` hands the gate the
      titles, labels and formal `blocks` relations it needs. Ordering is by
      creation, not by whatever Linear returns first.
@@ -29,6 +32,7 @@ REPO = os.path.join(os.path.dirname(__file__), "..")
 WF = os.path.join(REPO, ".github", "workflows", "plan.yml")
 PLANNER_BRIEF = os.path.join(REPO, "briefs", "planner.md")
 STANDARD = os.path.join(REPO, "standards", "card-quality.md")
+ARTIFACT_STANDARD = os.path.join(REPO, "standards", "plan-artifact.md")
 MODULE = os.path.join(REPO, "scripts", "proof_and_demo.py")
 SCRIPTS = os.path.join(REPO, "scripts")
 sys.path.insert(0, SCRIPTS)
@@ -40,7 +44,7 @@ os.environ.setdefault("GH_TOKEN", "x")
 import assemble_context as ac  # noqa: E402
 import linear_ops  # noqa: E402
 
-GATE = "Proof and demo cards"
+GATE = "Proof card"
 
 
 def wf_src() -> str:
@@ -65,14 +69,13 @@ def step_named(fragment: str) -> dict:
 class BriefAndStandardTest(unittest.TestCase):
     """1 — the planner is told, in the two documents it is handed."""
 
-    def test_the_planner_brief_names_the_two_cards(self):
+    def test_the_planner_brief_names_the_closing_card(self):
         text = open(PLANNER_BRIEF).read()
         self.assertIn("PROOF:", text)
-        self.assertIn("DEMO:", text)
 
     def test_the_brief_names_the_three_conditions(self):
         text = open(PLANNER_BRIEF).read().lower()
-        self.assertIn("last two", text)
+        self.assertIn("last child", text)
         self.assertIn("blocked by every", text)
         # `never `FLEET`` — markdown emphasis around the verdict is allowed.
         self.assertRegex(text, r"(never|not|no)\W{0,3}fleet")
@@ -80,7 +83,20 @@ class BriefAndStandardTest(unittest.TestCase):
     def test_the_card_standard_carries_the_convention(self):
         text = open(STANDARD).read()
         self.assertIn("PROOF:", text)
-        self.assertIn("DEMO:", text)
+
+    def test_neither_document_still_asks_for_a_demo_card(self):
+        """INVERTED (DRE-3669). Both used to be asserted to CONTAIN `DEMO:`.
+        The CEO's decision of 2026-09-12 is that there is no demo sitting — he
+        reads the proof record and closes the proof card himself — and the
+        pre-approval critic reads the epic shape out of exactly these two
+        documents, so a demo card named here is a critic asking where the demo
+        is on every plan."""
+        for path in (PLANNER_BRIEF, STANDARD, ARTIFACT_STANDARD):
+            self.assertNotIn("DEMO:", open(path).read(), path)
+
+    def test_the_standard_names_the_decision_that_halved_the_shape(self):
+        text = open(STANDARD).read()
+        self.assertIn("2026-09-12", text)
 
     def test_the_standard_rides_the_context_rail_for_the_planner(self):
         """card-quality.md is already assembled for the planner and both plan
@@ -126,7 +142,7 @@ class TheRunChecksThePlannersOutputTest(unittest.TestCase):
         self.assertLess(
             names.index(next(n for n in names if GATE in n)),
             names.index(next(n for n in names if "Epic → Green Light" in n)),
-            "an epic missing the two cards must not reach the CEO",
+            "an epic missing the proof card must not reach the CEO",
         )
 
     def test_the_bounce_names_the_reason_and_returns_the_card_to_planning(self):
@@ -148,8 +164,8 @@ class TheRunChecksThePlannersOutputTest(unittest.TestCase):
     def test_a_revised_plan_is_checked_again(self):
         """A revision is the planner's output too. The re-check step already
         re-runs the child validation and the artifact check for exactly this
-        reason — a re-plan that adds a card after the pair, or drops one of
-        them, must not reach the CEO because the first pass was clean."""
+        reason — a re-plan that adds a card after the proof card, or drops it,
+        must not reach the CEO because the first pass was clean."""
         run = step_named("Re-check the revised plan")["run"]
         self.assertIn("children-detail", run)
         self.assertIn("proof_and_demo.py check", run)
@@ -205,10 +221,23 @@ class TheReadSeamTest(unittest.TestCase):
 
 class ThePlannerIsToldInTheRunTest(unittest.TestCase):
     """The prompt the planner actually receives — the brief is guidance a model
-    can skip, so the run's own numbered process names the two cards too."""
+    can skip, so the run's own numbered process names the closing card too."""
 
-    def test_the_plan_prompt_names_the_two_cards(self):
+    def test_the_plan_prompt_names_the_closing_card(self):
         prompt = step_named("Plan epic")["with"]["prompt"]
         self.assertIn("PROOF:", prompt)
-        self.assertIn("DEMO:", prompt)
         self.assertIn("proof_and_demo.py check", prompt)
+
+    def test_the_plan_prompt_no_longer_asks_for_a_demo_card(self):
+        """INVERTED (DRE-3669): the prompt used to require `DEMO:` beside the
+        proof card. The planner files one closing child now."""
+        self.assertNotIn("DEMO:", step_named("Plan epic")["with"]["prompt"])
+
+    def test_the_plan_prompt_gives_the_closing_line_verbatim(self):
+        """The gate refuses a proof card whose body does not carry it, so the
+        run that has to satisfy the gate is told the exact words."""
+        sys.path.insert(0, SCRIPTS)
+        import proof_and_demo  # noqa: E402
+
+        self.assertIn(proof_and_demo.CLOSING_LINE,
+                      step_named("Plan epic")["with"]["prompt"])

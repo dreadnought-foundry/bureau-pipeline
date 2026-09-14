@@ -111,12 +111,12 @@ def reference(**overrides) -> dict:
                                        "month is before",
             },
             "proof-and-demo": {
-                "question": "did the epic end with a proof card and a demo card?",
+                "question": "did the epic end with a proof card?",
                 "scored": False,
-                "values": ["both-present", "missing"],
+                "values": ["present", "missing"],
                 "enforced_by": "scripts/proof_and_demo.py",
                 "contaminated": (
-                    "plan.yml runs the gate and bounces the epic until the pair "
+                    "plan.yml runs the gate and bounces the epic until the card "
                     "exists, so the planner was handed the answer face-up"
                 ),
             },
@@ -181,14 +181,28 @@ class ContaminationTest(unittest.TestCase):
         doc = reference()
         result = planner_score.score(
             epic(),
-            [child("DRE-1"), child("DRE-2", title="PROOF: watch it run"),
-             child("DRE-3", title="DEMO: show the CEO")],
+            [child("DRE-1"), child("DRE-2", title="PROOF: watch it run")],
             doc=doc,
         )
         rows = [r for r in result["rows"] if r["dimension"] == "proof-and-demo"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["outcome"], "excluded")
         self.assertIn("contaminated", rows[0]["why"].lower())
+
+    def test_the_row_reads_a_proof_card_alone_as_present(self):
+        """INVERTED (DRE-3669): the row used to say `both-present` and needed a
+        `DEMO:` child to say it. The CEO's decision of 2026-09-12 is one
+        closing child, so a proof card on its own is the whole answer."""
+        doc = reference()
+        result = planner_score.score(
+            epic(),
+            [child("DRE-1"), child("DRE-2", title="PROOF: watch it run")],
+            doc=doc,
+        )
+        row = next(r for r in result["rows"] if r["dimension"] == "proof-and-demo")
+        self.assertEqual(row["claimed"], "present")
+        self.assertEqual(row["observed"], "present")
+        self.assertNotIn("DEMO:", row["evidence"])
 
     def test_the_exclusion_is_what_stops_the_audit_flattering_itself(self):
         """The mutation. The contaminated row agrees by construction — the gate
@@ -1029,6 +1043,13 @@ class PlanDiffTest(unittest.TestCase):
         self.assertEqual(shape["footprint-collisions"], 1)
         self.assertEqual(shape["with-verdict"], 3)
         self.assertFalse(shape["proof-and-demo"])
+
+    def test_the_shape_counts_a_proof_card_alone_as_the_closing_child(self):
+        """INVERTED (DRE-3669): the column needed BOTH a `PROOF:` and a `DEMO:`
+        child to count. One closing child is the shape now."""
+        shape = planner_score.plan_shape(
+            self.HISTORICAL + [child("DRE-4", title="PROOF: watch it run")])
+        self.assertTrue(shape["proof-and-demo"])
 
     def test_a_plan_that_declared_nothing_is_not_counted_as_declaring_it(self):
         naked = [dict(c, body="just prose") for c in self.HISTORICAL]

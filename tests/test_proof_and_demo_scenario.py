@@ -1,4 +1,5 @@
-"""The proof/demo gate, walked with the workflow's own shell (DRE-2746).
+"""The proof-card gate, walked with the workflow's own shell (DRE-2746, halved
+by DRE-3669).
 
 Unit-green is not live-working: this feature spans the planner agent, the
 Linear read seam and a plan.yml step. So this walks a planner's OUTPUT through
@@ -6,11 +7,13 @@ the ACTUAL `run:` block from plan.yml — read out of the workflow and executed
 with the run's expressions substituted, against a stubbed `linear_ops.py` that
 serves one epic's children and records every write.
 
-Three walks:
+Four walks:
 
-  clean    five cards, the last two a PROOF: and a DEMO: blocked by all three
-           work siblings — the step passes and writes nothing to the card.
-  missing  the planner emitted no demo card — the step fails, the reason is
+  clean    four cards, the last a PROOF: blocked by all three work siblings —
+           the step passes and writes nothing to the epic.
+  legacy   the same plan with a DEMO: child still on it, the shape an epic
+           planned before 2026-09-12 carries — read past, not bounced.
+  missing  the planner emitted no proof card — the step fails, the reason is
            posted to the epic, and the epic is put back in Planning.
   fleet    the proof card's criteria are fleet-satisfiable — same bounce, and
            the reason says so.
@@ -33,23 +36,30 @@ import yaml
 REPO = os.path.join(os.path.dirname(__file__), "..")
 SCRIPTS = os.path.join(REPO, "scripts")
 WF = os.path.join(REPO, ".github", "workflows", "plan.yml")
+sys.path.insert(0, SCRIPTS)
+
+import proof_and_demo  # noqa: E402
 
 EPIC = "DRE-2746"
-GATE = "Proof and demo cards"
+GATE = "Proof card"
 
 WORK_BODY = "Build it.\n\n## Acceptance criteria\n\n- [ ] the gate refuses it\n"
 PROOF_BODY = (
     "Record what was observed, what was read and when.\n\n"
+    f"{proof_and_demo.CLOSING_LINE}\n\n"
     "## Acceptance criteria\n\n"
     "- [ ] the gate is observed refusing an epic in production\n"
+    "- [ ] the CEO closes this card after reading the record\n"
 )
+# The card the planner no longer files. Kept for the legacy walk: an epic
+# planned before 2026-09-12 still carries one, and must not be bounced for it.
 DEMO_BODY = (
     "Show the CEO.\n\n## Acceptance criteria\n\n"
     "- [ ] the CEO is walked through the bounce by hand\n"
 )
 LABELS = ["repo:bureau-pipeline", "agent:engineer", "initiative:pipeline"]
-# The pair wears `agent:ops` (DRE-3039) — a build role on the two cards that
-# confirm the epic is the fleet picking up the proof of its own work.
+# The proof card wears `agent:ops` (DRE-3039) — a build role on the card that
+# confirms the epic is the fleet picking up the proof of its own work.
 PAIR_LABELS = ["repo:bureau-pipeline", "agent:ops", "initiative:pipeline"]
 # No role label at all: precedence 1 answers nothing, so the acceptance
 # criteria decide. What the fleet-buildable walk needs.
@@ -66,11 +76,13 @@ def _card(identifier, title, body, blocked_by=(), labels=LABELS):
             "labels": list(labels), "blocked_by": list(blocked_by)}
 
 
-def plan(*, demo=True, proof_body=PROOF_BODY, pair_labels=PAIR_LABELS):
+def plan(*, proof=True, demo=False, proof_body=PROOF_BODY,
+         pair_labels=PAIR_LABELS):
     children = [_card(i, f"Build piece {n}", WORK_BODY)
                 for n, i in enumerate(WORK_IDS, 1)]
-    children.append(_card(PROOF_ID, "PROOF: the gate refused a real epic",
-                          proof_body, WORK_IDS, labels=pair_labels))
+    if proof:
+        children.append(_card(PROOF_ID, "PROOF: the gate refused a real epic",
+                              proof_body, WORK_IDS, labels=pair_labels))
     if demo:
         children.append(_card(DEMO_ID, "DEMO: the bounce, end to end",
                               DEMO_BODY, WORK_IDS, labels=pair_labels))
@@ -179,38 +191,52 @@ class GateWalkTest(unittest.TestCase):
             "a passing gate has nothing to tell the planner",
         )
 
+    # --- legacy: a demo child the planner no longer files (DRE-3669) -------
+    def test_an_epic_still_carrying_a_demo_child_passes(self):
+        """INVERTED. This walk used to be the CLEAN one — five cards, a PROOF:
+        and a DEMO: — and a plan without the demo card was the failure. The
+        CEO's decision of 2026-09-12 turned it around: the planner files one
+        closing child, and an epic planned before then is read past rather
+        than bounced."""
+        r = self._walk(plan(demo=True))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(
+            [w for w in self._writes() if w[1] == EPIC], [],
+            "a legacy demo child is not a reason to say anything to the planner",
+        )
+
     # --- the stamp (DRE-3039) ---------------------------------------------
-    def test_the_passing_gate_stamps_the_verdict_on_the_pair(self):
-        """The seam this walk exists for: the step that ACCEPTS the pair is the
-        step that writes each card's verdict, so the sweep reads a decision
-        rather than an absence. Before DRE-3039 it computed the verdict, printed
-        it and wrote nothing at all."""
+    def test_the_passing_gate_stamps_the_verdict_on_the_proof_card(self):
+        """The seam this walk exists for: the step that ACCEPTS the card is the
+        step that writes its verdict, so the sweep reads a decision rather than
+        an absence. Before DRE-3039 it computed the verdict, printed it and
+        wrote nothing at all."""
         r = self._walk(plan())
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         writes = self._writes()
-        for identifier in (PROOF_ID, DEMO_ID):
-            comments = [w for w in writes
-                        if w[0] == "comment" and w[1] == identifier]
-            self.assertEqual(len(comments), 1, f"{identifier}: {writes}")
-            self.assertIn("🧭 routing-verdict: **OPERATOR**", comments[0][2])
-            # ...and the marks the verdict declares, which is what stops the
-            # sweep dispatching a competing run.
-            marks = [w[2] for w in writes
-                     if w[0] == "add-label" and w[1] == identifier]
-            self.assertIn("hand-built", marks)
+        comments = [w for w in writes
+                    if w[0] == "comment" and w[1] == PROOF_ID]
+        self.assertEqual(len(comments), 1, f"{PROOF_ID}: {writes}")
+        self.assertIn("🧭 routing-verdict: **OPERATOR**", comments[0][2])
+        # ...and the marks the verdict declares, which is what stops the
+        # sweep dispatching a competing run.
+        marks = [w[2] for w in writes
+                 if w[0] == "add-label" and w[1] == PROOF_ID]
+        self.assertIn("hand-built", marks)
 
     def test_a_bounced_plan_stamps_nothing(self):
         """An epic on its way back to Planning is not an epic whose cards get a
         routing decision written on them."""
-        self._walk(plan(demo=False))
+        self._walk(plan(proof_body="Prove it.\n\n"
+                                   "## Acceptance criteria\n\n- [ ] by hand\n"))
         self.assertEqual(
             [w for w in self._writes() if w[1] == PROOF_ID], [],
-            "a refused pair may not be stamped",
+            "a refused proof card may not be stamped",
         )
 
-    # --- missing demo card ------------------------------------------------
-    def test_a_missing_demo_card_bounces_the_epic_back_to_planning(self):
-        r = self._walk(plan(demo=False))
+    # --- missing proof card ------------------------------------------------
+    def test_a_missing_proof_card_bounces_the_epic_back_to_planning(self):
+        r = self._walk(plan(proof=False))
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
 
         writes = self._writes()
@@ -218,7 +244,8 @@ class GateWalkTest(unittest.TestCase):
         self.assertTrue(comments, f"the reason must be posted; writes={writes}")
         body = comments[0][2]
         self.assertIn(EPIC, body)
-        self.assertIn("DEMO:", body)
+        self.assertIn("PROOF:", body)
+        self.assertNotIn("DEMO:", body)
 
         self.assertIn(["state", EPIC, "Planning"], writes,
                       "the epic must be returned to Planning")
@@ -227,7 +254,8 @@ class GateWalkTest(unittest.TestCase):
     def test_a_fleet_buildable_proof_card_bounces_with_that_reason(self):
         r = self._walk(plan(
             proof_body=(
-                "Prove it.\n\n## Acceptance criteria\n\n"
+                f"Prove it.\n\n{proof_and_demo.CLOSING_LINE}\n\n"
+                "## Acceptance criteria\n\n"
                 "- [ ] the proof page renders with the design tokens\n"),
             pair_labels=NO_ROLE_LABELS,
         ))
@@ -236,7 +264,7 @@ class GateWalkTest(unittest.TestCase):
         self.assertIn(PROOF_ID, body)
         self.assertIn("FLEET", body)
 
-    # --- a build role on the pair (DRE-3039) ------------------------------
+    # --- a build role on the proof card (DRE-3039) ------------------------
     def test_a_proof_card_wearing_a_build_role_bounces_with_that_reason(self):
         r = self._walk(plan(pair_labels=LABELS))
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
