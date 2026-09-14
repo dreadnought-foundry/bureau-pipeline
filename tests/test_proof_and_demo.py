@@ -1,38 +1,41 @@
-"""RED-first tests: every epic carries a proof card and a demo card (DRE-2746).
+"""RED-first tests: every epic carries a proof card, and only a proof card.
 
-The convention was already written down — `standards/plan-artifact.md` gives
-the artifact a "Proof and demo" section — and nothing made any planner follow
-it. A convention nothing checks is a convention that drifts, so the check runs
-on the PLANNER'S OUTPUT (the cards it actually created) rather than on the
-brief's text.
+DRE-2746 made it a PAIR — a `PROOF:` card and a `DEMO:` card, the epic's last
+two children. DRE-3669 halves it. On 2026-09-12 the CEO decided there are no
+demo sittings: he reads the proof record and closes the proof card himself. All
+25 open DEMO cards were cancelled that morning, and the planner stopped filing
+them.
 
-The two things are not the same:
+So the convention is one closing child, and the reason it is still CHECKED on
+the planner's OUTPUT rather than written down in a brief is unchanged — a
+convention nothing checks is a convention that drifts.
 
   * **Proof** answers *did it work* — and it is not a green test suite. It is
-    the mechanism observed running against real state.
-  * **Demo** answers *can the CEO see it*. A merged PR and a passing suite are
-    invisible to the person who green-lit the epic.
+    the mechanism observed running against real state, recorded in the repo.
+  * There is no demo card. The record IS how the CEO sees it.
 
 WHAT THIS PINS, one section per acceptance criterion:
 
-  1. A planner's output is read for a `PROOF:` card and a `DEMO:` card, and
-     they must be the LAST two children.
-  2. Both are blocked by every other child — read off the Linear `blocks`
-     relations, never off the order the cards happen to sit in.
-  3. Neither may carry a FLEET verdict. The verdicts that MAY confirm an epic
+  1. A planner's output is read for exactly one `PROOF:` card, and it must be
+     the LAST child. A `DEMO:` child is neither required nor refused — it is
+     read past, because a plan that still files one is not rejected.
+  2. The proof card is blocked by every other child — read off the Linear
+     `blocks` relations, never off the order the cards happen to sit in.
+  3. It may not carry a FLEET verdict. The verdicts that MAY confirm an epic
      are derived from `config/routing-verdicts.json` — the ones whose actor is
      a human — so "something other than the builder confirms it" is read from
      the file rather than restated here.
-  4. An epic missing either card is refused with the reason NAMED, in a comment
-     a planner can act on.
-  5. Neither card wears a BUILD role (DRE-3039). The roles a build run is
-     dispatched for are read off `agents.yaml`; the role the pair may wear is
-     read off the routing vocabulary. Neither list is written down here.
-  6. The check WRITES the verdict it computed onto each of the two cards, as
-     the same `🧭 routing-verdict` comment every other verdict uses — so
+  4. An epic missing the card is refused with the reason NAMED, in a comment a
+     planner can act on.
+  5. The card does not wear a BUILD role (DRE-3039). The roles a build run is
+     dispatched for are read off `agents.yaml`; the role it may wear is read
+     off the routing vocabulary. Neither list is written down here.
+  6. The check WRITES the verdict it computed onto the card, as the same
+     `🧭 routing-verdict` comment every other verdict uses — so
      `routing_verdict.promotion_refusal` reads it and the sweep refuses to
-     promote the pair. It used to compute the answer, print it and stamp
-     nothing.
+     promote it. It used to compute the answer, print it and stamp nothing.
+  7. The proof card's body carries the closing line (DRE-3669), verbatim, so
+     the card itself says who closes it and that nobody is owed a sitting.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_proof_and_demo.py -v
 """
@@ -67,9 +70,10 @@ EPIC = "DRE-2746"
 
 # --- one realistic planner output -------------------------------------------
 #
-# Three work cards, then the two that close the epic. Written the way a real
-# planner writes them: checkbox criteria, and the proof card's criteria naming
-# a live observation rather than a passing suite.
+# Three work cards, then the one that closes the epic. Written the way a real
+# planner writes them: checkbox criteria, the proof card's criteria naming a
+# live observation rather than a passing suite, and its body carrying the
+# closing line verbatim.
 
 WORK_BODY = (
     "Add the gate.\n\n"
@@ -79,11 +83,15 @@ WORK_BODY = (
 
 PROOF_BODY = (
     "Record what was observed, where it was read, and when.\n\n"
+    f"{proof_and_demo.CLOSING_LINE}\n\n"
     "## Acceptance criteria\n\n"
     "- [ ] the gate is observed refusing a real epic in production\n"
     "- [ ] the observation is written to docs/proof/DRE-2746.md and merged\n"
+    "- [ ] the CEO closes this card after reading the record\n"
 )
 
+# Kept for the legacy walks below: a `DEMO:` child the planner no longer emits,
+# which a pre-2026-09-12 epic may still carry.
 DEMO_BODY = (
     "Show the CEO the epic's outcome.\n\n"
     "## Acceptance criteria\n\n"
@@ -92,8 +100,8 @@ DEMO_BODY = (
 
 LABELS = ("repo:bureau-pipeline", "agent:engineer", "initiative:pipeline")
 
-# The pair's own labels (DRE-3039). A work card wears a build role because a
-# build agent builds it; the two cards that CONFIRM the epic wear `agent:ops`,
+# The proof card's own labels (DRE-3039). A work card wears a build role because
+# a build agent builds it; the card that CONFIRMS the epic wears `agent:ops`,
 # the role label the routing vocabulary reads as "a person handles this". The
 # proof card that started this carried `agent:engineer` and would have been
 # promoted into an engineer's hands to write the proof of its own siblings.
@@ -115,8 +123,12 @@ def _card(identifier, title, body=WORK_BODY, labels=LABELS, blocked_by=()):
     }
 
 
-def _plan(*, work=3, proof=True, demo=True, blocked=True, order=None):
-    """One epic's children, in the order the planner created them."""
+def _plan(*, work=3, proof=True, demo=False, blocked=True, order=None):
+    """One epic's children, in the order the planner created them.
+
+    `demo=True` is the LEGACY shape — an epic planned before 2026-09-12, which
+    the check must read past rather than refuse.
+    """
     work_ids = [f"DRE-90{n:02d}" for n in range(1, work + 1)]
     children = [_card(i, f"Build piece {n}") for n, i in enumerate(work_ids, 1)]
     tail = []
@@ -136,9 +148,9 @@ def _plan(*, work=3, proof=True, demo=True, blocked=True, order=None):
 
 
 # ===========================================================================
-# 1: the two cards, and where they sit
+# 1: the one card, and where it sits
 # ===========================================================================
-class TestTheTwoCards:
+class TestTheProofCard:
     def test_a_well_formed_plan_passes(self):
         assert proof_and_demo.findings(_plan()) == []
 
@@ -149,33 +161,54 @@ class TestTheTwoCards:
         # The reason is named, not merely signalled.
         assert any("PROOF:" in f for f in found)
 
-    def test_an_epic_with_no_demo_card_is_refused_and_the_reason_is_named(self):
-        found = proof_and_demo.findings(_plan(demo=False))
-        assert found
-        assert any("demo" in f.lower() for f in found)
-        assert any("DEMO:" in f for f in found)
+    def test_an_epic_with_no_demo_card_is_accepted(self):
+        """INVERTED (DRE-3669). This assertion used to run the other way: an
+        epic with no `DEMO:` child was refused and the reason named. The CEO's
+        decision of 2026-09-12 is that there is no demo sitting — he reads the
+        proof record and closes the proof card himself — so the absence of a
+        demo card is the shape, not a defect, and nothing may ask for one."""
+        assert proof_and_demo.findings(_plan(demo=False)) == []
+        for plan in (_plan(demo=False), _plan(proof=False, demo=False)):
+            assert not any("demo" in f.lower()
+                           for f in proof_and_demo.findings(plan))
 
-    def test_an_epic_with_neither_names_both(self):
+    def test_an_epic_with_neither_names_only_the_proof(self):
         found = proof_and_demo.findings(_plan(proof=False, demo=False))
         assert any("proof" in f.lower() for f in found)
-        assert any("demo" in f.lower() for f in found)
+        assert not any("demo" in f.lower() for f in found)
 
-    def test_they_must_be_the_last_two_children(self):
+    def test_a_plan_that_still_files_a_demo_child_is_not_rejected(self):
+        """INVERTED (DRE-3669): the demo card used to be required, and is now
+        read past. The planner no longer produces one, but an epic planned
+        before the decision — or a person adding one by hand — must not be
+        bounced for it."""
+        assert proof_and_demo.findings(_plan(demo=True)) == []
+
+    def test_the_proof_card_must_be_the_last_child(self):
         """Position is part of the convention: a proof card that is not last
         can be started before the work it proves exists."""
-        plan = _plan(order=["DRE-9001", "DRE-9091", "DRE-9092", "DRE-9002",
-                            "DRE-9003"])
+        plan = _plan(order=["DRE-9001", "DRE-9091", "DRE-9002", "DRE-9003"])
         found = proof_and_demo.findings(plan)
-        assert any("last two" in f for f in found), found
+        assert any("last" in f for f in found), found
 
-    def test_the_pair_may_sit_in_either_order(self):
-        plan = _plan(order=["DRE-9001", "DRE-9002", "DRE-9003",
+    def test_a_legacy_demo_child_does_not_displace_the_proof_card(self):
+        """INVERTED (DRE-3669): `the last TWO children, in either order` is
+        now `the last child`, and a `DEMO:` sibling is not a child the proof
+        card has to sit in front of."""
+        plan = _plan(demo=True,
+                     order=["DRE-9001", "DRE-9002", "DRE-9003",
                             "DRE-9092", "DRE-9091"])
+        assert proof_and_demo.findings(plan) == []
+        plan = _plan(demo=True,
+                     order=["DRE-9001", "DRE-9002", "DRE-9003",
+                            "DRE-9091", "DRE-9092"])
         assert proof_and_demo.findings(plan) == []
 
     def test_the_title_convention_is_anchored_not_a_substring(self):
         """`Record the demo: phase 3` is an ordinary code card — the same
-        anchoring the auto-Done guard and the routing vocabulary already use."""
+        anchoring the auto-Done guard and the routing vocabulary already use.
+        `is_demo` survives DRE-3669 as a reader of HISTORICAL cards, and the
+        three readers must still agree about what one is."""
         assert proof_and_demo.is_demo("DEMO: phase 3 end to end")
         assert proof_and_demo.is_demo("  demo: lower case, indented")
         assert not proof_and_demo.is_demo("Record the demo: phase 3")
@@ -193,7 +226,37 @@ class TestTheTwoCards:
     def test_a_childless_epic_is_refused_rather_than_passing_empty(self):
         found = proof_and_demo.findings([])
         assert any("proof" in f.lower() for f in found)
-        assert any("demo" in f.lower() for f in found)
+
+
+# ===========================================================================
+# 7: the closing line — the card says who closes it (DRE-3669)
+# ===========================================================================
+class TestTheClosingLine:
+    def test_the_line_says_the_ceo_reads_the_record_and_there_is_no_sitting(self):
+        line = proof_and_demo.CLOSING_LINE
+        assert line == ("The CEO reads this record and closes this card; "
+                        "there is no demo sitting.")
+
+    def test_a_proof_card_without_the_line_is_refused(self):
+        plan = _plan()
+        proof = next(c for c in plan if c["identifier"] == "DRE-9091")
+        proof["body"] = proof["body"].replace(
+            proof_and_demo.CLOSING_LINE + "\n\n", "")
+        found = proof_and_demo.findings(plan)
+        assert any("DRE-9091" in f for f in found), found
+
+    def test_the_refusal_quotes_the_line_so_the_planner_can_paste_it(self):
+        plan = _plan()
+        proof = next(c for c in plan if c["identifier"] == "DRE-9091")
+        proof["body"] = "Prove it.\n\n## Acceptance criteria\n\n- [ ] by hand\n"
+        found = [f for f in proof_and_demo.findings(plan) if "DRE-9091" in f]
+        assert any(proof_and_demo.CLOSING_LINE in f for f in found), found
+
+    def test_no_criterion_asks_for_a_sitting(self):
+        """The acceptance-criteria template drops any "the CEO has said so at a
+        sitting" line and keeps the one that says he closes it after reading."""
+        assert "sitting" not in PROOF_BODY.split("## Acceptance criteria")[1]
+        assert "the CEO closes this card after reading the record" in PROOF_BODY
 
 
 # ===========================================================================
@@ -203,7 +266,6 @@ class TestBlockedByEverySibling:
     def test_a_proof_card_with_no_relations_is_refused(self):
         found = proof_and_demo.findings(_plan(blocked=False))
         assert any("DRE-9091" in f and "blocked by" in f.lower() for f in found)
-        assert any("DRE-9092" in f and "blocked by" in f.lower() for f in found)
 
     def test_a_missing_relation_names_the_sibling_it_is_missing(self):
         plan = _plan()
@@ -218,34 +280,39 @@ class TestBlockedByEverySibling:
         that only SAYS it is blocked is still refused."""
         plan = _plan(blocked=False)
         for card in plan:
-            if proof_and_demo.is_proof(card["title"]) or proof_and_demo.is_demo(card["title"]):
+            if proof_and_demo.is_proof(card["title"]):
                 card["body"] += "\n**Blocked by:** DRE-9001, DRE-9002, DRE-9003\n"
         found = proof_and_demo.findings(plan)
         assert any("DRE-9091" in f and "blocked by" in f.lower() for f in found), found
 
-    def test_the_pair_need_not_block_each_other(self):
-        """`every other child` cannot mean each other in both directions —
-        that is a deadlock, not an order."""
-        plan = _plan()
-        demo = next(c for c in plan if c["identifier"] == "DRE-9092")
-        demo["blocked_by"] = demo["blocked_by"] + ["DRE-9091"]
+    def test_a_legacy_demo_child_is_not_a_sibling_the_proof_must_wait_on(self):
+        """INVERTED (DRE-3669). The pair used to be `blocked by every OTHER
+        child` with each other excluded; now the demo card is not a child the
+        shape is read over at all, so a proof card blocked by the work cards
+        alone is complete."""
+        plan = _plan(demo=True)
+        proof = next(c for c in plan if c["identifier"] == "DRE-9091")
+        assert "DRE-9092" not in proof["blocked_by"]
         assert proof_and_demo.findings(plan) == []
 
-    def test_a_mutual_block_between_the_pair_is_refused(self):
-        plan = _plan()
+    def test_a_mutual_block_with_a_legacy_demo_is_not_read(self):
+        """INVERTED (DRE-3669). `a mutual block between the pair is a deadlock,
+        not an order` was a rule about a pair that no longer exists. A legacy
+        demo card is read past entirely — including its relations — because a
+        plan that still files one is not rejected for anything about it."""
+        plan = _plan(demo=True)
         for card in plan:
             if card["identifier"] == "DRE-9091":
                 card["blocked_by"] += ["DRE-9092"]
             if card["identifier"] == "DRE-9092":
                 card["blocked_by"] += ["DRE-9091"]
-        found = proof_and_demo.findings(plan)
-        assert any("each other" in f for f in found), found
+        assert proof_and_demo.findings(plan) == []
 
 
 # ===========================================================================
-# 3: neither may be fleet-buildable, and the rule comes from the file
+# 3: the proof card may not be fleet-buildable, and the rule comes from the file
 # ===========================================================================
-class TestNeitherIsFleetBuildable:
+class TestTheProofIsNotFleetBuildable:
     def test_the_confirming_verdicts_are_the_ones_a_human_acts_on(self):
         assert set(proof_and_demo.confirming_verdicts()) == {"WORKBENCH", "OPERATOR"}
         for name in proof_and_demo.confirming_verdicts():
@@ -263,7 +330,8 @@ class TestNeitherIsFleetBuildable:
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["labels"] = list(NO_ROLE_LABELS)
         proof["body"] = (
-            "Prove it.\n\n## Acceptance criteria\n\n"
+            f"Prove it.\n\n{proof_and_demo.CLOSING_LINE}\n\n"
+            "## Acceptance criteria\n\n"
             "- [ ] the proof page renders with the design tokens\n"
         )
         assert routing_verdict.route(
@@ -279,7 +347,8 @@ class TestNeitherIsFleetBuildable:
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["labels"] = list(NO_ROLE_LABELS)
         proof["body"] = (
-            "Prove it.\n\n## Acceptance criteria\n\n"
+            f"Prove it.\n\n{proof_and_demo.CLOSING_LINE}\n\n"
+            "## Acceptance criteria\n\n"
             "- [ ] the mechanism is proven\n"
         )
         found = proof_and_demo.findings(plan)
@@ -289,18 +358,34 @@ class TestNeitherIsFleetBuildable:
         plan = _plan()
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["labels"] = list(PAIR_LABELS) + ["no-code"]
-        proof["body"] = "Run it.\n\n## Acceptance criteria\n\n- [ ] it ran\n"
+        proof["body"] = (
+            f"Run it.\n\n{proof_and_demo.CLOSING_LINE}\n\n"
+            "## Acceptance criteria\n\n- [ ] it ran\n"
+        )
+        assert proof_and_demo.findings(plan) == []
+
+    def test_a_fleet_buildable_legacy_demo_card_is_not_rejected(self):
+        """INVERTED (DRE-3669): rule 3 used to hold both cards. It now holds
+        the proof card only — a legacy demo child is read past whatever it
+        routes to, because a plan that still files one is not rejected."""
+        plan = _plan(demo=True)
+        demo = next(c for c in plan if c["identifier"] == "DRE-9092")
+        demo["labels"] = list(NO_ROLE_LABELS)
+        demo["body"] = (
+            "Show it.\n\n## Acceptance criteria\n\n"
+            "- [ ] the page renders with the design tokens\n"
+        )
         assert proof_and_demo.findings(plan) == []
 
     def test_the_rule_is_read_from_the_vocabulary_not_restated_here(self):
-        """Hand OPERATOR to an agent in a private copy of the file and the pair
-        stops being a pair anybody other than the builder confirms."""
+        """Hand OPERATOR to an agent in a private copy of the file and the
+        proof card stops being something other than the builder confirms."""
         doc = json.loads(VERDICTS.read_text(encoding="utf-8"))
         entry = next(v for v in doc["verdicts"] if v["name"] == "OPERATOR")
         entry["actor"] = "agent-task.yml"
         assert "OPERATOR" not in proof_and_demo.confirming_verdicts(doc)
         found = proof_and_demo.findings(_plan(), doc)
-        assert any("DRE-9092" in f for f in found), found
+        assert any("DRE-9091" in f for f in found), found
 
     def test_a_vocabulary_with_no_human_confirmer_is_refused(self):
         doc = json.loads(VERDICTS.read_text(encoding="utf-8"))
@@ -320,11 +405,21 @@ class TestTheBounce:
         for finding in found:
             assert finding in body
 
+    def test_the_comment_asks_for_no_demo_card(self):
+        """INVERTED (DRE-3669): the bounce used to tell the planner to add two
+        cards and explained what a demo was for. It asks for one card now, and
+        names the decision that halved it so the planner does not re-add the
+        other."""
+        body = proof_and_demo.bounce_comment(
+            EPIC, proof_and_demo.findings(_plan(proof=False)))
+        assert "DEMO:" not in body
+        assert "2026-09-12" in body
+
     def test_the_comment_mints_no_verdict_marker(self):
         """standards/untrusted-content.md: the merge gate reads verdicts out of
         comments, so nothing here may look like one."""
         body = proof_and_demo.bounce_comment(
-            EPIC, proof_and_demo.findings(_plan(proof=False, demo=False)))
+            EPIC, proof_and_demo.findings(_plan(proof=False)))
         for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
             assert forbidden not in body
 
@@ -353,12 +448,20 @@ class TestTheCli:
     def test_a_clean_plan_exits_zero(self):
         r = self._run(_plan())
         assert r.returncode == 0, r.stdout + r.stderr
-        assert "DRE-9091" in r.stdout and "DRE-9092" in r.stdout
+        assert "DRE-9091" in r.stdout
 
-    def test_a_plan_missing_a_card_exits_one_and_prints_the_reason(self):
-        r = self._run(_plan(demo=False))
+    def test_a_plan_missing_the_proof_card_exits_one_and_prints_the_reason(self):
+        r = self._run(_plan(proof=False))
         assert r.returncode == 1
-        assert "demo" in (r.stdout + r.stderr).lower()
+        assert "proof" in (r.stdout + r.stderr).lower()
+
+    def test_a_plan_with_only_a_demo_card_still_exits_one(self):
+        """INVERTED (DRE-3669): `--demo=False` used to be the failing case. The
+        failing case is a missing PROOF card now, and a demo card does not
+        stand in for it."""
+        r = self._run(_plan(proof=False, demo=True))
+        assert r.returncode == 1
+        assert "PROOF:" in r.stdout + r.stderr
 
     def test_the_comment_file_is_written_only_when_there_is_a_finding(self, tmp_path):
         clean = tmp_path / "clean.md"
@@ -373,7 +476,7 @@ class TestTheCli:
 
 
 # ===========================================================================
-# 5: the role label — neither card wears a build role (DRE-3039)
+# 5: the role label — the proof card wears no build role (DRE-3039)
 # ===========================================================================
 #
 # DRE-3031 carried `agent:engineer` and a `Files:` line naming the document it
@@ -396,7 +499,7 @@ class TestTheRoleLabel:
             "engineer", "frontend", "devops", "database-architect",
         }
 
-    def test_the_role_a_pair_may_wear_is_read_from_the_vocabulary(self):
+    def test_the_role_the_proof_may_wear_is_read_from_the_vocabulary(self):
         """And the positive answer is derived too: the `agent:*` labels the
         routing vocabulary maps to a verdict a human acts on."""
         assert proof_and_demo.confirming_role_labels() == ("agent:ops",)
@@ -413,14 +516,16 @@ class TestTheRoleLabel:
         assert any("DRE-9091" in f and label in f for f in found), found
 
     @pytest.mark.parametrize("label", BUILD_ROLE_LABELS)
-    def test_a_demo_card_wearing_a_build_role_is_refused(self, label):
-        plan = _plan()
+    def test_a_legacy_demo_card_wearing_a_build_role_is_not_refused(self, label):
+        """INVERTED (DRE-3669): rule 4 held both cards. It holds the proof card
+        only now — the demo card is not something the planner files, so there
+        is nothing to refuse it for."""
+        plan = _plan(demo=True)
         demo = next(c for c in plan if c["identifier"] == "DRE-9092")
         demo["labels"] = list(NO_ROLE_LABELS) + [label]
-        found = proof_and_demo.findings(plan)
-        assert any("DRE-9092" in f and label in f for f in found), found
+        assert proof_and_demo.findings(plan) == []
 
-    def test_the_finding_names_the_label_the_pair_should_carry(self):
+    def test_the_finding_names_the_label_the_proof_should_carry(self):
         plan = _plan()
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["labels"] = list(LABELS)
@@ -437,17 +542,17 @@ class TestTheRoleLabel:
         assert proof_and_demo.findings(plan) == []
 
     def test_a_work_card_may_wear_a_build_role(self):
-        """The rule is about the two cards that CONFIRM the epic. Every other
-        child is work, and work is what a build agent is for."""
+        """The rule is about the card that CONFIRMS the epic. Every other child
+        is work, and work is what a build agent is for."""
         plan = _plan()
         assert all("agent:engineer" in c["labels"]
                    for c in plan if c["identifier"].startswith("DRE-900"))
         assert proof_and_demo.findings(plan) == []
 
-    def test_a_vocabulary_with_no_role_label_for_the_pair_is_refused(self):
+    def test_a_vocabulary_with_no_role_label_for_the_proof_is_refused(self):
         """If no `agent:*` label routes to a human, the rule has no positive
-        answer to name and the check must say so rather than refuse every pair
-        with nowhere to send it."""
+        answer to name and the check must say so rather than refuse every proof
+        card with nowhere to send it."""
         doc = json.loads(VERDICTS.read_text(encoding="utf-8"))
         doc["labels"]["map"] = {"no-code": "OPERATOR"}
         assert proof_and_demo.confirming_role_labels(doc) == ()
@@ -463,8 +568,16 @@ class TestTheRoleLabel:
 # read no verdict and returned None. One writer, the one that already knows the
 # answer.
 class TestTheStamp:
-    def test_the_pair_is_stamped_with_the_verdict_the_check_computed(self):
+    def test_the_proof_card_is_stamped_with_the_verdict_the_check_computed(self):
         stamps = proof_and_demo.stamps(_plan())
+        assert [(i, v) for i, v, _ in stamps] == [("DRE-9091", "OPERATOR")]
+
+    def test_a_legacy_demo_child_is_stamped_too(self):
+        """A verdictless child promotes exactly as it always had (DRE-3039), so
+        an epic that still carries a demo card gets the verdict written on it
+        as well — the rule that REQUIRED the card is gone, the protection that
+        keeps the fleet off it is not."""
+        stamps = proof_and_demo.stamps(_plan(demo=True))
         assert [(i, v) for i, v, _ in stamps] == [
             ("DRE-9091", "OPERATOR"), ("DRE-9092", "OPERATOR"),
         ]
@@ -472,11 +585,9 @@ class TestTheStamp:
     def test_the_stamped_verdict_is_the_card_s_own_routing_decision(self):
         """Not a constant: strip the role label and the criteria decide."""
         plan = _plan()
-        for card in plan[-2:]:
-            card["labels"] = list(NO_ROLE_LABELS)
-        assert [v for _, v, _ in proof_and_demo.stamps(plan)] == [
-            "WORKBENCH", "WORKBENCH",
-        ]
+        proof = next(c for c in plan if c["identifier"] == "DRE-9091")
+        proof["labels"] = list(NO_ROLE_LABELS)
+        assert [v for _, v, _ in proof_and_demo.stamps(plan)] == ["WORKBENCH"]
 
     def test_a_stamped_verdict_is_never_fleet(self):
         for _, verdict, _ in proof_and_demo.stamps(_plan()):
@@ -489,7 +600,7 @@ class TestTheStamp:
             assert why.strip()
             routing_verdict.verdict_comment(verdict, why)
 
-    def test_nothing_is_stamped_when_the_pair_is_malformed(self):
+    def test_nothing_is_stamped_when_the_proof_card_is_malformed(self):
         """An epic going back to Planning is not an epic whose cards get a
         routing decision written on them."""
         assert proof_and_demo.stamps(_plan(blocked=False)) == ()
@@ -519,10 +630,10 @@ class TestTheStampIsWritten:
             written = proof_and_demo.write_stamps(children)
         return written, posted, labelled
 
-    def test_it_posts_one_verdict_comment_per_card(self):
+    def test_it_posts_one_verdict_comment_for_the_proof_card(self):
         written, posted, _ = self._write(_plan())
-        assert written == 2
-        assert [i for i, _ in posted] == ["DRE-9091", "DRE-9092"]
+        assert written == 1
+        assert [i for i, _ in posted] == ["DRE-9091"]
         for identifier, body in posted:
             assert routing_verdict.verdict_on([body]) == "OPERATOR", identifier
 
@@ -530,10 +641,9 @@ class TestTheStampIsWritten:
         """`hand-built` is what stops the sweep dispatching a competing run —
         the signal `reconcile.hand_built` already reads."""
         _, _, labelled = self._write(_plan())
-        for identifier in ("DRE-9091", "DRE-9092"):
-            applied = [l for i, l in labelled if i == identifier]
-            assert applied == list(routing_verdict.marks("OPERATOR")), identifier
-            assert "hand-built" in applied
+        applied = [l for i, l in labelled if i == "DRE-9091"]
+        assert applied == list(routing_verdict.marks("OPERATOR"))
+        assert "hand-built" in applied
 
     def test_it_never_writes_a_second_verdict_onto_a_card(self):
         """A card leaving Planning carries exactly one, and a re-planned epic
@@ -543,14 +653,14 @@ class TestTheStampIsWritten:
         assert written == 0
         assert posted == [] and labelled == []
 
-    def test_a_malformed_pair_writes_nothing(self):
-        written, posted, labelled = self._write(_plan(demo=False))
+    def test_a_malformed_proof_card_writes_nothing(self):
+        written, posted, labelled = self._write(_plan(proof=False))
         assert (written, posted, labelled) == (0, [], [])
 
     def test_the_check_stamps_by_default_and_no_stamp_holds_the_pen(self):
         """Nothing in plan.yml has to opt in: the check that computes the
         verdict is the thing that writes it."""
-        for args, expected in ((["check", "--epic", EPIC], 2),
+        for args, expected in ((["check", "--epic", EPIC], 1),
                                (["check", "--epic", EPIC, "--no-stamp"], 0)):
             posted: list[tuple[str, str]] = []
             with patch.object(sys, "stdin", io.StringIO(json.dumps(_plan()))), \
@@ -566,6 +676,10 @@ class TestTheStampIsWritten:
 # Drift guards — one definition of "this is a demo card", pipeline-wide
 # ===========================================================================
 class TestOneDefinitionOfADemoCard:
+    """`is_demo` is a reader of HISTORICAL cards after DRE-3669 — the planner
+    files none — and the three readers that classify one must still agree, or
+    a pre-2026-09-12 card gets two different answers depending on who asks."""
+
     TITLES = (
         "DEMO: phase 3 — folder access end to end",
         "  demo: indented and lower case",

@@ -1310,7 +1310,9 @@ def cmd_proof_observed(identifier: str, text: str) -> None:
 #   * `DEMO:`-titled cards — their acceptance criteria say the card closes only
 #     when every end-state claim in docs/demos/phase-N.md is a PASS. No merge
 #     event can read a verdict inside a markdown file: DRE-2253 and DRE-2252
-#     closed while their reports said "NOT demonstrated" in those words.
+#     closed while their reports said "NOT demonstrated" in those words. A
+#     reader of HISTORICAL cards since DRE-3669 (the planner files none), kept
+#     for the cards planned before 2026-09-12 that are still on the board.
 #   * EPICS (DRE-3119) — a third class, and the one whose Done is a fleet event.
 #     The head-ref anchor that closed the DRE-99 incident assumes a branch is
 #     named for a CARD; a branch named for the EPIC the work serves passes it.
@@ -1345,6 +1347,12 @@ NO_CODE_LABEL = "no-code"  # standards/card-quality.md: operator-work cards
 # Anchored on purpose: a card that merely MENTIONS demos — in its body or
 # mid-title ("Update demo docs", "Record the demo: phase 3") — is an ordinary
 # code card and still auto-closes.
+#
+# A reader of HISTORICAL cards since DRE-3669: the planner files no demo card,
+# and the 25 open ones were cancelled on 2026-09-12. It stays because a card
+# planned before then is still on the board, and the false close this guard
+# exists to prevent (DRE-2253, DRE-2252) is exactly what a retired guard would
+# let happen to one of them.
 _DEMO_TITLE_RE = re.compile(r"^\s*demo:", re.IGNORECASE)
 
 # Shared marker for the "merged but deliberately left open" card comment:
@@ -2938,9 +2946,9 @@ def child_detail_records(nodes: list) -> list:
     Pure (no I/O) so the ordering and the relation filter are pinned by test
     rather than by a live board. Two things it does that the raw nodes do not:
 
-      * **sorts by `createdAt` ascending.** "The epic's last two children"
-        (DRE-2746) is only meaningful against a stable order, and the planner
-        creates the pair last. Sorted here rather than asked for with an
+      * **sorts by `createdAt` ascending.** "The proof card is the epic's last
+        child" (DRE-2746, DRE-3669) is only meaningful against a stable order,
+        and the planner creates the proof card last. Sorted here rather than asked for with an
         `orderBy`, so the answer does not depend on which direction Linear
         happens to paginate a connection in.
       * **reads `blocked_by` off the FORMAL `blocks` relations only** — the

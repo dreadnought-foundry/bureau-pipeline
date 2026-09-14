@@ -47,7 +47,7 @@ Anchored at the start of the title, never a substring search. Each one ships an 
 | WORKBENCH | `^\s*demo:` | `DEMO: Phase 3 — folder access end to end` | `Record the demo: phase 3`<br>`Update demo docs`<br>`Phase 3 demo runner` |
 
 - `^\s*sign-off \(operator\)` — The card's deliverable is a human's sign-off on live work.
-- `^\s*demo:` — The card closes only when every end-state claim in its demo report is a PASS — somebody drives the live system and records what it did. That is an interactive flow over live state, which is WORKBENCH; it is not a deploy, so it is not OPERATOR.
+- `^\s*demo:` — A reader of HISTORICAL cards since DRE-3669 — the planner files no demo card, and the 25 open ones were cancelled on 2026-09-12 — kept because a card planned before then still routes through here. The card closes only when every end-state claim in its demo report is a PASS — somebody drives the live system and records what it did. That is an interactive flow over live state, which is WORKBENCH; it is not a deploy, so it is not OPERATOR.
 
 ## Labels read first
 

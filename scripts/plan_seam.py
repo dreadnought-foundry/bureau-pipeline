@@ -28,8 +28,8 @@ the far side of a seam belongs to the second epic whether it is code or a
 switch-on. DRE-3218 is the case in point — an `[OPERATOR]` card transitively
 blocked by DRE-3166 through DRE-3215 and DRE-3217, so it is in DRE-3166's
 waiting list. The second sentence is why DRE-3218 opens no seam of its own:
-nothing but the PROOF/DEMO pair waits on it, so no build work crosses it and
-there is no second epic to cut.
+nothing but the epic's closing card waits on it, so no build work crosses it
+and there is no second epic to cut.
 
 ## What this module does NOT do
 
@@ -40,7 +40,8 @@ read would collide with every one of them. It CONSUMES the two reads
 for titles and the formal `blocks` relations), joins them here, and derives
 every set it needs from the modules that already define them:
 `plan_critic.shipped_work_is_a_finding` for "delivered",
-`proof_and_demo.is_proof` / `is_demo` for the pair, and
+`proof_and_demo.is_proof` for the closing proof card (`is_demo` only reads a
+legacy demo child past), and
 `proof_and_demo.build_roles()` for what counts as build work.
 
 Wiring this into the plan workflow, and turning the finding into a send-back at
@@ -168,15 +169,20 @@ def join(cards, details) -> list[dict]:
 
 def _considered(records) -> list[dict]:
     """The children every definition here is over: the ones that survive the
-    delivered-child drop, minus the PROOF/DEMO pair.
+    delivered-child drop, minus the epic's closing card.
 
     The drop is `plan_critic.shipped_work_is_a_finding`, the same definition
     the collision check uses (DRE-3243) — a delivered card is not something a
     plan is still waiting on, and an observation already made is not a seam to
-    build across. The pair is excluded because it is blocked by every other
-    child by construction: read as ordinary children, PROOF and DEMO would be
+    build across. The closing card is excluded because it is blocked by every
+    other child by construction: read as an ordinary child, PROOF would be
     waiting on every observation card in the epic and every one of them would
     look like a seam.
+
+    The `is_demo` half drops HISTORICAL cards for the same reason and nothing
+    else (DRE-3669): the planner files one closing child now, and an epic
+    planned before 2026-09-12 still carries a demo card that is blocked by
+    every sibling exactly the way the proof card is.
     """
     return [r for r in (records or [])
             if isinstance(r, dict) and r.get("identifier")

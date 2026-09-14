@@ -193,8 +193,8 @@ collisions, and the findings are posted to the epic before the critic reads
 them. Three things follow for you:
 
 - **A card with no `**Files:**` section is a finding**, not a card that happens
-  to own nothing. Write the line on every card, including the proof and demo
-  pair. `**Files:** none — nothing is committed by this card.` is a valid
+  to own nothing. Write the line on every card, including the proof card.
+  `**Files:** none — nothing is committed by this card.` is a valid
   answer where it is true; silence is not.
 - **Root-level files are files.** `README.md`, `CHANGELOG.md`, `package.json`,
   `tsconfig.json` are the hottest files in any repo and the check now sees
@@ -442,7 +442,9 @@ Read in strict precedence, and stop at the first that answers:
 1. **An explicit role label** (`agent:ops`, `no-code`) — exact match, never a
    prefix.
 2. **The title convention**, anchored at the START of the title, never a
-   substring: `SIGN-OFF (OPERATOR): …` → OPERATOR, `DEMO: …` → WORKBENCH.
+   substring: `SIGN-OFF (OPERATOR): …` → OPERATOR. The vocabulary carries the
+   full list (`docs/routing-verdicts.md`), including prefixes that only appear
+   on cards planned before 2026-09-12.
 3. **The acceptance-criteria rule** — a criterion naming an interactive flow or
    live system state ("sign in", "past expiry", "in production", "by hand") is
    WORKBENCH; a criterion naming static visual fidelity ("matches the design",
@@ -507,58 +509,66 @@ is a deprecated legacy fallback, not part of new cards.
 **Blocked by:** DRE-N   <- only if it must wait for a sibling; omit otherwise
 ```
 
-## Every epic ends with a proof card and a demo card (DRE-2746)
-The last two children of EVERY epic — not a one-off, not when it feels
-warranted — are a card titled `PROOF: …` and a card titled `DEMO: …`. They
-answer two different questions and neither substitutes for the other:
+## Every epic ends with a proof card (DRE-2746, halved by DRE-3669)
+The last child of EVERY epic — not a one-off, not when it feels warranted — is
+a card titled `PROOF: …`.
 
-- **Proof** answers *did it work* — and it is **not a green test suite**. It is
-  the mechanism observed running against real state, with the observation
-  recorded in the repo: what was read, when, and what it said. That record
-  merges, so the card produces a written artifact rather than a claim.
-- **Demo** answers *can the CEO see it*. A merged PR and a passing suite are
-  invisible to the person who green-lit the epic. Without a demo the epic
-  completes and nobody outside the pipeline knows what changed.
+**Proof** answers *did it work* — and it is **not a green test suite**. It is
+the mechanism observed running against real state, with the observation
+recorded in the repo: what was read, when, and what it said. That record
+merges, so the card produces a written artifact rather than a claim. An epic
+that produces no proof has no way of being wrong in public.
 
-An epic that produces neither has no way of being wrong in public.
+**File ONE closing card, never two.** The CEO decided on 2026-09-12 that there
+are no demo sittings: he reads the proof record and closes the proof card
+himself, so the record IS how he sees it. Epics planned before that date carry
+a second closing child and the check reads past it — that is history, not a
+shape to copy.
 
-Four conditions, all checked on the cards you create:
+Five conditions, all checked on the cards you create:
 
-1. **Last.** They are the epic's last two children, in either order between
-   themselves.
+1. **Last.** It is the epic's last child.
 2. **Blocked by every other child** — a real Linear `blockedBy` relation, so
    write `**Blocked by:** DRE-A, DRE-B, …` naming every sibling and let
    `subissue` turn it into relations. Ordering is not a relation, and the
    check reads the relation.
-3. **Never `FLEET`.** Both must route to `WORKBENCH` or `OPERATOR` — a proof
+3. **Never `FLEET`.** It must route to `WORKBENCH` or `OPERATOR` — a proof
    the fleet can close by merging its own code is not a proof. **The whole
-   value is that something other than the builder confirms it.** `DEMO:` routes
-   to WORKBENCH by title convention; for the proof card, write acceptance
-   criteria that name the live observation ("observed in production", "against
-   the live …", "by hand"), or label it `no-code` when a person runs it.
-4. **Neither wears a build role** (DRE-3039). `subissue` inherits
+   value is that something other than the builder confirms it.** Write
+   acceptance criteria that name the live observation ("observed in
+   production", "against the live …", "by hand"), or label it `no-code` when a
+   person runs it.
+4. **It wears no build role** (DRE-3039). `subissue` inherits
    `agent:engineer` — or `agent:devops` on a pipeline epic — onto every child,
-   which is right for work and wrong for the two cards that CONFIRM the work: a
+   which is right for work and wrong for the card that CONFIRMS the work: a
    role a build run is dispatched for is a card the fleet picks up, and the
-   thing it would build is the proof of its own siblings. So create each of the
-   pair with `--label agent:ops` (the label the routing vocabulary already
-   reads as "a person handles this") and drop the inherited one:
+   thing it would build is the proof of its own siblings. So create it with
+   `--label agent:ops` (the label the routing vocabulary already reads as "a
+   person handles this") and drop the inherited one:
 
        python3 .bureau-pipeline/scripts/linear_ops.py remove-label <CARD> agent:engineer
 
-   The check refuses a proof or demo card carrying `agent:engineer`,
+   The check refuses a proof card carrying `agent:engineer`,
    `agent:frontend`, `agent:devops` or `agent:database-architect`, and names the
    label it should have instead.
+5. **Its body carries the closing line, verbatim**, on its own line above the
+   acceptance criteria:
 
-**You never stamp these two cards yourself.** The check writes the
-`🧭 routing-verdict` comment it computed onto each of them — the same comment
-every other verdict uses — so the promotion gate reads it and leaves the pair
+       The CEO reads this record and closes this card; there is no demo sitting.
+
+   The check refuses a proof card without it. Its acceptance criteria say the
+   CEO closes it after reading the record — never that he has said so at a
+   sitting, because there is not one.
+
+**You never stamp this card yourself.** The check writes the
+`🧭 routing-verdict` comment it computed onto it — the same comment
+every other verdict uses — so the promotion gate reads it and leaves the card
 in Backlog until a person picks it up. One writer, the one that already knows
 the answer: before DRE-3039 the check computed the verdict, printed it and
-stamped nothing, and the sweep promoted both cards to an engineer agent the
-moment their siblings reached Done.
+stamped nothing, and the sweep promoted the card to an engineer agent the
+moment its siblings reached Done.
 
-The run checks your OUTPUT, not this text — an epic missing either card is
+The run checks your OUTPUT, not this text — an epic missing the card is
 bounced back to Planning with the reason named, the same way an epic with
 invalid children is. Check it yourself before you finish (`--no-stamp` reads
 without writing, so your own check leaves the cards alone):

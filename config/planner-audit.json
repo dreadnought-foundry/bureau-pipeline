@@ -16,8 +16,8 @@
     "",
     "`proof-and-demo` IS EXCLUDED AS CONTAMINATED. plan.yml runs",
     "scripts/proof_and_demo.py and bounces the epic back to Planning until a",
-    "PROOF: card and a DEMO: card exist, blocked by every other child, neither",
-    "FLEET. The planner cannot leave the workflow without the answer, so scoring",
+    "PROOF: card exists, last, blocked by every other child and not FLEET.",
+    "The planner cannot leave the workflow without the answer, so scoring",
     "it reports a row the gate produced. This is DRE-2685's `hand-built`",
     "exclusion, one role over. The rows are kept and printed, never deleted — a",
     "number with rows silently removed is worse than no number.",
@@ -109,14 +109,14 @@
       "ledger_injected_why": "DRE-3078 is the piece that puts the ledger in front of the planner, and it has not shipped. Until it does there is no 'after', so `planner_score.py split-rate` reports every month as BEFORE and the after half as UNKNOWN — never an empty bucket printed as zero, which would read as an improvement the pipeline has not made. Set this to the date the injection merges and the same command draws the comparison DRE-3022 asked for."
     },
     "proof-and-demo": {
-      "question": "Did the epic end with a proof card and a demo card?",
+      "question": "Did the epic end with a proof card?",
       "scored": false,
       "values": [
-        "both-present",
+        "present",
         "missing"
       ],
       "enforced_by": "scripts/proof_and_demo.py",
-      "contaminated": "plan.yml runs the gate and bounces the epic back to Planning until the pair exists, blocked by every other child and neither one FLEET. The planner cannot leave the workflow without the answer, so a score here measures the gate, not the planner. It is the difference between a real blind comparison and one that flatters itself (DRE-2685)."
+      "contaminated": "plan.yml runs the gate and bounces the epic back to Planning until the card exists, last, blocked by every other child and not FLEET. The planner cannot leave the workflow without the answer, so a score here measures the gate, not the planner. It is the difference between a real blind comparison and one that flatters itself (DRE-2685). The dimension keeps its name through DRE-3669, which halved the shape to one closing child: renaming it would break every row already written against it, and the question it asks is what moved, not what it is called."
     }
   }
 }

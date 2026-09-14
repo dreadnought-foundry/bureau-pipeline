@@ -27,7 +27,7 @@ of it existed when the plan was written.
 | the routing verdict | an escalation or hand-back — a FLEET card that needed a person |
 | the plan was approved as written | the plan critic's send-backs, the mid-epic amendment markers |
 | the card survives as one card | the split ledger's own population — a turn-cap death, a cancel with pieces citing it, a hand-back |
-| a proof card and a demo card exist | **excluded — see below** |
+| a proof card exists | **excluded — see below** |
 
 ## The split rate (DRE-3079)
 
@@ -63,9 +63,9 @@ injection merges and the same command draws the comparison.
 ## The `proof-and-demo` exclusion, and why it stays
 
 `plan.yml` runs `scripts/proof_and_demo.py` and bounces the epic back to
-Planning until a `PROOF:` card and a `DEMO:` card exist, blocked by every other
-child and neither one FLEET. **The planner cannot leave the workflow without
-the answer.** Scoring it grades the gate, not the planner — DRE-2685's
+Planning until a `PROOF:` card exists — last, blocked by every other child and
+not FLEET. **The planner cannot leave the workflow without the answer.**
+Scoring it grades the gate, not the planner — DRE-2685's
 `hand-built` exclusion, one role over. The rows are printed and not counted.
 
 The exclusion is enforced in code and it **checks itself**:
@@ -76,11 +76,13 @@ scored again — an exclusion nobody re-checks is how a real result stays out of
 the number forever.
 
 On these three epics the exclusion costs the audit **three `missing` rows**: all
-three predate DRE-2746, and none carries the PAIR. Re-checked live on
+three predate DRE-2746, and none carries the closing card. Re-checked live on
 2026-09-04 across every child of each epic — DRE-2514 (47) and DRE-2668 (116)
-carry neither card; DRE-2628 (68) carries `DEMO: the form object …` (DRE-2638)
-and no `PROOF:` card, so the pair is still absent and the row is still
-`missing`. That is the exclusion doing its job in the other direction: those
+carry no closing card at all; DRE-2628 (68) carries a demo card
+(DRE-2638) and no `PROOF:` card, so the proof is still absent and the row is
+still `missing`. DRE-3669 halved the shape to one closing child on 2026-09-12
+and left all three rows where they were: what is missing on each of them is the
+proof. That is the exclusion doing its job in the other direction: those
 rows measure when the convention shipped, not whether the planner followed it.
 
 ## The epics

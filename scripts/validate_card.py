@@ -146,7 +146,9 @@ def title_repo_slug(title: str) -> str | None:
     question here is answered from). `PROOF: …`, `DEMO: …` and
     `SIGN-OFF (OPERATOR): …` are title conventions, not repos, and most cards
     open with an ordinary word before a colon or no colon at all — reading any
-    of those as a repo claim would refuse most of the board.
+    of those as a repo claim would refuse most of the board. (`DEMO: …` is a
+    HISTORICAL convention since DRE-3669 — the planner files no demo card —
+    named here because cards planned before 2026-09-12 still carry it.)
     """
     m = _TITLE_REPO_RE.match(title or "")
     if not m:
