@@ -144,6 +144,21 @@ class ClassifyPathTest(unittest.TestCase):
         # new source tree can't silently dodge the discipline.
         self.assertEqual(check_tdd_commits.classify_path("relay/handler.py"), "code")
 
+    def test_plugin_manifests_stay_code(self):
+        # DRE-3885, and the whole reason that card is an author/branch
+        # exemption rather than a path one: `plugins/**` carries the generated
+        # standards-sync manifests AND real plugin source, so moving the folder
+        # out of `code` would let implementation there skip the discipline
+        # forever. The manifests are exempted by WHO wrote them and WHERE,
+        # never by what they are called.
+        for path in (
+            "plugins/.claude-plugin/marketplace.json",
+            "plugins/dreadnought-standards/.claude-plugin/plugin.json",
+            "plugins/dreadnought-standards/skills/card-quality/hook.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(check_tdd_commits.classify_path(path), "code")
+
     # --- static design records (DRE-3763) --------------------------------
     #
     # agent-bureau #2523 was one commit adding one file — the CEO-approved
@@ -410,6 +425,100 @@ class DependabotExemptionTest(unittest.TestCase):
             self.assertFalse(check_tdd_commits.is_dependabot_author(login))
 
 
+class StandardsSyncExemptionTest(unittest.TestCase):
+    """DRE-3885: the nightly standards-sync PR is exempt, the way a dependabot
+    bump is — but matched by BRANCH **and** AUTHOR together, never by path.
+
+    The job (agent-bureau's `standards-sync.yml`) opens one PR a night on
+    `bot/standards-sync` carrying two generated manifests and one instructions
+    file — no behaviour of its own, so the only RED test it could carry is a
+    vacuous one, which the engineering standard bans. It failed the gate twice
+    and cannot fix itself: the finding is the commit ORDER, which no added
+    commit clears (DRE-2694).
+
+    Both halves are load-bearing. A path exemption for `plugins/**` would let
+    real plugin code skip the discipline; the branch alone would exempt
+    anything anyone pushes there; the author alone would exempt every PR this
+    bot opens, which is most of the fleet's PRs."""
+
+    def test_the_bot_login_shapes_all_count(self):
+        # Same normalization as the dependabot exemption: GitHub surfaces a Bot
+        # identity as "agent-bureau-bot" (GraphQL), "agent-bureau-bot[bot]"
+        # (REST / the git author line a workflow commit carries) or
+        # "app/agent-bureau-bot" (gh's bot marker) — one actor, three spellings.
+        for author in (
+            "agent-bureau-bot",
+            "agent-bureau-bot[bot]",
+            "app/agent-bureau-bot",
+        ):
+            with self.subTest(author=author):
+                self.assertTrue(check_tdd_commits.is_standards_sync_author(author))
+
+    def test_other_identities_are_not_the_sync_bot(self):
+        # The pool bots and the merging identity are DIFFERENT actors, and the
+        # match is exact on the normalized login so none of them inherits the
+        # exemption (the DRE-2020 lesson, read the other way round).
+        for author in (
+            "agent-bureau-bot-3",
+            "agent-bureau-qa-bot",
+            "not-agent-bureau-bot",
+            "agent-bureau-bot-fan[bot]",
+            "dependabot[bot]",
+            "alice",
+            "",
+            None,
+        ):
+            with self.subTest(author=author):
+                self.assertFalse(check_tdd_commits.is_standards_sync_author(author))
+
+    def test_the_sync_branch_authored_entirely_by_the_bot_is_exempt(self):
+        self.assertTrue(
+            check_tdd_commits.is_standards_sync_pr(
+                "bot/standards-sync", ["agent-bureau-bot[bot]"] * 2
+            )
+        )
+
+    def test_one_foreign_commit_on_the_sync_branch_ends_the_exemption(self):
+        # EVERY commit, not the first or the last: a branch anyone can push to
+        # would otherwise be a way to land unchecked code behind the bot's name.
+        self.assertFalse(
+            check_tdd_commits.is_standards_sync_pr(
+                "bot/standards-sync", ["agent-bureau-bot[bot]", "alice"]
+            )
+        )
+        self.assertFalse(
+            check_tdd_commits.is_standards_sync_pr(
+                "bot/standards-sync", ["alice", "agent-bureau-bot[bot]"]
+            )
+        )
+
+    def test_the_bot_on_any_other_branch_is_still_checked(self):
+        # This bot authors nearly every PR in the fleet — the branch is what
+        # narrows the exemption to the one nightly job.
+        for ref in (
+            "agent/DRE-3885-standards-sync-tdd-exemption",
+            "bot/standards-sync-2",
+            "bot/standards-sync/evil",
+            "evil/bot/standards-sync",
+            "main",
+            "",
+            None,
+        ):
+            with self.subTest(head_ref=ref):
+                self.assertFalse(
+                    check_tdd_commits.is_standards_sync_pr(
+                        ref, ["agent-bureau-bot[bot]"]
+                    )
+                )
+
+    def test_no_commits_is_not_exempt(self):
+        # Fail-closed: `all()` over an empty list is True, which would exempt a
+        # branch whose commits could not be read at all.
+        self.assertFalse(
+            check_tdd_commits.is_standards_sync_pr("bot/standards-sync", [])
+        )
+
+
 class GitRepoMixin:
     """A throwaway git repo plus the few helpers the end-to-end tests need.
     Mixed into each TestCase that drives the real script over real commits."""
@@ -436,16 +545,28 @@ class GitRepoMixin:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
 
-    def add_commit(self, rel, msg):
+    def add_commit(self, rel, msg, author=None):
+        """One commit. `author` overrides the git author line the way a bot's
+        own workflow commit carries it (DRE-3885)."""
         self.write(rel, f"content for {msg}")
         self.git("add", "-A")
-        self.git("commit", "-q", "-m", msg)
+        extra = ["--author", f"{author} <{author}@users.noreply.github.com>"] \
+            if author else []
+        self.git("commit", "-q", "-m", msg, *extra)
 
-    def run_check(self, base="main", head="HEAD", author=None):
+    def run_check(self, base="main", head="HEAD", author=None, head_ref=None,
+                  github_head_ref=None):
         env = {**os.environ}
-        env.pop("PR_AUTHOR", None)
+        # Popped, never inherited: this suite runs inside a pull_request
+        # workflow, where GitHub sets GITHUB_HEAD_REF for real.
+        for var in ("PR_AUTHOR", "HEAD_REF", "GITHUB_HEAD_REF"):
+            env.pop(var, None)
         if author is not None:
             env["PR_AUTHOR"] = author
+        if head_ref is not None:
+            env["HEAD_REF"] = head_ref
+        if github_head_ref is not None:
+            env["GITHUB_HEAD_REF"] = github_head_ref
         return subprocess.run(
             [sys.executable, str(SCRIPT), base, head],
             cwd=self.repo, capture_output=True, text=True, env=env,
@@ -538,6 +659,73 @@ class GitCliTest(GitRepoMixin, unittest.TestCase):
         self.git("checkout", "-q", "-b", "agent/DRE-5-x")
         self.add_commit("scripts/widget.py", "fix(DRE-5): impl first")
         p = self.run_check(author="alice")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    # --- standards-sync exemption end-to-end (DRE-3885) --------------------
+
+    BOT = "agent-bureau-bot[bot]"
+
+    def _standards_sync_commit(self, msg, author):
+        """The nightly job's own commit, reproduced: two generated manifests
+        and the instructions file, in one commit, with no test anywhere."""
+        self.write("plugins/.claude-plugin/marketplace.json", '{"version": "1"}')
+        self.write(
+            "plugins/dreadnought-standards/.claude-plugin/plugin.json",
+            '{"version": "1"}',
+        )
+        self.write(
+            "plugins/dreadnought-standards/skills/dreadnought-card-quality/SKILL.md",
+            "# card quality\n",
+        )
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", msg,
+                 "--author", f"{author} <{author}@users.noreply.github.com>")
+
+    def test_sync_branch_authored_by_the_bot_exits_0_without_a_test_commit(self):
+        # The live shape: one commit, code-classified manifests, no RED test —
+        # the failure that repeated nightly and cannot fix itself.
+        self.git("checkout", "-q", "-b", "bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", self.BOT)
+        p = self.run_check(head_ref="bot/standards-sync")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("exempt", p.stdout)
+        self.assertIn("bot/standards-sync", p.stdout)
+
+    def test_sync_branch_with_a_foreign_commit_is_still_checked(self):
+        # Branch AND author: one commit by somebody else and the gate is back.
+        self.git("checkout", "-q", "-b", "bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", self.BOT)
+        self.add_commit("scripts/widget.py", "feat: smuggled in", author="alice")
+        p = self.run_check(head_ref="bot/standards-sync")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
+
+    def test_the_bot_on_another_branch_is_still_checked(self):
+        # The same author, an ordinary agent branch: the discipline holds.
+        self.git("checkout", "-q", "-b", "agent/DRE-9-x")
+        self.add_commit("scripts/widget.py", "feat(DRE-9): impl first",
+                        author=self.BOT)
+        p = self.run_check(head_ref="agent/DRE-9-x", author=self.BOT)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
+
+    def test_the_branch_can_arrive_on_githubs_own_head_ref_variable(self):
+        # The fleet runs this check from `.bureau-pipeline/scripts/` through
+        # each product repo's OWN workflow, which this PR cannot edit. GitHub
+        # sets GITHUB_HEAD_REF itself on every pull_request run, so the
+        # exemption reaches agent-bureau — where the nightly PR is opened —
+        # without a workflow change there.
+        self.git("checkout", "-q", "-b", "bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", self.BOT)
+        p = self.run_check(github_head_ref="bot/standards-sync")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_the_sync_branch_with_no_branch_env_at_all_is_still_checked(self):
+        # Fail-closed: with neither variable set (the pre-push local run) the
+        # checker cannot know the branch, so it checks.
+        self.git("checkout", "-q", "-b", "bot/standards-sync")
+        self._standards_sync_commit("chore: sync dreadnought standards", self.BOT)
+        p = self.run_check()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
 
 
@@ -946,6 +1134,24 @@ class WorkflowWiringTest(unittest.TestCase):
             "github.event.pull_request.user.login",
             str(step.get("env", {}).get("PR_AUTHOR", "")),
             "the job must hand the PR author to the check via PR_AUTHOR",
+        )
+
+    def test_head_ref_reaches_the_check_for_the_standards_sync_exemption(self):
+        # DRE-3885: the branch is half the standards-sync exemption (the commit
+        # authors are the other half, read from git). Through env like every
+        # other ref here — a crafted branch name must not become shell input.
+        step = next(
+            s for s in self.job["steps"]
+            if "check_tdd_commits.py" in (s.get("run") or "")
+        )
+        self.assertIn(
+            "github.event.pull_request.head.ref",
+            str(step.get("env", {}).get("HEAD_REF", "")),
+            "the job must hand the PR's head branch to the check via HEAD_REF",
+        )
+        self.assertNotIn(
+            "${{", step["run"],
+            "no event field may be interpolated into the shell line",
         )
 
 
