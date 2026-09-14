@@ -13,6 +13,12 @@ The rule this file pins:
   deleting it. No new `workflow_call` input — a required input is the
   DRE-2689 startup-failure shape, and an optional one would still need every
   stub touched.
+* …except the SHORT-job lane (DRE-3887): the two bookkeeping reusables put
+  `vars.BUREAU_SHORT_RUNS_ON` in front of that same chain, so a repo whose
+  light runners are busy with 20-minute Claude jobs can route its 30-second
+  gates somewhere else. The rest of the rule is unchanged, and a repo that
+  sets nothing renders exactly what it renders today —
+  `tests/test_short_runs_on_lane.py` is where that lane is pinned.
 * Every job in a workflow that runs only in THIS repo stays on the literal
   `ubuntu-latest`. bureau-pipeline is public, its minutes bill at $0, and the
   org's Default runner group refuses public repos — a public-repo job pointed
@@ -31,6 +37,15 @@ import yaml
 WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 
 SWITCHABLE = "${{ fromJSON(vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]') }}"
+# The short lane (DRE-3887): the SAME chain with one more variable in front,
+# so an unset `BUREAU_SHORT_RUNS_ON` renders whatever `SWITCHABLE` renders.
+SHORT_SWITCHABLE = (
+    "${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON"
+    " || '[\"ubuntu-latest\"]') }}"
+)
+# The two reusables that carry only sub-minute bookkeeping jobs. Exactly these
+# — the scope is the card's, and widening it is a decision, not a tidy-up.
+SHORT_LANE = {"merge-gate.yml", "linear-sync.yml"}
 HOSTED = "ubuntu-latest"
 
 
@@ -79,14 +94,15 @@ def test_every_runner_job_declares_where_it_runs(path: Path) -> None:
 )
 def test_reusable_jobs_read_the_callers_runner_variable(path: Path) -> None:
     doc = _load(path)
+    expected = SHORT_SWITCHABLE if path.name in SHORT_LANE else SWITCHABLE
     wrong = [
         f"{job_id}: {runs_on!r}"
         for job_id, runs_on in _runner_jobs(doc)
-        if runs_on != SWITCHABLE
+        if runs_on != expected
     ]
     assert not wrong, (
         f"{path.name} is a workflow_call reusable; every job must read "
-        f"BUREAU_RUNS_ON with the hosted default. Not switchable: {wrong}"
+        f"{expected} . Not switchable: {wrong}"
     )
 
 
