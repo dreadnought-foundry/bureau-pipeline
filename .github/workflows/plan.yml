@@ -818,6 +818,45 @@ jobs:
           python3 .bureau-pipeline/scripts/planning_route.py exit \
             "${{ github.event.client_payload.identifier }}"
 
+      # A FRESH APP TOKEN BEFORE EVERY STEP THAT SPENDS ONE PAST A MODEL RUN
+      # (DRE-3940). GitHub gives an App installation token exactly 60 minutes,
+      # and `Mint bot token` runs at job start. On 2026-09-14 portico run
+      # 34869632296 minted at 16:56Z, the planner ran 75 minutes, and `First
+      # critic — round 1` died at 18:12Z in under a second with `401 Bad
+      # credentials`: the plan written, never reviewed, and the failure reading
+      # as a credential problem rather than a clock.
+      #
+      # The rule: every step that spends a token reads one minted after the
+      # last `claude-code-action` step ABOVE it in this file. A model run is the
+      # one step here whose length is not bounded in seconds, and at the
+      # incident's ~32 s/turn any of them can pass the hour alone. The rule is
+      # positional, not per-route, on purpose: routes are exclusive today (this
+      # planner never runs after the one-off critic above it), but a positional
+      # rule cannot be broken by a reordering nobody re-reasons about, and a
+      # mint costs one API call. tests/test_plan_token_remint.py pins it.
+      #
+      # This is agent-task.yml's shape (DRE-3043's `Mint fresh push token`): a
+      # `run:` step cannot mint, so the mint is its own step, immediately before
+      # its consumers, with the same pinned action and the same App as `Mint bot
+      # token`. Deliberately NOT continue-on-error, unlike agent-task.yml's
+      # rescue mints: those must never redden a build that is otherwise fine,
+      # while a mint that fails here should go red AT the mint, not as `Bad
+      # credentials` one step later. Each re-mint's `if:` covers every consumer
+      # it feeds, so it runs whenever one of them can.
+      #
+      # Q1/Q2 (standards/vendor-boundaries.md): unchanged — the same App
+      # identity and the same two secrets as `Mint bot token`, from the same
+      # store; only the token's age changes. Q3: minting is idempotent and a
+      # rerun mints again. Q5: a failed mint stops the job before the step that
+      # would have spent a dead token.
+      - name: Re-mint bot token — planner
+        id: app_plan
+        if: steps.route.outputs.mode == 'plan'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       - name: Plan epic
         id: claude
         if: steps.route.outputs.mode == 'plan'
@@ -832,7 +871,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.app_plan.outputs.token }}
           # github-actions: reconcile dispatches on the workflow's own
           # GITHUB_TOKEN, so its workflow_dispatch runs initiate as
           # github-actions (DRE-2053).
@@ -1249,6 +1288,17 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
+      # Fresh App token for round 1 (DRE-3940) — the incident step: the planner
+      # above is a model run and passed the hour on 2026-09-14. The rule and its
+      # reasons are on `Re-mint bot token — planner`.
+      - name: Re-mint bot token — first critic
+        id: app_prea
+        if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       - name: First critic — round 1 (before the CEO reads it)
         id: prea
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
@@ -1263,7 +1313,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.app_prea.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           # 60 since DRE-2785 (was 40), raised with the WebSearch/WebFetch
           # grant: a critic that cannot check an external claim approves a
@@ -1372,6 +1422,17 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
 
+      # Fresh App token for the re-plan (DRE-3940): round 1 of the critic above
+      # is a model run of its own. The rule and its reasons are on
+      # `Re-mint bot token — planner`.
+      - name: Re-mint bot token — re-plan
+        id: app_replan
+        if: steps.pre1.outputs.action == 'hold'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       - name: Re-plan after send-back
         id: replan
         if: steps.pre1.outputs.action == 'hold'
@@ -1386,7 +1447,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.app_replan.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
             --max-turns 60
@@ -1489,6 +1550,17 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
 
+      # Fresh App token for round 2 (DRE-3940): the re-plan above is a full
+      # planner run. The rule and its reasons are on
+      # `Re-mint bot token — planner`.
+      - name: Re-mint bot token — first critic round 2
+        id: app_preb
+        if: steps.pre1.outputs.action == 'hold'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       - name: First critic — round 2
         id: preb
         if: steps.pre1.outputs.action == 'hold'
@@ -1503,7 +1575,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.app_preb.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           # 60 since DRE-2785 (was 40), raised with the WebSearch/WebFetch
           # grant: a critic that cannot check an external claim approves a
@@ -1738,6 +1810,18 @@ jobs:
             echo "max_turns=100" >> "$GITHUB_OUTPUT"
           }
 
+      # Fresh App token for the post-approval review (DRE-3940). On the activate
+      # route no model runs before it, but the planner and both first-critic
+      # rounds sit above it in the file, and the rule is positional. The rule
+      # and its reasons are on `Re-mint bot token — planner`.
+      - name: Re-mint bot token — second critic
+        id: app_posta
+        if: steps.route.outputs.mode == 'activate'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       # `continue-on-error`, because THE RESULT FILE DECIDES and this step's
       # outcome does not (DRE-3501). On 2026-09-07 run 34144302622 FINISHED —
       # `"subtype": "success"` at turn 51 of a 48-turn ceiling — and the action
@@ -1772,7 +1856,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.app_posta.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
             --max-turns ${{ steps.postturns.outputs.max_turns }}
@@ -1917,6 +2001,20 @@ jobs:
             --result-file "${{ runner.temp }}/plan-critic-post.md" \
             --github-output "$GITHUB_OUTPUT"
 
+      # Fresh App token for `the review died` and the re-plan after it
+      # (DRE-3940): the review runs up to its per-plan turn ceiling. Placed
+      # after the receipt and the verdict, which sit directly behind the review
+      # and spend no token. Not always(): the review is continue-on-error, so a
+      # failed review still leaves this step running. The rule and its reasons
+      # are on `Re-mint bot token — planner`.
+      - name: Re-mint bot token — after the second critic
+        id: app_post
+        if: steps.route.outputs.mode == 'activate'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       # The review DIED — the action ended without a decision (DRE-3241). On
       # 2026-09-05 that left nothing on the epic: the job went red, every
       # sweep read the newest trusted marker — round ONE's send-back, already
@@ -1962,8 +2060,10 @@ jobs:
       # and the dispatch leaves an honest record and the sweep's POST_DIED
       # refusal still names what happens next.
       #
-      # Q1/Q2: the dispatch needs `contents:write`, which the App token minted
-      # by `Mint bot token` holds and the stub's own `github.token` does not
+      # Q1/Q2: the dispatch needs `contents:write`, which the App token holds
+      # (minted fresh by `Re-mint bot token — after the second critic`, the
+      # same App as `Mint bot token`, DRE-3940) and the stub's own
+      # `github.token` does not
       # (`plan_run.py`'s docstring) — the same path reconcile.redispatch uses,
       # initiating as a bot already in every reachable `allowed_bots` list. The
       # retry run reads the product repo's normal secrets, as every relay
@@ -1973,7 +2073,7 @@ jobs:
         if: steps.route.outputs.mode == 'activate' && steps.posta.outcome == 'failure' && steps.postverdict.outputs.verdict == 'NO_RESULT'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.app_post.outputs.token }}
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           EXEC_FILE="${{ steps.posta.outputs.execution_file }}"
@@ -2130,7 +2230,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.app_post.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
             --max-turns 60
@@ -2226,6 +2326,17 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Fresh App token for the send-back dispatch (DRE-3940): the re-plan above
+      # is a model run, and continue-on-error, so this runs after a failed one
+      # too. The rule and its reasons are on `Re-mint bot token — planner`.
+      - name: Re-mint bot token — send-back
+        id: app_sendback
+        if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       # Held — and the three things that can be true of a held plan, in this
       # order (DRE-3291). The children never promote in any of them.
       #
@@ -2253,18 +2364,19 @@ jobs:
       #     plan back again that is the bound, which parks for him.
       #
       # Q1/Q2 (standards/vendor-boundaries.md): the dispatch is the same seam
-      # the dead-review step uses — the App token minted by `Mint bot token`,
-      # which holds the `contents:write` the stub's own `github.token` does
-      # not, initiating as a bot already in every reachable `allowed_bots`
-      # list. Q5: the receipt is written FROM the dispatch's rc and never ahead
-      # of it (DRE-2034), and a dispatch that did not go through leaves the
-      # step RED, so the medic picks the run up rather than the epic sitting
-      # silently with nothing scheduled.
+      # the dead-review step uses — the App token, minted fresh by
+      # `Re-mint bot token — send-back` from the same App as `Mint bot token`
+      # (DRE-3940), which holds the `contents:write` the stub's own
+      # `github.token` does not, initiating as a bot already in every
+      # reachable `allowed_bots` list. Q5: the receipt is written FROM the
+      # dispatch's rc and never ahead of it (DRE-2034), and a dispatch that
+      # did not go through leaves the step RED, so the medic picks the run up
+      # rather than the epic sitting silently with nothing scheduled.
       - name: Second critic sent the plan back
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.app_sendback.outputs.token }}
           BOUND: ${{ steps.post1.outputs.bound }}
           FINDING: ${{ steps.post1.outputs.reason }}
           ROUND: ${{ steps.post1.outputs.round }}
@@ -2394,6 +2506,18 @@ jobs:
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of planner context"
 
+      # Fresh App token for the wave planner (DRE-3940). On the wave route no
+      # model runs before it, but every epic-route model step sits above it in
+      # the file, and the rule is positional. The rule and its reasons are on
+      # `Re-mint bot token — planner`.
+      - name: Re-mint bot token — wave plan
+        id: app_wave
+        if: steps.shape.outputs.route == 'wave'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
       - name: Wave route — write the wave plan
         id: wave
         if: steps.shape.outputs.route == 'wave'
@@ -2408,7 +2532,7 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          github_token: ${{ steps.app_wave.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
             --max-turns 80
