@@ -984,6 +984,27 @@ jobs:
             --worker-login "$WORKER_LOGIN" \
             --out .bureau-pipeline/fix-thread.md
 
+      # Claude Code, installed ONCE and proved, before the model step below
+      # (DRE-3414). DRE-3416: the vendor's own installer exited clean, left no
+      # launcher, and every Claude-running job in the fleet died minutes later
+      # on "native binary not found" — one turn, $0, which reads exactly like
+      # a stale credential. The first operator to look was sent to the token,
+      # which was the one thing that was not wrong.
+      #
+      # This step asserts `claude --version` answers, retries the install
+      # once, and fails AS AN INSTALL FAILURE if it still does not; the model
+      # step below then runs the binary this step proved, never a second copy
+      # the vendor installed and nobody checked. It comes out of the pinned
+      # pipeline checkout, the same way this file reaches the fleet's other
+      # shared actions, so a caller's pipeline_ref picks the channel.
+      - name: Install Claude Code (asserted)
+        id: install_claude
+        # Gated exactly like the model step below: a run that never reaches a
+        # model must neither spend an install nor go red for one it did not
+        # need.
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        uses: ./.bureau-pipeline/.github/actions/install-claude-code
+
       - name: Fix
         id: claude
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
@@ -1003,6 +1024,11 @@ jobs:
           # agent's own step lacked it.
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
+          # DRE-3414: the launcher the shared install step above PROVED
+          # runs. Without it the vendor action installs a second copy of
+          # Claude Code that nothing asserted, and the step above proves
+          # nothing about the binary this step actually executes.
+          path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}

@@ -1,0 +1,187 @@
+# One Claude Code install, PROVED before any model step runs (DRE-3414).
+#
+# On 2026-09-08 (DRE-3416) claude-code-action's own installer exited clean and
+# left no launcher. Nothing checked, so nothing failed at install time: every
+# Claude-running job in the fleet died minutes later on
+#
+#     ReferenceError: Claude Code native binary not found at
+#     /home/runner/.local/bin/claude
+#
+# — one turn, $0, which is byte-for-byte the fingerprint of a stale
+# credential. The first operator to look was sent to the token, which was the
+# one thing that was not wrong, and the fleet was down 72 minutes.
+#
+# The remedy is this action, and it is one sentence: an installer's exit code
+# is not the thing we need — a launcher that ANSWERS is. So the install is
+# followed by `claude --version`, and only a binary that ran is published.
+#
+# WHAT IT DOES, in order:
+#   1. installs Claude Code from the native installer;
+#   2. asserts `claude --version` exits 0 (not `test -x` — DRE-3416's launcher
+#      would have passed an existence check on the days it existed at all);
+#   3. on failure, retries the install exactly ONCE. Two attempts, never a
+#      loop: a vendor outage should fail this job at once, not hold a runner;
+#   4. if the second attempt is no better, fails with a `::error::` that names
+#      an INSTALL failure and says out loud that it is neither the credential
+#      nor the model. That sentence is the whole point of the card.
+#
+# WHY THE CALLER PASSES `outputs.executable` ON to the vendor action
+# (`path_to_claude_code_executable`): without it the vendor installs a second
+# copy of Claude Code that this assert never saw, and the proof above proves
+# nothing about the binary the model actually runs.
+#
+# WHAT THIS ACTION MUST NEVER DO: check out dreadnought-foundry/bureau-pipeline
+# — the same rule setup-node-cached carries, and for the same reason. A
+# checkout in here could not be pinned by `pipeline_ref`, because an action
+# cannot receive a `workflow_call` input.
+#
+# tests/test_claude_install_asserted.py is the guard, and it EXECUTES the
+# script below against a stub installer rather than grepping this file: "it
+# retries once" means the installer really ran twice, and "it fails loudly"
+# means the process really exited non-zero saying the word install. The same
+# file sweeps `.github/workflows/` and fails on any raw install left behind.
+
+name: Install Claude Code (asserted)
+description: >-
+  Install Claude Code and prove the binary runs before any model step starts,
+  retrying the install once and failing as an install failure — not as the
+  credential or the model — when it does not.
+
+inputs:
+  version:
+    description: >-
+      Version argument handed to the native installer (an exact version,
+      "stable", or "latest").
+    required: false
+    # 2.1.263 — EXACTLY what the vendor action installs at the sha every
+    # workflow here pins (`anthropics/claude-code-action@9c5ddab…`, v1.0.217:
+    # `base-action/action.yml` sets `CLAUDE_CODE_VERSION="2.1.263"` and pipes
+    # it into https://claude.ai/install.sh). Passing the proved path to that
+    # action makes it skip its own install, so this line — not the vendor's —
+    # now decides which Claude Code the fleet runs. Taking the install over
+    # must not also change the version it installs.
+    #
+    # It is deliberately NOT "stable": the vendor is pinned at v1.0.217
+    # because v1.0.218's Claude Code 2.1.265 is the installer that leaves no
+    # launcher (DRE-3416), so a floating channel could hand the whole fleet
+    # exactly the build this action exists to catch — loudly, but everywhere.
+    #
+    # MOVE THIS WITH THE VENDOR PIN. DRE-3417 unpins claude-code-action; the
+    # version that release installs is the version this line takes, and
+    # `tests/test_check_action_pins.py` holds the other half of the pair.
+    default: "2.1.263"
+  installer-url:
+    description: >-
+      Where the native installer is fetched from. A seam for tests, which
+      point it at a local stub; leave it empty in every real caller.
+    required: false
+    default: ""
+  bin-dir:
+    description: >-
+      Directory the installer drops the `claude` launcher in. Empty means the
+      installer's own default, `$HOME/.local/bin` — the path DRE-3416's error
+      message named.
+    required: false
+    default: ""
+  retry-delay:
+    description: >-
+      Seconds to wait before the single retry. Empty means 5.
+    required: false
+    default: ""
+
+outputs:
+  executable:
+    description: >-
+      Absolute path to the Claude Code launcher this action PROVED runs. Pass
+      it to `anthropics/claude-code-action` as
+      `path_to_claude_code_executable`, or the vendor action installs its own
+      copy and the assert above covers nothing.
+    value: ${{ steps.install.outputs.executable }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Claude Code and prove it runs
+      id: install
+      shell: bash
+      env:
+        # Through env, never interpolated into the shell line — the same rule
+        # every workflow in this repo follows for anything caller-supplied.
+        CLAUDE_CODE_VERSION: ${{ inputs.version }}
+        CLAUDE_INSTALLER_URL: ${{ inputs.installer-url }}
+        CLAUDE_BIN_DIR: ${{ inputs.bin-dir }}
+        CLAUDE_INSTALL_RETRY_DELAY: ${{ inputs.retry-delay }}
+      run: |
+        # No `set -e`: every failure here is handled explicitly, because the
+        # one thing this action may never do is end early and quietly.
+        set -uo pipefail
+
+        VERSION="${CLAUDE_CODE_VERSION:-stable}"   # the input carries the pin
+        URL="${CLAUDE_INSTALLER_URL:-https://claude.ai/install.sh}"
+        BIN_DIR="${CLAUDE_BIN_DIR:-$HOME/.local/bin}"
+        DELAY="${CLAUDE_INSTALL_RETRY_DELAY:-5}"
+        BIN="$BIN_DIR/claude"
+        INSTALLER="${RUNNER_TEMP:-/tmp}/claude-code-install.sh"
+
+        # One attempt: fetch, install, then ASSERT. Returns 0 only when the
+        # launcher answered.
+        attempt() {
+          echo "--- Claude Code install, attempt $1 of 2 (version: $VERSION)"
+          rm -f "$INSTALLER"
+          if ! curl -fsSL --max-time 120 "$URL" -o "$INSTALLER"; then
+            echo "attempt $1: could not download the installer from $URL"
+            return 1
+          fi
+          # The installer's own exit code is REPORTED, never trusted:
+          # DRE-3416's exited 0 and left nothing behind. It is not a reason to
+          # skip the assert either way, so the result only gets printed.
+          #
+          # Under `timeout` when the runner has it, guarded exactly the way
+          # the vendor's own install step guarded it: an install that HANGS
+          # would otherwise burn the whole job's budget rather than fail, and
+          # this action replaces that step, so it has to keep the ceiling.
+          if command -v timeout >/dev/null 2>&1; then
+            timeout --foreground --kill-after=10 120 bash "$INSTALLER" "$VERSION"
+          else
+            bash "$INSTALLER" "$VERSION"
+          fi || echo "attempt $1: the installer itself exited non-zero"
+          if [ ! -x "$BIN" ]; then
+            echo "attempt $1: no executable at $BIN after the install"
+            return 1
+          fi
+          # THE ASSERT. Existence is not the test — a half-written launcher or
+          # a libc mismatch is present, executable, and cannot run.
+          if ! "$BIN" --version; then
+            echo "attempt $1: '$BIN --version' did not succeed"
+            return 1
+          fi
+          return 0
+        }
+
+        INSTALLED=""
+        for n in 1 2; do
+          if attempt "$n"; then
+            INSTALLED=yes
+            break
+          fi
+          if [ "$n" = "1" ]; then
+            echo "retrying the Claude Code install once, in ${DELAY}s"
+            sleep "$DELAY"
+          fi
+        done
+
+        if [ -z "$INSTALLED" ]; then
+          # One line, and it names the cause the run actually had. An operator
+          # who reads "native binary not found" rotates a healthy credential
+          # (DRE-3416); this sentence exists to stop that happening again.
+          echo "::error::Claude Code install failed: two attempts left no" \
+               "binary that answers '$BIN --version'. This is an install" \
+               "failure — it is not an authentication failure and not a model" \
+               "failure, so no credential needs rotating on the strength of" \
+               "this message. Check the installer at $URL and the vendor pin."
+          exit 1
+        fi
+
+        echo "executable=$BIN" >> "$GITHUB_OUTPUT"
+        echo "$BIN_DIR" >> "$GITHUB_PATH"
+        echo "Claude Code install asserted: $BIN"

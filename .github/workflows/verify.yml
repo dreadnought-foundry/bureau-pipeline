@@ -378,6 +378,27 @@ jobs:
           # model is the silently-weakened critic DRE-2317 exists to prevent.
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
+      # Claude Code, installed ONCE and proved, before the model step below
+      # (DRE-3414). DRE-3416: the vendor's own installer exited clean, left no
+      # launcher, and every Claude-running job in the fleet died minutes later
+      # on "native binary not found" — one turn, $0, which reads exactly like
+      # a stale credential. The first operator to look was sent to the token,
+      # which was the one thing that was not wrong.
+      #
+      # This step asserts `claude --version` answers, retries the install
+      # once, and fails AS AN INSTALL FAILURE if it still does not; the model
+      # step below then runs the binary this step proved, never a second copy
+      # the vendor installed and nobody checked. It comes out of the pinned
+      # pipeline checkout, the same way this file reaches the fleet's other
+      # shared actions, so a caller's pipeline_ref picks the channel.
+      - name: Install Claude Code (asserted)
+        id: install_claude
+        # Gated exactly like the model step below: a run that never reaches a
+        # model must neither spend an install nor go red for one it did not
+        # need.
+        if: steps.scope.outputs.in_scope == 'true'
+        uses: ./.bureau-pipeline/.github/actions/install-claude-code
+
       - name: Verifier run
         id: verifier
         if: steps.scope.outputs.in_scope == 'true'
@@ -389,6 +410,11 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
+          # DRE-3414: the launcher the shared install step above PROVED
+          # runs. Without it the vendor action installs a second copy of
+          # Claude Code that nothing asserted, and the step above proves
+          # nothing about the binary this step actually executes.
+          path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.worker.outputs.token }}
@@ -543,7 +569,11 @@ jobs:
       # Gated identically to the retry it guards, so a healthy verify never
       # sleeps.
       - name: Back off before the verifier retry
-        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
+        # Byte-identical to the retry's own `if` below, including DRE-3414's
+        # install conjunct — tests/test_gate_pool_and_backoff.py fails if the
+        # two ever drift, because a backoff that outlives its retry sleeps
+        # 120s on runs that will never retry.
+        if: always() && !cancelled() && steps.install_claude.outcome == 'success' && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
         run: |
           echo "verifier attempt 1 produced no verdict — waiting 120s before the retry"
           sleep 120
@@ -554,12 +584,22 @@ jobs:
       # DRY'd — the runner would fail to parse the file.
       - name: Verifier run (retry)
         id: verifier_retry
-        if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
+        # DRE-3414: `always()` is why this needs saying out loud. A failed
+        # step skips the rest of the job — except the steps that asked for
+        # always(), which is this one. Without the install conjunct the retry
+        # would start against an executable the install step never produced,
+        # and buy a second identical death for the price of a first.
+        if: always() && !cancelled() && steps.install_claude.outcome == 'success' && steps.scope.outputs.in_scope == 'true' && steps.gate1.outputs.real != 'true'
         uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
         continue-on-error: true
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
+          # DRE-3414: the launcher the shared install step above PROVED
+          # runs. Without it the vendor action installs a second copy of
+          # Claude Code that nothing asserted, and the step above proves
+          # nothing about the binary this step actually executes.
+          path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.worker.outputs.token }}

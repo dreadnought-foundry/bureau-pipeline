@@ -819,6 +819,28 @@ jobs:
       #
       # Pinned by tests/test_agent_linear_key.py, which fails if this step
       # is renamed or the exception loses its reason.
+
+      # Claude Code, installed ONCE and proved, before the model step below
+      # (DRE-3414). DRE-3416: the vendor's own installer exited clean, left no
+      # launcher, and every Claude-running job in the fleet died minutes later
+      # on "native binary not found" — one turn, $0, which reads exactly like
+      # a stale credential. The first operator to look was sent to the token,
+      # which was the one thing that was not wrong.
+      #
+      # This step asserts `claude --version` answers, retries the install
+      # once, and fails AS AN INSTALL FAILURE if it still does not; the model
+      # step below then runs the binary this step proved, never a second copy
+      # the vendor installed and nobody checked. It comes out of the pinned
+      # pipeline checkout, the same way this file reaches the fleet's other
+      # shared actions, so a caller's pipeline_ref picks the channel.
+      - name: Install Claude Code (asserted)
+        id: install_claude
+        # Gated exactly like the model step below: a run that never reaches a
+        # model must neither spend an install nor go red for one it did not
+        # need.
+        if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
+        uses: ./.bureau-pipeline/.github/actions/install-claude-code
+
       - name: Critic review
         id: critic
         if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
@@ -827,6 +849,11 @@ jobs:
         # false REQUEST_CHANGES — the gate below detects it and we retry.
         continue-on-error: true
         with:
+          # DRE-3414: the launcher the shared install step above PROVED
+          # runs. Without it the vendor action installs a second copy of
+          # Claude Code that nothing asserted, and the step above proves
+          # nothing about the binary this step actually executes.
+          path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
@@ -1095,7 +1122,11 @@ jobs:
       # Gated identically to the retry it guards, so a healthy review never
       # sleeps.
       - name: Back off before the critic retry
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
+        # Byte-identical to the retry's own `if` below, including DRE-3414's
+        # install conjunct — tests/test_gate_pool_and_backoff.py fails if the
+        # two ever drift, because a backoff that outlives its retry sleeps
+        # 120s on runs that will never retry.
+        if: always() && !cancelled() && steps.install_claude.outcome == 'success' && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
         run: |
           echo "critic attempt 1 produced no verdict — waiting 120s before the retry"
           sleep 120
@@ -1123,10 +1154,20 @@ jobs:
       # exactly the drift this comment block warns about.
       - name: Critic review (retry)
         id: critic_retry
-        if: always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
+        # DRE-3414: `always()` is why this needs saying out loud. A failed
+        # step skips the rest of the job — except the steps that asked for
+        # always(), which is this one. Without the install conjunct the retry
+        # would start against an executable the install step never produced,
+        # and buy a second identical death for the price of a first.
+        if: always() && !cancelled() && steps.install_claude.outcome == 'success' && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized' && steps.gate1.outputs.real != 'true'
         uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217 — pinned DRE-3416: v1.0.218's Claude Code 2.1.265 installer leaves no launcher (anthropics/claude-code-action#1817); unpin on DRE-3417
         continue-on-error: true
         with:
+          # DRE-3414: the launcher the shared install step above PROVED
+          # runs. Without it the vendor action installs a second copy of
+          # Claude Code that nothing asserted, and the step above proves
+          # nothing about the binary this step actually executes.
+          path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app.outputs.token }}
@@ -1466,6 +1507,16 @@ jobs:
           # previous finding on this same commit. Two verdicts on one head
           # otherwise look like a bug to whoever reads the thread next.
           REFUTED: ${{ steps.cardctx.outputs.refuted }}
+          # DRE-3414: `true` when the shared install-and-assert step is what
+          # failed. A failed install skips BOTH critic attempts, so both gates
+          # report an attempt that left no execution record and the neutral
+          # comment falls into the crash branch — the one that blames a
+          # startup/auth failure. That sentence would send the operator to
+          # rotate a credential the reviewer never reached, which is the
+          # DRE-2924 mistake with a new cause. One word, written by Actions
+          # from a step outcome, so nothing a hostile diff could reach
+          # composes it.
+          INSTALL_FAILED: ${{ steps.install_claude.outcome == 'failure' }}
         run: |
           if [ "${STRATEGY:-}" = "oversized" ]; then
             # No review was attempted. This message names the actual size and
@@ -1566,6 +1617,25 @@ jobs:
             if [ -n "$FOOTER" ]; then
               printf '\n%s\n' "$FOOTER" >> /tmp/qa-comment.md
             fi
+          elif [ "${INSTALL_FAILED:-}" = "true" ]; then
+            # DRE-3414: the reviewer never started, because Claude Code was
+            # never installed. The shared install-and-assert step proved the
+            # binary would not run and failed the job there — so both critic
+            # attempts were skipped, both gates are empty, and without this
+            # branch the comment below would blame a startup/auth failure and
+            # send an operator to rotate a healthy credential (DRE-3416: that
+            # is exactly what the fleet's last install outage cost).
+            # Ordered AFTER the real-verdict branch and before every failure
+            # branch: a genuine verdict is never swallowed, and no other
+            # failure wording can claim this run first. Same neutral contract
+            # as every branch here — "QA Critic" so merge-gate treats it as
+            # the latest word and it supersedes a stale APPROVE, no
+            # "VERDICT:" line so merge is held and the fix agent is not woken
+            # for findings nobody made.
+            printf '%s\n\n%s\n' \
+              "🔎 QA Critic could not run — the Claude Code install failed, this is NOT a code rejection." \
+              "The shared install step could not produce a Claude Code binary that runs, so the adversarial reviewer never started and no findings were produced. This is an install failure: it is not an authentication failure and not a model failure, so no credential needs rotating and no model is degraded on the strength of this message — the install step's own error on this run names what it tried. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+              > /tmp/qa-comment.md
           elif [ "${A2_EVIDENCE:-${A1_EVIDENCE:-}}" = "defective" ] && [ -s /tmp/qa-evidence-hold.md ]; then
             # DRE-3005: the reviewer ran, finished, and blocked this pull
             # request on a claim about what a command or a CI job actually
