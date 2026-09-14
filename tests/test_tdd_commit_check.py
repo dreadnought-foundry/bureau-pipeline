@@ -1176,8 +1176,12 @@ class GeneratedRegionStandardTest(unittest.TestCase):
 
     def test_the_enforced_rule_sentence_names_the_exemption(self):
         text = (ROOT / "standards" / "engineering.md").read_text()
-        self.assertIn("generated region", text)
-        self.assertIn("sync_model_config.py --check", text)
+        marker = "The rule as it is ENFORCED, in one sentence."
+        self.assertIn(marker, text, "the enforced-rule bullet is gone")
+        bullet = text.split(marker, 1)[1].split("\n- **", 1)[0]
+        self.assertIn("generated region", bullet)
+        # …and the proof that makes the exemption safe, named.
+        self.assertIn("sync_model_config.py --check", bullet)
 
 
 class WorkflowWiringTest(unittest.TestCase):
