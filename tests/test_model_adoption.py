@@ -465,6 +465,41 @@ def test_a_same_family_version_not_newer_than_the_newest_rung_is_ignored():
     assert decided["claude-sonnet-4-9"]["rule"] == "ignore"
 
 
+def test_a_same_family_id_created_at_the_same_moment_is_not_newer():
+    # The boundary the rule is written on: `ignore` is "not NEWER than the
+    # family's newest rung", so a tie is an ignore. Reading a tie as newer
+    # adopts a rebadge of the model we already run.
+    decided = by_candidate(
+        ma.classify_catalog(
+            [
+                model(SONNET5, "2026-06-29T00:00:00Z"),
+                model("claude-sonnet-5-turbo", "2026-06-29T00:00:00Z"),
+            ],
+            ladders(advisory=[SONNET5]),
+            prices(claude_sonnet_5=(2.0, 10.0), claude_sonnet_5_turbo=(1.0, 1.0)),
+        )
+    )
+    assert decided["claude-sonnet-5-turbo"]["rule"] == "ignore"
+
+
+def test_a_new_family_as_old_as_the_oldest_rung_is_still_asked_about():
+    # The other side of the same boundary: `ignore` for a new family is "OLDER
+    # than every rung", so a tie is a question, not a silent drop.
+    decided = by_candidate(
+        ma.classify_catalog(
+            [
+                model(OPUS, "2026-08-01T00:00:00Z"),
+                model("claude-corvid-1", "2026-08-01T00:00:00Z"),
+            ],
+            ladders(workhorse=[OPUS]),
+            prices(claude_opus_5=(5.0, 25.0)),
+        )
+    )
+    decision = decided["claude-corvid-1"]
+    assert decision["rule"] == "ask"
+    assert decision["reason"].startswith("new model family")
+
+
 def test_a_new_family_older_than_every_rung_is_ignored():
     decided = by_candidate(
         ma.classify_catalog(
