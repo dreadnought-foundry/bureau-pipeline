@@ -128,6 +128,30 @@ class BriefAndStandardTest(unittest.TestCase):
         for role in ("planner", "plan-critic-pre", "plan-critic-post"):
             self.assertIn("card-quality.md", ac.ROLE_STANDARDS[role], role)
 
+    def test_the_code_that_reads_the_shape_does_not_still_describe_a_pair(self):
+        """The standard reading as one card is not enough when the files that
+        IMPLEMENT the shape still say otherwise. The second review of #397 found
+        the pair language surviving in a CLI help string, two docstrings, a
+        module docstring, a scored-dimension message and a workflow comment —
+        each one an engineer or agent reads to learn how the gate works. Pinned
+        per file, per phrase, so a new mention is named where it lands."""
+        stale = {
+            os.path.join(SCRIPTS, "proof_and_demo.py"): ("onto the pair",),
+            os.path.join(SCRIPTS, "planner_score.py"): ("without the pair",
+                                                        "pair exists"),
+            os.path.join(SCRIPTS, "plan_seam.py"): ("for the pair",),
+            os.path.join(SCRIPTS, "linear_ops.py"): ("last two children",
+                                                     "creates the pair last"),
+            WF: ("after the pair", "drops one of them"),
+        }
+        for path, phrases in stale.items():
+            text = " ".join(open(path).read().split())
+            for phrase in phrases:
+                self.assertFalse(
+                    phrase in text,
+                    f"{os.path.relpath(path, REPO)} still says {phrase!r} — "
+                    "the epic closes on ONE proof card")
+
 
 class TheRunChecksThePlannersOutputTest(unittest.TestCase):
     """2 — the gate, and what it reads."""
