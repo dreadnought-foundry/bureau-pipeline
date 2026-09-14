@@ -373,7 +373,8 @@ API_DEATH_RUN = {"is_error": True, "subtype": "success", "num_turns": 1,
 
 
 def _score(tmp_path: Path, *, answer: str | None, execution: dict | None,
-           model: str = "candidate-model", config: str = SYNTHETIC_CONFIG):
+           model: str = "candidate-model", config: str = SYNTHETIC_CONFIG,
+           claude_outcome: str = "success"):
     """Run the verify step's real `run:` block. Returns (proc, outputs)."""
     (tmp_path / "config").mkdir(exist_ok=True)
     (tmp_path / CONFIG_FILE).write_text(config)
@@ -397,7 +398,7 @@ def _score(tmp_path: Path, *, answer: str | None, execution: dict | None,
     env = dict(os.environ)
     env.update({
         "MODEL": model,
-        "CLAUDE_OUTCOME": "success",
+        "CLAUDE_OUTCOME": claude_outcome,
         "CLAUDE_EXECUTION_FILE": str(exec_file),
         "ANSWER_FILE": ANSWER_FILE,
         "CONFIG_FILE": CONFIG_FILE,
@@ -477,9 +478,22 @@ def test_an_api_death_fails_and_is_named(tmp_path):
 
 
 def test_no_execution_record_at_all_fails(tmp_path):
-    # The shape of a model step that never produced a result file.
+    # `classify` answers `none` both for "it did not die" and for "there is no
+    # result record to say so". Absence is not health: an adoption gate must
+    # not certify a candidate on evidence it never saw.
     proc, out = _score(tmp_path, answer=f"ladders={SYNTHETIC_LADDERS}\n",
                        execution=None)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out["outcome"] == "failed"
+    assert "no execution record" in out["summary"]
+
+
+def test_a_trial_step_github_reports_as_failed_fails(tmp_path):
+    # `continue-on-error` keeps the job green, so GitHub's own `outcome` for
+    # the step is the only record that it went red (DRE-2931). A right-looking
+    # answer file does not overrule it.
+    proc, out = _score(tmp_path, answer=f"ladders={SYNTHETIC_LADDERS}\n",
+                       execution=CLEAN_RUN, claude_outcome="failure")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert out["outcome"] == "failed"
 
