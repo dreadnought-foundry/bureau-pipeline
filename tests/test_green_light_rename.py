@@ -75,6 +75,14 @@ SHIM_FILES = ["config/lane-contract.json", "tests/test_lane_scope.py"]
 #: the mention returns on every run and cannot be edited out.
 GENERATED_HISTORY = ("config/split-ledger.json", "docs/split-ledger.md")
 
+#: The recorded board (DRE-3638). `scripts/board_snapshot.py take` writes the
+#: real board, and real cards' titles, descriptions and comments quote the
+#: retired name from before the rename. That is recorded history, like the
+#: ledger above: the fixture is a picture of what the board said, and rewriting
+#: it would make it a picture of a board that never existed. It is exempt by
+#: path, pinned to the snapshot the contract names, so it cannot widen to code.
+RECORDED_BOARD = ("tests/fixtures/board-snapshot-2026-09-12.json",)
+
 
 def src(name: str) -> str:
     return open(os.path.join(WORKFLOWS, name)).read()
@@ -126,7 +134,8 @@ class NoStaleLaneNameTest(unittest.TestCase):
     def test_the_old_lane_name_is_gone_from_every_tracked_file(self):
         offenders = [
             f"{rel}:{i}" for rel, i, line in retired_lane_mentions()
-            if SHIM_MARKER not in line and rel not in GENERATED_HISTORY
+            if SHIM_MARKER not in line
+            and rel not in GENERATED_HISTORY + RECORDED_BOARD
         ]
         self.assertEqual(
             [], offenders,
@@ -147,7 +156,9 @@ class NoStaleLaneNameTest(unittest.TestCase):
         # the derive that ages that card out.
         survivors = sorted({rel for rel, _, _ in retired_lane_mentions()})
         self.assertEqual(
-            SHIM_FILES, [rel for rel in survivors if rel not in GENERATED_HISTORY]
+            SHIM_FILES,
+            [rel for rel in survivors
+             if rel not in GENERATED_HISTORY + RECORDED_BOARD],
         )
 
     def test_the_alias_is_declared_exactly_once(self):
