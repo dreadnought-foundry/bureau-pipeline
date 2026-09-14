@@ -427,3 +427,43 @@ def test_the_cli_touches_nothing_for_a_surface_with_no_pipeline(tmp_path, monkey
     assert code == 0
     assert fake.calls == []
     assert "linear-release" not in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# The note's wording branches, pinned directly (the QA critic's gap on #396)   #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_card_with_no_title_and_no_why_reads_as_having_no_title():
+    assert release_linear.bullet_text({"title": "", "description": ""}) \
+        == release_linear.NO_TITLE
+    assert release_linear.bullet_text(
+        {"title": "   ", "description": "Some prose, no heading."}) == release_linear.NO_TITLE
+    note = release_linear.assemble_note(
+        label="portals", version="portals-v1.0.1", unnamed=[], first=False,
+        cards=[{"identifier": "DRE-7", "title": None, "description": None}])
+    assert f"* {release_linear.NO_TITLE} (DRE-7)" in note
+
+
+def test_an_empty_title_falls_back_to_the_first_sentence_of_why():
+    card = {"title": "", "description": "## Why\n\nThe train forgets what it shipped. "
+                                        "Nobody can see it.\n\n## What\nstuff"}
+    assert release_linear.bullet_text(card) == "The train forgets what it shipped."
+
+
+def test_the_epic_prefix_is_stripped():
+    assert release_linear.bullet_text({"title": "[EPIC] Releases land in Linear"}) \
+        == "Releases land in Linear."
+
+
+def test_a_long_head_before_the_em_dash_stands_alone():
+    head = "The release train writes a Linear release"
+    assert len(head) >= release_linear.TITLE_HEAD_FLOOR
+    assert release_linear.bullet_text({"title": f"{head} — for every declared surface"}) \
+        == f"{head}."
+
+
+def test_a_short_head_keeps_the_whole_title():
+    title = "Short head — the rest of the title carries the meaning"
+    assert len(title.partition(" — ")[0]) < release_linear.TITLE_HEAD_FLOOR
+    assert release_linear.bullet_text({"title": title}) == f"{title}."
