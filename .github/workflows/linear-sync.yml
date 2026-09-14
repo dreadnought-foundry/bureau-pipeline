@@ -96,7 +96,14 @@ on:
 jobs:
   card-done:
     if: github.event.pull_request.merged == true
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The SHORT-job lane (DRE-3887). Closing a card is seconds of Linear calls,
+    # and the conflict sweep below is two `reconcile.py` passes around a 105s
+    # sleep — neither needs the pool that runs the 20-minute Claude jobs, and
+    # sharing it is what left agent-bureau's gates queued for an hour on
+    # 2026-09-13. `BUREAU_SHORT_RUNS_ON` unset renders exactly today's runner,
+    # so nothing moves until a repo sets it
+    # (`tests/test_short_runs_on_lane.py`).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     # Whose Linear hour this job spends (DRE-3321) — see reconcile.yml's sweep
     # for the why. Job level, beside the job that reads secrets.LINEAR_API_KEY,
@@ -205,7 +212,8 @@ jobs:
   # (Origin: PR #1348 / DRE-1277 waited ~1h between sibling merges.)
   conflict-sweep:
     if: github.event.pull_request.merged == true
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `card-done` above (DRE-3887).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # Same declaration, same reason (DRE-3321): this job runs the sweep too.
     env:
