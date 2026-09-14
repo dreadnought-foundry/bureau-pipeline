@@ -110,9 +110,13 @@ class DecisionTriggerCliTest(unittest.TestCase):
         self.assertEqual(verdict, fix_context.TRIGGER_SKIP)
         self.assertIn(fix_context.SKIP_BOT_AUTHOR, reason)
 
-    def test_a_decision_older_than_the_latest_blocker_skips(self):
-        # The answer has to answer something. A decision the loop escalated
-        # PAST is stale: a newer 🛑 blocker outranks it.
+    def test_a_fresh_escalation_after_the_answer_skips(self):
+        # The answer has to answer something. Since DRE-3412 the ordering is
+        # read against the VERDICT the escalation is about, so this decision
+        # is not stale — it is SPENT: the loop ran again on it and blocked
+        # again, and a fresh 🛑 is the loop moving (DRE-2813's rule, which
+        # DRE-3412 left alone). Either way the run does nothing, and the
+        # named predicate is the one an operator can act on.
         comments = thread() + [
             comment(WORKER,
                     "🛑 Fix attempt 4 blocked: this still needs a call.",
@@ -120,7 +124,19 @@ class DecisionTriggerCliTest(unittest.TestCase):
         ]
         verdict, reason = decide(comments)
         self.assertEqual(verdict, fix_context.TRIGGER_SKIP)
-        self.assertIn(fix_context.SKIP_BEFORE_BLOCKER, reason)
+        self.assertIn(fix_context.SKIP_CONSUMED, reason)
+
+    def test_a_decision_older_than_its_verdict_skips(self):
+        # A decision that predates the verdict the escalation is about
+        # answered an EARLIER round — the loop has been told something new
+        # since (DRE-3412).
+        base = thread()
+        # …round 1's verdict, a fix attempt, the answer, THEN round 2's
+        # verdict and the hold it ended in.
+        comments = base[:2] + [base[-1]] + base[2:4]
+        verdict, reason = decide(comments)
+        self.assertEqual(verdict, fix_context.TRIGGER_SKIP)
+        self.assertIn(fix_context.SKIP_BEFORE_VERDICT, reason)
 
     def test_a_comment_that_merely_mentions_the_phrase_skips(self):
         # The near miss (DRE-2409) — the shape that burned both live

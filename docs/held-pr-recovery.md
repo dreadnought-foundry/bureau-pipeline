@@ -46,8 +46,12 @@ the words **Operator decision**:
     **Operator decision** — <your answer here>
 
 Any casing works, bold/plain/heading all work, and your answer can continue on
-that same line or below it. It has to be newer than the hold and written by a
-person, not a bot.
+that same line or below it. It has to be written by a person, not a bot, and
+newer than the critic verdict the hold is about — **not** newer than the hold
+itself. Those are two different moments: the verdict lands, the loop runs, and
+seconds to minutes later the bot posts the 🛑 saying it is holding for you. An
+answer written in that gap used to be thrown away by the bot's own later
+paperwork; since DRE-3412 it counts.
 
 Then stop. **Your comment starts the fix loop by itself** (DRE-3451), normally
 within a minute: agent-fix's job gate admits a User-authored PR comment, and
@@ -66,7 +70,7 @@ one restart; a further answer buys another.
 
 **A skip now means the wording was not recognised**, not that the answer was
 rejected. The run prints which predicate refused — `bot-author`,
-`older-than-latest-blocker`, `mention-only`, `decision-consumed`,
+`older-than-latest-verdict`, `mention-only`, `decision-consumed`,
 `no-blocker` — and the sweep posts the near-miss notice below for the one an
 operator can act on.
 
