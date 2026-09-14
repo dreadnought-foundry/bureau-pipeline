@@ -277,6 +277,17 @@ def test_the_tool_set_grants_no_shell_and_no_network():
     assert sorted(t.strip() for t in tools) == ["Glob", "Grep", "Read", "Write"], tools
 
 
+def test_the_trial_holds_no_credential_beyond_the_model_token():
+    # DRE-2696's rule is that every agent step gets LINEAR_API_KEY because its
+    # agent runs linear_ops.py from Bash. This one has no Bash, posts no
+    # heartbeat and reads no card, so it holds neither the key nor the secret —
+    # the waiver is recorded in tests/test_agent_linear_key.py.
+    step = _model_step(_doc())
+    assert "LINEAR_API_KEY" not in (step.get("env") or {})
+    declared = set(_on(_doc())["workflow_call"].get("secrets") or {})
+    assert declared == {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}, sorted(declared)
+
+
 def test_credentials_follow_agent_tasks_implement_card_step():
     mine = _model_step(_doc()).get("with") or {}
     theirs = _agent_task_model_step().get("with") or {}

@@ -31,6 +31,10 @@ EXPECTED_PROMPT_FILES = {
     "agent-fix.yml": 1,
     "agent-task.yml": 1,
     "medic.yml": 1,
+    # DRE-3897: the model trial's prompt. It names no lane and no card — it is
+    # a fixed, checkable task on a candidate model — but it is an inline agent
+    # prompt like any other and belongs in the enumeration.
+    "model-trial.yml": 1,
     # 6 → 7 with DRE-3041: the pre-approval critic reads the one-off exit.
     "plan.yml": 8,
     "qa-review.yml": 2,

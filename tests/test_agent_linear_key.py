@@ -89,6 +89,23 @@ DOCUMENTED_EXCEPTIONS = {
         "tests/test_critic_turn_budget.py); a retry that quietly gained a "
         "credential attempt 1 never had would be exactly that drift."
     ),
+    (
+        "model-trial.yml",
+        "Trial the candidate model",
+    ): (
+        "The trial agent is denied Linear ON PURPOSE (DRE-3897 + DRE-2696), "
+        "and it could not use the key if it had it: its tool set is "
+        "\"Read,Glob,Grep,Write\" with no Bash, so there is no way for it to "
+        "run linear_ops.py at all — the premise of the rule above. It posts "
+        "no heartbeat and reads no card: the task is a FIXED string (read "
+        "config/models.yaml, count the ladders, write one line), identical "
+        "for every candidate, which is what makes two trials comparable and "
+        "what leaves no untrusted text for an injection to ride in on. The "
+        "workflow declares exactly two workflow_call secrets, both Anthropic "
+        "credentials, so the widest credential this run holds is the model "
+        "token it is there to exercise. Reporting is the CALLER's job "
+        "(model-adoption.yml, DRE-3903) — it reads the three outputs."
+    ),
 }
 
 # The eight agent steps counted in the DRE-2696 sweep. More is fine (new

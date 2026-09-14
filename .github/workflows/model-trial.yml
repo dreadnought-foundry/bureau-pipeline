@@ -136,6 +136,14 @@ jobs:
       # `continue-on-error`: a model that 400s, hangs or exhausts its turns is
       # the FINDING. The scoring step below reads what happened and reports it;
       # this step going red would fail the caller instead.
+      #
+      # NO `LINEAR_API_KEY`, DELIBERATELY (DRE-2696 is the rule this omits).
+      # Every other agent step in the fleet gets that key because its agent
+      # runs `linear_ops.py` from Bash for its heartbeats. This one has no Bash
+      # — the tool set below is Read/Glob/Grep/Write — so it could not use the
+      # key if it held it, it posts no heartbeat and reads no card, and the
+      # caller is what reports. The waiver and its reason are pinned in
+      # tests/test_agent_linear_key.py's DOCUMENTED_EXCEPTIONS.
       - name: Trial the candidate model
         id: claude
         continue-on-error: true
