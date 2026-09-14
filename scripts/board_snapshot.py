@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
-"""Take the real board and write it as a fixture, in the shape the sweep reads.
+"""Take the real board and write it, in the shape the sweep reads — never into
+this repository.
 
-    python3 scripts/board_snapshot.py take --out tests/fixtures/board-snapshot-2026-09-12.json
+    python3 scripts/board_snapshot.py take --out /tmp/board-snapshot.json
+
+## DRE-3918: the real board is never committed here
+
+This repository is PUBLIC and a commit is permanent. DRE-3638 committed the real
+2026-09-12 board to `tests/fixtures/` (every card's text, customer names, and in
+one commit real contact addresses), it merged, and it had to be taken back out.
+So `take` REFUSES an output path anywhere inside this repository, before it
+reads anything (exit 3). The real board is for local, uncommitted use only.
+Tests, and the replay test that reads a board, use `synthetic()`: the same
+contract and the same shapes, and no real words.
 
 WHY (DRE-3638). The CI ceiling on the reconcile sweep's Linear spend passes at
 30 while a live pass costs 65 on bureau-pipeline and 92 on agent-bureau. The
@@ -77,7 +88,8 @@ issue {identifier, state {name}}}]}`, `history {nodes [{createdAt, toState
 Exit codes: 0 the snapshot was taken and is within both ceilings · 1 it was
 taken and written but a ceiling was crossed (named on stderr) · 2 the board
 could not be read, and no file is written — an unreadable board is not an
-empty board (DRE-2034).
+empty board (DRE-2034) · 3 the output path is inside this repository, and
+nothing is read or written (DRE-3918).
 """
 
 from __future__ import annotations
@@ -244,7 +256,7 @@ def redact_emails(text: str | None) -> str | None:
 
     The structured scrub below reaches a person's name and address when Linear
     hands them over as FIELDS. It cannot reach the ones a human typed into a
-    description or a comment — "ask yannan@example.com for the export" is prose
+    description or a comment — "ask ada@example.com for the export" is prose
     to Linear and prose to us, and this repository is public. So the free text
     is redacted too, and `None` stays `None` (a card with no description is a
     different thing from one with an empty one).
@@ -297,8 +309,8 @@ def scrub_card(card: dict) -> dict:
         "title": redact_emails(card.get("title")),
         # whole, never cut: the sweep reads growth records, wave-commitment
         # blocks and blocker lines anywhere in a description. Redacted all the
-        # same — this file is committed to a public repo, and the addresses the
-        # board's prose quotes are real customers'.
+        # same: the addresses the board's prose quotes are real customers', and
+        # a snapshot file travels (it is never committed here — DRE-3918).
         "description": redact_emails(card.get("description")),
         "createdAt": card.get("createdAt"),
         "updatedAt": card.get("updatedAt"),
@@ -418,7 +430,118 @@ def render(snapshot: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+#: This repository's root. `take` writes nowhere at or under it (DRE-3918).
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def inside_repo(path: str | os.PathLike) -> bool:
+    """Whether `path`, resolved from the current directory, is this repository
+    or anywhere under it."""
+    resolved = Path(path).expanduser().resolve()
+    return resolved == REPO_ROOT or REPO_ROOT in resolved.parents
+
+
+#: The synthetic board's size and its fixed provenance time, so every call
+#: returns the same bytes.
+SYNTHETIC_CARDS = 150
+SYNTHETIC_TAKEN_AT = "2026-01-01T00:00:00Z"
+_SYNTHETIC_BASE = 900000  # card numbers no real DRE card is near
+_EPIC_EVERY = 25
+_EPIC_CHILDREN = 12
+
+
+def synthetic(cards: int = SYNTHETIC_CARDS) -> dict:
+    """A board in the snapshot's exact contract, built from invented cards.
+
+    DRE-3918: the real board may not be committed to this public repository, so
+    this is what the tests and the replay test read. It is deterministic (no
+    clock, no randomness) and every free-text field is visibly synthetic. It
+    carries the shapes a real board has and a hand-built one usually lacks:
+    epics with a dozen children, children pointing at their parent, relations
+    both ways, exhausted comment and relation windows, over-long comment bodies
+    for the cut, null descriptions, history, and a card in every lane. Built
+    through `scrub_card`, so it is exactly what `take` would write.
+    """
+    ident = [f"DRE-{_SYNTHETIC_BASE + i}" for i in range(cards)]
+    lane = [LANES[i % len(LANES)] for i in range(cards)]
+
+    def at(i: int) -> str:
+        return f"2026-01-01T{i // 60 % 24:02d}:{i % 60:02d}:00.000Z"
+
+    parent_of: dict[int, int] = {}
+    for i in range(0, cards, _EPIC_EVERY):
+        for j in range(i + 1, min(i + 1 + _EPIC_CHILDREN, cards)):
+            parent_of[j] = i
+
+    raw = []
+    for i in range(cards):
+        epic = i % _EPIC_EVERY == 0
+        comments = []
+        if i % 3 == 0:
+            comments = [
+                {"body": "🧭 routing-verdict: **FLEET** — synthetic",
+                 "createdAt": at(i + 2), "user": {"id": f"synthetic-user-{i % 4}"}},
+                {"body": "synthetic comment " * 30,
+                 "createdAt": at(i + 1), "user": None},
+            ]
+        description = None if i % 11 == 0 else f"synthetic description for card {i}"
+        if description is not None and i % 5 == 1 and i > 0:
+            description += f"\n**Blocked by:** {ident[i - 1]}"
+        children = [
+            {"id": f"synthetic-uuid-{j}", "identifier": ident[j],
+             "createdAt": at(j), "state": {"name": lane[j]}}
+            for j, p in parent_of.items() if p == i
+        ] if epic else []
+        relations = []
+        if i % 5 == 0 and i + 1 < cards:
+            relations = [{"type": "blocks", "issue": {"identifier": ident[i]},
+                          "relatedIssue": {"identifier": ident[i + 1]}}]
+        inverse = []
+        if i % 5 == 1:
+            inverse = [{"type": "blocks", "issue": {
+                "identifier": ident[i - 1], "state": {"name": lane[i - 1]}}}]
+        p = parent_of.get(i)
+        raw.append({
+            "id": f"synthetic-uuid-{i}",
+            "identifier": ident[i],
+            "title": f"synthetic {'epic' if epic else 'card'} {i}",
+            "description": description,
+            "createdAt": at(i),
+            "updatedAt": at(i + 5),
+            "state": {"name": lane[i]},
+            "labels": {"nodes": [{"name": "repo:bureau-pipeline"},
+                                 {"name": "agent:planner" if epic else "agent:engineer"}]},
+            "parent": None if p is None else {
+                "identifier": ident[p], "state": {"name": lane[p]}},
+            "children": {"nodes": children},
+            "comments": {"pageInfo": {"hasNextPage": i % 7 == 0,
+                                      "endCursor": f"synthetic-cursor-{i}"},
+                         "nodes": comments},
+            "relations": {"pageInfo": {"hasNextPage": i % 35 == 0},
+                          "nodes": relations},
+            "inverseRelations": {"nodes": inverse},
+            "history": {"nodes": [{"createdAt": at(i), "toState": {"name": lane[i]}}]},
+        })
+    return {
+        "taken_at": SYNTHETIC_TAKEN_AT,
+        "team": TEAM,
+        "lanes": list(LANES),
+        "cards": [scrub_card(card) for card in raw],
+    }
+
+
 def cmd_take(out: str) -> int:
+    if inside_repo(out):
+        # DRE-3918: this repository is public and a commit is permanent. The
+        # real board is refused here before a single request is sent.
+        print(
+            f"refused: {out} is inside {REPO_ROOT}, which is a PUBLIC "
+            "repository. The real board is for local use only; write it "
+            "outside the repo (e.g. /tmp/board-snapshot.json). Tests use "
+            "board_snapshot.synthetic().",
+            file=sys.stderr,
+        )
+        return 3
     try:
         cards, requests = read_board()
     except linear_ops.LinearError as e:
@@ -458,7 +581,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     taker = sub.add_parser("take", help="read the live board and write the snapshot")
-    taker.add_argument("--out", required=True, help="where to write the JSON")
+    taker.add_argument("--out", required=True,
+                       help="where to write the JSON — outside this repository")
     args = parser.parse_args(argv)
     return cmd_take(args.out)
 
