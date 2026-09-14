@@ -93,6 +93,22 @@ def agent_steps() -> list[dict]:
     return [s for s in steps() if str(s.get("uses") or "").split("@")[0] == ACTION]
 
 
+def assert_app_token_minted_after_review(case: unittest.TestCase, fragment: str) -> None:
+    """The step's GH_TOKEN is a GitHub App token, minted AFTER the second
+    critic's review — never the one minted at job start, which a review past
+    the hour has already outlived (DRE-3940; tests/test_plan_token_remint.py
+    owns the general rule)."""
+    env = step_named(fragment).get("env") or {}
+    ids = re.findall(r"^\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.token \}\}$",
+                     str(env.get("GH_TOKEN") or ""))
+    case.assertEqual(len(ids), 1, env.get("GH_TOKEN"))
+    at = next(i for i, s in enumerate(steps()) if s.get("id") == ids[0])
+    case.assertEqual(str(steps()[at].get("uses") or "").split("@")[0],
+                     "actions/create-github-app-token")
+    case.assertGreater(at, index_of("Second critic — review (after approval)"))
+    case.assertLess(at, index_of(fragment))
+
+
 def prompt_of(fragment: str) -> str:
     return str((step_named(fragment).get("with") or {}).get("prompt") or "")
 
@@ -270,8 +286,7 @@ class OnlyAnAddedOrRemovedCardParksAfterASendBack(unittest.TestCase):
     def test_the_dispatch_runs_under_the_app_token(self):
         """Q1/Q2: `repos/.../dispatches` needs contents:write, which the App
         token holds and the stub's own `github.token` does not."""
-        env = step_named(SENT_BACK).get("env") or {}
-        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.app.outputs.token }}")
+        assert_app_token_minted_after_review(self, SENT_BACK)
 
     def test_a_failed_re_review_dispatch_is_said_and_never_claimed_as_started(self):
         """DRE-2034: no receipt on an unconfirmed dispatch. Both receipts hang
@@ -826,8 +841,7 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
         token holds and the stub's own token does not (`plan_run`'s docstring),
         and the run it starts initiates as the App bot — already in every
         `allowed_bots` list on the reachable workflows."""
-        env = step_named(DIED).get("env") or {}
-        self.assertEqual(env.get("GH_TOKEN"), "${{ steps.app.outputs.token }}")
+        assert_app_token_minted_after_review(self, DIED)
 
     def test_a_failed_dispatch_is_said_and_never_claimed_as_started(self):
         """`plan_run.fire`'s rc rule: no receipt on an unconfirmed dispatch.
