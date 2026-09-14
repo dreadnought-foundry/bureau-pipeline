@@ -265,7 +265,8 @@ def gate_is_enforced(script: str, workflow: str | None = None) -> bool:
     """Does `plan.yml` actually run `script`?
 
     The load-bearing half of the exclusion. `proof-and-demo` is contaminated
-    BECAUSE the plan workflow refuses to let the planner out without the pair;
+    BECAUSE the plan workflow refuses to let the planner out without the proof
+    card;
     take the gate away and the dimension stops being contaminated, and an
     exclusion nobody re-checked would keep a real result out of the number.
     """
@@ -391,7 +392,7 @@ def reference_problems(doc: dict | None = None) -> list:
     if CONTAMINATED_DIMENSION in declared and is_scored(CONTAMINATED_DIMENSION, doc):
         problems.append(
             f"{CONTAMINATED_DIMENSION!r} is scored — plan.yml bounces the epic "
-            "until the pair exists, so every row it produces was handed over "
+            "until the proof card exists, so every row it produces was handed over "
             "face-up (DRE-2685)"
         )
 
@@ -1325,7 +1326,7 @@ def render_diff(before_epic: str, before: dict,
         "",
         f"`{CONTAMINATED_DIMENSION}` is on this table for completeness and is "
         "still excluded from every score: plan.yml bounces an epic until the "
-        "pair exists, so both columns are the gate's answer rather than either "
+        "proof card exists, so both columns are the gate's answer rather than either "
         "planner's.",
         "",
         f"What each plan then did is the other half — run `score` on "

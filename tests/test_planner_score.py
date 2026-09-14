@@ -11,7 +11,7 @@ planner, and it is built on the same three rules:
     the children actually did. None of it needs a human to re-read a card, and
     none of it was visible to the planner when it wrote the plan.
   * **A contaminated dimension is never scored.** `proof-and-demo` is enforced
-    inside `plan.yml`: the planner cannot leave the workflow without the pair.
+    inside `plan.yml`: the planner cannot leave the workflow without the proof card.
     Scoring it reports a perfect number composed entirely of what the gate
     refused to let through — DRE-2685's `hand-built`, one role over.
   * **Agreement and disagreement are equal results**, and both are printed,

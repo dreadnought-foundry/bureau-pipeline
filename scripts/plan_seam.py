@@ -40,7 +40,8 @@ read would collide with every one of them. It CONSUMES the two reads
 for titles and the formal `blocks` relations), joins them here, and derives
 every set it needs from the modules that already define them:
 `plan_critic.shipped_work_is_a_finding` for "delivered",
-`proof_and_demo.is_proof` / `is_demo` for the pair, and
+`proof_and_demo.is_proof` for the closing proof card (`is_demo` only reads a
+legacy demo child past), and
 `proof_and_demo.build_roles()` for what counts as build work.
 
 Wiring this into the plan workflow, and turning the finding into a send-back at

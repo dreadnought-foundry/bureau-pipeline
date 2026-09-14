@@ -2946,9 +2946,9 @@ def child_detail_records(nodes: list) -> list:
     Pure (no I/O) so the ordering and the relation filter are pinned by test
     rather than by a live board. Two things it does that the raw nodes do not:
 
-      * **sorts by `createdAt` ascending.** "The epic's last two children"
-        (DRE-2746) is only meaningful against a stable order, and the planner
-        creates the pair last. Sorted here rather than asked for with an
+      * **sorts by `createdAt` ascending.** "The proof card is the epic's last
+        child" (DRE-2746, DRE-3669) is only meaningful against a stable order,
+        and the planner creates the proof card last. Sorted here rather than asked for with an
         `orderBy`, so the answer does not depend on which direction Linear
         happens to paginate a connection in.
       * **reads `blocked_by` off the FORMAL `blocks` relations only** — the

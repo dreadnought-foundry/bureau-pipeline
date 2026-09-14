@@ -603,7 +603,7 @@ def main(argv=None) -> int:
                        help="where to write the bounce note, when there is one")
     check.add_argument("--no-stamp", dest="stamp", action="store_false",
                        default=True,
-                       help="read only — do not write the verdict onto the pair")
+                       help="read only — do not write the verdict onto the proof card")
     check.set_defaults(fn=_cmd_check)
 
     vocab = sub.add_parser("vocabulary", help="validate the derived rule")
