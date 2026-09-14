@@ -886,6 +886,300 @@ class AstDocsCliTest(GitRepoMixin, unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
 
+# --- fixtures for the generated-region classifier (DRE-3896) -------------
+#
+# One .py file carrying a GENERATED region, in the shape
+# scripts/model_fallback.py carries it: prose, a marker line, a literal that
+# `scripts/sync_model_config.py` renders from config/models.yaml, a closing
+# marker, and ordinary code below. The variants are the five answers the rule
+# owes: regenerated inside the region, regenerated plus an edit outside it, a
+# marker line itself edited, a region whose END is missing, and source that
+# will not parse.
+
+_PY_GENERATED = '''"""Widget with a generated mirror.
+
+The literal below mirrors config/models.yaml; `sync_model_config.py --check`
+fails red if the two drift.
+"""
+
+VALUE = 1
+
+# GENERATED REGION: do not hand-edit. Edit config/models.yaml, then run
+# `python3 scripts/sync_model_config.py` to regenerate it.
+# --- BEGIN generated model config (from config/models.yaml) ---
+_FALLBACK = {
+    "default_ladder": "workhorse",
+    "ladders": {"workhorse": ["claude-opus-5"]},
+}
+# --- END generated model config ---
+
+
+def widget(x):
+    """Return x plus the value."""
+    return x + VALUE
+'''
+
+# The adoption PR's shape: config/models.yaml gained a rung, the mirror was
+# regenerated, nothing else moved.
+_PY_GENERATED_REGENERATED = _PY_GENERATED.replace(
+    '"ladders": {"workhorse": ["claude-opus-5"]},',
+    '"ladders": {"workhorse": ["claude-opus-5", "claude-sonnet-4-6"]},',
+)
+
+# One line inside the region and one outside it — the hole that would matter.
+_PY_GENERATED_AND_OUTSIDE = _PY_GENERATED_REGENERATED.replace(
+    "VALUE = 1", "VALUE = 2"
+)
+
+# The marker itself moved: the region is no longer the one the generator wrote.
+_PY_GENERATED_MARKER_EDITED = _PY_GENERATED_REGENERATED.replace(
+    "# --- BEGIN generated model config (from config/models.yaml) ---",
+    "# --- BEGIN generated model config (from config/other.yaml) ---",
+)
+
+# No closing marker: everything below BEGIN would otherwise be swallowed.
+_PY_GENERATED_NO_END = _PY_GENERATED.replace(
+    "# --- END generated model config ---\n", ""
+)
+_PY_GENERATED_NO_END_REGENERATED = _PY_GENERATED_REGENERATED.replace(
+    "# --- END generated model config ---\n", ""
+)
+
+
+class GeneratedRegionChangeTest(unittest.TestCase):
+    """DRE-3896: a change confined to a GENERATED region is generated, not
+    authored. The adoption PR of DRE-3892 edits config/models.yaml and then
+    runs `scripts/sync_model_config.py`, which rewrites the
+    `_FALLBACK_MODEL_CONFIG` literal in `scripts/model_fallback.py`. That
+    literal moves the AST, so the docstring rule cannot exempt it and there is
+    nobody to write the RED test — a failure DRE-2694 makes unfixable by
+    adding a commit.
+
+    The exemption is safe because the region's content is proved elsewhere:
+    `sync_model_config.py --check` (run by the unit suite, so red in CI) fails
+    when a generated region does not match its canonical render, so code
+    cannot hide there. Everything outside that proof stays fail-closed."""
+
+    def test_regenerated_region_is_a_generated_change(self):
+        self.assertTrue(
+            check_tdd_commits.is_generated_region_change(
+                _PY_GENERATED, _PY_GENERATED_REGENERATED
+            )
+        )
+
+    def test_a_line_outside_the_region_is_not(self):
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(
+                _PY_GENERATED, _PY_GENERATED_AND_OUTSIDE
+            )
+        )
+
+    def test_editing_a_marker_line_is_not(self):
+        # The markers delimit the proof. Move one and the "generated" claim is
+        # about a region the generator never wrote.
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(
+                _PY_GENERATED, _PY_GENERATED_MARKER_EDITED
+            )
+        )
+
+    def test_a_region_with_no_closing_marker_is_not(self):
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(
+                _PY_GENERATED, _PY_GENERATED_NO_END
+            )
+        )
+
+    def test_both_sides_missing_the_closing_marker_is_not(self):
+        # An unterminated region must not swallow the rest of the file and
+        # exempt every line below the BEGIN marker.
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(
+                _PY_GENERATED_NO_END, _PY_GENERATED_NO_END_REGENERATED
+            )
+        )
+
+    def test_a_file_with_no_region_is_not(self):
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(_PY_BASE, _PY_CODE_ONLY)
+        )
+
+    def test_unparseable_before_fails_closed_to_code(self):
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(
+                "def (\n", _PY_GENERATED_REGENERATED
+            )
+        )
+
+    def test_unparseable_after_fails_closed_to_code(self):
+        # A syntax error inside the region is still a syntax error: source
+        # that will not parse is never waved through as generated.
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(
+                _PY_GENERATED,
+                _PY_GENERATED.replace("_FALLBACK = {", "def ("),
+            )
+        )
+
+    def test_added_file_has_no_base_version_and_is_not_generated(self):
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(None, _PY_GENERATED)
+        )
+
+    def test_deleted_file_has_no_head_version_and_is_not_generated(self):
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(_PY_GENERATED, None)
+        )
+
+    def test_the_real_model_fallback_mirror_is_covered(self):
+        # Not a fixture: the live file the adoption PR regenerates. If its
+        # markers ever change shape, this exemption silently stops applying
+        # to the one change it was written for.
+        source = (ROOT / "scripts" / "model_fallback.py").read_text()
+        self.assertIn("BEGIN generated", source)
+        regenerated = source.replace(
+            '"default_ladder": "workhorse",',
+            '"default_ladder": "advisory",',
+        )
+        self.assertNotEqual(source, regenerated, "fixture no longer matches")
+        self.assertTrue(
+            check_tdd_commits.is_generated_region_change(source, regenerated)
+        )
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/model_fallback.py", source, regenerated
+            ),
+            "docs",
+        )
+
+
+class ClassifyPathGeneratedRegionTest(unittest.TestCase):
+    """The classifier reads a generated-region change as `docs`, beside the
+    docstring-only exemption, and everything else stays `code`."""
+
+    def test_generated_region_change_classifies_as_docs(self):
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/model_fallback.py",
+                _PY_GENERATED,
+                _PY_GENERATED_REGENERATED,
+            ),
+            "docs",
+        )
+
+    def test_region_plus_an_outside_line_stays_code(self):
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/model_fallback.py",
+                _PY_GENERATED,
+                _PY_GENERATED_AND_OUTSIDE,
+            ),
+            "code",
+        )
+
+    def test_marker_edit_stays_code(self):
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/model_fallback.py",
+                _PY_GENERATED,
+                _PY_GENERATED_MARKER_EDITED,
+            ),
+            "code",
+        )
+
+    def test_the_docstring_exemption_is_unaffected(self):
+        # Both rules live on the same branch of classify_path; neither may
+        # shadow the other.
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/reconcile.py", _PY_BASE, _PY_PROSE_ONLY
+            ),
+            "docs",
+        )
+
+    def test_a_non_python_generated_region_is_never_exempt(self):
+        # agents.yaml carries generated regions too, and it is already `ops`.
+        # No other extension gets this reading — only .py is AST-checked.
+        self.assertEqual(
+            check_tdd_commits.classify_path(
+                "scripts/deploy.sh",
+                "# BEGIN generated\nX=1\n# END generated\n",
+                "# BEGIN generated\nX=2\n# END generated\n",
+            ),
+            "code",
+        )
+
+
+class GeneratedRegionCliTest(GitRepoMixin, unittest.TestCase):
+    """DRE-3896 end-to-end: the adoption branch of DRE-3892, commit for
+    commit — config/models.yaml edited, the two mirrors regenerated, no test
+    anywhere and nobody to write one."""
+
+    def seed_mirror(self):
+        self.write("scripts/model_fallback.py", _PY_GENERATED)
+        self.write("config/models.yaml", "ladders:\n  workhorse:\n    - claude-opus-5\n")
+        self.write("agents.yaml", "agents:\n  - name: engineer\n    model: claude-opus-5\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: seed the model config and its mirrors")
+
+    def test_adoption_branch_is_exempt(self):
+        self.seed_mirror()
+        self.git("checkout", "-q", "-b", "agent/DRE-3892-model-adoption")
+        self.write("config/models.yaml",
+                   "ladders:\n  workhorse:\n    - claude-opus-5\n    - claude-sonnet-4-6\n")
+        self.write("agents.yaml",
+                   "agents:\n  - name: engineer\n    model: claude-sonnet-4-6\n")
+        self.write("scripts/model_fallback.py", _PY_GENERATED_REGENERATED)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore(DRE-3892): adopt claude-sonnet-4-6")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        # The exact reason the adoption workflow's contract names.
+        self.assertIn(
+            "exempt: no non-test code changed (docs/ops/tests only)", p.stdout
+        )
+        self.assertIn("[docs,ops]", p.stdout)
+
+    def test_a_line_outside_the_region_exits_1(self):
+        self.seed_mirror()
+        self.git("checkout", "-q", "-b", "agent/DRE-3896-outside")
+        self.write("scripts/model_fallback.py", _PY_GENERATED_AND_OUTSIDE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: regenerate (and one quiet edit)")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(check_tdd_commits.FAILURE_MESSAGE, p.stdout)
+
+    def test_a_marker_edit_exits_1(self):
+        self.seed_mirror()
+        self.git("checkout", "-q", "-b", "agent/DRE-3896-marker")
+        self.write("scripts/model_fallback.py", _PY_GENERATED_MARKER_EDITED)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: move the marker")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_a_region_without_its_end_marker_exits_1(self):
+        self.seed_mirror()
+        self.git("checkout", "-q", "-b", "agent/DRE-3896-unterminated")
+        self.write("scripts/model_fallback.py", _PY_GENERATED_NO_END_REGENERATED)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: regenerate over a broken region")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+
+class GeneratedRegionStandardTest(unittest.TestCase):
+    """The standard states the rule as it is ENFORCED, so a new exemption that
+    is not in that sentence is a document the code contradicts — which
+    standards/engineering.md itself says must be fixed in the same PR."""
+
+    def test_the_enforced_rule_sentence_names_the_exemption(self):
+        text = (ROOT / "standards" / "engineering.md").read_text()
+        self.assertIn("generated region", text)
+        self.assertIn("sync_model_config.py --check", text)
+
+
 class WorkflowWiringTest(unittest.TestCase):
     """tests.yml must actually run the checker on PRs — the script without
     the job enforces nothing."""
