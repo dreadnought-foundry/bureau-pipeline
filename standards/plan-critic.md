@@ -48,9 +48,11 @@ and the finding is one sentence:
     DRE-3215, DRE-3217, DRE-3218: wait on observing DRE-3166 live — that is a second epic, not a later step.
 
 The reader is `scripts/plan_seam.py`: relation-based, walking the `blocks`
-relations of `children-json` joined with `children-detail`, with the PROOF/DEMO
-pair excluded because the pair is blocked by every other child by construction
-and would make every observation card look like a seam. The gate is
+relations of `children-json` joined with `children-detail`, with the epic's
+closing card excluded because it is blocked by every other child by
+construction and would make every observation card look like a seam. (An epic
+planned before 2026-09-12 carries a second closing child — DRE-3669 stopped the
+planner filing one — and it is dropped the same way, for the same reason.) The gate is
 `scripts/plan_seam_gate.py`, and it is what makes this finding a decision rather
 than input — it rewrites the critic's result file before `plan_critic.py decide`
 reads it, so the round is a `SEND_BACK` with the seam as its reason whatever the

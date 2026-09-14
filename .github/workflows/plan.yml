@@ -884,27 +884,32 @@ jobs:
                only if it needs a decision. Use `subissue`, NOT `oneoff`, for
                anything that belongs to THIS epic's decomposition — a parentless
                card never promotes with the epic.
-            3c. EVERY epic's LAST TWO children are a `PROOF: <…>` card and a
-               `DEMO: <…>` card — always, not when it feels warranted. Proof
-               answers "did it work" and is NOT a green test suite: it is the
-               mechanism observed running against real state, with the
-               observation recorded in the repo. Demo answers "can the CEO see
-               it": a merged pull request is invisible to the person who
-               green-lit the epic. Create them last, give each a
-               `**Blocked by:**` line naming EVERY other child (so the
-               relations, not the ordering, hold them), and make sure neither
-               is fleet-buildable — write acceptance criteria naming the live
-               observation, or add `--label no-code` for work an operator runs.
-               NEITHER WEARS A BUILD ROLE (DRE-3039): create each of the pair
-               with `--label agent:ops` and drop the role `subissue` inherits
+            3c. EVERY epic's LAST child is a `PROOF: <…>` card — always, not
+               when it feels warranted, and it is the ONLY closing card (the
+               CEO decided on 2026-09-12 that he reads the proof record and
+               closes the card himself, so there is no sitting to arrange and
+               no second closing card to file). Proof answers "did it work"
+               and is NOT a green test suite: it is the mechanism observed
+               running against real state, with the observation recorded in
+               the repo. Create it last, give it a `**Blocked by:**` line
+               naming EVERY other child (so the relations, not the ordering,
+               hold it), and make sure it is not fleet-buildable — write
+               acceptance criteria naming the live observation, or add
+               `--label no-code` for work an operator runs. Its body carries
+               this line VERBATIM, on its own line above the acceptance
+               criteria, and the check refuses the card without it:
+                 The CEO reads this record and closes this card; there is no demo sitting.
+               Its criteria say the CEO closes it after reading the record,
+               never that he has said so at a sitting.
+               IT WEARS NO BUILD ROLE (DRE-3039): create it with
+               `--label agent:ops` and drop the role `subissue` inherits
                (`linear_ops.py remove-label <CARD> agent:engineer`), because a
                role a build run is dispatched for is a card the fleet picks up
                — and the thing it would build is the proof of its own siblings.
-               You do NOT stamp these two: the check writes the routing verdict
-               it computed onto each of them. The run checks the cards you
-               created and sends the epic back to Planning if they are missing,
-               so check your own work first (`--no-stamp` reads without
-               writing):
+               You do NOT stamp it: the check writes the routing verdict it
+               computed onto it. The run checks the cards you created and sends
+               the epic back to Planning if it is missing, so check your own
+               work first (`--no-stamp` reads without writing):
                  python3 .bureau-pipeline/scripts/linear_ops.py children-detail \
                    "${{ github.event.client_payload.identifier }}" \
                    | python3 .bureau-pipeline/scripts/proof_and_demo.py check \
@@ -1023,25 +1028,28 @@ jobs:
             echo "no children created (the planner escalated) — nothing to validate"
           fi
 
-      # --- Every epic carries a proof card and a demo card (DRE-2746) -------
+      # --- Every epic carries a proof card (DRE-2746, halved by DRE-3669) ---
       #
       # The convention was already written down (standards/plan-artifact.md
       # gives the artifact a "Proof and demo" section) and nothing made any
       # planner follow it. A brief is guidance a model can skip, so the check
       # runs on the PLANNER'S OUTPUT — the cards it created, read out of
-      # Linear — and an epic missing either card goes back to Planning with
+      # Linear — and an epic missing the card goes back to Planning with
       # the reason named, exactly the way an epic with invalid children does
       # one step up.
       #
       # Proof is not a green test suite: it is the mechanism observed running
-      # against real state, recorded in the repo. Demo is what the CEO sees.
-      # Neither may be fleet-buildable — a proof the fleet can close by merging
-      # its own code is not a proof.
+      # against real state, recorded in the repo. That record is what the CEO
+      # reads — he closes the card himself and there is no demo sitting, his
+      # decision of 2026-09-12 — so there is ONE closing child. An epic planned
+      # before then carries a second one and is read past, never bounced for it.
+      # The card may not be fleet-buildable: a proof the fleet can close by
+      # merging its own code is not a proof.
       #
       # The read is done FIRST, into a file: a crashed read decided nothing and
       # must never bounce a plan (standards/console-honesty.md rule 1), so the
       # reason is only posted when the checker actually wrote one.
-      - name: Proof and demo cards — the epic's last two children
+      - name: Proof card — the epic's last child
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}

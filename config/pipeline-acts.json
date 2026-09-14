@@ -1502,9 +1502,9 @@
     {
       "file": ".github/workflows/plan.yml",
       "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
-      "step": "Proof and demo cards — the epic's last two children",
+      "step": "Proof card — the epic's last child",
       "kind": "not-an-act",
-      "means": "The proof-and-demo check sends an epic back: its last two children are missing or wrong.",
+      "means": "The proof-card check sends an epic back: its last child is missing or wrong.",
       "why": "A VERDICT, not an act. It is a judgement about the WORK, where an act is something the pipeline did about the work on its own. It has its own writer, its own vocabulary and its own readers, and a second grammar on the same comment would give them two keys to disagree over. Its body belongs to scripts/proof_and_demo.py, which owns the bounce."
     },
     {

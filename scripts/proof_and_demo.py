@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Every epic carries a proof card and a demo card (DRE-2746).
+"""Every epic carries a proof card, and only a proof card (DRE-2746, DRE-3669).
 
 The convention already existed — `standards/plan-artifact.md` gives the plan
 artifact a "Proof and demo" section — and nothing made any planner follow it.
@@ -7,49 +7,64 @@ A brief is guidance a model can skip, and a convention nothing checks is a
 convention that drifts. So the check runs on the PLANNER'S OUTPUT: the cards it
 actually created, read out of Linear, never the brief's text.
 
-## The two things, and they are not the same
+## One closing child, since 2026-09-12
+
+DRE-2746 made it a PAIR: a `PROOF:` card and a `DEMO:` card, the epic's last
+two children. DRE-3669 halves it. The CEO decided on 2026-09-12 that there are
+no demo sittings — he reads the proof record and closes the proof card himself
+— so the record IS how he sees it, and a second card asking for a sitting is
+work nobody does.
 
   * **Proof** answers *did it work* — and it is not a green test suite. It is
     the mechanism observed running against real state, and the observation is
     recorded in the repo so the card produces a written artifact rather than a
     claim.
-  * **Demo** answers *can the CEO see it*. A merged PR and a passing suite are
-    invisible to the person who green-lit the epic.
+  * There is no demo card. An epic that produces no proof has no way of being
+    wrong in public.
 
-An epic that produces neither has no way of being wrong in public.
+A `DEMO:` child is READ PAST, never refused: every epic planned before the
+decision still carries one, and bouncing a plan for a card the rule no longer
+asks for would hold real work over history. `is_demo` survives for exactly
+that — a reader of historical cards, and the thing that keeps a legacy demo
+child out of the shape this checks.
 
-## What is checked, and why each half is here
+## What is checked, and why each rule is here
 
-  1. A `PROOF:` card and a `DEMO:` card exist, and they are the LAST two
-     children. Position is not decoration: the pair closes the epic.
-  2. Both are blocked by every OTHER child — read off Linear's formal `blocks`
+  1. Exactly one `PROOF:` card exists, and it is the LAST child (legacy demo
+     children excluded). Position is not decoration: the card closes the epic,
+     and one that is not last can be started before the work it proves exists.
+  2. It is blocked by every other child — read off Linear's formal `blocks`
      relations, never off the order the cards sit in and never off the
      `**Blocked by:**` prose line. Prose leaves the reconcile gates blind
      (DRE-2670), so a card that only SAYS it is blocked is refused.
-  3. Neither may be fleet-buildable. A proof the fleet can close by merging its
+  3. It may not be fleet-buildable. A proof the fleet can close by merging its
      own code is not a proof — the whole value is that something other than the
      builder confirms it.
-  4. Neither may wear a BUILD role (DRE-3039). `agent:engineer` on a proof card
+  4. It may not wear a BUILD role (DRE-3039). `agent:engineer` on a proof card
      is a card the relay dispatches to a build agent the moment anything
      promotes it, and the thing that agent would build is the proof of its own
      siblings' work.
+  5. Its body carries `CLOSING_LINE` verbatim (DRE-3669), so the card itself
+     says who closes it and that nobody is owed a sitting. The decision only
+     holds if it is written where the person closing the card reads it.
 
 ## And the check WRITES the verdict it computed (DRE-3039)
 
-Rule 3 read a verdict off each card, printed a one-line summary and stamped
+Rule 3 read a verdict off the card, printed a one-line summary and stamped
 NOTHING — so `routing_verdict.promotion_refusal()` found no verdict on the
 card, returned None ("a CHILD with NO verdict promotes exactly as it did
-before"), and the sweep promoted the pair the moment their siblings reached
-Done. A rule enforced at plan time and discarded before build time is not
-enforced.
+before"), and the sweep promoted it the moment its siblings reached Done. A
+rule enforced at plan time and discarded before build time is not enforced.
 
 So `check` writes what it computed, as the same `🧭 routing-verdict` comment
 every other verdict uses, through `routing_verdict.stamp_card` — one writer,
 the one that already knows the answer, and no second grammar for the promotion
-gate to learn. It writes only for a pair that PASSED: an epic on its way back
+gate to learn. It writes only for a card that PASSED: an epic on its way back
 to Planning is not an epic whose cards get a routing decision written on them.
-`--no-stamp` gives the pure read back, for a planner checking its own work
-before it finishes.
+A legacy demo child is stamped too where its own verdict is one a human acts
+on — the rule that REQUIRED the card is gone, the protection that keeps the
+fleet off it is not. `--no-stamp` gives the pure read back, for a planner
+checking its own work before it finishes.
 
 ## Rule 3 is READ from the vocabulary, not restated here
 
@@ -64,10 +79,10 @@ left, or where a verdict the sweep promotes would count as a confirmation.
 
 Rule 4 is read the same way, from both ends: the roles a BUILD run is
 dispatched for come off `agents.yaml` (the roster entries that run on
-`agent-task.yml`), and the role label the pair MAY wear comes off the routing
-vocabulary (the `agent:*` labels mapped to a verdict a human acts on — today
-`agent:ops`). Neither list is written down here, so a fifth build role or a
-second operator label moves the rule with it.
+`agent-task.yml`), and the role label the proof card MAY wear comes off the
+routing vocabulary (the `agent:*` labels mapped to a verdict a human acts on —
+today `agent:ops`). Neither list is written down here, so a fifth build role or
+a second operator label moves the rule with it.
 
 Pure functions over card records, plus ONE write: the stamp above, which is a
 Linear comment and the labels the verdict declares. Everything the plan gate
@@ -107,14 +122,25 @@ BUILD_WORKFLOW = ".github/workflows/agent-task.yml"
 # The two title conventions. Anchored at the START of the title, never a
 # substring: `Record the demo: phase 3` is an ordinary code card, and reading
 # it as a demo is the same mistake class as a substring blocker match. The
-# DEMO: half is the pipeline's existing convention — the routing vocabulary
-# routes it to WORKBENCH by title and `linear_ops.auto_done_skip_reason`
-# refuses to auto-close it — and `tests/test_proof_and_demo.py` pins all three
-# readers to the same answer rather than letting a fourth spelling appear.
+# DEMO: half is no longer something the planner emits (DRE-3669) — it reads
+# HISTORICAL cards, so an epic planned before 2026-09-12 is excluded from the
+# shape rather than bounced for it. It stays the pipeline's existing convention
+# — the routing vocabulary routes it to WORKBENCH by title and
+# `linear_ops.auto_done_skip_reason` refuses to auto-close it — and
+# `tests/test_proof_and_demo.py` pins all three readers to the same answer
+# rather than letting a fourth spelling appear.
 PROOF_PREFIX = "PROOF:"
 DEMO_PREFIX = "DEMO:"
 _PROOF_TITLE = re.compile(r"^\s*proof:", re.IGNORECASE)
 _DEMO_TITLE = re.compile(r"^\s*demo:", re.IGNORECASE)
+
+# The sentence every proof card's body carries, verbatim (DRE-3669). The
+# decision that there is no demo sitting only holds if it is written where the
+# person closing the card reads it — a rule living in a brief is a rule the
+# next planner re-derives from a card it saw last month.
+CLOSING_LINE = (
+    "The CEO reads this record and closes this card; there is no demo sitting."
+)
 
 # The marker the bounce comment opens with. Deliberately shares no prefix with
 # a routing verdict, a planning shape or a merge-gate verdict: a note that
@@ -138,8 +164,8 @@ def is_demo(title: str) -> bool:
 
 
 def confirming_verdicts(doc: dict | None = None) -> tuple:
-    """The verdicts a proof or demo card may carry: the ones whose accountable
-    actor is a HUMAN.
+    """The verdicts a proof card may carry: the ones whose accountable actor is
+    a HUMAN.
 
     Derived from `config/routing-verdicts.json`, in the file's own order, so
     the rule moves when the file does. Today that is WORKBENCH and OPERATOR;
@@ -152,8 +178,8 @@ def confirming_verdicts(doc: dict | None = None) -> tuple:
 
 
 def confirming_role_labels(doc: dict | None = None) -> tuple:
-    """The role labels a proof or demo card MAY wear: the `agent:*` labels the
-    routing vocabulary maps to a verdict a human acts on.
+    """The role labels a proof card MAY wear: the `agent:*` labels the routing
+    vocabulary maps to a verdict a human acts on.
 
     Derived, for the same reason rule 3's verdicts are. Today that is exactly
     `agent:ops` — the label the vocabulary already reads as "a person handles
@@ -213,8 +239,8 @@ def vocabulary_problems(doc: dict | None = None) -> list:
     if not confirming_role_labels(doc):
         problems.append(
             "no `agent:*` label maps to a verdict a human acts on, so the check "
-            "can refuse a proof or demo card's build role without being able to "
-            "name the label it should carry instead — a refusal with no remedy"
+            "can refuse a proof card's build role without being able to name "
+            "the label it should carry instead — a refusal with no remedy"
         )
     if not confirming:
         problems.append(
@@ -315,87 +341,92 @@ def _role_label_finding(card: dict, kind: str, doc: dict | None = None) -> str |
         f"{_ident(card)}: the {kind} card carries "
         + ", ".join(f"`{l}`" for l in worn)
         + " — a role a build run is dispatched for, so the fleet is what picks "
-        "it up. The pair is confirmed by a person: create it with "
+        "it up. The epic is confirmed by a person: create the card with "
         f"--label {allowed[0] if allowed else 'agent:ops'} and drop the "
         "inherited role (`linear_ops.py remove-label <CARD> "
         f"{worn[0]}`), so the card wears {named}."
     )
 
 
+def shape(children: list) -> list:
+    """This epic's children as the rules read them: legacy demo cards removed.
+
+    A `DEMO:` child is not something the planner files any more (DRE-3669) and
+    not something an epic is bounced for still carrying, so it is not a child
+    the proof card has to sit in front of, wait on, or be counted beside. One
+    filter, applied once, so "read past" cannot mean three different things in
+    three different rules.
+    """
+    return [c for c in (children or []) if not is_demo(c.get("title"))]
+
+
 def findings(children: list, doc: dict | None = None) -> list:
-    """Everything wrong with this epic's proof/demo pair, or an empty list.
+    """Everything wrong with this epic's proof card, or an empty list.
 
     `children` are the epic's cards IN CREATION ORDER, each a record from
     `linear_ops.py children-detail`: `identifier`, `title`, `body`, `labels`,
     `blocked_by` (formal `blocks` relations only).
     """
-    cards = list(children or [])
+    cards = shape(children)
     found: list[str] = []
 
     proofs = [c for c in cards if is_proof(c.get("title"))]
-    demos = [c for c in cards if is_demo(c.get("title"))]
 
-    for kind, prefix, matched in (
-        ("proof", PROOF_PREFIX, proofs), ("demo", DEMO_PREFIX, demos)
-    ):
-        if not matched:
-            found.append(
-                f"no {kind} card: no child's title opens `{prefix}`. Every "
-                f"epic carries one, as one of its last two children."
-            )
-        elif len(matched) > 1:
-            found.append(
-                f"{len(matched)} {kind} cards — "
-                + ", ".join(_ident(c) for c in matched)
-                + f". Exactly one `{prefix}` card per epic; picking between "
-                "two would be inventing the decision rather than reading it."
-            )
+    if not proofs:
+        return [
+            f"no proof card: no child's title opens `{PROOF_PREFIX}`. Every "
+            "epic carries one, as its last child."
+        ]
+    if len(proofs) > 1:
+        return [
+            f"{len(proofs)} proof cards — "
+            + ", ".join(_ident(c) for c in proofs)
+            + f". Exactly one `{PROOF_PREFIX}` card per epic; picking between "
+            "two would be inventing the decision rather than reading it."
+        ]
 
-    if len(proofs) != 1 or len(demos) != 1:
-        return found
+    proof = proofs[0]
 
-    proof, demo = proofs[0], demos[0]
-    pair = {_ident(proof), _ident(demo)}
-
-    # 1 — the last two children.
-    last_two = {_ident(c) for c in cards[-2:]}
-    if pair != last_two:
+    # 1 — the last child.
+    if _ident(cards[-1]) != _ident(proof):
         found.append(
-            f"{_ident(proof)} and {_ident(demo)} are not the last two "
-            "children — the last two are " + ", ".join(sorted(last_two))
-            + ". The pair closes the epic, so it is emitted last."
+            f"{_ident(proof)} is not the epic's last child — the last is "
+            f"{_ident(cards[-1])}. The card closes the epic, so it is created "
+            "last: one created earlier can be started before the work it "
+            "proves exists."
         )
 
     # 2 — blocked by every other child, by RELATION.
-    siblings = [_ident(c) for c in cards if _ident(c) not in pair]
-    for kind, card in (("proof", proof), ("demo", demo)):
-        missing = [s for s in siblings if s not in (card.get("blocked_by") or [])]
-        if missing:
-            found.append(
-                f"{_ident(card)}: the {kind} card is not blocked by "
-                + ", ".join(missing)
-                + " — `blocked by every sibling` is a Linear `blocks` "
-                "relation, not an ordering and not a `**Blocked by:**` line. "
-                "The relation is what the reconcile gates honour."
-            )
-    if _ident(demo) in (proof.get("blocked_by") or []) and \
-            _ident(proof) in (demo.get("blocked_by") or []):
+    siblings = [_ident(c) for c in cards if _ident(c) != _ident(proof)]
+    missing = [s for s in siblings if s not in (proof.get("blocked_by") or [])]
+    if missing:
         found.append(
-            f"{_ident(proof)} and {_ident(demo)} block each other — that is a "
-            "deadlock, not an order. Either may wait on the other; not both."
+            f"{_ident(proof)}: the proof card is not blocked by "
+            + ", ".join(missing)
+            + " — `blocked by every sibling` is a Linear `blocks` relation, "
+            "not an ordering and not a `**Blocked by:**` line. The relation is "
+            "what the reconcile gates honour."
         )
 
-    # 3 — neither is fleet-buildable.
-    for kind, card in (("proof", proof), ("demo", demo)):
-        problem = _verdict_finding(card, kind, doc)
-        if problem:
-            found.append(problem)
+    # 3 — it is not fleet-buildable.
+    problem = _verdict_finding(proof, "proof", doc)
+    if problem:
+        found.append(problem)
 
-    # 4 — neither wears a build role.
-    for kind, card in (("proof", proof), ("demo", demo)):
-        problem = _role_label_finding(card, kind, doc)
-        if problem:
-            found.append(problem)
+    # 4 — it wears no build role.
+    problem = _role_label_finding(proof, "proof", doc)
+    if problem:
+        found.append(problem)
+
+    # 5 — the body says who closes it (DRE-3669).
+    if CLOSING_LINE not in (proof.get("body") or ""):
+        found.append(
+            f"{_ident(proof)}: the proof card's body does not carry the "
+            "closing line. Paste it verbatim, on its own line above the "
+            f"acceptance criteria: {CLOSING_LINE} The card has to say who "
+            "closes it, because the CEO reads the record instead of being "
+            "walked through it (his decision of 2026-09-12)."
+        )
 
     return found
 
@@ -406,21 +437,34 @@ def findings(children: list, doc: dict | None = None) -> list:
 
 
 def stamps(children: list, doc: dict | None = None) -> tuple:
-    """`(identifier, verdict, why)` for the epic's proof and demo cards.
+    """`(identifier, verdict, why)` for the epic's proof card — and for a
+    legacy demo child, where its own verdict is one a human acts on.
 
-    Empty for a pair with any finding against it: an epic on its way back to
+    Empty for a card with any finding against it: an epic on its way back to
     Planning is not an epic whose cards get a routing decision written on them,
-    and the cards may not survive the re-plan at all.
+    and the card may not survive the re-plan at all.
+
+    The demo half is no longer CHECKED (DRE-3669) and so is no longer stamped
+    blind: a verdictless child promotes exactly as it always had, which is what
+    DRE-3039 fixed, but writing FLEET onto a card because nothing validated it
+    would send the fleet at it rather than keep the fleet off it. A verdict a
+    human acts on is written; anything else is left alone for the sweep's own
+    refusal to handle.
     """
     cards = list(children or [])
     if findings(cards, doc):
         return ()
+    confirming = confirming_verdicts(doc)
     out: list[tuple[str, str, str]] = []
     for kind, matches in (("proof", is_proof), ("demo", is_demo)):
         card = next((c for c in cards if matches(c.get("title"))), None)
-        if card is None:  # pragma: no cover — findings() already refused this
-            return ()
+        if card is None:
+            if kind == "proof":  # pragma: no cover — findings() refused this
+                return ()
+            continue
         verdict, reason = _verdict(card, doc)
+        if kind == "demo" and verdict not in confirming:
+            continue
         out.append((
             _ident(card),
             verdict,
@@ -437,10 +481,10 @@ def write_stamps(children: list, doc: dict | None = None) -> int:
     `routing_verdict.stamp_card` is the whole write — the comment and the marks
     the verdict declares, one implementation for both callers. It refuses a
     card that already carries a verdict (a re-planned epic runs this check
-    again) and says so on stderr rather than raising: the pair is well-formed
-    either way, and the gate that actually holds the cards is
-    `promotion_refusal`, which refuses a card carrying two verdicts as loudly
-    as it refuses one that is not FLEET.
+    again) and says so on stderr rather than raising: the card is well-formed
+    either way, and the gate that actually holds it is `promotion_refusal`,
+    which refuses a card carrying two verdicts as loudly as it refuses one that
+    is not FLEET.
 
     A failed WRITE is different and does propagate: the plan step's `if !`
     branch then finds no bounce note and fails the run without moving the epic,
@@ -454,11 +498,16 @@ def write_stamps(children: list, doc: dict | None = None) -> int:
 
 
 def bounce_comment(epic: str, found: list) -> str:
-    """The note posted to the epic when the pair is missing or malformed.
+    """The note posted to the epic when the proof card is missing or malformed.
 
     Raises on an empty finding list: a bounce with nothing to say is a plan
     stopped for no stated reason, which is the failure this card exists to
     prevent one level up.
+
+    It names the 2026-09-12 decision on purpose. A planner reading "add the
+    proof card" against a board full of pre-decision epics carrying two closing
+    children will helpfully add the second one back, and the epic comes round
+    again with a card nobody wants.
     """
     if not found:
         raise ValueError(
@@ -467,20 +516,23 @@ def bounce_comment(epic: str, found: list) -> str:
         )
     lines = [
         f"{BOUNCE_MARK} {BOUNCE_TAG}: {epic} is back in **Planning** — it owes "
-        "a proof card and a demo card.",
+        "a proof card.",
         "",
         "**Proof** answers *did it work*, and it is not a green test suite: it "
         "is the mechanism observed running against real state, with the "
-        "observation recorded in the repo. **Demo** answers *can the CEO see "
-        "it* — a merged pull request is invisible to the person who green-lit "
-        "the epic.",
+        "observation recorded in the repo. That record is how the CEO sees "
+        "it — he reads it and closes the card himself, so there is no sitting "
+        "to arrange and **no second closing card to add** (his decision of "
+        "2026-09-12).",
         "",
-        "Both are the epic's **last two children**, both are **blocked by "
-        f"every other child** (the Linear relation, not a body line), and "
-        "neither may be fleet-buildable — "
+        "It is the epic's **last child**, it is **blocked by every other "
+        "child** (the Linear relation, not a body line), it may not be "
+        "fleet-buildable — "
         + " or ".join(confirming_verdicts())
         + " only, because the whole value is that something other than the "
-        "builder confirms it.",
+        "builder confirms it — and its body carries this line verbatim:",
+        "",
+        f"> {CLOSING_LINE}",
         "",
         "**What is missing:**",
         "",
@@ -488,7 +540,7 @@ def bounce_comment(epic: str, found: list) -> str:
     lines += [f"- {f}" for f in found]
     lines += [
         "",
-        "Re-plan this epic with the two cards added and it moves on.",
+        "Re-plan this epic with that card in order and it moves on.",
     ]
     return "\n".join(lines)
 
@@ -511,9 +563,10 @@ def _cmd_check(args) -> int:
     if not found:
         proofs = [_ident(c) for c in children if is_proof(c.get("title"))]
         demos = [_ident(c) for c in children if is_demo(c.get("title"))]
+        legacy = f", read past legacy {', '.join(demos)}" if demos else ""
         print(
-            f"{args.epic}: {len(children)} card(s) — proof {', '.join(proofs)}, "
-            f"demo {', '.join(demos)}, both last and blocked by every sibling"
+            f"{args.epic}: {len(children)} card(s) — proof {', '.join(proofs)}"
+            f", last and blocked by every sibling{legacy}"
         )
         # ...and the verdict it computed goes ON the cards, because the sweep
         # reads the card, not this run's log (DRE-3039).

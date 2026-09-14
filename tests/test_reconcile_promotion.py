@@ -22,6 +22,11 @@ plan-time comment is built by calling `proof_and_demo.stamps()`, never
 hand-written here: delete the stamp and this test goes red, which is the whole
 point of it.
 
+DRE-3669 halved the SHAPE — the planner files one closing child now — and left
+this seam alone. The fixture keeps both cards on purpose: it is the legacy epic
+the check reads past, and the protection that holds a demo card in Backlog has
+to survive the rule that stopped requiring one.
+
 The second half of this file is the same seam one gate earlier (DRE-3059): the
 sweep releases an epic's children only once the SECOND critic has passed the
 plan, read out of the `plan-critic: stage=post` marker the critic already
@@ -62,8 +67,13 @@ PAIR_LABELS = ("repo:bureau-pipeline", "agent:ops", "initiative:bureau")
 
 PROOF_BODY = (
     "Read the stamp on main and record what it said.\n\n"
+    # The closing line the gate requires since DRE-3669. Read off the module,
+    # never retyped: a plan whose proof card does not carry it is bounced, so
+    # it would never reach the sweep this file is about.
+    f"{proof_and_demo.CLOSING_LINE}\n\n"
     "## Acceptance criteria\n\n"
     "- [ ] the stamp is read against the live repo and quoted in the card\n"
+    "- [ ] the CEO closes this card after reading the record\n"
 )
 
 DEMO_BODY = (

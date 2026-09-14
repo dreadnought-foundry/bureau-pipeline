@@ -26,7 +26,7 @@ the plan was right about it, and none of it needs a human to re-read a card:
   * whether the card **survived as one card**, against the split ledger's own
     population (DRE-3079) — and month by month, that is the split rate DRE-3022
     asked to be measured by;
-  * a **proof card and a demo card** exist;
+  * a **proof card** exists;
   * the plan was **approved as written**, against the plan critic's send-backs
     and the mid-epic amendment markers.
 
@@ -36,7 +36,7 @@ makes it a review the planner has never seen.
 ## The exclusion is the whole thing (DRE-2685's rule, one role over)
 
 `proof-and-demo` is **contaminated and never scored**. `plan.yml` runs
-`proof_and_demo.py check` and bounces the epic back to Planning until the pair
+`proof_and_demo.py check` and bounces the epic back to Planning until the card
 exists — the planner cannot leave the workflow without the answer. Scoring it
 reports a perfect row composed entirely of what the gate refused to let
 through, exactly the way `hand-built` flattered the critic's audit.
@@ -161,7 +161,7 @@ EMITTED_VALUES = {
     "routing": ("dispatchable", "needs-a-person"),
     "approval": ("as-written", "revised"),
     "split-rate": ("one-card", "split"),
-    CONTAMINATED_DIMENSION: ("both-present", "missing"),
+    CONTAMINATED_DIMENSION: ("present", "missing"),
 }
 
 OUTCOMES = ("agree", "disagree", "unknown", "unclaimed", "excluded")
@@ -997,14 +997,13 @@ def _proof_and_demo_rows(epic, children) -> list:
     """The contaminated row. Computed so it can be REPORTED — never dropped,
     because a number with rows silently removed is worse than no number."""
     titles = [child.get("title") or "" for child in children]
-    present = (any(proof_and_demo.is_proof(t) for t in titles)
-               and any(proof_and_demo.is_demo(t) for t in titles))
+    present = any(proof_and_demo.is_proof(t) for t in titles)
     return [_row(
         epic["identifier"], CONTAMINATED_DIMENSION,
-        "both-present", "both-present" if present else "missing", "excluded",
+        "present", "present" if present else "missing", "excluded",
         "",  # filled in by score(), which holds the reference's own wording
-        f"{proof_and_demo.PROOF_PREFIX} and {proof_and_demo.DEMO_PREFIX} "
-        "children: " + ("both" if present else "not both"),
+        f"{proof_and_demo.PROOF_PREFIX} child: "
+        + ("one" if present else "none"),
     )]
 
 
@@ -1255,7 +1254,7 @@ SHAPE_COLUMNS = (
     ("footprint-collisions", "pairs whose DECLARED footprints intersect"),
     ("serialized-pairs", "pairs wired with a real `blockedBy` relation"),
     ("with-verdict", "cards carrying a routing verdict"),
-    ("proof-and-demo", "the epic ends with both cards"),
+    ("proof-and-demo", "the epic ends with its proof card"),
 )
 
 
@@ -1293,8 +1292,7 @@ def plan_shape(children: list) -> dict:
         "serialized-pairs": edges,
         "with-verdict": sum(1 for c in children
                             if claimed_verdict(c.get("comments") or ())),
-        "proof-and-demo": (any(proof_and_demo.is_proof(t) for t in titles)
-                           and any(proof_and_demo.is_demo(t) for t in titles)),
+        "proof-and-demo": any(proof_and_demo.is_proof(t) for t in titles),
     }
 
 

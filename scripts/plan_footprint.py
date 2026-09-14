@@ -31,7 +31,8 @@ Three decisions worth stating, each of which the tests pin:
     next actions, and collapsing them is how a collision check passes with
     nothing to check (standards/console-honesty.md rule 1). An explicitly
     declared "none" IS an answer — DRE-3032, a DEMO card that commits nothing,
-    wrote exactly that and was right.
+    wrote exactly that and was right. (A historical card: DRE-3669 stopped the
+    planner filing demo cards. A proof card is the same shape of answer.)
   * **Root-level files are files.** The `/` requirement was the whole of the
     old blindness.
   * **Only the declared section counts.** The footprint is what the planner

@@ -25,14 +25,16 @@ section, not a substitute.
 | **Outcome** | If this goes right, what is different for the business |
 | **Visual model** | For UI work: the screens, built from `console/design/tokens.css` |
 | **The cards** | The decomposition, in dependency order, collisions named, each child's ledger check recorded |
-| **Proof and demo** | How we will know it works, and how the CEO will be shown |
+| **Proof and demo** | How we will know it works, and what the CEO reads to see it |
 
-**Proof and demo is a section AND two cards (DRE-2746).** This section says how
-the epic will be proven and shown; the epic's last two children — a `PROOF: …`
-card and a `DEMO: …` card, blocked by every sibling and never `FLEET` — are
-where it actually happens. The section is prose the planner writes; the cards
-are checked on the planner's output, and an epic missing either is bounced back
-to `Planning`. `standards/card-quality.md` carries the full rule.
+**Proof and demo is a section AND one card (DRE-2746, halved by DRE-3669).**
+This section says how the epic will be proven and how the CEO reads that proof;
+the epic's last child — a `PROOF: …` card, blocked by every sibling and never
+`FLEET` — is where it actually happens. There is no second closing card: the
+CEO decided on 2026-09-12 that he reads the proof record and closes the card
+himself, so the record is how he is shown. The section is prose the planner
+writes; the card is checked on the planner's output, and an epic missing it is
+bounced back to `Planning`. `standards/card-quality.md` carries the full rule.
 
 ## KPIs are data, not prose
 
@@ -177,6 +179,6 @@ parses and every record carries `name`, a numeric `baseline`, and a
 epic carries a live token-built mockup rather than a screenshot; the cards are
 in dependency order with collisions named; the `ledger-check` block records
 every child, with an `UNKNOWN` status where the ledger was missing or stale
-rather than no record at all; and proof-and-demo says how the CEO will be
-shown. A missing answer is a send-back, same as a missing test — cite the
+rather than no record at all; and proof-and-demo says what the CEO reads to
+see it. A missing answer is a send-back, same as a missing test — cite the
 section and say what would satisfy it.

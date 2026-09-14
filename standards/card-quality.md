@@ -234,34 +234,42 @@ permanently, with nothing saying so. `linear_ops.py subissue` refuses a parent
 that is not already an epic. Neither a `DRE-1234a` suffix nor a sub-issue: the
 new work is a **sibling card under the same epic**, with its own number.
 
-## Every epic ends with a proof card and a demo card (DRE-2746)
-The last two children of every epic are a `PROOF: …` card and a `DEMO: …` card.
-They answer different questions and neither substitutes for the other:
-**proof** answers *did it work* — not a green suite, but the mechanism observed
-running against real state, with the observation recorded in the repo so the
-record merges; **demo** answers *can the CEO see it*, because a merged PR and a
-passing suite are invisible to the person who green-lit the epic. An epic that
-produces neither has no way of being wrong in public.
+## Every epic ends with a proof card (DRE-2746, halved by DRE-3669)
+The last child of every epic is a `PROOF: …` card. **Proof** answers *did it
+work* — not a green suite, but the mechanism observed running against real
+state, with the observation recorded in the repo so the record merges. An epic
+that produces no proof has no way of being wrong in public.
 
-Four conditions, and each is checked on the planner's OUTPUT rather than on
+**There is no second closing card.** The CEO decided on 2026-09-12 that there
+are no demo sittings: he reads the proof record and closes the proof card
+himself, so the record IS how he sees it. Every epic planned before that date
+still carries a second closing child; the gate reads past one rather than
+bouncing the plan, and no plan adds one back.
+
+Five conditions, and each is checked on the planner's OUTPUT rather than on
 any document that states the convention — a convention nothing checks is a
 convention that drifts:
 
-1. Both are the epic's **last two children** (either order between themselves).
-2. Both are **blocked by every other child**, as real Linear `blockedBy`
+1. It is the epic's **last child**.
+2. It is **blocked by every other child**, as real Linear `blockedBy`
    relations. Prose is not a relation and the gate reads the relation.
-3. **Neither may carry `FLEET`** — both route to `WORKBENCH` or `OPERATOR`,
+3. **It may not carry `FLEET`** — it routes to `WORKBENCH` or `OPERATOR`,
    because a proof the fleet can close by merging its own code is not a proof.
    The whole value is that something other than the builder confirms it. The
    pair of acceptable verdicts is derived from `config/routing-verdicts.json`
    (the verdicts whose accountable actor is a human), never restated in code.
-4. **Neither may wear a build role** (DRE-3039) — `agent:engineer`,
+4. **It may not wear a build role** (DRE-3039) — `agent:engineer`,
    `agent:frontend`, `agent:devops`, `agent:database-architect`. A role a build
    run is dispatched for is a card the fleet picks up, and the thing it would
-   build is the proof of its own siblings' work. The pair carries `agent:ops`.
+   build is the proof of its own siblings' work. The card carries `agent:ops`.
    Both lists are derived, never restated: the build roles off `agents.yaml`
-   (the roster entries running on `agent-task.yml`), the role the pair may wear
+   (the roster entries running on `agent-task.yml`), the role the card may wear
    off the routing vocabulary's own label map.
+5. **Its body carries the closing line, verbatim**, above the acceptance
+   criteria: `The CEO reads this record and closes this card; there is no demo
+   sitting.` The decision only holds where the person closing the card reads
+   it, and its acceptance criteria say he closes it after reading the record —
+   never that he has said so at a sitting.
 
 **And the check writes the verdict it computes onto both cards** — the same
 `🧭 routing-verdict` comment every other verdict uses, so
@@ -489,12 +497,15 @@ the size tells above. Any ONE of them means the plan is cut at a seam.
 ### The worked example — DRE-3164
 
 **A — the engine and its first rider:** DRE-3167, DRE-3165, DRE-3210, DRE-3211,
-DRE-3166, plus a PROOF of the first supervised console release and its DEMO.
-That epic ends at an observation: a release, watched, by a person.
+DRE-3166, plus a PROOF of the first supervised console release. That epic ends
+at an observation: a release, watched, by a person.
 
 **B — the fleet:** DRE-3212, DRE-3216, DRE-3213, DRE-3238, DRE-3214, DRE-3215,
-DRE-3217, DRE-3218, plus the fleet proof and demo. Blocked on A, and planned
-only when A is Done.
+DRE-3217, DRE-3218, plus the fleet proof. Blocked on A, and planned only when
+A is Done.
+
+(As planned in August each half also carried a demo card. Both were cancelled
+on 2026-09-12 with the other 23; the shape above is the one to copy.)
 
 **What it cost as one epic.** A collision with DRE-3060 at the second critic. A
 plan drifting out of date against its own children over twenty hours, because
