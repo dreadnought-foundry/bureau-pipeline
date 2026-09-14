@@ -689,6 +689,69 @@ Adoption elsewhere needs a release tag containing this action (see "Which ref a
 repo may use") plus a one-job addition to each repo's own `ci.yml` — per-repo
 work, not something this repo can do to another.
 
+### `install-claude-code` — the binary is PROVED, not assumed (DRE-3414)
+
+`.github/actions/install-claude-code` installs Claude Code, then asserts
+`claude --version` actually answers. If it does not, it retries the install
+exactly once; if it still does not, it fails the step with a `::error::` that
+names an **install** failure and says out loud that it is neither the
+credential nor the model.
+
+Every reusable workflow here that runs a model calls it first, out of the
+pinned pipeline checkout, and hands the proved path on to the vendor action:
+
+```yaml
+- name: Install Claude Code (asserted)
+  id: install_claude
+  uses: ./.bureau-pipeline/.github/actions/install-claude-code
+- name: Critic review
+  uses: anthropics/claude-code-action@<sha> # v1.0.217
+  with:
+    path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
+```
+
+**Why the `path_to_claude_code_executable` line is not optional.** Without it
+the vendor action installs a second copy of Claude Code that this assert never
+saw, and the step above proves nothing about the binary the model actually
+runs.
+
+**The version pin moved here, and it moves with the vendor pin.** Handing the
+vendor action a path makes it skip its own install, so this action's `version`
+input — not the vendor's — now decides which Claude Code the fleet runs. It
+defaults to **2.1.263**, which is exactly what `claude-code-action` v1.0.217
+installs, so taking the install over changed nothing about what gets
+installed. It is deliberately not a floating channel: the vendor is pinned at
+v1.0.217 precisely because v1.0.218's Claude Code 2.1.265 is the installer
+that leaves no launcher, and `stable` could hand the whole fleet that build.
+When DRE-3417 unpins the vendor action, this default takes the version that
+release installs.
+
+**Why it exists.** On 2026-09-08 the vendor's own installer exited clean and
+left no launcher. Nothing checked, so nothing failed at install time: every
+Claude-running job in the fleet died minutes later on `Claude Code native
+binary not found` — one turn, $0, which is byte-for-byte the fingerprint of a
+stale credential. The first operator to look was sent to the token, the one
+thing that was not wrong, and the fleet was down 72 minutes (DRE-3416). An
+installer's exit code is not the thing we need; a launcher that answers is.
+
+`tests/test_claude_install_asserted.py` is the guard and it **executes** the
+script out of `action.yml` against a stub installer — "retries once" means the
+installer really ran twice, and "fails loudly" means the process really exited
+non-zero saying the word install. The same file sweeps `.github/workflows/`
+and fails on any raw install left at any site, which is the only thing that
+keeps the seventeenth site from being the one nobody wired.
+
+**A failed install is also what the critic's neutral comment now names.** A
+failed install skips both critic attempts, so both gates report an attempt
+that left no execution record — and the crashed-twice branch of
+`qa-review.yml` would blame a "startup/auth failure" that did not happen.
+When the shared step is what failed, the comment says so instead.
+
+Unlike the two actions above, this one is **internal**: it is called through
+the `.bureau-pipeline` checkout by this repo's own reusable workflows, so it
+rides `pipeline_ref` like every other internal path and the next section's
+`uses:`-pinning question does not arise for it.
+
 ### Which ref a repo may use — this is not a style choice
 
 **`@main` is for the canary repos only.** `standards/engineering.md` is explicit:
