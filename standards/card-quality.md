@@ -271,15 +271,18 @@ convention that drifts:
    it, and its acceptance criteria say he closes it after reading the record —
    never that he has said so at a sitting.
 
-**And the check writes the verdict it computes onto both cards** — the same
+**And the check writes the verdict it computes onto the card** — the same
 `🧭 routing-verdict` comment every other verdict uses, so
-`routing_verdict.promotion_refusal` reads it and the sweep leaves the pair in
+`routing_verdict.promotion_refusal` reads it and the sweep leaves the card in
 `Backlog` for the person who confirms it. It used to compute the verdict, print
 it and stamp nothing, and a verdictless child promotes exactly as it always
-had: the pair was dispatched to a build agent the moment its siblings reached
-Done (DRE-3039). One writer, the one that already knows the answer.
+had: the card was dispatched to a build agent the moment its siblings reached
+Done (DRE-3039). One writer, the one that already knows the answer. A legacy
+epic's second closing child is stamped only where its own verdict is one a
+human acts on — nothing checks that child any more, and writing `FLEET` onto an
+unchecked card would send the fleet at it rather than keep the fleet off it.
 
-An epic missing either card is bounced back to `Planning` with the reason
+An epic missing the card is bounced back to `Planning` with the reason
 named, the same way an epic with invalid children is. The enforcer is
 `scripts/proof_and_demo.py`, run over `linear_ops.py children-detail` in
 `plan.yml`; `briefs/planner.md` tells the planner how to satisfy it.

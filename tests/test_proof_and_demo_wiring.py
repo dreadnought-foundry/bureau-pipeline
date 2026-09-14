@@ -56,6 +56,16 @@ def wf_steps() -> list:
     return [s for job in doc["jobs"].values() for s in job.get("steps") or []]
 
 
+def proof_card_section() -> str:
+    """The standard's `Every epic ends with a proof card` section, up to the
+    next `## ` heading."""
+    text = open(STANDARD).read()
+    section = re.search(r"^## Every epic ends with a proof card.*?(?=^## )",
+                        text, re.S | re.M)
+    assert section, "the standard must still carry the proof-card section"
+    return section.group(0)
+
+
 def step_named(fragment: str) -> dict:
     for step in wf_steps():
         if fragment.lower() in (step.get("name") or "").lower():
@@ -97,6 +107,20 @@ class BriefAndStandardTest(unittest.TestCase):
     def test_the_standard_names_the_decision_that_halved_the_shape(self):
         text = open(STANDARD).read()
         self.assertIn("2026-09-12", text)
+
+    def test_the_standard_does_not_still_describe_a_second_closing_card(self):
+        """`DEMO:` gone from the section is not the same as the section reading
+        as one card. The paragraphs BELOW the numbered conditions described the
+        pair in prose — "onto both cards", "leaves the pair in `Backlog`", "an
+        epic missing either card" — which contradicts the five conditions above
+        them and invites a planner to file the second card back. The section is
+        what the pre-approval critic reads the epic shape out of, so it has to
+        say one card all the way down."""
+        section = proof_card_section()
+        for phrase in ("both cards", "either card", "the pair was dispatched",
+                       "leaves the pair"):
+            self.assertNotIn(phrase, section.lower(),
+                             f"{phrase!r} still describes a second closing card")
 
     def test_the_standard_rides_the_context_rail_for_the_planner(self):
         """card-quality.md is already assembled for the planner and both plan
