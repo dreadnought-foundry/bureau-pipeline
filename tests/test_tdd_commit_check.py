@@ -1031,6 +1031,29 @@ class GeneratedRegionChangeTest(unittest.TestCase):
             check_tdd_commits.is_generated_region_change(_PY_GENERATED, None)
         )
 
+    def test_wrapping_code_in_new_markers_is_not(self):
+        # The adversarial shape: a commit that INTRODUCES markers around code
+        # it wants exempted. The marker lines are themselves outside the
+        # region, so adding them is a change outside it — code.
+        wrapped = _PY_BASE.replace(
+            "VALUE = 1",
+            "# --- BEGIN generated ---\nVALUE = 2\n# --- END generated ---",
+        )
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(_PY_BASE, wrapped)
+        )
+
+    def test_deleting_the_region_is_not(self):
+        # Dropping the mirror is a decision, not a render — the markers that
+        # carried the proof are gone, so nothing proves what replaced them.
+        without = "\n".join(
+            line for line in _PY_GENERATED.splitlines()
+            if "generated model config" not in line
+        ) + "\n"
+        self.assertFalse(
+            check_tdd_commits.is_generated_region_change(_PY_GENERATED, without)
+        )
+
     def test_the_real_model_fallback_mirror_is_covered(self):
         # Not a fixture: the live file the adoption PR regenerates. If its
         # markers ever change shape, this exemption silently stops applying
