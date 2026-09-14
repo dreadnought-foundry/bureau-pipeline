@@ -22,7 +22,20 @@ is the floor. Every rule here exists because its violation shipped a bug.
   **STRICTLY BEFORE** the first commit that changes non-test code.* One RED
   commit before the FIRST implementation commit — **not one before every
   implementation commit**. Docs-only and ops-only branches are exempt, and so
-  is a `.py` change that is docstrings alone. A static design record — a
+  is a `.py` change that is docstrings alone, and so is one confined to a
+  GENERATED region — every differing line strictly between a `BEGIN generated`
+  and an `END generated` marker, markers untouched (DRE-3896). That last one is
+  safe only because the region's content is proved elsewhere: `python3
+  scripts/sync_model_config.py --check` goes red in CI when a generated region
+  does not match its canonical render, so code cannot hide in one. The proof is
+  the condition, not a claim about it — the exemption applies **only to the
+  handful of paths a generator's `--check` actually covers**, listed in
+  `check_tdd_commits.py`'s `_GENERATED_REGION_PROOFS`; writing those markers
+  into any other file buys nothing, because otherwise one reviewed commit
+  adding two comment lines would give any file a permanent untested edit
+  channel. A path with no proving generator, a line outside the region, an
+  edited marker, a region with no END, or source that will not parse stays
+  code. A static design record — a
   `.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/`.json` file under
   `console/design/` or a root `design/` — counts as docs; `.css` and source
   there stay code (DRE-3763). **Reviewers: hold a branch to

@@ -35,6 +35,35 @@ The rule (engineering standard: "commit the failing test FIRST"):
     by the PR has no counterpart version and is code; source that fails to
     parse on either side is code; a docstring edit riding beside a real edit
     is code; non-`.py` paths are never AST-compared.
+  • A `.py` change confined to a GENERATED region is generated, not authored
+    (DRE-3896), and is docs too — but ONLY in a file some generator's `--check`
+    actually proves. A region is the lines strictly between a line
+    containing `BEGIN generated` and the next line containing `END generated`
+    — the markers `scripts/sync_model_config.py` already writes, read
+    generically here. The live shape: an automated adoption PR edits
+    `config/models.yaml` and reruns that generator, which rewrites the
+    `_FALLBACK_MODEL_CONFIG` literal in `scripts/model_fallback.py`. That
+    literal moves the AST, so the docstring rule cannot exempt it, and there
+    is no author to write a RED test for a rendered literal — a failure
+    DRE-2694 makes unfixable by adding a commit.
+    **The exemption is safe because the region's content is proved
+    elsewhere:** `python3 scripts/sync_model_config.py --check` fails when a
+    generated region does not match its canonical render, and it runs in CI
+    (the unit suite asserts it on every PR), so code cannot hide in a region.
+    That proof is the whole argument, so the classifier REQUIRES it rather
+    than asserting it: the exempt paths are a closed map in
+    `_GENERATED_REGION_PROOFS`, each named with the command that proves it,
+    and a generated-region change on any other path is `code`. Markers alone
+    must never carry the exemption — they are comment lines any commit can
+    write, so one ordinary reviewed commit adding them to an arbitrary file
+    would otherwise buy that file a permanent, untested edit channel strictly
+    inside them, with no generator anywhere near it. That is the opposite of
+    the docstring rule, whose safety is intrinsic (any real change moves the
+    AST) and so needs no allowlist.
+    Fail-closed exactly like the docstring rule: a path with no proving
+    generator, a change touching one line outside the region, an edit to a
+    marker line itself, a region with no closing marker, and source that will
+    not parse on either side all stay `code`.
   • Dependabot-authored PRs are exempt (DRE-2049): a dependency bump has no
     behavior of its own to RED-test — its proof is the whole suite running
     against the bumped pins (the `unit` job installs from the manifest).
@@ -151,6 +180,40 @@ _DESIGN_RECORD_SUFFIXES = (
 )
 _OPS_PREFIXES = (".github/", "config/")
 _OPS_FILES = frozenset({"agents.yaml"})
+
+# Generated-region markers (DRE-3896), read as SUBSTRINGS of a line so the one
+# rule covers every generator's comment syntax and wording. These are the
+# markers `scripts/sync_model_config.py` already writes — e.g.
+# `# --- BEGIN generated model config (from config/models.yaml) ---` — and the
+# contract is deliberately generic: a line containing BEGIN opens a region, the
+# next line containing END closes it.
+_BEGIN_GENERATED = "BEGIN generated"
+_END_GENERATED = "END generated"
+
+# The ONLY paths whose generated regions are exempt, each mapped to the command
+# that PROVES the region's content in CI. The exemption's entire safety argument
+# is that proof — so the classifier demands the proof exists rather than taking
+# the markers' word for it.
+#
+# Marker-shape alone is not a proof and must never be read as one: markers are
+# ordinary comment lines any commit can write. A file could carry them in one
+# perfectly reviewable commit and then, in every commit after, have the code
+# inside them hand-edited with no test and no generator watching — a standing,
+# permanent bypass of this entire check for that file. So the substring rule
+# below answers "is this change confined to a region", and this map answers the
+# question that actually matters: "does anything prove what the region says".
+# Both must hold.
+#
+# Adding an entry is a `.py` change to this file, which is `code` — so it takes
+# a RED test first and a critic's read, which is exactly the bar a new TDD
+# exemption should clear. Each command must run on every PR (both below are
+# asserted by the unit suite: tests/test_model_config.py and
+# tests/test_sync_fallback_map.py), because a proof that does not run proves
+# nothing.
+_GENERATED_REGION_PROOFS = {
+    "scripts/model_fallback.py": "python3 scripts/sync_model_config.py --check",
+    "scripts/validate_card.py": "python3 scripts/sync_fallback_map.py --check",
+}
 
 
 # The nightly standards-sync PR (DRE-3885) — the bot that must have OPENED it
@@ -320,6 +383,82 @@ def is_docs_only_python_change(before: str | None, after: str | None) -> bool:
     return shape_before == shape_after
 
 
+def _outside_generated_regions(source: str) -> list[str] | None:
+    """Every line of `source` that is NOT inside a generated region, with the
+    marker lines kept, or None if there is no usable region.
+
+    None on two shapes, both fail-closed: a file with no `BEGIN generated`
+    line at all (nothing here is generated), and a region whose END marker is
+    missing (an unterminated region would otherwise swallow the rest of the
+    file and exempt every line below the marker).
+
+    Keeping the markers in the returned list is what makes an edit to a marker
+    a difference: the markers delimit the proof, so a moved one describes a
+    region the generator never wrote."""
+    lines = source.splitlines()
+    outside: list[str] = []
+    inside = False
+    saw_region = False
+    for line in lines:
+        if inside:
+            if _END_GENERATED in line:
+                inside = False
+                outside.append(line)
+            continue
+        outside.append(line)
+        if _BEGIN_GENERATED in line:
+            inside = True
+            saw_region = True
+    if inside or not saw_region:
+        return None
+    return outside
+
+
+def has_generated_region_proof(path: str) -> bool:
+    """True iff `path` is a file whose generated regions are PROVED by a
+    command this repo runs on every PR (`_GENERATED_REGION_PROOFS`).
+
+    Exact path match, never a prefix or a suffix: the proof is per-file, so a
+    neighbouring file in the same directory is not covered by it."""
+    return path in _GENERATED_REGION_PROOFS
+
+
+def is_generated_region_change(
+    path: str, before: str | None, after: str | None
+) -> bool:
+    """True iff `path` is a file with a generator proving its regions AND its
+    two versions differ ONLY inside those regions (DRE-3896).
+
+    `before`/`after` are the file's contents on either side of the commit, or
+    None when the file does not exist there. Same contract and the same
+    fail-closed edges as `is_docs_only_python_change`: a missing counterpart
+    is False, and source that will not parse on either side is False — a
+    syntax error is never waved through as "generated".
+
+    Everything outside the regions is compared line for line, markers
+    included, so a change that touches one line outside a region, or a marker
+    line itself, is authored code and stays `code`.
+
+    The `path` test comes first and is the load-bearing one. Without it the
+    markers alone would carry the exemption, and markers are comment lines
+    anybody can write: one ordinary commit adds them to any file, and every
+    edit strictly inside them afterwards skips the RED-test requirement
+    forever, with no generator and no `--check` anywhere near that file."""
+    if not has_generated_region_proof(path):
+        return False
+    if before is None or after is None:
+        return False
+    if _executable_shape(before) is None or _executable_shape(after) is None:
+        return False
+    outside_before = _outside_generated_regions(before)
+    if outside_before is None:
+        return False
+    outside_after = _outside_generated_regions(after)
+    if outside_after is None:
+        return False
+    return outside_before == outside_after
+
+
 def is_test_path(path: str) -> bool:
     """True iff `path` is a test by its DIRECTORY or by its FILENAME.
 
@@ -369,7 +508,12 @@ def classify_path(
         return "docs"
     if path.startswith(_OPS_PREFIXES) or path in _OPS_FILES:
         return "ops"
-    if path.endswith(".py") and is_docs_only_python_change(before, after):
+    if path.endswith(".py") and (
+        is_docs_only_python_change(before, after)
+        or is_generated_region_change(path, before, after)
+    ):
+        # Documentation by content (DRE-2409) or a generated region (DRE-3896)
+        # — neither has an author who could write a RED test for it.
         return "docs"
     return "code"
 
