@@ -199,7 +199,9 @@ class CanonicalConfigTest(unittest.TestCase):
             sorted(r for r, k in cfg["agents"].items() if k == "judgement"),
             ["planner"],
         )
-        self.assertEqual(_ladder_for_role(cfg, "planner")[0], FABLE51)
+        # DRE-3969 (hotfix, CEO decision 2026-09-14): the planner ladder
+        # starts — and, while Fable is out of capacity, ends — at Opus 5.
+        self.assertEqual(_ladder_for_role(cfg, "planner")[0], OPUS)
 
     def test_review_agents_share_one_kind(self):
         # critic/verifier/medic were the three that bypassed selection with a
@@ -220,11 +222,12 @@ class CanonicalConfigTest(unittest.TestCase):
         # `claude-fable-5` went back to read-only on 2026-08-12, when the
         # advisory ladder moved to Sonnet 5 on measured cost: excluded from
         # every ladder, still readable so in-flight markers attribute. Its
-        # SUCCESSOR `claude-fable-5-1` is a different id and is selectable —
-        # on the judgement ladder only (DRE-3015).
+        # SUCCESSOR `claude-fable-5-1` joined it on 2026-09-14 (DRE-3969,
+        # hotfix) after refusing every planning call on a monthly spend limit.
         self.assertIn(FABLE, readable)
         self.assertIn(FABLE, mf.KNOWN_MODELS)
-        self.assertNotIn(FABLE51, readable)
+        self.assertIn(FABLE51, readable)
+        self.assertIn(FABLE51, mf.KNOWN_MODELS)
         for name, rungs in cfg["ladders"].items():
             for model in _ladder_models(rungs):
                 self.assertNotIn(
@@ -510,7 +513,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             # The degrade path carries the JUDGEMENT ladder too (DRE-3015): a
             # truncated checkout must not silently drop the planner back onto
             # the build model, which would look exactly like a healthy run.
-            self.assertEqual(_cli_select(tree, "planner"), FABLE51)
+            self.assertEqual(_cli_select(tree, "planner"), OPUS)  # DRE-3969
 
 
 class WorkflowModelPinTest(unittest.TestCase):
