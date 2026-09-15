@@ -92,6 +92,7 @@ import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
 import execution_result  # noqa: E402
 import pipeline_act  # noqa: E402
+import stream_watchdog  # noqa: E402
 
 # The act this decision is announced as, and its idempotency key. The tag is
 # the key every reader counts on (`tag in body`), so it lives here — in the
@@ -108,6 +109,11 @@ DECLINE = "decline"
 RULE_NONE = "none"
 RULE_PARKED = "card-parked"
 RULE_TURN_EXHAUSTION = "turn-exhaustion"
+# DRE-3991. The THIRD rule: this run went silent and was stopped, and so did
+# the last one on this card. The first stall keeps its retry — a stall really
+# can be a passing blip in the network path — but a second in a row is not a
+# blip, and a third build would be DRE-1921's loop wearing a new name.
+RULE_STALLED_REPEAT = "stalled-no-stream-repeat"
 
 # The park receipt's own marker — `dead_run.decide()`'s hold sentence, which
 # both caps reach ("🚨 held-for-human (dead-run-requeue cap reached)" and
@@ -183,13 +189,14 @@ def decide(
     parked_because: str = "",
     execution: dict | None = None,
     turn_receipt: str = "",
+    repeat_stall: str = "",
 ) -> Decision:
     """Retry this failed run, or decline and say why.
 
-    The park is read FIRST. Both rules decline, so the order changes only which
-    one the receipt names — and when a card has been parked, "a person owns
-    this card now" is the fact the next reader needs, with the turn cap as the
-    reason it was parked rather than a finding of its own.
+    The park is read FIRST. Every rule declines, so the order changes only
+    which one the receipt names — and when a card has been parked, "a person
+    owns this card now" is the fact the next reader needs, with the turn cap
+    or the stall as the reason it was parked rather than a finding of its own.
     """
     if parked_because:
         return Decision(
@@ -197,6 +204,8 @@ def decide(
             RULE_PARKED,
             f"the card is parked for a human: {parked_because}",
         )
+    if repeat_stall:
+        return Decision(DECLINE, RULE_STALLED_REPEAT, repeat_stall)
     if is_turn_exhaustion(execution):
         facts = check_agent_result.turn_exhaustion_facts(execution)
         return Decision(
@@ -231,11 +240,34 @@ def declined_comment(decision: Decision, run_url: str = "") -> str:
         )
     run_suffix = f" Run: {run_url}" if run_url else ""
     return (
-        f"🩺 {DECLINED_TAG}: not retried — {decision.detail}. The medic re-runs "
-        f"a failed run once, for a transient infrastructure flake; this failure "
-        f"is not one, so no second build was started and nothing was charged to "
-        f"this card. Rule applied: {decision.rule}.{run_suffix}"
+        f"🩺 {DECLINED_TAG}: not retried — {decision.detail}. "
+        f"{_WHY_NOT.get(decision.rule, _WHY_NOT_DEFAULT)} "
+        f"Rule applied: {decision.rule}.{run_suffix}"
     )
+
+
+#: Why no retry was issued, per rule. The default is the sentence this receipt
+#: has always carried, byte for byte; a rule for which it would be WRONG gets
+#: its own, because a receipt that misdescribes the decision is worse than a
+#: terse one. A repeat stall is not "not a transient flake" — it is a
+#: transient-looking failure that already SPENT its one retry, and the next
+#: reader needs to know a person is now the only thing that moves it.
+_WHY_NOT_DEFAULT = (
+    "The medic re-runs a failed run once, for a transient infrastructure "
+    "flake; this failure is not one, so no second build was started and "
+    "nothing was charged to this card."
+)
+_WHY_NOT = {
+    RULE_STALLED_REPEAT: (
+        "The medic re-runs a stalled run once, and it already did: this is "
+        "the second run in a row on this card that started up and then went "
+        "quiet. Two in a row is not a passing blip, so no third build was "
+        "started and nothing more was charged to this card. Nothing is wrong "
+        "with the work — the agent never got as far as reading the code — "
+        "and nothing else is coming until someone looks at why the runs are "
+        "going silent."
+    ),
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -309,6 +341,34 @@ def park_reason(
     return (
         f"it was moved to {dead_run.PARK_STATE}{at} by the pipeline's own "
         f"hold, after this run started"
+    )
+
+
+def repeat_stall(stall, receipt_bodies, *, run_id: str, attempt: str) -> str:
+    """Why this stall is the SECOND one in a row on this card, or "".
+
+    Two facts, from the two places that hold them and neither inferred from
+    the other (`standards/console-honesty.md` rule 1): the RUN says it went
+    silent (`stream_watchdog.stall_from_log`, off the log the medic already
+    fetched), and the CARD says the last one did too (`prior_stalls`, off its
+    own records). A run that did not stall is never a repeat, whatever the
+    card carries, and a card with no earlier record keeps its one retry.
+
+    The exclusion of this run-attempt lives in `prior_stalls` and matters:
+    the card carries THIS stall's record within seconds of the classification,
+    so counting it would have the first stall refuse its own retry.
+    """
+    if stall is None:
+        return ""
+    earlier = stream_watchdog.prior_stalls(
+        receipt_bodies, run_id=run_id, attempt=attempt
+    )
+    if not earlier:
+        return ""
+    return (
+        f"this run went silent too: “{stall.step}” emitted nothing for "
+        f"{stall.silence_seconds} seconds after it started up, and this card "
+        f"already carries {len(earlier)} stall record(s) from an earlier run"
     )
 
 
@@ -488,7 +548,8 @@ def _read(path: str) -> str:
 def _decide_cli(args) -> int:
     log_text = _read(args.log)
     card = card_for_run(args.branch, log_text)
-    parked, witness = "", ""
+    stall = stream_watchdog.stall_from_log(log_text)
+    parked, witness, repeat = "", "", ""
     if card:
         try:
             facts = card_facts(card)
@@ -510,10 +571,17 @@ def _decide_cli(args) -> int:
             witness = turn_receipt(
                 facts["comments"], run_started_at=args.run_started_at
             )
+            repeat = repeat_stall(
+                stall,
+                [receipt.get("body") or "" for receipt in facts["comments"]],
+                run_id=args.run_id,
+                attempt=args.run_attempt,
+            )
     decision = decide(
         parked_because=parked,
         execution=execution_from_log(log_text),
         turn_receipt=witness,
+        repeat_stall=repeat,
     )
     print(f"retry={'true' if decision.retry else 'false'}")
     print(f"rule={decision.rule}")
@@ -536,6 +604,11 @@ def main(argv=None) -> int:
     gate.add_argument("--branch", default="")
     gate.add_argument("--log", default="")
     gate.add_argument("--run-started-at", default="")
+    # DRE-3991. Which run-attempt is asking — the one thing that tells this
+    # run's own stall record from the last one's. `gh run rerun --failed`
+    # reuses the run id, so the attempt is half of the answer, not a detail.
+    gate.add_argument("--run-id", default="")
+    gate.add_argument("--run-attempt", default="")
 
     note = sub.add_parser("post")
     note.add_argument("--card", required=True)

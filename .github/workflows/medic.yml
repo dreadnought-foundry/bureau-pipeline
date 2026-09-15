@@ -121,6 +121,15 @@ jobs:
       signature: ${{ steps.c.outputs.signature }}
       check: ${{ steps.c.outputs.check }}
       meaning: ${{ steps.c.outputs.meaning }}
+      # DRE-3991: the stall's own three facts, when the class is
+      # `stalled_no_stream` — the step that went quiet, when it last spoke,
+      # and how long the silence ran. Empty for every other class, which is
+      # how the record job below reads "not this one". They come straight off
+      # the classifier's own lines (`stream_watchdog.report_lines`), so the
+      # card's record and the run's log say the same numbers.
+      stall_step: ${{ steps.c.outputs.stall_step }}
+      stall_last_event: ${{ steps.c.outputs.stall_last_event }}
+      stall_silence: ${{ steps.c.outputs.stall_silence }}
       # DRE-3171: was this a WALL rather than a death — the Claude account's
       # usage limit or Linear's request budget? `true` blocks the retry AND
       # the diagnosis: a rerun walks into the same wall, and the marker the
@@ -166,6 +175,13 @@ jobs:
           # and git refnames may carry $ and backticks.
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           RUN_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+          # DRE-3991: which run-attempt is asking. The card carries this
+          # stall's own record within seconds of the classification, so
+          # without the attempt the gate cannot tell it from the LAST run's
+          # and the first stall would refuse its own retry. `gh run rerun
+          # --failed` reuses the run id, so the attempt is half the answer.
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           # `|| OUT=""`: this gate must never be able to take the whole medic
           # down with it. Every job here `needs: classify`, so a step that
@@ -175,7 +191,8 @@ jobs:
           # medic behaves exactly as it did before this card, out loud.
           OUT=$(python3 .bureau-pipeline/scripts/medic_retry.py decide \
             --branch "$HEAD_BRANCH" --log /tmp/medic-log.txt \
-            --run-started-at "$RUN_STARTED_AT") || OUT=""
+            --run-started-at "$RUN_STARTED_AT" \
+            --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT") || OUT=""
           if [ -z "$OUT" ]; then
             echo "::warning::The medic's retry gate gave no answer, so this run is handled the way it was before DRE-2954. If the card is parked, the retry it is about to take is the one that card exists to prevent."
           fi
@@ -299,11 +316,20 @@ jobs:
   # It neither reruns nor diagnoses, and it ends GREEN: this is a decision the
   # pipeline made on purpose, not a failure, and a red medic run is an operator
   # email about it. `run_attempt == 1` so it says it once per failed run.
+  #
+  # …EXCEPT for a repeat stall (DRE-3991), which can only BE on attempt 2. The
+  # medic's one retry is `gh run rerun --failed`, which reuses the run id, so
+  # the second stall in a row is by construction the second attempt of the
+  # same run — and under the attempt-1 gate alone it would say nothing at all,
+  # which is the complaint this card opens with: killed later, with nothing
+  # recorded. The rule fires only when the card already carries an earlier
+  # stall record, so it still says it once.
   retry_declined:
     needs: classify
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.run_attempt == 1 &&
+      (github.event.workflow_run.run_attempt == 1 ||
+       needs.classify.outputs.rule == 'stalled-no-stream-repeat') &&
       needs.classify.outputs.retry == 'false' &&
       needs.classify.outputs.card != ''
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
@@ -327,6 +353,77 @@ jobs:
           python3 .bureau-pipeline/scripts/medic_retry.py post \
             --card "$CARD" --rule "$RULE" --detail "$DETAIL" \
             --run-url "$RUN_URL"
+
+  # THE RUN WENT SILENT (DRE-3991). On 2026-09-15 the red-main repair agent
+  # emitted a successful `system/init` and then zero further stream events,
+  # twice in a row, and was killed from outside at 8m27s and 11m39s. It never
+  # read the failing build, never wrote a line, and the card got a dead run
+  # whose cause nobody could name. `scripts/stream_watchdog.py` now stops such
+  # a run after five minutes of SILENCE and writes one line into the log; this
+  # job is what the card gets.
+  #
+  # It posts the FIRST stall's record only — the step that went quiet, when it
+  # last spoke, for how long, and that the pipeline is trying once more. The
+  # `retry` job above is meanwhile issuing that retry, because a stall keeps
+  # `infra_crash=false` and the retry gate says nothing about a first one.
+  #
+  # ONE VOICE PER STALL: on a REPEAT the gate has already declined the retry
+  # (`rule == stalled-no-stream-repeat`), `retry_declined` posts that refusal
+  # in plain English, and this job stands down. Two comments about one stall
+  # is noise on a card the CEO reads.
+  #
+  # It ends GREEN. A stall is something the pipeline handled on purpose, and a
+  # red medic run is an operator email about it.
+  stall_record:
+    needs: classify
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      needs.classify.outputs.class == 'stalled_no_stream' &&
+      needs.classify.outputs.rule != 'stalled-no-stream-repeat' &&
+      needs.classify.outputs.card != ''
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+      - name: Record the stall on the card
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          # env, not inline ${{ }} (DRE-1996): the step name comes out of a
+          # failed run's log and is agent-influenced text.
+          CARD: ${{ needs.classify.outputs.card }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          STALL_STEP: ${{ needs.classify.outputs.stall_step }}
+          STALL_SILENCE: ${{ needs.classify.outputs.stall_silence }}
+        run: |
+          echo "stall on ${RUN_URL}: ${STALL_STEP} silent for ${STALL_SILENCE}s"
+          # EXACTLY ONE record per run-attempt. The classify job runs on every
+          # failed attempt, so an unguarded post writes a second record for
+          # one stall — and the count of records on the card is precisely what
+          # `medic_retry.repeat_stall` reads to refuse the next retry, so the
+          # medic would end up answering its own echo.
+          if python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" 2>/dev/null \
+               | grep -qF "run=${RUN_ID} attempt=${RUN_ATTEMPT}"; then
+            echo "$CARD already carries the record for run $RUN_ID attempt $RUN_ATTEMPT — not posting a second"
+            exit 0
+          fi
+          # The log this medic run already fetched (DRE-2488: a second fetch
+          # during an outage classifies an empty log). The facts are read from
+          # it once more rather than passed in, so the card's record and the
+          # run's own line can never disagree about the numbers.
+          gh run view "$RUN_ID" --log-failed --repo "$GITHUB_REPOSITORY" \
+            > /tmp/stall-log.txt 2>&1 || true
+          python3 .bureau-pipeline/scripts/stream_watchdog.py record \
+            --card "$CARD" --log /tmp/stall-log.txt \
+            --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --run-url "$RUN_URL" \
+            || echo "::warning title=Stall record not written::$CARD went silent on run $RUN_ID and the record could not be posted. The run's own log carries the stall line; nothing was rejected and the retry is unaffected."
 
   # Critic infra-crash back-off (DRE-1921). No rerun, no diagnosis agent —
   # just one plain-English note so the stall is visible without burning quota.

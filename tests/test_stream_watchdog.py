@@ -453,6 +453,45 @@ class TheSharedRunStepTest(unittest.TestCase):
         self.assertIn("proved-executable", outputs,
                       "the binary the install step PROVED still needs a name")
 
+    def test_the_published_launcher_really_stops_a_silent_run(self):
+        # END TO END, and this is the criterion that says the change lives in
+        # the shared run step: the REAL install script runs, publishes an
+        # `executable`, and that executable — the thing every caller hands
+        # `claude-code-action` — is what stops a silent child. A wrapper that
+        # was written but never published would pass every test above this one.
+        from test_claude_install_asserted import published, run_install
+
+        with tempfile.TemporaryDirectory() as raw:
+            proc, facts = run_install(
+                {1},
+                keep=raw,
+                env_overrides={
+                    "BUREAU_STREAM_WATCHDOG": str(WATCHDOG),
+                    "BUREAU_STREAM_SILENCE_SECONDS": "1",
+                },
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            launcher = published(facts["output"], "executable")
+            self.assertNotEqual(launcher, facts["bin"],
+                                "the published executable is not watched")
+            # The proved binary, replaced by a stub that goes quiet after
+            # init — the 2026-09-15 shape, behind the real launcher.
+            _stub_claude(Path(facts["bin"]), f"""
+                import time
+                print({INIT!r}, flush=True)
+                time.sleep(60)
+                """)
+            run = subprocess.run([launcher, "-p"], capture_output=True,
+                                 text=True, timeout=60)
+        self.assertNotEqual(run.returncode, 0)
+        found = stream_watchdog.stall_from_log(run.stderr)
+        self.assertIsNotNone(
+            found,
+            f"the shared step's own launcher did not record a stall:\n"
+            f"{run.stderr}",
+        )
+        self.assertIn(INIT, run.stdout, "the stream was not relayed")
+
     def test_it_takes_a_silence_budget_a_caller_can_set(self):
         inputs = _action().get("inputs") or {}
         self.assertIn("silence-seconds", inputs)
