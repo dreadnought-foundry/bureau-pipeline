@@ -665,11 +665,15 @@ def run(census_rows: list[dict], pack: dict, *, call=None,
     budget = output_budget(len(rows))
     calls = 1
     try:
-        answer = planning_classify._answer_of(
-            (call or planning_classify._call_real)(
-                model, prompt, max_tokens=budget,
-                timeout_seconds=wall_clock_seconds(budget)))
+        # DRE-3970: the classifier's seam, so a capacity refusal on this rung is
+        # asked once more on the next — one read, two calls, and the receipt
+        # shows the fall (asked ≠ answered).
+        answer, _on, _fell, _because, calls = \
+            planning_classify.call_with_capacity_fallback(
+                call or planning_classify._call_real, model, prompt,
+                max_tokens=budget, timeout_seconds=wall_clock_seconds(budget))
     except Exception as e:  # noqa: BLE001 — any failed call ranks nothing
+        calls = getattr(e, "calls", calls)
         return Judgement(verdicts=everything_unranked, calls=calls, asked=model,
                          pack=summary, output_budget=budget,
                          problem=_problem("the ranking call did not answer", e),

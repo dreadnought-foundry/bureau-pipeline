@@ -36,7 +36,8 @@ EXPECTED_PROMPT_FILES = {
     # prompt like any other and belongs in the enumeration.
     "model-trial.yml": 1,
     # 6 → 7 with DRE-3041: the pre-approval critic reads the one-off exit.
-    "plan.yml": 8,
+    # 8 → 12 with DRE-3970: the four planner steps' re-runs on the next rung.
+    "plan.yml": 12,
     "qa-review.yml": 2,
     "red-main-repair.yml": 1,
     "verify.yml": 2,

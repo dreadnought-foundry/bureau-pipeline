@@ -317,13 +317,11 @@ class CliTest(unittest.TestCase):
         )
 
     def test_cli_select_walks_the_planners_own_ladder(self):
-        # The planner is `judgement` (DRE-3015), and the CLI is the entry point
-        # plan.yml actually calls. DRE-3969 (hotfix, CEO 2026-09-14): that
-        # ladder is Opus 5 alone while Fable is out of capacity, so an
-        # available Fable buys the planner nothing.
+        # The planner is `judgement` (DRE-3015): its top rung is the current
+        # Fable, and the CLI is the entry point plan.yml actually calls.
         self.assertEqual(
             self._select("planner", {FABLE51: True, OPUS: True, SONNET: True}),
-            OPUS,
+            FABLE51,
         )
         self.assertEqual(
             self._select("planner", {FABLE51: False, OPUS: True, SONNET: True}),
@@ -355,10 +353,6 @@ class AvoidAModelThatJustDiedTest(unittest.TestCase):
     walks past that rung, loudly."""
 
     ALL_UP = staticmethod(lambda m: True)
-    # The MECHANISM is pinned against an explicit three-rung ladder, so it stays
-    # tested whatever the live judgement ladder holds (DRE-3969 made it one
-    # rung, where avoiding the only rung falls through to that same rung).
-    LADDER = (FABLE51, OPUS, SONNET)
 
     def setUp(self):
         mf.clear_availability_cache()
@@ -368,18 +362,16 @@ class AvoidAModelThatJustDiedTest(unittest.TestCase):
 
     def test_avoiding_the_top_rung_walks_to_the_next(self):
         self.assertEqual(
-            mf.select("planner", probe=self.ALL_UP, avoid=[FABLE51],
-                      ladder=self.LADDER), OPUS
+            mf.select("planner", probe=self.ALL_UP, avoid=[FABLE51]), OPUS
         )
 
     def test_without_avoid_the_top_rung_is_still_chosen(self):
         # "It stays on Fable whenever Fable works": avoid is opt-in per call.
-        self.assertEqual(
-            mf.select("planner", probe=self.ALL_UP, ladder=self.LADDER), FABLE51)
+        self.assertEqual(mf.select("planner", probe=self.ALL_UP), FABLE51)
 
     def test_an_avoided_rung_is_degraded_and_named_in_the_note(self):
         decision = mf.select_with_reasons(
-            "planner", probe=self.ALL_UP, avoid=[FABLE51], ladder=self.LADDER
+            "planner", probe=self.ALL_UP, avoid=[FABLE51]
         )
         self.assertTrue(decision["degraded"])
         self.assertFalse(decision["exhausted"])
@@ -393,7 +385,7 @@ class AvoidAModelThatJustDiedTest(unittest.TestCase):
         # The note rides the planner heartbeat comment; a `model-error: <id>`
         # substring inside it would be counted as a death by the next read.
         decision = mf.select_with_reasons(
-            "planner", probe=self.ALL_UP, avoid=[FABLE51], ladder=self.LADDER
+            "planner", probe=self.ALL_UP, avoid=[FABLE51]
         )
         self.assertNotIn(mf.ERROR_MARKER_PREFIX, mf.selection_note(decision))
 
@@ -404,18 +396,17 @@ class AvoidAModelThatJustDiedTest(unittest.TestCase):
             calls.append(m)
             return True
 
-        mf.select("planner", probe=probe, avoid=[FABLE51], ladder=self.LADDER)
+        mf.select("planner", probe=probe, avoid=[FABLE51])
         self.assertNotIn(FABLE51, calls)
 
     def test_avoiding_every_rung_still_never_blocks(self):
         chosen = mf.select("planner", probe=self.ALL_UP,
-                           avoid=[FABLE51, OPUS, SONNET], ladder=self.LADDER)
+                           avoid=[FABLE51, OPUS, SONNET])
         self.assertEqual(chosen, SONNET)
 
     def test_an_unknown_or_empty_avoid_changes_nothing(self):
         self.assertEqual(
-            mf.select("planner", probe=self.ALL_UP, avoid=["", "gpt-9"],
-                      ladder=self.LADDER), FABLE51
+            mf.select("planner", probe=self.ALL_UP, avoid=["", "gpt-9"]), FABLE51
         )
 
     def test_cli_avoid_flag(self):
@@ -423,16 +414,14 @@ class AvoidAModelThatJustDiedTest(unittest.TestCase):
         env["BUREAU_FAKE_AVAILABLE"] = json.dumps(
             {FABLE51: True, OPUS: True, SONNET: True}
         )
-        # The CLI walks the live config, so it is pinned on the two-rung build
-        # ladder: the planner's is one rung since DRE-3969.
         with tempfile.TemporaryDirectory() as tmp:
             why = os.path.join(tmp, "why.txt")
             out = subprocess.run(
-                [sys.executable, CliTest.SCRIPT, "select", "engineer",
-                 "--avoid", OPUS, "--explain-file", why],
+                [sys.executable, CliTest.SCRIPT, "select", "planner",
+                 "--avoid", FABLE51, "--explain-file", why],
                 capture_output=True, text=True, env=env,
             )
-            self.assertEqual(out.stdout.strip(), SONNET, out.stderr)
+            self.assertEqual(out.stdout.strip(), OPUS, out.stderr)
             self.assertTrue(open(why).read().startswith("DEGRADED"))
 
 
@@ -593,8 +582,7 @@ class AgentsRegistryAlignment(unittest.TestCase):
         # role can reach.
         declared = self._configured_ladders()
         self.assertNotEqual(declared["planner"], mf.LADDER)
-        # DRE-3969 (hotfix): Opus 5 alone while Fable is out of capacity.
-        self.assertEqual(declared["planner"], [OPUS])
+        self.assertEqual(declared["planner"][0], FABLE51)
         self.assertEqual(mf.ladder_for("planner"), declared["planner"])
 
     def test_no_configured_ladder_references_a_retired_model(self):

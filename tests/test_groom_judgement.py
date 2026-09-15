@@ -210,10 +210,7 @@ def test_the_ceiling_is_under_every_rung_of_the_planner_ladder():
     """The CLI clamps the budget to a per-model upper limit, so a ceiling above
     any rung's limit is a number we ask for and never get (Q4)."""
     ladder = model_fallback.ladder_for(groom_judgement.ROLE)
-    # A subset, not equality: DRE-3969 (hotfix) shortened the ladder to Opus 5
-    # alone, whose limit is already read below. A rung NOT in the table still
-    # fails here — that is the move that needs the CLI's limit re-read.
-    assert set(ladder) <= set(CLI_OUTPUT_UPPER_LIMITS), (
+    assert set(ladder) == set(CLI_OUTPUT_UPPER_LIMITS), (
         "the planner ladder moved — re-read the installed CLI's own limit for "
         "every rung before trusting the ceiling"
     )

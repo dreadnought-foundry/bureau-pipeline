@@ -166,7 +166,7 @@ _FALLBACK_MODEL_CONFIG = {
     "ladders": {
         "workhorse": ["claude-opus-5", "claude-sonnet-4-6"],
         "advisory": ["claude-sonnet-5", "claude-opus-5"],
-        "judgement": ["claude-opus-5"],
+        "judgement": ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-4-6"],
     },
     "agents": {
         "engineer": "workhorse",
@@ -184,7 +184,7 @@ _FALLBACK_MODEL_CONFIG = {
     },
     "discovery": {"on_new_model": "advisory", "alert": True},
     "retired": ["claude-opus-4-8"],
-    "excluded": ["claude-fable-5", "claude-fable-5-1"],
+    "excluded": ["claude-fable-5"],
 }
 # --- END generated model config ---
 
@@ -716,10 +716,90 @@ _SKIP_INCONCLUSIVE = "probe inconclusive — could not confirm it is up"
 # the planner heartbeat comment, and a marker substring in it would be counted
 # as a death by the next attempt's read.
 _SKIP_DIED = "died on this card's last attempt (is_error death recorded)"
+# DRE-3970. A rung this RUN already saw refused for capacity (a spend limit, a
+# usage limit, a rate limit, overload). Not a death on the card — nothing was
+# attempted on it — so it says so in its own words, and it carries no marker.
+_SKIP_CAPACITY = (
+    "out of capacity this run (refused on a spend, usage or rate limit, or "
+    "overloaded)"
+)
+
+
+# --------------------------------------------------------------------------- #
+# Out of capacity (DRE-3970)                                                   #
+# --------------------------------------------------------------------------- #
+
+# What a model says when it refuses for CAPACITY rather than for anything about
+# the request. Lower-cased; matched as substrings. The first is the sentence
+# `claude-fable-5-1` refused every planning call with on 2026-09-12/13/14
+# ("You've hit your monthly spend limit. Switch to another model to continue."
+# — portico run 34924370626), and the vendor names the remedy in the second.
+# The rest are the account usage limit as claude-code-action and the CLI word
+# it, and the API's own error types for a rate limit and for overload.
+CAPACITY_SIGNATURES = (
+    "monthly spend limit",
+    "switch to another model",
+    "hit your limit",
+    "usage limit reached",
+    # The CLI's own sentences for the same wall, read out of the installed
+    # Claude Code 2.1.271 binary's strings (DRE-3970).
+    "fable limit",
+    "out of usage credits",
+    "shared budget",
+    "rate_limit_error",
+    "overloaded_error",
+)
+# The turn ceiling, spelled as check_agent_result spells it (not imported: this
+# module is vendored and imports nothing of ours). A run that reached it did
+# real work and did not meet a capacity wall on its first call.
+_TURN_CAP_WORDS = ("maximum number of turns", "error_max_turns")
+
+
+def capacity_refusal(text: str | None, record: Mapping | None = None) -> str | None:
+    """The capacity signature `text` carries, or None (DRE-3970).
+
+    Answers ONE question: was this model refused because it is out of capacity,
+    so that the SAME step may ask the next rung instead? A spend limit, a usage
+    limit, a rate limit or overload is. Everything else — a bad credential, a
+    5xx, a timeout — is not, and gets no second call.
+
+    A run that did real work is NEVER read as one, whatever its text says,
+    because the words are ordinary English an agent writes after merely
+    reading the standard that quotes them (DRE-3499). The veto reads the
+    execution `record` when there is one — the turn-cap subtype, more than one
+    turn, any spend — and the turn-cap sentence in the text either way.
+    """
+    lowered = (text or "").lower()
+    if any(word in lowered for word in _TURN_CAP_WORDS):
+        return None
+    if isinstance(record, Mapping):
+        if str(record.get("subtype") or "").strip() in _TURN_CAP_WORDS:
+            return None
+        turns, cost = record.get("num_turns"), record.get("total_cost_usd")
+        if isinstance(turns, (int, float)) and not isinstance(turns, bool) and turns > 1:
+            return None
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost > 0:
+            return None
+    for signature in CAPACITY_SIGNATURES:
+        if signature in lowered:
+            return signature
+    return None
+
+
+def fallback_for(role: str, model: str) -> str | None:
+    """The rung directly below `model` on `role`'s ladder, or None when it is
+    the last rung or not on the ladder at all (DRE-3970). What a step hands the
+    CLI as `--fallback-model` — read off the reviewed ladder, never a literal."""
+    walk = ladder_for(role)
+    if model not in walk:
+        return None
+    at = walk.index(model)
+    return walk[at + 1] if at + 1 < len(walk) else None
 
 
 def select_with_reasons(
-    role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=()
+    role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=(),
+    out_of_capacity=(),
 ) -> dict:
     """The full selection DECISION, not just the answer (DRE-2317).
 
@@ -747,6 +827,10 @@ def select_with_reasons(
     passes that model here. An avoided rung is a skip like any other — degraded,
     named in the note — and avoiding every rung still falls through to the
     lowest one rather than block the run.
+
+    `out_of_capacity` (DRE-3970) names rungs this RUN has already seen refused
+    for capacity — the classifier's `fell_from`. Walked past without probing,
+    exactly like `avoid`, but with its own reason: nothing died on the card.
     """
     if probe is None:
         probe = _probe_real
@@ -754,9 +838,13 @@ def select_with_reasons(
         clock = time.monotonic
     walk = _normalize_ladder(ladder) or ladder_for(role)
     avoided = {m for m in (avoid or ()) if isinstance(m, str) and m}
+    refused = {m for m in (out_of_capacity or ()) if isinstance(m, str) and m}
 
     skipped: list[dict[str, str]] = []
     for model in walk:
+        if model in refused:
+            skipped.append({"model": model, "reason": _SKIP_CAPACITY})
+            continue
         if model in avoided:
             skipped.append({"model": model, "reason": _SKIP_DIED})
             continue
@@ -822,7 +910,8 @@ def selection_note(decision: Mapping) -> str:
 
 
 def select(
-    role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=()
+    role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=(),
+    out_of_capacity=(),
 ) -> str:
     """The model the next attempt should use: the first AVAILABLE model walking
     that agent's ordered ladder best→worst.
@@ -854,7 +943,8 @@ def select(
     return a model just confirmed 404.
     """
     return select_with_reasons(
-        role, probe=probe, clock=clock, ladder=ladder, avoid=avoid
+        role, probe=probe, clock=clock, ladder=ladder, avoid=avoid,
+        out_of_capacity=out_of_capacity,
     )["model"]
 
 
@@ -924,13 +1014,18 @@ def main(argv: list[str]) -> int:
     """CLI for the workflows — the entry point every agent workflow calls.
 
       select [<agent>] [--explain-file <path>] [--avoid <model>]...
+             [--out-of-capacity <model>]... [--fallback-file <path>]
                                    print the model the next attempt should use
                                    (walks that agent's ladder from
                                    config/models.yaml, probes availability) and,
                                    with --explain-file, write the one-line
                                    selection note beside it. --avoid walks past
                                    a model this card's last attempt died on
-                                   (DRE-3824), without probing it
+                                   (DRE-3824), without probing it;
+                                   --out-of-capacity walks past a model this
+                                   run saw refused for capacity (DRE-3970);
+                                   --fallback-file writes the rung below the
+                                   chosen one (empty when there is none)
       role-of <label,label,...>    print engineer|planner|devops|frontend from
                                    a card's labels
 
@@ -958,6 +1053,8 @@ def main(argv: list[str]) -> int:
     if cmd == "select":
         explain_path = None
         avoid: list[str] = []
+        refused: list[str] = []
+        fallback_path = None
         args: list[str] = []
         pending = list(rest)
         while pending:
@@ -966,6 +1063,10 @@ def main(argv: list[str]) -> int:
                 explain_path = pending.pop(0) if pending else None
             elif arg == "--avoid":
                 avoid.append(pending.pop(0) if pending else "")
+            elif arg == "--out-of-capacity":
+                refused.append(pending.pop(0) if pending else "")
+            elif arg == "--fallback-file":
+                fallback_path = pending.pop(0) if pending else None
             else:
                 args.append(arg)
         # Ignore a legacy comments-file 2nd arg if the workflow still passes one
@@ -973,7 +1074,8 @@ def main(argv: list[str]) -> int:
         role = args[0] if args else "engineer"
         clear_availability_cache()
         decision = select_with_reasons(
-            role, probe=_fake_probe_from_env(), avoid=avoid
+            role, probe=_fake_probe_from_env(), avoid=avoid,
+            out_of_capacity=refused,
         )
         note = selection_note(decision)
         print(decision["model"])
@@ -984,6 +1086,13 @@ def main(argv: list[str]) -> int:
                     fh.write(note + "\n")
             except OSError as exc:  # a note we cannot write must not kill a run
                 print(f"model_fallback: could not write {explain_path} ({exc})",
+                      file=sys.stderr)
+        if fallback_path:
+            try:
+                with open(fallback_path, "w") as fh:
+                    fh.write((fallback_for(role, decision["model"]) or "") + "\n")
+            except OSError as exc:  # same rule as the note
+                print(f"model_fallback: could not write {fallback_path} ({exc})",
                       file=sys.stderr)
         return 0
     print(f"unknown command {cmd!r}")

@@ -1796,18 +1796,3 @@ class TestThePromptDoesNotTransitArgv:
         )
         assert calls[0]["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
         assert "shell" not in calls[0], "no shell — the argv list is the call"
-
-
-# --------------------------------------------------------------------------- #
-# DRE-3969: the classifier runs on Opus 5 while Fable is out of capacity       #
-# --------------------------------------------------------------------------- #
-
-def test_the_classifier_picks_opus_5_on_the_fleets_subscription_credential(monkeypatch):
-    """DRE-3949 was parked by THIS pick: on a subscription token `_pick_model`
-    reads the judgement ladder's top rung directly, so when `claude-fable-5-1`
-    refused on a monthly spend limit (2026-09-12/13) the classifier died on it
-    before any fallback could run. CEO decision 2026-09-14 (hotfix): planning,
-    classify included, runs on Opus 5."""
-    _subscription_env(monkeypatch)
-    _ban_raw_api(monkeypatch)
-    assert planning_classify._pick_model() == "claude-opus-5"
