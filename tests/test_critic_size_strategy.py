@@ -1044,6 +1044,24 @@ class RemovalSummaryTest(unittest.TestCase):
         self.assertIn(f"{PR_2571_DELETED:,}", line)
         self.assertRegex(line, r"(?i)removed")
 
+    def test_the_line_names_the_reason_that_actually_decided_it(self):
+        """#2571 reaches `large` with a reviewable size of 5 files / 87 lines
+        — UNDER the one-pass threshold. Saying it is "past the one-pass
+        threshold (10 files / 1,500 lines)" would be a run record that
+        contradicts itself, and this module exists because a run record was
+        misread for a day (DRE-2465)."""
+        m = pss.measure(None, pr_2571_totals(), files=pr_2571_files())
+        line = pss.summary_line(m, "large")
+        self.assertIn("within the one-pass threshold", line)
+        self.assertNotIn("is past the one-pass threshold", line)
+        self.assertRegex(line, r"(?i)removed lines are in the diff")
+
+    def test_a_genuinely_large_pull_request_still_names_the_threshold(self):
+        m = pss.measure(None, {"changedFiles": 118, "additions": 16_909,
+                               "deletions": 628})
+        self.assertIn("is past the one-pass threshold",
+                      pss.summary_line(m, "large"))
+
     def test_a_pull_request_with_no_removals_says_nothing_about_them(self):
         line = pss.summary_line(pss.measure(compare([("a.py", 3, 1)]), None),
                                 "standard")

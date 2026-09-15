@@ -366,6 +366,18 @@ def why(m: dict, strategy: str) -> str:
             f"{OVERSIZED_LINES:,} lines)"
         )
     if strategy == "large":
+        # WHICH threshold decided it, truthfully. A removal-heavy pull
+        # request reaches `large` with a reviewable size UNDER the one-pass
+        # threshold, and a log line claiming otherwise is the kind of record
+        # #297 was misdiagnosed from for a day (DRE-2465).
+        if files <= LARGE_FILES and lines <= LARGE_LINES:
+            return (
+                f"reviewable size {files:,} files / {lines:,} lines is "
+                f"within the one-pass threshold, but the "
+                f"{m.get('removed_lines', 0):,} removed lines are in the "
+                f"diff a single pass has to read — reviewing from the "
+                f"changed-file list instead"
+            )
         return (
             f"reviewable size {files:,} files / {lines:,} lines is past the "
             f"one-pass threshold ({LARGE_FILES:,} files / {LARGE_LINES:,} "
@@ -490,7 +502,8 @@ def removal_context(m: dict) -> str:
         "(imports, scripts and workflow `run:` lines, documentation links, "
         "config references). A removal that breaks a live reference is a "
         "BLOCKING finding. Every changed file that is NOT on this list is "
-        "ordinary review work and gets your normal read.\n"
+        "ordinary review work and gets your normal read — filter these paths "
+        "out of the changed-file list and what remains is your review plan.\n"
         f"{head}\n{listing}"
     )
 
