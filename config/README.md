@@ -213,7 +213,7 @@ but not selectable* (retired ids, and ids excluded by cost policy).
 |---|---|---|---|
 | `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (today Opus 5) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
 | `advisory` | critic, verifier, medic, both plan critics | today Sonnet 5 | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. Sonnet 5 since 2026-08-12, on measured cost — the critic fires on every PR push, which is not the bounded volume the ladder was designed around. |
-| `judgement` | the planner, alone | the **strongest** model (today `claude-fable-5-1`) | One run per epic, at a decision point, and the plan it writes is the specification every child card is built from — so a bad output costs a fix loop per child, not a retry. Low volume, highest leverage (CEO decision, 2026-09-03). |
+| `judgement` | the planner, alone | the **strongest** model — but `claude-opus-5` alone since 2026-09-14 while Fable is out of capacity (DRE-3969, hotfix) | One run per epic, at a decision point, and the plan it writes is the specification every child card is built from — so a bad output costs a fix loop per child, not a retry. Low volume, highest leverage (CEO decision, 2026-09-03). |
 
 The allocation used to be exactly inverted — the cheapest model judging the most
 expensive one's work — and the priciest model sat on the hot path where it could
