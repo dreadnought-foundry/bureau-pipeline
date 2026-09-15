@@ -105,6 +105,15 @@ A LIMIT DEATH IS A WAIT, NOT A DEATH (DRE-3171):
               `turn_cap_in_text` vetoes the Claude answer on the action's own
               turn-cap evidence; the Linear answer is untouched, because a
               turn count cannot explain away another vendor's refusal.
+              THE CLAUDE WALL IS model_fallback's CAPACITY LIST (DRE-3978).
+              `claude-fable-5-1` refused every planning call on 2026-09-12/13/14
+              with "You've hit your monthly spend limit. Switch to another
+              model to continue." (portico run 34924370626) — a sentence the
+              old two-string list did not match, so no marker was written and
+              nothing brought those cards back. `limit_kind` now reads the one
+              list DRE-3970 built, minus `overloaded_error`: a 529 is the
+              service being busy, clears by itself, and names no reset, so it
+              is a capacity signature but never a limit death.
 
 A CANCELLED run is NOT a death class (DRE-2074): when the agent step's outcome
 is `cancelled` (the job timeout, or an external/concurrency cancel), the agent
@@ -147,6 +156,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # limit classifier below vetoes on it, and check_agent_result is where it
 # already lives — no I/O, no Linear seam, so importing it costs nothing.
 import check_agent_result  # noqa: E402 — after the path insert, by design
+
+# ONE definition of what a capacity refusal looks like (DRE-3978). DRE-3970
+# built that list for the fallback decision; the limit classifier below reads
+# the same one rather than keeping a second, older copy of the same sentences.
+# Import-safe: model_fallback does no I/O and imports nothing of ours.
+import model_fallback  # noqa: E402 — after the path insert, by design
 
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
@@ -207,6 +222,11 @@ LIMIT_MARK = f"🪦 {LIMIT_TAG}:"
 # it; the rest are Linear's request budget as linear_ops composes it
 # (DRE-2923), names it, and — the bare extension code — as the client's error
 # line quotes it. A new wall is one line here, never a branch below.
+# The CLAUDE half of this tuple is no longer the whole Claude answer: since
+# DRE-3978 that is `_CLAUDE_LIMIT_SIGNATURES` below, read off
+# `model_fallback.CAPACITY_SIGNATURES`. These two members stay because they
+# are members of that list too — the Linear loop in `limit_kind` skips them,
+# and the roll-call test reads the tuple as the record of what came from where.
 LIMIT_SIGNATURES = (
     "hit your limit",
     "rate_limit_error",
@@ -221,7 +241,29 @@ LIMIT_SIGNATURES = (
 LIMIT_SIGNATURE_PAIRS = (
     ("transient network fault, retried once", "The read operation timed out"),
 )
-_CLAUDE_LIMIT_SIGNATURES = ("hit your limit", "rate_limit_error")
+# THE CLAUDE WALL IS THE CAPACITY LIST (DRE-3978). `model_fallback` already
+# owns what a model says when it refuses for capacity rather than for anything
+# about the request, and DRE-3970 widened it to the sentences the CLI actually
+# prints. `("hit your limit", "rate_limit_error")` was a second, older copy of
+# the same fact: `claude-fable-5-1` refused every planning call on
+# 2026-09-12/13/14 with "You've hit your monthly spend limit. Switch to another
+# model to continue." (portico run 34924370626), which contains neither, so
+# `limit_kind` answered None, no marker was written and `limit_recovery.py`
+# never saw the wall. ONE list, read from where it lives.
+#
+# Each signature is DECIDED, not inherited wholesale. A limit death is an
+# ACCOUNT WALL: nothing the pipeline does clears it, it has a reset the
+# recovery sweep waits for, and re-running into it wastes an attempt. That is
+# every spend/usage/rate signature. `overloaded_error` is the one that is not —
+# an HTTP 529 is the SERVICE being busy, it clears by itself in seconds, it
+# names no reset to wait for, and marking it a limit death would park a card
+# waiting for a window that was never closed. It stays a capacity signature
+# (model_fallback may still fall to the next rung on it) and is not a death.
+_CAPACITY_NOT_A_LIMIT_DEATH = ("overloaded_error",)
+_CLAUDE_LIMIT_SIGNATURES = tuple(
+    sig for sig in model_fallback.CAPACITY_SIGNATURES
+    if sig not in _CAPACITY_NOT_A_LIMIT_DEATH
+)
 # The turn-cap VETO (DRE-3499). The Claude signatures above are ordinary
 # English, and the classifier scans the WHOLE failed log — `gh run view
 # --log-failed`, prose and all. On 2026-09-07 at 16:50Z the medic posted
@@ -308,7 +350,9 @@ def turn_cap_in_text(text: str) -> bool:
 
 def limit_kind(text: str) -> str | None:
     """`"claude"` or `"linear"` when `text` — a failed run's log or result —
-    carries one of LIMIT_SIGNATURES / LIMIT_SIGNATURE_PAIRS, else None.
+    carries one of `_CLAUDE_LIMIT_SIGNATURES` (the Claude wall, read off
+    `model_fallback.CAPACITY_SIGNATURES`) or LIMIT_SIGNATURES /
+    LIMIT_SIGNATURE_PAIRS (Linear's), else None.
 
     THE TURN-CAP VETO COMES FIRST (DRE-3499). A run that hit the turn ceiling
     did not hit the Claude account's usage limit, whatever words are in its
@@ -319,10 +363,16 @@ def limit_kind(text: str) -> str | None:
     The Linear answer is untouched by the veto: that is a different vendor
     refusing a request, and a turn count cannot explain it away. A log
     carrying BOTH a Linear signature and a turn cap still reads `linear`.
+
+    THE CLAUDE SIGNATURES ARE model_fallback's CAPACITY LIST (DRE-3978), minus
+    the transient service faults — matched case-insensitively, because they are
+    lower-cased data and the vendor prints "Switch to another model" with a
+    capital S. The Linear signatures below keep their own casing: `RATELIMITED`
+    and `LinearRateLimited` are codes, not prose.
     """
     text = text or ""
     if not turn_cap_in_text(text) and any(
-        sig in text for sig in _CLAUDE_LIMIT_SIGNATURES
+        sig in text.lower() for sig in _CLAUDE_LIMIT_SIGNATURES
     ):
         return "claude"
     for sig in LIMIT_SIGNATURES:

@@ -113,6 +113,20 @@ and the ordinary medic handling resumes. Nothing was removed from
 `LIMIT_SIGNATURES`, and the `linear` answer is unaffected — a turn count cannot
 explain away another vendor's refusal, so a log carrying both still reads
 `linear`.*
+*Amended 2026-09-15 (DRE-3978): the `claude` signatures are no longer a list of
+their own — they are `model_fallback.CAPACITY_SIGNATURES`, the list DRE-3970
+built for the fallback decision, minus `overloaded_error`. `claude-fable-5-1`
+refused every planning call on 2026-09-12/13/14 with "You've hit your monthly
+spend limit. Switch to another model to continue." (portico run 34924370626),
+which contains neither `hit your limit` nor `rate_limit_error`, so the medic
+classified it as an ordinary death, wrote no marker, and `limit_recovery.py`
+never brought those cards back. The Claude half of `dead_run.LIMIT_SIGNATURES`
+is therefore no longer the whole Claude answer — `dead_run._CLAUDE_LIMIT_SIGNATURES`
+is, matched case-insensitively, and Linear's signatures are unchanged and still
+live in `LIMIT_SIGNATURES`. `overloaded_error` is excluded on purpose: an HTTP
+529 is the service being busy, it clears by itself and names no reset, so
+waiting for one would park a card on a window that was never closed. The
+turn-cap veto still runs first over the wider list.*
 
 **Verdict:** covered.
 
