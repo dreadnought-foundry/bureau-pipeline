@@ -143,6 +143,19 @@ def wf_src():
     return open(WORKFLOW, encoding="utf-8").read()
 
 
+def report_step():
+    """The Report step, from the PARSED yaml. Read from the parse and not
+    from the source text on purpose: an `ATTEMPT:` line ANOTHER step owns
+    satisfies a substring search of the whole file, which is exactly how
+    `ATTEMPT: $ATTEMPT` shipped in this step under a green assertion."""
+    with open(WORKFLOW, encoding="utf-8") as fh:
+        steps = yaml.safe_load(fh)["jobs"]["fix"]["steps"]
+    for step in steps:
+        if step.get("name") == "Report":
+            return step
+    raise AssertionError("the Report step is gone from agent-fix.yml")
+
+
 def critic_prompts():
     """The `prompt:` input of both critic attempts, from the PARSED yaml."""
     with open(QA_WORKFLOW, encoding="utf-8") as fh:
@@ -639,13 +652,32 @@ class WorkflowWiringTest(unittest.TestCase):
         # "pushed — CI and critic review re-running": appending must not
         # disturb either.
         # The attempt number reaches the body through the step's env since
-        # DRE-3951 — the Report block carries no `${{ }}` at all, so GitHub
-        # never compiles it as an expression — but the counted string in front
-        # of it is unchanged, which is the whole of what this pins.
-        src = wf_src()
+        # DRE-3951 — the Report block's `run:` carries no `${{ }}` at all, so
+        # GitHub never compiles it as an expression — but the counted string
+        # in front of it is unchanged, which is the whole of what this pins.
+        #
+        # The env value is read off the REPORT STEP, not off the file: the
+        # whole-file substring this used to assert was already satisfied by a
+        # different step's `ATTEMPT: ${{ steps.pr.outputs.attempt }}`, so it
+        # stayed green while this step shipped `ATTEMPT: $ATTEMPT` and every
+        # comment the workflow posts said "Fix attempt $ATTEMPT pushed".
         self.assertIn('BODY="🔧 Fix attempt $ATTEMPT '
-                      'pushed — CI and critic review re-running."', src)
-        self.assertIn("ATTEMPT: ${{ steps.pr.outputs.attempt }}", src)
+                      'pushed — CI and critic review re-running."', wf_src())
+        self.assertEqual(report_step()["env"]["ATTEMPT"],
+                         "${{ steps.pr.outputs.attempt }}")
+
+    def test_no_report_env_value_is_a_bare_shell_variable(self):
+        # The class of bug above, not just the one line. `env:` resolves
+        # `${{ }}` and NOTHING else — a bare `$NAME` is set verbatim as the
+        # value, and the step's own script then substitutes that literal
+        # straight into a posted comment. Every value here comes from an
+        # expression or is a fixed string; none may name a shell variable.
+        for key, value in report_step()["env"].items():
+            with self.subTest(key=key):
+                self.assertNotRegex(
+                    str(value), r"\$(?!\{\{)[A-Za-z_{]",
+                    f"Report env {key} carries a shell-style variable GitHub "
+                    f"will not expand — use ${{{{ ... }}}}")
 
     def test_the_hold_names_which_stop_happened(self):
         src = wf_src()

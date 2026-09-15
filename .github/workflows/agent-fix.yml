@@ -1302,7 +1302,7 @@ jobs:
           # busiest workflow, and the next line added here cannot refuse every
           # consumer repo at dispatch with no job and no log (DRE-3484).
           PR: ${{ steps.pr.outputs.number }}
-          ATTEMPT: $ATTEMPT
+          ATTEMPT: ${{ steps.pr.outputs.attempt }}
           MODE: ${{ steps.pr.outputs.mode }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
