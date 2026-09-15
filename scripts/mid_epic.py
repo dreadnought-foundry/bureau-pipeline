@@ -184,12 +184,18 @@ AMENDMENTS_HEADING = "Amendments:"
 AWAITING_REAPPROVAL = "awaiting re-approval"
 UNKNOWN_GREEN_LIGHT = "unknown — Linear has no readable green light for this epic"
 
-_ADDITION_LINE = re.compile(r"^-\s+(DRE-\d+)\s+—\s+(.*)$")
+# ANY markdown bullet, not only the `-` this module writes (DRE-3643). Linear
+# stores descriptions in its own dialect and hands every `- ` back as `* `, so a
+# parser that took only `-` read every recorded addition as no addition at all:
+# the sweep re-flagged it as silent growth and the next write erased it.
+_BULLET = r"[-*+]"
+_NONE_LINE = re.compile(r"^" + _BULLET + r"\s+\(none\)$")
+_ADDITION_LINE = re.compile(r"^" + _BULLET + r"\s+(DRE-\d+)\s+—\s+(.*)$")
 # GREEDY on the justification, anchored on the settled field: the artifact is
 # parsed back on every sweep, and a justification that happens to contain the
 # field separator must not shear the record it was written into.
 _AMENDMENT_LINE = re.compile(
-    r"^-\s+(\S+)\s+—\s+(.*)\s+—\s+("
+    r"^" + _BULLET + r"\s+(\S+)\s+—\s+(.*)\s+—\s+("
     + re.escape(AWAITING_REAPPROVAL)
     + r"|re-green-lit\s+.*)$"
 )
@@ -487,7 +493,9 @@ def parse_artifact(description: str) -> dict:
         if line == AMENDMENTS_HEADING:
             section = "amendments"
             continue
-        if not line.startswith("-") or line == "- (none)":
+        # `**Green-lit at:**` also starts with `*`, and is consumed above; any
+        # other bold line is not a bullet because no whitespace follows the `*`.
+        if not re.match(_BULLET + r"\s", line) or _NONE_LINE.match(line):
             continue
         if section == "additions":
             m = _ADDITION_LINE.match(line)
@@ -576,14 +584,19 @@ def green_light_from(history_nodes) -> str | None:
     return max(stamps, key=_ts) if stamps else None
 
 
-def last_green_light(linear_ops, epic: str) -> str | None:
+def last_green_light(linear_ops, epic: str, *, issue: dict | None = None) -> str | None:
     """When `epic` was last green-lit, or None when Linear cannot say.
+
+    `issue` is the epic's record when the caller already holds it (DRE-3643) —
+    anything carrying `history { nodes { createdAt toState { name } } }` — and
+    then nothing is read. None reads the epic, as it always has.
 
     Never raises: the promotion gate calls this per epic per sweep, and an
     unreadable history must abstain (see promotion_refusal), not kill the sweep.
     """
     try:
-        return green_light_from(read_epic(linear_ops, epic).get("history", {}).get("nodes"))
+        record = issue if issue is not None else read_epic(linear_ops, epic)
+        return green_light_from((record.get("history") or {}).get("nodes"))
     except Exception as exc:  # noqa: BLE001 — an unreadable green light is unknown
         print(f"mid-epic: could not read {epic}'s green light ({exc})", file=sys.stderr)
         return None
@@ -706,7 +719,27 @@ def _amend(linear_ops, epic, because) -> None:
     return None
 
 
-def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
+def _comment_total(linear_ops, issue: dict) -> int | None:
+    """How many comments the epic holds, or None when Linear did not say.
+
+    A record that carries its first comment page (`comments(first: 250) { nodes
+    { id } pageInfo { hasNextPage } }`, the selection DRE-3642's batched epic
+    read gains) answers for itself when that page is its last — every epic
+    under 250 comments, for no request. Otherwise the count is paged by
+    `linear_ops.comment_count`, exactly as DRE-3343 built it: an epic past its
+    first page is the epic near the cap, and its count is never read off a
+    page that says there is more. An epic whose UUID the record did not carry
+    is not counted at all rather than guessed.
+    """
+    page = issue.get("comments")
+    if isinstance(page, dict) and not (page.get("pageInfo") or {}).get("hasNextPage"):
+        return len(page.get("nodes") or [])
+    uuid = issue.get("id")
+    return linear_ops.comment_count(uuid) if uuid else None
+
+
+def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None,
+                        issue: dict | None = None) -> dict:
     """Re-derive the epic's growth artifact from what is live, and report it.
 
     Does four things, all from truth rather than memory:
@@ -721,14 +754,20 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
     "comments"}. `capped` is the named condition when the epic refused a
     comment this call tried to write (DRE-3343) and None otherwise; `comments`
     is how many the epic holds, or None when Linear did not say.
+
+    `issue` is the epic's record when the caller already holds it (DRE-3643):
+    then the epic is not read again. None reads it, as it always has — the CLI
+    and `discovery` pass nothing.
+
+    The description is written only when the record MEANS something new — see
+    the convergence note at the write below.
     """
-    issue = read_epic(linear_ops, epic)
+    if issue is None:
+        issue = read_epic(linear_ops, epic)
     description = issue.get("description") or ""
     # None, not 0, when Linear could not say: an epic reported at zero comments
-    # reads as a quiet one, which is the opposite of unknown. An epic whose
-    # UUID this read did not carry is not counted at all rather than guessed.
-    uuid = issue.get("id")
-    comment_count = linear_ops.comment_count(uuid) if uuid else None
+    # reads as a quiet one, which is the opposite of unknown.
+    comment_count = _comment_total(linear_ops, issue)
     children = (issue.get("children") or {}).get("nodes") or []
     lane = (issue.get("state") or {}).get("name")
     green_lit_at = green_light_from((issue.get("history") or {}).get("nodes"))
@@ -765,7 +804,17 @@ def refresh_epic_growth(linear_ops, epic: str, *, add=None, amend=None) -> dict:
 
     block = render_artifact(green_lit, len(children), additions, amendments)
     merged = merge_artifact(description, block)
-    if merged != description:
+    # CONVERGENCE (DRE-3643): compare what the record MEANS, never its bytes.
+    # Linear stores the region in its own markdown — `* ` for every `- `, a
+    # blank line after each heading — so the bytes it hands back never equal
+    # the bytes rendered here, and a byte test rewrote every active epic on
+    # every sweep in every repo: a `get_issue` read and an `issueUpdate` per
+    # epic per pass, for a record that said what it already said, and a bumped
+    # `updatedAt` on each. Write when there is no region yet, or when the
+    # parsed record moved.
+    if not _REGION.search(description) or (
+        parse_artifact(merged) != parse_artifact(description)
+    ):
         linear_ops.set_description(epic, merged)
 
     # What the epic refused, if it refused anything. `cmd_comment` returns the
