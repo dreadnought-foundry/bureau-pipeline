@@ -311,7 +311,9 @@ class IncidentConditionTest(unittest.TestCase):
             all_up = {OPUS: True, SONNET: True, SONNET5: True,
                       FABLE: True, FABLE51: True}
             self.assertEqual(_cli_select(tree, "engineer", all_up)[0], OPUS)
-            self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
+            # DRE-3969 (hotfix, CEO 2026-09-14): the planner runs on Opus 5
+            # while Fable is out of capacity — Fable up buys it nothing.
+            self.assertEqual(_cli_select(tree, "planner", all_up)[0], OPUS)
             self.assertEqual(_cli_select(tree, "critic", all_up)[0], SONNET5)
 
     def test_availability_still_only_walks_down(self):
@@ -342,21 +344,23 @@ class JudgementKindTest(unittest.TestCase):
             "runs per card belongs on the workhorse ladder",
         )
 
-    def test_the_judgement_ladder_is_fable_first_then_the_build_models(self):
-        # Data, so it is pinned as data: the strongest model, then the two
-        # workhorse rungs as the deliberate (loud) degrade path.
-        self.assertEqual(_judgement_ladder(), [FABLE51, OPUS, SONNET])
-        self.assertEqual(_judgement_ladder()[1], _workhorse_ladder()[0])
+    def test_the_judgement_ladder_is_opus_only_while_fable_is_out_of_capacity(self):
+        # DRE-3969 (hotfix, CEO decision 2026-09-14): `claude-fable-5-1`
+        # refused every planning call on 2026-09-12/13 with a monthly spend
+        # limit, and the classifier reads this ladder's top rung directly. So
+        # the ladder is ONE rung, Opus 5 — the only Opus-first shape rule 4
+        # allows — and Fable is excluded (readable, never selectable).
+        self.assertEqual(_judgement_ladder(), [OPUS])
+        self.assertEqual(_judgement_ladder()[0], _workhorse_ladder()[0])
+        self.assertIn(FABLE51, mf.CONFIG["excluded"])
+        self.assertEqual(mf.policy_errors(_canonical()), [])
 
-    def test_the_planner_runs_on_fable_when_it_is_available(self):
+    def test_the_planner_runs_on_opus_even_when_fable_is_available(self):
         self.assertEqual(mf.kind_for("planner"), JUDGEMENT)
-        self.assertEqual(mf.select("planner", probe=lambda m: True), FABLE51)
+        self.assertEqual(mf.select("planner", probe=lambda m: True), OPUS)
 
-    def test_the_planner_reaches_fable_at_every_availability_that_allows_it(self):
-        # The other side of the 08-09 pin. Whatever the rest of the ladder is
-        # doing, an available Fable is the planner's model — that is the whole
-        # decision, and a config edit that quietly stopped honouring it would
-        # look exactly like a healthy run.
+    def test_the_planner_never_reaches_fable_at_any_availability(self):
+        # DRE-3969: whatever the probe says, the planner is not on Fable.
         for avail in (
             {FABLE51: True, OPUS: True, SONNET: True},
             {FABLE51: True, OPUS: False, SONNET: True},
@@ -366,22 +370,20 @@ class JudgementKindTest(unittest.TestCase):
                 mf.clear_availability_cache()
                 self.assertEqual(
                     mf.select("planner", probe=lambda m: avail.get(m, True)),
-                    FABLE51,
+                    OPUS,
                 )
 
-    def test_falling_to_opus_is_the_loud_fallback(self):
-        # Exactly as the advisory ladder does it: DEGRADED-prefixed, naming
-        # what was skipped and why, on one line the workflow turns into a
-        # ::warning::. A planner that quietly ran on Opus would be
-        # indistinguishable from one that got what it was promised.
-        decision = mf.select_with_reasons("planner", probe=lambda m: m != FABLE51)
+    def test_opus_on_the_planner_is_the_top_of_its_ladder_not_a_degrade(self):
+        # With one rung there is no fall: Opus is what the planner was
+        # promised, so the note is not DEGRADED and names nothing skipped.
+        decision = mf.select_with_reasons("planner", probe=lambda m: True)
         self.assertEqual(decision["model"], OPUS)
         self.assertEqual(decision["kind"], JUDGEMENT)
-        self.assertEqual([s["model"] for s in decision["skipped"]], [FABLE51])
+        self.assertEqual(decision["skipped"], [])
+        self.assertFalse(decision["degraded"])
         note = mf.selection_note(decision)
         self.assertEqual(len(note.splitlines()), 1)
-        self.assertTrue(note.startswith("DEGRADED"), f"the fallback is silent: {note}")
-        self.assertIn(FABLE51, note)
+        self.assertFalse(note.startswith("DEGRADED"), note)
         self.assertIn(JUDGEMENT, note)
 
     def test_no_workhorse_role_reaches_fable_at_any_availability(self):
@@ -423,7 +425,8 @@ class JudgementKindTest(unittest.TestCase):
             for role in ("engineer", "frontend", "devops", "fixer", "repairer"):
                 with self.subTest(role=role):
                     self.assertEqual(_cli_select(tree, role, all_up)[0], OPUS)
-            self.assertEqual(_cli_select(tree, "planner", all_up)[0], FABLE51)
+            # DRE-3969: the planner too, while Fable is out of capacity.
+            self.assertEqual(_cli_select(tree, "planner", all_up)[0], OPUS)
 
     def test_fable_on_a_build_ladder_is_still_rejected(self):
         # The judgement ladder is permission for the PLANNER, not for the model.
@@ -495,7 +498,7 @@ class JudgementKindTest(unittest.TestCase):
             "planner"
         ]
         self.assertEqual(planner["kind"], JUDGEMENT)
-        self.assertEqual(planner["model"], FABLE51)
+        self.assertEqual(planner["model"], OPUS)  # DRE-3969 hotfix
 
     def test_fable_5_1_is_a_known_model_and_its_predecessor_still_is_too(self):
         # Attribution: markers in flight carry either id.
