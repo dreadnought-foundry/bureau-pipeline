@@ -7186,6 +7186,85 @@ def main(
         )
 
 
+# ── What a dispatched pass is about (DRE-3645) ──────────────────────────────
+# The relay fires `repository_dispatch: reconcile` every time a card reaches
+# Done, carrying `{reason: "card-done", identifier: "DRE-…"}`, and the
+# reusable puts both in this pass's environment (DRE-3640). Until they were
+# read here, every one of those dispatches bought a FULL board pass — 67 to 92
+# Linear requests — for one card: about 460 of the fleet's 2,500 an hour on
+# 2026-09-15, six of them on portico inside fourteen minutes.
+#
+# A card going Done can change exactly two things: whether the cards it blocks
+# are promotable, and whether its parent epic is finished. That is the scoped
+# pass `linear-sync.yml` already runs on a merge (DRE-2930, DRE-3236), so the
+# dispatch runs the SAME one — the gate, then one pass per flag it names, each
+# with `MERGED_CARD` set — and nothing else. The backstops, the watchdogs, the
+# Intake age-out and the nudge loop are the cron's: a Done changes nothing any
+# of them reads. The dispatch cannot simply be dropped instead: a `no-code`
+# card the operator closes by hand reaches the board through the relay alone.
+CARD_DONE = "card-done"
+
+
+class SweepScope(NamedTuple):
+    """What this pass is about. `card` is None for a full pass."""
+
+    reason: str  # `card-done`, or why the pass is full (`schedule` when unsaid)
+    card: str | None  # the card that went Done, when the pass is scoped to it
+    passes: tuple[str, ...]  # the merge-sweep gate's flags for that card
+
+
+def sweep_scope() -> SweepScope:
+    """Read `SWEEP_REASON` / `SWEEP_CARD`, decide, and print the one line.
+
+    Only `card-done` WITH a card narrows anything. `epic-activated`, an empty
+    reason (the cron, `workflow_dispatch`), a word this file does not know, and
+    card-done with no card to narrow to are all the full pass that ran before
+    this existed — both variables stay optional, and absence is the safe case.
+
+    The narrowing is `merge_sweep_gate.decide`, the merge path's own gate, so
+    an unreadable card falls OPEN to both passes and an exhausted quota falls
+    CLOSED to none, exactly as it does there.
+    """
+    raw = (os.environ.get("SWEEP_REASON") or "").strip()
+    card = (os.environ.get("SWEEP_CARD") or "").strip().upper()
+    if raw.lower() != CARD_DONE:
+        reason = raw or "schedule"
+        print(f"sweep-scope: full pass ({reason})")
+        return SweepScope(reason, None, ())
+    if not card:
+        print(f"sweep-scope: full pass ({CARD_DONE} — no card named, nothing to narrow to)")
+        return SweepScope(CARD_DONE, None, ())
+    passes = tuple(merge_sweep_gate.decide(card))
+    print(
+        f"sweep-scope: {CARD_DONE} {card} — scoped to its dependents and parent "
+        f"({len(passes)} pass(es))"
+    )
+    return SweepScope(CARD_DONE, card, passes)
+
+
+def _run_card_done(scope: SweepScope) -> None:
+    """The merge path's scoped passes for `scope.card`, in-process.
+
+    `MERGED_CARD` is how `merged_card_scope` learns the card, as it is on the
+    merge path; it is restored afterwards so it cannot scope anything else in
+    this process. A pass that exits red stops the rest, the same as
+    linear-sync's `bash -e` loop over the same flags.
+    """
+    before = os.environ.get("MERGED_CARD")
+    os.environ["MERGED_CARD"] = scope.card or ""
+    try:
+        for flag in scope.passes:
+            main(
+                promote_only=flag == merge_sweep_gate.PROMOTE,
+                close_only=flag == merge_sweep_gate.CLOSE_EPICS,
+            )
+    finally:
+        if before is None:
+            os.environ.pop("MERGED_CARD", None)
+        else:
+            os.environ["MERGED_CARD"] = before
+
+
 # A rate-limited sweep exits with its OWN code (DRE-2923). Non-zero, because a
 # board that has stopped being reconciled must never go quiet — but distinct
 # from the generic 1 every real failure exits, so the condition is readable
@@ -7204,8 +7283,18 @@ def run(argv: list[str]) -> None:
 
     Everything else keeps its ordinary loud path: a real Linear failure, a
     write failure, a read failure all still surface exactly as before.
+
+    It is also where a DISPATCHED pass is narrowed (DRE-3645, `sweep_scope`).
+    Only a full-pass request is: a caller that named a mode already asked for
+    exactly one pass, and the environment neither widens nor narrows it.
     """
+    modes = ("--promote-only", "--conflicts-only", "--close-epics")
     try:
+        if not any(flag in argv for flag in modes):
+            scope = sweep_scope()
+            if scope.card is not None:
+                _run_card_done(scope)
+                return
         main(
             promote_only="--promote-only" in argv,
             conflicts_only="--conflicts-only" in argv,
