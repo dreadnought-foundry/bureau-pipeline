@@ -65,8 +65,10 @@ because a removed file has no additions to hide behind.
 Statuses come from the paginated PR files API (`/pulls/{n}/files`, 3,000
 records max), because the compare record truncates at 300 and #2571 changes
 3,080 files. Past that ceiling the tail's statuses are unknowable: its
-DELETIONS are split the way the deletions we could see were split, its
-additions are always review work. Read `measure()` for the arithmetic.
+DELETIONS are split the way the deletions we could see were split, its COUNT
+is split the way the seen files were split, and its additions are always
+review work. Neither split may ever claim the whole tail while the tail still
+carries lines a removal cannot own. Read `measure()` for the arithmetic.
 
 MEASURED FROM RECORDS THE WORKFLOW ALREADY FETCHES: the compare record
 Resolve PR writes to /tmp/qa-compare.json for the content id (DRE-2340),
@@ -260,11 +262,16 @@ def measure(compare: dict | None, pr_json: dict | None,
     what was seen); what is unknown is each one's status. Their ADDITIONS are
     counted as review work outright — a removed file has none, so an addition
     can never be hiding behind a removal. Their DELETIONS are split in the
-    same ratio as the deletions that WERE seen: where nothing seen was a
-    removal (the ordinary truncated pull request) the whole tail counts,
-    exactly as before this card; where the visible pull request is a wall of
-    removals, so is the tail. Nothing here is attributed when there is no
-    per-file record at all — that degrades to today's arithmetic.
+    same ratio as the deletions that WERE seen, and their COUNT in the same
+    ratio as the files that were seen: where nothing seen was a removal (the
+    ordinary truncated pull request) the whole tail counts, exactly as before
+    this card; where the visible pull request is a wall of removals, so is
+    the tail. Both splits stop one file short of the whole tail whenever the
+    tail still carries lines a removal cannot own, because those lines are in
+    a file somebody has to read — otherwise the record says `0 files / 87
+    lines reviewable`, which is not a state that exists. Nothing here is
+    attributed when there is no per-file record at all — that degrades to
+    today's arithmetic.
     """
     entries = files if files is not None else (compare or {}).get("files") or []
     seen_files = seen_add = seen_del = 0
@@ -302,10 +309,23 @@ def measure(compare: dict | None, pr_json: dict | None,
     # nothing seen was removed, which is every pull request this pipeline
     # has ever sized.
     tail_files = max(files_n - seen_files, 0)
+    tail_add = max(total_add - seen_add, 0)
     tail_del = max(total_del - seen_del, 0)
     removed_share = (rm_del / seen_del) if seen_del else 0.0
-    tail_rm_files = round(tail_files * (rm_files / seen_files)) if seen_files else 0
     tail_rm_lines = round(tail_del * removed_share)
+    tail_rm_files = round(tail_files * (rm_files / seen_files)) if seen_files else 0
+    # ...but never ALL of them while the tail still carries lines a removal
+    # cannot own. Its additions, and whatever deletions the split above did
+    # NOT attribute, live in files that are not removals — so at least one
+    # unseen file is review work, and claiming otherwise prints a record that
+    # contradicts itself: `0 files / 87 lines reviewable` cannot be a real
+    # state, and #2571 produced exactly that (3,000 seen files all removals,
+    # so the ratio attributed all 80 unseen files — including the five that
+    # carry the 87 added lines — to removals). One file is the floor this can
+    # PROVE; the true count is unknowable, which is why the log names the
+    # attribution rather than passing it off as a count.
+    if tail_add + max(tail_del - tail_rm_lines, 0) > 0:
+        tail_rm_files = min(tail_rm_files, max(tail_files - 1, 0))
 
     return {
         "files": files_n,

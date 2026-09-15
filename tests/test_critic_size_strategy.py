@@ -1010,6 +1010,34 @@ class RemovedFilesTest(unittest.TestCase):
         self.assertNotEqual(pss.choose(m), "oversized")
         self.assertLessEqual(m["review_lines"], PR_2571_ADDED)
 
+    def test_the_unseen_tail_never_reports_lines_to_read_in_zero_files(self):
+        """87 reviewable lines cannot live in 0 reviewable files, and the
+        truncated #2571 record produced exactly that: every SEEN file was a
+        removal, so the count ratio attributed all 80 unseen files to
+        removals — including the five carrying the 87 added lines. A run
+        record that contradicts the numbers printed beside it is the failure
+        this module exists to stop (DRE-2465), so the attribution stops one
+        file short whenever the tail carries lines a removal cannot own."""
+        seen = pr_2571_files()[:pss.FILES_API_MAX]
+        m = pss.measure(None, pr_2571_totals(), files=seen)
+        self.assertEqual(m["review_lines"], PR_2571_ADDED)
+        self.assertGreater(m["review_files"], 0)
+        self.assertLess(m["unseen_removed_files"], m["unseen_files"])
+        self.assertNotIn("0 files / 87 lines reviewable",
+                         pss.summary_line(m, pss.choose(m)))
+
+    def test_a_tail_that_really_is_all_removals_is_still_attributed_whole(self):
+        """The guard above must not over-correct: where the tail adds nothing
+        and every one of its deleted lines is attributed to a removal, there
+        are no lines needing a file to live in and the whole tail counts."""
+        m = pss.measure(
+            None,
+            {"changedFiles": 3_050, "additions": 0, "deletions": 1_830_000},
+            files=removed(3_000, 600),
+        )
+        self.assertEqual(m["unseen_removed_files"], m["unseen_files"])
+        self.assertEqual((m["review_files"], m["review_lines"]), (0, 0))
+
     def test_additions_in_the_unseen_tail_are_never_attributed_to_a_removal(self):
         """The guard on that attribution: a removed file has no additions, so
         added lines are never discounted, seen or unseen. 3,000 removals in
@@ -1238,6 +1266,11 @@ print(json.dumps(entries[start:start + per]))
         self.assertNotEqual(out["strategy"], "oversized")
         self.assertGreater(int(out["removed_files"]), 300)
         self.assertGreater(int(out["removed_lines"]), 2_000_000)
+        # The published outputs have to agree with each other: the stub stops
+        # at the API's 3,000-record ceiling, so this is the tail path, and
+        # lines to read with no file to read them in is not a state.
+        self.assertGreater(int(out["review_lines"]), 0)
+        self.assertGreater(int(out["review_files"]), 0)
         self.assertIn("archive/", out["strategy_context"])
         self.assertRegex(proc.stdout, r"(?i)removed")
 
