@@ -429,3 +429,21 @@ def test_the_plan_epic_finish_fails_the_job_on_a_genuine_failure(tmp_path):
         "SECOND_MODEL": "", "BECAUSE": "", "EPIC": "DRE-3949"})
     assert proc.returncode != 0
     assert not (tmp_path / "linear.log").exists(), "no receipt for a run nobody fell from"
+
+
+@pytest.mark.parametrize("site", SITES, ids=SITE_IDS)
+def test_every_capacity_retry_step_carries_its_planner_steps_route(site):
+    """The re-run steps belong to their planner step's route and no other.
+
+    tests/test_wave_plan_wiring.py caught `wave_cap` and `wave_done` gated only
+    on the wave step's outcome; nothing pinned the same for the plan epic and
+    the two re-plans, so dropping the route from any of their four steps would
+    have passed. A step off its route runs for a card on another one — a
+    finished? step that fails the job, or a re-run nobody's route asked for."""
+    name, orig, cap, mint, retry, done, _mint0, _coe = site
+    route = _by_id(orig)["if"]
+    assert route, f"{orig} is gated on a route"
+    for step_id in (cap, mint, retry, done):
+        gate = str(_by_id(step_id).get("if") or "")
+        assert f"({route})" in gate, (
+            f"{step_id} is not gated on {orig}'s route `{route}`: `{gate}`")
