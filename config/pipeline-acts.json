@@ -1803,6 +1803,54 @@
       "kind": "not-an-act",
       "means": "The dependabot card's record that its pull request closed without merging and the card was canceled with it (DRE-3665).",
       "why": "It reports an outcome of the work — dependabot superseded its own pull request, or a person closed it — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself; the same class as the merge→Done seam's `✅ Merged` line, from the other end. Its only reader is a person looking at the card, and the state change beside it is the machine-readable half."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<plan>\"",
+      "step": "Plan epic — on the next rung",
+      "kind": "not-an-act",
+      "means": "The line in the planner's prompt that tells it where to post the plan it wrote. The same prompt, in the step that re-runs it on the next rung after a capacity refusal (DRE-3970).",
+      "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own document. The medic's equivalent line DOES carry `--act=` because the medic's diagnosis is a declared act; this one has no registry row, and a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "\"${{ github.event.client_payload.identifier }}\" \"<summary>\"",
+      "step": "Wave route — write the wave plan — on the next rung",
+      "kind": "not-an-act",
+      "means": "The line in the wave planner's prompt that tells it where to post its summary. The same prompt, in the step that re-runs it on the next rung after a capacity refusal (DRE-3970).",
+      "why": "PROMPT TEXT, not a call: it is the line an AGENT reads, and what it posts is the agent's own document. The medic's equivalent line DOES carry `--act=` because the medic's diagnosis is a declared act; this one has no registry row, and a trailer written into a prompt would announce an act on behalf of an agent that decided nothing."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "— the planner ran on the model that answered.",
+      "step": "Plan epic — finished?",
+      "kind": "not-an-act",
+      "means": "Which model the planner asked for and which one actually answered, posted only when they differ — a re-run on the next rung after a capacity refusal, or the CLI's own fallback firing inside the step (DRE-3970).",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided — the same reading the Plan heartbeat and the classifier heartbeat above carry. Its body is composed by scripts/planner_capacity.py, never in YAML, and it carries no `model-error:` marker and not the DRE-3824 `planner agent starting` needle."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "— the planner ran on the model that answered.",
+      "step": "Re-plan after send-back — finished?",
+      "kind": "not-an-act",
+      "means": "Which model the planner asked for and which one actually answered, posted only when they differ — a re-run on the next rung after a capacity refusal, or the CLI's own fallback firing inside the step (DRE-3970).",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided — the same reading the Plan heartbeat and the classifier heartbeat above carry. Its body is composed by scripts/planner_capacity.py, never in YAML, and it carries no `model-error:` marker and not the DRE-3824 `planner agent starting` needle."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "— the planner ran on the model that answered.",
+      "step": "Re-plan after the second critic sent it back — finished?",
+      "kind": "not-an-act",
+      "means": "Which model the planner asked for and which one actually answered, posted only when they differ — a re-run on the next rung after a capacity refusal, or the CLI's own fallback firing inside the step (DRE-3970).",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided — the same reading the Plan heartbeat and the classifier heartbeat above carry. Its body is composed by scripts/planner_capacity.py, never in YAML, and it carries no `model-error:` marker and not the DRE-3824 `planner agent starting` needle."
+    },
+    {
+      "file": ".github/workflows/plan.yml",
+      "anchor": "— the planner ran on the model that answered.",
+      "step": "Wave route — write the wave plan — finished?",
+      "kind": "not-an-act",
+      "means": "Which model the planner asked for and which one actually answered, posted only when they differ — a re-run on the next rung after a capacity refusal, or the CLI's own fallback firing inside the step (DRE-3970).",
+      "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided — the same reading the Plan heartbeat and the classifier heartbeat above carry. Its body is composed by scripts/planner_capacity.py, never in YAML, and it carries no `model-error:` marker and not the DRE-3824 `planner agent starting` needle."
     }
   ]
 }

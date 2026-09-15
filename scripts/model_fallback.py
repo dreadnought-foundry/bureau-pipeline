@@ -741,6 +741,11 @@ CAPACITY_SIGNATURES = (
     "switch to another model",
     "hit your limit",
     "usage limit reached",
+    # The CLI's own sentences for the same wall, read out of the installed
+    # Claude Code 2.1.271 binary's strings (DRE-3970).
+    "fable limit",
+    "out of usage credits",
+    "shared budget",
     "rate_limit_error",
     "overloaded_error",
 )
