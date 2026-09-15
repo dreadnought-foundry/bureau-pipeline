@@ -88,15 +88,43 @@ inputs:
       Seconds to wait before the single retry. Empty means 5.
     required: false
     default: ""
+  silence-seconds:
+    description: >-
+      How long the model's stream may say NOTHING, after `system/init`,
+      before the run is stopped as a stall (DRE-3991). `0` turns the watchdog
+      off — the one switch that takes the fleet's safety net out without a
+      release. The default is `stream_watchdog.SILENCE_SECONDS` and a test
+      holds the two equal, so there is one budget and not two.
+    required: false
+    default: "300"
+  watchdog:
+    description: >-
+      Path to `scripts/stream_watchdog.py`. A seam for tests, which point it
+      at a checkout of their own; leave it empty in every real caller and the
+      action finds the script beside itself, three levels up from
+      `$GITHUB_ACTION_PATH` — the one resolution available to an action that
+      may not check bureau-pipeline out.
+    required: false
+    default: ""
 
 outputs:
   executable:
     description: >-
-      Absolute path to the Claude Code launcher this action PROVED runs. Pass
-      it to `anthropics/claude-code-action` as
-      `path_to_claude_code_executable`, or the vendor action installs its own
-      copy and the assert above covers nothing.
+      Absolute path to the Claude Code launcher to hand
+      `anthropics/claude-code-action` as `path_to_claude_code_executable`, or
+      the vendor action installs its own copy and the assert above covers
+      nothing. Since DRE-3991 this is the WATCHED launcher: the proved binary
+      wrapped in the stream watchdog, so a run that goes silent for five
+      minutes is stopped and recorded instead of being killed later with
+      nothing said. It falls back to the bare binary — loudly — when the
+      watchdog cannot be found or python3 is missing.
     value: ${{ steps.install.outputs.executable }}
+  proved-executable:
+    description: >-
+      Absolute path to the Claude Code binary this action PROVED runs, with no
+      wrapper around it. The assert's own answer, for a caller that wants the
+      binary rather than the guarded launcher.
+    value: ${{ steps.install.outputs.proved-executable }}
 
 runs:
   using: composite
@@ -111,6 +139,8 @@ runs:
         CLAUDE_INSTALLER_URL: ${{ inputs.installer-url }}
         CLAUDE_BIN_DIR: ${{ inputs.bin-dir }}
         CLAUDE_INSTALL_RETRY_DELAY: ${{ inputs.retry-delay }}
+        BUREAU_STREAM_SILENCE_SECONDS: ${{ inputs.silence-seconds }}
+        BUREAU_STREAM_WATCHDOG: ${{ inputs.watchdog }}
       run: |
         # No `set -e`: every failure here is handled explicitly, because the
         # one thing this action may never do is end early and quietly.
@@ -182,6 +212,57 @@ runs:
           exit 1
         fi
 
-        echo "executable=$BIN" >> "$GITHUB_OUTPUT"
+        echo "proved-executable=$BIN" >> "$GITHUB_OUTPUT"
         echo "$BIN_DIR" >> "$GITHUB_PATH"
         echo "Claude Code install asserted: $BIN"
+
+        # ── THE STREAM WATCHDOG (DRE-3991) ───────────────────────────────
+        # A proved binary still dies silently. On 2026-09-15 the red-main
+        # repair agent emitted `system/init` and then nothing at all, twice,
+        # and was killed from outside at 8m27s and 11m39s with no diagnosis,
+        # no code read and nothing on the card. So the launcher published
+        # below is not the binary — it is the binary WRAPPED, and the wrapper
+        # stops a run whose stream has said nothing for five minutes and
+        # writes one line saying which step went quiet, when it last spoke,
+        # and for how long.
+        #
+        # It lives here because this is the one place the whole fleet runs
+        # Claude from: every caller already passes `outputs.executable` to
+        # `claude-code-action`, so the watchdog reaches every workflow — and
+        # every product repo, through the channel — with no stub change.
+        #
+        # The script is found BESIDE THIS ACTION, three levels up
+        # ($GITHUB_ACTION_PATH/../../../scripts). That is the only resolution
+        # available: this action may never check bureau-pipeline out, because
+        # an action cannot receive a `workflow_call` input and the checkout
+        # could not be pinned by `pipeline_ref`.
+        WATCHDOG="${BUREAU_STREAM_WATCHDOG:-${GITHUB_ACTION_PATH:-.}/../../../scripts/stream_watchdog.py}"
+        SILENCE="${BUREAU_STREAM_SILENCE_SECONDS:-300}"
+        LAUNCHER_DIR="${RUNNER_TEMP:-/tmp}/claude-watchdog"
+        LAUNCHER="$LAUNCHER_DIR/claude"
+
+        # FAIL OPEN, OUT LOUD. A missing watchdog or a runner with no python3
+        # must not take the fleet's Claude step down — the watchdog is a
+        # safety net, and a safety net that can stop the run it guards is a
+        # worse failure than the one it prevents. The warning is what keeps
+        # the fallback from being silent.
+        if [ "$SILENCE" = "0" ]; then
+          echo "executable=$BIN" >> "$GITHUB_OUTPUT"
+          echo "stream watchdog: DISABLED (silence-seconds=0) — this run can go quiet without being stopped"
+        elif [ ! -f "$WATCHDOG" ] || ! command -v python3 >/dev/null 2>&1; then
+          echo "executable=$BIN" >> "$GITHUB_OUTPUT"
+          echo "::warning::stream watchdog not installed: no readable" \
+               "$WATCHDOG, or no python3 on this runner. Claude runs" \
+               "unguarded — a run that goes silent will hold this job until" \
+               "something outside kills it (DRE-3991)."
+        else
+          mkdir -p "$LAUNCHER_DIR"
+          # `$@` is LITERAL in the single-quoted format string: it is the
+          # vendor action's own arguments, expanded when the launcher runs,
+          # never here.
+          printf '#!/usr/bin/env bash\nexec python3 "%s" --executable "%s" --silence-seconds "%s" -- "$@"\n' \
+            "$WATCHDOG" "$BIN" "$SILENCE" > "$LAUNCHER"
+          chmod +x "$LAUNCHER"
+          echo "executable=$LAUNCHER" >> "$GITHUB_OUTPUT"
+          echo "stream watchdog armed: $LAUNCHER wraps $BIN, stopping the run after ${SILENCE}s of silence"
+        fi

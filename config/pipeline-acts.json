@@ -1851,6 +1851,13 @@
       "kind": "not-an-act",
       "means": "Which model the planner asked for and which one actually answered, posted only when they differ — a re-run on the next rung after a capacity refusal, or the CLI's own fallback firing inside the step (DRE-3970).",
       "why": "It is already machine-readable, in its own single-definition grammar, and it describes a MODEL's answer rather than something the pipeline decided — the same reading the Plan heartbeat and the classifier heartbeat above carry. Its body is composed by scripts/planner_capacity.py, never in YAML, and it carries no `model-error:` marker and not the DRE-3824 `planner agent starting` needle."
+    },
+    {
+      "file": "scripts/stream_watchdog.py",
+      "anchor": "_linear_ops().cmd_comment(args.card, body)",
+      "kind": "not-an-act",
+      "means": "Which agent step went silent on this card, when it last spoke and for how long, after the watchdog stopped it (DRE-3991).",
+      "why": "A REPORT about a run, not something the pipeline did on its own — the `reviewer_environment.evidence_note` reading exactly, and for the same reasons. Nothing is held, nothing is re-dispatched and nothing moves: the medic's ordinary one retry still runs alongside it, so the three questions a trailer answers (what obligation does this create, who has the work now, what does it discharge) all read 'not applicable'. The act on this path is the REFUSAL that follows a second consecutive stall, and that one already has a row (`retry-declined`) and composes through the writer. Its `run=<id> attempt=<n>` is an idempotency key the medic step checks before posting, so one stall never writes two records."
     }
   ]
 }

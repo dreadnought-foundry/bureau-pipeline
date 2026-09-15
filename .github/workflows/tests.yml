@@ -21,10 +21,20 @@ jobs:
     # that had already proved itself. The cap was spent before that PR existed:
     # the fifteen main runs before it ranged 3m11s to 4m44s, i.e. 16 seconds of
     # headroom against 93 seconds of run-to-run spread. A budget narrower than
-    # its own variance is a coin flip. 10 is ~2x the longest real run, matching
-    # the other 10-minute jobs in this repo; `tests/test_unit_suite_time_budget.py`
-    # holds it there and carries the measurements.
-    timeout-minutes: 10
+    # its own variance is a coin flip.
+    #
+    # THE SAME THING HAPPENED AGAIN, at 10 (DRE-3991 review round 1, measured
+    # 2026-09-15). Run 34993126917 printed `5 failed, 9594 passed, 2 skipped,
+    # 896 subtests passed in 593.37s (0:09:53)` and was cancelled 13 seconds
+    # later at 10m6s — a real pytest result the workflow never got to read an
+    # exit code for. The suite is now 9,594 tests, and the fifteen main runs
+    # before that one ranged 6m04s to 9m08s: 52 seconds of headroom against
+    # 184 seconds of spread. Same defect, same remedy, same arithmetic — 20 is
+    # ~2x the longest real run, matching `diagnose` in medic.yml.
+    # `tests/test_unit_suite_time_budget.py` holds it there and carries the
+    # measurements. The clock is the remedy because the clock is what is
+    # wrong: no branch has doubled this suite's runtime, it simply grew.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The shared plumbing, dogfooded (DRE-2589). This job used to run THREE

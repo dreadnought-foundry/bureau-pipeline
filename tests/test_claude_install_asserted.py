@@ -33,6 +33,7 @@ test; the download is not.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -110,9 +111,17 @@ def _stub_installer(path: Path, launcher_on_attempts: set[int], *,
     path.chmod(0o755)
 
 
-def run_install(launcher_on_attempts: set[int], **stub_kwargs):
-    """Execute the real action script against the stub. Returns (proc, facts)."""
-    with tempfile.TemporaryDirectory() as raw:
+def run_install(launcher_on_attempts: set[int], env_overrides=None,
+                keep=None, **stub_kwargs):
+    """Execute the real action script against the stub. Returns (proc, facts).
+
+    `env_overrides` reaches the script's own environment — the seam DRE-3991's
+    watchdog is driven through, the same way `CLAUDE_INSTALLER_URL` drives the
+    download. `keep` is a directory to build in instead of a temporary one,
+    for a test that needs the artifacts to outlive the call.
+    """
+    with contextlib.ExitStack() as stack:
+        raw = keep or stack.enter_context(tempfile.TemporaryDirectory())
         td = Path(raw)
         installer = td / "install.sh"
         _stub_installer(installer, launcher_on_attempts, **stub_kwargs)
@@ -141,7 +150,8 @@ def run_install(launcher_on_attempts: set[int], **stub_kwargs):
             "CLAUDE_INSTALL_RETRY_DELAY": "0",
             "STUB_LOG": str(log),
         })
-        (td / "runner-temp").mkdir()
+        env.update(env_overrides or {})
+        (td / "runner-temp").mkdir(exist_ok=True)
         proc = subprocess.run(["bash", str(script)], cwd=td, env=env,
                               capture_output=True, text=True)
         return proc, {
@@ -151,6 +161,15 @@ def run_install(launcher_on_attempts: set[int], **stub_kwargs):
             "bin": str(bin_dir / "claude"),
             "versions": " ".join(log.read_text().split()),
         }
+
+
+def published(output: str, key: str) -> str:
+    """The value the install step wrote to `$GITHUB_OUTPUT` under `key`."""
+    for line in output.splitlines():
+        name, _, value = line.partition("=")
+        if name == key:
+            return value
+    return ""
 
 
 class TheActionExistsAndIsWellFormedTest(unittest.TestCase):
@@ -172,6 +191,10 @@ class TheActionExistsAndIsWellFormedTest(unittest.TestCase):
         self.assertIn("executable", outputs,
                       "the action must publish the binary it proved, or the "
                       "vendor action installs a second copy nobody asserted")
+        # Since DRE-3991 `executable` is the proved binary WRAPPED in the
+        # stream watchdog, so the bare binary needs a name of its own — the
+        # assert's answer is still a fact a caller may want.
+        self.assertIn("proved-executable", outputs)
 
     def test_the_assert_is_claude_version(self):
         self.assertIn("--version", _install_script(),
@@ -186,9 +209,19 @@ class TheBinaryIsProvedNotAssumedTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(facts["installs"], 1,
                          "a working first install must not be re-run")
-        self.assertIn(f"executable={facts['bin']}", facts["output"])
+        self.assertEqual(facts["bin"], published(facts["output"],
+                                                 "proved-executable"))
         self.assertIn(str(Path(facts["bin"]).parent), facts["path"],
                       "the asserted binary's directory belongs on PATH")
+
+    def test_with_no_watchdog_on_the_runner_the_bare_binary_is_published(self):
+        # The DRE-3991 fallback: no watchdog script reachable (this harness
+        # points at no checkout), so the step publishes the proved binary and
+        # SAYS SO. A safety net that could stop the run it guards would be a
+        # worse failure than the one it prevents.
+        proc, facts = run_install({1})
+        self.assertEqual(facts["bin"], published(facts["output"], "executable"))
+        self.assertIn("::warning::stream watchdog not installed", proc.stdout)
 
     def test_the_declared_version_reaches_the_installer(self):
         _, facts = run_install({1})

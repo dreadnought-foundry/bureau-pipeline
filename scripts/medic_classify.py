@@ -90,14 +90,31 @@ a QA-review run, so the medic's three gates (retry, diagnose, backoff) behave
 exactly as they did. What is new is that the run now also says WHICH
 environment failure it was, and where to go and look.
 
+FIFTH CLASS — THE RUN WENT SILENT (DRE-3991). On 2026-09-15 the red-main
+repair agent emitted a successful `system/init` and then zero further stream
+events, twice in a row, and was killed from outside at 8m27s and 11m39s. It
+never read the failing build, never wrote a line, and the card got a dead run
+whose cause nobody could name — while three wrong causes were all available.
+`scripts/stream_watchdog.py` now stops such a run after five minutes of
+SILENCE (never on elapsed time — a busy run is never cut off) and writes one
+line into the run log. This classifier reads that line back and gives the
+failure its own name, `stalled_no_stream`, ahead of the critic infra-crash
+for the same reason the environment crash is ahead of it: a review that went
+quiet also posts the neutral marker into the same log.
+
+The stall keeps `infra_crash=false`, which is deliberate — it is the medic's
+ONE automatic retry that a stall is entitled to. The second one in a row is
+refused by `medic_retry`, not here.
+
 CLI:
     python3 medic_classify.py <workflow-name> <log-file>
 prints `infra_crash=true|false` (the DRE-1921 gate, unchanged),
-`class=environment_crash|critic_infra_crash|upstream_5xx|linear_ratelimited|normal`,
-and then `signature=`, `check=` and `meaning=` — the last three empty unless
-the class is `environment_crash` — plus a human line on stderr; exit 0 either
-way. The caller (medic.yml) appends the stdout lines to `$GITHUB_OUTPUT`, so
-every value is one line.
+`class=environment_crash|stalled_no_stream|critic_infra_crash|upstream_5xx|linear_ratelimited|normal`,
+then `signature=`, `check=` and `meaning=` (empty unless the class is
+`environment_crash`) and `stall_step=`, `stall_last_event=` and
+`stall_silence=` (empty unless the class is `stalled_no_stream`), plus a human
+line on stderr; exit 0 either way. The caller (medic.yml) appends the stdout
+lines to `$GITHUB_OUTPUT`, so every value is one line.
 """
 
 from __future__ import annotations
@@ -109,6 +126,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import reviewer_environment  # noqa: E402
+import stream_watchdog  # noqa: E402
 
 # The exact neutral marker qa-review.yml posts + echoes when the critic crashes
 # on infra (qa-review.yml "Post verdict or neutral status" step). Matching this
@@ -200,19 +218,27 @@ def is_linear_rate_limited(log_text: str) -> bool:
 
 def classify(workflow_name: str, log_text: str) -> str:
     """The failed run's class: `environment_crash` (DRE-3428 — this runner
-    cannot run Claude at all), `critic_infra_crash` (DRE-1921 — back off, the
-    reviewer was down), `upstream_5xx` (DRE-2488 — GitHub is down, back off),
-    `linear_ratelimited` (DRE-2923 — the workspace quota is exhausted, back
-    off), or `normal` (retry once, then diagnose).
+    cannot run Claude at all), `stalled_no_stream` (DRE-3991 — the run went
+    quiet and the watchdog stopped it), `critic_infra_crash` (DRE-1921 — back
+    off, the reviewer was down), `upstream_5xx` (DRE-2488 — GitHub is down,
+    back off), `linear_ratelimited` (DRE-2923 — the workspace quota is
+    exhausted, back off), or `normal` (retry once, then diagnose).
 
     The environment crash is checked FIRST and that ordering is the whole
     point of DRE-3428: the crashed review posts the neutral marker into the
     same log, so `critic_infra_crash` won on 2026-09-08 and the cause was
     never named. The DRE-1921 gate below is unaffected — a QA-review run
     still prints `infra_crash=true`.
+
+    THE STALL IS CHECKED NEXT, ahead of the critic infra-crash, for exactly
+    that reason a second time: a review that went quiet posts the neutral
+    marker into the same log too, and the cause the next reader needs is the
+    silence, not the reviewer's rate limit.
     """
     if reviewer_environment.detect(log_text) is not None:
         return "environment_crash"
+    if stream_watchdog.stall_from_log(log_text) is not None:
+        return "stalled_no_stream"
     if is_critic_infra_crash(workflow_name, log_text):
         return "critic_infra_crash"
     if is_upstream_5xx(log_text):
@@ -271,7 +297,27 @@ def main(argv: list[str]) -> int:
     print(f"class={kind}")
     for line in reviewer_environment.report_lines(environment):
         print(line)
-    if environment is not None:
+    # The stall's own three facts — the step that went quiet, when it last
+    # spoke, and for how long — on every class, empty on all but one. They are
+    # what `stall_record` writes onto the card, and a classifier that named
+    # the class without them would leave the medic re-reading the log.
+    stall = (
+        stream_watchdog.stall_from_log(log_text)
+        if kind == "stalled_no_stream" else None
+    )
+    for line in stream_watchdog.report_lines(stall):
+        print(line)
+    if kind == "stalled_no_stream" and stall is not None:
+        print(
+            f"medic classify: STALL — {stall.step} emitted no stream event "
+            f"for {stall.silence_seconds}s after system/init (last event "
+            f"{stall.last_event}), so the watchdog stopped it. Not a code "
+            f"failure, not a credential failure, not a usage limit. The "
+            f"medic retries a stall once; a second one in a row gets a "
+            f"notice instead.",
+            file=sys.stderr,
+        )
+    elif environment is not None:
         print(
             "medic classify: ENVIRONMENT CRASH — this runner cannot run "
             f"Claude ({environment.slug}): {environment.meaning}. Not the "
