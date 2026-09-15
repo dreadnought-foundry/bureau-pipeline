@@ -98,6 +98,76 @@ def code(n_files, lines_each, prefix="src/mod"):
     return [(f"{prefix}{i}.py", lines_each, 0) for i in range(n_files)]
 
 
+# ── removal fixtures (DRE-3995) ────────────────────────────────────────────
+
+def removed(n_files, lines_each, prefix="archive/f"):
+    """Per-file records for whole-file removals, as the files API reports
+    them: no additions, every line a deletion, `status: removed`."""
+    return [
+        {"filename": f"{prefix}{i}.py", "additions": 0,
+         "deletions": lines_each, "status": "removed"}
+        for i in range(n_files)
+    ]
+
+
+def touched(path, additions=0, deletions=0, status="modified"):
+    return {"filename": path, "additions": additions, "deletions": deletions,
+            "status": status}
+
+
+#: agent-bureau PR #2571 (DRE-3979) as GitHub reports it: 3,080 changed
+#: files, of which 3,075 are whole-file removals of the retired v1 platform
+#: under `archive/` carrying 2,094,946 deleted lines, and 5 modified files
+#: carrying the 87 added lines a reviewer must actually read (a guard test
+#: and four doc pointers). Refused four times since 2026-09-14 21:26 PT as
+#: "too large to review (3,080 files, 2,095,033 changed lines)" — a pull
+#: request that cannot merge without a verdict, and whose real review is
+#: five files long.
+PR_2571_FILES = 3_080
+PR_2571_REMOVED = 3_075
+PR_2571_DELETED = 2_094_946
+PR_2571_ADDED = 87
+PR_2571_MODIFIED = PR_2571_FILES - PR_2571_REMOVED
+
+
+def pr_2571_files():
+    """The per-file records for #2571, summing to exactly its totals."""
+    each, extra = divmod(PR_2571_DELETED, PR_2571_REMOVED)
+    entries = removed(PR_2571_REMOVED, each)
+    entries[0]["deletions"] += extra
+    add_each, add_extra = divmod(PR_2571_ADDED, PR_2571_MODIFIED)
+    entries += [touched(f"docs/pointer{i}.md", additions=add_each)
+                for i in range(PR_2571_MODIFIED - 1)]
+    entries.append(touched("tests/test_archive_stays_gone.py",
+                           additions=add_each + add_extra))
+    return entries
+
+
+def pr_2571_totals():
+    return {"changedFiles": PR_2571_FILES, "additions": PR_2571_ADDED,
+            "deletions": PR_2571_DELETED}
+
+
+def parse_outputs(raw):
+    """Parse $GITHUB_OUTPUT (scalars + heredoc blocks)."""
+    out, lines, i = {}, raw.splitlines(), 0
+    while i < len(lines):
+        line = lines[i]
+        if "<<" in line:
+            name, delim = line.split("<<", 1)
+            body = []
+            i += 1
+            while i < len(lines) and lines[i] != delim:
+                body.append(lines[i])
+                i += 1
+            out[name] = "\n".join(body)
+        elif "=" in line:
+            name, value = line.split("=", 1)
+            out[name] = value
+        i += 1
+    return out
+
+
 def strategy_for(compare_record=None, pr_json=None):
     m = pss.measure(compare_record, pr_json)
     return pss.choose(m)
@@ -476,23 +546,7 @@ class CliTest(unittest.TestCase):
             return proc, open(out_path).read()
 
     def outputs(self, raw):
-        """Parse $GITHUB_OUTPUT (scalars + heredoc blocks)."""
-        out, lines, i = {}, raw.splitlines(), 0
-        while i < len(lines):
-            line = lines[i]
-            if "<<" in line:
-                name, delim = line.split("<<", 1)
-                body = []
-                i += 1
-                while i < len(lines) and lines[i] != delim:
-                    body.append(lines[i])
-                    i += 1
-                out[name] = "\n".join(body)
-            elif "=" in line:
-                name, value = line.split("=", 1)
-                out[name] = value
-            i += 1
-        return out
+        return parse_outputs(raw)
 
     def test_it_publishes_every_output_the_workflow_reads(self):
         proc, raw = self.run_cli(
@@ -826,6 +880,363 @@ class PublishCheckOversizeTest(unittest.TestCase):
         for word in ("auth", "credential", "infrastructure"):
             with self.subTest(word=word):
                 self.assertNotIn(word, (title + summary).lower())
+
+
+# ── 8. whole-file removals are not review work (DRE-3995) ──────────────────
+
+class RemovedFilesTest(unittest.TestCase):
+    """THE BUG: a pull request is sized by `additions + deletions` over every
+    changed file, so one that only REMOVES files is refused by its own size
+    even when the part a reviewer must read is tiny. agent-bureau #2571 was
+    refused four times for 3,080 files / 2,095,033 changed lines, of which 87
+    lines are the review.
+
+    The review question for a removed file is not what its deleted lines
+    said — it is whether anything still live imports, runs or links into that
+    path, and that is answered from the LIST of removed paths.
+    """
+
+    def m2571(self):
+        return pss.measure(None, pr_2571_totals(), files=pr_2571_files())
+
+    def test_pr_2571_is_not_refused_for_a_size_it_does_not_have(self):
+        """AC 1 — the headline. Never `oversized`."""
+        self.assertIn(pss.choose(self.m2571()), ("standard", "large"))
+
+    def test_the_reviewable_part_is_the_five_files_a_reviewer_reads(self):
+        m = self.m2571()
+        self.assertEqual(m["removed_files"], PR_2571_REMOVED)
+        self.assertEqual(m["removed_lines"], PR_2571_DELETED)
+        self.assertEqual(m["review_files"], PR_2571_MODIFIED)
+        self.assertEqual(m["review_lines"], PR_2571_ADDED)
+
+    def test_the_totals_still_describe_the_whole_pull_request(self):
+        """The discount changes what is REVIEWABLE, never what is reported:
+        the `[qa-size]` log and the size phrase still name the real diff."""
+        m = self.m2571()
+        self.assertEqual(m["files"], PR_2571_FILES)
+        self.assertEqual(m["lines"], PR_2571_DELETED + PR_2571_ADDED)
+
+    def test_a_removal_diff_never_gets_the_one_pass_block(self):
+        """The `standard` block orders `gh pr diff` read WHOLE, and the two
+        million removed lines are in that diff whether or not they are review
+        work. Deciding on the reviewable size must not hand the critic the
+        one instruction its size makes impossible."""
+        self.assertEqual(pss.choose(self.m2571()), "large")
+
+    def test_removals_do_not_hide_additions(self):
+        """AC 2. 3,000 removed files and 25,000 added lines is still a
+        25,000-line review."""
+        entries = removed(3_000, 500) + [touched("src/app.py", additions=25_000)]
+        m = pss.measure(
+            None,
+            {"changedFiles": 3_001, "additions": 25_000, "deletions": 1_500_000},
+            files=entries,
+        )
+        self.assertEqual(pss.choose(m), "oversized")
+
+    def test_only_whole_file_removals_are_discounted(self):
+        """AC 3 — deleted lines in a MODIFIED file are ordinary review work:
+        the reviewer has to read what replaced them."""
+        entries = [touched("src/rewritten.py", additions=12, deletions=20_001)]
+        m = pss.measure(
+            None, {"changedFiles": 1, "additions": 12, "deletions": 20_001},
+            files=entries,
+        )
+        self.assertEqual(m["removed_files"], 0)
+        self.assertEqual(m["review_lines"], 20_013)
+        self.assertEqual(pss.choose(m), "oversized")
+
+    def test_a_renamed_file_is_not_a_removal(self):
+        """GitHub reports a rename as its own status. Only `removed` is a
+        whole-file removal; everything else is read."""
+        entries = [touched("src/new.py", additions=2_000, deletions=2_000,
+                           status="renamed")]
+        m = pss.measure(
+            None, {"changedFiles": 1, "additions": 2_000, "deletions": 2_000},
+            files=entries,
+        )
+        self.assertEqual(m["removed_files"], 0)
+        self.assertEqual(m["review_lines"], 4_000)
+
+    def test_a_removed_generated_file_is_discounted_exactly_once(self):
+        """Both discounts subtract from the same total — counting a removed
+        lock file twice would drive the reviewable size negative."""
+        entries = [{"filename": "dist/bundle.js", "additions": 0,
+                    "deletions": 900, "status": "removed"}]
+        m = pss.measure(
+            None, {"changedFiles": 1, "additions": 0, "deletions": 900},
+            files=entries,
+        )
+        self.assertEqual(m["removed_files"] + m["generated_files"], 1)
+        self.assertEqual(m["review_lines"], 0)
+        self.assertEqual(m["review_files"], 0)
+
+    def test_a_handful_of_removed_files_keeps_the_one_pass_review(self):
+        """The floor above is about the size of the raw diff, not about the
+        word `removed`: four small files still fit one pass."""
+        entries = [touched("src/a.py", additions=4)] + removed(3, 12, "old/f")
+        m = pss.measure(
+            None, {"changedFiles": 4, "additions": 4, "deletions": 36},
+            files=entries,
+        )
+        self.assertEqual(pss.choose(m), "standard")
+
+    def test_the_compare_record_carries_the_same_statuses(self):
+        """Under 300 files the compare record the workflow already fetches
+        answers the question — a files-API blip must not lose the discount."""
+        rec = {"files": removed(6, 400) + [touched("src/a.py", additions=10)]}
+        m = pss.measure(rec, {"changedFiles": 7, "additions": 10,
+                              "deletions": 2_400})
+        self.assertEqual(m["removed_files"], 6)
+        self.assertEqual(m["review_lines"], 10)
+
+    def test_a_record_with_no_statuses_sizes_exactly_as_before(self):
+        """Every existing caller hands `measure()` records without a
+        `status` field. Nothing about them may move."""
+        m = pss.measure(compare([("a.py", 10, 5), ("b.py", 1, 2)]), None)
+        self.assertEqual((m["removed_files"], m["removed_lines"]), (0, 0))
+        self.assertEqual((m["review_files"], m["review_lines"]), (2, 18))
+
+    def test_the_tail_past_the_api_cap_does_not_refuse_the_pull_request(self):
+        """GitHub's files API stops at 3,000 records and #2571 changes 3,080
+        files, so 80 files' statuses are UNKNOWABLE. Counting their ~51,000
+        deleted lines as review work would refuse the pull request on lines
+        nobody has to read, which is the whole defect this card is about — so
+        the tail's DELETIONS are split the way the deletions we could see
+        were split."""
+        seen = pr_2571_files()[:pss.FILES_API_MAX]
+        m = pss.measure(None, pr_2571_totals(), files=seen)
+        self.assertNotEqual(pss.choose(m), "oversized")
+        self.assertLessEqual(m["review_lines"], PR_2571_ADDED)
+
+    def test_additions_in_the_unseen_tail_are_never_attributed_to_a_removal(self):
+        """The guard on that attribution: a removed file has no additions, so
+        added lines are never discounted, seen or unseen. 3,000 removals in
+        front of 25,000 added lines is still oversized."""
+        m = pss.measure(
+            None,
+            {"changedFiles": 3_050, "additions": 25_000, "deletions": 1_830_000},
+            files=removed(3_000, 600),
+        )
+        self.assertEqual(pss.choose(m), "oversized")
+
+    def test_a_tail_of_ordinary_edits_is_still_counted_in_full(self):
+        """Attribution follows what was SEEN. A truncated record showing
+        ordinary modifications attributes nothing — today's behavior, and the
+        direction that errs toward reviewing."""
+        m = pss.measure(
+            compare(code(300, 20)),
+            {"changedFiles": 412, "additions": 30_000, "deletions": 1_000},
+        )
+        self.assertEqual(m["review_lines"], 31_000)
+        self.assertEqual(pss.choose(m), "oversized")
+
+
+class RemovalSummaryTest(unittest.TestCase):
+    """AC 4 — the `[qa-size]` log says what was counted as a removal."""
+
+    def test_the_size_line_names_the_removed_files_and_lines(self):
+        m = pss.measure(None, pr_2571_totals(), files=pr_2571_files())
+        line = pss.summary_line(m, pss.choose(m))
+        self.assertIn("[qa-size]", line)
+        self.assertIn(f"{PR_2571_REMOVED:,}", line)
+        self.assertIn(f"{PR_2571_DELETED:,}", line)
+        self.assertRegex(line, r"(?i)removed")
+
+    def test_a_pull_request_with_no_removals_says_nothing_about_them(self):
+        line = pss.summary_line(pss.measure(compare([("a.py", 3, 1)]), None),
+                                "standard")
+        self.assertNotRegex(line, r"(?i)removed")
+
+    def test_the_refusal_message_says_removals_do_not_count(self):
+        """A pull request that IS oversized on its own additions must not be
+        told to split off the part that was never counted."""
+        m = pss.measure(
+            None, {"changedFiles": 480, "additions": 60_000, "deletions": 5_000}
+        )
+        self.assertRegex(pss.oversize_message(m), r"(?i)removed")
+
+
+class RemovalContextTest(unittest.TestCase):
+    """AC 5 — what the critic is told about a pull request with removals."""
+
+    def block(self, m=None, pr="2571"):
+        m = m if m is not None else pss.measure(
+            None, pr_2571_totals(), files=pr_2571_files())
+        return pss.strategy_context(pss.choose(m), m, pr)
+
+    def test_it_asks_for_the_live_reference_check(self):
+        block = self.block().lower()
+        self.assertIn("removed path", block)
+        for token in ("import", "execute", "link"):
+            with self.subTest(token=token):
+                self.assertIn(token, block)
+        self.assertRegex(block, r"(?i)blocking finding")
+
+    def test_a_long_removal_list_collapses_to_top_level_directories(self):
+        """3,075 paths pasted into a prompt is the context dump this module
+        exists to prevent — the critic gets the directories and the counts."""
+        block = self.block()
+        self.assertIn("archive/", block)
+        self.assertNotIn("archive/f2000.py", block)
+        self.assertLess(len(block.splitlines()), 120)
+        self.assertIn(f"{PR_2571_REMOVED:,}", block)
+
+    def test_a_short_removal_list_is_given_in_full(self):
+        entries = removed(3, 20, "old/gone") + [touched("src/a.py", additions=4)]
+        m = pss.measure(None, {"changedFiles": 4, "additions": 4,
+                               "deletions": 60}, files=entries)
+        block = pss.strategy_context(pss.choose(m), m, "42")
+        for i in range(3):
+            with self.subTest(path=i):
+                self.assertIn(f"old/gone{i}.py", block)
+
+    def test_a_pull_request_with_no_removals_gets_no_removal_block(self):
+        for strategy in ("standard", "large"):
+            with self.subTest(strategy=strategy):
+                block = pss.strategy_context(
+                    strategy, pss.measure(compare([("a.py", 3, 1)]), None), "1")
+                self.assertNotIn("removed path", block.lower())
+
+
+class PaginatedFilesApiTest(unittest.TestCase):
+    """AC 4 — statuses are read PAST the compare record's 300-file cap.
+
+    The compare record the workflow already fetches truncates at 300 entries
+    and does not paginate (verdict_content.py documents the same cap), so on
+    a 3,080-file pull request it can see 300 of the 3,075 removals. The
+    per-file statuses therefore come from the paginated PR files API, and
+    these tests drive that path with `gh` stubbed.
+    """
+
+    STUB = '''#!/usr/bin/env python3
+import json, re, sys
+
+REMOVED, DELETED, ADDED, MODIFIED = {removed}, {deleted}, {added}, {modified}
+with open({log!r}, "a") as fh:
+    fh.write(" ".join(sys.argv[1:]) + "\\n")
+each, extra = divmod(DELETED, REMOVED)
+entries = [{{"filename": "archive/f%d.py" % i, "additions": 0,
+            "deletions": each + (extra if i == 0 else 0), "status": "removed"}}
+           for i in range(REMOVED)]
+entries += [{{"filename": "docs/pointer%d.md" % i, "additions": ADDED // MODIFIED,
+             "deletions": 0, "status": "modified"}} for i in range(MODIFIED)]
+url = sys.argv[-1]
+if "/pulls/" not in url or "/files" not in url:
+    sys.exit(1)
+page = int(re.search(r"[?&]page=(\\d+)", url).group(1))
+per = int(re.search(r"[?&]per_page=(\\d+)", url).group(1))
+start = (page - 1) * per
+print(json.dumps(entries[start:start + per]))
+'''
+
+    def stub_gh(self, td):
+        os.mkdir(os.path.join(td, "bin"))
+        log = os.path.join(td, "gh-calls.log")
+        path = os.path.join(td, "bin", "gh")
+        with open(path, "w") as fh:
+            fh.write(self.STUB.format(
+                removed=PR_2571_REMOVED, deleted=PR_2571_DELETED,
+                added=PR_2571_ADDED, modified=PR_2571_MODIFIED, log=log))
+        os.chmod(path, 0o755)
+        return log
+
+    def with_stub(self, td, fn):
+        before = os.environ["PATH"]
+        os.environ["PATH"] = os.path.join(td, "bin") + os.pathsep + before
+        try:
+            return fn()
+        finally:
+            os.environ["PATH"] = before
+
+    def test_it_reads_statuses_past_the_three_hundred_file_cap(self):
+        with tempfile.TemporaryDirectory() as td:
+            log_path = self.stub_gh(td)
+            files = self.with_stub(
+                td, lambda: pss.fetch_pr_files(
+                    "dreadnought-foundry/agent-bureau", "2571"))
+            calls = open(log_path).read().splitlines()
+        self.assertGreater(len(files), 300)
+        self.assertEqual(len(files), min(PR_2571_FILES, pss.FILES_API_MAX))
+        self.assertGreater(len(calls), 1, "it never paginated")
+        self.assertGreaterEqual(
+            sum(1 for f in files if f.get("status") == "removed"), 3_000)
+
+    def test_it_stops_at_the_apis_own_three_thousand_file_ceiling(self):
+        """GitHub returns at most 3,000 records however many pages are asked
+        for. A loop with no ceiling would page forever on a bigger diff."""
+        with tempfile.TemporaryDirectory() as td:
+            log_path = self.stub_gh(td)
+            self.with_stub(td, lambda: pss.fetch_pr_files("o/r", "2571"))
+            calls = open(log_path).read().splitlines()
+        self.assertLessEqual(len(calls), pss.FILES_API_MAX // 100 + 1)
+
+    def test_a_failing_gh_call_is_not_a_failure(self):
+        """Sizing never wedges the gate: no statuses simply means no
+        discount, which is today's behavior."""
+        with tempfile.TemporaryDirectory() as td:
+            os.mkdir(os.path.join(td, "bin"))
+            path = os.path.join(td, "bin", "gh")
+            with open(path, "w") as fh:
+                fh.write("#!/bin/sh\nexit 3\n")
+            os.chmod(path, 0o755)
+            self.assertEqual(
+                self.with_stub(td, lambda: pss.fetch_pr_files("o/r", "1")), [])
+
+    def test_a_hostile_pr_number_never_reaches_the_api_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            log_path = self.stub_gh(td)
+            self.with_stub(
+                td, lambda: pss.fetch_pr_files("o/r", "1; rm -rf / #"))
+            calls = open(log_path).read()
+        self.assertNotIn("rm -rf", calls)
+
+    def test_the_cli_sizes_the_whole_3080_file_pull_request(self):
+        """End to end, the way the workflow runs it: a compare record
+        truncated at 300 files, the authoritative totals, and the files API
+        for the statuses. #2571 must come out reviewable."""
+        truncated = {"files": pr_2571_files()[:300]}
+        with tempfile.TemporaryDirectory() as td:
+            self.stub_gh(td)
+            cmp_path = os.path.join(td, "compare.json")
+            pr_path = os.path.join(td, "size.json")
+            out_path = os.path.join(td, "out.txt")
+            with open(cmp_path, "w") as fh:
+                json.dump(truncated, fh)
+            with open(pr_path, "w") as fh:
+                json.dump(pr_2571_totals(), fh)
+            env = dict(os.environ, GITHUB_OUTPUT=out_path,
+                       PATH=os.path.join(td, "bin") + os.pathsep
+                       + os.environ["PATH"])
+            proc = subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, "pr_size_strategy.py"),
+                 "--compare-file", cmp_path, "--pr-json-file", pr_path,
+                 "--repo", "dreadnought-foundry/agent-bureau", "--pr", "2571"],
+                capture_output=True, text=True, env=env,
+            )
+            out = parse_outputs(open(out_path).read())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotEqual(out["strategy"], "oversized")
+        self.assertGreater(int(out["removed_files"]), 300)
+        self.assertGreater(int(out["removed_lines"]), 2_000_000)
+        self.assertIn("archive/", out["strategy_context"])
+        self.assertRegex(proc.stdout, r"(?i)removed")
+
+
+class RemovalWiringTest(unittest.TestCase):
+    def test_the_size_step_can_reach_the_files_api(self):
+        step = wf_step("size")
+        self.assertIn("--repo", step["run"])
+        self.assertIn("github.repository", step["run"])
+        self.assertIn("GH_TOKEN", json.dumps(step["env"]))
+
+    def test_the_static_fallback_publishes_the_removal_counts_too(self):
+        """Every other output the script writes has a `||` fallback; a
+        missing one reads as an empty string in `${{ }}`."""
+        run = wf_step("size")["run"]
+        self.assertRegex(run, r"removed_files=\d+")
+        self.assertRegex(run, r"removed_lines=\d+")
 
 
 if __name__ == "__main__":
