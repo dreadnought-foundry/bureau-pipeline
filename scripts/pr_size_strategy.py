@@ -49,6 +49,25 @@ noise. Counting it would push every dependency PR toward a path meant for
 17k lines of hand-written code, and past the second threshold would refuse
 them outright.
 
+SO ARE WHOLE-FILE REMOVALS (DRE-3995). agent-bureau #2571 removes the
+retired v1 platform — 3,080 files, 2,094,946 deleted lines, plus 87 added
+lines (a guard test and four doc pointers) — and was refused four times as
+"too large to review". The review question for a REMOVED file is not what
+its deleted lines said; it is whether anything still live imports, executes
+or links into that path, and that is answered from the LIST of removed
+paths, not by reading each deleted line. So a file whose status is `removed`
+counts toward `removed_files`/`removed_lines` and not toward the reviewable
+size, the critic's block carries the removed paths plus the standing
+live-reference instruction, and ADDITIONS are never discounted — a pull
+request that removes 3,000 files and adds 25,000 lines is still oversized,
+because a removed file has no additions to hide behind.
+
+Statuses come from the paginated PR files API (`/pulls/{n}/files`, 3,000
+records max), because the compare record truncates at 300 and #2571 changes
+3,080 files. Past that ceiling the tail's statuses are unknowable: its
+DELETIONS are split the way the deletions we could see were split, its
+additions are always review work. Read `measure()` for the arithmetic.
+
 MEASURED FROM RECORDS THE WORKFLOW ALREADY FETCHES: the compare record
 Resolve PR writes to /tmp/qa-compare.json for the content id (DRE-2340),
 plus `gh pr view --json changedFiles,additions,deletions` for authoritative
@@ -62,7 +81,8 @@ carries a static fallback on top of that.
 
 CLI:
     pr_size_strategy.py --compare-file /tmp/qa-compare.json \
-                        --pr-json-file /tmp/qa-size.json --pr 297
+                        --pr-json-file /tmp/qa-size.json \
+                        --repo owner/name --pr 297
 """
 
 from __future__ import annotations
@@ -71,6 +91,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 
 from sanitize_untrusted import _write_output
@@ -147,6 +168,71 @@ def is_generated(path: str) -> bool:
     return bool(_GENERATED_RE.search(path or ""))
 
 
+#: GitHub's own ceilings on the PR files API: 100 records per page, and at
+#: most 3,000 records however many pages are asked for ("Responses include a
+#: maximum of 3000 files"). The page loop stops at both — a loop with no
+#: ceiling would page forever on a bigger diff, and asking past 3,000 returns
+#: nothing anyway.
+FILES_API_PAGE = 100
+FILES_API_MAX = 3_000
+
+#: How many removed paths the critic's block lists one by one before it names
+#: their top-level directories instead. #2571 removes 3,075 files; pasting
+#: that list into a prompt is exactly the context dump this module exists to
+#: prevent, and the live-reference check is per DIRECTORY anyway.
+REMOVED_PATHS_LISTED = 40
+
+_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def fetch_pr_files(repo: str, pr: str,
+                   max_files: int = FILES_API_MAX) -> list[dict]:
+    """Per-file records from `GET /repos/{repo}/pulls/{n}/files`, paginated.
+
+    The per-file STATUS is the whole point: the compare record the workflow
+    already fetches carries the same field but truncates at 300 entries, and
+    the pull request this exists for changes 3,080 files.
+
+    Never raises and never exits: a missing `gh`, a 404, a rate limit or a
+    malformed page all mean "no statuses", which is the behavior that was
+    there before this call existed. Both arguments are validated before they
+    reach a URL — the PR number arrives from workflow context and is digits,
+    and this script must not be the place that assumption is first tested.
+    """
+    number = _pr_ref(pr)
+    if number == "<n>" or not _REPO_RE.match(str(repo or "")):
+        return []
+    out: list[dict] = []
+    for page in range(1, max_files // FILES_API_PAGE + 1):
+        batch = _gh_json(
+            f"repos/{repo}/pulls/{number}/files"
+            f"?per_page={FILES_API_PAGE}&page={page}"
+        )
+        if not isinstance(batch, list) or not batch:
+            break
+        out.extend(entry for entry in batch if isinstance(entry, dict))
+        if len(batch) < FILES_API_PAGE or len(out) >= max_files:
+            break
+    return out[:max_files]
+
+
+def _gh_json(path: str):
+    """One `gh api` call, decoded. None on any failure at all."""
+    try:
+        proc = subprocess.run(
+            ["gh", "api", path],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return json.loads(proc.stdout or "")
+    except ValueError:
+        return None
+
+
 def _int(value) -> int:
     """A count from an API record, or 0. Never raises — a malformed field
     must not be the thing that stops a review."""
@@ -156,55 +242,114 @@ def _int(value) -> int:
         return 0
 
 
-def measure(compare: dict | None, pr_json: dict | None) -> dict:
-    """Size the PR from both records; the larger signal wins.
+def measure(compare: dict | None, pr_json: dict | None,
+            files: list[dict] | None = None) -> dict:
+    """Size the PR from every record; the larger signal wins.
 
     `compare` is GitHub's three-dot compare record (per-file, capped at 300
     files). `pr_json` is `gh pr view --json changedFiles,additions,deletions`
-    (totals only, never truncated). The per-file record is what makes the
-    generated-file discount possible; the totals are what makes the count
-    honest above 300 files.
+    (totals only, never truncated). `files` is the paginated files API
+    (per-file, capped at 3,000) and SUPERSEDES the compare record's per-file
+    entries when it is given — it is the same shape and sees ten times as
+    far. The per-file record is what makes the generated-file and removal
+    discounts possible; the totals are what makes the count honest above
+    3,000 files.
+
+    THE TAIL. Past whichever per-file ceiling applied, some files were never
+    seen. Their count and their aggregate lines are known (the totals minus
+    what was seen); what is unknown is each one's status. Their ADDITIONS are
+    counted as review work outright — a removed file has none, so an addition
+    can never be hiding behind a removal. Their DELETIONS are split in the
+    same ratio as the deletions that WERE seen: where nothing seen was a
+    removal (the ordinary truncated pull request) the whole tail counts,
+    exactly as before this card; where the visible pull request is a wall of
+    removals, so is the tail. Nothing here is attributed when there is no
+    per-file record at all — that degrades to today's arithmetic.
     """
-    files_c = lines_c = gen_files = gen_lines = 0
-    for entry in (compare or {}).get("files") or []:
+    entries = files if files is not None else (compare or {}).get("files") or []
+    seen_files = seen_add = seen_del = 0
+    rm_files = rm_lines = rm_del = 0
+    gen_files = gen_lines = 0
+    removed_paths: list[str] = []
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
-        changed = _int(entry.get("additions")) + _int(entry.get("deletions"))
-        files_c += 1
-        lines_c += changed
-        if is_generated(entry.get("filename") or ""):
+        path = entry.get("filename") or ""
+        adds, dels = _int(entry.get("additions")), _int(entry.get("deletions"))
+        seen_files += 1
+        seen_add += adds
+        seen_del += dels
+        # A file is discounted once, by one reason: `removed` first, because
+        # a removed lock file is a removal and subtracting it twice would
+        # drive the reviewable size below zero.
+        if str(entry.get("status") or "").strip().lower() == "removed":
+            rm_files += 1
+            rm_lines += adds + dels
+            rm_del += dels
+            removed_paths.append(path)
+        elif is_generated(path):
             gen_files += 1
-            gen_lines += changed
+            gen_lines += adds + dels
 
+    total_add = _int((pr_json or {}).get("additions"))
+    total_del = _int((pr_json or {}).get("deletions"))
     files_p = _int((pr_json or {}).get("changedFiles"))
-    lines_p = _int((pr_json or {}).get("additions")) + _int(
-        (pr_json or {}).get("deletions")
-    )
 
-    files = max(files_c, files_p)
-    lines = max(lines_c, lines_p)
+    files_n = max(seen_files, files_p)
+    lines_n = max(seen_add + seen_del, total_add + total_del)
+
+    # The unseen tail (see the docstring). `removed_share` is 0 whenever
+    # nothing seen was removed, which is every pull request this pipeline
+    # has ever sized.
+    tail_files = max(files_n - seen_files, 0)
+    tail_del = max(total_del - seen_del, 0)
+    removed_share = (rm_del / seen_del) if seen_del else 0.0
+    tail_rm_files = round(tail_files * (rm_files / seen_files)) if seen_files else 0
+    tail_rm_lines = round(tail_del * removed_share)
+
     return {
-        "files": files,
-        "lines": lines,
+        "files": files_n,
+        "lines": lines_n,
         # What the critic must actually read. The discount is a lower bound
-        # when the compare record is truncated (generated files past entry
-        # 300 are not seen), which errs toward reviewing, not refusing.
-        "review_files": max(files - gen_files, 0),
-        "review_lines": max(lines - gen_lines, 0),
+        # when the per-file record is truncated (generated files past the
+        # last entry are not seen), which errs toward reviewing, not
+        # refusing.
+        "review_files": max(files_n - gen_files - rm_files - tail_rm_files, 0),
+        "review_lines": max(lines_n - gen_lines - rm_lines - tail_rm_lines, 0),
         "generated_files": gen_files,
         "generated_lines": gen_lines,
-        "truncated": files_c > 0 and files_p > files_c,
+        # Whole-file removals: reported in full, discounted from the review,
+        # and handed to the critic as a list of paths to check references
+        # against (DRE-3995).
+        "removed_files": rm_files,
+        "removed_lines": rm_lines,
+        "removed_paths": removed_paths,
+        "unseen_files": tail_files,
+        "unseen_removed_files": tail_rm_files,
+        "unseen_removed_lines": tail_rm_lines,
+        "per_file_records": seen_files,
+        "truncated": seen_files > 0 and files_p > seen_files,
     }
 
 
 def choose(m: dict) -> str:
     """The review strategy for a measurement. Decided on the REVIEWABLE
-    size — see the generated-files note in the module docstring."""
+    size — see the generated-files and removals notes in the module
+    docstring."""
     files = m.get("review_files", 0)
     lines = m.get("review_lines", 0)
     if files > OVERSIZED_FILES or lines > OVERSIZED_LINES:
         return "oversized"
     if files > LARGE_FILES or lines > LARGE_LINES:
+        return "large"
+    # A removal-heavy pull request is REVIEWABLE, and it is still not
+    # one-pass material: the `standard` block orders `gh pr diff` read whole
+    # and the removed lines are in that diff whether or not they are review
+    # work. #2571's reviewable part is 87 lines and its diff is two million.
+    # The file-list strategy reads the same five files without ever printing
+    # the diff into the critic's context, so the removals decide the PATH
+    # here while the reviewable size decides everything else.
+    if m.get("removed_lines", 0) > LARGE_LINES:
         return "large"
     return "standard"
 
@@ -239,10 +384,26 @@ def turn_budget(strategy: str) -> tuple[int, int]:
 
 
 def summary_line(m: dict, strategy: str) -> str:
+    # The removal clause appears exactly when removals decided something, so
+    # a refusal that should not have happened is readable off one log line
+    # (DRE-3995: four refusals of #2571 said only "3,080 files").
+    removals = ""
+    if m.get("removed_files"):
+        removals = (
+            f", {m['removed_files']:,} removed files / "
+            f"{m['removed_lines']:,} removed lines discounted"
+        )
+        if m.get("unseen_removed_files"):
+            removals += (
+                f" + {m['unseen_removed_files']:,} of {m['unseen_files']:,} "
+                f"files past the API's {FILES_API_MAX:,}-file ceiling "
+                f"attributed to removals"
+            )
     return (
         f"[qa-size] {m['files']:,} files / {m['lines']:,} changed lines "
         f"({m['review_files']:,} files / {m['review_lines']:,} lines "
         f"reviewable, {m['generated_files']:,} generated files discounted"
+        f"{removals}"
         f"{', compare record truncated' if m.get('truncated') else ''}) "
         f"→ strategy: {strategy} — {why(m, strategy)}"
     )
@@ -279,6 +440,61 @@ _EXHAUSTIVE = (
 )
 
 
+def _top_level(path: str) -> str:
+    """The directory a removed path belongs to, for the collapsed listing.
+    A file at the root is its own entry — `archive/` and `setup.py` are both
+    things to check references against."""
+    head, sep, _ = (path or "").partition("/")
+    return f"{head}/" if sep else (head or "(root)")
+
+
+def removal_context(m: dict) -> str:
+    """What the critic is told about a pull request's whole-file removals.
+
+    The size block above has already discounted them, so this block owes the
+    critic two things: WHICH paths went, and the one question a removal
+    actually raises. Reading 2,094,946 deleted lines is not that question —
+    whether anything still live points at those paths is (DRE-3995).
+    """
+    count = _int(m.get("removed_files"))
+    if not count:
+        return ""
+    paths = sorted({p for p in (m.get("removed_paths") or []) if p})
+    if not paths:
+        listing = "  (the paths were not readable — derive them from the diff)"
+        head = f"The {count:,} removed paths:"
+    elif len(paths) <= REMOVED_PATHS_LISTED:
+        listing = "\n".join(f"  - {p}" for p in paths)
+        head = f"The {count:,} removed paths:"
+    else:
+        tally: dict[str, int] = {}
+        for path in paths:
+            tally[_top_level(path)] = tally.get(_top_level(path), 0) + 1
+        listing = "\n".join(
+            f"  - {d} ({c:,} files)"
+            for d, c in sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        head = (
+            f"The {count:,} removed paths, by top-level directory (too many "
+            f"to list one by one):"
+        )
+    return (
+        f"\n\nWHOLE-FILE REMOVALS: {count:,} files / "
+        f"{_int(m.get('removed_lines')):,} lines, NOT counted in the size "
+        "above. Those files are gone; what their deleted lines said is not "
+        "the review, and you do not have to read them.\n"
+        "THE CHECK THIS PULL REQUEST OWES YOU INSTEAD, and it is mandatory: "
+        "confirm that nothing OUTSIDE the removed set still imports, "
+        "executes, or links into these paths — search the head of the branch "
+        "for each directory below and for the module names under it "
+        "(imports, scripts and workflow `run:` lines, documentation links, "
+        "config references). A removal that breaks a live reference is a "
+        "BLOCKING finding. Every changed file that is NOT on this list is "
+        "ordinary review work and gets your normal read.\n"
+        f"{head}\n{listing}"
+    )
+
+
 def strategy_context(strategy: str, m: dict, pr: str) -> str:
     """The REVIEW STRATEGY block injected into both critic prompts."""
     n = _pr_ref(pr)
@@ -289,6 +505,7 @@ def strategy_context(strategy: str, m: dict, pr: str) -> str:
             "single pass handles). Read the whole diff in one pass: "
             f"`gh pr diff {n}`. Examine the ENTIRE diff.\n"
             f"{_EXHAUSTIVE}"
+            f"{removal_context(m)}"
         )
     first, _ = turn_budget("large")
     return (
@@ -327,6 +544,7 @@ def strategy_context(strategy: str, m: dict, pr: str) -> str:
         "ACTUALLY reviewed: in `## For the fixing agent`, state which files "
         "you reviewed and which you did not review, so nobody mistakes a "
         "file you never opened for a clean one."
+        f"{removal_context(m)}"
     )
 
 
@@ -344,7 +562,8 @@ def oversize_message(m: dict) -> str:
         f"No review was attempted, so there are no findings and this is NOT "
         f"a code rejection. The reviewer's working limit is "
         f"{OVERSIZED_FILES:,} files / {OVERSIZED_LINES:,} changed lines "
-        f"(generated and lock files do not count toward it).\n\n"
+        f"(generated and lock files do not count toward it, and neither do "
+        f"removed files — splitting off deletions will not help).\n\n"
         f"Split this change into smaller pull requests — each one "
         f"independently reviewable — and every part gets a full review. "
         f"The merge is held until a reviewer has actually read this change."
@@ -366,11 +585,24 @@ def main(argv: list[str]) -> int:
                     help="GitHub compare record (Resolve PR already writes it)")
     ap.add_argument("--pr-json-file", default="",
                     help="gh pr view --json changedFiles,additions,deletions")
+    ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""),
+                    help="owner/name, for the paginated PR files API")
     ap.add_argument("--pr", default="")
     args = ap.parse_args(argv)
 
     try:
-        m = measure(_read_json(args.compare_file), _read_json(args.pr_json_file))
+        compare_record = _read_json(args.compare_file)
+        pr_json = _read_json(args.pr_json_file)
+        m = measure(compare_record, pr_json)
+        # The per-file STATUSES, when the compare record cannot carry them
+        # all: it truncates at 300 entries and #2571 changes 3,080 files
+        # (DRE-3995). Under that cap the compare record is complete and the
+        # extra API calls are not spent; above it, every page costs one call
+        # and a wrong refusal costs a pull request that cannot merge.
+        if m["files"] > m["per_file_records"]:
+            fetched = fetch_pr_files(args.repo, args.pr)
+            if fetched:
+                m = measure(compare_record, pr_json, files=fetched)
         strategy = choose(m)
     except Exception as exc:  # degrade to today's behavior, never wedge
         print(f"pr_size_strategy: sizing failed ({exc}) — falling back to the "
@@ -397,6 +629,8 @@ def main(argv: list[str]) -> int:
         "lines": str(m["lines"]),
         "review_files": str(m["review_files"]),
         "review_lines": str(m["review_lines"]),
+        "removed_files": str(m["removed_files"]),
+        "removed_lines": str(m["removed_lines"]),
         "max_turns": str(first),
         "retry_max_turns": str(retry),
         # One rendering of the size, for anything that has to name it in
