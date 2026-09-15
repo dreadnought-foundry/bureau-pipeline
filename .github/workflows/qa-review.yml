@@ -304,10 +304,16 @@ jobs:
       - name: Size the diff and pick the review strategy
         id: size
         if: steps.decide.outputs.review == 'true'
+        env:
+          # The per-file STATUSES (DRE-3995): above the compare record's
+          # 300-file cap the script reads them from the paginated PR files
+          # API, which needs a token. Below it, no call is made.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           python3 .bureau-pipeline/scripts/pr_size_strategy.py \
             --compare-file /tmp/qa-compare.json \
             --pr-json-file /tmp/qa-size.json \
+            --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
           || {
             echo "::warning::PR sizing failed — falling back to the standard one-pass review"
@@ -317,6 +323,8 @@ jobs:
               echo "lines=0"
               echo "review_files=0"
               echo "review_lines=0"
+              echo "removed_files=0"
+              echo "removed_lines=0"
               echo "max_turns=80"
               echo "retry_max_turns=120"
             } >> "$GITHUB_OUTPUT"
