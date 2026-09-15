@@ -41,6 +41,14 @@ What this file pins about `dead_run.py`:
      log carried `rate_limit_error` because the reviewer had READ the standard
      that quotes it. `limit_recovery.py` reads that marker and would re-enter
      the plan stage when a window it never hit "reset".
+  7. **The spend-limit wall (DRE-3978).** The Claude signatures are the same
+     capacity list `model_fallback.CAPACITY_SIGNATURES` holds, minus the
+     transient ones. `claude-fable-5-1` refused every planning call on
+     2026-09-12/13/14 with "You've hit your monthly spend limit. Switch to
+     another model to continue." (portico run 34924370626) — a sentence
+     `"hit your limit"` is not a substring of, so no marker was ever written.
+     `overloaded_error` stays out: a 529 is the service being busy, not the
+     account being out. The turn-cap veto still comes first.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_limit_death_is_its_own_class.py -v
 """
@@ -56,6 +64,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import dead_run  # noqa: E402
+import model_fallback  # noqa: E402 — the capacity list limit_kind reads (DRE-3978)
 
 RUN = "33912345678"
 NOON = datetime(2026, 9, 5, 18, 0, tzinfo=UTC)      # 11:00 PT, before the reset
@@ -457,6 +466,108 @@ def test_the_veto_reads_the_turn_cap_evidence_from_one_place():
     ) is True
     for subtype in check_agent_result._TURN_CAP_SUBTYPES:
         assert dead_run.turn_cap_in_text(f'"subtype": "{subtype}"') is True
+
+
+# --------------------------------------------------------------------------
+# 7. the spend-limit wall is a Claude limit death too (DRE-3978)
+# --------------------------------------------------------------------------
+# The sentence `claude-fable-5-1` refused every planning call with on
+# 2026-09-12/13/14, verbatim from portico run 34924370626. `"hit your limit"`
+# is not a substring of it, so before DRE-3978 `limit_kind` answered None and
+# no marker was ever written — `limit_recovery.py` never saw the wall.
+SPEND_LIMIT = ("You've hit your monthly spend limit. Switch to another model to "
+               "continue.")
+SPEND_LIMIT_RECORD = (
+    '{"type":"result","subtype":"success","is_error":true,"num_turns":1,'
+    '"total_cost_usd":0,"duration_ms":646,"result":"%s"}' % SPEND_LIMIT
+)
+# The CLI's own sentences for the same account wall (DRE-3970 read them out of
+# the installed Claude Code 2.1.271 binary's strings).
+CLI_WALLS = (
+    "You've reached your Fable limit.",
+    "You're out of usage credits. Switch to another model",
+    "You've hit your team's shared budget. Switch to another model",
+    "You've hit your channel's monthly spend limit.",
+    "Claude AI usage limit reached",
+)
+# A 529 is the service being busy, not the account being out — it clears on
+# its own and has no reset to wait for, so it must never become a limit death.
+OVERLOADED = 'HTTP 529: {"type":"error","error":{"type":"overloaded_error"}}'
+
+
+def test_the_portico_spend_limit_refusal_is_a_claude_limit_death():
+    """The verbatim refusal from portico run 34924370626, and the CLI record
+    that carried it."""
+    assert dead_run.limit_kind(SPEND_LIMIT) == "claude"
+    assert dead_run.limit_kind(SPEND_LIMIT_RECORD) == "claude"
+
+
+@pytest.mark.parametrize("text", CLI_WALLS)
+def test_every_cli_wall_sentence_is_a_claude_limit_death(text):
+    assert dead_run.limit_kind(text) == "claude"
+
+
+def test_overloaded_error_alone_is_not_a_limit_death():
+    """DRE-3978: `overloaded_error` is a transient 529 the caller retries into
+    a service that recovers by itself — an account wall it is not. It IS a
+    capacity signature (model_fallback may fall to the next rung on it), and
+    that is exactly why the two lists are not the same list."""
+    assert dead_run.limit_kind(OVERLOADED) is None
+    assert "overloaded_error" in model_fallback.CAPACITY_SIGNATURES
+
+
+@pytest.mark.parametrize("wall", (SPEND_LIMIT,) + CLI_WALLS, ids=[
+    "monthly-spend-limit", "fable-limit", "out-of-usage-credits",
+    "shared-budget", "channel-spend-limit", "usage-limit-reached",
+])
+def test_the_turn_cap_veto_still_wins_over_the_new_words(wall):
+    """The DRE-3499 lesson is unchanged by the wider list: a run that reached
+    the ceiling did real work, and the wall sentences are ordinary English an
+    agent writes after merely READING the standard that quotes them."""
+    assert dead_run.limit_kind(f"{SUBTYPE_JSON}\nI read the standard: {wall}") is None
+    assert dead_run.limit_kind(f"{CAP_SENTENCE}\n{wall}") is None
+    assert dead_run.limit_kind(f"{OVER_THE_CEILING}\n{wall}") is None
+
+
+def test_the_claude_signatures_are_the_capacity_list_minus_the_transient_ones():
+    """One list, not a second copy (DRE-3978). Every capacity signature
+    `model_fallback` reads is decided here, and the only ones that are NOT a
+    limit death are the transient service faults."""
+    assert dead_run._CAPACITY_NOT_A_LIMIT_DEATH == ("overloaded_error",)
+    assert dead_run._CLAUDE_LIMIT_SIGNATURES == tuple(
+        sig for sig in model_fallback.CAPACITY_SIGNATURES
+        if sig not in dead_run._CAPACITY_NOT_A_LIMIT_DEATH
+    )
+    # Nothing is dropped on the floor: every signature is either a limit death
+    # or explicitly excused.
+    assert set(model_fallback.CAPACITY_SIGNATURES) == (
+        set(dead_run._CLAUDE_LIMIT_SIGNATURES)
+        | set(dead_run._CAPACITY_NOT_A_LIMIT_DEATH)
+    )
+
+
+def test_a_wall_sentence_in_any_case_still_classifies():
+    """The capacity signatures are lower-cased data and the log is whatever
+    the vendor printed — "Switch to another model" arrives capitalised."""
+    assert dead_run.limit_kind(SPEND_LIMIT.upper()) == "claude"
+
+
+def test_cli_decide_classifies_the_spend_limit_log(tmp_path, capsys):
+    """End to end on the medic's own call: the marker the sweep reads is
+    written, with `reset=unknown` because a spend limit names no window."""
+    log = tmp_path / "medic-log.txt"
+    log.write_text(SPEND_LIMIT_RECORD, encoding="utf-8")
+    rc = dead_run.main([
+        "decide", "0", "--is-error", "--error-model", "claude-fable-5-1",
+        "--limit-log", str(log), "--workflow", "Agent Plan (reusable)",
+        "--run-id", "34924370626", "--now", "2026-09-15T03:17:00Z",
+    ])
+    out = capsys.readouterr().out.splitlines()
+    assert rc == 0
+    assert out[0] == "limit"
+    assert out[2] == (
+        "🪦 limit-death: kind=claude stage=plan reset=unknown run=34924370626"
+    )
 
 
 # --------------------------------------------------------------------------
