@@ -53,6 +53,7 @@ QA_REVIEW = os.path.join(WF_DIR, "qa-review.yml")
 SCRIPTS = os.path.join(ROOT, "scripts")
 sys.path.insert(0, SCRIPTS)
 
+import fix_handoff  # noqa: E402
 import review_card_context as rcc  # noqa: E402
 
 BEGIN = "===== BEGIN UNTRUSTED CARD TEXT ====="
@@ -171,7 +172,8 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
     # about the trailer the registry check demands.
     pipeline = os.path.join(td, ".bureau-pipeline")
     os.makedirs(os.path.join(pipeline, "scripts"), exist_ok=True)
-    for name in ("fix_context.py", "pipeline_act.py", "lane_contract.py"):
+    for name in ("fix_context.py", "pipeline_act.py", "lane_contract.py",
+                 "fix_handoff.py"):
         os.symlink(os.path.join(SCRIPTS, name),
                    os.path.join(pipeline, "scripts", name))
     os.symlink(os.path.join(ROOT, "config"), os.path.join(pipeline, "config"))
@@ -185,21 +187,18 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
     comments_file = os.path.join(td, "comments.json")
     with open(comments_file, "w") as f:
         json.dump(comments, f)
-    with open(os.path.join(td, "fix-refutation.txt"), "w") as f:
+    # The refutation the agent wrote, in THIS run's keyed handoff (DRE-3951).
+    # It used to be the fixed path /tmp/fix-refutation.txt, which is how one
+    # card's escalation reached the next card's pull request.
+    paths = fix_handoff.open_handoff(td, repo, PR, SHA,
+                                     legacy_dir=os.path.join(td, "legacy"))
+    with open(paths["refutation"], "w") as f:
         f.write(refutation)
 
-    run = substitute(
-        step_named("Report")["run"],
-        {
-            "steps.pr.outputs.number": PR,
-            "steps.pr.outputs.attempt": "1",
-            "steps.pr.outputs.mode": "fix",
-            "steps.claude.outputs.execution_file": "",
-            "github.repository": repo,
-            "github.server_url": "https://github.com",
-            "github.run_id": "42",
-        },
-    )
+    # The Report block carries no `${{ }}` any more — every substitution moved
+    # to the step's `env:` (DRE-3951/DRE-3484), so the values ride env below
+    # and this call now proves the block is expression-free.
+    run = substitute(step_named("Report")["run"], {})
     # The step's scratch files (the refutation the agent wrote, the thread
     # dump, the composed receipts) live at /tmp in CI; the harness must not
     # write there, so every one of them is redirected into the sandbox.
@@ -223,6 +222,12 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
             CARD=card,
             PRE_SHA=SHA,
             RUNNER_TEMP=td,
+            REPO=repo,
+            PR=PR,
+            ATTEMPT="1",
+            MODE="fix",
+            EXEC_FILE="",
+            RUN_URL="https://github.com/%s/actions/runs/42" % repo,
         ),
         capture_output=True,
         text=True,
@@ -374,12 +379,15 @@ class RefutationCliTest(unittest.TestCase):
 
 class FixerIsToldHowToRefuteTest(unittest.TestCase):
     def test_the_prompt_names_the_refutation_file(self):
+        # The path is this run's own since DRE-3951 — the open step publishes
+        # it, and a refutation written anywhere else cannot be attributed to
+        # this pull request and is refused rather than posted.
         prompt = step_named("Fix")["with"]["prompt"]
-        self.assertIn("/tmp/fix-refutation.txt", prompt)
+        self.assertIn("${{ steps.handoff.outputs.refutation }}", prompt)
 
     def test_the_prompt_separates_refuted_from_blocked(self):
         prompt = step_named("Fix")["with"]["prompt"]
-        self.assertIn("/tmp/fix-blocker.txt", prompt)
+        self.assertIn("${{ steps.handoff.outputs.blocker }}", prompt)
         self.assertIn("refuted", prompt.lower())
         # The distinction has to be stated, not implied: a blocker asks a
         # human, a refutation answers the critic.
@@ -493,8 +501,12 @@ class ReportRefutedBranchTest(unittest.TestCase):
         # specific outcome and must win, or the re-review never happens.
         code = step_named("Report")["run"]
         self.assertLess(
-            code.index("/tmp/fix-refutation.txt"),
-            code.index("/tmp/fix-blocker.txt"),
+            code.index("--kind refutation"),
+            code.index("--kind blocker"),
+        )
+        self.assertLess(
+            code.index('"$REFUTED_RC" -eq 0'),
+            code.index('"$BLOCKED_RC" -eq 0'),
         )
 
 

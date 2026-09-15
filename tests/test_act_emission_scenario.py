@@ -39,6 +39,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
+import fix_handoff  # noqa: E402
 import pipeline_act  # noqa: E402
 
 CARD = "DRE-2826"
@@ -48,8 +49,10 @@ PRE_SHA = "a" * 40
 POST_SHA = "b" * 40
 BLOCKER = "the reviewer's finding is wrong and I will not force it"
 
-# The paths the step itself names. Absolute in the workflow, so absolute here.
-BLOCKER_FILE = "/tmp/fix-blocker.txt"
+# The composed receipts the step writes. Absolute in the workflow, so absolute
+# here. The BLOCKER itself is no longer one of them: since DRE-3951 the agent
+# writes it into this run's keyed handoff under RUNNER_TEMP, and a file at the
+# old fixed path is refused rather than posted.
 RECEIPTS = ("/tmp/act-fix-blocked.md", "/tmp/act-fix-pushed.md")
 
 
@@ -122,28 +125,47 @@ sys.exit(0)
     return binary
 
 
+def _open_handoff(td: str, blocked: bool) -> dict:
+    """This run's keyed handoff (DRE-3951), and the blocker in it if the fixer
+    wrote one. `legacy` is a sandbox: the harness must never touch the real
+    /tmp, which is the directory the fault travelled through."""
+    paths = fix_handoff.open_handoff(td, REPO, PR, PRE_SHA,
+                                     legacy_dir=os.path.join(td, "legacy"))
+    if blocked:
+        with open(paths["blocker"], "w", encoding="utf-8") as fh:
+            fh.write(BLOCKER + "\n")
+    return paths
+
+
+def _report_env(td: str, mode: str) -> dict:
+    """The step's `env:`, which is where every substitution now lives — the
+    Report block carries no `${{ }}` at all (DRE-3951/DRE-3484)."""
+    return dict(
+        RUNNER_TEMP=td, REPO=REPO, PR=PR, ATTEMPT="2", MODE=mode,
+        CARD=CARD, PRE_SHA=PRE_SHA,
+        EXEC_FILE=os.path.join(td, "exec.json"),
+        RUN_URL="https://github.com/%s/actions/runs/1234" % REPO,
+        GH_TOKEN="test", LINEAR_API_KEY="test-key",
+    )
+
+
+def answers(td: str) -> str:
+    """The attribution line every comment the step posts now carries."""
+    return fix_handoff.attribution(td, REPO, PR, PRE_SHA, CARD)
+
+
 def run_report(td: str, *, mode: str, blocked: bool):
     """Execute the real Report block. Returns (proc, posted comments)."""
     _checkout(td)
     log = os.path.join(td, "comments.jsonl")
     binary = _gh_stub(td, log)
 
-    for path in (BLOCKER_FILE, *RECEIPTS):
+    for path in RECEIPTS:
         if os.path.exists(path):
             os.remove(path)
-    if blocked:
-        with open(BLOCKER_FILE, "w", encoding="utf-8") as fh:
-            fh.write(BLOCKER + "\n")
+    _open_handoff(td, blocked)
 
-    run = substitute(report_step()["run"], {
-        "steps.pr.outputs.number": PR,
-        "steps.pr.outputs.attempt": "2",
-        "steps.pr.outputs.mode": mode,
-        "steps.claude.outputs.execution_file": os.path.join(td, "exec.json"),
-        "github.repository": REPO,
-        "github.server_url": "https://github.com",
-        "github.run_id": "1234",
-    })
+    run = substitute(report_step()["run"], {})
     script = os.path.join(td, "report.sh")
     with open(script, "w") as fh:
         fh.write("set -eo pipefail\n" + run)
@@ -153,8 +175,7 @@ def run_report(td: str, *, mode: str, blocked: bool):
         env=dict(
             os.environ,
             PATH=binary + os.pathsep + os.environ["PATH"],
-            CARD=CARD, PRE_SHA=PRE_SHA,
-            GH_TOKEN="test", LINEAR_API_KEY="test-key",
+            **_report_env(td, mode),
         ),
         capture_output=True, text=True,
     )
@@ -175,32 +196,39 @@ def _answer_format() -> str:
 
 class FixLoopReceiptsCarryTheirTrailer(unittest.TestCase):
     def tearDown(self):
-        for path in (BLOCKER_FILE, *RECEIPTS):
+        for path in RECEIPTS:
             if os.path.exists(path):
                 os.remove(path)
 
     def test_the_blocker_notice_is_the_live_body_plus_its_trailer(self):
         with tempfile.TemporaryDirectory() as td:
             proc, posted = run_report(td, mode="fix", blocked=True)
+            trailing = answers(td)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(posted), 1, posted)
         expected_body = (
             f"🛑 Fix attempt 2 blocked: {BLOCKER}\n\n{_answer_format().rstrip()}"
         )
+        # The act's trailer is still the last thing the WRITER composes; the
+        # attribution line is appended to the posted comment after it, so the
+        # body the registry froze is untouched and every comment still names
+        # the pull request it answers (DRE-3951).
         self.assertEqual(
             posted[0]["body"],
-            f"{expected_body}\n\n{pipeline_act.trailer('fix-attempt-disputed')}",
+            f"{expected_body}\n\n{pipeline_act.trailer('fix-attempt-disputed')}"
+            f"\n\n{trailing}\n",
         )
 
     def test_the_push_marker_is_the_live_body_plus_its_trailer(self):
         with tempfile.TemporaryDirectory() as td:
             proc, posted = run_report(td, mode="fix", blocked=False)
+            trailing = answers(td)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(posted), 1, posted)
         self.assertEqual(
             posted[0]["body"],
             "🔧 Fix attempt 2 pushed — CI and critic review re-running."
-            f"\n\n{pipeline_act.trailer('fix-attempt-landed')}",
+            f"\n\n{pipeline_act.trailer('fix-attempt-landed')}\n\n{trailing}\n",
         )
 
     def test_the_conflict_wording_is_the_same_act(self):
@@ -208,11 +236,13 @@ class FixLoopReceiptsCarryTheirTrailer(unittest.TestCase):
         rounds count as a different obligation from the fix attempts."""
         with tempfile.TemporaryDirectory() as td:
             proc, posted = run_report(td, mode="conflict", blocked=False)
+            trailing = answers(td)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
             posted[0]["body"],
             "🔀 Conflict resolution round 2 pushed — CI and critic review "
-            f"re-running.\n\n{pipeline_act.trailer('fix-attempt-landed')}",
+            f"re-running.\n\n{pipeline_act.trailer('fix-attempt-landed')}"
+            f"\n\n{trailing}\n",
         )
 
     def test_the_push_marker_the_workflow_reads_back_still_opens_the_body(self):
@@ -235,25 +265,15 @@ class FixLoopReceiptsCarryTheirTrailer(unittest.TestCase):
                         "#!/usr/bin/env python3\nimport sys\nsys.exit(3)\n")
             log = os.path.join(td, "comments.jsonl")
             binary = _gh_stub(td, log)
-            with open(BLOCKER_FILE, "w", encoding="utf-8") as fh:
-                fh.write(BLOCKER + "\n")
-            run = substitute(report_step()["run"], {
-                "steps.pr.outputs.number": PR,
-                "steps.pr.outputs.attempt": "2",
-                "steps.pr.outputs.mode": "fix",
-                "steps.claude.outputs.execution_file": os.path.join(td, "exec.json"),
-                "github.repository": REPO,
-                "github.server_url": "https://github.com",
-                "github.run_id": "1234",
-            })
+            _open_handoff(td, blocked=True)
+            run = substitute(report_step()["run"], {})
             script = os.path.join(td, "report.sh")
             with open(script, "w") as fh:
                 fh.write("set -eo pipefail\n" + run)
             proc = subprocess.run(
                 ["bash", script], cwd=td,
                 env=dict(os.environ, PATH=binary + os.pathsep + os.environ["PATH"],
-                         CARD=CARD, PRE_SHA=PRE_SHA, GH_TOKEN="test",
-                         LINEAR_API_KEY="test-key"),
+                         **_report_env(td, "fix")),
                 capture_output=True, text=True,
             )
             posted = [json.loads(line) for line in

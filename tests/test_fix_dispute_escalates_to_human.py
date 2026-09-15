@@ -5,8 +5,8 @@ Origin (2026-06-28): DeltaSolv PRs #64 (DRE-1848) and #74 (DRE-1825) each sat
 ~20h in "In QA" and had to be hand-merged. Both ended with the branch's LATEST
 QA Critic verdict still REQUEST_CHANGES and NO new commit to re-review:
 
-  * #64 — the fix agent DISPUTED the critic's blocking finding (wrote
-    /tmp/fix-blocker.txt) and, per its instructions, pushed nothing.
+  * #64 — the fix agent DISPUTED the critic's blocking finding (wrote the
+    blocker handoff) and, per its instructions, pushed nothing.
   * #74 — the fix agent reported "Fix attempt 2 pushed" but the branch head
     SHA never advanced (a phantom push), so CI + the critic never re-ran.
 
@@ -48,9 +48,11 @@ class FixDisputeEscalatesTest(unittest.TestCase):
     def test_dispute_branch_no_longer_only_narrates(self):
         # The fix-blocker branch must DO something with the card state, not just
         # post a "needs a human look" comment that leaves it stuck in In QA.
+        # Since DRE-3951 the branch is taken on the keyed handoff read's exit
+        # code, not on a fixed path being present.
         step = report_step()
         m = re.search(
-            r"if \[ -f /tmp/fix-blocker\.txt \]; then(.*?)\n\s*else\b", step, re.S
+            r'elif \[ "\$BLOCKED_RC" -eq 0 \]; then(.*?)\n\s*else\b', step, re.S
         )
         self.assertIsNotNone(m, "fix-blocker branch not found in Report step")
         self.assertIn("Triage", m.group(1) + step)

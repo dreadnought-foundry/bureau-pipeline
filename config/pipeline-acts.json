@@ -444,7 +444,7 @@
       "why": "Only a NEW commit re-triggers CI and the critic; the workflow verifies the head sha actually advanced before saying this, because announcing 'review re-running' when it did not is a lie that stalls the card in the review lane (DeltaSolv PR #74).",
       "emits": {
         "file": ".github/workflows/agent-fix.yml",
-        "anchor": "🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
+        "anchor": "🔧 Fix attempt $ATTEMPT pushed — CI and critic review re-running."
       }
     },
     {
@@ -462,7 +462,7 @@
       "why": "The fixer pushed nothing, so the branch holds a stale REQUEST_CHANGES the critic will never lift on its own. The card is parked for a human rather than left to stall invisibly in the review lane. Its answer is picked up by the sweep and discharged by `fix-loop-restarted`.",
       "emits": {
         "file": ".github/workflows/agent-fix.yml",
-        "anchor": "blocked: $(cat /tmp/fix-blocker.txt)"
+        "anchor": "blocked: $BLOCKER"
       }
     },
     {
@@ -480,7 +480,7 @@
       "why": "The sibling of `fix-attempt-disputed`, and the difference is who is being asked. A blocker asks a HUMAN because the fixer cannot settle the disagreement; a refutation settles it with evidence and needs only the reviewer to look again — the two agents are built to see different things (the critic holds no Linear key on purpose, DRE-2696), so a finding the fixer disproves is evidence the critic never had. The tag is ADOPTED because it is the per-head idempotency key in the same receipt: `refuted-finding @<sha8>` is what the fix loop counts to allow exactly ONE re-review per commit, and what qa-review.yml reads back to put the refutation in the critic's context. A second refutation on the same head is a loop, not a re-review, and escalates as `fix-attempt-disputed` does.",
       "emits": {
         "file": ".github/workflows/agent-fix.yml",
-        "anchor": "refuted the finding: $(cat /tmp/fix-refutation.txt)"
+        "anchor": "refuted the finding: $REFUTATION"
       }
     },
     {
