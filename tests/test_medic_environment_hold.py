@@ -56,7 +56,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
 import medic_classify  # noqa: E402
+import medic_retry  # noqa: E402
 import reviewer_environment as renv  # noqa: E402
+import stream_watchdog  # noqa: E402
 
 WORKFLOW = ROOT / ".github" / "workflows" / "medic.yml"
 
@@ -75,6 +77,21 @@ NATIVE_BINARY_LOG = "".join(
         "Error: Claude Code native binary not found",
         "##[error]Process completed with exit code 1.",
     )
+)
+
+# The DRE-3991 log, same shape: a run that said `system/init` and then nothing,
+# stopped by `scripts/stream_watchdog.py` after five minutes of silence. Built
+# from the watchdog's own writer, so this replay reads the line the watchdog
+# actually emits rather than a copy of it.
+STALLED_LOG = (
+    "repair\tRun claude\t2026-09-15T05:04:12.0000000Z "
+    '{"type":"system","subtype":"init","session_id":"s1"}\n'
+    "repair\tRun claude\t2026-09-15T05:09:24.0000000Z "
+    + stream_watchdog.stall_line(stream_watchdog.Stall(
+        step="Red-main Repair / repair",
+        last_event="2026-09-15T05:04:12Z",
+        silence_seconds=312,
+    )) + "\n"
 )
 
 
@@ -223,38 +240,85 @@ _TERM = re.compile(
 )
 
 
+def _split_top_level(expression: str, operator: str) -> list:
+    """`expression` split on `operator`, ignoring any inside parentheses."""
+    parts, depth, start, index = [], 0, 0, 0
+    while index < len(expression):
+        char = expression[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            assert depth >= 0, f"unbalanced parentheses in {expression!r}"
+        elif depth == 0 and expression.startswith(operator, index):
+            parts.append(expression[start:index])
+            index += len(operator)
+            start = index
+            continue
+        index += 1
+    assert depth == 0, f"unbalanced parentheses in {expression!r}"
+    parts.append(expression[start:])
+    return parts
+
+
+def _reads_true(term: str, context: dict) -> bool:
+    """One comparison, evaluated. An unmodelled term raises — see `fires`."""
+    match = _TERM.match(term)
+    assert match, f"this evaluator cannot read the term {term!r}"
+    left, operator, right = (
+        match.group("left"), match.group("op"), match.group("right")
+    )
+    assert left in context, f"the gate reads {left!r}, which this replay does not model"
+    actual = context[left]
+    if right.startswith("'"):
+        expected = right[1:-1]
+    else:
+        actual, expected = int(actual), int(right)
+    if operator == "==":
+        return actual == expected
+    if operator == "!=":
+        return actual != expected
+    if operator == ">=":
+        return actual >= expected
+    if operator == "<=":
+        return actual <= expected
+    if operator == ">":
+        return actual > expected
+    return actual < expected
+
+
 def fires(gate: str, context: dict) -> bool:
     """Evaluate one `if:` expression against a context.
 
     Deliberately strict: an operator or an unmodelled term raises rather than
     reading false, because a gate this evaluator cannot read is a gate this
     test is not checking.
+
+    The shape read here is `&&` of terms, where a term may also be a
+    PARENTHESIZED `||` group — DRE-3991 gave `retry_declined` the first one in
+    this file (attempt 1 OR a repeat stall, which can only BE attempt 2). The
+    group gets the same rigor as everything else: EVERY branch is evaluated,
+    so an alternative this replay does not model raises rather than being
+    skipped because an earlier branch happened to read true. An
+    unparenthesized `||` still raises — GitHub binds `&&` tighter, so reading
+    that as `&&` of terms would evaluate a different expression than the one
+    the workflow runs.
     """
-    assert "||" not in gate, f"this evaluator cannot read {gate!r}"
-    for raw in gate.split("&&"):
+    assert len(_split_top_level(gate, "||")) == 1, (
+        f"this evaluator cannot read an unparenthesized `||` in {gate!r}"
+    )
+    for raw in _split_top_level(gate, "&&"):
         term = raw.strip()
-        match = _TERM.match(term)
-        assert match, f"this evaluator cannot read the term {term!r}"
-        left, operator, right = (
-            match.group("left"), match.group("op"), match.group("right")
-        )
-        assert left in context, f"the gate reads {left!r}, which this replay does not model"
-        actual = context[left]
-        if right.startswith("'"):
-            expected = right[1:-1]
-        else:
-            actual, expected = int(actual), int(right)
-        if operator == "==" and not actual == expected:
-            return False
-        if operator == "!=" and not actual != expected:
-            return False
-        if operator == ">=" and not actual >= expected:
-            return False
-        if operator == "<=" and not actual <= expected:
-            return False
-        if operator == ">" and not actual > expected:
-            return False
-        if operator == "<" and not actual < expected:
+        if term.startswith("(") and term.endswith(")"):
+            branches = [b.strip() for b in _split_top_level(term[1:-1], "||")]
+            assert len(branches) > 1, (
+                f"this evaluator reads a parenthesized group as an `||` "
+                f"alternation, and {term!r} is not one"
+            )
+            if not any([_reads_true(b, context) for b in branches]):
+                return False
+            continue
+        if not _reads_true(term, context):
             return False
     return True
 
@@ -275,12 +339,17 @@ def classify(workflow_name: str, log_text: str) -> dict:
 
 
 def fired_jobs(*, workflow_name: str, log_text: str, attempt: int,
-               card: str = "DRE-3416", retry: str = "true") -> tuple:
+               card: str = "DRE-3416", retry: str = "true",
+               rule: str = "") -> tuple:
     """Every medic job that fires for this failed run, and the classification.
 
     `retry='true'` is the adversarial choice: the DRE-2954 gate said a retry
     would be fine, so anything that does not rerun here is stopped by THIS
     card's wiring and not by that one.
+
+    `rule` is that same gate's reason when it says no — empty whenever it said
+    yes, which is why it defaults empty. It comes off the retry step, not the
+    classifier, so it is a parameter here rather than a classifier output.
     """
     outputs = classify(workflow_name, log_text)
     context = {
@@ -290,6 +359,7 @@ def fired_jobs(*, workflow_name: str, log_text: str, attempt: int,
         "needs.classify.outputs.class": outputs["class"],
         "needs.classify.outputs.limit": "false",
         "needs.classify.outputs.retry": retry,
+        "needs.classify.outputs.rule": rule,
         "needs.classify.outputs.card": card,
     }
     jobs = _medic()["jobs"]
@@ -344,6 +414,34 @@ class GateReplayTest(unittest.TestCase):
         )
         self.assertEqual(outputs["class"], "normal")
         self.assertEqual(fired, {"classify", "diagnose"})
+
+    def test_a_first_stall_records_on_the_card_and_takes_its_one_retry(self):
+        # DRE-3991, the half the `||` gate above exists for. A stall keeps
+        # `infra_crash=false` on purpose, so the DRE-2954 retry still issues —
+        # and `retry_declined` stays silent, because the gate said yes.
+        fired, outputs = fired_jobs(
+            workflow_name="Red-main Repair (reusable)",
+            log_text=STALLED_LOG, attempt=1,
+        )
+        self.assertEqual(outputs["class"], "stalled_no_stream")
+        self.assertEqual(fired, {"classify", "retry", "stall_record"})
+
+    def test_a_repeat_stall_says_so_once_and_records_nothing_twice(self):
+        # The other half. `gh run rerun --failed` reuses the run id, so the
+        # second stall in a row IS attempt 2 of the same run — the case the
+        # attempt-1 gate alone could not speak on at all. One voice: the
+        # refusal, never a second record.
+        #
+        # `diagnose` is in this set because every non-environment failure has
+        # been diagnosed on attempt 2 since DRE-1346. DRE-3991 neither adds
+        # nor removes it; this test pins what the gates actually decide today.
+        fired, outputs = fired_jobs(
+            workflow_name="Red-main Repair (reusable)",
+            log_text=STALLED_LOG, attempt=2,
+            retry="false", rule=medic_retry.RULE_STALLED_REPEAT,
+        )
+        self.assertEqual(outputs["class"], "stalled_no_stream")
+        self.assertEqual(fired, {"classify", "retry_declined", "diagnose"})
 
 
 # ── 4. the steps, executed ───────────────────────────────────────────────────
