@@ -116,25 +116,26 @@ class LiveWorkflowsTest(unittest.TestCase):
         caps = cwc.effective_cap_by_workflow(self.docs, {"max_wip": "3"})
         self.assertEqual({"3"}, set(caps.values()), caps)
 
-    def test_stub_passing_nothing_inherits_the_one_default(self):
-        """A consumer stub that passes no input inherits the declared default,
-        and that default is the same on every path — so the fan-out to the
-        fleet can land repo by repo without any window of disagreement."""
+    def test_stub_passing_nothing_renders_an_empty_cap_on_every_path(self):
+        """A consumer stub that passes no input renders EMPTY on every path
+        (DRE-3994), and reconcile.py resolves empty from the caller's own
+        reconcile.yml stub — the value the sweep runs at. Before DRE-3994 it
+        rendered the declared "8", so plan.yml and linear-sync.yml promoted a
+        repo held at "0" at 8 (DRE-3777's approval, 2026-09-15)."""
         caps = cwc.effective_cap_by_workflow(self.docs, {})
-        self.assertEqual(
-            {str(cwc.canonical_default())}, set(caps.values()), caps
-        )
+        self.assertEqual({""}, set(caps.values()), caps)
 
-    def test_default_is_single_sourced_with_the_script(self):
-        """The workflows' default and reconcile.py's own fallback are ONE
-        value. A divergent script fallback is a fifth cap hiding behind an
-        unset env var."""
+    def test_the_one_fallback_lives_in_the_script_not_the_workflows(self):
+        """reconcile.DEFAULT_MAX_WIP is the ONE fallback, and no workflow
+        re-declares it: a declared default renders a value whenever a stub is
+        silent, so the script could never tell "the repo said 8" from "the
+        repo said nothing" (DRE-3994)."""
         self.assertEqual(cwc.script_default(), cwc.canonical_default())
         for name in sorted(KNOWN_PROMOTERS):
             spec = cwc.max_wip_input(self.docs[name])
             self.assertIsNotNone(spec, f"{name} declares no max_wip input")
             self.assertEqual("string", spec.get("type"), name)
-            self.assertEqual(str(cwc.canonical_default()), spec.get("default"), name)
+            self.assertNotIn("default", spec, name)
 
     def test_no_literal_cap_anywhere_in_the_workflow_dir(self):
         """Acceptance: no `MAX_WIP` literal remains in any pipeline workflow."""
@@ -256,7 +257,6 @@ class SyntheticViolationsTest(unittest.TestCase):
         "        default: main\n"
         "      max_wip:\n"
         "        type: string\n"
-        "        default: \"8\"\n"
     )
     GOOD_ENV = "        env:\n          MAX_WIP: ${{ inputs.max_wip }}\n"
 
@@ -294,20 +294,25 @@ class SyntheticViolationsTest(unittest.TestCase):
             any("max_wip" in v and "input" in v for v in cwc.check_workflow(doc, "t.yml"))
         )
 
-    def test_wrong_default_is_caught(self):
-        doc = self._reusable(
-            inputs_yaml=(
-                "      pipeline_ref:\n"
-                "        type: string\n"
-                "        default: main\n"
-                "      max_wip:\n"
-                "        type: string\n"
-                "        default: \"12\"\n"
-            ),
-            step_env=self.GOOD_ENV,
-            run=self.PROMOTE_RUN,
-        )
-        self.assertTrue(any("default" in v for v in cwc.check_workflow(doc, "t.yml")))
+    def test_any_declared_default_is_caught(self):
+        """"8" included (DRE-3994): a declared default is what let a silent
+        plan.yml stub promote a repo held at "0" at 8."""
+        for default in ('"12"', '"8"'):
+            doc = self._reusable(
+                inputs_yaml=(
+                    "      pipeline_ref:\n"
+                    "        type: string\n"
+                    "        default: main\n"
+                    "      max_wip:\n"
+                    "        type: string\n"
+                    f"        default: {default}\n"
+                ),
+                step_env=self.GOOD_ENV,
+                run=self.PROMOTE_RUN,
+            )
+            self.assertTrue(
+                any("default" in v for v in cwc.check_workflow(doc, "t.yml")), default
+            )
 
     def test_promotion_step_with_no_cap_in_scope_is_caught(self):
         """No MAX_WIP anywhere in scope means the step silently falls through
