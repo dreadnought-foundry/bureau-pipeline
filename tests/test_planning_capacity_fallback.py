@@ -85,6 +85,12 @@ def _fresh_cache():
     "Claude AI usage limit reached",
     'HTTP 429: {"type":"error","error":{"type":"rate_limit_error"}}',
     'HTTP 529: {"type":"error","error":{"type":"overloaded_error"}}',
+    # The CLI's own refusal sentences, read out of the installed Claude Code
+    # 2.1.271 binary's strings (DRE-3970) — the same wall in other words.
+    "You've reached your Fable limit.",
+    "You're out of usage credits. Switch to another model",
+    "You've hit your team's shared budget. Switch to another model",
+    "You've hit your channel's monthly spend limit.",
 ])
 def test_a_capacity_refusal_is_recognised(text):
     assert mf.capacity_refusal(text)

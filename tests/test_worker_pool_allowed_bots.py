@@ -133,12 +133,13 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
         # one since DRE-3088), the first critic's two
         # rounds and the post-approval critic (DRE-2721), the wave planner on
         # the wave route (DRE-2845), and the pre-approval critic on the
-        # one-off route (DRE-3041).
+        # one-off route (DRE-3041). 8 → 12 with DRE-3970: each of the four
+        # planner steps has its same-step re-run on the next rung.
         expected = {
             "qa-review.yml": 2,
             "verify.yml": 2,
             "agent-task.yml": 1,
-            "plan.yml": 8,
+            "plan.yml": 12,
         }
         for filename, count in expected.items():
             sites = [

@@ -441,6 +441,15 @@ class TheBoundIsWired(unittest.TestCase):
         doc = yaml.safe_load(wf_src())
         timeout = doc["jobs"]["plan"]["timeout-minutes"]
         turns = [int(m) for m in re.findall(r"--max-turns\s+(\d+)", wf_src())]
+        # DRE-3970: a planner step's re-run on the next rung only starts after
+        # an attempt that did no work — a capacity refusal is one turn and $0,
+        # and anything more is vetoed — so the pair's worst case is ONE ceiling.
+        # The re-runs are taken back out of the sum, one ceiling each.
+        retries = [s for s in agent_steps()
+                   if str(s.get("id") or "").endswith("_retry")]
+        for step in retries:
+            turns.remove(int(re.search(r"--max-turns\s+(\d+)",
+                                       step["with"]["claude_args"]).group(1)))
         # The post-approval review's ceiling is an EXPRESSION since DRE-3241
         # (sized per plan), so the literal scan above cannot see it; its worst
         # case is the cap, added by name so the arithmetic keeps counting it.
@@ -449,7 +458,7 @@ class TheBoundIsWired(unittest.TestCase):
         # `retry_ceiling` turns, and the arithmetic has to cover the longest
         # run this workflow can start.
         self.assertEqual(
-            len(turns), len(agent_steps()) - 1,
+            len(turns), len(agent_steps()) - len(retries) - 1,
             "every agent step but the post-approval review carries a literal "
             "ceiling; a second expression would drop out of this arithmetic",
         )
