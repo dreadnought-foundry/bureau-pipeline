@@ -357,9 +357,13 @@ class TransportError(RuntimeError):
     own message carries the response body and stays in the run log.
     """
 
-    def __init__(self, message: str, detail: str):
+    def __init__(self, message: str, detail: str, *, record: dict | None = None):
         super().__init__(message)
         self.detail = detail
+        # The CLI's result envelope when there was one (DRE-3970): the facts —
+        # turns, spend, subtype — that tell a model refusing for capacity on its
+        # first call from a run that did real work and then failed.
+        self.record = record
 
 
 @dataclass(frozen=True)
@@ -422,6 +426,10 @@ class Decision:
     # the heartbeat naming a model is gated on it, and a heartbeat for a call
     # that 429'd would be the console lying about the ladder.
     answered: bool = False
+    # DRE-3970. The rung this call FELL from because it was out of capacity, and
+    # the signature that said so. None on every call that did not fall.
+    fell_from: str | None = None
+    fell_because: str | None = None
 
     @property
     def escalates(self) -> bool:
@@ -1208,7 +1216,8 @@ def answered_model(envelope, requested: str | None = None) -> str | None:
     return max(usage, key=lambda name: _output_tokens(usage[name]))
 
 
-def model_receipt(asked: str | None, answered: str | None) -> str:
+def model_receipt(asked: str | None, answered: str | None, *,
+                  because: str | None = None) -> str:
     """The heartbeat's model half: what was asked for AND what answered.
 
     One line, because it rides a `$GITHUB_OUTPUT` assignment and a Linear
@@ -1222,7 +1231,12 @@ def model_receipt(asked: str | None, answered: str | None) -> str:
     asked = " ".join((asked or "").split()) or "unknown"
     answered = " ".join((answered or "").split()) or "unknown"
     head = "DEGRADED " if answered != asked else ""
-    return f"{head}{asked} (asked) / {answered} (answered)"
+    line = f"{head}{asked} (asked) / {answered} (answered)"
+    if because:
+        # DRE-3970: a fall the run MADE says why, in words that are not a death
+        # marker — this line rides a `model-attempt:` heartbeat.
+        line += f" — {asked} out of capacity ({' '.join(str(because).split())})"
+    return line
 
 
 def cut_off(envelope) -> bool:
@@ -1333,6 +1347,7 @@ def _call_claude_code(model: str, prompt: str, *, max_tokens: int | None = None,
             f"{envelope.get('subtype')!r}, is_error "
             f"{envelope.get('is_error')!r}: {str(envelope.get('result'))[:400]}",
             str(envelope.get("subtype") or "no answer"),
+            record=envelope,
         )
     if done.returncode != 0:
         raise TransportError(
@@ -1360,6 +1375,34 @@ def _call_real(model: str, prompt: str, *, max_tokens: int | None = None,
     transport = _call_api if api_key_mode() else _call_claude_code
     return transport(model, prompt, max_tokens=max_tokens,
                      timeout_seconds=timeout_seconds)
+
+
+def call_with_capacity_fallback(call, model: str, prompt: str, **kwargs):
+    """Make one call; if `model` refuses for CAPACITY, make the same call once on
+    the next rung of the planner's ladder (DRE-3970).
+
+    Returns `(answer, answered_on, fell_from, because, calls)`. Only a refusal
+    `model_fallback.capacity_refusal` recognises opens the second call — and it
+    reads the CLI record, so a run that did real work never does. One fall, not
+    a walk: a second refusal is raised, and the caller's own failure path (the
+    DRE-3074 requeue for the classifier) takes it from there, carrying
+    `fell_from` so the receipt still says what was tried.
+    """
+    try:
+        return _answer_of(call(model, prompt, **kwargs)), model, None, None, 1
+    except TransportError as e:
+        because = model_fallback.capacity_refusal(str(e), record=e.record)
+        below = model_fallback.fallback_for(ROLE, model) if because else None
+        if not below:
+            raise
+        print(f"planning: {model} is out of capacity ({because}) — asking {below} "
+              f"in the same step", file=sys.stderr)
+        try:
+            answer = _answer_of(call(below, prompt, **kwargs))
+        except TransportError as again:
+            again.fell_from, again.fell_because, again.calls = model, because, 2
+            raise
+        return answer, below, model, because, 2
 
 
 def _pick_model() -> str:
@@ -1390,7 +1433,8 @@ def _answer_of(result) -> Answer:
 
 def classify(card: dict, *, call=None, model: str | None = None,
              doc: dict | None = None) -> Decision:
-    """Classify one card. One call, no retry, and never a silent stamp."""
+    """Classify one card. One call per rung, a second rung only when the first
+    is out of capacity (DRE-3970), and never a silent stamp."""
     if not model:
         try:
             model = _pick_model()
@@ -1401,21 +1445,27 @@ def classify(card: dict, *, call=None, model: str | None = None,
     except (ClassifyError, planning_shape.ShapeError) as e:
         return Decision(model=model, asked=model, refusal=_unreachable(e))
     try:
-        answer = _answer_of((call or _call_real)(model, prompt))
+        # DRE-3970: a capacity refusal on this rung is asked again, once, on the
+        # next — the same call, in this step, rather than a failed run.
+        answer, answered_on, fell_from, because, _calls = \
+            call_with_capacity_fallback(call or _call_real, model, prompt)
     except TransportError as e:
         # DRE-3074's split: nothing read the card, so there is nothing here for
         # a human to decide. `run()` spends the budget; this only names the fact.
         return Decision(model=model, asked=model, transport=True,
-                        refusal=_transport(e))
+                        refusal=_transport(e),
+                        fell_from=getattr(e, "fell_from", None),
+                        fell_because=getattr(e, "fell_because", None))
     except Exception as e:  # noqa: BLE001 — any failed call is a refusal
         return Decision(model=model, asked=model, refusal=_unreachable(e))
     # `or model` is the STAMP's floor, not an attribution: a planner stamp must
     # name a model, and a transport that reported none still ran the one we
     # asked for. Every real Claude Code success bills its `modelUsage`, so this
     # falls back only for the plain-string `call` seam.
-    decision = parse(answer.text, doc=doc, model=answer.model or model)
+    decision = parse(answer.text, doc=doc, model=answer.model or answered_on)
     decision = seam_decision(decision, card.get("description") or "")
-    return dataclasses.replace(decision, answered=True, asked=model)
+    return dataclasses.replace(decision, answered=True, asked=model,
+                               fell_from=fell_from, fell_because=because)
 
 
 def seam_decision(decision: Decision, body: str) -> Decision:
@@ -1597,7 +1647,11 @@ def _model_pairs(decision: Decision) -> list:
     return [
         ("model", decision.model or ""),
         ("asked", decision.asked or ""),
-        ("receipt", model_receipt(decision.asked, decision.model)),
+        ("receipt", model_receipt(decision.asked, decision.model,
+                                  because=decision.fell_because)),
+        # DRE-3970: plan.yml's Select model skips this rung for the planner, so
+        # the run that saw Fable refused does not ask it a second time.
+        ("fell_from", decision.fell_from or ""),
     ]
 
 
