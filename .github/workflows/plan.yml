@@ -1057,7 +1057,7 @@ jobs:
       # below; the finish step after it fails the job where this step used to.
       - name: Plan epic — out of capacity?
         id: plan_cap
-        if: "!cancelled() && steps.claude.outcome == 'failure'"
+        if: "!cancelled() && (steps.route.outputs.mode == 'plan') && steps.claude.outcome == 'failure'"
         env:
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
@@ -1251,7 +1251,7 @@ jobs:
 
       - name: Plan epic — finished?
         id: plan_done
-        if: "!cancelled() && (steps.claude.outcome == 'success' || steps.claude.outcome == 'failure')"
+        if: "!cancelled() && (steps.route.outputs.mode == 'plan') && (steps.claude.outcome == 'success' || steps.claude.outcome == 'failure')"
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           EPIC: ${{ github.event.client_payload.identifier }}
@@ -1748,7 +1748,7 @@ jobs:
       # below; the finish step after it fails the job where this step used to.
       - name: Re-plan after send-back — out of capacity?
         id: replan_cap
-        if: "!cancelled() && steps.replan.outcome == 'failure'"
+        if: "!cancelled() && (steps.pre1.outputs.action == 'hold') && steps.replan.outcome == 'failure'"
         env:
           EXEC_FILE: ${{ steps.replan.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
@@ -1822,7 +1822,7 @@ jobs:
 
       - name: Re-plan after send-back — finished?
         id: replan_done
-        if: "!cancelled() && (steps.replan.outcome == 'success' || steps.replan.outcome == 'failure')"
+        if: "!cancelled() && (steps.pre1.outputs.action == 'hold') && (steps.replan.outcome == 'success' || steps.replan.outcome == 'failure')"
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           EPIC: ${{ github.event.client_payload.identifier }}
@@ -2647,7 +2647,7 @@ jobs:
       # below; the finish step after it fails the job where this step used to.
       - name: Re-plan after the second critic sent it back — out of capacity?
         id: postreplan_cap
-        if: "!cancelled() && steps.postreplan.outcome == 'failure'"
+        if: "!cancelled() && (steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold') && steps.postreplan.outcome == 'failure'"
         env:
           EXEC_FILE: ${{ steps.postreplan.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
@@ -2726,7 +2726,7 @@ jobs:
 
       - name: Re-plan after the second critic sent it back — finished?
         id: postreplan_done
-        if: "!cancelled() && (steps.postreplan.outcome == 'success' || steps.postreplan.outcome == 'failure')"
+        if: "!cancelled() && (steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold') && (steps.postreplan.outcome == 'success' || steps.postreplan.outcome == 'failure')"
         continue-on-error: true
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -3085,7 +3085,7 @@ jobs:
       # below; the finish step after it fails the job where this step used to.
       - name: Wave route — write the wave plan — out of capacity?
         id: wave_cap
-        if: "!cancelled() && steps.wave.outcome == 'failure'"
+        if: "!cancelled() && (steps.shape.outputs.route == 'wave') && steps.wave.outcome == 'failure'"
         env:
           EXEC_FILE: ${{ steps.wave.outputs.execution_file }}
           MODEL: ${{ steps.model.outputs.model }}
@@ -3182,7 +3182,7 @@ jobs:
 
       - name: Wave route — write the wave plan — finished?
         id: wave_done
-        if: "!cancelled() && (steps.wave.outcome == 'success' || steps.wave.outcome == 'failure')"
+        if: "!cancelled() && (steps.shape.outputs.route == 'wave') && (steps.wave.outcome == 'success' || steps.wave.outcome == 'failure')"
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           EPIC: ${{ github.event.client_payload.identifier }}
