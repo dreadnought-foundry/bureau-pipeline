@@ -124,8 +124,8 @@ def agent_note(names, base_sha: str) -> str:
         "",
         "Do not spend fix attempts on them, and do not weaken or skip them to "
         "go green. Address only what this pull request actually broke. If the "
-        "critic's findings are all inherited failures, write that to "
-        "/tmp/fix-blocker.txt and stop.",
+        "critic's findings are all inherited failures, write that to the "
+        "blocker file your prompt names and stop.",
     ]
     return "\n".join(parts).rstrip() + "\n"
 

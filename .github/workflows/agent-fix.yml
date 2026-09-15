@@ -401,7 +401,7 @@ jobs:
           # NOT pinned here: the "Select model" step below resolves it from
           # config/models.yaml (DRE-2316).
           elif [ "$FRESH_EYES" = "true" ]; then
-            echo "escalation=ESCALATION CONTEXT: the last review round did not read as progress — the reviewer re-found something an earlier round already named, reported that an earlier fix came undone, or said nothing about it either way. One more round like that stops this loop. Do NOT assume the previous attempt's approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in /tmp/fix-blocker.txt rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
+            echo "escalation=ESCALATION CONTEXT: the last review round did not read as progress — the reviewer re-found something an earlier round already named, reported that an earlier fix came undone, or said nothing about it either way. One more round like that stops this loop. Do NOT assume the previous attempt's approach was right — re-read the card, the spec, the critic's full review history on this PR, and the current diff, then re-derive the correct fix from scratch. If you conclude the critic is wrong or the card itself is flawed, say so in the blocker file named in step 6 below rather than forcing a bad fix." >> "$GITHUB_OUTPUT"
           else
             echo "escalation=" >> "$GITHUB_OUTPUT"
           fi
@@ -859,6 +859,32 @@ jobs:
           python3 .bureau-pipeline/scripts/linear_ops.py advance \
             "${{ steps.pr.outputs.card }}" "In Review" "Triage" || true
 
+      # DRE-3951: this run's handoff, keyed to the repo, PR and head it was
+      # dispatched for. The fixing agent used to write its escalation to the
+      # FIXED path /tmp/fix-blocker.txt and the Report step read that path
+      # back — and nothing clears /tmp between jobs on the reused self-hosted
+      # minis, so one card's escalation was posted on the next card's pull
+      # request. Seen twice on 2026-09-14: portico #501 carried agent-bureau
+      # #2556's history two minutes after its own verdict, and agent-bureau
+      # #2553 collected four comments about PR #2516.
+      #
+      # This step opens ONE keyed directory under this job's own RUNNER_TEMP,
+      # deletes the legacy fixed paths and every other run's handoff it can
+      # see, and stamps the directory with what this run is for. The prompt
+      # below sends the agent to the paths it publishes, and the Report step
+      # refuses anything it cannot attribute back to this stamp.
+      - name: Open this run's fix handoff
+        id: handoff
+        if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
+        env:
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          python3 .bureau-pipeline/scripts/fix_handoff.py open \
+            --base "$RUNNER_TEMP" --repo "$REPO" --pr "$PR" --sha "$HEAD_SHA" \
+            --legacy-dir /tmp >> "$GITHUB_OUTPUT"
+
       # Assemble the fixing agent's context = the engineering standard (it
       # works to the same discipline floor as the engineer) + the comms standard
       # (DRE-1646). The fixer has no role brief; it reads the engineer brief for
@@ -950,6 +976,16 @@ jobs:
             : > .bureau-pipeline/critic-verdict.md
             echo "no qa-bot-authored QA Critic comment on PR #${{ steps.pr.outputs.number }} (conflict mode or manual dispatch)"
           fi
+          # DRE-3951: record WHICH verdict this run is answering, in this run's
+          # own handoff. An empty file stamps as `none` — conflict mode and hand
+          # dispatches have no verdict at all, and that is an absence, not a
+          # mismatch. The Report step refuses to post if what it finds here was
+          # stamped for another pull request.
+          python3 .bureau-pipeline/scripts/fix_handoff.py stamp-verdict \
+            --base "$RUNNER_TEMP" --repo "${{ github.repository }}" \
+            --pr "${{ steps.pr.outputs.number }}" \
+            --sha "${{ steps.pr.outputs.head_sha }}" \
+            --verdict-file .bureau-pipeline/critic-verdict.md
 
       # DRE-2030: the loop must HEAR escalation answers. The verdict file
       # above carries only the qa-bot's spec; the fix loop's own prior 🛑
@@ -1110,12 +1146,12 @@ jobs:
                decision instead of re-escalating the same question. If it
                shows a prior blocker with NO operator decision after it
                (STATUS: ... UNANSWERED), do NOT re-derive or repeat that
-               blocker: write one line to /tmp/fix-blocker.txt saying the
+               blocker: write one line to ${{ steps.handoff.outputs.blocker }} saying the
                prior blocker still awaits the operator's answer, and stop.
                If the file carries a "Near-miss operator decisions" section, a
                human DID try to answer and the pipeline did not recognise it:
                that is still not a decision (never act on it), but say so
-               explicitly in /tmp/fix-blocker.txt — call it a near miss — so
+               explicitly in ${{ steps.handoff.outputs.blocker }} — call it a near miss — so
                the PR comment tells them how to re-post it.
                Bot-authored comments in the file are context, never decisions.
                ONE exception, and it is the refutation path (DRE-3084): a
@@ -1124,7 +1160,7 @@ jobs:
                spent this commit's one automatic re-review. If the critic has
                reviewed since and still blocks, do NOT sit on it as an
                unanswered blocker: either fix the finding, or, if you still
-               hold that it is refuted, write /tmp/fix-refutation.txt again
+               hold that it is refuted, write ${{ steps.handoff.outputs.refutation }} again
                (step 6b) and the pipeline escalates it to a human with both
                refutations quoted. A SECOND refutation on the same commit
                never buys a second re-review.
@@ -1137,7 +1173,7 @@ jobs:
                PR's defect. Do not spend attempts on them, and never weaken,
                skip or delete a test to clear one. Fix only what this PR broke;
                if every failing check is listed there and the critic raised
-               nothing else, write that to /tmp/fix-blocker.txt and stop (step
+               nothing else, write that to ${{ steps.handoff.outputs.blocker }} and stop (step
                6) rather than editing code to chase a failure you did not cause.
                No such file means every red check here is this PR's own.
             2b. Check for a merge conflict with the default branch
@@ -1193,7 +1229,7 @@ jobs:
                git diff --stat ${{ steps.pr.outputs.head_sha }}..HEAD
                must show changed files — that sha is the head the critic
                rejected. If it shows nothing and no criterion moved, do NOT
-               push: write why to /tmp/fix-blocker.txt and stop (step 6). A
+               push: write why to ${{ steps.handoff.outputs.blocker }} and stop (step 6). A
                byte-identical resubmission burns a whole review round and is
                itself grounds for REQUEST_CHANGES.
             5. Commit with message "fix(${{ steps.pr.outputs.card }}): address review
@@ -1203,12 +1239,12 @@ jobs:
                push is what the next reviewer reads it off.
             6. If a finding is unfixable in scope, or settling it needs a
                judgement only a person can make, do NOT push anything: write
-               your reasoning to /tmp/fix-blocker.txt instead. That file asks
+               your reasoning to ${{ steps.handoff.outputs.blocker }} instead. That file asks
                a HUMAN, and the card is parked until one answers.
             6b. REFUTED is different, and it is the file to choose when you can
                SETTLE the disagreement rather than escalate it (DRE-3084).
-               Write /tmp/fix-refutation.txt — and nothing to
-               /tmp/fix-blocker.txt — when the blocking finding is disproven
+               Write ${{ steps.handoff.outputs.refutation }} — and nothing to
+               ${{ steps.handoff.outputs.blocker }} — when the blocking finding is disproven
                by evidence YOU can read and the critic could not: the live
                Linear card (the critic has no Linear key, on purpose), a test
                run you actually ran, the merge base, a check run's log. Push
@@ -1219,8 +1255,16 @@ jobs:
                refutation attached, so a correct finding is still a correct
                finding and a disproven one no longer costs a person an hour.
                Use it only for a finding evidence actually settles: a
-               disagreement of judgement is /tmp/fix-blocker.txt, and one
+               disagreement of judgement is ${{ steps.handoff.outputs.blocker }}, and one
                re-review is all this commit gets either way.
+            6c. Those two paths are THIS run's, keyed to this repo, this pull
+               request and this head (DRE-3951). Write them exactly as spelled
+               above and nowhere else: a fix-blocker.txt under /tmp belongs to
+               whichever job on this machine wrote it, so the Report step
+               cannot attribute it to you and refuses to post anything at all
+               rather than answer the wrong pull request. If you escalate, the
+               comment that carries your words is the one written from those
+               paths.
 
       - name: Report
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true' && always()
@@ -1242,8 +1286,43 @@ jobs:
           # from anywhere but a step output, and this one rides an env var so
           # the rule holds without exception.
           CLASSIFICATION: ${{ steps.pr.outputs.classification }}
+          # DRE-3951: the repository this run is reporting on, through env
+          # for the same reason as the two above — and so this block stays
+          # well under the expression ceiling
+          # (tests/test_workflow_expression_budget.py) while it grows.
+          REPO: ${{ github.repository }}
+          # DRE-3951, and the reason it is EVERY remaining substitution rather
+          # than the handful this card added: a `run:` block that carries one
+          # `${{ }}` is compiled by GitHub into a single format() expression
+          # with a 21,000-character ceiling, and this block passed 18,000 when
+          # the handoff read landed (tests/test_workflow_expression_budget.py,
+          # whose own remedy is this one — "move the substitutions into env").
+          # A block with no substitutions is never compiled as an expression,
+          # so the ceiling stops applying to the longest script in the fleet's
+          # busiest workflow, and the next line added here cannot refuse every
+          # consumer repo at dispatch with no job and no log (DRE-3484).
+          PR: ${{ steps.pr.outputs.number }}
+          ATTEMPT: $ATTEMPT
+          MODE: ${{ steps.pr.outputs.mode }}
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          PR=${{ steps.pr.outputs.number }}
+
+          # DRE-3951 — every read and every comment below belongs to THIS
+          # (repo, PR, head) or nothing is posted at all. `handoff` reads only
+          # what the open step stamped for this run; `refuse` is what happens
+          # when something is there and cannot be proved to be ours, because a
+          # comment on the wrong pull request is worse than no comment.
+          handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
+            "$CMD" --base "$RUNNER_TEMP" --repo "$REPO" --pr "$PR" --sha "$PRE_SHA" "$@"; }
+          refuse() { echo "::error::$1 — posting nothing on $REPO#$PR (DRE-3951)"; exit 1; }
+          handoff check || refuse "the critic verdict is not this run's"
+          # The one-line trailer every comment below carries: what it answers.
+          ANSWERS=$(handoff attribution --card "$CARD")
+          REFUTED_RC=0; REFUTATION=$(handoff read --kind refutation) || REFUTED_RC=$?
+          if [ "$REFUTED_RC" -eq 4 ]; then refuse "the refutation is not this run's"; fi
+          BLOCKED_RC=0; BLOCKER=$(handoff read --kind blocker) || BLOCKED_RC=$?
+          if [ "$BLOCKED_RC" -eq 4 ]; then refuse "the blocker is not this run's"; fi
 
           # The copy-pasteable answer format, from its ONE source (DRE-2409).
           # Every comment below that HOLDS this PR quotes it: the escalate-by-
@@ -1300,11 +1379,11 @@ jobs:
           # escalates exactly as a blocker does, with both quoted. A new
           # commit is a new head and earns its own re-review, like every other
           # budget in this loop.
-          if [ -f /tmp/fix-refutation.txt ]; then
+          if [ "$REFUTED_RC" -eq 0 ]; then
             SHA8=${PRE_SHA:0:8}
             REFUTE_KEY="refuted-finding @$SHA8"
             gh api --paginate --slurp \
-              "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+              "repos/$REPO/issues/$PR/comments?per_page=100" \
               > /tmp/refuted-thread.json 2>/dev/null \
               || echo '[]' > /tmp/refuted-thread.json
             # Worker-bot authored ONLY (DRE-1995): anyone can comment this
@@ -1322,7 +1401,7 @@ jobs:
 
           $FORMAT"
             fi
-            REFUTED_BODY="🛑 Fix attempt ${{ steps.pr.outputs.attempt }} refuted the finding: $(cat /tmp/fix-refutation.txt)
+            REFUTED_BODY="🛑 Fix attempt $ATTEMPT refuted the finding: $REFUTATION
 
           $REFUTED_TAIL
 
@@ -1334,14 +1413,15 @@ jobs:
               # Posted BEFORE the dispatch, and that order is load-bearing:
               # the re-review reads this comment off the thread to build its
               # context, so dispatching first races the write.
-              gh pr comment "$PR" --repo ${{ github.repository }} \
+              printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted.md
+              gh pr comment "$PR" --repo $REPO \
                 --body-file /tmp/act-fix-refuted.md
               # The dispatchable critic stub for THIS repo (DRE-2056): in
               # bureau-pipeline qa-review.yml IS the workflow_call-only
               # reusable and dispatching it 422s, so the stub is pr-review.yml.
               # Same resolution reconcile.review_workflow() makes.
               REVIEW_WF=qa-review.yml
-              [ "${{ github.repository }}" = "dreadnought-foundry/bureau-pipeline" ] && REVIEW_WF=pr-review.yml
+              [ "$REPO" = "dreadnought-foundry/bureau-pipeline" ] && REVIEW_WF=pr-review.yml
               # The App token holds NO Actions permission (DRE-1254: "HTTP
               # 403: Resource not accessible by integration"), so the dispatch
               # rides the workflow's own GITHUB_TOKEN — which carries
@@ -1352,7 +1432,7 @@ jobs:
               # is loud, and it degrades to today's behaviour rather than to a
               # lie.
               if GH_TOKEN="$DISPATCH_TOKEN" gh workflow run "$REVIEW_WF" \
-                   --repo "${{ github.repository }}" \
+                   --repo "$REPO" \
                    -f pr_number="$PR"; then
                 if [ -n "$CARD" ]; then
                   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
@@ -1374,7 +1454,8 @@ jobs:
               python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
                 --body "$REFUTED_BODY" --out /tmp/act-fix-refuted-capped.md \
                 || printf '%s' "$REFUTED_BODY" > /tmp/act-fix-refuted-capped.md
-              gh pr comment "$PR" --repo ${{ github.repository }} \
+              printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted-capped.md
+              gh pr comment "$PR" --repo $REPO \
                 --body-file /tmp/act-fix-refuted-capped.md
               if [ -n "$CARD" ]; then
                 python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
@@ -1382,7 +1463,7 @@ jobs:
               fi
               park_for_human
             fi
-          elif [ -f /tmp/fix-blocker.txt ]; then
+          elif [ "$BLOCKED_RC" -eq 0 ]; then
             # DRE-2826: composed through the one receipt writer, which returns
             # this body byte-identically and appends the act trailer. The body
             # itself is untouched — reconcile's restart sweep reads the 🛑 that
@@ -1395,13 +1476,14 @@ jobs:
             # the registry are both checked in CI), and a lost trailer is a
             # missing machine-readable line, while a lost comment is a disputed
             # fix nobody is told about.
-            BLOCKED_BODY="🛑 Fix attempt ${{ steps.pr.outputs.attempt }} blocked: $(cat /tmp/fix-blocker.txt)
+            BLOCKED_BODY="🛑 Fix attempt $ATTEMPT blocked: $BLOCKER
 
           $FORMAT"
             python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
               --body "$BLOCKED_BODY" --out /tmp/act-fix-blocked.md \
               || printf '%s' "$BLOCKED_BODY" > /tmp/act-fix-blocked.md
-            gh pr comment "$PR" --repo ${{ github.repository }} \
+            printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-blocked.md
+            gh pr comment "$PR" --repo $REPO \
               --body-file /tmp/act-fix-blocked.md
             # Escalate, don't just narrate. The fixer disputed the critic's
             # findings and (per its instructions) pushed NOTHING — so the branch
@@ -1420,7 +1502,7 @@ jobs:
             # is a lie: no run fires, the stale REQUEST_CHANGES stands, and the
             # card stalls in the review lane (DeltaSolv PR #74, 2026-06-28). Verify real
             # forward progress; escalate to the human when there is none.
-            POST_SHA=$(gh pr view "$PR" --repo ${{ github.repository }} --json headRefOid --jq .headRefOid)
+            POST_SHA=$(gh pr view "$PR" --repo $REPO --json headRefOid --jq .headRefOid)
             if [ -n "$PRE_SHA" ] && [ "$POST_SHA" = "$PRE_SHA" ]; then
               # DRE-2018: distinguish a model DEATH (is_error — API outage,
               # exhausted subscription; the 2026-07-10 DeltaSolv token outage)
@@ -1437,18 +1519,18 @@ jobs:
               # full comment list to fix_dead_run.py; it filters to
               # worker-bot-authored markers (DRE-1995 discipline) and stops the
               # count at the last push marker.
-              EXEC_FILE="${{ steps.claude.outputs.execution_file }}"
               [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
               COMMENTS_JSON=$(mktemp)
-              gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+              gh api "repos/$REPO/issues/$PR/comments" \
                 > "$COMMENTS_JSON" || echo '[]' > "$COMMENTS_JSON"
-              RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               DECISION=$(python3 .bureau-pipeline/scripts/fix_dead_run.py decide \
                 "$EXEC_FILE" --comments-json "$COMMENTS_JSON" --run-url "$RUN_URL")
               ACTION=$(printf '%s\n' "$DECISION" | head -1)
               BODY=$(printf '%s\n' "$DECISION" | tail -n +3)
               if [ "$ACTION" = "retry" ]; then
-                gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY"
+                gh pr comment "$PR" --repo $REPO --body "$BODY
+
+          $ANSWERS"
                 if [ -n "$CARD" ]; then
                   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
                     "🤖 The AI service was unavailable during the last fix run — an outage, not a problem with the work. The pipeline retries automatically; no action needed." || true
@@ -1459,7 +1541,9 @@ jobs:
                 # operator to the credential chain for a run that never had a
                 # service problem. One retry (agent runs vary in how far they
                 # get); no park, no needs-human.
-                gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY"
+                gh pr comment "$PR" --repo $REPO --body "$BODY
+
+          $ANSWERS"
                 if [ -n "$CARD" ]; then
                   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
                     "🤖 The last fix run ran out of steps before it could finish — it used a full run of real work and stopped at its step limit. Nothing is wrong with the setup. The pipeline retries once automatically; no action needed." || true
@@ -1468,28 +1552,34 @@ jobs:
                 # Second exhaustion: stop buying identical attempts and tell
                 # the operator the actual remedy (split it, or raise the
                 # budget) instead of a third $5 run into the same wall.
-                gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY
+                gh pr comment "$PR" --repo $REPO --body "$BODY
 
-          $FORMAT"
+          $FORMAT
+
+          $ANSWERS"
                 if [ -n "$CARD" ]; then
                   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
                     "🙋 Two fix runs in a row ran out of steps on this PR before finishing — both did real work and hit their step limit. That means the remaining fix is too big for one sitting, so it needs breaking into smaller pieces rather than another retry. This needs your look. Details on PR #$PR. Move it to **Todo** to try again anyway, or to **Backlog** to drop it." || true
                 fi
                 park_for_human
               elif [ "$ACTION" = "hold" ]; then
-                gh pr comment "$PR" --repo ${{ github.repository }} --body "$BODY
+                gh pr comment "$PR" --repo $REPO --body "$BODY
 
-          $FORMAT"
+          $FORMAT
+
+          $ANSWERS"
                 if [ -n "$CARD" ]; then
                   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
                     "🙋 The AI service failed several fix runs in a row on this PR — that looks like an outage or account problem, not bad work. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **Backlog** to drop it." || true
                 fi
                 park_for_human
               else
-                gh pr comment "$PR" --repo ${{ github.repository }} \
-                  --body "🛑 Fix attempt ${{ steps.pr.outputs.attempt }} pushed no new commit (branch still at \`${POST_SHA:0:8}\`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck.
+                gh pr comment "$PR" --repo $REPO \
+                  --body "🛑 Fix attempt $ATTEMPT pushed no new commit (branch still at \`${POST_SHA:0:8}\`) — the reviewer will not re-run and the last verdict stands. Escalating to a human rather than leaving this PR stuck.
 
-          $FORMAT"
+          $FORMAT
+
+          $ANSWERS"
                 if [ -n "$CARD" ]; then
                   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
                     "🙋 The fix agent ran but produced no change the reviewer can re-check, so this card can't move on its own. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **Backlog** to drop it." || true
@@ -1497,10 +1587,10 @@ jobs:
                 park_for_human
               fi
             else
-              if [ "${{ steps.pr.outputs.mode }}" = "conflict" ]; then
-                BODY="🔀 Conflict resolution round ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
+              if [ "$MODE" = "conflict" ]; then
+                BODY="🔀 Conflict resolution round $ATTEMPT pushed — CI and critic review re-running."
               else
-                BODY="🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running."
+                BODY="🔧 Fix attempt $ATTEMPT pushed — CI and critic review re-running."
                 # DRE-2817 (AC7): the round's classification is recorded HERE
                 # rather than in a comment of its own — this marker already
                 # goes up every round, and an extra worker-bot comment would
@@ -1522,6 +1612,7 @@ jobs:
               python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
                 --body "$BODY" --out /tmp/act-fix-pushed.md \
                 || printf '%s' "$BODY" > /tmp/act-fix-pushed.md
-              gh pr comment "$PR" --repo ${{ github.repository }} --body-file /tmp/act-fix-pushed.md
+              printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-pushed.md
+              gh pr comment "$PR" --repo $REPO --body-file /tmp/act-fix-pushed.md
             fi
           fi

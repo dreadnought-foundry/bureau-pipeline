@@ -388,18 +388,21 @@ class TheCliIsTheWorkflowsSeam(unittest.TestCase):
         )
 
     def test_open_prints_github_output_lines(self):
+        # Asserted INSIDE the sandbox: `dir` names a directory the open step
+        # created under it, and a check made after the sandbox is torn down
+        # would be asking whether a deleted path exists.
         with tempfile.TemporaryDirectory() as td:
             base, legacy = _sandbox(td)
             proc = self._run("open", "--base", base, "--repo", REPO, "--pr", PR,
                              "--sha", SHA, "--legacy-dir", legacy)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        fields = dict(
-            line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line
-        )
-        self.assertTrue(fields["blocker"].endswith("fix-blocker.txt"))
-        self.assertTrue(fields["refutation"].endswith("fix-refutation.txt"))
-        self.assertEqual(fields["key"], fix_handoff.key(REPO, PR, SHA))
-        self.assertTrue(os.path.isdir(fields["dir"]))
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            fields = dict(
+                line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line
+            )
+            self.assertTrue(fields["blocker"].endswith("fix-blocker.txt"))
+            self.assertTrue(fields["refutation"].endswith("fix-refutation.txt"))
+            self.assertEqual(fields["key"], fix_handoff.key(REPO, PR, SHA))
+            self.assertTrue(os.path.isdir(fields["dir"]))
 
     def test_read_exits_zero_and_prints_the_body(self):
         with tempfile.TemporaryDirectory() as td:

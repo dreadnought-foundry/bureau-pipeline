@@ -198,18 +198,18 @@ class FixRun:
         })
 
     def report_step(self):
-        run = substitute(step_named("Report")["run"], {
-            "steps.pr.outputs.number": self.pr,
-            "steps.pr.outputs.attempt": "2",
-            "steps.pr.outputs.mode": "fix",
-            "steps.claude.outputs.execution_file": os.path.join(self.td, "exec.json"),
-            "github.repository": self.repo,
-            "github.server_url": "https://github.com",
-            "github.run_id": "34902813699",
-        })
+        # Nothing is substituted: the Report block carries no `${{ }}` at all,
+        # because the handoff read pushed it past the compiled-expression
+        # budget and every substitution moved to the step's `env:` below
+        # (tests/test_workflow_expression_budget.py, DRE-3484). The call stays
+        # so that a substitution creeping back in is a failure here.
+        run = substitute(step_named("Report")["run"], {})
         run = run.replace("/tmp/", self.legacy + "/")
         return self._bash(run, {
-            "REPO": self.repo, "CARD": self.card, "PRE_SHA": self.sha,
+            "REPO": self.repo, "PR": self.pr, "CARD": self.card,
+            "PRE_SHA": self.sha, "ATTEMPT": "2", "MODE": "fix",
+            "EXEC_FILE": os.path.join(self.td, "exec.json"),
+            "RUN_URL": f"https://github.com/{self.repo}/actions/runs/34902813699",
         })
 
     # ── what the run did ───────────────────────────────────────────────────

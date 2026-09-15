@@ -638,9 +638,14 @@ class WorkflowWiringTest(unittest.TestCase):
         # fix_budget counts on "🔧 Fix attempt" and the mode read-back keys on
         # "pushed — CI and critic review re-running": appending must not
         # disturb either.
+        # The attempt number reaches the body through the step's env since
+        # DRE-3951 — the Report block carries no `${{ }}` at all, so GitHub
+        # never compiles it as an expression — but the counted string in front
+        # of it is unchanged, which is the whole of what this pins.
         src = wf_src()
-        self.assertIn('BODY="🔧 Fix attempt ${{ steps.pr.outputs.attempt }} '
+        self.assertIn('BODY="🔧 Fix attempt $ATTEMPT '
                       'pushed — CI and critic review re-running."', src)
+        self.assertIn("ATTEMPT: ${{ steps.pr.outputs.attempt }}", src)
 
     def test_the_hold_names_which_stop_happened(self):
         src = wf_src()
