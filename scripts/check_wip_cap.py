@@ -23,10 +23,12 @@ This checker FAILS (exit 1) when:
     has no `MAX_WIP` in scope, so it silently falls through to the script's
     own fallback instead of taking the caller's value;
   * a reusable workflow containing such a step fails to declare the `max_wip`
-    input as `type: string` with the ONE canonical default;
-  * that canonical default diverges from `reconcile.DEFAULT_MAX_WIP` — the
-    value the script uses when `MAX_WIP` is unset or empty. A stub that
-    passes nothing must inherit a default that is correct on its own.
+    input as `type: string`, or declares it WITH a default (DRE-3994). A
+    silent stub must render an EMPTY input, because empty is what makes
+    reconcile.py read the repo's own cap from the caller's reconcile.yml stub;
+    a declared "8" rendered 8 instead, and a repo held at "0" promoted three
+    cards when an epic was approved on 2026-09-15. The ONE fallback is
+    `reconcile.DEFAULT_MAX_WIP`, in the script, and nowhere else.
 
 Deterministic, PyYAML-only (the script default is read with `ast`, so
 importing reconcile.py — which requires live env — is never needed). Run
@@ -206,9 +208,12 @@ def effective_cap(doc, caller_inputs, default=None):
         return str(value).strip().strip('"').strip("'")
     if INPUT_NAME in caller_inputs:
         return str(caller_inputs[INPUT_NAME])
+    # A silent stub renders the declared default — or, with none declared, the
+    # EMPTY string, which reconcile.py resolves from the caller's own
+    # reconcile.yml stub (DRE-3994). `default` is kept for the signature only.
     spec = max_wip_input(doc) or {}
     declared = spec.get("default")
-    return str(declared if declared is not None else default)
+    return "" if declared is None else str(declared)
 
 
 def effective_cap_by_workflow(docs, caller_inputs, default=None):
@@ -262,11 +267,14 @@ def check_workflow(doc, name, default=None):
                     f"{name}: '{INPUT_NAME}' input must be type: string "
                     f"(got {spec.get('type')!r})"
                 )
-            if spec.get("default") != str(default):
+            if "default" in spec:
                 violations.append(
-                    f"{name}: '{INPUT_NAME}' input must default to "
-                    f"{str(default)!r} (got {spec.get('default')!r}) — the one "
-                    f"cap, single-sourced from reconcile.DEFAULT_MAX_WIP"
+                    f"{name}: '{INPUT_NAME}' input must declare NO default "
+                    f"(got {spec.get('default')!r}) — a silent stub has to "
+                    f"render empty so reconcile.py reads the repo's own cap "
+                    f"from its reconcile.yml stub; the one fallback, "
+                    f"{str(default)!r}, lives in reconcile.DEFAULT_MAX_WIP "
+                    f"(DRE-3994)"
                 )
 
     return violations

@@ -20,10 +20,13 @@ on:
         type: string
         required: true
       max_wip:
-        description: WIP cap for the dependency gate's auto-promotion
+        # NO DEFAULT (DRE-3994), the same as plan.yml and linear-sync.yml: an
+        # empty input makes reconcile.py read the caller's own reconcile stub,
+        # which for this workflow is the stub that called it — so a stub that
+        # sets no cap still resolves to reconcile.DEFAULT_MAX_WIP, as before.
+        description: WIP cap for the dependency gate's auto-promotion (empty = the caller's reconcile.yml stub)
         type: string
         required: false
-        default: "8"
       intake_hold:
         description: >-
           THE PEN'S SWITCH (DRE-3035). Set it — ideally to the date you set

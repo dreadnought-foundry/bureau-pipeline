@@ -71,12 +71,13 @@ on:
         # reconcile.yml — it used to hardcode 8, which meant a repo capped at
         # 12 had this fast path refuse between 8 and 11 in flight while the
         # cron promoted the very same card an hour later, at 12.
-        # Default single-sourced from reconcile.DEFAULT_MAX_WIP; a stub that
-        # passes nothing inherits a value that is correct on its own.
-        description: WIP cap for the dependency gate's auto-promotion
+        # NO DEFAULT, on purpose (DRE-3994). A stub that passes nothing renders
+        # an empty input, and reconcile.py then reads the cap from the caller's
+        # own reconcile.yml stub — the value the sweep runs at. A declared "8"
+        # here promoted a merged card's dependents at 8 in repos held at "0".
+        description: WIP cap for the dependency gate's auto-promotion (empty = the caller's reconcile.yml stub)
         type: string
         required: false
-        default: "8"
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -189,7 +190,9 @@ jobs:
           # unreadable card, and to none on an exhausted quota (a sweep cannot
           # succeed against a spent limit and would deepen it — DRE-1921).
           # MAX_WIP comes from the step env above — the caller's cap, so this
-          # fast path and the cron sweep never disagree (DRE-2529).
+          # fast path and the cron sweep never disagree (DRE-2529). Empty when
+          # the stub passes none: reconcile.py then reads the caller's
+          # reconcile.yml stub from the checkout above (DRE-3994).
           # MERGED_CARD scopes each pass to what THIS merge can have changed
           # (DRE-3236): the merged card's own dependents for --promote-only,
           # its own parent for --close-epics. A pass that read the whole board
