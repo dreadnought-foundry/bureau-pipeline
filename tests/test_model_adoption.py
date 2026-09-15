@@ -227,12 +227,11 @@ def test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder(tmp_path):
     assert sonnet6["display_name"] == "Claude Sonnet 6"
     assert sonnet6["price"] == {"input": 2.0, "output": 10.0}
     # Every ladder carrying a Sonnet rung, and on each the family's NEWEST one:
-    # the advisory ladder runs Sonnet 5, the workhorse one Sonnet 4.6. The
-    # judgement ladder is Opus 5 alone since DRE-3969 (hotfix), so it carries
-    # no Sonnet rung to replace.
+    # the advisory ladder runs Sonnet 5, the other two run Sonnet 4.6.
     assert {(r["ladder"], r["model"]) for r in sonnet6["replaces"]} == {
         ("workhorse", SONNET46),
         ("advisory", SONNET5),
+        ("judgement", SONNET46),
     }
     for rung in sonnet6["replaces"]:
         assert rung["created_at"], "a replaced rung carries the date it was ranked on"

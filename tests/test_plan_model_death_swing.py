@@ -86,16 +86,6 @@ class SelectModelStepRunsTest(unittest.TestCase):
         shutil.copy(os.path.join(ROOT, "scripts", "model_fallback.py"), scripts)
         shutil.copytree(os.path.join(ROOT, "config"),
                         os.path.join(self.tmp, ".bureau-pipeline", "config"))
-        # The step's MECHANISM is pinned on a Fable-first judgement ladder, the
-        # shape it was built for. The live ladder is Opus 5 alone since
-        # DRE-3969 (hotfix), where the swing has no rung to swing to.
-        models = os.path.join(self.tmp, ".bureau-pipeline", "config", "models.yaml")
-        cfg = yaml.safe_load(open(models).read())
-        cfg["ladders"]["judgement"] = [FABLE51, OPUS, SONNET]
-        cfg["excluded"] = [e for e in cfg.get("excluded") or []
-                           if (e.get("model") if isinstance(e, dict) else e) != FABLE51]
-        with open(models, "w") as fh:
-            fh.write(yaml.safe_dump(cfg))
         with open(os.path.join(scripts, "linear_ops.py"), "w") as fh:
             fh.write(STUB_LINEAR_OPS)
         self.log = os.path.join(self.tmp, "linear.log")
