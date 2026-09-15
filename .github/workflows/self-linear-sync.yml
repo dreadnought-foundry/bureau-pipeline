@@ -3,8 +3,10 @@
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
 # The merge handler promotes cards, so this stub is one of the repo's three
-# WIP-cap paths. max_wip is left at the reusable's default ("8"), matching
-# self-reconcile and self-plan — override all three or none (DRE-2529).
+# WIP-cap paths. It passes no max_wip, matching self-reconcile and self-plan —
+# override all three or none (DRE-2529). An empty input is resolved from
+# self-reconcile.yml, which sets none, so the cap is
+# reconcile.DEFAULT_MAX_WIP ("8") on every path (DRE-3994).
 name: Linear Sync
 
 on:

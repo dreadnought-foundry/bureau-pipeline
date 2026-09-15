@@ -68,7 +68,10 @@ read from Linear's native "blocks" relations AND from "Blocked by: DRE-N" /
 "serialize after DRE-N" lines in the description. A WIP cap (MAX_WIP, default
 DEFAULT_MAX_WIP active cards) throttles promotion so the pipeline never floods.
 The calling workflow passes the repo's own cap through its `max_wip` input;
-every promotion path in the pipeline uses that one value (DRE-2529).
+every promotion path in the pipeline uses that one value (DRE-2529). When the
+input is empty — a plan.yml or linear-sync.yml stub that passes nothing — the
+cap is read from the caller's own reconcile.yml stub, so a repo held at "0"
+builds nothing on any path (DRE-3994; see `cap_and_source`).
 
 Mid-epic discovery (DRE-2739): a Backlog child created AFTER its epic's most
 recent green light is a card the approved plan never described, and promoting it
@@ -239,12 +242,14 @@ STALE_MINUTES = lane_contract.stale_minutes()
 # carrying it, so a rename fails at import instead of leaving a dead literal
 # that writes into a state Linear no longer has.
 REVIEW_LANE = lane_contract.lane("In Review")["name"]
-# The ONE work-in-progress cap (DRE-2529). This constant is the single source
-# of truth: scripts/check_wip_cap.py reads it and fails the build unless every
-# reusable workflow declares its `max_wip` input with exactly this default, so
-# a stub that passes nothing inherits a value that is correct on its own.
+# The ONE work-in-progress fallback (DRE-2529). It applies only when neither
+# the run's `max_wip` input nor the caller's reconcile.yml stub names a cap
+# (`cap_and_source` below). scripts/check_wip_cap.py reads this constant, and
+# since DRE-3994 fails the build if any reusable workflow re-declares it as an
+# input default: a declared default renders "8" whenever a stub is silent, and
+# the script could then never fall through to the repo's own cap.
 # It was 4 while the workflows all said 8 — a fifth cap hiding behind an unset
-# env var, which is the same defect this card removes from the workflows.
+# env var, which is the same defect DRE-2529 removed from the workflows.
 DEFAULT_MAX_WIP = 8
 
 
@@ -263,7 +268,95 @@ def resolve_max_wip(raw):
         return DEFAULT_MAX_WIP
 
 
-MAX_WIP = resolve_max_wip(os.environ.get("MAX_WIP"))
+# The reusable a caller's reconcile stub calls. Matched on a `uses:` line that
+# is not a comment, so the stub that owns the repo's cap is found by what it
+# DOES, whatever the file is named (bureau-pipeline's own is self-reconcile.yml).
+_RECONCILE_STUB_USES = re.compile(
+    r"^[ \t]*uses:[ \t]*['\"]?[^\s#'\"]*bureau-pipeline/\.github/workflows/reconcile\.yml@",
+    re.MULTILINE,
+)
+# A `max_wip:` key, never a comment line that mentions one (portico's stub
+# carries "# No max_wip: ..." — read as a cap, that is a hold nobody set).
+_STUB_MAX_WIP = re.compile(r"^[ \t]*max_wip:[ \t]*(.*?)[ \t]*(?:#.*)?$", re.MULTILINE)
+
+
+def cap_and_source(raw, workspace) -> tuple[int, str]:
+    """The WIP cap this run promotes at, and where it was read (DRE-3994).
+
+    The order, and why:
+
+      1. The run's `max_wip` input, when it names a number. A stub that passes
+         a cap on this path (agent-bureau passes "12" on all three) keeps it.
+      2. The caller's reconcile.yml stub, when the input is empty. That file is
+         the one place a product repo writes its cap — it is what the sweep
+         runs at — and every job that promotes has the caller checked out at
+         $GITHUB_WORKSPACE. Before this, plan.yml's activate route and
+         linear-sync.yml's merge handler took an empty input as the reusable's
+         default of 8: on 2026-09-15 approving DRE-3777 promoted three cards in
+         portico, held at "0" for a week, and atlas and agent-bureau-demo
+         (also "0") and deltasolv ("4") would have leaked the same way.
+      3. DEFAULT_MAX_WIP, saying why — no checkout, no stub, a stub that sets
+         no cap, or one whose cap is not a number.
+
+    Read with the standard library on purpose: the promotion steps install
+    nothing, and reconcile.py imports no YAML parser. Never raises — a cap
+    question must not turn a promotion step red.
+    """
+    try:
+        return int(str(raw).strip()), "this run's max_wip input"
+    except (TypeError, ValueError):
+        pass
+    fallback = f"the default {DEFAULT_MAX_WIP}"
+    if not workspace:
+        return DEFAULT_MAX_WIP, f"{fallback} — no caller checkout to read a reconcile stub from"
+    workflows = os.path.join(str(workspace), ".github", "workflows")
+    try:
+        names = sorted(
+            n for n in os.listdir(workflows) if n.endswith((".yml", ".yaml"))
+        )
+    except OSError:
+        names = []
+    stubs: list[tuple[str, str]] = []
+    for name in names:
+        try:
+            with open(os.path.join(workflows, name), encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _RECONCILE_STUB_USES.search(text):
+            stubs.append((f".github/workflows/{name}", text))
+    if not stubs:
+        return DEFAULT_MAX_WIP, (
+            f"{fallback} — no reconcile stub in the caller's .github/workflows"
+        )
+    caps: list[tuple[int, str]] = []
+    unreadable: list[str] = []
+    for path, text in stubs:
+        for match in _STUB_MAX_WIP.finditer(text):
+            value = match.group(1).strip().strip("'\"").strip()
+            try:
+                caps.append((int(value), path))
+            except ValueError:
+                unreadable.append(f"{path} sets max_wip: {match.group(1).strip()}")
+    if caps:
+        # More than one stub or line is not a fleet shape; if it ever happens,
+        # the LOWER cap is the one that cannot build past anybody's hold.
+        cap, path = min(caps)
+        return cap, f"the caller's reconcile stub {path}"
+    if unreadable:
+        return DEFAULT_MAX_WIP, (
+            f"{fallback} — {'; '.join(unreadable)}, which is not a number this "
+            "step can read"
+        )
+    return DEFAULT_MAX_WIP, (
+        f"{fallback} — the caller's reconcile stub "
+        f"{', '.join(p for p, _ in stubs)} sets no max_wip"
+    )
+
+
+MAX_WIP, MAX_WIP_SOURCE = cap_and_source(
+    os.environ.get("MAX_WIP"), os.environ.get("GITHUB_WORKSPACE")
+)
 
 # Parent-epic states that count as ACTIVATED for the dependency gate (DRE-1893).
 # The CEO activates an approved epic by moving it to **In Progress** (DRE-2727 —
@@ -2570,6 +2663,10 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     whole-Backlog read when the caller already knows which cards a moment can
     have changed (the merge path, DRE-3236). Every gate below is the same.
     """
+    # Which cap, and from where (DRE-3994): a run that holds or promotes must
+    # say what it was holding to, or a repo at "0" promoting at 8 reads exactly
+    # like a repo at 8.
+    print(f"promotion: WIP cap {MAX_WIP}, read from {MAX_WIP_SOURCE}")
     budget = MAX_WIP - active_count
     if budget <= 0:
         print(f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — none promoted")
