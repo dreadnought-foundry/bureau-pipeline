@@ -1,0 +1,78 @@
+{
+  "card": "DRE-3879",
+  "read": "2026-09-15 20:45 PT, `linear_ops.py dump-comments DRE-3879 --with-authors`",
+  "what_this_is": "The thread DRE-4058 was written off: five one-off critic rounds, five different findings, two signed CEO answers between them, and the card back in Planning after each one. A faithful SUBSET — every round marker and every CEO answer verbatim, plus the round-1 escalation note, the round-5 critic note and the operator's revision comment. The three critic notes of rounds 2-4 are left out; nothing reads a note as a round (`_sole_record`), which the round-5 note here is what proves.",
+  "authorship": "`authored_by_pipeline` is what the fleet key sees: the fleet user `Agent-Bureau` wrote every pipeline comment, and the operator's own tools wrote as `bureau-tools` — false, exactly as `comment_records` computes it inside a workflow.",
+  "comments": [
+    {
+      "body": "🧩 planning-shape: **one-off** — One card, one pull request. It owes no plan artifact and stops for no green light.\n\n**Why:** One configuration mismatch in one workflow file, fixed by a single change (open a PR instead of pushing to main, or grant the bot a bypass) with no cross-piece contracts, one tier, and a fully enumerated scope. — size tests checked: 1 contracts between the pieces, 2 two languages or two tiers, 3 a criterion counting something never enumerated, 4 an unbounded quantifier, 5 specific is not small, 6 cut on file footprint, not only on concern\n\n**Stamped by:** `planner` · **model:** `claude-fable-5-1`\n\n**Where it goes:** Backlog. **Who handles it there:** reconcile.py.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-14T04:54:50.843Z"
+    },
+    {
+      "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read the card.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-14T04:54:51.274Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=1 result=SEND_BACK collisions=0 — The card offers two different fixes for the same problem without picking one, and choosing between them is a security policy call, not a coding task.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-14T04:56:16.904Z"
+    },
+    {
+      "body": "🙋 planning-escalation: DRE-3879 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n**Why it needs you:** This card was about to go to the build queue, and the reader that checks work of this size did not think an agent could finish it unattended.\n\nWhat it found: The card offers two different fixes for the same problem without picking one, and choosing between them is a security policy call, not a coding task.\n\nWhich gets to my question: is this something you want to settle yourself, or should we put it back in the queue as it stands?\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-14T04:56:17.696Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=2 result=SEND_BACK collisions=0 — DRE-3879 claims the CEO already decided how to fix this, but that decision doesn't show up anywhere we can actually verify he said it.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-14T14:45:05.651Z"
+    },
+    {
+      "body": "Answer from Sid Conklin (signed in to the console), 2026-09-14 08:14 PT:\n\nOpen a PR; no exception to branch protection. Fix both split-ledger.yml and model-drift.yml this way, one PR per job updated in place. Don't change any branch protection setting.\n\n🔏 console-answer: v1 card=DRE-3879 sha256=b2d3e4260fdda84ab5e289911c3d0b1f3756c78ab2c3a6bb4f72dc93b5f7fc82 user=88c1b3e0-7031-70df-dae2-99dc7efea1ec at=2026-09-14T15:14:58Z kid=7d1f6e507b7bc4ad sig=AlN8XQ4nvOHiG3QKkC0eY4sEfPd26UdE6vzyRXaFL0LTTh_faf1AYlv1up7c7UHDjZKId1pSUseueWMjvPIVDQ",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-14T15:14:59.518Z"
+    },
+    {
+      "body": "Moved to Planning by Sid Conklin (88c1b3e0-7031-70df-dae2-99dc7efea1ec) via the console",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-14T15:14:59.759Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=3 result=SEND_BACK collisions=0 — Making the new pull request merge itself without a person watching needs widening the pipeline's own trusted-branch list, and that list is deliberately narrow and was never meant to grow just by picking a matching name — nobody has made that call.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-14T15:19:01.714Z"
+    },
+    {
+      "body": "Answer from Sid Conklin (signed in to the console), 2026-09-15 13:12 PT:\n\nYes. Add exactly two literal branches to the merge gate's trusted list: bot/split-ledger and bot/model-drift, trusted the same way bot/standards-sync is. No wildcard; no other branch gains merge rights. CI and the critic still run on these PRs, and a red check or REQUEST_CHANGES still blocks the merge.\n\n🔏 console-answer: v1 card=DRE-3879 sha256=1ba25c06dae84f23b75a5f3387df9099b43c8c6d0726892663f20d89f6f7525f user=88c1b3e0-7031-70df-dae2-99dc7efea1ec at=2026-09-15T20:12:59Z kid=7d1f6e507b7bc4ad sig=oyu6upyotkLZsZ_bBJEamMHMKi_n6-3giXmTSCwcu2wJ3JKvNumsSkuW1vgsc_bovjHv0Qeryelma3oFqNQdCw",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-15T20:13:00.086Z"
+    },
+    {
+      "body": "Moved to Planning by Sid Conklin (88c1b3e0-7031-70df-dae2-99dc7efea1ec) via the console",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-15T20:13:01.018Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=4 result=SEND_BACK collisions=0 — The card doesn't say which two branches are now allowed to merge automatically, even though that was already decided, so the fix still can't land without a person watching it.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-15T20:16:22.600Z"
+    },
+    {
+      "body": "Card revised 13:18 PT to answer all three round-4 findings. No new decision is involved: the CEO's signed answer from 13:12 PT is quoted at the top.\n1 and 2: the two branch names, bot/split-ledger and bot/model-drift, are now written into the description and acceptance criteria, including exactly where they're added (the merge gate's trusted list, plus every place bot/standards-sync is treated as trusted).\n3: 'No repo setting is changed' now says plainly that the trusted-list edit is our own pipeline code in this PR, not a GitHub branch-protection change. main still requires a PR and both checks.\nBack to Planning.",
+      "authored_by_pipeline": false,
+      "created_at": "2026-09-15T20:18:42.651Z"
+    },
+    {
+      "body": "🙋 **Pre-approval critic — before this is built** — the card never decides whether the weekly model-update job gets let off our \"write the test before the fix\" check, and without that decision its pull request can never pass on its own.\n\nEvery finding this round (4), ranked — the revision answers all of them, and the next round checks those fixes rather than finding these again:\n\n1. the card never decides whether the weekly model-update job gets let off our \"write the test before the fix\" check, and without that decision its pull request can never pass on its own.\n2. DRE-3879: One of the two jobs (the weekly model-update one) touches a file that our existing safety check will treat as ordinary code needing a test written first — something an automated job cannot do — so every week its pull request would fail that check and sit stuck needing a person to force it…\n3. DRE-3879: Granting that exemption is the same kind of call the CEO already had to make once before for a similar nightly job — because it means letting an automated pull request skip a safety check that normally protects code quality — so it is not something a coding agent should decide on its own,…\n4. DRE-3879: The CEO's latest answer says a red check should still block the merge, which is in tension with quietly exempting this job from a check — so the card is asking for both \"still blocks on red\" and \"let this job through anyway\" without saying which wins.\n\nThis card is not going to the build queue — it is with a person, in the decision queue, with the reason above.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-15T20:22:08.061Z"
+    },
+    {
+      "body": "plan-critic: stage=one-off round=5 result=SEND_BACK collisions=0 — the card never decides whether the weekly model-update job gets let off our \"write the test before the fix\" check, and without that decision its pull request can never pass on its own.",
+      "authored_by_pipeline": true,
+      "created_at": "2026-09-15T20:22:09.807Z"
+    }
+  ]
+}
