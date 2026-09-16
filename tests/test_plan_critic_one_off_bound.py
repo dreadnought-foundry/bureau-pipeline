@@ -239,6 +239,14 @@ class WhatTheCeoReadsAtTheBound(unittest.TestCase):
                           "a finding the CEO already answered is missing from "
                           "the list the rewrite has to answer")
 
+    def test_a_finding_the_critic_re_raises_is_listed_once(self):
+        """DRE-3879's round 5 headline IS its round-5 marker reason, verbatim —
+        the critic naming again what it already recorded is the normal case, and
+        a list that says it twice reads as two open problems."""
+        prior, this_round = recorded_findings()[:2], recorded_findings()[1:3]
+        self.assertEqual(recorded_findings()[:3],
+                         pc.every_finding_so_far(prior, this_round))
+
     def test_it_is_fit_to_put_in_front_of_the_ceo(self):
         text = self._text()
         self.assertIsNone(planning_escalation.refusal(text), text)
