@@ -651,9 +651,16 @@ jobs:
       # the CEO still reads it. Here NOTHING reads the card afterwards, so a
       # critic that did not run must not be spent as a pass: the two steps that
       # can die carry `continue-on-error`, the decision runs on `!cancelled()`,
-      # and `plan_critic.py decide --stage one-off` answers `escalate` for
-      # anything that is not a PASS. The exit below moves the card only on
-      # `proceed`.
+      # and `plan_critic.py decide --stage one-off` answers a PARK — `escalate`,
+      # or `rewrite` at the bound — for anything that is not a PASS. The exit
+      # below moves the card only on `proceed`.
+      #
+      # AND IT IS BOUNDED (DRE-4058). The decision step is handed the card's own
+      # comment thread, so it reads how many times this card has already been
+      # sent back and, at MAX_ROUNDS, asks for a rewrite instead of a sixth
+      # answer. The loop that bound closes runs through the CEO, not through
+      # this job: DRE-3879 parked, was answered, came back to Planning and was
+      # re-classified five times, each run one honest unbounded call.
       - name: Select model — one-off critic
         id: oomodel
         if: steps.shape.outputs.route == 'one-off'
@@ -817,8 +824,18 @@ jobs:
       # waits in with the question stated in business terms and posted at most
       # once. Nothing is stamped on this path — the card has not left Planning,
       # so it is not carrying a verdict out of it.
+      #
+      # TWO actions park here, not one (DRE-4058). `escalate` asks the CEO a
+      # question; `rewrite` tells him the card has now been round-tripped
+      # MAX_ROUNDS times and needs rewriting rather than another answer, with
+      # every finding raised so far named in the reason file. One seam, because
+      # both end in the same lane with the same writer — and two actions,
+      # because the ask is different and the run's own output has to say which
+      # it made. A park action no step acted on would be a stranded card, so
+      # tests/test_plan_critic_one_off_bound.py derives this gate from the
+      # module's own action constants rather than trusting this line.
       - name: One-off critic — escalate
-        if: steps.oneoff.outputs.action == 'escalate'
+        if: steps.oneoff.outputs.action == 'escalate' || steps.oneoff.outputs.action == 'rewrite'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
