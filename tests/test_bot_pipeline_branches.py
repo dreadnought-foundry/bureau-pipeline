@@ -30,6 +30,7 @@ fourth time.
 
 import os
 import re
+import subprocess  # nosec B404 — runs the gate's own shell pattern
 import sys
 import unittest
 from pathlib import Path
@@ -116,6 +117,27 @@ def _resolve_if() -> str:
     return _doc("merge-gate.yml")["jobs"]["resolve"]["if"]
 
 
+def _gate_pattern() -> str:
+    """The gate's branch `case` pattern, exactly as the shell reads it."""
+    m = re.search(r'case "\$BRANCH" in ([^)]+)\)', MERGE_GATE.read_text())
+    assert m is not None, "merge-gate.yml: no branch case statement"
+    return m.group(1)
+
+
+def _gate_admits(branch: str) -> bool:
+    """Whether the gate's own pattern matches `branch` — RUN, not read for.
+
+    A shell `case` is the only thing that can answer "is `bot/split-ledger` a
+    literal here or a prefix", and the answer is the whole of the CEO's "no
+    wildcard".
+    """
+    script = (f'case "$1" in {_gate_pattern()}) echo yes;; *) echo no;; esac')
+    done = subprocess.run(  # nosec B603 B607 — the workflow's own pattern
+        ["bash", "-c", script, "bash", branch],
+        capture_output=True, text=True, check=True)
+    return done.stdout.strip() == "yes"
+
+
 # --------------------------------------------------------------------------- #
 # each job commits to its own fixed branch                                     #
 # --------------------------------------------------------------------------- #
@@ -195,15 +217,26 @@ class TheTrustedListTest(unittest.TestCase):
                 self.assertFalse(reconcile.fix_eligible(branch))
 
     def test_no_wildcard_was_added(self):
-        """The decision in one assertion: two literal names, not `bot/*`. A
-        prefix would hand auto-merge to every future branch named that way."""
+        """The decision in one assertion: two literal names, not `bot/*`.
+
+        MERGE RIGHTS are decided by the gate's `case`, and a shell `case`
+        matches the name exactly — so `bot/split-ledger-2` is not a branch the
+        gate will merge, and no future `bot/…` branch inherits auto-merge by
+        being named one. Run the gate's own pattern rather than describing it.
+        """
+        for imposter in ("bot/split-ledger-2", "bot/split-ledger/evil",
+                         "evil/bot/split-ledger", "bot/something-else"):
+            with self.subTest(branch=imposter):
+                self.assertFalse(_gate_admits(imposter),
+                                 f"{imposter} gained merge rights")
+        for branch in JOB_BRANCHES.values():
+            with self.subTest(branch=branch):
+                self.assertTrue(_gate_admits(branch))
+        # `(?<![a-z])` so `dependabot/*` — which ends in the same four
+        # characters — is not mistaken for the wildcard being banned.
+        self.assertIsNone(re.search(r"(?<![a-z])bot/\*",
+                                    _uncommented(MERGE_GATE.read_text())))
         self.assertFalse(reconcile.pipeline_owns("bot/something-else"))
-        self.assertFalse(reconcile.pipeline_owns("bot/split-ledger-2"))
-        self.assertFalse(reconcile.pipeline_owns("bot/split-ledger/evil"))
-        self.assertFalse(reconcile.pipeline_owns("evil/bot/split-ledger"))
-        self.assertNotIn("bot/", _shell_gate_prefixes() - set(JOB_BRANCHES.values())
-                         - {"bot/standards-sync"})
-        self.assertNotIn("bot/*", _uncommented(MERGE_GATE.read_text()))
 
     def test_exactly_these_branches_gained_merge_rights(self):
         """Nothing else joined the trusted list on this card. The set is read
@@ -240,20 +273,20 @@ class TheChecksStillGateTest(unittest.TestCase):
         for branch in JOB_BRANCHES.values():
             with self.subTest(branch=branch):
                 decision = self._decide(RED_CI, _verdict("APPROVE"), branch)
-                self.assertNotEqual(decision.decision, "merge", decision.reason)
+                self.assertNotEqual(decision.action, "merge", decision.reason)
 
     def test_a_request_changes_verdict_blocks_the_merge(self):
         for branch in JOB_BRANCHES.values():
             with self.subTest(branch=branch):
                 decision = self._decide(GREEN_CI, _verdict("REQUEST_CHANGES"),
                                         branch)
-                self.assertNotEqual(decision.decision, "merge", decision.reason)
+                self.assertNotEqual(decision.action, "merge", decision.reason)
 
     def test_no_verdict_at_all_blocks_the_merge(self):
         for branch in JOB_BRANCHES.values():
             with self.subTest(branch=branch):
                 decision = self._decide(GREEN_CI, [], branch)
-                self.assertNotEqual(decision.decision, "merge", decision.reason)
+                self.assertNotEqual(decision.action, "merge", decision.reason)
 
     def test_green_ci_and_an_approve_merges(self):
         """The control: without this the three tests above would pass on a
@@ -261,7 +294,7 @@ class TheChecksStillGateTest(unittest.TestCase):
         for branch in JOB_BRANCHES.values():
             with self.subTest(branch=branch):
                 decision = self._decide(GREEN_CI, _verdict("APPROVE"), branch)
-                self.assertEqual(decision.decision, "merge", decision.reason)
+                self.assertEqual(decision.action, "merge", decision.reason)
 
     def test_both_repository_checks_still_run_on_these_pull_requests(self):
         """Nothing filters these branches out of CI or the critic: both

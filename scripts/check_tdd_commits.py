@@ -17,7 +17,10 @@ The rule (engineering standard: "commit the failing test FIRST"):
     docs = `docs/` + any `*.md` (README, standards/, briefs/) + a static
            design record (`.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/
            `.json` under `console/design/` or a root `design/`, DRE-3763);
-    ops  = `.github/` + `config/` + `agents.yaml`.
+    ops  = `.github/` + `config/` + `agents.yaml` + `models.json`
+           (the catalog snapshot — data a scheduled job derives from the
+           vendor's model list, added by DRE-3879 on the CEO's signed answer
+           of 2026-09-16; exactly that one path, matched exactly).
     Anything unrecognized counts as code — fail-closed, so a new source tree
     can't silently dodge the discipline.
   • A `.py` file whose change is documentation is docs too (DRE-2409), and
@@ -179,7 +182,25 @@ _DESIGN_RECORD_SUFFIXES = (
     ".html", ".md", ".png", ".jpg", ".jpeg", ".svg", ".pen", ".json",
 )
 _OPS_PREFIXES = (".github/", "config/")
-_OPS_FILES = frozenset({"agents.yaml"})
+# Root-level DATA files, matched by EXACT path — never a prefix, a suffix or a
+# directory, so `console/models.json` and `models.json.bak` stay code.
+#
+# `models.json` is the Anthropic catalog snapshot `model-drift.yml` refreshes
+# once a week: a vendor's model list, derived rather than authored, and the
+# seam the console reads so agent-bureau needs no Anthropic credential. It
+# classified as `code` (neither a docs path nor an ops one), which made the
+# weekly regeneration unable to satisfy a check whose finding is the ORDER of
+# commits that already exist — there is no RED test to write for a list
+# somebody else publishes, and DRE-2694 means no added commit clears it.
+#
+# The CEO decided it on 2026-09-16 (signed console answer, DRE-3879): count
+# `models.json` as data beside `config/` and `agents.yaml`, and NOTHING ELSE is
+# exempted. The boundary is worth saying twice, because it is the half that is
+# easy to lose: this list says which FILES need a RED test committed first, and
+# never whether the rule applies. A pull request that refreshes the snapshot
+# AND changes a `.py` still owes its test first, and no check is skipped —
+# a red check or a REQUEST_CHANGES verdict still blocks the merge.
+_OPS_FILES = frozenset({"agents.yaml", "models.json"})
 
 # Generated-region markers (DRE-3896), read as SUBSTRINGS of a line so the one
 # rule covers every generator's comment syntax and wording. These are the

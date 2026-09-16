@@ -15,9 +15,11 @@ The fake `gh` answers the two subcommands this path uses and nothing else:
   * `pr create …` records the call, writes the new pull request into the store
     so the NEXT run finds it open, and prints its url.
 
-Every call's argv is appended to `FAKE_GH_LOG`, one call per line, fields
-separated by NUL — so a test can assert both the number of `pr create` calls
-and the exact body the pull request was opened with.
+Every call's argv is appended to `FAKE_GH_LOG` as one JSON array per line — so
+a test can assert both the number of `pr create` calls and the exact body the
+pull request was opened with. JSON rather than a delimiter because the body is
+multi-line prose, and any separator that is not escaped puts one call across
+several lines of the log.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ import sys
 
 argv = sys.argv[1:]
 with open(os.environ["FAKE_GH_LOG"], "a") as fh:
-    fh.write("\\0".join(argv) + "\\n")
+    fh.write(json.dumps(argv) + "\\n")
 store = os.environ["FAKE_GH_PRS"]
 if argv[:2] == ["pr", "list"]:
     if os.environ.get("FAKE_GH_FAIL_LIST"):
@@ -154,7 +156,7 @@ class BotBranchRepo:
 
     def gh_calls(self) -> list[list[str]]:
         text = self.gh_log.read_text()
-        return [line.split("\0") for line in text.splitlines() if line]
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
 
     def pr_creates(self) -> list[list[str]]:
         return [c for c in self.gh_calls() if c[:2] == ["pr", "create"]]

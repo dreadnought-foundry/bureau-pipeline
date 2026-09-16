@@ -15,33 +15,57 @@
 # under load and never retries them.
 #
 # Shaped on `model-drift.yml`, the other scheduled job here that commits a
-# generated file to `main`, down to the commit step's staged-set proof: stage
-# the paths by name, read the index back, refuse anything else. That is what
-# makes a job that can push to `main` incapable of pushing anything but the two
-# files it just generated.
+# generated file, down to the staged-set proof: stage the paths by name, read
+# the index back, refuse anything else. That is what makes a job holding
+# `contents: write` incapable of committing anything but the two files it just
+# generated. Since DRE-3879 both jobs make that proof in one place —
+# `scripts/bot_branch_pr.py` — rather than in two copies of shell.
+#
+# IT DOES NOT PUSH TO `main`, AND THAT IS THE POINT (DRE-3879). This step used
+# to end in `git push origin HEAD:main`, and branch protection refused it every
+# single morning:
+#
+#     GH006: Protected branch update failed
+#     Changes must be made through a pull request
+#
+# The ledger was derived correctly and then could not be saved. The CEO's
+# signed answer (2026-09-14 08:14 PT) is the remedy and its limit in one
+# sentence: open a pull request, change no branch protection. So the derivation
+# is committed to `bot/split-ledger` — one fixed branch, one pull request,
+# updated in place rather than reopened — and `main` keeps requiring a pull
+# request and both required checks. The branch is on the merge gate's trusted
+# list as a LITERAL name (never `bot/*`), so CI and the adversarial critic run
+# on it exactly as on any other pull request and a red check or a
+# REQUEST_CHANGES verdict blocks the merge.
 #
 # A run that changes nothing but `generated_at` STILL COMMITS. The timestamp is
 # the freshness every reader checks, so a run that derived the same rows and
-# skipped the commit would leave a fresh derivation looking stale.
+# skipped the commit would leave a fresh derivation looking stale. A run that
+# changes NOTHING AT ALL opens no pull request and exits green.
 #
 # Vendor boundary (standards/vendor-boundaries.md):
-#   Q1 actor — the schedule initiates as `github-actions`; the push is made
-#      with the bureau App token, so the commit and the Pipeline Tests run it
-#      triggers are attributed to `agent-bureau-bot`, an identity every gate
-#      here already admits (the same arrangement model-drift.yml runs under).
+#   Q1 actor — the schedule initiates as `github-actions`; the push and the
+#      `gh pr create` are made with the bureau App token, so the commit, the
+#      pull request and the Pipeline Tests run it triggers are attributed to
+#      `agent-bureau-bot` — an identity every gate here already admits, and one
+#      distinct from the qa-bot App that merges, so author != merger holds.
 #   Q2 secrets — a schedule-triggered run in this repo reads the repo's normal
 #      secrets store, never GitHub's separate Dependabot store, so
 #      `LINEAR_API_KEY` and the App credentials resolve. No dependabot-triggered
 #      event is in this workflow's path at all.
 #   Q3 re-run — safe and boring: a second run on the same day re-derives the
-#      same rows and commits a new timestamp. There is nothing else to change
+#      same rows, force-pushes the same branch and finds its own open pull
+#      request rather than opening a second. There is nothing else to change
 #      and no state a re-run could double.
-#   Q4 command limits — `git push` to `main` needs the branch protection rule to
-#      admit this App. It already admits model-drift.yml's identical push, which
-#      is the whole of the evidence; the PR body confirms it rather than assumes
-#      it. `derive` itself is bounded by what it can read: a repo this token
-#      cannot see records `UNKNOWN`, never `0`, so a narrowed token degrades the
-#      ledger visibly instead of quietly reporting a clean history.
+#   Q4 command limits — the push is to `bot/split-ledger`, which no protection
+#      rule covers, so the GH006 refusal cannot recur; the pull request is what
+#      reaches `main`, through the gate. `gh pr list --state open` is
+#      deliberately not `--state all` — a merged pull request is finished and
+#      the next change needs a new one — and a listing GitHub will not answer
+#      fails the run rather than opening a duplicate. `derive` itself is
+#      bounded by what it can read: a repo this token cannot see records
+#      `UNKNOWN`, never `0`, so a narrowed token degrades the ledger visibly
+#      instead of quietly reporting a clean history.
 #   Q5 our crash — a crash anywhere leaves the previous ledger in place. There
 #      are no receipts and no markers, so nothing blocks recovery: the next
 #      day's run simply repeats, and `workflow_dispatch` re-runs it sooner.
@@ -110,36 +134,32 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: python3 scripts/split_ledger.py derive
 
-      # GENERATED FILES ONLY, and proven so: stage the two paths by name, read
-      # the index back, and refuse to commit if anything else is in it. Copied
-      # from model-drift.yml, where the same three lines are what make a
-      # scheduled job structurally incapable of moving a model pin.
-      - name: Commit the ledger (the two generated paths only)
+      # GENERATED FILES ONLY, and proven so: the two paths are named here, and
+      # `bot_branch_pr.py` stages exactly them, reads the index back and
+      # refuses to commit if anything else is in it — the model-drift
+      # guarantee, now in one tested place for both jobs (DRE-3879). It then
+      # commits to `bot/split-ledger` and opens or updates that branch's ONE
+      # pull request. Nothing changed means no pull request and a green run.
+      - name: Publish the ledger on bot/split-ledger (one PR, never a push to main)
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git add config/split-ledger.json docs/split-ledger.md
-          STAGED=$(git diff --cached --name-only)
-          # Unreachable while the derivation stamps itself: both files carry
-          # `generated_at`, so every run changes both. It is here so that an
-          # impossible no-op is a green run rather than a red one from
-          # `git commit` refusing an empty index — never as a way to skip a
-          # derivation that only moved the timestamp.
-          if [ -z "$STAGED" ]; then
-            echo "the ledger is byte-identical — nothing to commit"
-            exit 0
-          fi
-          UNEXPECTED=$(printf '%s\n' "$STAGED" \
-            | grep -vxF -e 'config/split-ledger.json' -e 'docs/split-ledger.md' || true)
-          if [ -n "$UNEXPECTED" ]; then
-            echo "::error::refusing to commit — staged more than the generated ledger: $UNEXPECTED"
-            exit 1
-          fi
-          git -c user.name="agent-bureau-bot[bot]" \
-              -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
-              commit -m "chore(ledger): regenerate the split ledger
+          cat > "$RUNNER_TEMP/split-ledger-pr-body.md" <<'BODY'
+          The split ledger, regenerated by `.github/workflows/split-ledger.yml`
+          (DRE-3357). Derived, never hand-edited — the generation time inside it
+          is the freshness `scripts/ledger_context.py` checks, and a ledger older
+          than `LEDGER_MAX_AGE_HOURS` is handed to the planner as `UNKNOWN`.
 
-          Generated by .github/workflows/split-ledger.yml (DRE-3357). Derived,
-          never hand-edited — the generation time inside it is the freshness
-          scripts/ledger_context.py checks."
-          git push origin HEAD:main
+          Data only: the run stages `config/split-ledger.json` and
+          `docs/split-ledger.md` by name and refuses to commit anything else, so
+          this job is structurally incapable of changing code.
+          BODY
+          python3 scripts/bot_branch_pr.py publish \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch bot/split-ledger \
+            --base "${DEFAULT_BRANCH:-main}" \
+            --path config/split-ledger.json \
+            --path docs/split-ledger.md \
+            --title "chore(ledger): regenerate the split ledger" \
+            --body-file "$RUNNER_TEMP/split-ledger-pr-body.md"

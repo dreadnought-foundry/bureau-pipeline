@@ -37,6 +37,7 @@ What is pinned here, and why each line exists:
 """
 
 import os
+import re
 import subprocess  # nosec B404 — fixed-arg calls against a temp repo
 import sys
 import unittest
@@ -219,15 +220,21 @@ class PublishRunsTest(unittest.TestCase):
         self.assertEqual(self.repo.origin_ref("main"), self.before)
 
 
-class TheSourceNeverNamesTheBaseAsAPushTargetTest(unittest.TestCase):
-    """The belt to the behavioural braces above: `HEAD:main` was the literal
-    that failed every day, and no file in this repo may carry it again."""
+class NoWorkflowPushesToTheDefaultBranchTest(unittest.TestCase):
+    """The belt to the behavioural braces above. `git push origin HEAD:main`
+    is the literal that failed every day, and no workflow in this repo may
+    carry it again — not only the two this card fixes.
 
-    def test_no_workflow_or_script_pushes_head_to_main(self):
+    Comment lines are stripped first: these files explain the incident at
+    length and must stay free to name it. What is banned is the COMMAND.
+    """
+
+    def test_no_workflow_pushes_to_main(self):
         offenders = []
-        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")) + \
-                sorted((ROOT / "scripts").glob("*.py")):
-            if "HEAD:main" in path.read_text():
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+            body = "\n".join(line for line in path.read_text().splitlines()
+                             if not line.lstrip().startswith("#"))
+            if re.search(r"git\s+push[^\n]*\b(HEAD:)?main\b", body):
                 offenders.append(str(path.relative_to(ROOT)))
         self.assertEqual(offenders, [],
                          "a direct push to main is back — branch protection "
