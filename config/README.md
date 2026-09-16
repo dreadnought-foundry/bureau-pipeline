@@ -117,7 +117,11 @@ of it is ever a runtime lookup.
   was derived at, and `docs/split-ledger.md` is rendered from it. Since
   DRE-3357 the derivation is a job rather than a habit: `.github/workflows/
   split-ledger.yml` runs `derive` daily and commits both paths (and only those
-  two — it proves its staged set the way `model-drift.yml` does). Daily is
+  two — it proves its staged set the way `model-drift.yml` does). Since
+  DRE-3879 that commit lands on `bot/split-ledger` and reaches `main` through
+  **one** pull request, opened once and updated in place: branch protection
+  refuses a direct push (`GH006`), which is why the job failed every morning
+  until then. A day that derives nothing opens no pull request. Daily is
   chosen against the READER's window, `ledger_context.LEDGER_MAX_AGE_HOURS` =
   72, so two dropped scheduled runs still leave a ledger the planner treats as
   fresh. A read that
