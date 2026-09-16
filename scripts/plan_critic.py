@@ -2444,9 +2444,21 @@ def _cmd_decide(args) -> int:
     title = STAGES[args.stage]["title"]
     # 📝 for the rewrite park: it is not the 🙋 of a question the CEO can answer
     # where he sits, and a reader scanning the thread should be able to tell the
-    # two apart without reading either (DRE-4058).
-    icon = {"hold": "🛑", "proceed": "✅", ESCALATE: "🙋", REWRITE: "📝"}[action] \
-        if result != NO_RESULT else "⚠️"
+    # two apart without reading either (DRE-4058). Read from the module that
+    # writes the park comment ITSELF, one line below this note on the card —
+    # this note and that park opening with different icons is the drift the icon
+    # was for. In its own branch rather than in the map: the map is built on
+    # EVERY route, and `_cmd_decide` must not need the escalation module to
+    # decide an epic round. REWRITE reaches only the one-off route, which needs
+    # that module anyway (`one_off_escalation`).
+    if result == NO_RESULT:
+        icon = "⚠️"
+    elif action == REWRITE:
+        import planning_escalation  # late: it reads planning_route, which reads us
+
+        icon = planning_escalation.REWRITE_MARK
+    else:
+        icon = {"hold": "🛑", "proceed": "✅", ESCALATE: "🙋"}[action]
     seen = stats["rounds"]
     rate_text = (
         f"send-back rate at this critic so far on this planning attempt: "

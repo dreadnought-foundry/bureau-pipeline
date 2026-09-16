@@ -464,6 +464,140 @@ class TheRailCarriesThePark(unittest.TestCase):
         self.assertNotIn(pc.REWRITE, gate)
 
 
+class TheParkNoteAsksForTheRewriteToo(unittest.TestCase):
+    """The comment that PARKS the card is `planning_escalation`'s, not the note
+    above — and it wrapped the rewrite request in the words written for a
+    question: "the reasoning itself is the deliverable", "it is correct and
+    waiting on judgement", "Answer it here and move the card back to be picked
+    up". Read quickly — the way DRE-3879's five rounds were read — that is an
+    instruction to answer and move the card back, which is the exact loop the
+    bound exists to end."""
+
+    def _reason(self, prior=None) -> str:
+        findings = recorded_findings()
+        return pc.one_off_escalation(
+            pc.SEND_BACK, findings[-1],
+            prior_send_backs=len(findings) - 1 if prior is None else prior,
+            findings=findings)
+
+    def _parked(self) -> str:
+        return planning_escalation.escalation_comment(
+            CARD, self._reason(), rewrite=True)
+
+    def test_it_does_not_tell_him_to_answer_a_card_it_just_said_to_rewrite(self):
+        text = self._parked()
+        self.assertNotIn("Answer it here", text)
+        self.assertNotIn("waiting on judgement", text)
+        self.assertNotIn("the reasoning itself is the deliverable", text)
+
+    def test_it_asks_for_the_rewrite_and_still_carries_the_findings(self):
+        text = self._parked()
+        self.assertIn("rewrit", text.lower())
+        self.assertIn(planning_escalation.ESCALATION_TAG, text)
+        self.assertIn(planning_escalation.destination(), text)
+        for finding in recorded_findings():
+            self.assertIn(finding, text)
+
+    def test_a_reader_can_tell_the_two_parks_apart_without_reading_either(self):
+        """The note above the park already does this with 📝 against 🙋. The
+        park is the operative comment, so it opens the same way — and off the
+        same definition, because two icons for one act drift."""
+        self.assertTrue(self._parked().startswith(
+            planning_escalation.REWRITE_MARK))
+        self.assertNotEqual(planning_escalation.REWRITE_MARK,
+                            planning_escalation.ESCALATION_MARK)
+        source = open(os.path.join(SCRIPTS, "plan_critic.py"),
+                      encoding="utf-8").read()
+        self.assertIn("planning_escalation.REWRITE_MARK", source)
+        self.assertNotIn(f'{pc.REWRITE}: "', source)
+
+    def test_it_is_still_fit_to_put_in_front_of_the_ceo(self):
+        self.assertIsNone(planning_escalation.refusal(self._parked()),
+                          self._parked())
+
+    def test_the_question_park_is_word_for_word_what_it_always_was(self):
+        """DRE-2848's and DRE-3074's notes are untouched: the branch is an
+        addition, and every caller that does not ask for it gets the old text."""
+        asked = planning_escalation.escalation_comment(CARD, self._reason(0))
+        self.assertIn("the reasoning itself is the deliverable", asked)
+        self.assertIn("it is correct and waiting on judgement", asked)
+        self.assertIn("Answer it here and move the card back", asked)
+        self.assertTrue(asked.startswith(planning_escalation.ESCALATION_MARK))
+        transport = planning_escalation.escalation_comment(
+            CARD, "the classifier could not reach its model", transport=True)
+        self.assertIn("nothing has read this card at all", transport)
+
+    def test_the_seam_that_parks_the_card_carries_the_flag(self):
+        """`escalate()` is what writes the comment and moves the card. A flag
+        that stopped at `escalation_comment` would be a flag nothing reaches."""
+        posted: list[str] = []
+        lops = _Lops(posted)
+        outcome = planning_escalation.escalate(
+            lops, CARD, self._reason(), rewrite=True)
+        self.assertTrue(outcome.parked)
+        self.assertEqual(1, len(posted))
+        self.assertNotIn("Answer it here", posted[0])
+        self.assertIn("rewrit", posted[0].lower())
+        self.assertEqual([(CARD, planning_escalation.destination())],
+                         lops.states)
+
+    def test_the_cli_accepts_it(self):
+        out = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "planning_escalation.py"),
+             "escalate", "--help"], capture_output=True, text=True)
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("--rewrite", out.stdout)
+
+    def test_the_workflow_asks_for_it_exactly_when_it_asked_for_a_rewrite(self):
+        """The one call site that can produce a rewrite-shaped reason — and it
+        is gated on the action the decision already published, never on a second
+        reading of the text."""
+        doc = yaml.safe_load(open(WF, encoding="utf-8").read())
+        step = next(s for job in doc["jobs"].values()
+                    for s in job.get("steps") or []
+                    if "One-off critic — escalate" in str(s.get("name") or ""))
+        run = str(step.get("run"))
+        self.assertIn("--rewrite", run)
+        self.assertIn(f"steps.oneoff.outputs.action == '{pc.REWRITE}'", run)
+
+    def test_no_other_escalating_step_asks_for_it(self):
+        """Every other caller writes a question, so a `--rewrite` there would be
+        the contradiction pointing the other way."""
+        doc = yaml.safe_load(open(WF, encoding="utf-8").read())
+        for job in doc["jobs"].values():
+            for step in job.get("steps") or []:
+                run = str(step.get("run") or "")
+                if "planning_escalation.py escalate" not in run:
+                    continue
+                if "One-off critic" in str(step.get("name") or ""):
+                    continue
+                self.assertNotIn("--rewrite", run, step.get("name"))
+
+
+class _Lops:
+    """Enough of `linear_ops` for `escalate()`: a card still in Planning, with
+    no prior escalation and no routing verdict, so the park is the live path."""
+
+    def __init__(self, posted: list[str]):
+        self.posted = posted
+        self.states: list[tuple[str, str]] = []
+
+    def get_issue(self, identifier, fresh=False):
+        return {"state": {"name": planning_escalation.ORIGIN}}
+
+    def comment_bodies(self, identifier):
+        return []
+
+    def count_comments(self, identifier, tag):
+        return 0
+
+    def cmd_comment(self, identifier, body):
+        self.posted.append(body)
+
+    def cmd_state(self, identifier, lane):
+        self.states.append((identifier, lane))
+
+
 class TheStandardSaysTheRouteIsBounded(unittest.TestCase):
     """The standard is what a headless critic and a future author read. A
     module that bounds a loop the standard still calls unbounded is a document

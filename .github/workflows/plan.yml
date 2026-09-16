@@ -834,6 +834,15 @@ jobs:
       # it made. A park action no step acted on would be a stranded card, so
       # tests/test_plan_critic_one_off_bound.py derives this gate from the
       # module's own action constants rather than trusting this line.
+      #
+      # `--rewrite` is what keeps the two apart INSIDE the note as well as in
+      # the gate, and it is the `--transport` pattern above (DRE-3074's): the
+      # seam wraps its reason file in fixed language, and the language written
+      # for a question closes with "Answer it here and move the card back to be
+      # picked up" over "it is correct and waiting on judgement". Wrapped round
+      # a rewrite request, that is an instruction to do the exact round trip
+      # the bound was added to end. The flag rides the action the decision
+      # already published, never a second reading of the reason text.
       - name: One-off critic — escalate
         if: steps.oneoff.outputs.action == 'escalate' || steps.oneoff.outputs.action == 'rewrite'
         env:
@@ -841,7 +850,8 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "${{ github.event.client_payload.identifier }}" \
-            --reason-file "${{ runner.temp }}/one-off-escalation.txt"
+            --reason-file "${{ runner.temp }}/one-off-escalation.txt" \
+            ${{ steps.oneoff.outputs.action == 'rewrite' && '--rewrite' || '' }}
 
       # ...and the move, only on a pass. The lane it goes to is the
       # vocabulary's, so it is not written here.
