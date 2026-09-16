@@ -149,6 +149,17 @@ PLAN_WORKFLOW = os.path.join(ROOT, ".github", "workflows", "plan.yml")
 ESCALATION_TAG = "planning-escalation"
 ESCALATION_MARK = "🙋"
 
+# The mark a REWRITE park opens with (DRE-4058), and the reason it is not
+# `ESCALATION_MARK`: 🙋 is a question the reader can answer where they sit, 📝
+# is a card that has to be rewritten before any answer means anything. A reader
+# scanning the thread should be able to tell the two apart without reading
+# either. ONE definition — `plan_critic` reads it for the note it posts just
+# above this park, because a note and the park that follows it opening with
+# different icons is exactly the drift the icon was for. The TAG is unchanged
+# on purpose: counting is keyed on it (`escalate`), so a second tag here would
+# hand the same card a second escalation budget.
+REWRITE_MARK = "📝"
+
 # The lane the escalation leaves FROM. Hand-planning is an escalation OUT of
 # Planning, so the card has been through Planning by the time it parks — which
 # is also the lane `break-glass` repays its skipped classification to, and
@@ -333,7 +344,7 @@ def refusal(reason: str | None) -> str | None:
 
 
 def escalation_comment(identifier: str, reason: str | None,
-                       transport: bool = False) -> str:
+                       transport: bool = False, rewrite: bool = False) -> str:
     """The note that IS the escalation. One card, one of these.
 
     Written to `standards/comms.md`: purpose in the first sentence, the reason
@@ -347,19 +358,39 @@ def escalation_comment(identifier: str, reason: str | None,
     (`standards/console-honesty.md`). The card still parks — an infrastructure
     failure that outlived its retry needs a person — it just parks saying what
     happened.
+
+    `rewrite` is DRE-4058's third arrival, and it is the same lesson a third
+    time. The one-off route spends its bound and then asks for a REWRITTEN card
+    rather than another answer (`plan_critic.one_off_rewrite_request`) — and
+    this wrapper, written for the question case, closed that request with
+    "Answer it here and move the card back to be picked up" over the words "it
+    is correct and waiting on judgement". Read quickly, that is an instruction
+    to do the one thing the bound exists to stop. So the wrapper branches where
+    it makes a claim, on the flag the decision already published, rather than
+    re-reading the text to guess which kind of park this is.
     """
     lane = destination()
-    lines = [
-        f"{ESCALATION_MARK} {ESCALATION_TAG}: {identifier} could not be "
-        "classified and needs you to look — the step that reads new cards has "
-        "now failed twice to reach the model it asks, so nothing has read this "
-        "card at all."
-        if transport else
-        f"{ESCALATION_MARK} {ESCALATION_TAG}: {identifier} needs a decision from "
-        "you before it can be planned — the reasoning itself is the deliverable "
-        "here, and that part is not work an agent can do.",
-        "",
-    ]
+    if rewrite:
+        opening = (
+            f"{REWRITE_MARK} {ESCALATION_TAG}: {identifier} has been sent back "
+            "as many times as this route allows, and what it needs now is a "
+            "rewrite rather than another answer — the card itself is what has "
+            "to change."
+        )
+    elif transport:
+        opening = (
+            f"{ESCALATION_MARK} {ESCALATION_TAG}: {identifier} could not be "
+            "classified and needs you to look — the step that reads new cards "
+            "has now failed twice to reach the model it asks, so nothing has "
+            "read this card at all."
+        )
+    else:
+        opening = (
+            f"{ESCALATION_MARK} {ESCALATION_TAG}: {identifier} needs a decision "
+            "from you before it can be planned — the reasoning itself is the "
+            "deliverable here, and that part is not work an agent can do."
+        )
+    lines = [opening, ""]
     why = refusal(reason)
     if why is None:
         lines += [f"**Why it needs you:** {(reason or '').strip()}", ""]
@@ -367,22 +398,36 @@ def escalation_comment(identifier: str, reason: str | None,
         lines += [f"**Why it needs you:** {NO_REASON_STATED}", ""]
     else:
         lines += [f"**Why it needs you:** {NOT_PLAIN_ENGLISH}", ""]
-    lines += [
-        f"This card is parked in **{lane}** — your decision queue, the same "
-        "place a plan waits for you. There is nothing wrong with the card and "
-        "no judgement is being asked of you: something on our side is down, and "
-        "it is here so it is not forgotten while we fix it."
-        if transport else
-        f"This card is parked in **{lane}** — your decision queue, the same "
-        "place a plan waits for you. It is not broken and it has not failed "
-        "anything; it is correct and waiting on judgement.",
-        "",
-        "Move it back to be picked up once we tell you the classifier is "
-        "reading cards again."
-        if transport else
-        "Answer it here and move the card back to be picked up, or park it if "
-        "we should not do this at all.",
-    ]
+    if rewrite:
+        lines += [
+            f"This card is parked in **{lane}** — your decision queue, the "
+            "same place a plan waits for you. It is not waiting on an answer: "
+            "the questions it could ask have all been asked, and it still is "
+            "not something an agent can build as it stands.",
+            "",
+            "Rewrite it and move the card back to be picked up, or park it if "
+            "we should not do this at all.",
+        ]
+    elif transport:
+        lines += [
+            f"This card is parked in **{lane}** — your decision queue, the "
+            "same place a plan waits for you. There is nothing wrong with the "
+            "card and no judgement is being asked of you: something on our "
+            "side is down, and it is here so it is not forgotten while we fix "
+            "it.",
+            "",
+            "Move it back to be picked up once we tell you the classifier is "
+            "reading cards again.",
+        ]
+    else:
+        lines += [
+            f"This card is parked in **{lane}** — your decision queue, the "
+            "same place a plan waits for you. It is not broken and it has not "
+            "failed anything; it is correct and waiting on judgement.",
+            "",
+            "Answer it here and move the card back to be picked up, or park it "
+            "if we should not do this at all.",
+        ]
     return "\n".join(lines)
 
 
@@ -519,7 +564,8 @@ def moved_on(issue: dict, comment_bodies, contract: dict | None = None) -> str |
 
 
 def stood_down_comment(identifier: str, where: str, reason: str | None,
-                       withdrawn: bool = False, transport: bool = False) -> str:
+                       withdrawn: bool = False, transport: bool = False,
+                       rewrite: bool = False) -> str:
     """The record a card gets when the escalation reached it too late.
 
     `where` is `moved_on()`'s sentence. `withdrawn` is the crash-between-the-
@@ -545,7 +591,10 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
             "",
         ]
     why = refusal(reason)
-    heading = "**What this run had found:**" if transport else \
+    # `rewrite` sits with `transport` rather than with the question: neither one
+    # ASKED anything, so "what this run had to ask" over either of them is the
+    # same wrong sentence the rewrite park was flagged for (DRE-4058).
+    heading = "**What this run had found:**" if (transport or rewrite) else \
         "**What this run had to ask:**"
     if why is None:
         lines += [f"{heading} {(reason or '').strip()}", ""]
@@ -562,7 +611,7 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
 
 
 def escalate(linear_ops, identifier: str, reason: str | None,
-             transport: bool = False) -> Outcome:
+             transport: bool = False, rewrite: bool = False) -> Outcome:
     """Post the escalation and park the card — if the card is still ours.
 
     The lane is read LIVE first (`fresh=True`, never the command's memo — the
@@ -604,15 +653,16 @@ def escalate(linear_ops, identifier: str, reason: str | None,
             print(f"{identifier}: already recorded, under {STOOD_DOWN_TAG}")
         else:
             linear_ops.cmd_comment(identifier, stood_down_comment(
-                identifier, elsewhere, reason,
-                withdrawn=bool(already), transport=transport))
+                identifier, elsewhere, reason, withdrawn=bool(already),
+                transport=transport, rewrite=rewrite))
             posted = True
         return Outcome(parked=False, posted=posted, stood_down=elsewhere)
     if already:
         print(f"{identifier}: already escalated, under {ESCALATION_TAG}")
     else:
         linear_ops.cmd_comment(
-            identifier, escalation_comment(identifier, reason, transport))
+            identifier,
+            escalation_comment(identifier, reason, transport, rewrite))
         posted = True
     linear_ops.cmd_state(identifier, lane)
     return Outcome(parked=True, posted=posted, stood_down=None)
@@ -874,7 +924,8 @@ def _cmd_escalate(args) -> int:
         # The raw text goes to the run log and nowhere near the card.
         print(f"the stated reason is not fit for the card: {why}", file=sys.stderr)
         print(f"--- the planner wrote ---\n{reason}", file=sys.stderr)
-    outcome = escalate(linear_ops, args.identifier, reason, args.transport)
+    outcome = escalate(linear_ops, args.identifier, reason, args.transport,
+                       args.rewrite)
     if outcome.parked:
         print(f"{args.identifier} escalated out of {ORIGIN} → {destination()}")
     else:
@@ -898,6 +949,12 @@ def main(argv=None) -> int:
     # its one retry still needs a person, and telling that person the reasoning
     # is the deliverable would be a confident wrong answer.
     esc.add_argument("--transport", action="store_true")
+    # DRE-4058: the same park again, said honestly again. The one-off route's
+    # bound asks for a rewritten CARD, and the note that parks it must not close
+    # by telling the reader to answer it and move it back — that is the round
+    # trip the bound was added to end. Passed by the step that already knows,
+    # off `plan_critic`'s published action, never guessed from the reason text.
+    esc.add_argument("--rewrite", action="store_true")
 
     req = sub.add_parser("requeue")
     req.add_argument("identifier")

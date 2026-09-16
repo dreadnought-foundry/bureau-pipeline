@@ -42,7 +42,12 @@ Three rules baked in, each one bought:
     how 17 cards sat in a lane for 27 days. The budget is per planning ATTEMPT,
     counted from the `plan-cycle:` boundary the plan route writes — a
     re-planned epic gets its revision round back, because the plan the earlier
-    rounds argued about no longer exists.
+    rounds argued about no longer exists. ON THE ONE-OFF ROUTE the same count
+    holds over the card's whole history (DRE-4058): its loop runs through the
+    CEO — park, answer, back to Planning, a fresh single call — so the bound is
+    spent in his queue rather than in one job, and at it the card is asked for a
+    REWRITE naming every finding raised so far instead of a sixth answer.
+    DRE-3879 went round five times before anything counted.
   * A CRASH IS NOT A REJECTION (standards/console-honesty.md rule 1). A critic
     that produced no result did not decide anything, and must never be the
     reason a plan stops moving.
@@ -87,7 +92,10 @@ CLI:
                                      The note and the record are TWO comments.
                                      `--escalation-file` is the one-off stage's
                                      CEO-facing reason, written only when the
-                                     card does not pass.
+                                     card does not pass — the critic's question
+                                     below the bound, and at it the request to
+                                     REWRITE the card, naming every finding the
+                                     card has collected (DRE-4058).
   sight --this <EPIC>                epics in flight (JSON array) on stdin
   cycle-start --epic <EPIC> [--record]
                                      the note that opens a planning attempt,
@@ -613,6 +621,13 @@ def collisions_declared(text: str) -> int:
 #: whether a note carries a list at all.
 FINDINGS_HEADING = "Every finding this round"
 
+#: ...and the heading for a list that is NOT one round's: the whole history the
+#: one-off rewrite park hands back (DRE-4058). Its own words because the claim
+#: is different — these were raised across rounds the CEO has already answered,
+#: and calling them "this round" would read as the critic inventing five new
+#: findings in one pass.
+FINDINGS_SO_FAR_HEADING = "Every finding raised on this card so far"
+
 #: The sentence every critic prompt spells this grammar with, in one place so
 #: the four prompts on the rail cannot drift apart from each other — the
 #: one-off stage shares the first critic's result grammar, so it shares this.
@@ -687,6 +702,23 @@ def findings_section(items: list[str]) -> str:
         f"{FINDINGS_HEADING} ({len(items)}), ranked — the revision answers all "
         "of them, and the next round checks those fixes rather than finding "
         "these again:",
+        findings_block(items),
+    ])
+
+
+def findings_so_far_section(items: list[str]) -> str:
+    """The list the one-off rewrite park carries: every finding this CARD has
+    collected, oldest first (DRE-4058).
+
+    Printed even for a single item, unlike the round's own list above: there the
+    headline already said the one finding, here the headline asks for a rewrite
+    and a rewrite request that names nothing is the ask without the work.
+    """
+    if not items:
+        return ""
+    return "\n\n".join([
+        f"{FINDINGS_SO_FAR_HEADING} ({len(items)}), oldest first — one rewrite "
+        "answers all of them, rather than one answer each:",
         findings_block(items),
     ])
 
@@ -1105,6 +1137,26 @@ def send_backs(bodies: list, stage: str) -> int:
                if r["stage"] == stage and r["result"] == SEND_BACK)
 
 
+def send_back_findings(bodies: list, stage: str) -> list[str]:
+    """What each failed round GAVE as its reason, oldest→newest.
+
+    The same rows `send_backs` counts, read for their text instead of their
+    number — one parser, so a count and a list can never disagree about which
+    rounds happened. Each marker carries the worst finding of its round and only
+    that one (`marker`), so this is the spine of the history rather than the
+    whole of it; the rest of a round's findings live in the note beside it,
+    which is prose and records nothing.
+
+    Why it exists (DRE-4058): when the one-off route reaches its bound the card
+    needs REWRITING, and a rewrite can only answer findings somebody names. The
+    CEO answered DRE-3879 five times without ever being shown the other four
+    findings in one place. A reason-less send-back contributes nothing — there
+    is no text to name — which matches `read_result` reading one as NO_RESULT.
+    """
+    return [r["reason"] for r in parse_markers(bodies)
+            if r["stage"] == stage and r["result"] == SEND_BACK and r["reason"]]
+
+
 def rate(bodies: list, stage: str) -> dict:
     """`{rounds, send_backs, rate}` for a stage.
 
@@ -1473,6 +1525,20 @@ def _count_word(n: int) -> str:
     return {1: "one", 2: "two", 3: "three"}.get(n, str(n))
 
 
+def _bound_spent(prior_send_backs: int) -> bool:
+    """Does THIS send-back spend the last round of the budget?
+
+    The one place the arithmetic lives, for all three routes (DRE-4058). The
+    count is of PRIOR failed rounds, so the round being decided is `prior + 1`,
+    and the bound is reached when that number reaches MAX_ROUNDS. Every reader
+    below asks this rather than comparing against a literal, so raising or
+    lowering MAX_ROUNDS moves the epic route and the one-off route together —
+    which is what "the bound, on both loops" was always supposed to mean, and
+    for two months did not.
+    """
+    return int(prior_send_backs) + 1 >= MAX_ROUNDS
+
+
 def decide(result: str, prior_send_backs: int, reason: str = "",
            stage: str = STAGE_PRE) -> tuple[str, str]:
     """`(action, note)` — `hold` stops the plan here, `proceed` moves it on.
@@ -1503,7 +1569,7 @@ def decide(result: str, prior_send_backs: int, reason: str = "",
             "plan proceeds and this round is not counted against the bound"
         )
     failed = prior_send_backs + 1
-    if failed < MAX_ROUNDS:
+    if not _bound_spent(prior_send_backs):
         return "hold", f"sent back — round {failed} of {MAX_ROUNDS}"
     if stage == STAGE_POST:
         note = (
@@ -1526,7 +1592,7 @@ def at_bound(action: str, prior_send_backs: int, result: str) -> bool:
     real send-back that holds at MAX_ROUNDS — the post stage's park signal.
     A crash or a pass never reaches the bound, whatever the count says."""
     return (action == "hold" and result == SEND_BACK
-            and prior_send_backs + 1 >= MAX_ROUNDS)
+            and _bound_spent(prior_send_backs))
 
 
 # --- The one-off exit (DRE-3041) --------------------------------------------
@@ -1544,13 +1610,49 @@ def at_bound(action: str, prior_send_backs: int, result: str) -> bool:
 #   decide" cannot be spent as "the critic said yes". The card goes to a person
 #   instead — the cheap outcome — and the run says which of the two happened.
 #
-# There is no bound here either, because there is no loop to bound: one call per
-# one-off classification, and the card either moves or parks.
+# AND IT IS BOUNDED, on the same count as the epic route (DRE-4058). What stood
+# here until 2026-09-16 was the claim that it needed no bound "because there is
+# no loop to bound: one call per one-off classification, and the card either
+# moves or parks". That premise was false, and the loop it missed is the
+# expensive one:
+#
+#   the card parks in Green Light → the CEO answers it and moves it back to
+#   Planning → that is a NEW one-off classification → a new single unbounded
+#   call → which finds the NEXT problem and parks it again.
+#
+# One call per classification, and nothing limited the classifications. DRE-3879
+# went round five times: five different findings, two signed console answers,
+# rounds 4 and 5 six minutes apart on 2026-09-15 PT and both after the CEO's
+# 13:12 PT answer. DRE-3880 did it three times. The findings were real and new —
+# the critic reads the whole card and reports the worst of it — so each round
+# bought a genuine finding at the price of a full CEO round trip, and the card
+# never converged because each answer exposed the next gap.
+#
+# `round=N` was already on every marker and `send_backs` already counted them:
+# the record was there and nothing read it. So this route now asks for the count
+# and, at `_bound_spent`, answers a THIRD action. A card sent back MAX_ROUNDS
+# times is not a card the next answer fixes — it needs REWRITING, which is a
+# different request and has to be made as one, with every finding raised so far
+# named in one place so a single rewrite can answer all of them.
+#
+# The budget is the CARD's whole history, not an attempt's: no `plan-cycle:`
+# boundary is ever posted on this route, and none is wanted. The epic route
+# needs one because a re-plan argues about a different document; here the card
+# IS the document, and a spent bound blocks nothing that has actually been
+# fixed — a PASS proceeds at any count (`one_off_decide` reads the verdict
+# before it reads the budget), so a rewritten card that now passes goes to the
+# build queue with nothing to refund.
 
-#: The two actions the one-off exit can take. `proceed` runs
-#: `planning_route.py exit`; `escalate` runs `planning_escalation.py escalate`.
+#: The three actions the one-off exit can take. `proceed` runs
+#: `planning_route.py exit`; `escalate` and `rewrite` both run
+#: `planning_escalation.py escalate` — the same seam, because a card the critic
+#: stopped parks in the CEO's queue either way — and are told apart because they
+#: ask him for different things: an ANSWER, or a rewritten card. Distinct values
+#: rather than one action with a flag, so the run's own output says which
+#: happened and nothing downstream has to re-derive it.
 PROCEED = "proceed"
 ESCALATE = "escalate"
+REWRITE = "rewrite"
 
 #: What the run records when the critic produced nothing usable. Its own
 #: sentence rather than the epic route's, because here it is not a shrug.
@@ -1560,13 +1662,24 @@ NO_CRITIC_NOTE = (
 )
 
 
-def one_off_decide(result: str, reason: str = "") -> tuple[str, str]:
-    """`(action, note)` for a one-off exit — `proceed` moves it, `escalate` parks it.
+def one_off_decide(result: str, reason: str = "",
+                   prior_send_backs: int = 0) -> tuple[str, str]:
+    """`(action, note)` for a one-off exit — `proceed` moves it, `escalate` asks
+    the CEO a question, `rewrite` tells him the card itself has to change.
 
-    Only a PASS moves the card. A SEND_BACK carries the critic's own line; a
-    crash, an empty file, an unparseable header or a verdict this module does
-    not write all land on the same answer, because reading any of them as a
-    pass is the one direction that must never happen.
+    Only a PASS moves the card, and it moves it at ANY count: the budget is
+    spent by findings, not by the card, and a card that now passes has nothing
+    left to answer. A SEND_BACK carries the critic's own line until the bound;
+    at `_bound_spent` it carries the rewrite request instead. A crash, an empty
+    file, an unparseable header, a reason-less send-back or a verdict this
+    module does not write all land on the ordinary escalate and spend NOTHING —
+    the epic route's rule (`decide`), for the same reason: a round the critic
+    never decided is not a failed round, and must not be charged as one.
+
+    `prior_send_backs` is what the card's own markers already record
+    (`send_backs(current_cycle(thread), STAGE_ONE_OFF)`), so the number the
+    bound reads is the number the run posted. It defaults to zero, which is the
+    first round and the behaviour every caller had before DRE-4058.
     """
     if result == PASS:
         return PROCEED, (
@@ -1574,11 +1687,97 @@ def one_off_decide(result: str, reason: str = "") -> tuple[str, str]:
             "agent can build unattended"
         )
     if result == SEND_BACK and one_line(reason):
-        return ESCALATE, one_line(reason)
+        if not _bound_spent(prior_send_backs):
+            return ESCALATE, one_line(reason)
+        return REWRITE, (
+            f"{_count_word(int(prior_send_backs) + 1)} send-backs on this card "
+            "— the bound. It needs REWRITING rather than another answer, and "
+            "every finding raised so far is listed below so one rewrite can "
+            "answer all of them."
+        )
     return ESCALATE, NO_CRITIC_NOTE
 
 
-def one_off_escalation(result: str, reason: str = "") -> str:
+#: What the list says in place of a finding whose own words are not fit to put
+#: in front of the CEO. Its own LINE rather than a silent drop: a rewrite that
+#: answers four findings out of five is another round, so the count has to
+#: survive even where the wording cannot (`planning_escalation.jargon`).
+FINDING_NOT_PLAIN_ENGLISH = (
+    "One finding was written in technical terms, so it is not repeated here — "
+    "it is in the run's own log."
+)
+
+
+def every_finding_so_far(prior_findings, this_round) -> list[str]:
+    """Every finding this card has collected, oldest first, each once.
+
+    The markers' spine (`send_back_findings`) followed by this round's ranked
+    list (`all_findings`), deduplicated — a critic that re-raises a finding the
+    CEO has already been shown must not make the list say it twice. Order is
+    chronological rather than ranked, because the CEO reading it has answered
+    the early ones and the question he is being asked is what is STILL open.
+
+    Deliberately uncapped, unlike one round's list (MAX_FINDINGS): the bound is
+    what limits the length, and a history that quietly dropped its oldest
+    findings would buy the exact round this card exists to prevent.
+    """
+    out: list[str] = []
+    for item in list(prior_findings or []) + list(this_round or []):
+        flat = one_line(item)
+        if flat and flat not in out:
+            out.append(flat)
+    return out
+
+
+def _sayable_findings(findings) -> list[str]:
+    """The findings as the CEO may be shown them, one line each.
+
+    Every item is an AGENT's sentence, so each is read by the same seam that
+    guards the single reason — per ITEM, because one leaking line must cost that
+    line and never the list. The raw text stays in the run log for an operator.
+    """
+    import planning_escalation  # late: it reads planning_route, which reads us
+
+    out = []
+    for item in findings or []:
+        leaks = planning_escalation.jargon(item)
+        if not leaks:
+            out.append(item)
+            continue
+        print("plan critic: a one-off finding is not fit for the card — "
+              f"{', '.join(leaks)}\n--- the critic wrote ---\n{item}",
+              file=sys.stderr)
+        out.append(FINDING_NOT_PLAIN_ENGLISH)
+    return out
+
+
+def one_off_rewrite_request(prior_send_backs: int, findings) -> str:
+    """What the CEO is handed when the one-off bound is spent (DRE-4058).
+
+    Not a question about the work: a statement that the CARD is the problem,
+    plus every finding raised so far in one place. DRE-3879's CEO answered five
+    questions and was never once shown the other findings the same critic had
+    already written down, so each answer could only ever close one of them.
+
+    `standards/comms.md` all the same — it is still the CEO's queue this lands
+    in: what happened, the list, and exactly one ask as the closing line.
+    """
+    trips = _count_word(int(prior_send_backs) + 1)
+    said = _sayable_findings(findings)
+    return "\n\n".join([
+        f"This card has been round-tripped {trips} separate times — stopped, "
+        "answered, and stopped again by a different problem. Another answer is "
+        "not what it needs: the card itself has to be rewritten, and that is "
+        "why this is not one more question about the work.",
+        *([ "Everything found so far, so one rewrite can answer all of it:\n\n"
+            + findings_block(said) ] if said else []),
+        "Which gets to my question: do you want to rewrite this card yourself, "
+        "or should we take it out of the queue and start again from a fresh one?",
+    ])
+
+
+def one_off_escalation(result: str, reason: str = "",
+                       prior_send_backs: int = 0, findings=()) -> str:
     """The plain-English question the CEO is handed when a one-off does not pass.
 
     `standards/comms.md`: purpose first, the finding in its own block, and one
@@ -1589,8 +1788,18 @@ def one_off_escalation(result: str, reason: str = "") -> str:
     that leaks a path or a command costs the REASON, never the question: the
     raw text stays in the run log, and the card still parks with something a
     person can answer.
+
+    AT THE BOUND it is a different text, and WHICH ONE IS NOT DECIDED HERE
+    (DRE-4058): `one_off_decide` is asked, on the same inputs, so the words the
+    CEO reads and the action the run took can never disagree. `findings` is
+    every finding raised so far (`every_finding_so_far`) and is read only on
+    that branch — below the bound the card is still one question with one
+    finding, which is what the CEO has always been handed.
     """
     import planning_escalation  # late: it reads planning_route, which reads us
+
+    if one_off_decide(result, reason, prior_send_backs)[0] == REWRITE:
+        return one_off_rewrite_request(prior_send_backs, findings)
 
     stated = one_line(reason)
     if result == SEND_BACK and stated and not planning_escalation.jargon(stated):
@@ -2192,10 +2401,19 @@ def _cmd_decide(args) -> int:
     cycle = current_cycle(thread, args.epic)
     prior = send_backs(cycle, args.stage)
     if args.stage == STAGE_ONE_OFF:
-        # No bound and no loop on this route: one call, and the card either
-        # moves or parks. `prior` is still read so a re-run of the same card
-        # numbers its round honestly.
-        action, note = one_off_decide(result, reason)
+        # The bound on THIS route is the card's whole send-back history: the
+        # loop runs through the CEO, so `prior` is the number of times he has
+        # already been asked (DRE-4058). Read from the markers the earlier runs
+        # posted — the same number, not a second count — which is why the round
+        # it posts below and the budget it spends here cannot drift apart.
+        #
+        # `items` is this round's ranked list; every finding the CARD has
+        # collected is that plus the spine of the markers, and the rewrite
+        # request is the only text that needs the whole of it.
+        action, note = one_off_decide(result, reason, prior)
+        if action == REWRITE:
+            items = every_finding_so_far(
+                send_back_findings(cycle, args.stage), items)
     else:
         action, note = decide(result, prior, reason, stage=args.stage)
     stats = rate(cycle, args.stage)
@@ -2205,8 +2423,10 @@ def _cmd_decide(args) -> int:
     round_n = stats["rounds"] + 1
     # `bound` is the workflow's park signal (DRE-3088): a post-stage hold at
     # the last round parks the epic with `needs-human` instead of asking the
-    # CEO to approve the same plan a third time.
-    bound = at_bound(action, prior, result)
+    # CEO to approve the same plan a third time. A one-off REWRITE is the same
+    # fact on the other route and says so here rather than leaving the run
+    # claiming `bound=false` beside a note that says "the bound" (DRE-4058).
+    bound = action == REWRITE or at_bound(action, prior, result)
 
     _write_outputs(args.github_output, [
         ("action", action),
@@ -2222,8 +2442,23 @@ def _cmd_decide(args) -> int:
     _write_block_output(args.github_output, "findings", findings_block(items))
 
     title = STAGES[args.stage]["title"]
-    icon = {"hold": "🛑", "proceed": "✅", ESCALATE: "🙋"}[action] \
-        if result != NO_RESULT else "⚠️"
+    # 📝 for the rewrite park: it is not the 🙋 of a question the CEO can answer
+    # where he sits, and a reader scanning the thread should be able to tell the
+    # two apart without reading either (DRE-4058). Read from the module that
+    # writes the park comment ITSELF, one line below this note on the card —
+    # this note and that park opening with different icons is the drift the icon
+    # was for. In its own branch rather than in the map: the map is built on
+    # EVERY route, and `_cmd_decide` must not need the escalation module to
+    # decide an epic round. REWRITE reaches only the one-off route, which needs
+    # that module anyway (`one_off_escalation`).
+    if result == NO_RESULT:
+        icon = "⚠️"
+    elif action == REWRITE:
+        import planning_escalation  # late: it reads planning_route, which reads us
+
+        icon = planning_escalation.REWRITE_MARK
+    else:
+        icon = {"hold": "🛑", "proceed": "✅", ESCALATE: "🙋"}[action]
     seen = stats["rounds"]
     rate_text = (
         f"send-back rate at this critic so far on this planning attempt: "
@@ -2237,9 +2472,11 @@ def _cmd_decide(args) -> int:
     # sharing a comment with prose is a record that prose can forge
     # (`_sole_record`).
     #
-    # The one-off route has no round bound, so its note does not claim one:
-    # "round 1 of 2" on a card that will never get a second call is a number
-    # that means nothing to the person reading it.
+    # The one-off route's note does not print "round N of 2": the bound it lives
+    # under is the card's whole history rather than an attempt's, and the note
+    # that matters is what the card needs next, which the decision already says
+    # in words (DRE-4058 — until then this comment claimed the route had no
+    # bound at all, which was the defect written down).
     if args.stage == STAGE_ONE_OFF:
         headline = f"{icon} **{title}** — {note}"
         # ...and what happens next, in the words of the route it is on. The
@@ -2247,6 +2484,11 @@ def _cmd_decide(args) -> int:
         closing = (
             "This card goes to the build queue."
             if action == PROCEED
+            else "This card is not going to the build queue — and it is not "
+                 "waiting on an answer either. It needs rewriting so that one "
+                 "revision answers every finding above; move it back once it "
+                 "does, or take it out of the queue."
+            if action == REWRITE
             else "This card is not going to the build queue — it is with a "
                  "person, in the decision queue, with the reason above."
         )
@@ -2255,8 +2497,11 @@ def _cmd_decide(args) -> int:
         closing = rate_text
     # The whole list rides HERE, beside the record and never in it: the note is
     # prose, and prose records nothing (`_sole_record`). This is the half of the
-    # round the CEO reads, so it carries everything the critic found.
-    section = findings_section(items)
+    # round the CEO reads, so it carries everything the critic found — and at the
+    # one-off bound that is everything the CARD has collected, under a heading
+    # that says so rather than claiming one round found it all.
+    section = (findings_so_far_section(items) if action == REWRITE
+               else findings_section(items))
     body = "\n\n".join([
         headline,
         *( [f"Reason: {reason}"] if reason and reason != note else [] ),
@@ -2273,10 +2518,14 @@ def _cmd_decide(args) -> int:
     # Only when the card does NOT pass, and only on the route that has an
     # escalation exit: a reason file left behind by a passing card is a
     # question nobody owes an answer to, and the step that reads it is gated on
-    # the action rather than on the file existing.
-    if args.escalation_file and args.stage == STAGE_ONE_OFF and action == ESCALATE:
+    # the action rather than on the file existing. BOTH parks write it — the
+    # question and the rewrite request park through the same seam (DRE-2848's,
+    # never a second one), and which text lands is decided inside
+    # `one_off_escalation` off the same inputs the action came from.
+    if (args.escalation_file and args.stage == STAGE_ONE_OFF
+            and action in (ESCALATE, REWRITE)):
         with open(args.escalation_file, "w", encoding="utf-8") as f:
-            f.write(one_off_escalation(result, reason) + "\n")
+            f.write(one_off_escalation(result, reason, prior, items) + "\n")
     print(body)
     print()
     print(record)

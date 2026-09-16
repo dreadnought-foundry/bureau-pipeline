@@ -217,6 +217,20 @@ answering a question; the expensive one is a build nobody asked for.
 **The reason lands on the card either way** — pass or send-back — so the
 planner scorer can grade critic against classifier against outcome.
 
+**The one-off route is bounded too, and its loop runs through the CEO.** One
+call per classification, and nothing limited the classifications: the card
+parks, the CEO answers it and moves it back to Planning, and that is a fresh
+unbounded call which finds the next problem and parks it again. DRE-3879 made
+that round trip five times — five real, different findings, two signed answers,
+rounds 4 and 5 six minutes apart — and DRE-3880 three times. So the same
+`MAX_ROUNDS` the epic route spends is spent here over the CARD's whole history,
+counted from the markers earlier runs posted, and at the bound the card parks
+with a different ask: **it needs rewriting, not another answer**, with every
+finding raised so far named in one place so one rewrite can answer all of them.
+A crash still parks and still spends nothing — a round the critic never decided
+is not a failed round — and a PASS still moves the card whatever the count is,
+because a rewritten card that now passes has nothing left to answer.
+
 ## A critic names everything it sees, in the round it sees it
 
 **One round, every finding.** Whatever a critic has found by the time it writes
