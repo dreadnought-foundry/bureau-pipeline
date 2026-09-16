@@ -81,8 +81,33 @@ JSON. Each line is pipe-separated:
 * the fourth field is the **trigger** on `not-now` and the **evidence** on
   `likely-done`. It is required on those two and ignored on the other two.
 
+### A `now` line says five more things (DRE-3764)
+
+A card you rank `now` is a card the CEO is asked to approve, and he opens the
+row to see why. So a `now` line carries five more fields after the reason, each
+one **labelled**, each one a single plain-English clause:
+
+```
+<card id> | now | <reason> | why now: … | value: … | effort: … | if skipped: … | depends on: …
+```
+
+* **why now** — what about the work in flight makes this the batch it belongs in;
+* **value** — what we get when it lands, in outcomes rather than mechanism;
+* **effort** — how big it is, in plain terms (an afternoon, a day, a fortnight);
+* **if skipped** — what happens if it waits;
+* **depends on** — what has to be true or done first, or `nothing`.
+
+Write them **by label, in any order**, and write only the ones you can answer:
+a label you leave out is simply absent from the page, and nothing is invented
+in its place. Only a `now` line carries them — they are ignored on the other
+three outcomes. Keep each to a clause; these five are shown in full and not cut
+to fit, so a paragraph here is a paragraph the CEO has to read.
+
 **Brevity is the contract, not a style note.** One clause per reason, never a
-paragraph. The whole answer is sized at roughly eighty tokens a card, so the
+paragraph — including each of the five labelled lines above, which is what
+makes them affordable: `now` is the scarce answer, so the extra fields are
+spent on the handful of cards the batch holds and on none of the rest. The
+whole answer is sized at roughly eighty tokens a card, so the
 budget you spend writing three sentences about one card is a card further down
 the census that the answer never reaches — and a card the answer never reaches
 is `unranked` and stays exactly where it was. Say the one thing that decided it

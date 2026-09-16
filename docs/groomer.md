@@ -115,7 +115,7 @@ line per card, before anything moves.
 
 | Outcome | Means | What it must name |
 | -- | -- | -- |
-| `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "created inside the window"). |
+| `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "created inside the window") — and, on a judged run, the five **labelled reasons** below. |
 | `not-now` | **Wanted, and deliberately not this batch**. Either it names the cycle it is reconsidered in, or it is older than the window and stays in Intake ungroomed. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
 | `dead` (the read calls it `likely-done`) | **Recommended for cancellation, and never cancelled here**. Two readers propose one and the proposal says which: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | **evidence** — the card, merged PR or decision it points at. A recommendation nobody can check is one nobody should act on. |
 | `could not rank` | **The read could not place it.** The rules kept it exactly where they had it. | **itself** — its own section in the proposal, never folded into "not now". |
@@ -130,6 +130,40 @@ A reason written in technical terms never reaches the page. It goes through
 the same plain-English guard the planner's escalation goes through, is replaced
 with one sentence saying so, and the count of withheld reasons is printed in
 the proposal's receipt line.
+
+### Why each card is in the batch (DRE-3764)
+
+The batch table's `Why` is one line cut at ninety characters, because it is a
+column. The CEO opening a row in the console wants the rest of it, so a judged
+proposal writes the same reasons again — **uncut**, in their own section after
+the table, one block per batch card:
+
+```
+## Why each card is in the batch
+
+### DRE-3764
+- **Why:** the console cannot show what the proposal does not carry
+- **Why now:** the chevron it feeds is being built this cycle
+- **Value:** the CEO can read a batch without asking anyone
+- **Effort:** a day, and no new moving parts
+- **If skipped:** the chevron opens on an empty row
+- **Depends on:** nothing outside this batch
+```
+
+The five labels are the ranked read's, asked for in `briefs/groomer.md` and
+read back by label rather than by position, so a `now` line that answers three
+of them shifts nothing. Each one goes through the same plain-English guard the
+one-line reason does — and here a refused line is **dropped**, not replaced:
+the card is counted in `withheld` and the label simply has no line. A label
+with a sentence about the guard under it would read as an answer, and the point
+of the five is that the reader can tell what was said from what was not.
+
+**After the table on purpose.** The table is read back by two parsers — the
+drain's and the console's — so a sixth column would have moved both and a
+section after it moves neither. A rules-only run (`--no-judgement`) writes the
+section not at all: the rules place a card by priority and age and have nothing
+labelled to say about it, and that page still renders byte for byte as it did
+before this card.
 
 A dead recommendation always names what replaced it, and the proposal keeps the
 two sources apart — **declared on the card** (a person wrote the line) and

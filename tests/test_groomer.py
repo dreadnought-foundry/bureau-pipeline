@@ -44,11 +44,15 @@ BASE = datetime.fromisoformat(NOW.replace("Z", "+00:00"))
 PACK = groom_context.pack(now=NOW)
 GOLDEN = ROOT / "tests" / "fixtures" / "groom_rules_only_proposal.json"
 
-# The four fields DRE-3150 adds to every row, and the block it adds to the
-# proposal. Named once: the `--no-judgement` comparison strips exactly these
-# and nothing else, so a fifth field added later cannot hide inside the
-# "identical to today" claim.
-ADDED_ROW_KEYS = ("reason", "trigger", "evidence", "judged")
+# The four fields DRE-3150 adds to every row, DRE-3764's fifth, and the block
+# DRE-3150 adds to the proposal. Named once: the `--no-judgement` comparison
+# strips exactly these and nothing else, so a sixth field added later cannot
+# hide inside the "identical to today" claim. `reasons` is on the list
+# deliberately and is `{}` on every rules-only row — the rules place a card by
+# priority and age and have no labelled reasons to give it
+# (tests/test_groomer_batch_reasons.py holds that one to `{}` by name, so
+# stripping it here cannot hide a value appearing in it).
+ADDED_ROW_KEYS = ("reason", "trigger", "evidence", "judged", "reasons")
 ADDED_DEAD_KEYS = ADDED_ROW_KEYS + ("source",)
 
 

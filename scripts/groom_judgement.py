@@ -126,6 +126,28 @@ UNRANKED = "unranked"
 #: weaker version of the answer it was reaching for.
 NEEDS_POINTER = ("not-now", "likely-done")
 
+#: The labelled reasons a `now` line carries beside its one-line reason
+#: (DRE-3764), as `{the label the model writes: the label the CEO reads}`.
+#: Insertion order is the order the proposal renders them in, so the section's
+#: grammar does not depend on the order the model happened to answer in.
+#:
+#: Labelled rather than positional, and that is the whole of the format
+#: decision: five more pipe fields would make a line that skipped one shift
+#: every answer after it into the wrong label, silently, on text a model wrote.
+#: A label the answer leaves out is simply absent — the proposal writes nothing
+#: in its place.
+REASON_LABELS = {
+    "why now": "Why now",
+    "value": "Value",
+    "effort": "Effort",
+    "if skipped": "If skipped",
+    "depends on": "Depends on",
+}
+
+#: The outcome that owes them. Only a card the read puts in the BATCH is
+#: rendered in the section, so only a `now` line is read for them.
+NEEDS_REASONS = "now"
+
 #: The exact sentence an unranked card carries (DRE-3150's contract — the
 #: presentation and console cards render this string, so it is written once).
 UNRANKED_REASON = "could not rank — needs a person"
@@ -236,6 +258,12 @@ _CARD_REF = re.compile(r"\b([A-Z][A-Z0-9]*-\d+)\b")
 # garbled card, because none of them names a card id anyway.
 _NOT_AN_ANSWER = re.compile(r"^\s*(?:```|#|\||-{3,}|\*{3,})")
 
+# `why now: the epic it serves is halfway through` — one labelled field of an
+# answer line. The label is matched loosely and checked against
+# `REASON_LABELS`, so a field that is not one of the five is left alone rather
+# than read as a sixth.
+_LABELLED_REASON = re.compile(r"^\s*\**\s*([A-Za-z][A-Za-z ]*?)\s*\**\s*:\s*(\S.*)$")
+
 
 class RefusedAnswer(RuntimeError):
     """The answer names a card that is not in the census.
@@ -255,11 +283,18 @@ class Verdict:
     `likely-done`, and is None on the other two. One field rather than two
     because exactly one of them is ever populated, and two would make "which
     one did the model actually give us" a question with three answers.
+
+    `reasons` is DRE-3764's labelled set — `{label: one line}` over
+    `REASON_LABELS`, in that order, and empty on every outcome but `now`. It
+    carries only what the answer actually said: a label the model left out is
+    missing from the dict rather than present and empty, because the page's one
+    rule is that nothing is written in place of a reason nobody gave.
     """
 
     outcome: str
     reason: str
     pointer: str | None = None
+    reasons: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -475,6 +510,12 @@ def problems() -> list:
             found.append(
                 f"the ranking prompt never asks for a {word}, which the parser "
                 "requires before it will write the answer down")
+    for label in REASON_LABELS:
+        if label not in prompt.lower():
+            found.append(
+                f"the ranking prompt never asks for the {label!r} line, which "
+                "this module reads off a `now` answer and the proposal renders "
+                "per batch card — the prompt and the parser are one contract")
     if "|" not in prompt:
         found.append(
             "the ranking prompt never states the pipe-separated answer format "
@@ -577,6 +618,26 @@ def within_ceiling(rows: list[dict]) -> tuple[list, list]:
             [row for i, row in enumerate(rows) if i not in kept])
 
 
+def _labelled_reasons(parts: list) -> dict:
+    """The labelled reasons on one answer line, in `REASON_LABELS` order.
+
+    Read off the fields AFTER the reason, by their labels rather than by their
+    position, and only for the five labels the page renders. A field that is
+    not one of them — the trigger of a line that carried one anyway, a sixth
+    label the model invented — is left where it is. The first line to claim a
+    label keeps it.
+    """
+    found: dict = {}
+    for part in parts[3:]:
+        match = _LABELLED_REASON.match(part)
+        if not match:
+            continue
+        label = " ".join(match.group(1).split()).lower()
+        if label in REASON_LABELS and label not in found:
+            found[label] = " ".join(match.group(2).split())
+    return {label: found[label] for label in REASON_LABELS if label in found}
+
+
 def _verdict(parts: list) -> Verdict:
     """One answer line, or `unranked` when it does not say enough."""
     outcome = (parts[1] if len(parts) > 1 else "").strip().lower()
@@ -586,7 +647,12 @@ def _verdict(parts: list) -> Verdict:
         return Verdict(UNRANKED, UNRANKED_REASON)
     if outcome in NEEDS_POINTER and not pointer:
         return Verdict(UNRANKED, UNRANKED_REASON)
-    return Verdict(outcome, reason, pointer if outcome in NEEDS_POINTER else None)
+    # The labelled reasons are an ADDITION and never a requirement: a `now`
+    # line that carries none of them is the answer this parser has always read,
+    # and it still ranks the card.
+    return Verdict(outcome, reason,
+                   pointer if outcome in NEEDS_POINTER else None,
+                   _labelled_reasons(parts) if outcome == NEEDS_REASONS else {})
 
 
 # --------------------------------------------------------------------------- #
