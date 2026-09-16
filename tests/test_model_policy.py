@@ -19,8 +19,9 @@ Fable off the build path as DATA. This card makes it STRUCTURAL:
   * every role is classified `workhorse` (high-volume build work) or `advisory`
     (bounded consults at decision points — the critic and verifier), and a role
     may only be assigned one of those two KINDS, never an arbitrary ladder;
-  * the advisory ladder's strongest model is unreachable from any workhorse
-    ladder — pinned here at every availability, which is the incident condition;
+  * the strongest model — the top of the JUDGEMENT ladder — is unreachable from
+    any workhorse ladder, pinned here at every availability, which is the
+    incident condition;
   * a model the system discovers may at most join the ADVISORY ladder, and
     `on_new_model: workhorse` is REJECTED by schema validation — that value is
     precisely the incident;
@@ -42,6 +43,16 @@ can, and a newly-discovered model may never land on either the build or the
 planning ladder by itself — `discovery.on_new_model: judgement` is refused
 exactly as `workhorse` is. A human editing config/models.yaml is the only way
 up.
+
+The advisory/workhorse overlap (DRE-3880, CEO decision 2026-09-16)
+------------------------------------------------------------------
+`claude-sonnet-5` tops the advisory ladder AND backs the workhorse one, so the
+build/review fence is no longer bought by keeping the two lists disjoint — it
+is bought at SELECTION time, per pull request, and the schema permits the
+overlap only together with that rule. The tests for it live in
+tests/test_review_separation.py; what stays here is everything that did not
+change, above all the 2026-08-09 guard: the strongest model we run is still
+unreachable from a build ladder at any availability.
 
 These tests are the pin. Every one of them fails if its behaviour is removed.
 """
@@ -91,6 +102,9 @@ _TREE_FILES = (
     "scripts/model_fallback.py",
     "scripts/sync_model_config.py",
     "config/models.yaml",
+    # Schema validation reads the DECLARED price of a rung sitting below the
+    # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
+    "config/model-prices.yaml",
     "agents.yaml",
 )
 
@@ -279,8 +293,20 @@ class IncidentConditionTest(unittest.TestCase):
     def tearDown(self):
         mf.clear_availability_cache()
 
-    def test_no_build_role_reaches_the_advisory_model_at_full_availability(self):
-        advisory_top = _advisory_ladder()[0]
+    def test_no_build_role_reaches_the_strongest_model_at_full_availability(self):
+        # The incident condition, on the model it was actually about: the
+        # STRONGEST thing we run — the judgement ladder's top rung — must be
+        # unreachable from the build path however available it looks.
+        #
+        # RESCOPED 2026-09-16 (DRE-3880). This used to read the ADVISORY top
+        # and that is no longer the same question: `claude-sonnet-5` tops the
+        # advisory ladder and backs the workhorse one on purpose, and the
+        # build/review fence it used to imply is now enforced per pull request
+        # at selection time (tests/test_review_separation.py). What the
+        # 2026-08-09 rule was ever about is a model promoting ITSELF onto the
+        # hot path, and that is the strongest rung, which the build path still
+        # cannot see.
+        strongest = _judgement_ladder()[0]
         everything_available = lambda model: True  # noqa: E731 — the probe 404s nothing
         build_roles = [r for r, k in mf.AGENT_KINDS.items() if k == WORKHORSE]
         self.assertTrue(build_roles, "there are build roles to check")
@@ -288,17 +314,34 @@ class IncidentConditionTest(unittest.TestCase):
             with self.subTest(role=role):
                 mf.clear_availability_cache()
                 self.assertNotIn(
-                    advisory_top, mf.ladder_for(role),
-                    f"{role}'s ladder contains the advisory model",
+                    strongest, mf.ladder_for(role),
+                    f"{role}'s ladder contains the strongest model",
                 )
                 self.assertNotEqual(
-                    mf.select(role, probe=everything_available), advisory_top,
-                    f"{role} selected the advisory model — this is the "
+                    mf.select(role, probe=everything_available), strongest,
+                    f"{role} selected the strongest model — this is the "
                     "2026-08-09 incident",
                 )
         # An unrecognized role walks the default ladder — same guarantee.
         self.assertNotEqual(
-            mf.select("no-such-role", probe=everything_available), advisory_top
+            mf.select("no-such-role", probe=everything_available), strongest
+        )
+
+    def test_the_advisory_overlap_is_declared_rather_than_incidental(self):
+        # The other half of what DRE-3880 changed. A model on BOTH the
+        # advisory and a workhorse ladder is admissible only because
+        # config/models.yaml declares what the reviewers run instead; the bare
+        # edit is still refused. Proved in full in
+        # tests/test_review_separation.py — this is the hinge, kept beside the
+        # incident it used to be confused with.
+        cfg = _canonical()
+        overlap = set(_advisory_ladder(cfg)[:1]) & set(_workhorse_ladder(cfg))
+        self.assertTrue(overlap, "the advisory top no longer overlaps the build path")
+        stripped = _canonical()
+        stripped.pop("review_separation", None)
+        self.assertTrue(
+            mf.policy_errors(stripped),
+            "a bare overlap with no selection rule must still be refused",
         )
 
     def test_the_cli_path_holds_the_same_line(self):
@@ -316,10 +359,12 @@ class IncidentConditionTest(unittest.TestCase):
 
     def test_availability_still_only_walks_down(self):
         # The other half of the rule: a probe may decide how far DOWN a ladder
-        # we walk, never how far up.
+        # we walk, never how far up. The rung below Opus became SONNET5 on
+        # 2026-09-16 (DRE-3880); the rule is unchanged.
         self.assertEqual(
-            mf.select("engineer", probe=lambda m: m != OPUS), SONNET
+            mf.select("engineer", probe=lambda m: m != OPUS), _workhorse_ladder()[1]
         )
+        self.assertEqual(_workhorse_ladder()[1], SONNET5)
 
 
 class JudgementKindTest(unittest.TestCase):
@@ -342,11 +387,15 @@ class JudgementKindTest(unittest.TestCase):
             "runs per card belongs on the workhorse ladder",
         )
 
-    def test_the_judgement_ladder_is_fable_first_then_the_build_models(self):
-        # Data, so it is pinned as data: the strongest model, then the two
-        # workhorse rungs as the deliberate (loud) degrade path.
+    def test_the_judgement_ladder_is_fable_first_then_the_degrade_rungs(self):
+        # Data, so it is pinned as data: the strongest model, then the loud
+        # degrade onto the workhorse primary, then the last resort that exists
+        # so a plan never blocks on availability. `claude-sonnet-4-6` left the
+        # WORKHORSE ladder on 2026-09-16 (DRE-3880) and kept this rung — the
+        # CEO's answer says so in as many words: do not retire it.
         self.assertEqual(_judgement_ladder(), [FABLE51, OPUS, SONNET])
         self.assertEqual(_judgement_ladder()[1], _workhorse_ladder()[0])
+        self.assertNotIn(SONNET, _workhorse_ladder())
 
     def test_the_planner_runs_on_fable_when_it_is_available(self):
         self.assertEqual(mf.kind_for("planner"), JUDGEMENT)

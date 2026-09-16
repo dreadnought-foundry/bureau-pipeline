@@ -80,6 +80,9 @@ _TREE_FILES = (
     "scripts/model_fallback.py",
     "scripts/sync_model_config.py",
     "config/models.yaml",
+    # Schema validation reads the DECLARED price of a rung sitting below the
+    # workhorse fallback (DRE-3880), so the throwaway tree carries it too.
+    "config/model-prices.yaml",
     "agents.yaml",
 )
 
@@ -457,7 +460,7 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             self.assertEqual(_cli_select(tree, "engineer"), OPUS)
             _swap_workhorse(tree)
             self.assertEqual(
-                _cli_select(tree, "engineer"), SONNET,
+                _cli_select(tree, "engineer"), SONNET5,
                 "editing config/models.yaml did not change the selected model",
             )
 
@@ -468,15 +471,15 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             self.assertEqual(_run_sync(tree).returncode, 0)
             # The registry the console reads:
             self.assertEqual(
-                _agents_registry(tree / "agents.yaml")["engineer"]["model"], SONNET
+                _agents_registry(tree / "agents.yaml")["engineer"]["model"], SONNET5
             )
             # The Python degrade path:
             self.assertIn(
-                f'"{SONNET}", "{OPUS}"',
+                f'"{SONNET5}", "{OPUS}"',
                 (tree / "scripts" / "model_fallback.py").read_text(),
             )
             # And the CI path agrees.
-            self.assertEqual(_cli_select(tree, "engineer"), SONNET)
+            self.assertEqual(_cli_select(tree, "engineer"), SONNET5)
 
     def test_review_tier_is_editable_the_same_way(self):
         # Not just the build ladder: the critic/verifier/medic tier moves off
@@ -490,6 +493,11 @@ class ConfigDrivesTheFleetTest(unittest.TestCase):
             # SANCTIONED path — what policy validation blocks is the reverse
             # direction (the strongest model landing on a build ladder).
             cfg["ladders"][advisory] = [{"model": SONNET, "reason": "one-file edit"}]
+            # Moving the advisory tier OFF the overlapping model takes the
+            # selection rule that covered that overlap with it (DRE-3880): a
+            # rule describing an overlap that no longer exists is refused, so
+            # the fleet can never inherit a stale guarantee. Still one file.
+            cfg["review_separation"]["rules"] = []
             path.write_text(yaml.safe_dump(cfg, sort_keys=False))
             self.assertEqual(_cli_select(tree, "critic"), SONNET)
             # …and the build fleet is untouched by that edit.
