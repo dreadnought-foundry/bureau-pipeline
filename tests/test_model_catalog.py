@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -52,6 +53,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import bot_branch_pr  # noqa: E402
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 
@@ -637,11 +639,26 @@ def test_the_drift_workflow_opens_one_card_and_never_duplicates_it():
 
 def test_the_drift_workflow_commits_models_json_and_nothing_else():
     runs = _run_steps(_workflow_doc())
-    assert "git add models.json" in runs
+    assert "--path models.json" in runs
     assert "git add ." not in runs and "git add -A" not in runs
-    # Not just "we only staged one path" — the workflow PROVES the staged set
-    # before pushing, so a future edit cannot smuggle agents.yaml along.
-    assert "git diff --cached --name-only" in runs
+    # Not just "we only staged one path" — the staged set is PROVED before
+    # anything is pushed, so a future edit cannot smuggle agents.yaml along.
+    # Since DRE-3879 that proof lives in the publisher both scheduled jobs
+    # share, and it is exercised there; here we pin that it still refuses.
+    assert bot_branch_pr.unexpected_staged(
+        ["models.json", "agents.yaml"], ["models.json"]) == ["agents.yaml"]
+
+
+def test_the_drift_workflow_never_pushes_to_main():
+    """DRE-3879. `git push origin HEAD:main` is what branch protection
+    refused (`GH006`) on every weekly run since at least 2026-08-10. The
+    snapshot rides one pull request off `bot/model-drift` instead."""
+    text = _workflow_text()
+    uncommented = "\n".join(line for line in text.splitlines()
+                            if not line.lstrip().startswith("#"))
+    assert "HEAD:main" not in uncommented
+    assert not re.search(r"git\s+push[^\n]*\bmain\b", uncommented)
+    assert "--branch bot/model-drift" in uncommented
 
 
 def test_the_drift_workflow_cannot_touch_the_ladder():

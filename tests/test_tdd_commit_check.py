@@ -68,6 +68,77 @@ class ClassifyPathTest(unittest.TestCase):
     def test_agents_registry_is_ops(self):
         self.assertEqual(check_tdd_commits.classify_path("agents.yaml"), "ops")
 
+    # --- the catalog snapshot is data (DRE-3879) ------------------------
+    #
+    # `models.json` is the snapshot `model-drift.yml` refreshes from the
+    # Anthropic catalog once a week — the seam the console reads, data the
+    # job derives rather than code anybody authored. It classified as `code`
+    # (it is neither a docs path nor an ops one), so the weekly regeneration
+    # could not satisfy a check whose finding is the ORDER of commits that
+    # already exist: there is no RED test to write for a vendor's model list,
+    # and DRE-2694 means no added commit clears it.
+    #
+    # The CEO decided it on 2026-09-16 (signed console answer): count
+    # `models.json` as data, beside `config/` and `agents.yaml` — and NOTHING
+    # ELSE is exempted. The tests below hold both halves of that sentence.
+
+    def test_the_catalog_snapshot_is_ops(self):
+        self.assertEqual(check_tdd_commits.classify_path("models.json"), "ops")
+
+    def test_the_snapshot_exemption_is_that_one_path_and_no_other(self):
+        # Exact-path membership, never a prefix, a suffix or a directory: a
+        # `models.json` somewhere else in the tree is somebody's source file.
+        for path in ("console/models.json", "scripts/models.json",
+                     "models.json.bak", "my-models.json", "models.yaml"):
+            with self.subTest(path=path):
+                self.assertNotEqual(
+                    check_tdd_commits.classify_path(path), "ops",
+                    f"{path} gained an exemption nobody decided on",
+                )
+
+    def test_no_other_data_file_joined_the_list(self):
+        # The whole ops list, pinned. A later edit that quietly adds a second
+        # root-level data file is a new TDD exemption, and that is a decision
+        # rather than a tidy-up.
+        self.assertEqual(set(check_tdd_commits._OPS_FILES), {"agents.yaml",
+                                                             "models.json"})
+        self.assertEqual(tuple(check_tdd_commits._OPS_PREFIXES),
+                         (".github/", "config/"))
+
+    def test_a_python_change_beside_the_snapshot_still_needs_its_test_first(self):
+        """The boundary the CEO drew, as the check sees it: a pull request
+        that refreshes `models.json` AND edits code still owes the RED test
+        first. The exemption is about which files need one, never about
+        whether the rule applies."""
+        ok, reason = check_tdd_commits.check_commits([
+            commit(["models.json"], "chore(models): refresh the snapshot"),
+            commit(["scripts/model_catalog.py"], "feat: a real behaviour change"),
+        ])
+        self.assertFalse(ok, reason)
+        self.assertEqual(reason, check_tdd_commits.FAILURE_MESSAGE)
+        # …and with the test commit first, the same pair passes.
+        ok, _ = check_tdd_commits.check_commits([
+            commit(["tests/test_model_catalog.py"], "RED"),
+            commit(["models.json"], "chore(models): refresh the snapshot"),
+            commit(["scripts/model_catalog.py"], "feat: a real behaviour change"),
+        ])
+        self.assertTrue(ok)
+
+    def test_a_snapshot_only_pull_request_is_exempt(self):
+        ok, reason = check_tdd_commits.check_commits([
+            commit(["models.json"], "chore(models): refresh the catalog snapshot"),
+        ])
+        self.assertTrue(ok, reason)
+
+    def test_the_bot_branches_get_no_identity_exemption(self):
+        """The exemption the CEO chose is the PATH, not the branch. Neither
+        scheduled job's branch buys its pull request the standards-sync
+        identity exemption — a `.py` change riding on one is still code."""
+        for branch in ("bot/split-ledger", "bot/model-drift"):
+            with self.subTest(branch=branch):
+                self.assertFalse(check_tdd_commits.is_standards_sync_pr(
+                    branch, "agent-bureau-bot", ["agent-bureau-bot"]))
+
     # --- nested test trees (DRE-2741) -----------------------------------
     #
     # DRE-2022 built this check for bureau-pipeline's OWN PRs, and this repo
