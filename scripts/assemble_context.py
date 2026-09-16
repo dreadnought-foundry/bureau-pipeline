@@ -57,8 +57,11 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # and build console state surfaces honestly (DRE-2107 — badges derive
     # from what actually happened, never from adjacent signals).
     "engineer": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
-    # Frontend is the engineer in web mode + the design-fidelity standard.
-    "frontend": ["engineering.md", "architecture.md", "card-quality.md", "design.md", "vendor-boundaries.md", "console-honesty.md"],
+    # Frontend is the engineer in web mode + the design-fidelity standard, and
+    # the fleet-wide design system it produces design work inside of
+    # (design-system.md — DRE-3938: one `design/` folder, tokens and atoms
+    # locked in LOCK.json, everything starting from the master template).
+    "frontend": ["engineering.md", "architecture.md", "card-quality.md", "design.md", "design-system.md", "vendor-boundaries.md", "console-honesty.md"],
     # DevOps shares the engineer set (infra is code; same discipline + shape)
     # minus console-honesty — it authors CDK/CI/migrations, not console
     # state surfaces.
@@ -90,7 +93,10 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # goes to the critic ALONE, because it is the only role that writes a
     # verdict: a finding that asserts what a command or a job did carries
     # the run, or it is not made.
-    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md", "verdict-evidence.md"],
+    # design-system.md (DRE-3938) joins the design lenses beside design-parity:
+    # the critic is the role that says whether a design is really done, and it
+    # cannot hold work to a folder shape and a lock it was never handed.
+    "critic": ["engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "design-system.md", "plan-artifact.md", "verdict-evidence.md"],
     # The two PLAN critics (DRE-2721). Their standards sets differ on purpose,
     # because their questions do:
     #   pre  — "is this fit to take the CEO's time?" It judges the SHAPE of a

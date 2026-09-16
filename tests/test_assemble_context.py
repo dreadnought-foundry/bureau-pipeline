@@ -63,13 +63,16 @@ class MappingTest(unittest.TestCase):
         # the same file. verdict-evidence.md (DRE-3005) goes to the critic
         # alone, for the mirror reason: it is the only role that writes a
         # verdict, and a verdict asserting what a command did carries the run.
+        # design-system.md (DRE-3938) goes to the two roles that produce and
+        # gate design work — the frontend build agent and the critic whose
+        # checklist says whether a design is really done.
         expected = {
             "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md"],
-            "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "vendor-boundaries.md", "console-honesty.md"],
+            "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "design-system.md", "vendor-boundaries.md", "console-honesty.md"],
             "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
             "database-architect": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md"],
             "planner": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "vendor-boundaries.md", "design-parity.md", "plan-artifact.md", "wave-plan.md"],
-            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "plan-artifact.md", "verdict-evidence.md"],
+            "critic": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "console-honesty.md", "design-parity.md", "design-system.md", "plan-artifact.md", "verdict-evidence.md"],
             "verifier": ["comms.md", "untrusted-content.md", "design.md", "design-parity.md"],
             # The two plan critics (DRE-2721). Different questions, so
             # different context: the pre stage judges the SHAPE of a plan that
@@ -117,6 +120,27 @@ class MappingTest(unittest.TestCase):
             self.assertNotIn(
                 "console-honesty.md", ac.standards_for(role),
                 f"{role} must not carry the console-honesty standard",
+            )
+
+    def test_design_system_reaches_the_design_roles_only(self):
+        # DRE-3938: one `design/` standard and one design critic, fleet-wide.
+        # It must reach the role that PRODUCES design work and the role whose
+        # checklist gates it done. engineer/devops/database-architect author
+        # backend/infra, the planner's design obligation is design-parity.md,
+        # and the fixer/medic work inside an already-reviewed diff — keeping
+        # their context lean is deliberate. (The verifier is left out on
+        # purpose: it proves a shipped surface against the design ref, which is
+        # design.md + design-parity.md, not the folder-and-lock contract.)
+        for role in ("frontend", "critic"):
+            self.assertIn(
+                "design-system.md", ac.standards_for(role),
+                f"{role} must receive the design-system standard",
+            )
+        for role in ("engineer", "devops", "planner", "verifier", "fix",
+                     "medic", "database-architect"):
+            self.assertNotIn(
+                "design-system.md", ac.standards_for(role),
+                f"{role} must not carry the design-system standard",
             )
 
     def test_frontend_alone_gets_design(self):
