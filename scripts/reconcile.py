@@ -667,22 +667,125 @@ _stale_defects: list[str] = []
 PROSE_DEFECT_RED_MINUTES = 120
 
 
+#: How many times a read-path gh call is attempted when GitHub answers with a
+#: BRIEF refusal, and how long it waits between attempts (DRE-4109). Three
+#: attempts, ~15s then ~45s: under a minute of waiting in the worst case, which
+#: sits well inside the sweep's 10-minute job timeout, and long enough that a
+#: secondary-rate-limit blip has cleared. An hourly bucket that is genuinely
+#: empty will NOT clear in that minute — that run still raises, still exits 1
+#: and still files, which is exactly the "only tell me if it persists" the CEO
+#: asked for (signed console answer, 2026-09-16).
+GH_READ_ATTEMPTS = 3
+GH_READ_BACKOFF_SECONDS = (15, 45)
+
+#: And how many retries the WHOLE sweep may spend. Per-read the budget above is
+#: the card's; this is the bound `standards/vendor-boundaries.md` Q5 requires of
+#: every retry at a vendor boundary, and it exists because `pr_for` runs once
+#: PER CARD: a genuinely empty hourly bucket refuses every read of the sweep,
+#: not one. Unbounded, a dozen refused reads would spend a dozen minutes of
+#: waiting and the sweep's 10-minute job timeout would KILL the run — turning
+#: today's loud, fast, correctly-filed failure into a hung one that never
+#: prints its ledger, which is strictly worse than what DRE-4109 set out to
+#: fix. Six retries is the worst case this sweep will wait for — about three
+#: minutes, leaving seven — and it is spent only by refusals: a sweep of clean
+#: reads spends none, and six separate one-blip reads all get their retry.
+#: Past it, gh_read behaves exactly as it did before this card. (DRE-1921:
+#: re-running against an exhausted limit cannot succeed and deepens it.)
+GH_READ_RETRY_BUDGET = 6
+
+#: Retries spent by THIS process. Module state, like the failure ledgers above:
+#: one sweep is one process.
+_gh_read_retries_spent = 0
+
+#: GitHub's rate-limit wording, and ONLY that (DRE-4109). Deliberately narrower
+#: than medic_classify's log-scanning patterns: this one decides whether to
+#: spend another request, so it matches the refusals that a wait actually fixes
+#: — `API rate limit exceeded`, `secondary rate limit`, an HTTP 429. The OTHER
+#: 403, `Resource not accessible by integration`, is a permission failure that
+#: no amount of waiting repairs; retrying it would only deepen the quota burn
+#: DRE-1921 was filed for. The 429 alternative is anchored to an `http`/`status`
+#: word so a bare 429 inside an installation id or a PR number cannot match.
+_RATE_LIMIT_REFUSAL = re.compile(
+    r"api rate limit exceeded"
+    r"|secondary rate limit"
+    r"|(?:http|status)\D{0,6}\b429\b",
+    re.I,
+)
+
+
+def _is_rate_limit_refusal(stderr: str) -> bool:
+    """True iff `gh`'s stderr is GitHub declining THIS request for quota."""
+    return bool(_RATE_LIMIT_REFUSAL.search(stderr))
+
+
 def gh_read(*args: str) -> str:
-    """Run a read-path gh command LOUDLY: raise ReconcileReadError on rc!=0.
+    """Run a read-path gh command LOUDLY: raise ReconcileReadError on rc!=0,
+    after retrying a brief rate-limit refusal a couple of times.
 
     Origin (2026-06-28, twice live / DRE-2034): the silent gh() helper
     discarded exit code and stderr, so a 403/rate-limit on the PR lookup
     parsed as "[]" — indistinguishable from "this card has no PR" — and the
     sweep requeued healthy cards off that fabricated emptiness.
+
+    The retry (DRE-4109, and DRE-4107 the same hour on portico): the unlanded
+    watchdog's `repos/:r/branches --paginate` listing came back `HTTP 403: API
+    rate limit exceeded for installation ID 123249480` — the SHARED App
+    installation, momentarily throttled — `card_branches` recorded it as a
+    write failure, the sweep exited 1 and the medic filed a pipeline-failure
+    card, while every other phase of that sweep had run normally. A brief
+    refusal from an outside service is a retry, not a failure. The CEO's
+    answer named the remedy and its limits: back off and try again a couple of
+    times, do NOT ask for the data any less often (the freshness is worth more
+    than the occasional blip), and say so in the run log each time so the
+    pattern is visible without a card.
+
+    This is the ONE seam that retries, and it covers every read that goes
+    through it. `gh()` keeps its own fallbacks; `gh_actions_read()` /
+    `_actions_read()` run under GH_DISPATCH_TOKEN — a different GitHub quota
+    from the App installation that was refused — and their contract stays
+    "answer None and fail closed", never "raise".
+
+    Bounded twice: three attempts per read, and GH_READ_RETRY_BUDGET retries
+    per sweep. The second bound is there because a refusal is rarely alone —
+    `pr_for` runs once per card, so an empty bucket refuses every read of the
+    sweep, and unbounded waiting would run the job into its own timeout.
     """
-    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
-        ["gh", *args], capture_output=True, text=True, check=False
-    )
-    if p.returncode != 0:
-        raise ReconcileReadError(
-            f"gh {' '.join(args)} failed rc={p.returncode}: {p.stderr.strip()[:400]}"
+    global _gh_read_retries_spent
+    for attempt in range(1, GH_READ_ATTEMPTS + 1):
+        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+            ["gh", *args], capture_output=True, text=True, check=False
         )
-    return p.stdout.strip()
+        if p.returncode == 0:
+            return p.stdout.strip()
+        stderr = p.stderr.strip()
+        retryable = attempt < GH_READ_ATTEMPTS and _is_rate_limit_refusal(stderr)
+        if retryable and _gh_read_retries_spent >= GH_READ_RETRY_BUDGET:
+            # Say it once per read, so nobody reads the missing retry line as
+            # the retry having silently stopped working.
+            print(
+                f"gh-read: this sweep's retry budget of {GH_READ_RETRY_BUDGET} "
+                f"is spent — `gh {' '.join(args)}` was refused for rate limit "
+                "and is NOT being retried; the bucket is empty, not blipping"
+            )
+            retryable = False
+        if not retryable:
+            raise ReconcileReadError(
+                f"gh {' '.join(args)} failed rc={p.returncode}: {stderr[:400]}"
+            )
+        _gh_read_retries_spent += 1
+        wait = GH_READ_BACKOFF_SECONDS[attempt - 1]
+        # ONE line per retry, to the run log, naming the command and where we
+        # are in the budget — this is the whole of the visibility the CEO asked
+        # for in place of a card.
+        print(
+            f"gh-read: GitHub refused `gh {' '.join(args)}` for rate limit on "
+            f"attempt {attempt} of {GH_READ_ATTEMPTS} — retrying in {wait}s: "
+            f"{stderr[:200]}"
+        )
+        time.sleep(wait)
+    # Unreachable: the final attempt either returns or raises above. Kept so
+    # the function has no implicit `return None` for a caller to act on.
+    raise ReconcileReadError(f"gh {' '.join(args)} failed: retries exhausted")
 
 
 def gh_dispatch(*args: str) -> None:
