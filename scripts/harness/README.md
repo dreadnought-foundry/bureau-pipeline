@@ -3,19 +3,36 @@
 End-to-end scenarios against the dedicated sandbox repo
 **`dreadnought-foundry/bureau-harness`**, driven by
 `.github/workflows/harness.yml` (job id `harness`; workflow_dispatch with
-input `pipeline_ref` default `main`, plus a `pull_request` trigger on the
-boundary paths — DRE-2103 — plus a `push` trigger on `main` with no paths
-filter, so every trunk commit is proved and stamped — DRE-2551). The
+input `pipeline_ref` default `main`, plus a `push` trigger on `main` with no
+paths filter, so every trunk commit is proved and stamped — DRE-2551; there
+is deliberately NO `pull_request` trigger — DRE-4149, below). The
 scenarios mock **nothing GitHub-side** —
 real branches, real PRs, the sandbox's real critic and merge-gate stubs,
 real App identities. Unit tests (`tests/test_harness_*.py`) cover only
 the driver's pure logic.
 
-The harness is **load-bearing** (DRE-2103): on a boundary-touching PR the
-driver runs from the PR's own head and its red check run holds the merge
-gate (all-checks-green, no branch-protection change); dependabot-triggered
-PR events self-skip clean at the job level (empty Dependabot secrets
-store). A green run stamps a success `integration-harness` commit status
+The harness is **load-bearing**, and what it bears is the release channel,
+not the pull request. **It proves `main`, not every pull request (DRE-4149).**
+From DRE-2103 until 2026-09-17 it also ran on boundary-touching PRs and its
+red check run held the merge gate. That run largely re-proved `main` — the
+sandbox rides `@main`, and the harness logged on every PR run that the commit
+it compiled "is NOT the commit under test" — and on 2026-09-17, with the
+worker App's hourly GitHub allowance exhausted (DRE-4132), refused harness
+runs held six approved PRs behind a red check that said nothing about their
+code. A PR now merges on the critic, the verifier and the unit/contract suite;
+the harness runs on every push to `main`, where its verdict decides whether
+`stable` advances, and Red-Main Repair watches it there (DRE-2820). To prove a
+risky branch before it merges, dispatch by hand with `pipeline_ref=<branch>` —
+that run proves, it does not gate.
+
+**The accepted cost, named (DRE-4149).** A change that breaks the pipeline
+end to end is found on `main` after it merges rather than on its pull request
+before. `stable` does not move onto it, so no product repo sees it; Red-Main
+Repair watches the harness on `main` (DRE-2820) and files the repair card.
+With several merges between two `main` runs, the failing run names a range of
+commits, not one.
+
+A green run stamps a success `integration-harness` commit status
 on the tested sha — the record `release-gate.yml` requires before any
 `v*` tag stands ("agents author, human promotes, harness proves"), and,
 since DRE-2551, the record `promote-channel.yml` requires before it moves
@@ -117,19 +134,20 @@ unusable IS a failure.
 ### One namespace per kind of run (DRE-3075)
 
 Every run id OPENS with the run's namespace — `main-…` for a push to main
-and for a hand dispatch, `pr<number>-…` for a pull request's proving run,
-`local-…` off the CLI (`HARNESS_NAMESPACE` / `--namespace`). So the
+and for a hand dispatch, `local-…` off the CLI (`HARNESS_NAMESPACE` /
+`--namespace`; `pr<number>-…` was a pull request's proving run until DRE-4149
+removed it, and the driver still accepts the shape). So the
 namespace is a prefix of every branch and every probe file the run
 creates, and **each sweep collects only its own**.
 
-That is what lets two runs share the sandbox, which is the point:
-`harness.yml` holds a no-cancel concurrency group **per kind of run**
-(`integration-harness-main`, `integration-harness-pr-<number>`), so main's
-proving run — the one `stable` advances on — never queues behind a pull
-request's. On 2026-09-03 it did, for 18 minutes, and `stable` fell 50
-commits behind. Two runs at once means an unscoped sweep would delete the
-branches the other one is mid-scenario on, so the namespace scoping and
-the split slots are one change, not two.
+That is what lets two runs share the sandbox. DRE-3075 built it so that
+main's proving run — the one `stable` advances on — never queued behind a
+pull request's (`integration-harness-main` beside
+`integration-harness-pr-<number>`): on 2026-09-03 it did, for 18 minutes, and
+`stable` fell 50 commits behind. Since DRE-4149 there is no pull-request run,
+and `harness.yml` holds ONE no-cancel group, `integration-harness-main`, for
+every run it can start; the namespace scoping stays because a `local` run off
+the CLI still shares the sandbox with main's.
 
 A namespace carries no dash (`pr251`, not `pr-251`): the dash is what
 separates it from the run id, so allowing one inside would let namespace
@@ -147,8 +165,10 @@ leftover whose age cannot be read is left alone, always.
 #### The isolation is only as old as the oldest driver in flight
 
 All of the above lives in `framework.py`, and `harness.yml` checks that file
-out at `github.event.pull_request.head.sha` — a pull request's own head, at
-whatever vintage the branch was cut. A branch that forked before DRE-3075
+out at whatever ref the run is about — since DRE-4149 that is `main`'s own
+commit on a push, or the `pipeline_ref` a person dispatches by hand, at
+whatever vintage that branch was cut (before DRE-4149 it was every pull
+request's own head). A branch that forked before DRE-3075
 therefore still runs the UNSCOPED sweep, which closes every open harness PR
 it finds, whoever it belongs to.
 
@@ -164,9 +184,10 @@ So the driver declares `SANDBOX_ISOLATION_CONTRACT`, and `harness.yml`
 refuses a checkout below its own `REQUIRED_CONTRACT` floor **before it mints
 a sandbox token** — the offending branch goes red and is told to rebase,
 instead of the run beside it. The guard is written in the workflow rather
-than in a script here because the whole checkout is the stale thing: on a
-`pull_request` event GitHub runs the workflow file from the merge ref, which
-makes it the one part of the run a stale branch cannot make stale. It reads
+than in a script here because the whole checkout is the stale thing: a
+dispatch runs the workflow file from the ref it was dispatched ON (`main`),
+which makes it the one part of the run a stale branch cannot make stale. It
+reads
 the declaration with `ast` rather than importing, because a driver old
 enough to matter may not import at all, and a crash must not read as a pass.
 
@@ -341,9 +362,9 @@ asserts only what the sandbox SHOWS: PR existence/absence, PR body content
 under `## Unmet criteria`, comment text, and (scenario 5) the mutation
 outcome. The agent's transcript is never an input to a pass.
 
-**Opt-in by name.** `harness.yml` runs on every boundary PR and its check run
-holds this repo's merge gate; five agent runs per PR would hold every merge
-for hours. So the default sweep (empty `scenarios` input) is exactly the cheap
+**Opt-in by name.** `harness.yml` runs on every push to `main` and the release
+channel waits on it; five agent runs per merge would hold `stable` for hours.
+So the default sweep (empty `scenarios` input) is exactly the cheap
 scenarios — every discovered scenario whose `requires_agent` is false, listed
 in `docs/harness.md` — and these are selected by name through the same input —
 `--scenarios unverified_claim`. The driver caps each agent at 45 minutes and
