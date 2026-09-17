@@ -232,8 +232,10 @@ def test_the_batch_table_the_drain_parses_never_carries_it():
     assert moved == ["DRE-1", "DRE-2"], (
         "the drain moves what the batch table says; it never says DRE-3020"
     )
-    assert DECLINED not in groomer.proposal_comment(proposal).split(
-        "## Collisions")[0].split("## The batch, in order")[1], (
+    table = groomer.proposal_comment(proposal).split(
+        "## The batch, in order")[1].split("\n## ")[0]
+    assert "DRE-3020" not in table
+    assert DECLINED not in table, (
         "no batch row may print the sentence that says nobody could place it"
     )
 
@@ -255,6 +257,46 @@ def test_a_proposal_that_proposes_an_unranked_card_is_refused_at_write_time():
     assert "DRE-3020" in str(caught.value)
     with pytest.raises(groomer.ProposalContradiction):
         groomer.proposal_comment(proposal)
+
+
+# --------------------------------------------------------------------------
+# a read that placed nothing declined nothing
+# --------------------------------------------------------------------------
+def test_a_read_that_answered_nothing_still_proposes_the_rules_batch():
+    """`problem` is set on exactly the paths where NO card was ranked, and
+    every card is `unranked` by default there. The read refused nothing, so
+    the proposal is the rules' — emptying the batch would take the groomer
+    down with the model."""
+    cards = population()
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=20, now=NOW,
+                               judgement=judged(cards, "I'd rather not."))
+    assert proposal["judgement"]["problem"]
+    assert proposal["judgement"]["unranked"] == ["DRE-1", "DRE-2", "DRE-3020"]
+    assert batch_ids(proposal) == ["DRE-1", "DRE-3020", "DRE-2"], (
+        "a read that placed nothing falls back to the rules, exactly as it "
+        "did before the read existed"
+    )
+    groomer.assert_disjoint(proposal)
+    text = groomer.proposal_comment(proposal)
+    assert proposal["judgement"]["problem"] in text
+    assert "## Could not rank — needs a person" not in text, (
+        "the whole population under a heading that says nobody could place "
+        "it, listing the very cards in the batch above, is the contradiction "
+        "this card is about — the problem line says what happened instead"
+    )
+
+
+def test_a_failed_read_still_names_a_trigger_on_every_deferred_card():
+    cards = [card(f"DRE-{n}", days=n) for n in range(1, 6)]
+    proposal = groomer.propose(cards, cycles=CYCLES, capacity=2, now=NOW,
+                               judgement=judged(cards, "I'd rather not."))
+    later = later_rows(proposal)
+    assert later, "capacity 2 over five cards defers three of them"
+    for identifier, row in later.items():
+        assert row["trigger"], (
+            f"{identifier} was deferred by the RULES — the read declined "
+            f"nothing, so it still names what brings it back"
+        )
 
 
 # --------------------------------------------------------------------------

@@ -287,8 +287,20 @@ the same defect**, which is the difference between a guard and a coincidence.
 
 **Not fixed here, and owned elsewhere.** This record does not change the
 groomer; it reports what the two batches did. **DRE-3544** is the card that owns
-the fix, and as of 2026-09-12 it is still in `Intake` with the code path above
+the fix, and as of 2026-09-12 it was still in `Intake` with the code path above
 unchanged on `main`.
+
+**Fixed on 2026-09-16 by DRE-3544**, and the paragraph above is the code as it
+stood when this record was written. `propose` now removes a card the read
+declined from the batch where the batch is made — the proposed cards and the
+`unranked` ones are disjoint by construction and `assert_disjoint` refuses a
+proposal where they are not, so neither the band rule nor a sequence position
+is what keeps a declined card out any more. The unit rule described above is
+unchanged: it still decides where a unit sits in the order, and it is no
+longer what decides whether a declined card is in the batch. Whether a real
+judged batch shows it — the live proposal — cannot be seen until this is on
+`main` and a groom runs, so it is owed by **DRE-4100**, the follow-up DRE-3544
+blocks, and not by this record.
 
 ## The scorer's report, over DRE-3151's audit table
 
