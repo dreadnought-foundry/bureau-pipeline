@@ -114,6 +114,31 @@ scenario waiting on it had no way to tell that from slowness, so it waited
 out `timeout-minutes: 180` and `stable` sat 50 commits behind until a human
 cancelled the run.
 
+## What a wait costs GitHub (DRE-4132)
+
+Every wait above is the same URL asked again, and GitHub bills each ask against
+the identity's 5,000 requests an hour. `gate_paths`' stale leg asks two every
+five seconds — 24 a minute per live run — and on 2026-09-17 that was most of
+what emptied the worker installation's hour, which refuses every job in the
+fleet that holds the worker token, not just the harness.
+
+So the client (`github_api.GitHub`) makes repeated reads **conditional**: it
+remembers each GET's `ETag` and body, sends `If-None-Match` next time, and
+answers from memory on `304 Not Modified` — which GitHub does not bill
+(measured: 20 conditional reads moved `x-ratelimit-used` by 0; 20 unconditional
+moved it by 20). The cadence is untouched — the five seconds are the race the
+stale leg exists to win — and a `200` always replaces the memory, so a wait
+sees a new comment on the same poll it would have before. Writes and the raw
+log archive are never conditional. `GitHub(..., conditional=False)` is the
+pre-DRE-4132 client.
+
+Every run ends with one line per identity, zero included — in this shape (the
+numbers here are an illustration, not a measurement):
+
+    github-spend: worker 212 billed, 1840 free (304 Not Modified)
+
+`billed` is what the run cost that identity's hour. Read it before guessing.
+
 ## Namespacing and self-cleaning
 
 Every branch a run creates is `agent/harness-<run-id>-<scenario>` (or
