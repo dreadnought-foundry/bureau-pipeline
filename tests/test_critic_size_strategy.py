@@ -829,6 +829,9 @@ class OversizedPostStepScenarioTest(unittest.TestCase):
             # variable here is a latent break the moment anyone does.
             f.write("set -euo pipefail\n" + run.replace("/tmp/", td + "/"))
         env = dict(os.environ, PATH=f"{td}/bin:{os.environ['PATH']}",
+                   # DRE-3226: the checkout outside the workspace the post
+                   # step runs its scripts out of. This repo is one.
+                   PIPELINE_DIR=os.path.abspath(REPO),
                    CARD="", REAL="false", PR="297",
                    REVIEWED_SHA="a" * 40, CONTENT_ID="", MODEL_ID="m",
                    MODEL_WHY="why")

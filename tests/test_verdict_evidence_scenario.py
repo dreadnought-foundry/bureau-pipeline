@@ -172,6 +172,10 @@ def run_post(verdict_text: str, *, body_read_at: str = "",
         env = dict(os.environ)
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
         env.update({
+            # DRE-3226: the checkout now sits outside the working tree and
+            # the step addresses it by this variable. The symlink above is
+            # that checkout.
+            "PIPELINE_DIR": str(td / ".bureau-pipeline"),
             "CARD": "", "PR": "2247", "REAL": outputs["real"],
             "REVIEWED_SHA": "f" * 40, "CONTENT_ID": "e" * 64,
             "MODEL_ID": "claude-opus-5", "MODEL_WHY": "advisory ladder top",

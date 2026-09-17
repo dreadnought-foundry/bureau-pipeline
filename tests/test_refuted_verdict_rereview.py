@@ -623,7 +623,10 @@ class CriticBriefTest(unittest.TestCase):
         path = os.path.join(ROOT, "briefs", "critic.md")
         self.assertTrue(os.path.isfile(path), "briefs/critic.md is missing")
         body = open(path, encoding="utf-8").read()
-        self.assertIn(".bureau-pipeline/tests/fixtures/", body)
+        # DRE-3226 moved the pipeline checkout out of the reviewed working
+        # tree, so the brief names the fixtures where the critic can now
+        # actually find them.
+        self.assertIn("$PIPELINE_DIR/tests/fixtures/", body)
         self.assertIn("snapshot", body)
         self.assertIn("stale", body)
         self.assertIn("quoted in the PR body", body)

@@ -87,6 +87,11 @@ class _Harness:
         self.linear_dir.mkdir()
         ops = td / ".bureau-pipeline" / "scripts"
         ops.mkdir(parents=True)
+        # DRE-3226: the post step probes for the gate's own script before
+        # it composes anything — a checkout that is not there gets the
+        # missing-checkout notice, not a verdict. This harness is a present
+        # checkout, so the probe must find it.
+        (ops / "check_critic_result.py").write_text("pass\n")
         (ops / "linear_ops.py").write_text(
             "import sys, json, pathlib\n"
             f"d = pathlib.Path({str(self.linear_dir)!r})\n"
@@ -127,6 +132,9 @@ def _run_post(td: Path, *, card: str, real: str = "true",
     # that indirection is the thing under test, so the harness must not
     # shortcut it by pasting the values into the script.
     env.update({
+        # The stubbed pipeline checkout above, addressed the way the
+        # workflow addresses the real one (DRE-3226).
+        "PIPELINE_DIR": str(td / ".bureau-pipeline"),
         "CARD": card, "REAL": real, "PR": "132",
         "REVIEWED_SHA": "a" * 40, "CONTENT_ID": "c" * 64,
         "MODEL_ID": model, "MODEL_WHY": why,
