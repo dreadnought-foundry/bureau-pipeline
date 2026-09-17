@@ -242,12 +242,20 @@ So the rule, now enforced by schema validation in
 `model_fallback.policy_errors()` rather than by convention:
 
 - the model at the **top of a non-build ladder** — the advisory one, the
-  judgement one — must not appear on any build ladder, and it may not hide
-  *below* the rung that ladder degrades onto either. A config that puts it there
-  is **refused**: `sync_model_config.py --check` fails CI red, and the selector
-  keeps running the last-known-good ladders instead of honouring it. The rungs
-  beneath the top are deliberately shared: that is the DEGRADED fall onto the
-  build model;
+  judgement one — must not appear on any build ladder. A config that puts it
+  there is **refused**: `sync_model_config.py --check` fails CI red, and the
+  selector keeps running the last-known-good ladders instead of honouring it.
+  The rungs beneath the top are deliberately shared: that is the DEGRADED fall
+  onto the build model. **One exemption, for the advisory ladder only**
+  (DRE-3880) — see *The one declared overlap* below;
+- nothing **dearer than the rung a non-build ladder degrades onto** may sit
+  below that rung, where the check above cannot see it. The question is the
+  **declared price** in `model-prices.yaml`, so a rung with no declared price is
+  refused: a price is never guessed, and a rung that cannot be shown to be no
+  dearer fails closed. (This used to read "every rung below the fallback is a
+  workhorse model" — a proxy for the same thing, and it stopped working the
+  moment `claude-sonnet-4-6` left the build ladder and stayed the planner's last
+  resort.);
 - an `excluded` id must not appear on **any** ladder, enforced on its own terms
   rather than as a side effect of the rule above;
 - the critic and verifier must stay `advisory`;
@@ -262,6 +270,54 @@ So the rule, now enforced by schema validation in
   `discovery.alert` must be true: the weekly `model-drift` workflow opens one
   Linear card for a human whenever the API offers a model this file does not
   name.
+
+## The one declared overlap — a Sonnet-5 build is never reviewed by Sonnet 5
+
+Since 2026-09-16 (CEO decision, DRE-3880) `claude-sonnet-5` **tops the advisory
+ladder and backs the workhorse one**. One model, two ladders — so the build /
+review fence the rule above used to buy by keeping those two lists disjoint is
+bought at **selection time**, per pull request, instead:
+
+```yaml
+review_separation:
+  roles: [critic, verifier]          # the roles that REVIEW a pull request
+  rules:
+    - built_on: claude-sonnet-5      # …when the build ran on this…
+      reviewers_use: claude-opus-5   # …those roles run on this instead
+```
+
+The critic's and the verifier's Select-model steps read the model the build ran
+on off the card's own `model-attempt:` heartbeat
+(`model_fallback.py build-model`) and pass it as `--built-on`, which takes that
+rung off the reviewer's walk. A card they cannot read is `--built-on-unknown`,
+which bars **every** declared overlap: absence of evidence that the build ran on
+something else is not evidence that it did, and the guarantee has to survive a
+Linear blip. The cost of that fail-closed default is a reviewer on Opus rather
+than Sonnet 5 on any pull request whose card cannot be read.
+
+The overlap is not new in principle — the advisory ladder's own fallback is
+`claude-opus-5`, the workhorse **primary**, so reviewer and worker have
+coincided whenever the critic falls back. What is new is that the guarantee is
+explicit per run instead of incidental.
+
+A declaration is not decoration. `policy_errors` refuses a **bare** overlap (one
+with no rule), a rule that sends the reviewer back to the build model, a
+`reviewers_use` that is not on the advisory ladder, and a **stale** rule
+describing an overlap that no longer exists. That last one is the DRE-3892
+carry-forward: a same-family successor replaces this rung on *both* ladders at
+once, so an adoption that leaves the rule behind fails `--check` twice — the new
+rung is a bare overlap, and the old rule names a model that is no longer one.
+
+The separation binds reviewers and **only** reviewers. The medic is advisory too
+and is deliberately absent: it diagnoses a failed run and reviews nothing. The
+judgement ladder gets no such exemption at all — declaring a rule buys nothing
+for the planner's model, because Fable on a build ladder is still the 2026-08-09
+incident.
+
+Recording it is **not** a degradation: the selection note names the separation
+and never carries the `DEGRADED` prefix. A `::warning::` on every Sonnet-5 build
+would teach the fleet to ignore the warning that means a reviewer did not get
+its model.
 
 ## Every run says which model it used, and why anything above it was skipped
 
@@ -300,6 +356,10 @@ The wider design is recorded in `architecture/decisions/adr-model-policy.md` in
   pins a model id; a test reads the workflow files and fails if one does.
 - **The console roster**, indirectly: `agents.yaml`'s per-agent `model:` line is
   a **generated** mirror of this file.
+- **`model-prices.yaml`**, the other way round: schema validation reads the
+  declared price of any rung sitting below the one its ladder degrades onto
+  (DRE-3880), so that file is on the dispatch path too — an entry deleted there
+  makes this config stop validating, and the fleet falls to the mirror.
 
 ## Generated mirrors and the drift gate
 
@@ -317,6 +377,10 @@ when the YAML is unreadable, so a truncated checkout degrades instead of
 stranding a dispatch. `tests/test_model_config.py` pins the markers, the
 byte-for-byte regeneration, the red `--check`, and that editing this file alone
 changes what the fleet selects.
+
+The literal carries `review_separation` too (DRE-3880): a degrade that dropped
+the fence would review a Sonnet-5 build on Sonnet 5 and look exactly like a
+healthy run.
 
 ## Changing a model
 

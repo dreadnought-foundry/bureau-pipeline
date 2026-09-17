@@ -1,5 +1,16 @@
 # model-prices.yaml — the DECLARED price of a model, in USD per million tokens
-# (DRE-3895). Read by `scripts/model_adoption.py`, and by nothing else.
+# (DRE-3895). Two readers, and no third:
+#
+#   * `scripts/model_adoption.py` — the adoption rule ("newer and no dearer").
+#   * `scripts/model_fallback.py` — schema validation, since DRE-3880. One
+#     question only: is a rung sitting BELOW the one its ladder degrades onto
+#     dearer than that rung? The rule used to read "every rung below the
+#     fallback is a workhorse model", a proxy that stopped working the moment
+#     `claude-sonnet-4-6` left the build ladder and stayed the planner's last
+#     resort. That makes this file load-bearing on the DISPATCH path: a config
+#     whose lower rungs cannot be priced is refused and the fleet keeps the
+#     last-known-good ladders, so an entry deleted here is a fleet-wide
+#     degrade, not a documentation change.
 #
 # PRICE IS NEVER GUESSED, AND ABSENCE IS A VALID ANSWER.
 # ------------------------------------------------------
@@ -51,9 +62,11 @@ prices:
     output: 10.00
     source: "https://www.anthropic.com/pricing"
     declared: 2026-09-14
-  # Kept whichever way DRE-3880 (Sonnet 4.6 → Sonnet 5) merges: a retired id
-  # may keep its price, and dropping it would make this file's history harder
-  # to read for no gain.
+  # LOAD-BEARING since DRE-3880 merged (2026-09-16). Sonnet 4.6 left the
+  # workhorse ladder and kept the judgement ladder's last rung, which puts it
+  # BELOW the rung that ladder degrades onto — so this entry is what shows it
+  # is cheaper than Opus 5 and admissible there. Delete it and the canonical
+  # config stops validating.
   claude-sonnet-4-6:
     input: 3.00
     output: 15.00

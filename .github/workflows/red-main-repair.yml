@@ -22,7 +22,8 @@
 #     bucket card dispatch is draining.
 #
 # Model: the workhorse ladder with runtime availability detection
-# (model_fallback.py, engineer role) — claude-opus-5, then claude-sonnet-4-6.
+# (model_fallback.py, engineer role) — claude-opus-5, then claude-sonnet-5
+# (DRE-3880 replaced claude-sonnet-4-6 on that rung, 2026-09-16).
 #
 # Reusable workflow: the workflow_run trigger list (which CI workflows to
 # watch) and permissions live in the calling stub; the stub's github.token

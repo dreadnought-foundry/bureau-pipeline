@@ -226,10 +226,15 @@ def test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder(tmp_path):
     assert sonnet6["family"] == "sonnet"
     assert sonnet6["display_name"] == "Claude Sonnet 6"
     assert sonnet6["price"] == {"input": 2.0, "output": 10.0}
-    # Every ladder carrying a Sonnet rung, and on each the family's NEWEST one:
-    # the advisory ladder runs Sonnet 5, the other two run Sonnet 4.6.
+    # Every ladder carrying a Sonnet rung, and on each the family's NEWEST one.
+    # Since 2026-09-16 (DRE-3880) Sonnet 5 is the newest on TWO of them — it
+    # tops the advisory ladder and backs the workhorse one — so a same-family
+    # successor takes two rungs at once, which is exactly why the selection
+    # rule that covers that overlap has to travel with it
+    # (tests/test_review_separation.py, CarriedForwardToDre3892Test). The
+    # judgement ladder still ends on Sonnet 4.6.
     assert {(r["ladder"], r["model"]) for r in sonnet6["replaces"]} == {
-        ("workhorse", SONNET46),
+        ("workhorse", SONNET5),
         ("advisory", SONNET5),
         ("judgement", SONNET46),
     }

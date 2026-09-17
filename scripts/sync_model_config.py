@@ -38,6 +38,7 @@ from pathlib import Path
 # drift the day one side gains a rule, and the whole point of DRE-2317 is that
 # the rule cannot be edited away by accident.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from model_fallback import _normalize_separation  # noqa: E402
 from model_fallback import policy_errors as _policy_errors  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,6 +117,11 @@ def load_config(path: Path = CONFIG) -> dict:
             "on_new_model": str(discovery.get("on_new_model") or "").strip().lower(),
             "alert": bool(discovery.get("alert")),
         },
+        # The build/review fence, normalized by the one normalizer (DRE-3880),
+        # so the mirror the selector degrades to carries the SAME separation a
+        # healthy checkout reads. A degrade that dropped it would review a
+        # Sonnet-5 build on Sonnet 5 and look exactly like a healthy run.
+        "review_separation": _normalize_separation(raw.get("review_separation")),
         "retired": ids(raw.get("retired")),
         "excluded": ids(raw.get("excluded")),
     }
@@ -149,6 +155,18 @@ def render_literal(cfg: dict) -> str:
         f'"{cfg["discovery"]["on_new_model"]}", "alert": '
         f'{bool(cfg["discovery"]["alert"])}}},'
     )
+    # The rules go out COMPACT — {built_on: reviewers_use} — because the mirror
+    # is read by `_normalize_separation`, not by a human, and the `reason:` a
+    # rule carries is documentation that belongs in the canonical file.
+    separation = cfg["review_separation"]
+    lines.append('    "review_separation": {')
+    rendered = ", ".join(f'"{r}"' for r in separation["roles"])
+    lines.append(f'        "roles": [{rendered}],')
+    lines.append('        "rules": {')
+    for built_on, use in separation["rules"].items():
+        lines.append(f'            "{built_on}": "{use}",')
+    lines.append("        },")
+    lines.append("    },")
     for key in ("retired", "excluded"):
         rendered = ", ".join(f'"{m}"' for m in cfg[key])
         lines.append(f'    "{key}": [{rendered}],')

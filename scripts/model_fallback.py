@@ -26,7 +26,9 @@ assigned a kind — never a raw ladder name:
   * `workhorse` — high-volume build work (engineer, frontend, devops,
     database-architect, fixer, repairer). Hundreds of turns per card: this is
     the HOT PATH, and it gets the cost-appropriate model. Today
-    `claude-opus-5`, falling back to `claude-sonnet-4-6`.
+    `claude-opus-5`, falling back to `claude-sonnet-5` (DRE-3880 — it was
+    `claude-sonnet-4-6` until 2026-09-16, which kept the judgement ladder's
+    last rung and was not retired).
   * `advisory` — bounded consults at decision points (critic, verifier, medic,
     the two plan critics). The critic gates EVERY unattended merge, so it is
     the correctness backstop for a pipeline where no human reads a diff.
@@ -63,6 +65,21 @@ ladder, demotes the critic to a build kind, or declares `on_new_model:
 workhorse` (or `judgement`) is REJECTED — the selector degrades to the
 last-known-good mirror rather than honour it, and `sync_model_config.py
 --check` fails CI red.
+
+THE ONE DECLARED OVERLAP (DRE-3880, CEO decision 2026-09-16)
+------------------------------------------------------------
+`claude-sonnet-5` tops the ADVISORY ladder and backs the WORKHORSE one, so the
+build/review fence is no longer bought by keeping those two lists disjoint. It
+is bought at SELECTION time, per pull request: `select(role, built_on=…)` walks
+the reviewer past the model the build ran on. `config/models.yaml`'s
+`review_separation` block declares that, the schema permits the overlap ONLY
+together with the declaration, and the generated mirror below carries it so a
+truncated checkout separates too.
+
+None of that touches the 2026-08-09 rule. The STRONGEST model we run — the top
+of the judgement ladder — is still unreachable from a build ladder at every
+availability, and the judgement ladder gets no such exemption: a declaration
+buys nothing for the planner's model.
 
 Why this replaced DRE-1354's per-role pair
 -------------------------------------------
@@ -146,6 +163,12 @@ DISCOVERY_TARGETS = (ADVISORY_KIND, "none")
 # token). config/README.md documents that constraint.
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "models.yaml"
 
+# The DECLARED price of every model, same checkout, same constraint (DRE-3895).
+# Policy validation reads it for one question — "is this rung dearer than the
+# rung its ladder degrades onto?" — and a price is never guessed, so an id with
+# no entry fails that question closed.
+_PRICES_PATH = Path(__file__).resolve().parent.parent / "config" / "model-prices.yaml"
+
 # Last-known-good fallback: the config as of this commit. `_load_config` reads
 # the on-disk YAML FIRST (so changing a model is a data edit to one file); this
 # literal is used ONLY when that file is missing/unreadable/malformed, so a
@@ -164,7 +187,7 @@ _FALLBACK_MODEL_CONFIG = {
         "judgement": "judgement",
     },
     "ladders": {
-        "workhorse": ["claude-opus-5", "claude-sonnet-4-6"],
+        "workhorse": ["claude-opus-5", "claude-sonnet-5"],
         "advisory": ["claude-sonnet-5", "claude-opus-5"],
         "judgement": ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-4-6"],
     },
@@ -183,6 +206,12 @@ _FALLBACK_MODEL_CONFIG = {
         "plan-critic-post": "advisory",
     },
     "discovery": {"on_new_model": "advisory", "alert": True},
+    "review_separation": {
+        "roles": ["critic", "verifier"],
+        "rules": {
+            "claude-sonnet-5": "claude-opus-5",
+        },
+    },
     "retired": ["claude-opus-4-8"],
     "excluded": ["claude-fable-5"],
 }
@@ -242,22 +271,109 @@ def _normalize_config(raw) -> dict | None:
         "ladders": ladders,
         "agents": agents,
         "discovery": discovery,
+        "review_separation": _normalize_separation(raw.get("review_separation")),
         "retired": ids(raw.get("retired")),
         "excluded": ids(raw.get("excluded")),
     }
+
+
+def _normalize_separation(raw) -> dict:
+    """`review_separation` in ONE shape: `{"declared": bool, "roles": [...],
+    "rules": {built_on: reviewers_use}}` (DRE-3880).
+
+    Two input shapes are accepted deliberately, so the canonical file, the
+    generated mirror, the CI check and the tests all judge by one set of rules:
+    the YAML's list of `{built_on:, reviewers_use:, reason:}` mappings, and the
+    mirror's compact `{built_on: reviewers_use}` mapping.
+
+    `declared` distinguishes "this config says nothing about separation" from
+    "it declares none": the first is the edit that DELETED the block, and
+    `policy_errors` has to be able to tell them apart to name what is missing.
+    A malformed rule is carried through with an empty `reviewers_use` rather
+    than dropped — dropping it would turn a broken declaration into a silently
+    absent one, which is the bare overlap wearing a declaration.
+    """
+    if not isinstance(raw, Mapping):
+        return {"declared": False, "roles": [], "rules": {}}
+    roles = [str(r) for r in (raw.get("roles") or []) if isinstance(r, str)]
+    rules: dict[str, str] = {}
+    entries = raw.get("rules")
+    if isinstance(entries, Mapping):
+        for built_on, use in entries.items():
+            rules[str(built_on)] = str(use) if isinstance(use, str) else ""
+    else:
+        for entry in entries or []:
+            if not isinstance(entry, Mapping):
+                continue
+            built_on, use = entry.get("built_on"), entry.get("reviewers_use")
+            if isinstance(built_on, str) and built_on:
+                rules[built_on] = use if isinstance(use, str) else ""
+    return {"declared": True, "roles": roles, "rules": rules}
+
+
+def declared_prices(path: Path | None = None) -> dict[str, dict[str, float]]:
+    """`{model_id: {"input": …, "output": …}}` from config/model-prices.yaml.
+
+    A reader, not a validator — `model_adoption.load_prices` is the validator
+    and raises on a half-declared entry; this one is on the dispatch path of
+    every card, so it DEGRADES: an unreadable file, absent PyYAML or a
+    half-declared entry all yield "no price for that id". That is fail-closed
+    where it counts, because the one rule reading this refuses a rung it cannot
+    show to be no dearer than the fallback.
+
+    Deliberately not imported from `model_adoption`: that module imports this
+    one, and an import cycle on the dispatch path is not worth ten lines.
+    """
+    global _PRICES_CACHE
+    if path is None and _PRICES_CACHE is not None:
+        return _PRICES_CACHE
+    prices: dict[str, dict[str, float]] = {}
+    try:
+        import yaml
+
+        raw = yaml.safe_load(Path(path or _PRICES_PATH).read_text())
+        entries = raw.get("prices") if isinstance(raw, Mapping) else None
+        for model_id, entry in (entries or {}).items():
+            if not isinstance(entry, Mapping):
+                continue
+            side_in, side_out = entry.get("input"), entry.get("output")
+            if any(
+                isinstance(v, bool) or not isinstance(v, (int, float))
+                for v in (side_in, side_out)
+            ):
+                continue
+            prices[str(model_id)] = {
+                "input": float(side_in), "output": float(side_out)
+            }
+    except Exception as exc:  # missing / unreadable / malformed / no PyYAML
+        print(
+            f"model_fallback: could not read declared prices {_PRICES_PATH} "
+            f"({exc}); every rung below a ladder's fallback will be refused",
+            file=sys.stderr,
+        )
+    if path is None:
+        _PRICES_CACHE = prices
+    return prices
+
+
+# Read once per process: the file is small, but `policy_errors` is called on
+# every dispatch and repeatedly across the suite's schema sweeps.
+_PRICES_CACHE: dict[str, dict[str, float]] | None = None
 
 
 # --------------------------------------------------------------------------- #
 # Policy validation — the schema half of "availability is not permission"      #
 # --------------------------------------------------------------------------- #
 
-def policy_errors(config) -> list[str]:
+def policy_errors(config, prices=None) -> list[str]:
     """Every way this config would put the strongest model on the build path,
     as plain-English strings. Empty list = the config is admissible.
 
     Accepts either a raw parsed `config/models.yaml` document or the normalized
     shape, so the CI check, the tests and the runtime loader all judge by ONE
-    set of rules. It is a pure function: no I/O, no network, no import cycle.
+    set of rules. No network and no import cycle; the one thing it reads off
+    disk is `config/model-prices.yaml` (rule 4b), through `declared_prices`,
+    which degrades rather than raises — pass `prices` to supply them directly.
 
     The rules, each one an edit that would recreate the 2026-08-09 outage:
 
@@ -269,14 +385,26 @@ def policy_errors(config) -> list[str]:
       3. The critic and the verifier are advisory. They gate unattended merges;
          a demotion is the inversion this policy removes.
       4. The TOP RUNG of every non-workhorse ladder is absent from every
-         workhorse ladder, and once such a ladder descends onto a workhorse
-         model every rung below it is a workhorse model too. This is the
-         incident condition: the model a judging kind reaches for must be
-         unreachable from the build path at every availability, and it may not
-         hide below the fallback where the first half of the rule cannot see
-         it. The rungs BENEATH the top are deliberately shared — that is the
-         DEGRADED fall onto the build model, which is the designed shape of
-         both the advisory and the judgement ladder.
+         workhorse ladder. This is the incident condition: the model a judging
+         kind reaches for must be unreachable from the build path at every
+         availability. The rungs BENEATH the top are deliberately shared — that
+         is the DEGRADED fall onto the build model, which is the designed shape
+         of both the advisory and the judgement ladder.
+
+         ONE exemption, and only for the ADVISORY kind (DRE-3880): the advisory
+         top MAY be a workhorse rung when rule 8 below declares what the
+         reviewers run instead. The judgement ladder gets no such exemption —
+         a declaration is about REVIEWERS and buys nothing for the planner's
+         model.
+      4b. No rung below the one a non-workhorse ladder DEGRADES ONTO is dearer
+         than that rung. This used to read "every rung below the fallback is a
+         workhorse model", which was a proxy for the same thing and stopped
+         working the moment `claude-sonnet-4-6` left the build ladder and
+         stayed the planner's last resort. The question is the declared price
+         (`config/model-prices.yaml`), and a rung with no declared price cannot
+         be shown to be no dearer, so it is refused: a premium model parked
+         below the fallback is invisible to rule 4 and one availability flip
+         away from running.
       5. `default_ladder` is the workhorse ladder, so an unrecognized role
          lands on the cheap side of the fence.
       6. `discovery.on_new_model` is `advisory` or `none`. `workhorse` — a
@@ -289,6 +417,15 @@ def policy_errors(config) -> list[str]:
          putting it back on the workhorse ladder validated clean. Exclusion is
          the decision "we do not run this at all" and has to be enforced on its
          own terms.
+      8. `review_separation` (DRE-3880) binds both the critic and the verifier,
+         names only advisory roles, and carries exactly one rule per real
+         overlap: `reviewers_use` is on the advisory ladder and is not the
+         build model itself, and a rule describing an overlap that no longer
+         exists is STALE and refused. The stale half is the DRE-3892 carry-
+         forward: a same-family adoption moves the overlapping rung on both
+         ladders at once, so an adoption that leaves the rule behind fails
+         twice — the new rung is a bare overlap, and the old rule names a model
+         that is no longer one.
     """
     cfg = _normalize_config(config)
     if cfg is None:
@@ -334,32 +471,115 @@ def policy_errors(config) -> list[str]:
             )
 
     workhorse_models = set(ladders.get(kinds[WORKHORSE_KIND], []))
+    if prices is None:
+        prices = declared_prices()
+
+    # Rule 8 (DRE-3880), first — rule 4 reads its answer. The advisory ladder's
+    # TOP rung is the only place an overlap is admissible, and only with a rule
+    # that says what the reviewers run instead.
+    advisory_ladder_name = kinds[ADVISORY_KIND]
+    advisory_models = ladders.get(advisory_ladder_name, [])
+    advisory_top = advisory_models[0] if advisory_models else None
+    overlap = advisory_top if advisory_top in workhorse_models else None
+    separation = cfg["review_separation"]
+    declared: dict[str, str] = {}
+    if separation["declared"]:
+        for role in BACKSTOP_ROLES:
+            if role not in separation["roles"]:
+                errors.append(
+                    f"review_separation.roles: must bind {role!r} — the "
+                    "separation is what keeps a build off its own reviewer, "
+                    "and a reviewer it does not name is not separated"
+                )
+        for role in separation["roles"]:
+            if cfg["agents"].get(role) != ADVISORY_KIND:
+                errors.append(
+                    f"review_separation.roles: {role!r} is not an "
+                    f"{ADVISORY_KIND} role — the separation binds the roles "
+                    "that REVIEW a pull request, and binding a build role "
+                    "would be a spend change wearing a safety rule"
+                )
+    for built_on, use in separation["rules"].items():
+        if built_on != overlap:
+            errors.append(
+                f"review_separation.rules: {built_on} is not on both the "
+                f"{advisory_ladder_name} ladder's top rung and a build ladder, "
+                "so this rule describes an overlap that does not exist — a "
+                "STALE rule is how the guarantee is lost without anybody "
+                "editing it (DRE-3892)"
+            )
+        elif use == built_on:
+            errors.append(
+                f"review_separation.rules: {built_on} may not be reviewed on "
+                f"{use} — a rule that sends the reviewer back to the model the "
+                "build ran on is the overlap wearing a declaration"
+            )
+        elif use not in advisory_models:
+            errors.append(
+                f"review_separation.rules: {use} is not on the "
+                f"{advisory_ladder_name} ladder, so the reviewers cannot "
+                f"actually run on it when a build ran on {built_on}"
+            )
+        else:
+            declared[built_on] = use
+    if overlap is not None and overlap not in declared:
+        errors.append(
+            f"ladders.{advisory_ladder_name}: {overlap} tops the "
+            f"{ADVISORY_KIND} ladder and also sits on a build ladder — a BARE "
+            "overlap is refused. Declare it in `review_separation.rules` "
+            "(which model the reviewers use when a build ran on it) or take it "
+            "off one of the two ladders"
+        )
+
     # Rule 4, for every kind that is not the build path. A non-workhorse ladder
     # has one shape: the model that kind is FOR on top, then the workhorse
     # rungs it degrades onto (loudly — see `selection_note`). So the top rung
-    # is what the build path must not be able to reach, and everything from the
-    # first workhorse rung down must stay workhorse: a premium model parked
-    # BELOW the fallback would be invisible to the top-rung check and one
-    # availability flip away from running.
+    # is what the build path must not be able to reach, and nothing DEARER than
+    # the rung it degrades onto may hide below that rung, where the top-rung
+    # check cannot see it.
     for kind, ladder_name in kinds.items():
         if kind == WORKHORSE_KIND:
             continue
         rungs = ladders.get(ladder_name, [])
-        if len(rungs) > 1 and rungs[0] in workhorse_models:
+        # The advisory overlap is reported once, above, with the repair in it —
+        # `declared` is exactly the set rule 8 admitted.
+        if (
+            len(rungs) > 1
+            and rungs[0] in workhorse_models
+            and not (kind == ADVISORY_KIND and rungs[0] in declared)
+        ):
             errors.append(
                 f"ladders.{ladder_name}: {rungs[0]} tops the {kind} ladder and "
                 "must not appear on a build ladder — availability is not "
                 "permission (2026-08-09)"
             )
-        descended = False
+        # Rule 4b: the fallback is the FIRST workhorse rung this ladder reaches,
+        # and everything under it has to be provably no dearer.
+        fallback = None
         for model in rungs:
             if model in workhorse_models:
-                descended = True
-            elif descended:
+                if fallback is None:
+                    fallback = model
+                continue
+            if fallback is None:
+                continue
+            here, onto = prices.get(model), prices.get(fallback)
+            if here is None or onto is None:
+                unpriced = model if here is None else fallback
                 errors.append(
-                    f"ladders.{ladder_name}: {model} sits BELOW the workhorse "
-                    f"fallback on the {kind} ladder — a stronger model may not "
-                    "hide beneath the rung the ladder degrades onto"
+                    f"ladders.{ladder_name}: {model} sits BELOW the {fallback} "
+                    f"rung the {kind} ladder degrades onto and "
+                    f"config/model-prices.yaml declares no price for "
+                    f"{unpriced} — a price is never guessed, so a rung that "
+                    "cannot be shown to be no dearer is refused"
+                )
+            elif here["input"] > onto["input"] or here["output"] > onto["output"]:
+                errors.append(
+                    f"ladders.{ladder_name}: {model} sits BELOW the {fallback} "
+                    f"rung the {kind} ladder degrades onto and is DEARER "
+                    f"(${here['input']:.2f}/${here['output']:.2f} against "
+                    f"${onto['input']:.2f}/${onto['output']:.2f} per MTok) — a "
+                    "stronger model may not hide beneath the fallback"
                 )
     # Rule 7 (2026-08-12): an EXCLUDED model is unreachable from every ladder.
     #
@@ -458,6 +678,11 @@ AGENT_KINDS: dict[str, str] = CONFIG["agents"]
 # proposed for the advisory ladder by a human) or `none`. Never `workhorse`.
 DISCOVERY: dict = CONFIG["discovery"]
 
+# The build/review fence (DRE-3880): `{"declared": bool, "roles": [critic,
+# verifier], "rules": {built_on: reviewers_use}}`. `select(..., built_on=…)`
+# reads it, and `policy_errors` refuses a ladder overlap that is not in it.
+SEPARATION: dict = CONFIG["review_separation"]
+
 # The default (WORKHORSE) ladder — what any unrecognized role falls back to, and
 # what every build agent walks. FABLE is deliberately absent (2026-08-09): it is
 # excluded by POLICY — cost and subscription quota, ~2x Opus per token — not by
@@ -522,6 +747,9 @@ ERROR_MARKER_PREFIX = "model-error:"
 
 _ERROR_MARKER_RE = re.compile(
     re.escape(ERROR_MARKER_PREFIX) + r"\s*([a-z0-9.-]+)", re.IGNORECASE
+)
+_ATTEMPT_MARKER_RE = re.compile(
+    re.escape(MARKER_PREFIX) + r"\s*([a-z0-9.-]+)", re.IGNORECASE
 )
 
 # Substrings that mean "this model is not available for us" even absent a clean
@@ -797,9 +1025,46 @@ def fallback_for(role: str, model: str) -> str | None:
     return walk[at + 1] if at + 1 < len(walk) else None
 
 
+def separated_walk(role: str, walk: list[str], built_on=None, built_on_unknown=False):
+    """`(walk, separated)` — the ladder a REVIEWER walks once the build/review
+    separation has been applied, and the rungs it removed (DRE-3880).
+
+    `built_on` is the model the pull request in front of this reviewer was
+    BUILT on, read off the card's own `model-attempt:` marker. When a declared
+    rule covers it, that rung comes off this reviewer's walk and the model the
+    rule names LEADS what is left: the declaration says what the reviewers run,
+    so a ladder that happened to keep something above it would be ignoring it.
+
+    `built_on_unknown` fails CLOSED: a card we could not read is not evidence
+    the build ran on something else, so every declared overlap comes off. The
+    guarantee has to survive a Linear blip.
+
+    Roles the separation does not bind — the medic, every build role — walk
+    their ladder untouched. So does a reviewer looking at a build that ran on a
+    model no rule names, which is the ordinary Opus case.
+    """
+    rules = SEPARATION["rules"]
+    if role not in SEPARATION["roles"] or not rules:
+        return list(walk), []
+    if built_on_unknown:
+        barred = {m for m in walk if m in rules}
+    else:
+        barred = {built_on} & set(rules) if built_on else set()
+    if not barred:
+        return list(walk), []
+    separated = [m for m in walk if m in barred]
+    kept = [m for m in walk if m not in barred]
+    lead = [rules[m] for m in separated if rules[m] in kept]
+    reordered = list(dict.fromkeys(lead)) + [m for m in kept if m not in lead]
+    # Defensive: the schema guarantees `reviewers_use` is a different rung on
+    # this same ladder, so `reordered` is non-empty for any config that
+    # validated. A config that did NOT must still not strand a dispatch.
+    return (reordered, separated) if reordered else (list(walk), [])
+
+
 def select_with_reasons(
     role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=(),
-    out_of_capacity=(),
+    out_of_capacity=(), built_on=None, built_on_unknown=False,
 ) -> dict:
     """The full selection DECISION, not just the answer (DRE-2317).
 
@@ -807,6 +1072,7 @@ def select_with_reasons(
 
         {"role":…, "kind": "workhorse"|"advisory", "ladder": [ids…],
          "model": chosen, "skipped": [{"model":…, "reason":…}, …],
+         "separated": [ids…], "built_on_unknown": bool,
          "degraded": bool, "exhausted": bool}
 
     `skipped` lists every rung ABOVE the chosen one and why it was passed over.
@@ -831,12 +1097,21 @@ def select_with_reasons(
     `out_of_capacity` (DRE-3970) names rungs this RUN has already seen refused
     for capacity — the classifier's `fell_from`. Walked past without probing,
     exactly like `avoid`, but with its own reason: nothing died on the card.
+
+    `built_on` / `built_on_unknown` (DRE-3880) are the build/review separation,
+    and they are NOT a skip: the rungs `separated_walk` removes never enter the
+    walk, are reported in `separated` rather than `skipped`, and leave
+    `degraded` alone. Falling off the top of a ladder is a run worth looking
+    at; running the reviewer on a different model than the build did is the
+    DESIGNED path, and a ::warning:: on every Sonnet-5 build would teach the
+    fleet to ignore the warning that means a reviewer lost its model.
     """
     if probe is None:
         probe = _probe_real
     if clock is None:
         clock = time.monotonic
     walk = _normalize_ladder(ladder) or ladder_for(role)
+    walk, separated = separated_walk(role, walk, built_on, built_on_unknown)
     avoided = {m for m in (avoid or ()) if isinstance(m, str) and m}
     refused = {m for m in (out_of_capacity or ()) if isinstance(m, str) and m}
 
@@ -856,6 +1131,8 @@ def select_with_reasons(
                 "ladder": list(walk),
                 "model": model,
                 "skipped": skipped,
+                "separated": separated,
+                "built_on_unknown": bool(built_on_unknown),
                 "degraded": bool(skipped),
                 "exhausted": False,
             }
@@ -874,6 +1151,8 @@ def select_with_reasons(
         "ladder": list(walk),
         "model": walk[-1],
         "skipped": skipped[:-1],
+        "separated": separated,
+        "built_on_unknown": bool(built_on_unknown),
         "degraded": True,
         "exhausted": True,
     }
@@ -897,6 +1176,19 @@ def selection_note(decision: Mapping) -> str:
     kind = decision.get("kind") or WORKHORSE_KIND
     head = "DEGRADED " if decision.get("degraded") else ""
     note = f"{head}model-policy: {model} chosen for {role} ({kind} kind)"
+    # The separation is recorded but is NOT a degradation (DRE-3880): it is
+    # named here so a verdict can be traced to the model that wrote it, and it
+    # never adds the DEGRADED prefix — see `select_with_reasons`.
+    separated = list(decision.get("separated") or [])
+    if separated:
+        joined = ", ".join(separated)
+        note += (
+            " — build/review separation: this build's model could not be read, "
+            f"so the reviewer skips every declared overlap ({joined})"
+            if decision.get("built_on_unknown")
+            else f" — build/review separation: this build ran on {joined}, so "
+            "the reviewer does not"
+        )
     skipped = list(decision.get("skipped") or [])
     if skipped:
         note += " — skipped " + "; ".join(
@@ -911,7 +1203,7 @@ def selection_note(decision: Mapping) -> str:
 
 def select(
     role: str = "engineer", *, probe=None, clock=None, ladder=None, avoid=(),
-    out_of_capacity=(),
+    out_of_capacity=(), built_on=None, built_on_unknown=False,
 ) -> str:
     """The model the next attempt should use: the first AVAILABLE model walking
     that agent's ordered ladder best→worst.
@@ -941,10 +1233,17 @@ def select(
     inconclusive); if nothing resolves available, fall through to the last
     (lowest, most-likely-up) known-good model rather than block the build or
     return a model just confirmed 404.
+
+    `built_on` is the model the pull request under review was BUILT on, and
+    `built_on_unknown` says we could not find out (DRE-3880). For a role the
+    `review_separation` block binds — the critic and the verifier — a declared
+    overlap comes off the walk, so a Sonnet-5 build is never reviewed by Sonnet
+    5 at any availability. Every other role ignores both.
     """
     return select_with_reasons(
         role, probe=probe, clock=clock, ladder=ladder, avoid=avoid,
-        out_of_capacity=out_of_capacity,
+        out_of_capacity=out_of_capacity, built_on=built_on,
+        built_on_unknown=built_on_unknown,
     )["model"]
 
 
@@ -960,6 +1259,27 @@ def last_error_model(comment_bodies: list[str | None]) -> str | None:
     board/console can attribute the last is_error death to a model."""
     for body in reversed(comment_bodies):
         for found in _ERROR_MARKER_RE.findall(body or ""):
+            model = found.lower()
+            if model in KNOWN_MODELS:
+                return model
+    return None
+
+
+def last_attempt_model(comment_bodies) -> str | None:
+    """The model id from the MOST RECENT attempt heartbeat, or None (DRE-3880).
+
+    This is where "what did the build run on?" is answered: the heartbeat is
+    already written on every attempt, so the reviewer reads the build's model
+    off the card rather than out of a second record that could disagree with
+    it. Same shape as `last_error_model` — oldest→newest in, scanned from the
+    end, and only a KNOWN model id counts, so an unrecognized payload reads as
+    "we do not know" (which the caller fails CLOSED on) rather than as a model.
+
+    A `model-error:` marker is NOT an attempt: a death says which model died,
+    not which one the build that produced this diff ran on.
+    """
+    for body in reversed(list(comment_bodies or [])):
+        for found in _ATTEMPT_MARKER_RE.findall(body or ""):
             model = found.lower()
             if model in KNOWN_MODELS:
                 return model
@@ -1010,11 +1330,38 @@ def _fake_probe_from_env():
     return lambda m: bool(table.get(m, True))
 
 
+def _build_model_from_thread(path: str) -> str | None:
+    """The build's model out of a dumped comment thread, or None (DRE-3880).
+
+    Reads the two shapes `linear_ops.py dump-comments` writes: a JSON array of
+    bodies, and the `--with-authors` array of records. DEGRADES to None on a
+    missing file, unreadable JSON or an unexpected shape — the caller's answer
+    is then `--built-on-unknown`, which bars every declared overlap, so a
+    Linear outage costs a cheaper reviewer and never a failed review job.
+    """
+    import json
+
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(data, list):
+        return None
+    bodies = [
+        entry if isinstance(entry, str)
+        else entry.get("body") if isinstance(entry, Mapping)
+        else None
+        for entry in data
+    ]
+    return last_attempt_model(bodies)
+
+
 def main(argv: list[str]) -> int:
     """CLI for the workflows — the entry point every agent workflow calls.
 
       select [<agent>] [--explain-file <path>] [--avoid <model>]...
              [--out-of-capacity <model>]... [--fallback-file <path>]
+             [--built-on <model>] [--built-on-unknown]
                                    print the model the next attempt should use
                                    (walks that agent's ladder from
                                    config/models.yaml, probes availability) and,
@@ -1025,7 +1372,18 @@ def main(argv: list[str]) -> int:
                                    --out-of-capacity walks past a model this
                                    run saw refused for capacity (DRE-3970);
                                    --fallback-file writes the rung below the
-                                   chosen one (empty when there is none)
+                                   chosen one (empty when there is none);
+                                   --built-on names the model the pull request
+                                   under review was BUILT on and
+                                   --built-on-unknown says we could not find
+                                   out, which fails closed (DRE-3880)
+      build-model <comments.json>  print the model the build ran on, read from
+                                   the card's own attempt heartbeats — the JSON
+                                   array `linear_ops.py dump-comments` writes.
+                                   An unreadable thread prints NOTHING and
+                                   exits 0: the caller's answer is then
+                                   --built-on-unknown, which is the fail-closed
+                                   one, so a Linear blip must not fail the job
       role-of <label,label,...>    print engineer|planner|devops|frontend from
                                    a card's labels
 
@@ -1042,7 +1400,8 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(
             "usage: model_fallback.py select [<agent>] [--explain-file <path>] "
-            "| role-of <labels>"
+            "[--built-on <model>|--built-on-unknown] "
+            "| build-model <comments.json> | role-of <labels>"
         )
         return 2
     cmd, *rest = argv
@@ -1050,11 +1409,16 @@ def main(argv: list[str]) -> int:
         labels = (rest[0] if rest else "").split(",")
         print(_role_from_labels([l.strip() for l in labels if l.strip()]))
         return 0
+    if cmd == "build-model":
+        print(_build_model_from_thread(rest[0] if rest else "") or "")
+        return 0
     if cmd == "select":
         explain_path = None
         avoid: list[str] = []
         refused: list[str] = []
         fallback_path = None
+        built_on = None
+        built_on_unknown = False
         args: list[str] = []
         pending = list(rest)
         while pending:
@@ -1067,6 +1431,10 @@ def main(argv: list[str]) -> int:
                 refused.append(pending.pop(0) if pending else "")
             elif arg == "--fallback-file":
                 fallback_path = pending.pop(0) if pending else None
+            elif arg == "--built-on":
+                built_on = pending.pop(0) if pending else None
+            elif arg == "--built-on-unknown":
+                built_on_unknown = True
             else:
                 args.append(arg)
         # Ignore a legacy comments-file 2nd arg if the workflow still passes one
@@ -1075,7 +1443,8 @@ def main(argv: list[str]) -> int:
         clear_availability_cache()
         decision = select_with_reasons(
             role, probe=_fake_probe_from_env(), avoid=avoid,
-            out_of_capacity=refused,
+            out_of_capacity=refused, built_on=built_on,
+            built_on_unknown=built_on_unknown,
         )
         note = selection_note(decision)
         print(decision["model"])
