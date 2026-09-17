@@ -47,8 +47,10 @@ README.md`, "The Linear side").
 Discovered by convention — one module per scenario in
 `scripts/harness/scenarios/`, each exporting `SCENARIO`. The **default sweep**
 (an empty `scenarios` input) runs every rehearsal that does not spend a real
-build-agent run; that sweep is what every push to `main` and every boundary
-pull request runs, and therefore what the channel gate reads.
+build-agent run; that sweep is what every push to `main` runs, and therefore
+what the channel gate reads. (It ran on boundary pull requests too until
+DRE-4149; the harness now proves `main` once — see `docs/self-hosting.md`,
+"The harness proves main, not every pull request".)
 
 | rehearsal | in the default sweep | what it proves |
 | --- | --- | --- |
@@ -86,11 +88,12 @@ rather than a build.
 the commit under test (`HARNESS_TESTED_SHA`), and a difference is reported,
 not failed. The sandbox's stubs ride `@main` and GitHub resolves that ref at
 dispatch, while `harness.yml` queues runs rather than cancelling them
-(`cancel-in-progress: false`, DRE-3070) — so a pull request's head, which is
-not on `main` at all, and a push overtaken by a merge burst are both compiled
-as whatever `@main` was at dispatch time. Failing on that difference would
-turn every boundary pull request and every merge-burst push red on the
-pipeline's own design.
+(`cancel-in-progress: false`, DRE-3070) — so a branch proved by hand, which
+is not on `main` at all, and a push overtaken by a merge burst are both
+compiled as whatever `@main` was at dispatch time. Failing on that difference
+would turn every by-hand run and every merge-burst push red on the pipeline's
+own design. (It is also why the pull-request run was dropped, DRE-4149: it
+compiled `main`'s workflows, not the pull request's.)
 
 **A missing stub says so.** Until the operator has installed
 `agent-task.yml` in `bureau-harness`, the rehearsal reports *a missing stub*

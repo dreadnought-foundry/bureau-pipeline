@@ -13,20 +13,55 @@
 #
 # NOTE (scope of pipeline_ref): the input pins the DRIVER code under test.
 # The sandbox's stubs consume the reusable workflows at the ref THEY pin —
-# on a PR run the driver comes from the PR's head while the sandbox still
-# rides its own pinned pipeline ref (main, the canary channel).
+# main, the canary channel — and GitHub resolves that ref at dispatch. So a
+# by-hand run against a branch drives the sandbox with the branch's driver
+# while the sandbox's own workflows are still main's.
 #
-# Load-bearing since DRE-2103, two ways:
-#   * PR gate — pull_request on the boundary paths below. merge_gate.py
-#     condition 1 requires EVERY check run on the head sha to finish
-#     green and harness.yml is not a review workflow, so a red run holds
-#     the merge with no branch-protection change
-#     (tests/test_harness_gate_evidence.py).
+# THE HARNESS PROVES MAIN, NOT EVERY PULL REQUEST (DRE-4149).
+#
+# From DRE-2103 until 2026-09-17 this workflow also ran on pull requests that
+# touched the boundary paths, and a red run held the merge (merge_gate.py
+# condition 1 counts every check run on the head). That run is gone:
+#
+#   * It largely re-proved main. The sandbox rides @main (above), which the
+#     harness logged on every PR run — "agent-task.yml parses at <main sha> …
+#     which is NOT the commit under test" — and DRE-3101 had already handed a
+#     PR run main's own sweep and probe rules. The run that proves the MERGED
+#     result is the one on main, and it runs anyway.
+#   * It was not free. On 2026-09-17 the worker App's hourly GitHub allowance
+#     ran out near the end of every hour (DRE-4132). Every harness run that
+#     needed GitHub in that stretch was refused, so six approved pull requests
+#     sat behind a red harness that said nothing about their code and `stable`
+#     fell twelve merges behind — with about ten PR runs that morning, each up
+#     to 26 minutes of polling, among the heaviest spenders of that allowance.
+#
+# THE ACCEPTED COST, named: a change that breaks the pipeline end to end is
+# found on main AFTER it merges rather than on its pull request before.
+# `stable` does not move onto it, so no product repo sees it; Red-Main Repair
+# watches this workflow on main (DRE-2820) and files the repair card. With
+# several merges between two main runs, the failing run names a RANGE of
+# commits, not one.
+#
+# A person can still prove a risky branch BEFORE it merges: dispatch this
+# workflow by hand with `pipeline_ref` set to the branch. That run proves, it
+# does not gate — its check run lands on the dispatch ref's tip and its stamp
+# is a commit status, which the merge gate never reads.
+#
+# Load-bearing, two ways:
+#   * Release channel — every push to main runs the default sweep, and
+#     promote-channel.yml moves `stable` only for a commit whose run here
+#     SUCCEEDED on main (DRE-2551). A pull request merges on the critic, the
+#     verifier and the unit/contract suite, the bar every other repo in the
+#     fleet merges on; nothing reaches a product repo without a green harness,
+#     because products ride `stable`.
 #   * Release gate — a green run stamps a success `integration-harness`
 #     commit status on the sha it actually checked out; release-gate.yml
 #     refuses any v* tag whose commit lacks that stamp. The stamp, not
 #     the run record, is the sha-binding: a dispatch run's head_sha is
 #     the DISPATCH ref's tip, not pipeline_ref's.
+#
+# tests/test_harness_proves_main.py pins the triggers, so a pull_request
+# trigger cannot return without someone deciding it should.
 name: Integration Harness
 
 on:
@@ -62,12 +97,11 @@ on:
           off.
         required: false
         default: "10"
-  # DRE-2551: automatic promotion needs a PROVEN commit on the trunk, and
-  # until now nothing ever proved one. The PR trigger stamps the PR head; the
-  # fleet merges with merge commits, so that stamp never transfers to main's
-  # tip and no commit on main has ever carried a harness verdict.
+  # DRE-2551: automatic promotion needs a PROVEN commit on the trunk. The
+  # fleet merges with merge commits, so a stamp on any other commit never
+  # transfers to main's tip — the proof has to be made HERE, on the push.
   #
-  # Deliberately NO paths filter, unlike the PR trigger below. Consumers pin
+  # Deliberately NO paths filter. Consumers pin
   # the whole repo, so every commit on main changes what they get — a channel
   # that only advances for pipeline-path commits would sit stale on a docs
   # merge and trip its own staleness alarm. This is the cheap default sweep
@@ -79,37 +113,28 @@ on:
   push:
     branches: [main]
 
-  pull_request:
-    # The boundary: workflow wiring plus the dispatch/gate scripts the
-    # scenarios exercise end-to-end. Everything else stays silent.
-    paths:
-      - ".github/workflows/**"
-      - "scripts/harness/**"
-      - "scripts/reconcile.py"
-      - "scripts/merge_gate.py"
-      - "scripts/gate_note.py"
-      - "scripts/dispatch_pool.py"
-      - "scripts/dedupe_dispatch.py"
-      - "scripts/should_review_pr.py"
+  # NO pull_request trigger, on purpose (DRE-4149) — see the header. Do not
+  # add one back to "catch it earlier": the run it adds re-proves main, spends
+  # the allowance main's own run needs, and a refused run holds an approved
+  # pull request behind a red check that says nothing about its code.
 
-# One slot per KIND of run (DRE-3075). Main's proving run is what `stable`
-# advances on, so it must never wait behind a pull request's:
-# on 2026-09-03 a PR run held the single `integration-harness-sandbox`
-# group for 18 minutes while five pushes to main queued behind it, each
-# replacing the last (GitHub keeps one pending run per group). Main's
-# first turn started at 20:07 PT, the fleet ran the afternoon's code until
-# 21:12 PT with eight front-door fixes already merged, and `stable` fell 50
-# commits behind.
+# ONE lane: `integration-harness-main` (DRE-3075 named it; DRE-4149 made it
+# the only one). DRE-3075 split main's lane from a `pr-<number>` lane per pull
+# request after a PR run held a shared group for 18 minutes on 2026-09-03
+# while five pushes to main queued behind it and `stable` fell 50 commits
+# behind. With the pull_request trigger gone there is no PR lane to keep out
+# of main's way, so the expression is a plain string again.
 #
-# `main` for a push to main AND for a hand dispatch — a dispatch drives the
-# sandbox under the same namespace, so it must share main's lane rather
-# than run beside it. `pr-<number>` per pull request: two pushes to one PR
-# still serialize, two different PRs do not.
+# A push to main AND a hand dispatch both ride it — a dispatch drives the
+# sandbox under the same `main` namespace (HARNESS_NAMESPACE below), and two
+# live runs in one namespace would sweep each other's branches.
 #
-# Running beside each other is only safe because the driver's sweep is
-# scoped to the run's own sandbox namespace (HARNESS_NAMESPACE below); an
-# unscoped sweep would delete the branches the other live run is
-# mid-scenario on, which is why separate groups alone were not the fix.
+# RUNS ON MAIN COLLAPSE TO THE NEWEST COMMIT (DRE-4149) — and this group is
+# the whole mechanism; there is no cancel step to find. GitHub keeps one run
+# in progress and at most ONE pending run per group: the proof in progress
+# finishes, the newest head waits behind it, and a head in between is dropped
+# before it starts. tests/test_merge_train.py simulates exactly that, and
+# tests/test_harness_proves_main.py pins the single group.
 #
 # QUEUE BEHIND, NEVER CANCEL — and the release channel depends on it
 # (DRE-3070). `promote-channel.yml` moves `stable` only for a commit a harness
@@ -130,28 +155,20 @@ on:
 # staleness alarm counts those records to say "merge train" instead of
 # "unknown". See docs/self-hosting.md, "Queue behind, never cancel".
 concurrency:
-  group: >-
-    integration-harness-${{ github.event_name == 'pull_request'
-    && format('pr-{0}', github.event.pull_request.number) || 'main' }}
+  group: integration-harness-main
   cancel-in-progress: false
 
 permissions:
   contents: read
-  pull-requests: read  # DRE-3101: which files THIS pull request changes
   statuses: write  # the tested-sha stamp release-gate.yml reads
 
 jobs:
   harness:
-    # Premortem Q1/Q2 on our own wiring (DRE-2047/2067): dependabot's own
-    # opens/rebases of a .github/workflows/** bump fire pull_request AS
-    # dependabot[bot], and that event gets GitHub's SEPARATE Dependabot
-    # secrets store — for us EMPTY — so the App-token mints below would
-    # crash red with zero scenarios run. The guard sits on the JOB so no
-    # step ever executes: the run concludes `skipped`, which the merge
-    # gate's GREEN_CONCLUSIONS admits — a clean skip, never a red crash
-    # (the pr-review.yml pattern; reconcile's dispatch route reviews
-    # dependabot PRs, and dependency bumps are not harness business).
-    if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
+    # No job-level `if` (DRE-4149). There was one — a clean self-skip for
+    # dependabot-triggered pull_request events, which get GitHub's separate,
+    # EMPTY Dependabot secrets store (DRE-2047/2067). Dependabot neither pushes
+    # to main nor dispatches, so with the pull_request trigger gone the guard
+    # could only ever be true.
     runs-on: ubuntu-latest
     # Scenario budget for the whole default sweep: each verdict wait is bounded
     # by the critic job's own timeout — 65m since DRE-2466, not the 25m this
@@ -170,13 +187,11 @@ jobs:
     # Pinned to the driver's own budgets by tests/test_harness_wiring.py.
     timeout-minutes: 180
     steps:
-      # The ref under test: pipeline_ref on a dispatch (defaulted to
-      # main); on pull_request the inputs context is EMPTY, so the middle
-      # clause makes the PR's own head the driver checkout — without it
-      # every PR run would silently test main (the DRE-2026 chimera).
+      # The ref under test: pipeline_ref on a by-hand dispatch (defaulted to
+      # main). On a push the inputs context is EMPTY and the tail runs.
       #
       # The tail is github.sha — an immutable commit, never the branch NAME
-      # 'main' (DRE-2551). On a push run neither earlier clause resolves, and
+      # 'main' (DRE-2551). On a push run the first clause does not resolve, and
       # a branch name checks out whatever main's tip is at the moment the job
       # starts, not the commit that triggered this run. Merge bursts are
       # routine here (merge-gate.yml records five PRs / twelve gate runs in 25
@@ -188,7 +203,7 @@ jobs:
       # quiet no-op precisely during the busy periods this must survive.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.pipeline_ref || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.pipeline_ref || github.sha }}
 
       # The sha the stamp binds — resolved from the ACTUAL checkout, the
       # only record a dispatch run has of what pipeline_ref pointed at.
@@ -228,63 +243,19 @@ jobs:
             -f description="integration harness: running (attempt ${ATTEMPT})" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-
-      # A pull request's run drives the SHARED sandbox with whatever
-      # scripts/harness/ its branch carries (DRE-3101). On 2026-09-04 that
-      # meant three PR branches cut before DRE-3075 merged still ran the old,
-      # un-namespaced sweep: each one deleted every harness branch and closed
-      # every probe PR in the sandbox — main's included — and no main proving
-      # run finished for three hours while stable sat ten merges behind. The
-      # sweep's namespace rule is only as good as the OLDEST branch that runs
-      # it, so a PR run takes the harness code from main unless the PR itself
-      # changes it (then the PR is testing the harness, and says so). The
-      # workflow file is still the PR's own — GitHub decides that — which is
-      # why this step lives at the top of the job rather than in the sweep.
-      - name: Harness code from main (DRE-3101)
-        id: harnesscode
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          # Two statements on purpose: the API call must fail LOUDLY (a PR
-          # that changes the harness must never be quietly handed main's copy
-          # because GitHub blinked), and only the zero-match grep may be
-          # forgiven. One pipeline with `|| true` on the end forgave both.
-          FILES=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
-              --paginate --jq '.[].filename')
-          CHANGED=$(printf '%s\n' "$FILES" | grep -c '^scripts/harness/' || true)
-          if [ "${CHANGED:-0}" -gt 0 ]; then
-            echo "source=pr" >> "$GITHUB_OUTPUT"
-            echo "harness code: this pull request changes scripts/harness ($CHANGED file(s)) — running the PR's copy"
-          else
-            # Explicit refspec: actions/checkout clones one ref, so a bare
-            # `fetch origin main` fills FETCH_HEAD and never origin/main.
-            git fetch --depth 1 origin main:refs/remotes/origin/main
-            # Remove first, then restore: `git checkout <ref> -- <dir>` only
-            # writes files that exist in <ref> and never deletes one the old
-            # branch still carries. scripts/harness/scenarios/ discovers every
-            # module it finds, so a scenario main deleted would still run.
-            rm -rf scripts/harness
-            git checkout origin/main -- scripts/harness
-            MAIN_SHA=$(git rev-parse --short origin/main)
-            echo "source=main" >> "$GITHUB_OUTPUT"
-            echo "harness code: main ($MAIN_SHA) — this pull request does not change scripts/harness, so its run drives the sandbox with the sweep every other run uses"
-          fi
-
       # Is this checkout allowed at the SHARED sandbox at all?
       #
-      # DRE-3075 lets main's run and a pull request's proving run drive the
-      # sandbox side by side, and the only thing keeping them apart is that
-      # each sweep collects its own namespace. That rule lives entirely in the
-      # driver — which, by the time this step runs, is main's copy (DRE-3101,
-      # above) unless the PR itself touches scripts/harness/, in which case
-      # it is genuinely the PR's own head at whatever vintage the branch was
-      # cut. That second case is exactly the one this guard exists for: a PR
-      # testing the harness runs its own code, so its own contract
-      # declaration is what's on disk and what must be checked.
+      # The sandbox is shared, and the only thing keeping one run's leftovers
+      # from another's is that each sweep collects its own namespace
+      # (DRE-3075). That rule lives entirely in the driver — and on a by-hand
+      # dispatch the driver is whatever `pipeline_ref` names, at whatever
+      # vintage that branch was cut. Since DRE-4149 that is the ONLY way an old
+      # driver reaches the sandbox (pull requests no longer run here, and the
+      # DRE-3101 step that handed a PR run main's copy of scripts/harness/
+      # went with them), so this guard is what stands between a months-old
+      # branch someone dispatches "just to check" and main's live proving run.
       #
-      # 2026-09-04, the cost of having neither fix yet: run 33910802510
+      # 2026-09-04, the cost of having no guard yet: run 33910802510
       # started at 19:22 for PR #260, whose head forked from a7bfa52 and
       # predated DRE-3075. Its sweep was the unscoped one, so it closed every
       # open harness PR it found — including main's live gate_paths probe
@@ -295,8 +266,8 @@ jobs:
       #
       # This step is the guard, and it sits HERE for two reasons: the whole
       # checkout is the stale thing, so the check cannot be a script in it —
-      # but on a pull_request event GitHub runs the workflow file from the
-      # merge ref, so this file is current even when the driver is months old.
+      # but a dispatch runs the workflow file from the ref it was dispatched
+      # ON (main), so this file is current even when the driver is months old.
       # And it runs BEFORE the mints below: a driver that will not be let near
       # the sandbox is never handed a token for it.
       #
@@ -353,9 +324,9 @@ jobs:
       # Only the named-scenario path needs test tooling: the DRE-2490
       # unverified_claim scenario proves a shipped test is non-vacuous by
       # RUNNING it against a mutant, and that needs pytest on the runner. The
-      # default sweep (empty input, every pull_request run) is stdlib-only and
-      # asks for install: false — a merge-gating workflow does not take a
-      # package-registry dependency it does not use. The install itself is the
+      # default sweep (empty input, every push to main) is stdlib-only and
+      # asks for install: false — the workflow the release channel waits on
+      # does not take a package-registry dependency it does not use. The install itself is the
       # shared action's job now (DRE-2589), so the pins have one home.
       - name: Install test tooling (named scenarios only)
         uses: ./.github/actions/setup-python-cached
@@ -385,7 +356,7 @@ jobs:
 
       # The console's own state lists (DRE-2726). Best-effort BY DESIGN: this
       # is a different repository and a different installation, and a mint that
-      # cannot happen must not turn every boundary PR red on a clause the wave
+      # cannot happen must not turn every proving run red on a clause the wave
       # has not reached yet. When the token is absent the lane-contract clause
       # reports UNEVALUATED — never a pass — and config/lane-contract.json names
       # the phase from which that unevaluated state becomes a hard failure.
@@ -412,10 +383,7 @@ jobs:
           # The agent scenarios run the SHIPPED agent-task.yml prompt through
           # the Claude Code CLI against a sandbox clone (scripts/harness/
           # agent_run.py). Same auth switch agent-task.yml uses; unset on the
-          # default sweep, which never starts an agent. A dependabot-triggered
-          # PR event gets the empty Dependabot secrets store — the job-level
-          # guard above already skips it clean (DRE-2067), so these resolve to
-          # empty only on runs that do not read them.
+          # default sweep, which never starts an agent.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           HARNESS_WORKER_TOKEN: ${{ steps.worker.outputs.token }}
@@ -440,25 +408,24 @@ jobs:
           # `agent_task_parses` rehearsal reports it beside the commit the
           # sandbox actually compiled: the sandbox's stubs ride @main and
           # GitHub resolves that ref at dispatch, so the two agree on a
-          # quiet push to main and deliberately do not on a pull request's
-          # proving run. Recorded either way; the rehearsal never fails on
-          # the difference.
+          # quiet push to main and deliberately do not on a by-hand run
+          # against a branch (or when a second merge lands mid-run). Recorded
+          # either way; the rehearsal never fails on the difference.
           HARNESS_TESTED_SHA: ${{ steps.tested.outputs.sha }}
           # The slice of the sandbox this run owns (DRE-3075). It opens the
           # run id, so every branch and probe file lands inside it, and the
-          # driver's sweep collects nothing outside it — which is what lets
-          # this run share the sandbox with the other lane's.
+          # driver's sweep collects nothing outside it — which is what keeps
+          # a local run (namespace `local`) from collecting this one's.
           #
-          # The same condition the concurrency group keys on, minus the dash:
-          # the group is GitHub's key and the card's spelling; the namespace
-          # is a branch-name prefix and a dash there would let namespace `pr`
-          # match `pr-251`'s branches. Both are pinned, for every event, by
-          # tests/test_harness_main_slot.py.
-          HARNESS_NAMESPACE: >-
-            ${{ github.event_name == 'pull_request'
-            && format('pr{0}', github.event.pull_request.number) || 'main' }}
+          # Always `main` since DRE-4149: every run this workflow can start —
+          # a push to main or a by-hand dispatch — rides the one
+          # `integration-harness-main` lane, and the lane and the namespace
+          # must agree (two live runs in one namespace sweep each other). It
+          # was `pr<number>` for a pull request's run while those existed.
+          # Pinned, for every event, by tests/test_harness_main_slot.py.
+          HARNESS_NAMESPACE: main
           SCENARIOS: ${{ inputs.scenarios }}
-          # DRE-3076. On push/pull_request the `inputs` context does not
+          # DRE-3076. On a push the `inputs` context does not
           # resolve and this is empty — the driver then uses its own default
           # (framework.WAIT_DEADLINE_SECONDS), which is the same number as the
           # input's default above; tests/test_harness_sandbox_deadline.py pins
@@ -520,7 +487,7 @@ jobs:
       # description. promote_channel.py reads the marker and says "blocked by
       # sandbox, not proven yet" instead of "harness failed", which would send
       # someone looking at a diff that was never judged. The stamp stays RED:
-      # unproven is not proven, and the PR-gating check must still hold.
+      # unproven is not proven, and the channel must not move on it.
       - name: Stamp tested sha with the harness verdict
         if: success() || failure()
         env:

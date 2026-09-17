@@ -108,6 +108,7 @@ CI_SUITE = 78612233475  # the repo's CI workflow run
 REVIEW_SUITE = 78612234136  # the qa-review.yml (critic) workflow run
 EVIL_SUITE = 78612239999  # a PR-authored workflow's own run — never review
 REVIEW_SUITES = frozenset({REVIEW_SUITE})  # the verified-origin record
+HARNESS_SUITE = 78612240001  # a harness.yml run left on a head before DRE-4149
 
 
 def run(name="unit", status="completed", conclusion="success", suite=CI_SUITE):
@@ -406,6 +407,32 @@ ROWS = [
         "verdict.",
         old_expect="hold",
         delta="anchored parsing: cross-marker mentions in bodies do not count"),
+
+    # ── DRE-4149: the Integration Harness proves main, not pull requests ─
+    # harness.yml no longer runs on pull_request, so a PR head carries no
+    # `harness` check run at all. The gate has never kept a list of checks
+    # it EXPECTS — condition 1 is "every check run that IS on the head is
+    # green" — so an absent harness holds nothing, under the old shell and
+    # the new decision alike. These rows are here so that stays a decision:
+    # a required-checks list added later turns the first one red.
+    Row("harness_absent_from_the_head_merges",
+        [CRITIC_OK, comment(QA_LOGIN, verifier("PASS", HEAD))], "merge",
+        "critic APPROVE",
+        "fixture L117-129 (condition 1 counts the runs PRESENT on the head; "
+        "no list of expected names exists to be missing from) + L209-210; "
+        "DRE-4149 — green CI, critic APPROVE and verifier PASS bound to the "
+        "head, and no check run named `harness`",
+        checks=[run("scripts unit tests"), run("TDD commit discipline")]),
+    Row("harness_red_already_on_the_head_still_waits",
+        [CRITIC_OK, comment(QA_LOGIN, verifier("PASS", HEAD))], "wait",
+        "not green",
+        "fixture L125,129 (conclusion failure → not green). DRE-4149 does "
+        "NOT special-case history: a head that already carries a red "
+        "`harness` check run from before the trigger was removed is held by "
+        "it like any other red check, until that run is re-run green or the "
+        "branch takes a new commit (a new head gets no harness run)",
+        checks=[run("scripts unit tests"),
+                run("harness", conclusion="failure", suite=HARNESS_SUITE)]),
 ]
 
 
