@@ -24,22 +24,45 @@
 # then PROVES the staged set, so this workflow is structurally incapable of
 # adopting anything.
 #
+# IT DOES NOT PUSH TO `main` (DRE-3879). The commit step used to end in
+# `git push origin HEAD:main`, and branch protection refused it — `GH006:
+# Protected branch update failed`, "Changes must be made through a pull
+# request" — on every weekly run since at least 2026-08-10. The snapshot was
+# refreshed correctly and then could not be saved. The CEO's signed answer
+# (2026-09-14 08:14 PT) is the remedy and its limit together: open a pull
+# request, change no branch protection. So the snapshot is committed to
+# `bot/model-drift` — one fixed branch, one pull request, updated in place
+# rather than reopened — and `main` keeps requiring a pull request and both
+# required checks. The branch is on the merge gate's trusted list as a LITERAL
+# name (never `bot/*`), so CI and the adversarial critic run on it exactly as
+# on any other pull request and a red check or a REQUEST_CHANGES verdict
+# blocks the merge.
+#
 # Vendor boundary (standards/vendor-boundaries.md):
 #   Q1 actor — the schedule initiates as `github-actions`; the snapshot commit
-#      is pushed with the bureau App token, so the resulting push (and the
-#      Pipeline Tests run it triggers) is attributed to agent-bureau-bot, an
-#      identity every gate here already admits.
+#      is pushed, and its pull request opened, with the bureau App token, so
+#      both (and the Pipeline Tests run the push triggers) are attributed to
+#      agent-bureau-bot — an identity every gate here already admits, and one
+#      distinct from the qa-bot App that merges, so author != merger holds.
 #   Q2 secrets — a schedule-triggered run in this repo reads the repo's normal
 #      secrets store (never the separate Dependabot store), so the Anthropic
 #      and Linear credentials resolve.
 #   Q3 re-run — the snapshot write is idempotent (an unchanged catalog is a
-#      byte-identical file and no commit) and the card lookup is by exact
-#      title, so a re-run mints nothing new. A DECLINED finding should be
-#      parked in Backlog rather than Canceled: `find-open` ignores terminal
-#      cards, so cancelling one invites a fresh card next week.
-#   Q4 command limits — `linear_ops.py find-open` matches an EXACT title among
-#      non-terminal cards; drift_title() is generated deterministically from
-#      the finding so the match holds week to week.
+#      byte-identical file, no commit and no pull request), a changed one
+#      force-pushes the same branch and finds its own open pull request, and
+#      the card lookup is by exact title, so a re-run mints nothing new. A
+#      DECLINED finding should be parked in Backlog rather than Canceled:
+#      `find-open` ignores terminal cards, so cancelling one invites a fresh
+#      card next week.
+#   Q4 command limits — the push is to `bot/model-drift`, which no protection
+#      rule covers, so the GH006 refusal cannot recur; the pull request is what
+#      reaches `main`, through the gate. `gh pr list --state open` is
+#      deliberately not `--state all` — a merged pull request is finished and
+#      the next refresh needs a new one — and a listing GitHub will not answer
+#      fails the run rather than opening a duplicate. `linear_ops.py find-open`
+#      matches an EXACT title among non-terminal cards; drift_title() is
+#      generated deterministically from the finding so the match holds week to
+#      week.
 #   Q5 our crash — no receipts, no markers, nothing to unstick: a run that dies
 #      anywhere simply repeats next week (or on workflow_dispatch).
 name: Model drift
@@ -182,27 +205,32 @@ jobs:
             python3 scripts/linear_ops.py create "$TITLE" "$RUNNER_TEMP/new-model-body.md" --repo "$REPO_SLUG"
           fi
 
-      # DATA ONLY, and proven so: stage exactly one path, then refuse to commit
-      # if anything else is staged. This is the structural guarantee that a
-      # scheduled job can never move a model pin.
-      - name: Commit the snapshot (models.json only)
+      # DATA ONLY, and proven so: exactly one path is named here, and
+      # `bot_branch_pr.py` stages it, reads the index back and refuses to
+      # commit if anything else is staged. This is the structural guarantee
+      # that a scheduled job can never move a model pin — shared with
+      # split-ledger.yml since DRE-3879, so there is one tested copy of it.
+      # The snapshot rides ONE pull request off `bot/model-drift`; an unchanged
+      # catalog opens none and the run is green.
+      - name: Publish the snapshot on bot/model-drift (one PR, never a push to main)
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git add models.json
-          STAGED=$(git diff --cached --name-only)
-          if [ -z "$STAGED" ]; then
-            echo "catalog unchanged — nothing to commit"
-            exit 0
-          fi
-          if [ "$STAGED" != "models.json" ]; then
-            echo "::error::refusing to commit — staged more than the snapshot: $STAGED"
-            exit 1
-          fi
-          git -c user.name="agent-bureau-bot[bot]" \
-              -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
-              commit -m "chore(models): refresh the catalog snapshot
+          cat > "$RUNNER_TEMP/model-drift-pr-body.md" <<'BODY'
+          The Anthropic catalog snapshot, refreshed by
+          `.github/workflows/model-drift.yml` (DRE-2236).
 
-          Generated by .github/workflows/model-drift.yml (DRE-2236). Data only —
-          the ladder is unchanged; adoption is a human edit."
-          git push origin HEAD:main
+          **Data only — the ladder is unchanged; adoption is a human edit.** The
+          run stages one path and refuses to commit anything else, so this job
+          is structurally incapable of moving a model pin. A model the catalog
+          offers that we have never configured is reported on its own Linear
+          card, for a person to decide.
+          BODY
+          python3 scripts/bot_branch_pr.py publish \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch bot/model-drift \
+            --base "${DEFAULT_BRANCH:-main}" \
+            --path models.json \
+            --title "chore(models): refresh the catalog snapshot" \
+            --body-file "$RUNNER_TEMP/model-drift-pr-body.md"

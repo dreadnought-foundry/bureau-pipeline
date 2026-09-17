@@ -8,8 +8,14 @@ there, while `scripts/ledger_context.py` calls a ledger older than
 Freshness that depends on someone remembering is not freshness.
 
 `.github/workflows/split-ledger.yml` is shaped on `model-drift.yml` — the one
-other scheduled job here that commits a generated file to `main` — and these
-tests pin the four things a later edit could quietly take away:
+other scheduled job here that commits a generated file — and these tests pin
+the four things a later edit could quietly take away.
+
+DRE-3879 changed where that commit LANDS and nothing else about this job. Both
+jobs used to end in `git push origin HEAD:main`, which branch protection
+refuses (`GH006`), so the ledger had failed to save itself every day since the
+card was opened. It now rides one pull request off `bot/split-ledger`, and the
+tests below watch `main` staying exactly where it was.
 
   1. **The cadence**, bound to the reader's own rule rather than to a number
      typed twice: daily against a 72-hour window is two missed days of margin.
@@ -31,16 +37,17 @@ check) and a third staged path must be refused.
 
 import json
 import os
-import subprocess  # nosec B404 — fixed-arg git calls against a temp repo
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
+import bot_branch_harness as H  # noqa: E402
+import bot_branch_pr  # noqa: E402
 import channel_watch  # noqa: E402
 import ledger_context  # noqa: E402
 import split_ledger  # noqa: E402
@@ -100,9 +107,16 @@ def _run_steps(doc: dict) -> str:
 
 
 def _commit_script(doc: dict) -> str:
-    """The commit step's shell, the thing the executable tests below run."""
-    found = [s.get("run", "") for s in _steps(doc) if "git add" in (s.get("run") or "")]
-    assert len(found) == 1, f"exactly one step stages the ledger, found {len(found)}"
+    """The publishing step's shell, the thing the executable tests below run.
+
+    Since DRE-3879 the step hands the work to `scripts/bot_branch_pr.py`
+    rather than spelling out a commit and a push to `main` — that push is the
+    one branch protection refuses, and it had failed every day since this
+    card's ancestor was opened.
+    """
+    found = [s.get("run", "") for s in _steps(doc)
+             if "bot_branch_pr.py" in (s.get("run") or "")]
+    assert len(found) == 1, f"exactly one step publishes the ledger, found {len(found)}"
     return found[0]
 
 
@@ -206,14 +220,25 @@ class ItCommitsOnlyWhatItGeneratesTest(unittest.TestCase):
         self.assertNotIn("git add --all", self.runs)
 
     def test_it_proves_the_staged_set_before_pushing(self):
-        """Not "we only staged two paths" — the workflow READS the index back
-        and refuses anything else, so a future edit that stages a third path
-        cannot smuggle it to main behind the schedule."""
-        self.assertIn("git diff --cached --name-only", self.script)
+        """Not "we only staged two paths" — the index is READ BACK and
+        anything else refused, so a future edit that stages a third path
+        cannot smuggle it behind the schedule. The proof moved into
+        `bot_branch_pr.publish` with the rest of the step (DRE-3879); this
+        pins that it is still made, and the publisher's own suite runs it."""
+        self.assertEqual(
+            bot_branch_pr.unexpected_staged(list(LEDGER_PATHS) + ["agents.yaml"],
+                                            list(LEDGER_PATHS)),
+            ["agents.yaml"])
 
-    def test_it_pushes_to_main_as_the_bot(self):
-        self.assertIn("agent-bureau-bot[bot]", self.script)
-        self.assertIn("git push origin HEAD:main", self.script)
+    def test_it_commits_as_the_bot_and_never_pushes_to_main(self):
+        """DRE-3879. `git push origin HEAD:main` is what branch protection
+        refused with GH006 every morning; the ledger now rides a pull request
+        off `bot/split-ledger`, and the bot identity comes from the publisher
+        rather than from a second copy in this file."""
+        self.assertEqual(bot_branch_pr.BOT_NAME, "agent-bureau-bot[bot]")
+        self.assertIn("--branch bot/split-ledger", self.script)
+        self.assertNotIn("HEAD:main", _uncommented(_text()))
+        self.assertNotRegex(_uncommented(_text()), r"git\s+push[^\n]*\bmain\b")
 
     def test_it_does_not_skip_a_timestamp_only_change(self):
         """The timestamp IS the freshness the readers check. A run that
@@ -290,97 +315,74 @@ class TheDocumentSaysSoTest(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 
 
-def _git(*args, cwd):
-    return subprocess.run(  # nosec B603 B607 — fixed args, temp repo
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
-
-
-class TheCommitStepRunsTest(unittest.TestCase):
+class ThePublishStepRunsTest(unittest.TestCase):
     """The staged-set guarantee, exercised rather than read for. Each test
     builds a repository with the two generated files committed and a real
     `origin`, mutates the working tree the way a run would, and runs the
-    workflow's own commit script."""
+    workflow's own publishing script against a fake `gh`.
+
+    Since DRE-3879 what is watched is `bot/split-ledger` — and `main`, which
+    must not move.
+    """
+
+    BRANCH = "bot/split-ledger"
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        root = Path(self.tmp.name)
-        self.origin = root / "origin.git"
-        self.work = root / "work"
-        subprocess.run(  # nosec B603 B607
-            ["git", "init", "--bare", "-b", "main", str(self.origin)],
-            capture_output=True, check=True)
-        self.work.mkdir()
-        _git("init", "-b", "main", cwd=self.work)
-        for path in LEDGER_PATHS:
-            target = self.work / path
-            target.parent.mkdir(parents=True, exist_ok=True)
+        self.repo = H.BotBranchRepo(self.addCleanup)
         self._write_ledger("2026-09-09T04:11:00Z")
-        (self.work / "agents.yaml").write_text("# a file this job may never touch\n")
-        _git("add", "-A", cwd=self.work)
-        self._commit("seed")
-        _git("remote", "add", "origin", str(self.origin), cwd=self.work)
-        _git("push", "origin", "main", cwd=self.work)
-        self.before = self._origin_head()
+        self.repo.write("agents.yaml", "# a file this job may never touch\n")
+        self.repo.seed()
+        self.before = self.repo.origin_ref("main")
 
     def _write_ledger(self, stamp: str):
-        (self.work / LEDGER_PATHS[0]).write_text(
-            json.dumps({"generated_at": stamp, "rows": []}, indent=2) + "\n")
-        (self.work / LEDGER_PATHS[1]).write_text(f"# The split ledger\n\nGenerated **{stamp}**.\n")
+        self.repo.write(LEDGER_PATHS[0],
+                        json.dumps({"generated_at": stamp, "rows": []},
+                                   indent=2) + "\n")
+        self.repo.write(LEDGER_PATHS[1],
+                        f"# The split ledger\n\nGenerated **{stamp}**.\n")
 
-    def _commit(self, message: str):
-        _git("-c", "user.name=t", "-c", "user.email=t@example.com",
-             "commit", "-m", message, cwd=self.work)
+    def _run_publish_step(self):
+        return self.repo.run(_commit_script(_doc()))
 
-    def _origin_head(self) -> str:
-        return _git("rev-parse", "main", cwd=self.origin).stdout.strip()
-
-    def _run_commit_step(self):
-        env = {
-            "PATH": os.environ["PATH"],
-            "HOME": str(self.work),
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_SYSTEM": os.devnull,
-            "GH_TOKEN": "unused-in-this-harness",
-        }
-        return subprocess.run(  # nosec B603 B607 — the workflow's own script
-            ["bash", "-e", "-c", _commit_script(_doc())],
-            cwd=str(self.work), env=env, capture_output=True, text=True)
-
-    def test_a_timestamp_only_derivation_still_commits_and_pushes(self):
+    def test_a_timestamp_only_derivation_still_ships(self):
         """The run the card is about: nothing changed but `generated_at`, and
         skipping it would make a fresh derivation look stale to every reader."""
         self._write_ledger("2026-09-10T04:11:00Z")
-        result = self._run_commit_step()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotEqual(self._origin_head(), self.before,
-                            "main did not move — the freshness never shipped")
-        log = _git("log", "-1", "--format=%an|%ae|%s", cwd=self.origin).stdout
-        self.assertIn("agent-bureau-bot[bot]", log)
-        changed = _git("show", "--name-only", "--format=", "HEAD", cwd=self.origin)
-        self.assertEqual(sorted(changed.stdout.split()), sorted(LEDGER_PATHS))
+        result = self._run_publish_step()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.repo.origin_ref(self.BRANCH),
+                        "the branch never moved — the freshness never shipped")
+        self.assertIn("agent-bureau-bot[bot]", self.repo.origin_log(self.BRANCH))
+        self.assertEqual(self.repo.origin_files(self.BRANCH),
+                         sorted(LEDGER_PATHS))
+
+    def test_main_is_never_touched(self):
+        """The defect this card fixes, watched directly: branch protection
+        refuses a push here, so the job must not attempt one."""
+        self._write_ledger("2026-09-10T04:11:00Z")
+        self.assertEqual(self._run_publish_step().returncode, 0)
+        self.assertEqual(self.repo.origin_ref("main"), self.before)
 
     def test_it_refuses_when_anything_else_is_staged(self):
         """A third path in the index — an earlier step, or a later edit to this
-        workflow — is refused, and main does not move."""
+        workflow — is refused, and nothing is pushed."""
         self._write_ledger("2026-09-10T04:11:00Z")
-        (self.work / "agents.yaml").write_text("# a quietly rewritten ladder\n")
-        _git("add", "agents.yaml", cwd=self.work)
-        result = self._run_commit_step()
+        self.repo.write("agents.yaml", "# a quietly rewritten ladder\n")
+        H.git("add", "agents.yaml", cwd=self.repo.work)
+        result = self._run_publish_step()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("agents.yaml", result.stdout + result.stderr)
-        self.assertEqual(self._origin_head(), self.before,
-                         "main moved on a run that should have refused")
+        self.assertEqual(self.repo.origin_ref(self.BRANCH), "")
+        self.assertEqual(self.repo.origin_ref("main"), self.before)
 
     def test_an_untracked_neighbour_is_not_swept_in(self):
         """The other half of the same guarantee: a file the job never staged
         stays out of the commit rather than riding along."""
         self._write_ledger("2026-09-10T04:11:00Z")
-        (self.work / "stray.txt").write_text("left behind by some other step\n")
-        result = self._run_commit_step()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        changed = _git("show", "--name-only", "--format=", "HEAD", cwd=self.origin)
-        self.assertNotIn("stray.txt", changed.stdout)
+        self.repo.write("stray.txt", "left behind by some other step\n")
+        result = self._run_publish_step()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("stray.txt", self.repo.origin_files(self.BRANCH))
 
 
 if __name__ == "__main__":

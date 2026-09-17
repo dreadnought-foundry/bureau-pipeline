@@ -53,6 +53,16 @@ RUN_URL = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/3
 WF_NAME = "Integration harness"
 SLUG = "bureau-pipeline"
 
+#: merge-gate.yml's branch gate, spelled as the shell spells it. Written once
+#: here and asserted against the workflow below (DRE-3879 added the two
+#: scheduled jobs' own branches, `bot/split-ledger` and `bot/model-drift`);
+#: two copies of this string in one module is how it comes to name a gate
+#: nobody runs.
+MERGE_GATE_PATTERN = (
+    "agent/*|repair/*|dependabot/*|bot/standards-sync"
+    "|bot/split-ledger|bot/model-drift"
+)
+
 
 def wf(name: str) -> str:
     return open(os.path.join(WF_DIR, name)).read()
@@ -160,8 +170,7 @@ class BranchNamesTheCardTest(unittest.TestCase):
     def test_the_shell_case_matchers_accept_it(self):
         """merge-gate.yml and agent-fix.yml gate on a shell `case` — run it."""
         branch = red_main_repair.repair_branch(SHA, 1, card=CARD)
-        for pattern in ("agent/*|repair/*|dependabot/*|bot/standards-sync",
-                        "agent/*|repair/*"):
+        for pattern in (MERGE_GATE_PATTERN, "agent/*|repair/*"):
             script = (f'B="{branch}"; case "$B" in {pattern}) echo yes;; '
                       '*) echo no;; esac')
             out = subprocess.run(["bash", "-c", script], capture_output=True,
@@ -170,8 +179,7 @@ class BranchNamesTheCardTest(unittest.TestCase):
 
     def test_both_patterns_are_the_ones_the_workflows_use(self):
         # The strings above are only proof if the workflows still spell them.
-        self.assertIn("agent/*|repair/*|dependabot/*|bot/standards-sync",
-                      wf("merge-gate.yml"))
+        self.assertIn(MERGE_GATE_PATTERN, wf("merge-gate.yml"))
         self.assertIn("agent/*|repair/*", wf("agent-fix.yml"))
 
 

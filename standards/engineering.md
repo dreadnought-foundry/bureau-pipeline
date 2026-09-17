@@ -38,7 +38,15 @@ is the floor. Every rule here exists because its violation shipped a bug.
   code. A static design record — a
   `.html`/`.md`/`.png`/`.jpg`/`.jpeg`/`.svg`/`.pen`/`.json` file under
   `console/design/` or a root `design/` — counts as docs; `.css` and source
-  there stay code (DRE-3763). **Reviewers: hold a branch to
+  there stay code (DRE-3763). A root `models.json` counts as DATA, beside
+  `config/` and `agents.yaml`: it is the Anthropic catalog snapshot a
+  scheduled job refreshes from the vendor's model list, and there is no RED
+  test to write for a list somebody else publishes (DRE-3879, CEO's signed
+  answer 2026-09-16). **That one path, matched exactly** — a `models.json`
+  anywhere else in the tree is somebody's source file and stays code, and the
+  exemption says which FILES need a test committed first, never whether the
+  rule applies: a `.py` change riding on the same pull request still owes its
+  RED test first, and no check is skipped. **Reviewers: hold a branch to
   that rule and no other.** "A RED test immediately before each implementation
   commit" is a stricter standard nothing enforces, and blocking on it rejects a
   compliant branch — it cost agent-bureau #2247 ~22 hours, a fix-loop attempt

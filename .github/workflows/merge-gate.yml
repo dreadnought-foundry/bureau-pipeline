@@ -101,7 +101,9 @@ jobs:
        (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
         startsWith(github.event.workflow_run.head_branch, 'repair/') ||
         startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
-        github.event.workflow_run.head_branch == 'bot/standards-sync')) ||
+        github.event.workflow_run.head_branch == 'bot/standards-sync' ||
+        github.event.workflow_run.head_branch == 'bot/split-ledger' ||
+        github.event.workflow_run.head_branch == 'bot/model-drift')) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        contains(github.event.comment.body, 'QA Critic') &&
@@ -212,12 +214,28 @@ jobs:
           # have linear-sync re-close a long-done card every night. The CARD
           # lookup below already tolerates an empty result.
           #
-          # Matched as the LITERAL branch, not `bot/*`. A broad prefix would
+          # bot/split-ledger and bot/model-drift = this repo's own two
+          # scheduled derivations (DRE-3879). Both used to push straight to
+          # `main` and both had been failing on it every run — branch
+          # protection answers GH006 — so each now commits to its own fixed
+          # branch and rides one pull request. Card-less for the same reason
+          # the nightly sync is. The CEO added exactly these two names on
+          # 2026-09-15 (signed console answer): trusted the way
+          # `bot/standards-sync` is, no wildcard, and nothing here waves them
+          # through — CI green and a SHA-bound critic APPROVE still decide,
+          # so a red check or a REQUEST_CHANGES verdict blocks the merge.
+          #
+          # Matched as the LITERAL branches, not `bot/*`. A broad prefix would
           # hand auto-merge to any future branch that happened to be named that
-          # way — a permission nobody asked for. A second bot workflow will hit
-          # this wall and unowned-branch-watchdog will say so loudly, which is
-          # the right amount of friction.
-          case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+          # way — a permission nobody asked for. That wall is exactly what the
+          # two above hit, and this is what walking up to it costs: a card, a
+          # decision, and a line naming the branch.
+          #
+          # The set is the one `reconcile.PIPELINE_BRANCH_PREFIXES` holds, and
+          # tests/test_pipeline_ownership.py fails if the two drift apart —
+          # eight hand-copied answers to this question is what stranded four
+          # pull requests for ten hours (DRE-2426).
+          case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/split-ledger|bot/model-drift) ;; *) echo "not an agent branch — skip"; exit 0;; esac
           CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 
           # The conflict record (DRE-2416): GitHub's own mergeability
