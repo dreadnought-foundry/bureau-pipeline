@@ -458,6 +458,131 @@ class TestTheWipCount:
 
 
 # --------------------------------------------------------------------------
+# 4b: a full fleet does not hold a person's card
+# --------------------------------------------------------------------------
+class TestAFullFleetDoesNotHoldAPersonsCard:
+    """The critic's finding on PR #430. Section 4 stopped a person's queue
+    starving the FLEET's; this is the same starvation pointed the other way.
+    The cap question was asked ONCE, before the roster was read, so on an
+    ordinary busy day — every slot taken by work the fleet dispatched itself —
+    the sweep returned before it reached an OPERATOR card that needs no slot.
+    The lane contract this card wrote says "a hand-built card needs no room";
+    these hold the sweep to it.
+    """
+
+    def test_an_operator_card_is_promoted_while_the_fleet_is_at_its_cap(self):
+        """The reproduction, verbatim from the review: cap 1, one real run in
+        flight, one OPERATOR card whose turn has come."""
+        card = _card(identifier="DRE-3390", comments=[OPERATOR])
+        with patch.object(reconcile, "MAX_WIP", 1):
+            board = _Board(card)
+            assert board.promote(active_count=1) == 1
+        assert board.lane_of("DRE-3390") == "Todo"
+        assert board.labels_on("DRE-3390") == list(routing_verdict.marks("OPERATOR"))
+
+    def test_a_workbench_card_is_promoted_while_the_fleet_is_at_its_cap(self):
+        card = _card(identifier="DRE-3390", comments=[WORKBENCH])
+        with patch.object(reconcile, "MAX_WIP", 1):
+            board = _Board(card)
+            assert board.promote(active_count=1) == 1
+        assert board.lane_of("DRE-3390") == "Todo"
+        assert "nothing was dispatched" in board.receipt_for("DRE-3390")
+
+    def test_a_fleet_over_its_cap_does_not_hold_it_either(self):
+        """A cap lowered under work already in flight leaves the budget
+        NEGATIVE, not zero — the same answer, by the same rule."""
+        card = _card(identifier="DRE-3390", comments=[OPERATOR])
+        with patch.object(reconcile, "MAX_WIP", 1):
+            board = _Board(card)
+            assert board.promote(active_count=3) == 1
+        assert board.lane_of("DRE-3390") == "Todo"
+
+    def test_at_the_cap_the_fleet_card_beside_it_still_waits(self, capsys):
+        """Control, and the half that must not move: the cap still caps. The
+        OPERATOR card leaves; the FLEET card either side of it stays, and the
+        run still says the cap it was holding to and who is waiting on it."""
+        cards = [
+            _card(identifier="DRE-3389", comments=[FLEET]),
+            _card(identifier="DRE-3390", comments=[OPERATOR]),
+            _card(identifier="DRE-3391", comments=[FLEET]),
+        ]
+        with patch.object(reconcile, "MAX_WIP", 1):
+            board = _Board(*cards)
+            assert board.promote(active_count=1) == 1
+        assert board.lane_of("DRE-3390") == "Todo"
+        assert board.lane_of("DRE-3389") == "Backlog"
+        assert board.lane_of("DRE-3391") == "Backlog"
+        assert board.comments_on("DRE-3389") == []
+        out = capsys.readouterr().out
+        assert "WIP at cap (1/1)" in out
+        waiting = [ln for ln in out.splitlines() if "not considered" in ln]
+        assert len(waiting) == 1, out
+        assert "2 candidate(s)" in waiting[0]
+        assert "DRE-3389" in waiting[0]
+
+    def test_a_cap_reached_mid_sweep_does_not_cut_off_the_card_behind_it(self):
+        """The same early exit, one step later: candidates are read lowest
+        number first, so once FLEET cards spent the budget the loop BROKE and
+        a newer OPERATOR card behind them was never reached — every sweep,
+        because the newest card is always the one cut off."""
+        cards = [
+            _card(identifier=f"DRE-{n}", comments=[FLEET]) for n in (3390, 3391, 3392)
+        ]
+        cards.append(_card(identifier="DRE-3399", comments=[OPERATOR]))
+        with patch.object(reconcile, "MAX_WIP", 2):
+            board = _Board(*cards)
+            assert board.promote(active_count=0) == 3
+        assert board.lane_of("DRE-3399") == "Todo"
+        assert board.lane_of("DRE-3391") == "Todo"
+        assert board.lane_of("DRE-3392") == "Backlog"
+
+    def test_a_repo_held_at_zero_still_hands_a_person_their_card(self):
+        """A cap of "0" holds the FLEET: no run is dispatched on any path
+        (DRE-3994). An OPERATOR card dispatches nothing, so the hold has
+        nothing to refuse it for — pinned here because it is a consequence
+        somebody should have chosen rather than discovered."""
+        cards = [
+            _card(identifier="DRE-3390", comments=[OPERATOR]),
+            _card(identifier="DRE-3391", comments=[FLEET]),
+        ]
+        with patch.object(reconcile, "MAX_WIP", 0):
+            board = _Board(*cards)
+            assert board.promote(active_count=0) == 1
+        assert board.lane_of("DRE-3390") == "Todo"
+        assert board.lane_of("DRE-3391") == "Backlog"
+
+    def test_five_waiting_fleet_cards_are_one_line_not_five(self, capsys):
+        """DRE-2918 held: a saturated sweep over a long Backlog says who is
+        waiting ONCE, and never a line per card."""
+        cards = [
+            _card(identifier=f"DRE-{n}", comments=[FLEET]) for n in range(3390, 3395)
+        ]
+        with patch.object(reconcile, "MAX_WIP", 1):
+            board = _Board(*cards)
+            assert board.promote(active_count=1) == 0
+        out = capsys.readouterr().out
+        waiting = [ln for ln in out.splitlines() if "not considered" in ln]
+        assert len(waiting) == 1, out
+        assert "5 candidate(s)" in waiting[0] and "DRE-3390" in waiting[0]
+        assert not any("DRE-3393" in ln for ln in out.splitlines())
+
+    def test_a_saturated_sweep_does_not_start_judging_cards_bound_elsewhere(self):
+        """Control on the fix's reach: only a card bound for a PERSON passes a
+        full cap. A PARKED card or one with no verdict is not walked through
+        the gates — and posted on — by a sweep that has no room to act."""
+        cards = [
+            _card(identifier="DRE-3390", comments=[PARKED]),
+            _card(identifier="DRE-3391", comments=[NEEDS_WORK]),
+            _card(identifier="DRE-3392"),
+        ]
+        with patch.object(reconcile, "MAX_WIP", 1):
+            board = _Board(*cards)
+            assert board.promote(active_count=1) == 0
+        assert board.posted == []
+        assert board.writes == []
+
+
+# --------------------------------------------------------------------------
 # 5: the vocabulary and the contract say the same thing the code does
 # --------------------------------------------------------------------------
 class TestTheContractSaysSo:
