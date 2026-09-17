@@ -10,6 +10,7 @@ deletes, branch-protection refusals).
 from __future__ import annotations
 
 import base64
+import collections
 import io
 import json
 import time
@@ -34,6 +35,27 @@ _LOG_BYTE_CAP = 256 * 1024
 # scenarios (run 29795108949: gate_paths 401ed in verify AND cleanup).
 TOKEN_REFRESH_SECONDS = 50 * 60
 
+# CONDITIONAL READS (DRE-4132). The driver waits on the sandbox by asking the
+# same URL again and again — `gate_paths`' stale leg asks two every five
+# seconds for as long as a critic review takes — and GitHub bills every one of
+# those although the answer has not changed. On 2026-09-17 that was most of
+# what emptied the worker installation's 5,000 requests an hour: ~150 a minute
+# with four harness runs live, and while it was empty every job in the fleet
+# holding the worker token was refused.
+#
+# GitHub does NOT bill a conditional request it answers `304 Not Modified`
+# (measured that day: 20 `If-None-Match` reads moved `x-ratelimit-used` by 0;
+# the same 20 unconditional moved it by 20). So a client remembers each GET's
+# ETag with the body it came with, sends `If-None-Match` the next time it asks
+# that URL, and answers from memory on a 304. The poll keeps its cadence — the
+# five seconds ARE the stale-verdict race — and only the unchanged answers
+# stop costing anything. A 200 always replaces the memory, so the driver is
+# never served anything older than GitHub's own reply.
+#
+# Bounded, oldest-out: forgetting a URL costs one billed read, never a wrong
+# answer. 256 is several times the distinct URLs a wait ever cycles through.
+ETAG_CACHE_ENTRIES = 256
+
 
 class GitHubError(RuntimeError):
     def __init__(self, status: int, message: str):
@@ -53,22 +75,50 @@ class GitHub:
         opener=None,
         token_supplier=None,
         clock=time.monotonic,
+        conditional: bool = True,
     ):
         self._token = token
         self._api = api_url.rstrip("/")
-        # opener(urllib.request.Request) -> (status, bytes); injectable so
-        # the retry/error logic is unit-testable without a network.
+        # opener(urllib.request.Request) -> (status, bytes, headers);
+        # injectable so the retry/error logic is unit-testable without a
+        # network. The older (status, bytes) pair is still accepted.
         self._opener = opener or self._urlopen
         # token_supplier() -> fresh token; None = the token is static (a
         # PAT, or an App JWT) and expiry surfaces as the 401 it is.
         self._supplier = token_supplier
         self._clock = clock
         self._minted_at = clock()
+        # url -> (etag, raw json bytes). Bytes, not the parsed object: every
+        # answer is parsed fresh, so a scenario that mutates what it was
+        # handed cannot poison the next poll. `conditional=False` is the off
+        # switch — every read billed, exactly the pre-DRE-4132 client.
+        self._conditional = conditional
+        self._remembered: collections.OrderedDict = collections.OrderedDict()
+        # The ledger the driver prints at the end of a run: `billed` is every
+        # request GitHub charged to this identity's hour (errors included —
+        # a 404 costs what a 200 does), `free` is every 304.
+        self._billed = 0
+        self._free = 0
 
     @staticmethod
     def _urlopen(req: urllib.request.Request):
+        # opener(req) -> (status, bytes, headers). The headers are how the
+        # client learns an ETag; an injected opener that returns the older
+        # (status, bytes) pair is still accepted and is simply never
+        # conditional.
         with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
-            return resp.status, resp.read()
+            return resp.status, resp.read(), resp.headers
+
+    def spend(self) -> dict:
+        """`{"billed": n, "free": m}` — requests GitHub charged to this
+        identity's hourly allowance vs. 304s it did not (DRE-4132)."""
+        return {"billed": self._billed, "free": self._free}
+
+    def _remember(self, url: str, etag: str, payload: bytes) -> None:
+        self._remembered[url] = (etag, payload)
+        self._remembered.move_to_end(url)
+        while len(self._remembered) > ETAG_CACHE_ENTRIES:
+            self._remembered.popitem(last=False)
 
     def _remint(self) -> bool:
         """Swap in a fresh token from the supplier; False when the client
@@ -123,6 +173,13 @@ class GitHub:
                  raw: bool = False):
         url = path if path.startswith("http") else f"{self._api}{path}"
         data = json.dumps(body).encode() if body is not None else None
+        # Only a JSON GET is ever conditional: a write must always be sent,
+        # and the raw log archive is read once and is not worth remembering.
+        recall = (
+            self._remembered.get(url)
+            if self._conditional and method == "GET" and not raw
+            else None
+        )
         last_error: Exception | None = None
         for attempt in range(1, _RETRIES + 1):
             req = urllib.request.Request(  # nosec B310 — https API host only
@@ -135,14 +192,29 @@ class GitHub:
                     "X-GitHub-Api-Version": "2022-11-28",
                     "User-Agent": "bureau-pipeline-harness",
                     **({"Content-Type": "application/json"} if data else {}),
+                    **({"If-None-Match": recall[0]} if recall else {}),
                 },
             )
             try:
-                status, payload = self._opener(req)
+                answer = self._opener(req)
+                status, payload = answer[0], answer[1]
+                headers = answer[2] if len(answer) > 2 else None
+                self._billed += 1
                 if raw:
                     return payload or b""
+                etag = headers.get("ETag") if headers is not None else None
+                if self._conditional and method == "GET" and etag and payload:
+                    self._remember(url, etag, payload)
                 return json.loads(payload) if payload else None
             except urllib.error.HTTPError as e:
+                if e.code == 304 and recall:
+                    # Unchanged since we last asked, and not billed. Answer
+                    # from memory — parsed fresh, see __init__.
+                    self._free += 1
+                    if url in self._remembered:
+                        self._remembered.move_to_end(url)
+                    return json.loads(recall[1])
+                self._billed += 1
                 detail = e.read().decode(errors="replace")[:500]
                 if e.code >= 500 and attempt < _RETRIES:
                     last_error = GitHubError(e.code, detail)
