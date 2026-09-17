@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-10T13:42:09Z",
+  "generated_at": "2026-09-17T04:48:32Z",
   "window_days": 90,
   "generated_by": "scripts/split_ledger.py derive",
   "source": "Linear card bodies, labels and comment receipts, plus the merged pull requests of each card's split pieces, over a population DISCOVERED from the turn-cap, hand-back and split-citation receipts of the last 90 days plus the seed cards",
@@ -175,16 +175,6 @@
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
       "piece_files": [
-        "config/linear-workspace.json",
-        "docs/protocol/card-quality-standard.md",
-        "scripts/tests/test_label_retirement.py",
-        "architecture/agent-bureau-architecture.md",
-        "architecture/project-registry-plan.md",
-        "cloud/relay/lambda_function.py",
-        "cloud/relay/test_lambda_function.py",
-        "plugins/dreadnought-standards/skills/dreadnought-card-quality/SKILL.md",
-        "scripts/onboard-customer.py",
-        "scripts/test_onboard_customer.py",
         "README.md",
         "briefs/planner.md",
         "config/README.md",
@@ -215,7 +205,9 @@
         "unbounded-quantifier": "'Every retired' with no count of retireds anywhere"
       },
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2876: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2875: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -421,43 +413,7 @@
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": [
-        "console/backend/README.md",
-        "console/backend/enrich.py",
-        "console/backend/inflight.py",
-        "console/backend/pr_merge.py",
-        "console/backend/project_rollups.py",
-        "console/backend/schema.py",
-        "console/backend/sources.py",
-        "console/backend/tests/test_enrich_gate_phase.py",
-        "console/backend/tests/test_inflight.py",
-        "console/backend/tests/test_inflight_query.py",
-        "console/backend/tests/test_one_derivation_per_question.py",
-        "console/web/schema.graphql",
-        "console/web/src/components/atoms/ciStatus.test.ts",
-        "console/web/src/components/atoms/ciStatus.ts",
-        "console/web/src/components/atoms/index.ts",
-        "console/web/src/components/board/kanbanMapping.test.ts",
-        "console/web/src/components/board/kanbanMapping.ts",
-        "console/web/src/components/board/swimLanes.test.ts",
-        "console/web/src/components/board/swimLanes.ts",
-        "console/web/src/components/composed/actorKey.test.ts",
-        "console/web/src/components/composed/actorKey.ts",
-        "console/web/src/components/composed/index.ts",
-        "console/web/src/components/dashboard/inFlightMapping.test.ts",
-        "console/web/src/components/dashboard/inFlightMapping.ts",
-        "console/web/src/components/derivationAgreement.test.ts",
-        "console/web/src/components/flyout/CardFlyout.tsx",
-        "console/web/src/components/flyout/MobileCardSheet.tsx",
-        "console/web/src/components/flyout/cardMeta.test.ts",
-        "console/web/src/components/flyout/cardMeta.ts",
-        "console/web/src/components/flyout/index.ts",
-        "console/web/src/generated/graphql.ts",
-        "console/web/src/components/atoms/statusColors.laneShim.test.tsx",
-        "console/web/src/components/atoms/statusColors.ts",
-        "console/web/src/components/board/epicWorkFilter.ts",
-        "console/web/src/components/cards/EpicCard.tsx"
-      ],
+      "piece_files": "UNKNOWN",
       "pieces": 3,
       "pieces_named": [
         "DRE-2872",
@@ -476,7 +432,9 @@
       },
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against",
-        "DRE-2871: no merged pull request this run could read"
+        "DRE-2872: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2871: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2870: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -493,46 +451,7 @@
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": [
-        "console/web/src/components/atoms/LiveSyncBadge.test.tsx",
-        "console/web/src/components/atoms/LiveSyncBadge.tsx",
-        "console/web/src/components/dashboard/InFlightSection.test.tsx",
-        "console/web/src/components/dashboard/InFlightSection.tsx",
-        "console/web/src/components/dashboard/readModelFreshness.test.ts",
-        "console/web/src/components/dashboard/readModelFreshness.ts",
-        "console/web/src/lib/useLiveQuery.test.tsx",
-        "console/web/src/lib/useLiveQuery.ts",
-        "console/web/src/pages/Dashboard.tsx",
-        "console/web/src/test/freshness.ts",
-        "console/backend/schema.py",
-        "console/backend/tests/test_project_rollup_freshness.py",
-        "console/web/schema.graphql",
-        "console/web/src/components/dashboard/GlanceBanner.test.tsx",
-        "console/web/src/components/dashboard/GlanceBanner.tsx",
-        "console/web/src/components/dashboard/OpenPrsGroup.test.tsx",
-        "console/web/src/components/dashboard/OpenPrsGroup.tsx",
-        "console/web/src/components/dashboard/ReadAgeLabel.test.tsx",
-        "console/web/src/components/dashboard/ReadAgeLabel.tsx",
-        "console/web/src/components/dashboard/StatRibbon.test.tsx",
-        "console/web/src/components/dashboard/StatRibbon.tsx",
-        "console/web/src/generated/graphql.ts",
-        "console/web/src/graphql/operations.graphql",
-        "console/web/src/lib/time.ts",
-        "console/web/src/pages/ProjectDetail.tsx",
-        "console/web/src/pages/ProjectOverview.tsx",
-        "console/web/src/pages/projectDetailModel.ts",
-        "console/web/src/pages/projectDetailTabs.test.tsx",
-        "console/web/src/pages/projectDetailTabs.tsx",
-        "console/web/src/pages/projectOverview.test.tsx",
-        "console/web/src/pages/projectRightRail.ts",
-        "console/backend/pr_merge.py",
-        "console/backend/sources.py",
-        "console/backend/tests/isolation.py",
-        "console/backend/tests/test_badge_dependabot.py",
-        "console/backend/tests/test_fix_loop_engagement.py",
-        "console/backend/tests/test_merge_gate_one_clock.py",
-        "console/backend/tests/test_pr_merge.py"
-      ],
+      "piece_files": "UNKNOWN",
       "pieces": 3,
       "pieces_named": [
         "DRE-2892",
@@ -550,7 +469,10 @@
         "unbounded-quantifier": "'each other' with no count of others anywhere"
       },
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2892: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2891: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2890: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -566,12 +488,7 @@
       "role": "devops",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": [
-        "architecture/wave-plans/README.md",
-        "architecture/wave-plans/wave-1.5-the-intake-gate.html",
-        "docs/design/dre-2822-instances.json",
-        "scripts/tests/test_wave_plan_pointer.py"
-      ],
+      "piece_files": "UNKNOWN",
       "pieces": 1,
       "pieces_named": [
         "DRE-2851"
@@ -587,7 +504,8 @@
         "unbounded-quantifier": "'every phase' with no count of phases anywhere"
       },
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2851: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -665,8 +583,6 @@
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
       "piece_files": [
-        "config/linear-workspace.json",
-        "scripts/tests/test_linear_workspace.py",
         "config/lane-contract.json",
         "docs/lane-contract.md",
         "scripts/planning_escalation.py",
@@ -705,7 +621,8 @@
         "unbounded-quantifier": "'each writer' with no count of writers anywhere"
       },
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2860: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -746,14 +663,7 @@
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": [
-        ".github/workflows/ci.yml",
-        "Makefile",
-        "console/Makefile",
-        "console/backend/check_unknown_direction.py",
-        "console/backend/tests/test_unknown_direction_guard.py",
-        "console/backend/unknown_resolution.py"
-      ],
+      "piece_files": "UNKNOWN",
       "pieces": 3,
       "pieces_named": [
         "DRE-2912",
@@ -772,8 +682,9 @@
       },
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against",
-        "DRE-2912: no merged pull request this run could read",
-        "DRE-2911: no merged pull request this run could read"
+        "DRE-2912: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2911: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2910: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -808,7 +719,7 @@
       "card": "DRE-2898",
       "title": "COMPLIANCE \u00b7 An answer to a question the form never asked exports as an ordinary answer, and reads 12/11",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-2898/compliance-an-answer-to-a-question-the-form-never-asked-exports-as-an",
-      "state": "Intake",
+      "state": "Backlog",
       "created_at": "2026-09-01T01:02:38Z",
       "reasons": [
         "turn-cap-death"
@@ -841,20 +752,7 @@
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": [
-        "console/backend/poller.py",
-        "console/backend/sources.py",
-        "console/backend/tests/test_non_dispatch_repo_prs.py",
-        "console/backend/tests/test_offrail_timeline.py",
-        "console/backend/tests/test_pr_ingest.py",
-        "console/backend/tests/test_sources.py",
-        "console/backend/check_unknown_direction.py",
-        "console/backend/project_rollups.py",
-        "console/backend/tests/test_project_rollups.py",
-        "console/backend/unknown_resolution.py",
-        "console/backend/alerts.py",
-        "console/backend/tests/test_alerts.py"
-      ],
+      "piece_files": "UNKNOWN",
       "pieces": 4,
       "pieces_named": [
         "DRE-2937",
@@ -872,7 +770,10 @@
       },
       "unreadable": [
         "the card declares no `Files:` line, so it made no footprint claim to compare against",
-        "DRE-2937: no merged pull request this run could read"
+        "DRE-2937: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2936: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2935: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2934: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -888,21 +789,7 @@
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": [
-        "console/web/src/pages/settings/membersModel.test.ts",
-        "console/web/src/pages/settings/membersModel.ts",
-        "console/design/docs/desktop.md",
-        "console/web/src/components/composed/ProjectRightRail.test.tsx",
-        "console/web/src/components/composed/ProjectRightRail.tsx",
-        "console/web/src/pages/projectRightRail.test.ts",
-        "console/web/src/pages/projectRightRail.ts",
-        "console/web/src/components/dashboard/GitHubQuotaPanel.test.tsx",
-        "console/web/src/components/dashboard/GitHubQuotaPanel.tsx",
-        "console/web/src/components/mobile/MobileDashboard.test.tsx",
-        "console/web/src/components/mobile/MobileDashboard.tsx",
-        "console/web/src/components/mobile/mobileDashboardModel.test.ts",
-        "console/web/src/components/mobile/mobileDashboardModel.ts"
-      ],
+      "piece_files": "UNKNOWN",
       "pieces": 4,
       "pieces_named": [
         "DRE-2942",
@@ -919,7 +806,11 @@
         "contracts-between-pieces": "'reads what' (standards/card-quality.md \u2014 \"B reads what A writes\")"
       },
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-2942: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2941: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2940: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2939: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -962,24 +853,7 @@
         "alerts.py"
       ],
       "declared_file_count": 1,
-      "piece_files": [
-        "console/web/src/components/AlertBellBadge.tsx",
-        "console/web/src/components/AppShell.test.tsx",
-        "console/web/src/components/AppSidebar.test.tsx",
-        "console/web/src/components/AppSidebar.tsx",
-        "console/web/src/components/TopBar.test.tsx",
-        "console/web/src/components/TopBar.tsx",
-        "console/web/src/generated/graphql.ts",
-        "console/web/src/graphql/operations.graphql",
-        "console/web/src/lib/useAlertCount.test.tsx",
-        "console/web/src/lib/useAlertCount.ts",
-        "console/web/src/pages/Alerts.test.tsx",
-        "console/web/src/pages/Alerts.tsx",
-        "console/backend/alerts.py",
-        "console/backend/schema.py",
-        "console/backend/tests/test_alert_coverage.py",
-        "console/web/schema.graphql"
-      ],
+      "piece_files": "UNKNOWN",
       "pieces": 2,
       "pieces_named": [
         "DRE-2953",
@@ -993,7 +867,10 @@
       "tell_evidence": {
         "two-languages-or-tiers": "the footprint spans python, web"
       },
-      "unreadable": []
+      "unreadable": [
+        "DRE-2953: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-2952: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
     },
     {
       "card": "DRE-2968",
@@ -1033,18 +910,7 @@
       "role": "engineer",
       "declared_files": "UNKNOWN",
       "declared_file_count": "UNKNOWN",
-      "piece_files": [
-        "client/app/e2e/choice-dropdown.spec.ts",
-        "client/app/e2e/mocks/handlers.ts",
-        "client/app/src/features/forms/FormReadingView.test.tsx",
-        "client/app/src/features/forms/FormReadingView.tsx",
-        "infra/scripts/convert-readiness-html.ts",
-        "infra/test/convert_readiness_options.test.ts",
-        "client/app/src/features/forms/formDefinition.ts",
-        "infra/lambda/form_def_lib.ts",
-        "infra/test/form_def_lib.test.ts",
-        "infra/test/readiness_data_section.test.ts"
-      ],
+      "piece_files": "UNKNOWN",
       "pieces": 3,
       "pieces_named": [
         "DRE-3025",
@@ -1056,7 +922,10 @@
       "tells": [],
       "tell_evidence": {},
       "unreadable": [
-        "the card declares no `Files:` line, so it made no footprint claim to compare against"
+        "the card declares no `Files:` line, so it made no footprint claim to compare against",
+        "DRE-3025: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-3024: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one",
+        "DRE-3023: this token cannot read dreadnought-foundry/portico, and an empty PR search there is indistinguishable from a card that never produced one"
       ]
     },
     {
@@ -1350,6 +1219,42 @@
       "unreadable": []
     },
     {
+      "card": "DRE-3213",
+      "title": "agent-bureau: release.json gains the website and relay entries with auto off, and a loader plus a parity test pin the data to deploy-lag's surface table \u2014 the readers do not change yet",
+      "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3213/agent-bureau-releasejson-gains-the-website-and-relay-entries-with-auto",
+      "state": "Canceled",
+      "created_at": "2026-09-05T21:19:56Z",
+      "reasons": [
+        "split"
+      ],
+      "size": "S",
+      "role": "engineer",
+      "declared_files": [
+        ".github/bureau/release.json",
+        "scripts/release_surfaces.py",
+        "scripts/test_release_surfaces.py"
+      ],
+      "declared_file_count": 3,
+      "piece_files": "UNKNOWN",
+      "pieces": 1,
+      "pieces_named": [
+        "DRE-3238"
+      ],
+      "deaths": 0,
+      "dollars": 0.0,
+      "tells": [
+        "two-languages-or-tiers",
+        "unbounded-quantifier"
+      ],
+      "tell_evidence": {
+        "two-languages-or-tiers": "the footprint spans python, workflow",
+        "unbounded-quantifier": "'each pinned' with no count of pinneds anywhere"
+      },
+      "unreadable": [
+        "DRE-3238: this token cannot read dreadnought-foundry/agent-bureau, and an empty PR search there is indistinguishable from a card that never produced one"
+      ]
+    },
+    {
       "card": "DRE-3232",
       "title": "COMPLIANCE \u00b7 Answers outside the frozen definition are kept, flagged, and never counted as asked",
       "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3232/compliance-answers-outside-the-frozen-definition-are-kept-flagged-and",
@@ -1459,7 +1364,7 @@
   "monthly": [
     {
       "month": "2026-06",
-      "planner_children": 372,
+      "planner_children": 178,
       "split": 0,
       "died": 0,
       "complete": false
@@ -1473,26 +1378,26 @@
     },
     {
       "month": "2026-08",
-      "planner_children": 305,
+      "planner_children": 307,
       "split": 6,
       "died": 17,
       "complete": true
     },
     {
       "month": "2026-09",
-      "planner_children": 365,
-      "split": 4,
+      "planner_children": 655,
+      "split": 5,
       "died": 16,
       "complete": false
     }
   ],
   "rates": {
-    "cards": 40,
+    "cards": 41,
     "died": 33,
     "by_declared_files": [
       {
         "more_than": 1,
-        "of": 11,
+        "of": 12,
         "died": 9,
         "cards": [
           "DRE-3016",
@@ -1505,11 +1410,11 @@
           "DRE-3232",
           "DRE-3275"
         ],
-        "sentence": "cards declaring more than 1 file died 9 of 11 times"
+        "sentence": "cards declaring more than 1 file died 9 of 12 times"
       },
       {
         "more_than": 2,
-        "of": 8,
+        "of": 9,
         "died": 6,
         "cards": [
           "DRE-3016",
@@ -1519,7 +1424,7 @@
           "DRE-3232",
           "DRE-3275"
         ],
-        "sentence": "cards declaring more than 2 files died 6 of 8 times"
+        "sentence": "cards declaring more than 2 files died 6 of 9 times"
       },
       {
         "more_than": 3,
@@ -1627,9 +1532,9 @@
       },
       {
         "tell": "two-languages-or-tiers",
-        "of": 14,
+        "of": 15,
         "died": 11,
-        "sentence": "cards carrying the two-languages-or-tiers tell died 11 of 14 times"
+        "sentence": "cards carrying the two-languages-or-tiers tell died 11 of 15 times"
       },
       {
         "tell": "unenumerated-count",
@@ -1639,9 +1544,9 @@
       },
       {
         "tell": "unbounded-quantifier",
-        "of": 13,
+        "of": 14,
         "died": 11,
-        "sentence": "cards carrying the unbounded-quantifier tell died 11 of 13 times"
+        "sentence": "cards carrying the unbounded-quantifier tell died 11 of 14 times"
       }
     ],
     "unreadable_footprint": 28,
