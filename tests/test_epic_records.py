@@ -347,7 +347,10 @@ def test_the_sweep_completes_over_a_batch_that_raises():
             patch.object(reconcile, "advance_unblocked_epics"):
         reconcile.main(close_only=True)  # must not raise
     state.assert_called_once_with(NINE[0], "Done")
-    assert fake.per_epic == 1
+    assert (fake.batched, fake.per_epic) == (1, 1), (
+        "the pass must have TRIED the batch and then read the epic the old "
+        f"way: {[q for q, _ in fake.queries]}"
+    )
 
 
 def test_the_fallback_is_paid_once_per_pass():
