@@ -241,11 +241,7 @@
    "DRE-900403 needs-human",
    "DRE-900405 needs-human"
   ],
-  "escalate": [
-   "DRE-900004 → Green Light",
-   "DRE-900010 → Green Light",
-   "DRE-900016 → Green Light"
-  ],
+  "escalate": [],
   "close": []
  }
 }

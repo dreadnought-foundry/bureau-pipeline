@@ -4,9 +4,9 @@
 THE GAP. A live sweep prints one `linear-budget:` line as it exits, and that
 is the whole of what it says about its spend. Measured read-only on
 2026-09-12 against this repo's board, one full pass cost 65 Linear reads: 18
-in `promote_ready`, 18 in `report_epic_growth`, 15 in `escalate_aged_intake`,
-9 in `close_finished_epics`, 4 for the board itself and 1 for the break-glass
-count. None of that was readable from the run log, so a cut could not show its
+in `promote_ready`, 18 in `report_epic_growth`, 15 in the Intake age-out
+DRE-4141 has since deleted, 9 in `close_finished_epics`, 4 for the board itself
+and 1 for the break-glass count. None of that was readable from the run log, so a cut could not show its
 effect live and a regression could not be placed.
 
 WHAT IS UNDER TEST:
@@ -58,9 +58,15 @@ import validate_card  # noqa: E402
 #: charged without the implementation's help — which is the whole point: a test
 #: that read the same counter the same way would prove only that arithmetic
 #: works.
+#: An Intake card far past any window the lane ever had. A literal since
+#: DRE-4141: the sweep has no opinion about how old an Intake card is any
+#: more, so a fixture that asked the code for one would have nothing to ask.
+_THIRTY_DAYS = 30 * 24 * 60
+
+
 MEASURED_PHASES = (
     "flag_stranded",
-    "escalate_aged_intake",
+    "report_intake_depth",
     "close_finished_epics",
     "promote_ready",
 )
@@ -292,14 +298,14 @@ def _total_line(lines: list[str]) -> tuple[int, int]:
 
 def _busy_board(scale: int = 1):
     """A board whose every card is one the sweep must LOOK at: stale Todo
-    cards, stale Planning cards, aged Intake cards, and another repo's Backlog.
+    cards, stale Planning cards, old Intake cards, and another repo's Backlog.
     The shape `test_sweep_request_budget` measures its budget over."""
     active = []
     for n in range(4 * scale):
         active.append(_card(f"DRE-{7000 + n}", state="Todo", minutes_stale=600.0))
         active.append(_card(f"DRE-{7300 + n}", state="Planning", minutes_stale=6000.0))
         active.append(_card(f"DRE-{7600 + n}", state="Intake", labels=(),
-                            minutes_stale=reconcile.INTAKE_MAX_AGE_MINUTES + 600))
+                            minutes_stale=_THIRTY_DAYS))
     backlog = [
         _card(f"DRE-{8000 + n}", state="Backlog", labels=("repo:atlas",))
         for n in range(4 * scale)
@@ -461,7 +467,7 @@ def test_the_board_read_is_its_own_phase(capsys):
     the phase that paid for it — with the watchdogs that usually read it first
     stood down, that is here."""
     fake = FakeLinear(*_busy_board())
-    _run_sweep(fake, mocks=("flag_stranded", "escalate_aged_intake"))
+    _run_sweep(fake, mocks=("flag_stranded", "report_intake_depth"))
     printed = _phase_lines(_spend_lines(capsys))
     assert printed.get("board_read") == 1, (
         f"the board read must be charged to `board_read`: {printed}"

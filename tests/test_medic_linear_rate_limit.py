@@ -153,7 +153,7 @@ class LinearRateLimitClassifierTest(unittest.TestCase):
         with mock.patch.object(linear_ops.urllib.request, "urlopen", _boom):
             with self.assertRaises(linear_ops.LinearRateLimited) as caught:
                 linear_ops.gql("query { issues { nodes { id } } }")
-        guarded = f"ERROR: escalate_aged_intake: {caught.exception}\n"
+        guarded = f"ERROR: report_intake_depth: {caught.exception}\n"
         self.assertTrue(medic_classify.is_linear_rate_limited(guarded))
 
     def test_the_200_errors_payload_message_is_classifiable_too(self):
@@ -190,7 +190,7 @@ class LinearRateLimitClassifierTest(unittest.TestCase):
             with self.assertRaises(linear_ops.LinearRateLimited) as caught:
                 linear_ops.gql("query { issues { nodes { id } } }")
         # As a reconcile per-card guard would log it: one line, one `str(e)`.
-        guarded = f"ERROR: escalate_aged_intake: {caught.exception}\n"
+        guarded = f"ERROR: report_intake_depth: {caught.exception}\n"
         self.assertTrue(medic_classify.is_linear_rate_limited(guarded))
         self.assertEqual(
             medic_classify.classify("Reconcile (reusable)", guarded),

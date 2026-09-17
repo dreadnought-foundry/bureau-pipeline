@@ -51,8 +51,9 @@ that. This module is the reader that sees the set.
   4. **Repo order is a tie-break inside a band** — Portico first only among
      cards of equal priority created on the same day.
   5. **Older than the window is "not now" by default.** Those cards stay in
-     Intake ungroomed, reported as one line rather than aged out, cancelled or
-     moved. `INTAKE_HOLD` semantics (DRE-3035) are untouched.
+     Intake ungroomed, reported as one line rather than cancelled or moved —
+     and nothing else moves them either, since DRE-4141 removed the sweep's
+     age-out. `INTAKE_HOLD` semantics (DRE-3035) are untouched.
   6. **Two things still pull an old card forward**: a file collision with a
      batched card, and being a Linear blocker of one.
   7. **The date is the CREATION date**, never the last update. A stray agent
@@ -406,12 +407,12 @@ BAND_LABELS = {BAND_URGENT: "Urgent", BAND_HIGH: "High"}
 BOILERPLATE_THRESHOLD = 12
 
 
-# The operator's switch on the whole lane (DRE-3035), read once at import. The
-# drain and the sweep's age-out are the two things that move a card out of
-# Intake, and they read it from one place — a switch two readers interpret
-# separately is a pen with a hole in it. `propose` is untouched: it writes
-# nothing but a comment, and a held pen still wants a batch prepared for the
-# day it opens.
+# The operator's switch on the whole lane (DRE-3035), read once at import, and
+# since DRE-4141 this is its one reader. The drain and the sweep's age-out were
+# the two things that moved a card out of Intake; the age-out is gone — no card
+# leaves that lane for being old — so the drain is the exit and this switch is
+# what holds it. `propose` is untouched: it writes nothing but a comment, and a
+# held pen still wants a batch prepared for the day it opens.
 INTAKE_HOLD = intake_controls.hold()
 
 

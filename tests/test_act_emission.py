@@ -152,17 +152,6 @@ def _drive_stranded_planning(mp):
     reconcile.flag_stalled_planning()
 
 
-@site("intake-overdue", "intake-overdue")
-def _drive_intake_overdue(mp):
-    card = _watchdog_card("Intake")
-    mp.setattr(reconcile, "active_cards", lambda *_a, **_k: [card])
-    mp.setattr(reconcile, "hand_built", lambda _c: False)
-    mp.setattr(reconcile, "age_minutes", lambda *_a, **_k: 4320.0)
-    mp.setattr(reconcile.linear_ops, "comment_bodies", lambda *_a, **_k: [])
-    _card_recorder(mp)
-    reconcile.escalate_aged_intake()
-
-
 @site("pr-without-checks", "pr-without-checks")
 def _drive_no_checks(mp):
     def fake_gh(*args):

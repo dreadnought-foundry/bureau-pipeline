@@ -93,8 +93,10 @@ this week's work, not the oldest work.
 5. **Older than the window is "not now" by default.** Those cards stay in
    Intake, ungroomed, and the proposal reports them as one line: *"N cards older
    than 14 days, not batched — raise a card's priority to High or Urgent to pull
-   it in."* They are not aged out, not cancelled and not moved, and the
-   operator's Intake hold (DRE-3035) is untouched by any of this.
+   it in."* They are not cancelled and not moved — and nothing else moves them
+   either, since DRE-4141 removed the sweep's age-out: no card leaves Intake
+   for being old. The operator's Intake hold (DRE-3035) is untouched by any of
+   this, and the drain is now its one reader.
 6. **Two things still pull an old card forward**, whatever its age: a file
    collision with a batched card — the old card is ordered *before* it — and
    being a Linear blocker of a batched card. Both are constraints the sequence

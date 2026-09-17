@@ -204,11 +204,15 @@ def test_the_sweep_posts_no_intake_aged_comment():
     assert not any(AGED_TAG in body for body in bodies), bodies
 
 
-def test_no_hold_is_needed_to_get_that_answer(monkeypatch):
+def test_no_hold_is_needed_to_get_that_answer():
     """The whole point of the change. `INTAKE_HOLD` cleared on every repo is
     the state the fleet will be in once the holds are lifted, and it is the
-    state that flooded the queue on 2026-09-10."""
-    monkeypatch.setattr(reconcile, "INTAKE_HOLD", None)
+    state that flooded the queue on 2026-09-10 — so the answer must not depend
+    on a switch. The sweep no longer has one to read."""
+    assert not hasattr(reconcile, "INTAKE_HOLD"), (
+        "the sweep still reads the hold — a switch it consults is a move it "
+        "could still make"
+    )
     _comment, advanced = _run(_old_batch(10))
     assert not advanced.called
 
@@ -278,7 +282,7 @@ def test_every_full_pass_reports_the_count_and_the_oldest(capsys):
         pass
     lines = [
         line for line in capsys.readouterr().out.splitlines()
-        if line.startswith(f"{reconcile.INTAKE_DEPTH_TAG}:")
+        if line.startswith(f"{reconcile.INTAKE_DEPTH_PREFIX}:")
     ]
     assert len(lines) == 1, f"expected one Intake line per pass, got {lines}"
     assert "7 cards" in lines[0], lines[0]
@@ -288,7 +292,7 @@ def test_every_full_pass_reports_the_count_and_the_oldest(capsys):
 def test_the_report_names_the_oldest_cards_age_in_days():
     line = reconcile.intake_depth_line(209, 38.4 * 1440)
     assert "\n" not in line, "one line per pass, so a sweep's log stays readable"
-    assert line.startswith(f"{reconcile.INTAKE_DEPTH_TAG}: ")
+    assert line.startswith(f"{reconcile.INTAKE_DEPTH_PREFIX}: ")
     assert "209 cards" in line
     assert "38.4" in line, "the oldest card's age, in days, is the second number"
 
@@ -299,25 +303,27 @@ def test_an_empty_intake_renders_the_absent_oldest_as_absent():
     empty lane, and an age of 0.0 days would be an invented one."""
     line = reconcile.intake_depth_line(0, None)
     assert "0 cards" in line
-    assert "0.0" not in line, line
-    assert "no cards" in line or "none" in line.lower(), line
+    assert "0.0" not in line, "an empty lane has no oldest card, not a 0.0-day one"
+    assert "no oldest" in line, line
 
 
-def test_the_report_still_runs_with_the_hold_set(monkeypatch, capsys):
-    """`INTAKE_HOLD` pauses the groomer's drain and nothing else now. A hold
-    that silenced the count would take the one thing this phase still does."""
-    monkeypatch.setattr(reconcile, "INTAKE_HOLD", "2026-09-10")
-    _run(_old_batch(3))
-    out = capsys.readouterr().out
-    assert f"{reconcile.INTAKE_DEPTH_TAG}:" in out
-    assert "3 cards" in out
+def test_the_hold_keeps_exactly_one_job():
+    """`INTAKE_HOLD` pauses the groomer's drain, and that is the whole of what
+    it does now — the drain is the one thing that still moves a card out of
+    Intake. Two readers of one switch was the pen's design (DRE-3035); one
+    reader is what is left when the other thing it held is deleted."""
+    import groomer
+
+    assert hasattr(groomer, "INTAKE_HOLD"), "the drain stopped reading the pen"
+    assert intake_controls.ENV_HOLD == "INTAKE_HOLD"
+    assert not hasattr(reconcile, "INTAKE_HOLD")
 
 
 def test_promote_only_mode_does_not_read_intake(capsys):
     """The event hooks run the dependency gate alone — unchanged by this card."""
     with _full_sweep(_old_batch(3), promote_only=True):
         pass
-    assert f"{reconcile.INTAKE_DEPTH_TAG}:" not in capsys.readouterr().out
+    assert f"{reconcile.INTAKE_DEPTH_PREFIX}:" not in capsys.readouterr().out
 
 
 def test_intake_is_still_a_lane_the_full_sweep_reads():
@@ -375,13 +381,22 @@ def test_the_lane_contract_states_no_age_based_exit_for_intake():
     """THE CRITERION. Intake's exit is the groomer's approved batch, and the
     contract is the file the guard, the sweep and the harness all read."""
     exit_text = lane_contract.lane("Intake")["clauses"]["exit"]["text"].lower()
-    for forbidden in ("stall window", "timer", "48", "past the lane"):
+    for forbidden in (
+        "past the lane's own stall window",
+        "moves it to green light",
+        "the one planning lane with a timer",
+    ):
         assert forbidden not in exit_text, (
             f"Intake's exit clause still states an age-based exit: {exit_text!r}"
         )
     assert "groomer" in exit_text, (
         "the exit clause must name the one way out — the groomer's batch, "
         "approved by the CEO in Green Light"
+    )
+    assert "for being old" in exit_text, (
+        "the clause must say age is not an exit; a clause that merely stops "
+        "mentioning the timer reads as an omission, and the next writer adds "
+        "one back"
     )
 
 
@@ -465,27 +480,58 @@ def test_the_cutover_runbook_no_longer_describes_a_live_age_out():
     PR. The runbook told the operator how to widen a window that no longer
     exists and how to hold a sweep that no longer moves anything."""
     text = (ROOT / "docs" / "backlog-cutover.md").read_text()
-    assert "intake_max_age_minutes" not in text
-    assert "intake_escalation_cap" not in text
     assert "48 hours of grace" not in text
+    assert "intake_max_age_minutes: " not in text, (
+        "the sample stub still sets the retired window"
+    )
     assert "DRE-4141" in text, (
         "the runbook must name the card that removed the age-out, or a reader "
         "finds a mechanism described in the past tense with no record of why"
     )
+    # The two retired inputs are still NAMED here, and only here: an operator
+    # whose stub passes one needs somewhere that says what happened to it.
+    for retired in ("intake_max_age_minutes", "intake_escalation_cap"):
+        assert retired in text, (
+            f"{retired} is retired and unrecorded — the runbook is the one "
+            f"document an operator who set it would be reading"
+        )
 
 
-def test_the_reusable_sweep_declares_no_window_or_cap_input():
-    """The knobs were `workflow_call` inputs. An input nothing reads is a dial
-    wired to nothing, which is worse than no dial."""
+def test_the_sweep_puts_no_intake_knob_in_its_environment():
+    """THE CRITERION, at the wire. The three knobs were `workflow_call` inputs
+    threaded into the sweep step's environment; none reaches it now, which is
+    the whole of what "accepted and ignored" means.
+
+    They stay DECLARED on purpose: a `workflow_call` input a caller passes and
+    the reusable does not declare is a hard error ("Invalid input, X is not
+    defined in the referenced workflow"), so deleting them here would fail the
+    next sweep of every stub on this channel, on the merge rather than on any
+    change to that stub. The declarations say RETIRED and the stubs drop the
+    lines on their own schedule."""
     import yaml
 
     doc = yaml.safe_load((ROOT / ".github" / "workflows" / "reconcile.yml").read_text())
+    body = (ROOT / ".github" / "workflows" / "reconcile.yml").read_text()
     inputs = ((doc.get(True) or doc.get("on")).get("workflow_call") or {}).get("inputs") or {}
-    assert "intake_max_age_minutes" not in inputs
-    assert "intake_escalation_cap" not in inputs
-    assert "intake_hold" in inputs, (
-        "the hold is unchanged by this card — it still pauses the drain"
-    )
+    for name in ("intake_hold", "intake_max_age_minutes", "intake_escalation_cap"):
+        assert name in inputs, f"{name} was deleted — every caller passing it breaks"
+        assert "RETIRED" in inputs[name]["description"], (
+            f"{name} reads as a live control and is read by nothing"
+        )
+        assert "${{ inputs.%s }}" % name not in body, (
+            f"{name} still reaches an environment somewhere in the sweep"
+        )
+    envs = [doc.get("env") or {}]
+    for job in (doc.get("jobs") or {}).values():
+        envs.append(job.get("env") or {})
+        for step in job.get("steps") or ():
+            envs.append(step.get("env") or {})
+    assigned = {name for env in envs for name in env}
+    for name in ("INTAKE_HOLD", "INTAKE_MAX_AGE_MINUTES", "INTAKE_ESCALATION_CAP"):
+        assert name not in assigned, (
+            f"the sweep still puts {name} in an environment — it moves nothing "
+            f"out of Intake, so there is nothing for a knob to turn"
+        )
 
 
 if __name__ == "__main__":

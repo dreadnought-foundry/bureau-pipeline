@@ -376,7 +376,7 @@ class TestTheTrailerCarriesNoForeignTag:
     def test_no_existing_constant_was_deleted(self):
         text = RECONCILE.read_text(encoding="utf-8")
         for constant in (
-            "BAD_REF_TAG", "WATCHDOG_TAG", "INTAKE_AGED_TAG", "NO_CHECKS_TAG",
+            "BAD_REF_TAG", "WATCHDOG_TAG", "NO_CHECKS_TAG",
             "UNLANDED_TAG", "DECISION_RESTART_TAG", "DEPENDABOT_DISPATCH_TAG",
             "CRASHED_REVIEW_DISPATCH_TAG", "REVIEWER_DOWN_TAG",
             "STALE_VERDICT_TAG", "_AGENT_COMMENT_PREFIXES",

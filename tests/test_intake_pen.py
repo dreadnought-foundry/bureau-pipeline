@@ -1,32 +1,33 @@
-"""Intake is a pen the operator controls (DRE-3035).
+"""Intake is a pen the operator controls (DRE-3035, narrowed by DRE-4141).
 
 The CEO's question, asked of a 209-card cutover: *"If we add all the cards, it
 will just kick off a storm — what mechanism lets us control the inflow as we
-start to turn on the pipes?"* Three things answer it. The groomer batch is the
-valve he approves; PARKED is the per-card "stay still"; and this card closes the
-two holes that make the age-out a storm rather than a trickle.
+start to turn on the pipes?"* Two things answer it now. The groomer batch is the
+valve he approves, and PARKED is the per-card "stay still".
+
+WHAT DRE-4141 TOOK OUT OF THIS FILE. The third answer used to be the sweep's
+age-out, and the two holes this card closed were holes in it: the hold it
+ignored and the PARKED card it overrode. On the CEO's signed console answer of
+2026-09-17 there is no age-out at all — no card leaves Intake because it is old
+— so a hold over it, a window on it and a cap under it are all switches on a
+thing that does not happen. `tests/test_intake_no_age_out.py` owns that half.
 
 WHAT THESE TESTS PIN:
 
-  * **`INTAKE_HOLD` is one switch and it closes the whole pen.** Set, neither
-    `reconcile.escalate_aged_intake()` nor `groomer.drain()` moves a card, and
-    each says so in one line per pass — the pen is VISIBLY closed rather than
-    silently stuck. That distinction is the point: about 480 consecutive green
-    sweeps once printed the exact reason five cards were frozen and nobody read
-    one, so a hold that printed nothing would be a stall with an alibi.
-  * **The age-out honours PARKED.** `escalate_aged_intake()` skipped only
-    `hand_built`. PARKED is the vocabulary's own "deliberately not dispatchable,
-    never reported as stalled", and a clock that pushes a PARKED card into the
-    CEO's queue overrides a decision somebody made on purpose.
-  * **The window and the cap are real inputs.** `reconcile.py` read
-    `INTAKE_MAX_AGE_MINUTES` / `INTAKE_ESCALATION_CAP` from its environment and
-    nothing ever set them, so the cutover ADR's "widen the window as a
-    deliberate operator act" described a knob that did not exist. They are
-    `workflow_call` inputs now, threaded verbatim, with an ABSENT input leaving
-    the code default in force — a bare `int("")` on an unset input would have
-    turned a window question into a red sweep (the `resolve_max_wip` lesson).
-  * **Neither name is a bare env edit any more.** No workflow may assign any of
-    the three a literal; the value comes from the caller's input or not at all.
+  * **`INTAKE_HOLD` is one switch and it closes the pen.** Set, `groomer.drain`
+    moves no card and says so in one line per pass — the pen is VISIBLY closed
+    rather than silently stuck. That distinction is the point: about 480
+    consecutive green sweeps once printed the exact reason five cards were
+    frozen and nobody read one, so a hold that printed nothing would be a stall
+    with an alibi.
+  * **ONE READER, and it is the drain.** The drain is the one thing that moves
+    a card out of Intake, so the switch that holds it holds the lane. The sweep
+    does not read it, because the sweep moves nothing.
+  * **The switch is a real input, never a bare env edit.** It is a
+    `workflow_call` input on `groomer.yml`, threaded verbatim, with an ABSENT
+    input leaving the pen OPEN — an unset input is the EMPTY STRING, and a hold
+    that read that as "closed" would stop the fleet's intake on a schedule
+    event.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_intake_pen.py -v
 """
@@ -49,19 +50,16 @@ os.environ.setdefault("GH_TOKEN", "x")
 import check_wip_cap  # noqa: E402
 import groomer  # noqa: E402
 import intake_controls  # noqa: E402
-import lane_contract  # noqa: E402
 import reconcile  # noqa: E402
-import routing_verdict  # noqa: E402
 
 from test_groomer_approval_gate import FakeOps, PROPOSAL_CARD, _proposal, _thread  # noqa: E402
-from test_intake_escalation import _aged_batch, _card, _run  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 HOLD_SINCE = "2026-09-03"
 
 
 # --------------------------------------------------------------------------
-# 1: the switch itself — one reading of it, shared by both readers
+# 1: the switch itself — one reading of it, one reader left
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("raw", [None, "", "   ", "false", "FALSE", "0", "no", "off"])
 def test_the_pen_is_open_unless_the_operator_closes_it(raw):
@@ -85,11 +83,11 @@ def test_a_bare_switch_closes_the_pen_with_no_date(raw):
 
 
 def test_the_notice_names_the_switch_the_date_and_the_counts():
-    line = intake_controls.notice(HOLD_SINCE, 209, "17 past the window")
-    assert "\n" not in line, "one line per pass, so a held sweep stays readable"
+    line = intake_controls.notice(HOLD_SINCE, 209, "17 in the approved batch")
+    assert "\n" not in line, "one line per pass, so a held pass stays readable"
     assert HOLD_SINCE in line
     assert "209 cards waiting" in line
-    assert "17 past the window" in line
+    assert "17 in the approved batch" in line
     assert intake_controls.ENV_HOLD in line, (
         "the line must name what to clear, or the pen is closed and nobody "
         "knows which switch opens it"
@@ -97,55 +95,29 @@ def test_the_notice_names_the_switch_the_date_and_the_counts():
 
 
 def test_the_notice_says_so_when_no_date_was_given():
-    line = intake_controls.notice("", 1, "0 past the window")
+    line = intake_controls.notice("", 1, "0 in the approved batch")
     assert "1 card waiting" in line
     assert "no date" in line, "absent is rendered as absent, never invented"
 
 
 # --------------------------------------------------------------------------
-# 2: the window and the cap resolve like the WIP cap — empty is the default
-# --------------------------------------------------------------------------
-def test_the_window_default_is_the_lane_contracts_own_number():
-    """The number a reader finds in docs/lane-contract.md is the number that
-    runs, and an absent input leaves exactly that in force."""
-    contract = lane_contract.stale_minutes()["Intake"]
-    assert intake_controls.max_age_minutes(None) == contract
-    assert intake_controls.max_age_minutes("") == contract
-    assert reconcile.INTAKE_MAX_AGE_MINUTES == contract
-
-
-@pytest.mark.parametrize("raw", ["", "   ", None, "not-a-number"])
-def test_an_absent_or_unparseable_cap_leaves_the_code_default_in_force(raw):
-    assert intake_controls.escalation_cap(raw) == intake_controls.DEFAULT_CAP
-    assert reconcile.INTAKE_ESCALATION_CAP == intake_controls.DEFAULT_CAP
-
-
-def test_the_operator_can_actually_move_both_numbers():
-    assert intake_controls.max_age_minutes("20160") == 20160
-    assert intake_controls.escalation_cap("1") == 1
-
-
-@pytest.mark.parametrize("raw", ["", "   ", None, "not-a-number"])
-def test_an_absent_window_never_crashes_the_sweep(raw):
-    """`int("")` would raise, and an unset input IS the empty string — that is
-    a window question turned into a red run across the whole fleet."""
-    assert intake_controls.max_age_minutes(raw) == lane_contract.stale_minutes()["Intake"]
-
-
-# --------------------------------------------------------------------------
-# 2b: the wire — env in, module constant out
+# 2: the wire — env in, module constant out
 # --------------------------------------------------------------------------
 # Everything above tests the resolver, and everything below patches the module
 # constant. Neither proves the ONE thing the workflow actually does: set an
 # environment variable and start the process. A fresh interpreter is the only
 # honest way to assert an import-time constant, so the wire gets its own test
 # rather than being assumed by the two halves that surround it.
+#
+# ONE constant since DRE-4141. `reconcile.INTAKE_HOLD` was the other, and the
+# probe asserted the two agreed because a switch two readers interpret
+# separately is a pen with a hole in it. The sweep is not a reader any more —
+# it moves no card out of Intake — so the probe asserts its ABSENCE instead: a
+# constant nothing consults is the same hole with the light off.
 _PROBE = (
     "import json, reconcile, groomer;"
-    "print(json.dumps({'hold': reconcile.INTAKE_HOLD,"
-    " 'groomer_hold': groomer.INTAKE_HOLD,"
-    " 'window': reconcile.INTAKE_MAX_AGE_MINUTES,"
-    " 'cap': reconcile.INTAKE_ESCALATION_CAP}))"
+    "print(json.dumps({'groomer_hold': groomer.INTAKE_HOLD,"
+    " 'sweep_reads_the_hold': hasattr(reconcile, 'INTAKE_HOLD')}))"
 )
 
 
@@ -165,120 +137,25 @@ def _probe(**env) -> dict:
     return json.loads(out.stdout)
 
 
-def test_the_environment_the_workflow_sets_reaches_the_constants_the_code_reads():
-    got = _probe(INTAKE_HOLD=HOLD_SINCE, INTAKE_MAX_AGE_MINUTES="20160",
-                 INTAKE_ESCALATION_CAP="1")
-    assert got["hold"] == HOLD_SINCE
-    assert got["groomer_hold"] == HOLD_SINCE, (
-        "the drain read a different switch from the sweep — a pen with a hole"
+def test_the_environment_the_workflow_sets_reaches_the_constant_the_code_reads():
+    got = _probe(INTAKE_HOLD=HOLD_SINCE)
+    assert got["groomer_hold"] == HOLD_SINCE
+    assert got["sweep_reads_the_hold"] is False, (
+        "the sweep read the pen's switch — it moves nothing out of Intake, so "
+        "a switch it consults is a move somebody could put back"
     )
-    assert got["window"] == 20160
-    assert got["cap"] == 1
 
 
-def test_an_absent_input_leaves_the_code_default_in_force():
+def test_an_absent_input_leaves_the_pen_open():
     """The card's own criterion. An unset workflow input is the EMPTY STRING,
     not an absent variable, so both spellings are asserted."""
-    for env in ({}, {"INTAKE_HOLD": "", "INTAKE_MAX_AGE_MINUTES": "",
-                     "INTAKE_ESCALATION_CAP": ""}):
+    for env in ({}, {"INTAKE_HOLD": ""}):
         got = _probe(**env)
-        assert got["hold"] is None, f"the pen closed itself on {env!r}"
-        assert got["groomer_hold"] is None
-        assert got["window"] == lane_contract.stale_minutes()["Intake"]
-        assert got["cap"] == intake_controls.DEFAULT_CAP
+        assert got["groomer_hold"] is None, f"the pen closed itself on {env!r}"
 
 
 # --------------------------------------------------------------------------
-# 3: the sweep's age-out honours the hold
-# --------------------------------------------------------------------------
-def test_a_held_intake_moves_no_card(monkeypatch):
-    monkeypatch.setattr(reconcile, "INTAKE_HOLD", HOLD_SINCE)
-    escalated, comment, advanced = _run(_aged_batch(4))
-    assert escalated == set()
-    comment.assert_not_called()
-    assert not advanced.called, "the clock pushed a card past a closed pen"
-
-
-def test_a_held_intake_says_so_once_per_pass(monkeypatch, capsys):
-    """Visibly closed, not silently stuck: one line naming the date, how many
-    cards are waiting and how many the clock would otherwise have taken."""
-    monkeypatch.setattr(reconcile, "INTAKE_HOLD", HOLD_SINCE)
-    _run(_aged_batch(4))
-    lines = [
-        line for line in capsys.readouterr().out.splitlines()
-        if intake_controls.TAG in line
-    ]
-    assert len(lines) == 1, f"expected one hold line per pass, got {lines}"
-    assert HOLD_SINCE in lines[0]
-    assert "4 cards waiting" in lines[0]
-    assert "4 past the window" in lines[0]
-
-
-def test_a_bare_switch_holds_the_sweep_just_as_hard(monkeypatch):
-    """`hold()` returns `""` for a dated-less switch, and `""` is FALSY. A
-    reader written as `if INTAKE_HOLD:` would open the pen for exactly the
-    operator who typed `true` — the check is against None and this pins it."""
-    monkeypatch.setattr(reconcile, "INTAKE_HOLD", "")
-    escalated, _comment, advanced = _run(_aged_batch(2))
-    assert escalated == set()
-    assert not advanced.called
-
-
-def test_clearing_the_hold_resumes_the_age_out(monkeypatch):
-    monkeypatch.setattr(reconcile, "INTAKE_HOLD", None)
-    escalated, _comment, advanced = _run(_aged_batch(1))
-    assert escalated == {"DRE-1"}
-    advanced.assert_called_once_with("DRE-1", "Green Light", "Intake")
-
-
-# --------------------------------------------------------------------------
-# 4: the age-out honours PARKED
-# --------------------------------------------------------------------------
-def _parked(card: dict) -> dict:
-    """The routing verdict, on the card, the way the board read returns it —
-    `active_cards` selects the fifty-comment window inline (DRE-2929), so
-    this costs the sweep no request at all."""
-    body = routing_verdict.verdict_comment(
-        "PARKED", "well-formed and deliberately not to be built this quarter")
-    card["comments"] = {"nodes": [{"body": body}]}
-    return card
-
-
-def test_a_parked_intake_card_is_never_pushed_into_green_light_by_a_clock():
-    """PARKED is the vocabulary's own 'deliberately not dispatchable, never
-    reported as stalled'. A clock that overrides it un-parks a decision
-    somebody made on purpose, and lands it in the queue the CEO reads."""
-    escalated, comment, advanced = _run([_parked(_card())])
-    assert escalated == set()
-    comment.assert_not_called()
-    advanced.assert_not_called()
-
-
-def test_the_parked_skip_prints_the_same_reason_the_watchdog_prints(capsys):
-    _run([_parked(_card())])
-    out = capsys.readouterr().out
-    assert "is routed PARKED" in out
-    assert "deliberately not built" in out
-
-
-def test_a_parked_card_does_not_consume_the_per_sweep_cap():
-    """The cap holds cards it must still take. Spending a slot on a card that
-    is never going to move would make the cap forget the ones that are."""
-    cards = _aged_batch(reconcile.INTAKE_ESCALATION_CAP + 1)
-    _parked(cards[0])
-    escalated, _comment, _advanced = _run(cards)
-    assert "DRE-1" not in escalated
-    assert len(escalated) == reconcile.INTAKE_ESCALATION_CAP
-
-
-def test_an_unparked_intake_card_still_ages_out():
-    """Guard the guard: the skip must read the marker, not simply never fire."""
-    escalated, _comment, _advanced = _run([_card()])
-    assert escalated == {"DRE-2687"}
-
-
-# --------------------------------------------------------------------------
-# 5: the groomer's drain honours the same switch
+# 3: the groomer's drain honours the switch — the one exit from Intake
 # --------------------------------------------------------------------------
 def test_a_held_drain_moves_nothing_even_with_a_valid_approval(monkeypatch):
     """The hold outranks the approval, and lands before any write: an operator
@@ -349,7 +226,7 @@ def test_a_held_drain_exits_refused_rather_than_silently_doing_nothing(monkeypat
 
 
 # --------------------------------------------------------------------------
-# 6: the knobs are workflow inputs — never a bare env edit (DRE-2692's shape)
+# 4: the switch is a workflow input — never a bare env edit (DRE-2692's shape)
 # --------------------------------------------------------------------------
 def _doc(name: str) -> dict:
     return yaml.safe_load((WORKFLOWS / name).read_text())
@@ -386,16 +263,16 @@ def _assignments(doc, name, variable):
     return found
 
 
-#: env var → the workflow_call input that must supply it.
+#: env var → the workflow_call input that must supply it. ONE row since
+#: DRE-4141: the window and the cap bounded a move that no longer happens, and
+#: `tests/test_intake_no_age_out.py` pins their retirement.
 KNOBS = {
     "INTAKE_HOLD": "intake_hold",
-    "INTAKE_MAX_AGE_MINUTES": "intake_max_age_minutes",
-    "INTAKE_ESCALATION_CAP": "intake_escalation_cap",
 }
 
 
-def test_the_reusable_sweep_declares_all_three_knobs_as_optional_inputs():
-    inputs = _call_inputs(_doc("reconcile.yml"))
+def test_the_groomer_declares_the_switch_as_an_optional_input():
+    inputs = _call_inputs(_doc("groomer.yml"))
     for variable, name in KNOBS.items():
         assert name in inputs, (
             f"{name} is not a workflow_call input, so {variable} is still a "
@@ -405,36 +282,30 @@ def test_the_reusable_sweep_declares_all_three_knobs_as_optional_inputs():
         assert inputs[name].get("required") is False
 
 
-def test_an_omitted_window_or_cap_input_defaults_to_empty_not_to_a_number():
-    """The default lives in ONE place — the lane contract for the window,
-    `intake_controls.DEFAULT_CAP` for the cap. A number declared here too would
-    be a second source that drifts the day the contract's does."""
-    inputs = _call_inputs(_doc("reconcile.yml"))
-    for name in ("intake_max_age_minutes", "intake_escalation_cap", "intake_hold"):
-        assert inputs[name].get("default") == ""
+def test_an_omitted_switch_defaults_to_empty_which_is_open():
+    """Empty is load-bearing: an unset `workflow_call` input interpolates to
+    the empty string on every event where the `inputs` context is empty, and a
+    default of anything else would close the fleet's pen on a schedule event."""
+    assert _call_inputs(_doc("groomer.yml"))["intake_hold"].get("default") == ""
 
 
-def test_the_sweep_step_threads_every_knob_verbatim():
-    doc = _doc("reconcile.yml")
-    for variable, name in KNOBS.items():
-        places = _assignments(doc, "reconcile.yml", variable)
-        assert places, f"the sweep step never puts {variable} in the environment"
-        for where, value in places:
-            assert str(value).strip() == "${{ inputs.%s }}" % name, (
-                f"{where} sets {variable} to {value!r} — the caller's input is "
-                f"the only value it may carry"
-            )
-
-
-def test_the_groomer_takes_the_same_switch():
+def test_the_groomer_threads_the_switch_verbatim():
     doc = _doc("groomer.yml")
-    assert "intake_hold" in _call_inputs(doc), (
-        "the drain reads INTAKE_HOLD, so its caller must be able to set it"
-    )
     places = _assignments(doc, "groomer.yml", "INTAKE_HOLD")
-    assert places
+    assert places, "the drain step never puts INTAKE_HOLD in the environment"
     for _where, value in places:
         assert str(value).strip() == "${{ inputs.intake_hold }}"
+
+
+def test_the_sweep_threads_no_intake_knob_at_all():
+    """The other half of "one reader" (DRE-4141), read at the wire. The sweep
+    moves no card out of Intake, so nothing on `reconcile.yml` may put any of
+    the three names in an environment — a knob that reaches the process is a
+    knob somebody can act on."""
+    doc = _doc("reconcile.yml")
+    for variable in ("INTAKE_HOLD", "INTAKE_MAX_AGE_MINUTES",
+                     "INTAKE_ESCALATION_CAP"):
+        assert _assignments(doc, "reconcile.yml", variable) == [], variable
 
 
 def test_no_workflow_anywhere_hardcodes_one_of_the_knobs():
@@ -459,16 +330,20 @@ def test_the_guard_would_notice_a_hardcoded_knob():
         steps:
           - name: Sweep
             env:
-              INTAKE_MAX_AGE_MINUTES: "20160"
+              INTAKE_HOLD: "2026-09-08"
             run: python3 .bureau-pipeline/scripts/reconcile.py
     """)
-    found = _assignments(doc, "synthetic.yml", "INTAKE_MAX_AGE_MINUTES")
-    assert [value for _w, value in found] == ["20160"]
+    found = _assignments(doc, "synthetic.yml", "INTAKE_HOLD")
+    assert [value for _w, value in found] == ["2026-09-08"]
 
 
-def test_this_repos_own_stubs_take_the_switch_from_the_repository_variable():
-    """The pen is one switch per repo, and both of this repo's readers pass it.
-    A stub that cannot pass it is a repo whose intake cannot be held.
+def test_this_repos_own_stub_takes_the_switch_from_the_repository_variable():
+    """The pen is one switch per repo, and this repo's one reader passes it. A
+    stub that cannot pass it is a repo whose intake cannot be held.
+
+    ONE STUB since DRE-4141. `self-reconcile.yml` passed it too, because the
+    age-out and the drain were the two things that moved a card out of Intake;
+    the age-out is gone, so the drain's stub is the pen.
 
     WHERE the value comes from changed in DRE-3285: every stub in the fleet now
     threads `${{ vars.INTAKE_HOLD }}`, a repository variable, rather than a
@@ -483,7 +358,7 @@ def test_this_repos_own_stubs_take_the_switch_from_the_repository_variable():
     a pull request, a critic round and the merge gate on the morning somebody
     needs the pen shut within the hour. Same treatment the sibling fleet brake
     already gets in `test_the_brake_is_read_before_any_surface_runs`."""
-    for stub in ("self-reconcile.yml", "self-groomer.yml"):
+    for stub in ("self-groomer.yml",):
         with_block = ((_doc(stub).get("jobs") or {}).get("call") or {}).get("with") or {}
         assert "intake_hold" in with_block, (
             f"{stub} passes no intake_hold — this repo's own intake cannot be held"

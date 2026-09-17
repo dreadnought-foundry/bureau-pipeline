@@ -239,8 +239,6 @@
       "name": "Intake",
       "status": "live",
       "segment": "planning",
-      "stale_minutes": 2880,
-      "stale_why": "what an Intake card owes is a classification, and the thing that produces one — a groomer batch the CEO approves, then a planner run — is on-demand (D5, 2026-08-23), so the window has to cover a day nobody remembers to run it. Two days is the point past which nothing is coming: the card is not waiting on the flow, it is out of it, and reconcile.escalate_aged_intake MOVES it to Green Light rather than reporting it (DRE-2687)",
       "clauses": {
         "entrance": {
           "text": "Every writer that creates work writes here first — the relay, the planner, a mid-epic discovery, a human. There is no other valid first lane.",
@@ -249,7 +247,7 @@
           "pending": "DRE-2680 points every writer at Intake"
         },
         "exit": {
-          "text": "A classification exists: one-off, epic, or wave — or the card has sat here past the lane's own stall window, in which case the sweep moves it to Green Light carrying whatever reason is already stated on it (DRE-2687). Intake is the one planning lane with a timer, because a lane nothing drains is what this wave exists to remove.",
+          "text": "A classification exists: one-off, epic, or wave. The way out is the groomer — it proposes a batch, the CEO approves it in Green Light, and the approved batch drains to Planning (groomer.py drain). That is the only exit, and AGE IS NOT ONE: no card is moved out of this lane for being old, this lane carries no stall window, and there is no window of any length in its place (DRE-4141, on the CEO's signed answer of 2026-09-17). The sweep reports how many cards are waiting and how old the oldest is, and moves none of them.",
           "enforced_from": "5",
           "assertion": null,
           "pending": null
