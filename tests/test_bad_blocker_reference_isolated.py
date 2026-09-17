@@ -50,12 +50,19 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 import linear_ops  # noqa: E402
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
 
 # The nonexistent card id, and the blocker line built HERE — never written
 # out in card text, where the sweep's parser would match it (the first
 # version of the DRE-2035 card body did exactly that and killed every sweep).
 BAD_ID = "DRE-99999"
 BAD_BLOCKER_LINE = "Blocked by: " + BAD_ID
+
+# Every candidate below carries one, because since DRE-3385 a card with NO
+# routing verdict is refused promotion outright — and a fixture refused for
+# that would say nothing about the blocker-reference isolation under test here.
+FLEET = routing_verdict.verdict_comment(
+    "FLEET", "the acceptance criteria are unit-testable")
 
 
 @pytest.fixture(autouse=True)
@@ -75,7 +82,7 @@ def _candidate(identifier: str, description_extra: str = "") -> dict:
         "description": "**Repo:** agent-bureau\nwork\n" + description_extra,
         "parent": {"identifier": "DRE-800", "state": {"name": "In Progress"}},
         "labels": {"nodes": [{"name": "size:M"}]},
-        "comments": {"nodes": []},
+        "comments": {"nodes": [{"body": FLEET}]},
         "inverseRelations": {"nodes": []},
     }
 

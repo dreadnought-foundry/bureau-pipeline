@@ -661,36 +661,58 @@ class TestParkedIsNeverStalled:
 
 
 # ===========================================================================
-# The promoter reads the verdict: WORKBENCH must not be dispatched
+# The promoter reads the verdict: WORKBENCH must not be DISPATCHED
+#
+# DRE-3385 separated the two questions this class used to run together. The
+# sweep carries a card to the lane its verdict names, and WORKBENCH/OPERATOR
+# name `Todo` — so they are promoted, marked `hand-built`, and no run is sent
+# at them. What "must not be dispatched" protects is the RUN, and that is now
+# the marks plus the relay's own guard (DRE-3341), not the card being left in a
+# lane nothing ever moves it out of.
 # ===========================================================================
 class TestThePromoterRoutesOnTheVerdict:
     def test_a_fleet_card_promotes(self):
         board = _PromotionBoard([routing_verdict.verdict_comment("FLEET", "unit-testable")])
         assert board.promote() == 1
         assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert board.labelled == []
 
-    @pytest.mark.parametrize("verdict", ["WORKBENCH", "OPERATOR", "PARKED", "NEEDS WORK"])
-    def test_a_non_fleet_card_is_not_dispatched(self, verdict):
+    @pytest.mark.parametrize("verdict", ["WORKBENCH", "OPERATOR"])
+    def test_a_person_s_card_is_promoted_and_marked_but_never_dispatched(self, verdict):
+        board = _PromotionBoard([routing_verdict.verdict_comment(verdict, "because")])
+        assert board.promote() == 1
+        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert [l for _, l in board.labelled] == list(routing_verdict.marks(verdict))
+        receipt = "\n".join(b for _, b in board.posted)
+        assert "nothing was dispatched" in receipt
+
+    @pytest.mark.parametrize("verdict", ["PARKED", "NEEDS WORK"])
+    def test_a_card_routed_away_from_todo_is_not_moved_at_all(self, verdict):
         board = _PromotionBoard([routing_verdict.verdict_comment(verdict, "because")])
         assert board.promote() == 0
         assert board.advanced == []
+        assert board.labelled == []
 
     def test_the_refusal_names_the_destination_and_the_actor_once(self):
         board = _PromotionBoard(
-            [routing_verdict.verdict_comment("WORKBENCH", "it drives an auth flow")]
+            [routing_verdict.verdict_comment("PARKED", "deliberately not built")]
         )
         board.promote()
         assert board.surfaced_once(routing_verdict.NOT_FLEET_TAG)
         notice = "\n".join(b for _, b in board.posted)
-        assert routing_verdict.destination("WORKBENCH") in notice
-        assert routing_verdict.actor("WORKBENCH") in notice
+        assert routing_verdict.destination("PARKED") in notice
+        assert routing_verdict.actor("PARKED") in notice
 
-    def test_a_card_with_no_verdict_yet_still_promotes(self):
-        """Backlog's "it carries a verdict" clause is enforced from Phase 5.
-        Until the second critic writes one on every card, a verdictless card
-        promotes exactly as it did before — this change refuses a WRONG
-        destination, it does not freeze the board."""
-        assert _PromotionBoard([]).promote() == 1
+    def test_a_card_with_no_verdict_at_all_is_refused(self):
+        """It used to promote: "refusing the whole verdictless board today
+        would freeze it rather than route it" was true while nothing wrote a
+        verdict at planning exit, and stopped being true once everything did.
+        What it cost in between is DRE-3039 — a `PROOF:` card handed to an
+        engineer agent the moment its siblings reached Done."""
+        board = _PromotionBoard([])
+        assert board.promote() == 0
+        assert board.advanced == []
+        assert board.surfaced_once(routing_verdict.NO_VERDICT_TAG)
 
     def test_a_conflicting_pair_of_verdicts_is_refused_not_guessed(self):
         board = _PromotionBoard([
@@ -813,6 +835,7 @@ class _PromotionBoard:
         self.card = _card("Backlog", comments)
         self.advanced: list[tuple[str, str, str]] = []
         self.posted: list[tuple[str, str]] = []
+        self.labelled: list[tuple[str, str]] = []
 
     def promote(self) -> int:
         with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), patch.object(
@@ -821,6 +844,12 @@ class _PromotionBoard:
             reconcile, "epic_blockers_unmet", return_value=False
         ), patch.object(
             reconcile.mid_epic, "last_green_light", return_value=None
+        ), patch.object(
+            # The promoter stamps a hand-built card's marks before it moves it
+            # (DRE-3385). Unmocked, the real write fails and the refusal under
+            # test would be indistinguishable from a broken label call.
+            reconcile.linear_ops, "add_label",
+            side_effect=lambda i, label: self.labelled.append((i, label)),
         ), patch.object(
             reconcile.linear_ops, "cmd_advance",
             side_effect=lambda i, to, frm: self.advanced.append((i, to, frm)),

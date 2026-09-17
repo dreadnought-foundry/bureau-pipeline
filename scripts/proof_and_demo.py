@@ -56,6 +56,11 @@ card, returned None ("a CHILD with NO verdict promotes exactly as it did
 before"), and the sweep promoted it the moment its siblings reached Done. A
 rule enforced at plan time and discarded before build time is not enforced.
 
+(That quoted clause is gone — DRE-3385 refuses a verdictless child too — but
+the stamp is still what this check owes: the sweep now CARRIES an OPERATOR card
+to Todo, and the marks it stamps on the way are what keep a build run off it.
+Without the plan-time verdict nothing applies them.)
+
 So `check` writes what it computed, as the same `🧭 routing-verdict` comment
 every other verdict uses, through `routing_verdict.stamp_card` — one writer,
 the one that already knows the answer, and no second grammar for the promotion
@@ -251,8 +256,8 @@ def vocabulary_problems(doc: dict | None = None) -> list:
     for name in confirming:
         if routing_verdict.is_promotable(name, doc):
             problems.append(
-                f"the verdict {name!r} names a human actor AND is promoted by "
-                "the sweep — a card the fleet may build cannot be the thing "
+                f"the verdict {name!r} names a human actor AND is dispatched "
+                "unattended — a card the fleet may build cannot be the thing "
                 "that confirms the fleet's work"
             )
     return problems
@@ -445,11 +450,11 @@ def stamps(children: list, doc: dict | None = None) -> tuple:
     and the card may not survive the re-plan at all.
 
     The demo half is no longer CHECKED (DRE-3669) and so is no longer stamped
-    blind: a verdictless child promotes exactly as it always had, which is what
-    DRE-3039 fixed, but writing FLEET onto a card because nothing validated it
-    would send the fleet at it rather than keep the fleet off it. A verdict a
-    human acts on is written; anything else is left alone for the sweep's own
-    refusal to handle.
+    blind: writing FLEET onto a card because nothing validated it would send the
+    fleet at it rather than keep the fleet off it. A verdict a human acts on is
+    written; anything else is left alone for the sweep's own refusal to handle —
+    and since DRE-3385 that refusal covers a verdictless CHILD too, so an
+    unstamped legacy demo card is held rather than dispatched.
     """
     cards = list(children or [])
     if findings(cards, doc):

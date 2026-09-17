@@ -310,7 +310,14 @@ _WATCHDOG_OWNERS = {
 #: The gate's walk is `_intake_candidates` since DRE-3035 — a HELD sweep reports
 #: how much is behind the pen, which needs the same walk without the moves, so
 #: the two exemptions (hand-built, and now PARKED) live in the walk itself.
-_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {"_intake_candidates"}
+#: The WIP reader (DRE-3385), and it is the one member of this set that is
+#: neither an alarm nor a dispatch. `counts_against_wip` asks whether the card
+#: occupies one of MAX_WIP's slots, and work no run is coming for occupies
+#: none: 19 hand-built cards against agent-bureau's cap of 12 made the sweep
+#: print "WIP at cap — none promoted" for ever, so a person's queue starved the
+#: fleet's. It is in this set rather than spelling the label a second time,
+#: because a second spelling is exactly what this guard exists to catch.
+_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {"_intake_candidates", "counts_against_wip"}
 
 
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
@@ -330,6 +337,8 @@ def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     label that switches off the only thing which would say the work had
     stopped, with nothing put in its place, is what left DRE-2655's finished
     work invisible on a pushed branch for nineteen hours.
+
+    The sixth is `counts_against_wip` — see the note above the set.
     """
     assert _call_owners("hand_built") == _HAND_BUILT_OWNERS
 

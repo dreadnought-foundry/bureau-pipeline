@@ -579,16 +579,57 @@ def hand_built(card: dict) -> bool:
 
     The work is done by a human or a local agent rather than a dispatched
     pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
-    are all the normal state, not evidence of a stall. Read by exactly two
-    callers, both answering "should the pipeline start or restart an agent on
-    this card": flag_stranded (the alarm) and main()'s nudge loop on a card
-    with no PR (the dispatch that alarm was reporting on). Never read by a
-    PR-keyed repair path, or this would silently become a second, wider hold.
+    are all the normal state, not evidence of a stall. Read by the callers that
+    answer "should the pipeline start or restart an agent on this card":
+    flag_stranded and flag_stalled_planning (the alarms), _intake_candidates,
+    main()'s nudge loop on a card with no PR (the dispatch those alarms were
+    reporting on) — plus `_flag_hand_built_idle`, which is the other direction
+    and fires only on this label. Never read by a PR-keyed repair path, or this
+    would silently become a second, wider hold.
+
+    `counts_against_wip` reads it too (DRE-3385), and that one is neither a
+    dispatch nor a repair: it asks whether the card occupies one of MAX_WIP's
+    slots, and work no run is coming for occupies none. Same label, one
+    spelling — tests/test_hand_built_not_stranded.py names every owner, so a
+    reader added later is a finding at the diff.
     """
     return any(
         lbl["name"].lower() == HAND_BUILT_LABEL
         for lbl in (card.get("labels") or {}).get("nodes", [])
     )
+
+
+def counts_against_wip(card: dict) -> bool:
+    """Does this card occupy one of MAX_WIP's slots? (DRE-3385)
+
+    The cap exists to stop the pipeline flooding itself with concurrent AGENT
+    RUNS. A card marked `hand-built` or `no-code` has no run to count — nothing
+    was dispatched for it and nothing will be — so counting it budgets the
+    fleet's capacity against work a person is doing by hand.
+
+    Measured on 2026-09-08: 19 such cards sat in Todo / In Progress / In Review
+    against agent-bureau's cap of 12, so the sweep printed "WIP at cap — none
+    promoted" and no engineer card could ever promote again. The two labels are
+    exactly the marks the OPERATOR and WORKBENCH verdicts stamp
+    (`routing_verdict.marks`), which is how a promoted operator card stops
+    counting the moment it is promoted.
+
+    `no-code` comes from `linear_ops`, the one place that label is spelled —
+    the same constant `auto_done_skip_reason` reads to leave an operator card
+    open when its runbook merges.
+    """
+    if hand_built(card):
+        return False
+    return not any(
+        lbl["name"].lower() == linear_ops.NO_CODE_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes", [])
+    )
+
+
+def wip_count(cards) -> int:
+    """How many of `cards` take a slot under the cap — the number every
+    promotion budget is computed from."""
+    return sum(1 for card in cards if counts_against_wip(card))
 
 
 def automation_card(card: dict) -> bool:
@@ -2944,6 +2985,25 @@ def epic_thread(epic: str) -> list | None:
         return None
 
 
+def takes_no_slot(bodies) -> bool:
+    """Is this card bound for a PERSON — moved by the sweep, never dispatched?
+
+    WORKBENCH and OPERATOR, read off the vocabulary rather than spelled here:
+    a verdict the sweep promotes (`sweep_promotes`) that no run is dispatched
+    at (`is_promotable`). Such a card takes no slot under MAX_WIP, so a fleet
+    at its cap does not hold it (DRE-3385). False for a FLEET card, for a
+    verdict bound somewhere else, and for a card carrying no verdict at all —
+    none of those passes a full cap. Pure: `bodies` came with the candidates
+    query, so asking spends no Linear read.
+    """
+    verdict = routing_verdict.verdict_on(bodies)
+    return (
+        verdict is not None
+        and routing_verdict.sweep_promotes(verdict)
+        and not routing_verdict.is_promotable(verdict)
+    )
+
+
 def promote_ready(active_count: int, candidates: list[dict] | None = None) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -2958,6 +3018,23 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     `candidates` — Backlog cards in `backlog_children`'s shape — replaces the
     whole-Backlog read when the caller already knows which cards a moment can
     have changed (the merge path, DRE-3236). Every gate below is the same.
+
+    THREE verdicts leave this lane, not one (DRE-3385). FLEET is promoted and
+    dispatched; WORKBENCH and OPERATOR are promoted and NOT dispatched — the
+    marks their verdict declares go on first, so the card never sits in Todo
+    unmarked, and the receipt says whose turn it is. Only a verdict routed
+    somewhere else (PARKED, NEEDS WORK) or no verdict at all is refused. The
+    hand-built promotions do not spend the WIP budget either: nothing is
+    dispatched for them, so they take no slot, and a Backlog holding 33
+    operator cards must not eat the fleet's promotion budget on its way out.
+
+    And they do not WAIT on it. The cap is asked per card, never once for the
+    sweep: a fleet at — or over — its cap holds every card a run would be
+    dispatched for, and still carries a WORKBENCH or OPERATOR card to Todo,
+    because "a hand-built card needs no room" (the lane contract's words). An
+    early return at the cap starved a person's card on every ordinary busy day
+    (PR #430's review); so did breaking out of the loop once the budget was
+    spent, since the candidates are read lowest number first.
     """
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
     # say what it was holding to, or a repo at "0" promoting at 8 reads exactly
@@ -2965,10 +3042,18 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     print(f"promotion: WIP cap {MAX_WIP}, read from {MAX_WIP_SOURCE}")
     budget = MAX_WIP - active_count
     if budget <= 0:
-        print(f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — none promoted")
-        return 0
+        # Said, not returned on (DRE-3385): this holds the cards a run would be
+        # dispatched for. A card bound for a person is still read below.
+        print(
+            f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — no card is "
+            "dispatched this sweep; a hand-built card needs no room and is "
+            "still considered"
+        )
     promoted = 0
     parentless = 0  # of `promoted` — the new path, reported rather than inferred
+    by_hand = 0  # of `promoted` — WORKBENCH/OPERATOR, moved but never dispatched
+    spent = 0  # of `budget` — only a card a run IS dispatched for takes a slot
+    waiting_reported = False  # the budget-spent line is ONE per sweep (DRE-2918)
     # Cache the epic-level gate per parent epic: it is the same answer for every
     # child of that epic, so consult Linear once per epic per sweep (DRE-1772).
     epic_gate: dict[str, bool] = {}
@@ -2999,18 +3084,6 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         in EPIC_ACTIVE_STATES
     })
     for index, card in enumerate(candidates):
-        if promoted >= budget:
-            # ONE line per sweep, not one per card (DRE-2918): a 200-card
-            # Backlog must not print 200 lines. `candidates` is sorted ascending
-            # by card number, so the cards cut off here are always the newest,
-            # every sweep — and the summary at the end reports only a total.
-            unconsidered = candidates[index:]
-            print(
-                f"promotion: WIP budget spent ({promoted}/{budget} promoted) — "
-                f"{len(unconsidered)} candidate(s) not considered this sweep, "
-                f"lowest-numbered {unconsidered[0]['identifier']}"
-            )
-            break
         # The ONE deliberately silent exit in this loop (DRE-2918). The sweep is
         # per-repo over the whole team's Backlog, so speaking here would make
         # every repo print a line for every other repo's every card, every
@@ -3022,6 +3095,36 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # gates below read them — the epic test, the wave record and the
         # verdict. One comprehension, hoisted to the first of them.
         bodies = card_comment_bodies(card)
+        # The cap, asked PER CARD (DRE-3385). With the budget gone, only a card
+        # bound for a person goes on — WORKBENCH or OPERATOR: the sweep moves
+        # it and no run is dispatched at it, so it takes no slot. Everything
+        # else stops here, before any gate below spends a Linear read or posts
+        # a refusal on a sweep with no room to act: a FLEET card, and equally a
+        # card with no verdict or one bound somewhere else, exactly as when
+        # the loop broke. The verdict is read off comments the candidates query
+        # already returned, so asking costs nothing. `budget` may be negative
+        # (a cap lowered under work in flight); `spent >= budget` holds then too.
+        if spent >= budget and not takes_no_slot(bodies):
+            # ONE line per sweep, not one per card (DRE-2918): a 200-card
+            # Backlog must not print 200 lines. Said at the FIRST card held —
+            # the count is already exact there, because `spent` never falls and
+            # a hand-built promotion never raises it, so every later card of
+            # this repo's that needs a slot is held too. `candidates` is sorted
+            # ascending by card number, so the cards left waiting are always
+            # the newest, every sweep.
+            if not waiting_reported:
+                waiting_reported = True
+                unconsidered = [
+                    c["identifier"] for c in candidates[index:]
+                    if card_repo(c) == REPO_SLUG
+                    and not takes_no_slot(card_comment_bodies(c))
+                ]
+                print(
+                    f"promotion: WIP budget spent ({spent}/{max(budget, 0)} "
+                    f"dispatched) — {len(unconsidered)} candidate(s) not "
+                    f"considered this sweep, lowest-numbered {unconsidered[0]}"
+                )
+            continue
         if card_is_epic(card, bodies):
             print(
                 f"promotion: {card['identifier']} is an epic — epics are "
@@ -3210,18 +3313,23 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                         bodies,
                     )
             # Routing verdict (DRE-2724): the verdict answers WHO builds this
-            # card, and only FLEET means "an unattended agent, in one pull
-            # request". WORKBENCH needs an interactive flow, OPERATOR is not
-            # code at all, PARKED is deliberately not built, NEEDS WORK is not
-            # buildable as written — dispatching any of them sends the fleet at
-            # a card it cannot close. A CHILD with NO verdict promotes exactly as
-            # before: Backlog's "it carries a verdict" clause is enforced from
-            # Phase 5, and refusing the whole verdictless board today would
-            # freeze it rather than route it.
+            # card and WHERE it goes, and the sweep refuses only a card bound
+            # somewhere it does not go. PARKED is deliberately not built and
+            # NEEDS WORK belongs back with the planner; WORKBENCH and OPERATOR
+            # are bound for Todo like FLEET and are carried there, marked
+            # `hand-built`, with nothing dispatched (DRE-3385).
             #
-            # A PARENTLESS card is the one case where no verdict is itself the
-            # refusal (DRE-2735): a child inherits its epic's approval and this
-            # one has none to inherit, so the verdict IS the approval.
+            # NO VERDICT is the other refusal, and since DRE-3385 it holds for a
+            # child as well as a one-off. "A child with no verdict promotes
+            # exactly as before" was right while nothing wrote a verdict at
+            # planning exit and wrong once everything did — it dispatched an
+            # engineer agent at a `PROOF:` card the moment its siblings reached
+            # Done (DRE-3039).
+            #
+            # The no-verdict refusal still READS differently on each (DRE-2735):
+            # a child has an epic's approval to name, and a one-off has none to
+            # inherit, so its verdict IS the approval. Same tag, same outcome,
+            # different sentence — and the sentence is what a person acts on.
             if refusal is None:
                 refusal = (
                     routing_verdict.promotion_refusal(card["identifier"], bodies)
@@ -3250,17 +3358,36 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
         # bad reference: record it on the existing _write_failures path (fails
         # the run red for medic) instead of the bad-reference diagnostic.
+        #
+        # The verdict is on the card by now — the gate above refuses one that
+        # carries none — and it decides both halves of this move: whether the
+        # marks go on, and what the receipt says.
+        verdict = routing_verdict.verdict_on(bodies)
+        by_hand_note = routing_verdict.hand_built_promotion(verdict)
         try:
+            # MARKS FIRST, then the move (DRE-3385). The nudge loop leaves a
+            # hand-built card alone BECAUSE of the label, so a card that lands
+            # in Todo unmarked is a card the next sweep — fifteen minutes later
+            # — dispatches an agent at. The labels the card already carries came
+            # free with the candidates query; `add_label` is idempotent but
+            # costs a Linear read to find that out.
+            if by_hand_note is not None:
+                for label in routing_verdict.marks(verdict):
+                    if label.lower() not in labels:
+                        linear_ops.add_label(card["identifier"], label)
             linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
-            # The receipt names what actually approved this card. "parent epic
-            # active" on a card with no parent would be a confident wrong
-            # answer about the one thing the reader is asking.
+            # The receipt names what actually approved this card, and — for the
+            # two verdicts nothing is dispatched for — whose turn it now is.
+            # "parent epic active" on a card with no parent would be a confident
+            # wrong answer about the one thing the reader is asking.
+            reason = by_hand_note or (
+                "parent epic active and all blockers Done."
+                if parent
+                else "no parent epic, a FLEET verdict, and all blockers Done."
+            )
             linear_ops.cmd_comment(
                 card["identifier"],
-                "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done."
-                if parent
-                else "🧹 Auto-promoted Backlog → Todo: no parent epic, a FLEET "
-                     "verdict, and all blockers Done.",
+                f"🧹 Auto-promoted Backlog → Todo: {reason}",
             )
         except linear_ops.LinearError as e:
             _write_failures.append(f"{card['identifier']} advance/comment: {e}")
@@ -3270,14 +3397,22 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             )
             continue
         promoted += 1
+        if by_hand_note is not None:
+            by_hand += 1
+        else:
+            spent += 1
         if not parent:
             parentless += 1
     # The parentless count is printed on EVERY sweep, zero included: the new
     # path is meant to be visible rather than inferred from a total, and "no
-    # line" and "none promoted" must not render the same (DRE-2735).
+    # line" and "none promoted" must not render the same (DRE-2735). The
+    # hand-built count is there for the same reason (DRE-3385) — and it is the
+    # one number that explains a sweep promoting more cards than the cap has
+    # room for, because none of them took a slot.
     print(
         f"promotion: {promoted} card(s) promoted, {parentless} parentless "
-        f"one-off(s) (WIP {active_count}+{promoted}/{MAX_WIP})"
+        f"one-off(s), {by_hand} hand-built (nothing dispatched) "
+        f"(WIP {active_count}+{spent}/{MAX_WIP})"
     )
     if _card_skips:
         # A red pattern the run log can't miss (DRE-2035) — pairs with the
@@ -6862,7 +6997,7 @@ def recover_limit_deaths() -> None:
         cards = [c for c in active_cards() if card_repo(c) in (None, REPO_SLUG)]
         for line in limit_recovery.recover(
             linear_ops, datetime.now(UTC), os.environ.get("CLAUDE_ACCOUNT") or None,
-            MAX_WIP - sum(1 for c in cards if card_repo(c) == REPO_SLUG),
+            MAX_WIP - wip_count([c for c in cards if card_repo(c) == REPO_SLUG]),
             rerun=lambda run_id: gh_dispatch(
                 "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
             move=lambda ident, lane: linear_ops.cmd_state(ident, lane),
@@ -7241,13 +7376,13 @@ def main(
                 f"{len(scope.dependents)} dependent(s)"
             )
             promote_ready(
-                active_count=len(mine),
+                active_count=wip_count(mine),
                 candidates=backlog_children(only=scope.dependents),
             )
         else:
-            promote_ready(active_count=len(mine))
+            promote_ready(active_count=wip_count(mine))
     if promote_only:
-        print(f"promote-only: gate evaluated (WIP base {len(mine)})")
+        print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
         # The event-driven gate runs the epic gate too, so it can find a stale
         # prose defect — and a red run is the epic's whole escalation, so it
         # must be red on this path as well (DRE-2676).

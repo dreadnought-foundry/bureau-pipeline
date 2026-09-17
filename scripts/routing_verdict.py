@@ -3,10 +3,22 @@
 
 `config/routing-verdicts.json` declares the five routes, each with the lane it
 sends a card to and the actor who picks it up there. This module is the only
-reader: the sweep (`reconcile.py`) refuses to promote a card whose verdict
-names a destination that is not Todo-by-an-agent and never reports a PARKED
-card as stalled, `docs/routing-verdicts.md` is RENDERED from the same file, and
-the write path below is the one way a verdict gets onto a card.
+reader: the sweep (`reconcile.py`) carries a Backlog card to the lane its
+verdict names and refuses one whose verdict names a lane the sweep does not go
+to, it never reports a PARKED card as stalled,
+`docs/routing-verdicts.md` is RENDERED from the same file, and the write path
+below is the one way a verdict gets onto a card.
+
+## Promoted is not the same as dispatched (DRE-3385)
+
+Three verdicts route to `Todo` — FLEET, WORKBENCH and OPERATOR — and the sweep
+performs the move for all three. Only FLEET is handed to an agent. That
+distinction lives in two readers here: `sweep_promotes` (is this card's
+destination the promotion lane) and `is_promotable` (may a run be dispatched at
+it). Collapsing them into one is what left OPERATOR and WORKBENCH with a
+destination written on them and no turn ever coming — "enters Backlog and goes
+to the queue when its turn comes, with no turn ever coming" (DRE-2735), and on
+2026-09-08, 33 of the board's 40 Backlog cards.
 
 ## Why routing and not a score
 
@@ -126,11 +138,29 @@ VERDICT_MARK = "🧭"
 # verdict itself.
 NOT_FLEET_TAG = "routing-not-fleet"
 
-# The other refusal, and a DIFFERENT fact: the card is parentless and carries no
-# verdict at all, so nothing has approved it (DRE-2735). Separate tag because
-# "routed somewhere else on purpose" and "nobody has routed this" have different
-# next actions, and a sweep log that collapsed them would tell a reader neither.
+# The other refusal, and a DIFFERENT fact: the card carries no verdict at all,
+# so nothing has routed it (DRE-2735, widened to every card by DRE-3385).
+# Separate tag because "routed somewhere else on purpose" and "nobody has routed
+# this" have different next actions, and a sweep log that collapsed them would
+# tell a reader neither.
 NO_VERDICT_TAG = "routing-no-verdict"
+
+# The lane the sweep promotes a Backlog card INTO (DRE-3385). THREE of the five
+# verdicts name it as their destination — FLEET, WORKBENCH and OPERATOR — and
+# what separates them is not where the card goes but who picks it up there. So
+# the promotion refusal reads the DESTINATION, never `promotable`: that field
+# answers the narrower question "may an unattended run be dispatched at this",
+# and reading it as "may the sweep move this" is exactly how OPERATOR and
+# WORKBENCH came to have a destination nothing ever carried them to — the
+# amendment to DRE-2724 wrote `Todo` on both, and `promote_ready` refused every
+# non-FLEET verdict, so 33 of 40 Backlog cards were cards with a destination and
+# no turn (read live 2026-09-08).
+PROMOTION_LANE = "Todo"
+
+# Who performs that move, named so `config_problems()` can bind it to the lane
+# contract the way every actor is bound: a promoter the destination lane does
+# not permit is a move nothing may legally make (DRE-2859).
+PROMOTER = "reconcile.py"
 
 # The marker must OPEN the comment. Anchored for the reason above, and for the
 # same reason the title patterns are.
@@ -254,8 +284,27 @@ def revival(name: str, doc: dict | None = None) -> str | None:
 
 
 def is_promotable(name: str, doc: dict | None = None) -> bool:
-    """May the sweep promote and dispatch this card? FLEET alone."""
+    """May an unattended RUN be dispatched at this card? FLEET alone.
+
+    Not the same question as `sweep_promotes` below, and the difference is the
+    whole of DRE-3385: three verdicts reach `Todo`, and only one of them is
+    handed to an agent when it gets there.
+    """
     return bool(record(name, doc)["promotable"])
+
+
+def sweep_promotes(name: str, doc: dict | None = None) -> bool:
+    """Does the sweep MOVE a Backlog card carrying this verdict?
+
+    True when the verdict's destination is `PROMOTION_LANE` — FLEET, WORKBENCH
+    and OPERATOR. PARKED stays in Backlog on purpose, and NEEDS WORK goes back
+    to Planning, which is the planner's move and never the sweep's.
+
+    Read off the destination rather than listed, so a route added or re-pointed
+    in the vocabulary changes what the sweep does without anybody remembering
+    to edit a tuple in the promoter.
+    """
+    return destination(name, doc) == PROMOTION_LANE
 
 
 def marks(name: str, doc: dict | None = None) -> tuple:
@@ -319,6 +368,23 @@ def config_problems(doc: dict | None = None) -> list:
     except Exception as e:  # noqa: BLE001 — an unreadable contract is a problem, not a crash
         return [f"the lane contract could not be read, so nothing can be bound to it: {e}"]
 
+    # The promotion lane itself (DRE-3385). Three routes now depend on the
+    # sweep being able to make this move, so a lane that does not exist — or one
+    # the promoter may not write — is a dead end for all three at once, and it
+    # fails here rather than in a live sweep.
+    if PROMOTION_LANE not in lanes:
+        problems.append(
+            f"the promotion lane {PROMOTION_LANE!r} is not a live lane in "
+            "config/lane-contract.json — the sweep has nowhere to promote to"
+        )
+    elif PROMOTER not in lane_contract.lane_writers(PROMOTION_LANE):
+        problems.append(
+            f"the promoter {PROMOTER!r} is not a permitted writer of "
+            f"{PROMOTION_LANE!r}, which permits only "
+            f"{', '.join(lane_contract.lane_writers(PROMOTION_LANE))} — the "
+            "move the sweep makes would not be one the contract allows"
+        )
+
     names = verdicts(doc)
     for name in names:
         entry = record(name, doc)
@@ -363,6 +429,15 @@ def config_problems(doc: dict | None = None) -> list:
         problems.append(
             f"exactly one verdict may be dispatched unattended; {promotable} are"
         )
+    for name in promotable:
+        # A verdict the relay dispatches at a lane the sweep never carries a
+        # card into is a dispatch that never happens.
+        if not sweep_promotes(name, doc):
+            problems.append(
+                f"verdict {name!r} is dispatched unattended but routes to "
+                f"{destination(name, doc)!r} rather than {PROMOTION_LANE!r} — "
+                "the sweep can only dispatch a card it promotes"
+            )
 
     for label, verdict in label_map(doc).items():
         if verdict not in names:
@@ -557,14 +632,16 @@ def stamp_refusal(name: str, comment_bodies, doc: dict | None = None) -> str | N
     )
 
 
-def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) -> str | None:
-    """Why the sweep must not promote `identifier`, or None to let it through.
+def _destination_refusal(
+    identifier: str, comment_bodies, doc: dict | None = None
+) -> str | None:
+    """Why this card's verdict sends it somewhere the sweep does not go, or None.
 
-    A card with NO verdict promotes exactly as it did before this card shipped:
-    the lane contract's "Backlog entrance: it carries a verdict" clause is
-    enforced from Phase 5, and refusing every verdictless card today would
-    freeze the board rather than route it. What this refuses is a WRONG
-    DESTINATION — a card whose own verdict says a person builds it.
+    The half that is about a WRONG DESTINATION and nothing else. Since DRE-3385
+    that is read off `sweep_promotes`, not off `promotable`: WORKBENCH and
+    OPERATOR are bound for `Todo` like FLEET and the sweep carries them there;
+    what they are not is DISPATCHED, and the promoter says so in the receipt
+    rather than by leaving the card behind.
     """
     try:
         name = verdict_on(comment_bodies, doc)
@@ -573,7 +650,7 @@ def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) 
             f"🚨 {NOT_FLEET_TAG}: {identifier} is not being promoted — {e}. "
             "Nothing is dispatched until the card says once where it goes."
         )
-    if name is None or is_promotable(name, doc):
+    if name is None or sweep_promotes(name, doc):
         return None
     entry = record(name, doc)
     revived = f"**Who takes it back out:** {entry['revival']}\n\n" if entry.get("revival") else ""
@@ -589,6 +666,56 @@ def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) 
     )
 
 
+def _no_verdict_refusal(identifier: str, inherits: str) -> str:
+    """The refusal for a card nothing has routed. `inherits` is the paragraph
+    that says what this card's approval WOULD have been — the one thing that
+    differs between a child and a one-off."""
+    return (
+        f"🚨 {NO_VERDICT_TAG}: {identifier} carries no routing verdict, so "
+        "nothing has said who builds it — the sweep is not promoting it.\n\n"
+        f"{inherits}\n\n"
+        "**To let it through:** stamp the routing decision —\n"
+        "`python3 scripts/routing_verdict.py stamp <CARD> FLEET "
+        '--why "<one line>"`\n\n'
+        "This refusal is only about carrying NO verdict. A verdict routes the "
+        "card on purpose and says where — FLEET, WORKBENCH and OPERATOR all "
+        f"reach {PROMOTION_LANE}, and the last two say a person builds it."
+    )
+
+
+def promotion_refusal(identifier: str, comment_bodies, doc: dict | None = None) -> str | None:
+    """Why the sweep must not promote `identifier` — a CHILD of an epic — or
+    None to let it through.
+
+    Two refusals, and they are different facts. A WRONG DESTINATION is a card
+    whose own verdict sends it somewhere the sweep does not go. NO VERDICT is a
+    card nobody has routed at all, and until DRE-3385 that promoted exactly as
+    it always had: "refusing the whole verdictless board today would freeze it
+    rather than route it" was true while nothing wrote a verdict at planning
+    exit, and it stopped being true once everything did. What it cost in the
+    meantime is on the record — a `PROOF:` card dispatched to an engineer agent
+    the moment its siblings reached Done (DRE-3039), and eight unmarked
+    operator cards one cleared blocker from the same.
+
+    The epic's approval is evidence for a child, and it is evidence about the
+    PLAN: it says the set of work was approved, never who builds this piece of
+    it. The verdict is that second fact, and the refusal says so.
+    """
+    refusal = _destination_refusal(identifier, comment_bodies, doc)
+    if refusal is not None:
+        return refusal
+    if verdict_on(comment_bodies, doc) is not None:
+        return None
+    return _no_verdict_refusal(
+        identifier,
+        "This card is a child of an epic, and that epic's approval is evidence "
+        "for it only alongside a verdict of its own: the epic says the PLAN was "
+        "approved, and the verdict says who builds THIS piece and how. Promoting "
+        "without one would pick the answer on the card's behalf — and the answer "
+        "the pipeline picks is `FLEET`, which dispatches an agent.",
+    )
+
+
 def parentless_promotion_refusal(
     identifier: str, comment_bodies, doc: dict | None = None
 ) -> str | None:
@@ -600,27 +727,51 @@ def parentless_promotion_refusal(
     the design's whole claim about why a one-off never reaches the CEO. Absent
     it, nothing has approved this card and the sweep must not dispatch it.
 
+    Since DRE-3385 the child path refuses a verdictless card too, so what is
+    left here is the REASON, which is still the one this card was written for:
+    a one-off has no epic behind it, and the paragraph that says so would be a
+    confident wrong answer on a child.
+
     The wrong-destination refusal is unchanged and takes precedence: "routed
-    WORKBENCH" and "routed nowhere" are different facts, and the first already
-    says who picks the card up instead.
+    PARKED" and "routed nowhere" are different facts, and the first already says
+    who picks the card up instead.
     """
-    refusal = promotion_refusal(identifier, comment_bodies, doc)
+    refusal = _destination_refusal(identifier, comment_bodies, doc)
     if refusal is not None:
         return refusal
     if verdict_on(comment_bodies, doc) is not None:
         return None
+    return _no_verdict_refusal(
+        identifier,
+        "This card has no parent epic, so there is no approval for it to "
+        "inherit. A card under an epic inherits that epic's approval: a human "
+        "moved the epic, and the sweep reads its state. A one-off inherits "
+        "nothing, so its verdict IS the approval, and it is written at Planning "
+        "exit.",
+    )
+
+
+def hand_built_promotion(name: str, doc: dict | None = None) -> str | None:
+    """What the promotion receipt says for a verdict a PERSON acts on — None
+    for the one verdict a run is dispatched at.
+
+    The sweep performs the move for WORKBENCH and OPERATOR exactly as it does
+    for FLEET (DRE-3385); what differs is that nothing was dispatched, and the
+    card has to say so where the person reads it. The ordinary promotion
+    receipt on a hand-built card reads as work an agent has been sent at, and
+    whoever's turn it actually is has no way to tell.
+
+    The marks are named because they are applied in the same breath: the reader
+    can see that the labels which keep the fleet off this card are on it.
+    """
+    if is_promotable(name, doc):
+        return None
+    entry = record(name, doc)
+    marked = ", ".join(f"`{m}`" for m in marks(name, doc))
     return (
-        f"🚨 {NO_VERDICT_TAG}: {identifier} has no parent epic and carries no "
-        "routing verdict, so nothing has approved it — the sweep is not "
-        "promoting it.\n\n"
-        "A card under an epic inherits that epic's approval: a human moved the "
-        "epic, and the sweep reads its state. A one-off inherits nothing, so "
-        "its verdict is the approval, and it is written at Planning exit.\n\n"
-        "**To let it through:** stamp the routing decision —\n"
-        "`python3 scripts/routing_verdict.py stamp <CARD> FLEET "
-        '--why "<one line>"`\n\n'
-        "This refusal is only about carrying NO verdict. A verdict that is not "
-        "FLEET routes the card somewhere else on purpose, and says where."
+        f"routed **{name}** — {entry['means']} {actor(name, doc)}, your turn — "
+        "a person builds this; nothing was dispatched."
+        + (f" Marked {marked}." if marked else "")
     )
 
 

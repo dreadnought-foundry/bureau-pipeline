@@ -61,6 +61,7 @@ CREATED = "2026-07-01T00:00:00.000Z"
 
 FLEET = routing_verdict.verdict_comment("FLEET", "the acceptance criteria are unit-testable")
 WORKBENCH = routing_verdict.verdict_comment("WORKBENCH", "it drives a live auth flow")
+PARKED = routing_verdict.verdict_comment("PARKED", "we decided not to build this")
 
 # The stamps, built by the writer that stamps them — hand-writing the comment
 # here would let the vocabulary drift without this file noticing.
@@ -112,6 +113,7 @@ class _Board:
         self.cards = list(cards)
         self.advanced: list[tuple[str, str, str]] = []
         self.posted: list[tuple[str, str]] = []
+        self.labelled: list[tuple[str, str]] = []
         self.lanes = {c["identifier"]: ["Backlog"] for c in self.cards}
 
     def promote(self, active_count: int = 0) -> int:
@@ -127,6 +129,10 @@ class _Board:
             reconcile.mid_epic, "last_green_light", return_value=None
         ), patch.object(
             reconcile, "card_state", return_value="Done"
+        ), patch.object(
+            # A hand-built card's marks go on before the move (DRE-3385).
+            reconcile.linear_ops, "add_label",
+            side_effect=lambda i, label: self.labelled.append((i, label)),
         ), patch.object(
             reconcile.linear_ops, "cmd_advance", side_effect=advance
         ), patch.object(
@@ -207,15 +213,28 @@ class TestTheParentlessGateStillDecides:
             routing_verdict.NO_VERDICT_TAG in b for b in board.comments_on("DRE-3018")
         )
 
-    def test_a_one_off_routed_workbench_is_refused_as_workbench(self, capsys):
-        """The wrong-destination refusal, reached through the same path: a
-        person builds this one, and the card says so."""
-        board = _Board(_card(comments=[ONE_OFF_STAMP, WORKBENCH]))
+    def test_a_one_off_routed_parked_is_refused_as_parked(self, capsys):
+        """The wrong-destination refusal, reached through the same path: the
+        card is deliberately inert, and it says so.
+
+        This used to use WORKBENCH. DRE-3385 corrected the reading: WORKBENCH
+        names Todo as its destination, so the sweep carries it there for a
+        person — see the test below, and test_operator_card_promotion.py."""
+        board = _Board(_card(comments=[ONE_OFF_STAMP, PARKED]))
         assert board.promote() == 0
         held = _lines_naming(capsys, "DRE-3018")
         assert len(held) == 1, f"expected exactly one line, got {held}"
         assert routing_verdict.NOT_FLEET_TAG in held[0]
-        assert "WORKBENCH" in held[0]
+        assert "PARKED" in held[0]
+
+    def test_a_one_off_routed_workbench_is_promoted_for_a_person(self):
+        """The one-off gate reads the verdict, and WORKBENCH is a destination
+        the sweep goes to — marked, and with nothing dispatched."""
+        board = _Board(_card(comments=[ONE_OFF_STAMP, WORKBENCH]))
+        assert board.promote() == 1
+        assert board.lane_of("DRE-3018") == "Todo"
+        assert [l for _, l in board.labelled] == list(
+            routing_verdict.marks("WORKBENCH"))
 
 
 # ===========================================================================

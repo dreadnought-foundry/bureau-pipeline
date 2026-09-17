@@ -60,6 +60,14 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 import linear_ops  # noqa: E402
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
+
+# Since DRE-3385 a Backlog card carrying NO routing verdict is refused
+# promotion outright, so every candidate below carries one — a fixture held
+# back for the missing verdict would say nothing about the gate under test.
+FLEET_VERDICT = routing_verdict.verdict_comment(
+    "FLEET", "the acceptance criteria are unit-testable")
+
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +95,7 @@ def _card(identifier="DRE-900", description="work", relations=(), parent="DRE-80
         "description": "**Repo:** agent-bureau\n" + description,
         "parent": {"identifier": parent, "state": {"name": parent_state}} if parent else None,
         "labels": {"nodes": [{"name": "size:M"}]},
-        "comments": {"nodes": []},
+        "comments": {"nodes": [{"body": FLEET_VERDICT}]},
         "inverseRelations": {"nodes": list(relations)},
     }
 

@@ -50,6 +50,10 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
 import planning_shape  # noqa: E402
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
+
+ROUTING_FLEET = routing_verdict.verdict_comment(
+    "FLEET", "the acceptance criteria are unit-testable")
 
 _SOURCE = (_SCRIPTS / "reconcile.py").read_text()
 
@@ -192,7 +196,10 @@ def _card(identifier="DRE-2826", *, labels=("repo:agent-bureau",), relations=(),
         "createdAt": "2026-08-01T00:00:00.000Z",
         "parent": {"identifier": parent[0], "state": {"name": parent[1]}} if parent else None,
         "labels": {"nodes": [{"name": n} for n in labels]},
-        "comments": {"nodes": [{"body": b} for b in comments]},
+        # The routing verdict is always there: since DRE-3385 a card carrying
+        # none is refused, which would drown out the exit under test in each of
+        # these. A test that wants the no-verdict refusal passes its own.
+        "comments": {"nodes": [{"body": b} for b in (*comments, ROUTING_FLEET)]},
         "inverseRelations": {
             "nodes": [
                 {"type": "blocks", "issue": {"identifier": i, "state": {"name": s}}}
