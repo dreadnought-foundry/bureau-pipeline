@@ -53,12 +53,20 @@ to it) and `unknown` (its record could not be read). Only the first two are in
 the denominator. Counting `pending` as `one-card` would make the rate improve
 every time the board grows.
 
-**The before/after has no boundary yet, and says so.** The ledger reaches the
-planner in DRE-3078, which has not shipped, so `ledger_injected_at` in
-`config/planner-audit.json` is `null`: every month reports as *before* and the
-after half reports **UNKNOWN**, never an empty bucket printed as zero — which
-would read as an improvement the pipeline has not made. Set that date when the
-injection merges and the same command draws the comparison.
+**The boundary is set, and the after half is not a clean month yet.** The ledger
+reached the planner in **DRE-3359 (PR [#359](https://github.com/dreadnought-foundry/bureau-pipeline/pull/359))**,
+merged `2026-09-10T22:16:25Z` — 2026-09-10 15:16 PT — and that is the date
+`ledger_injected_at` in `config/planner-audit.json` now holds (set by DRE-3363).
+The command draws the comparison from it by MONTH: every month earlier than
+2026-09 reports *before*, and 2026-09 itself and everything after it report
+*after*. That is what it cannot report cleanly yet — September straddles the
+boundary and the shipped reader has two sides, not three, so September's *after*
+figure includes cards cut before the planner had ever seen the ledger, and it is
+not over either. The first month that answers the question cleanly is October,
+read after 1 November. A bucket with no finished
+cards still reports **UNKNOWN**, never an empty bucket printed as zero — which
+would read as an improvement the pipeline has not made.
+`docs/split-ledger-audit.md` records the reading the date was set from.
 
 ## The `proof-and-demo` exclusion, and why it stays
 

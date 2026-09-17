@@ -172,8 +172,8 @@ plan artifact: complete
 ## 3. The critic cited a row — MET, twice, and one of them is this week
 
 The card's first choice was DRE-3022's own thread, and it is there. The second
-sighting is four days old and on a different epic, which matters more: it shows
-the citation is ordinary traffic rather than one historical comment.
+sighting is from this morning and on a different epic, which matters more: it
+shows the citation is ordinary traffic rather than one historical comment.
 
 ### 3a. On DRE-3022's own thread — 2026-09-09 12:45:19 PT
 
@@ -197,7 +197,7 @@ deaths)** and the tell rate quoted is **6 of 7**. The fourth finding above is
 transcribed from the thread as it stands; the epic's own row is cited against
 three of its children.
 
-### 3b. On a live epic four days later — 2026-09-17 05:05:47 PT
+### 3b. On a live epic eight days later — 2026-09-17 05:05:47 PT
 
 Same comment shape, on [DRE-3694](https://linear.app/dreadnoughtfoundry/issue/DRE-3694),
 from run [35217665939](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/35217665939)
