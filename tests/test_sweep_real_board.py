@@ -167,8 +167,18 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
                  tag, so a cut that changes the reason fails too), or parked
                  behind the hold label.
       escalate — a card moved into the CEO's queue or into the broken-card
-                 lane: the Intake age-out, and the prose-blocker defect route.
+                 lane: the Intake age-out, the prose-blocker defect route, and
+                 Planning's stall escalation.
       close    — a card or epic moved to Done.
+
+    BOTH move seams are read, and that is not tidiness (DRE-4124). The Intake
+    age-out advances (`cmd_advance`); `planning_escalation.escalate` writes the
+    lane directly (`cmd_state`), because it parks a card rather than walking it
+    along the rail. Reading only the first is what made 68 stalled Planning
+    cards — held under `needs-human` until this card, escalated after it —
+    drop out of the record entirely rather than move buckets. A decision this
+    file cannot see is a decision a cut can delete for free, which is the one
+    thing the record exists to stop.
     """
     promote, hold, escalate, close = [], [], [], []
     for call in advance.call_args_list:
@@ -181,6 +191,8 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
         ident, to = call.args[0], call.args[1]
         if to == "Done":
             close.append(ident)
+        elif to in _ESCALATION_LANES:
+            escalate.append(f"{ident} → {to}")
         elif to == "Backlog" and "--park" in call.args[2:]:
             hold.append(f"{ident} parked")
     for call in label.call_args_list:

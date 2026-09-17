@@ -409,6 +409,13 @@ class TestTheOneOffIsActuallyPromoted:
 # ===========================================================================
 # The CLI — the seam the run actually calls, where the writes happen
 # ===========================================================================
+#: When these cards' comments were posted — a planning attempt that ended
+#: before this process started, which is what a card's history is by the time
+#: the exit command reaches it. Nothing here turns on a CURRENT verdict; the
+#: freshness case lives in `tests/test_planning_escalation.py` (DRE-4124).
+COMMENTED_AT = "2026-09-08T11:02:00-07:00"
+
+
 class _Card:
     """One card, with the CLI's writes recorded rather than posted.
 
@@ -451,6 +458,15 @@ class _Card:
 
         with patch.object(
             linear_ops, "comment_bodies", side_effect=lambda i: list(self.comments)
+        ), patch.object(
+            # The escalation reads the thread WITH its times (DRE-4124) — it
+            # has to tell a verdict from this planning attempt from one a spent
+            # attempt left behind. Same window, same query, `createdAt` kept.
+            linear_ops, "comment_timeline",
+            side_effect=lambda i: [
+                {"body": body, "createdAt": COMMENTED_AT}
+                for body in self.comments
+            ],
         ), patch.object(
             linear_ops, "cmd_comment", side_effect=post
         ), patch.object(

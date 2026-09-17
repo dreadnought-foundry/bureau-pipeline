@@ -96,6 +96,22 @@ def _shape(doc: dict, name: str) -> dict:
     return next(entry for entry in doc["shapes"] if entry["name"] == name)
 
 
+#: When the card's seeded comments were posted, unless a test says otherwise:
+#: a planning attempt that ended days before this process started, which is
+#: what a card's existing history IS by the time a fresh run reaches it. The
+#: date is DRE-2415's — the verdict from 09-08 that stood a card down on
+#: 09-16, thirty-five days into its stay in Planning (DRE-4124).
+A_SPENT_ATTEMPT_AT = "2026-09-08T11:02:00-07:00"
+
+
+def _moments_ago() -> str:
+    """A comment time INSIDE the attempt this process is making — later than
+    `attempt_started_at()`, which is fixed at import."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
 class _Card:
     """One card, with the CLI's writes recorded rather than posted.
 
@@ -106,10 +122,18 @@ class _Card:
     `lane` is where the board says the card is (DRE-3654): the escalation
     re-reads it before it parks, and a move here updates it, so a retried call
     reads the lane the first call left the card in rather than a constant.
+
+    The two comment reads are stubbed the way PRODUCTION supplies them, and
+    that difference is the whole of DRE-4124's regression: `comment_bodies`
+    hands back plain strings with no time, `comment_timeline` hands back
+    `{"body", "createdAt"}`. A test whose stub gave both a time would pass
+    against the bug.
     """
 
-    def __init__(self, comments=(), *, lane: str = planning_escalation.ORIGIN):
+    def __init__(self, comments=(), *, lane: str = planning_escalation.ORIGIN,
+                 commented_at: str = A_SPENT_ATTEMPT_AT):
         self.comments = list(comments)
+        self.commented_at = commented_at
         self.lane = lane
         self.posted: list[tuple[str, str]] = []
         self.states: list[tuple[str, str]] = []
@@ -118,6 +142,9 @@ class _Card:
         self.events: list[str] = []
         #: Every `get_issue` read, with the flags it was made with.
         self.reads: list[dict] = []
+        #: Which comment read each caller made — `"bodies"` (untimed) or
+        #: `"timeline"` (timestamped). DRE-4124 turns on the difference.
+        self.comment_reads: list[str] = []
 
     def run(self, fn):
         def post(identifier, body):
@@ -140,8 +167,19 @@ class _Card:
                 "labels": {"nodes": []}, "children": {"nodes": []},
             }
 
+        def bodies(identifier):
+            self.comment_reads.append("bodies")
+            return list(self.comments)
+
+        def timeline(identifier):
+            self.comment_reads.append("timeline")
+            return [{"body": body, "createdAt": self.commented_at}
+                    for body in self.comments]
+
         with patch.object(
-            linear_ops, "comment_bodies", side_effect=lambda i: list(self.comments)
+            linear_ops, "comment_bodies", side_effect=bodies
+        ), patch.object(
+            linear_ops, "comment_timeline", side_effect=timeline,
         ), patch.object(
             linear_ops, "cmd_comment", side_effect=post
         ), patch.object(
@@ -297,16 +335,22 @@ def _seconds_between(earlier: str, later: str) -> float:
     return (datetime.fromisoformat(later) - datetime.fromisoformat(earlier)).total_seconds()
 
 
-def _dre_3604(lane: str = "In Progress") -> _Card:
+def _dre_3604(lane: str = "In Progress",
+              commented_at: str = A_SPENT_ATTEMPT_AT) -> _Card:
     """The card exactly as the board had it at 18:06:23: the transport note,
     a routing verdict written by the vocabulary's own composer, and the lane
-    the hand move left it in."""
+    the hand move left it in.
+
+    `commented_at` is when that verdict was stamped. The default is a spent
+    attempt — DRE-4124's case; `_moments_ago()` is DRE-3604's own five-second
+    window, where the verdict is this attempt's answer."""
     return _Card(
         comments=[
             planning_escalation.transport_comment(DRE_3604, "HTTP 429 answered"),
             routing_verdict.verdict_comment("WORKBENCH", WORKBENCH_WHY),
         ],
         lane=lane,
+        commented_at=commented_at,
     )
 
 
@@ -410,16 +454,35 @@ class TestTheEscalationReReadsTheLaneBeforeItParks:
         DRE-3604 was for five seconds.
 
         DRE-4124 narrowed this from "whatever the lane it is in": the verdict
-        has to be current. `moved_on` is asked directly here because the CLI
-        reads the card's comments as plain strings, which carry no time — and
-        an unreadable time is stale, which is the case below."""
-        card = _dre_3604(lane=planning_escalation.ORIGIN)
-        where = planning_escalation.moved_on(
-            {"state": {"name": planning_escalation.ORIGIN}},
-            [{"body": b, "createdAt": ESCALATION_AT} for b in card.comments],
-            attempt_since=HAND_MOVE_AT,
+        has to be current. Driven through the REAL CLI call shape — no
+        `comments=` handed over, exactly as `planning_route._cmd_exit` and the
+        `escalate` subcommand call it — because that is the seam the narrowing
+        first broke: it read the comments through `comment_bodies`, whose
+        plain strings carry no time, so every verdict read as stale and a card
+        a fresh verdict had just stood down got parked anyway."""
+        card = _dre_3604(lane=planning_escalation.ORIGIN,
+                         commented_at=_moments_ago())
+        assert _escalate(card, DRE_3604, "--transport") == 0
+        assert card.states == [], "a card a current verdict covers was parked"
+        note = card.bodies()
+        assert planning_escalation.STOOD_DOWN_TAG in note
+        assert "WORKBENCH" in note
+        assert planning_escalation.ESCALATION_TAG not in note
+
+    def test_the_current_verdict_is_read_off_a_timestamped_thread(self):
+        """The fix is WHICH read the fallback branch makes, so pin it: the
+        comments come from `comment_timeline` (`{"body", "createdAt"}`), never
+        from `comment_bodies`. `moved_on` cannot tell a fresh verdict from a
+        spent one without the time, and `_stale` treats a time it cannot read
+        as stale — so reading the bodies is the bug, not a style choice. Both
+        are the same fifty-comment window off the same query, so this costs no
+        extra request."""
+        card = _dre_3604(lane=planning_escalation.ORIGIN,
+                         commented_at=_moments_ago())
+        _escalate(card, DRE_3604, "--transport")
+        assert card.comment_reads == ["timeline"], (
+            "the escalation read the untimed bodies; every verdict is stale to it"
         )
-        assert where is not None and "WORKBENCH" in where
 
     def test_a_verdict_from_a_spent_attempt_does_not_stop_the_park(self):
         """DRE-4124, and the card it is named for: on 2026-09-16 23:42 PT this

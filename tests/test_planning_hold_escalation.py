@@ -330,11 +330,22 @@ class TestAStaleVerdictIsNotMovement:
 
     def test_the_escalation_defaults_to_this_run_as_the_attempt(self):
         """A run escalating a card is making the current planning attempt, so
-        every verdict already on the card predates it."""
+        a verdict already on the card when the run started predates it — by a
+        second or by a month.
+
+        The comment's time is derived from `attempt_started_at()` rather than
+        from the wall clock. `attempt_started_at()` is fixed at IMPORT, so a
+        fixed "a moment ago" is older than the run only while the run is
+        young: a literal `_at(0.001)` read stale in a one-file run and fresh
+        in the ten-minute whole-suite run CI makes, which is a test that
+        passes on the clock rather than on the behaviour."""
         since = planning_escalation.attempt_started_at()
+        a_second_before_the_run = (
+            datetime.fromisoformat(since) - timedelta(seconds=1)
+        ).isoformat().replace("+00:00", "Z")
         assert planning_escalation.moved_on(
             _issue(planning_escalation.ORIGIN),
-            [{"body": _verdict_body(), "createdAt": _at(0.001)}],
+            [{"body": _verdict_body(), "createdAt": a_second_before_the_run}],
             attempt_since=since,
         ) is None
 

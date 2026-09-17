@@ -588,6 +588,12 @@ class _Lops:
     def comment_bodies(self, identifier):
         return []
 
+    def comment_timeline(self, identifier):
+        """The read `escalate()` actually makes when no caller hands it
+        comments (DRE-4124): the thread WITH each comment's `createdAt`, so a
+        verdict from this planning attempt can be told from a spent one."""
+        return []
+
     def count_comments(self, identifier, tag):
         return 0
 

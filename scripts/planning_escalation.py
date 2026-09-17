@@ -694,7 +694,16 @@ def escalate(linear_ops, identifier: str, reason: str | None,
 
     Otherwise the lane is read LIVE first (`fresh=True`, never the command's
     memo — the memo is the state the card was in when the run began, and that
-    is the read DRE-3604 was wrong by), and nothing is written until it has
+    is the read DRE-3604 was wrong by), and the comments come from
+    `comment_timeline` — WITH their `createdAt`, because since DRE-4124 a
+    verdict is only a stand-down while it is CURRENT and `_stale` reads a time
+    it cannot parse as stale. `comment_bodies` is the same one window with the
+    times thrown away, so reading it here made EVERY verdict stale and parked
+    cards a fresh verdict had just stood down — the two non-sweep callers
+    (`planning_route._cmd_exit`, `_cmd_escalate`) lost DRE-3604/DRE-3654's
+    five-second window entirely. Both read the same `_THREAD_QUERY`, so the
+    switch costs no extra request inside a pass; outside one it is the same
+    read `comment_bodies` would have made. Nothing is written until it has
     been. A card
     that has moved on — out of the segment, or already carrying a verdict —
     gets NO state write and one stand-down note, keyed on its own tag so a
@@ -715,7 +724,7 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     handed = comments is not None
     if issue is None:
         issue = linear_ops.get_issue(identifier, fresh=True)
-    bodies = list(comments) if handed else linear_ops.comment_bodies(identifier)
+    bodies = list(comments) if handed else linear_ops.comment_timeline(identifier)
     elsewhere = moved_on(
         issue, bodies, attempt_since=attempt_since or attempt_started_at())
 
