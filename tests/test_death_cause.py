@@ -208,6 +208,15 @@ def test_the_three_answer_strings_are_the_contract():
 )
 def test_one_real_record_for_each_of_the_four_answers(record, answer):
     assert death_cause.cause(record) == answer
+    if answer is None:
+        # A None answer proves nothing on its own — a `cause()` that always
+        # answered None would pass this case and fail the other three. So the
+        # case that expects None also asks the same record, one sentence
+        # different, for a positive answer.
+        assert (
+            death_cause.cause(dict(record, result="out of usage credits"))
+            == death_cause.CAPPED
+        )
 
 
 @pytest.mark.parametrize("record", [None, {}, [], "not a record", {"is_error": True}])
@@ -260,14 +269,10 @@ def test_the_transcript_is_never_read_through_the_real_loader(tmp_path):
     assert death_cause.cause(record) is None
 
 
-def test_every_field_the_module_reads_is_on_the_whitelist():
-    """Read off the SOURCE, not off behaviour: a field read by name anywhere
-    in the module is a field that can carry transcript or environment
-    content, and the whitelist is the one list that has been audited for
-    that (`execution_result._DIAGNOSTIC_FIELDS`)."""
-    tree = ast.parse((SCRIPTS / "death_cause.py").read_text(encoding="utf-8"))
+def _fields_named_in(source: str) -> set[str]:
+    """Every string key `source` reads by name — `x.get("k")` and `x["k"]`."""
     named = set()
-    for node in ast.walk(tree):
+    for node in ast.walk(ast.parse(source)):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -283,6 +288,22 @@ def test_every_field_the_module_reads_is_on_the_whitelist():
             and isinstance(node.slice.value, str)
         ):
             named.add(node.slice.value)
+    return named
+
+
+def test_the_source_walker_has_teeth():
+    """The guard below passes on an empty set, so prove the walker would see
+    the thing it is watching for before trusting its silence."""
+    assert _fields_named_in('record.get("env")') == {"env"}
+    assert _fields_named_in('text = record["messages"]') == {"messages"}
+
+
+def test_every_field_the_module_reads_is_on_the_whitelist():
+    """Read off the SOURCE, not off behaviour: a field read by name anywhere
+    in the module is a field that can carry transcript or environment
+    content, and the whitelist is the one list that has been audited for
+    that (`execution_result._DIAGNOSTIC_FIELDS`)."""
+    named = _fields_named_in((SCRIPTS / "death_cause.py").read_text(encoding="utf-8"))
     outside = named - set(execution_result._DIAGNOSTIC_FIELDS)
     assert not outside, f"death_cause reads fields off the whitelist: {sorted(outside)}"
 
