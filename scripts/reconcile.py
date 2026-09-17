@@ -2313,12 +2313,28 @@ EPIC_RECORD_GQL = """
                type issue { identifier state { name } }
              } }"""
 
+#: How many epics one PAGE of the record asks for. Twenty-five, not the 100
+#: every other paged read here uses, because this selection is far heavier per
+#: node: 250 children + 50 history entries + 20 relations apiece. Linear prices
+#: a request on the nodes it could return, so 100 × 320 is a query it can
+#: refuse outright — and a refused batch would fall back to the per-epic reads
+#: this cut exists to remove, permanently and quietly. The yardstick is the one
+#: heavy query this repo KNOWS Linear answers: `backlog_children`, at 100 cards
+#: × a 50-comment window, live since DRE-2929. 25 × 320 sits in that same
+#: order. A board with more active epics than this pages, exactly as the
+#: 260-card Backlog read pages, and still costs the pass a handful of requests
+#: rather than two per epic. It cannot be measured from CI — no test here
+#: reaches Linear — so it is set conservatively on purpose.
+EPIC_RECORD_PAGE = 25
+
 _EPIC_RECORDS_QUERY = """query($after: String, $numbers: [Float!]) {
-           issues(first: 100, after: $after, filter: {
+           issues(first: %d, after: $after, filter: {
              team: {key: {eq: "DRE"}},
              number: {in: $numbers}
            }) { nodes {%s
-           } pageInfo { hasNextPage endCursor } } }""" % EPIC_RECORD_GQL
+           } pageInfo { hasNextPage endCursor } } }""" % (
+    EPIC_RECORD_PAGE, EPIC_RECORD_GQL,
+)
 
 _EPIC_RECORD_QUERY = """query($id: String!) { issue(id: $id) {%s
          } }""" % EPIC_RECORD_GQL

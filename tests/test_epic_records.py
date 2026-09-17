@@ -169,6 +169,23 @@ def test_the_record_carries_exactly_the_contracted_fields():
         assert field in selection, selection
 
 
+def test_the_page_is_small_enough_for_a_selection_this_heavy():
+    """A page of this record is 250 children + 50 history entries + 20
+    relations PER EPIC, and Linear prices a request on what it could return. A
+    page of 100 is a request it can refuse outright — and a refused batch falls
+    back to the per-epic reads this cut removes, quietly and for good. Nothing
+    here can measure a live complexity limit, so the page is set below the one
+    heavy query this repo knows Linear answers and the number is asserted where
+    a future edit will see why."""
+    assert reconcile.EPIC_RECORD_PAGE <= 25
+    assert f"issues(first: {reconcile.EPIC_RECORD_PAGE}," in " ".join(
+        reconcile._EPIC_RECORDS_QUERY.split()
+    )
+    assert "$after" in reconcile._EPIC_RECORDS_QUERY, (
+        "a board with more active epics than one page must PAGE, not truncate"
+    )
+
+
 def test_the_second_ask_is_served_from_the_pass_and_the_reset_drops_it():
     """Cached for the pass — and only for the pass: a sweep that inherited the
     last one's epics would close an epic off a board an hour old."""
@@ -300,6 +317,37 @@ def test_a_batched_read_that_raises_falls_back_to_the_per_epic_reads(capsys):
     assert fake.per_epic == len(NINE)
     assert sorted(c.args[0] for c in state.call_args_list) == sorted(NINE)
     assert "The read operation timed out" in capsys.readouterr().err
+
+
+def test_the_sweep_completes_over_a_batch_that_raises():
+    """Not just the phase — the PASS. The event-driven epic-close sweep is the
+    shape two runs died in on 2026-09-06 (DRE-3148), so a batched read that
+    fails must leave it doing what it did before: closing the epics it can
+    read, and returning."""
+    fake = FakeLinear(
+        [_record(NINE[0], children=("Done", "Done"))],
+        batch_error=TimeoutError("The read operation timed out"),
+    )
+    with patch.multiple(
+        reconcile,
+        unstick_conflicts=lambda *a, **k: None,
+        retrigger_dead_heads=lambda *a, **k: None,
+        check_dependabot_capacity=lambda *a, **k: None,
+        fix_approved_but_red=lambda *a, **k: None,
+        active_cards=lambda *a, **k: [{
+            "identifier": NINE[0],
+            "title": f"[EPIC] {NINE[0]}",
+            "description": "**Repo:** agent-bureau\nepic",
+            "children": {"nodes": [{"id": "kid-1"}]},
+            "labels": {"nodes": [{"name": "agent:planner"}]},
+        }],
+    ), patch.object(linear_ops, "gql", side_effect=fake.gql), \
+            patch.object(linear_ops, "cmd_state") as state, \
+            patch.object(linear_ops, "cmd_comment"), \
+            patch.object(reconcile, "advance_unblocked_epics"):
+        reconcile.main(close_only=True)  # must not raise
+    state.assert_called_once_with(NINE[0], "Done")
+    assert fake.per_epic == 1
 
 
 def test_the_fallback_is_paid_once_per_pass():
