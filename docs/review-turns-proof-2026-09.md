@@ -67,9 +67,14 @@ DRE-3623 (12), DRE-3892 (11).
 `Agent Plan`, job `call / bureau-card: DRE-3623`, created `2026-09-13T18:33:31Z`
 (**2026-09-13 11:33:31 PT**), conclusion `success`.
 
-It is first by twenty-eight seconds; DRE-3622's round 1 ran in
-[34774971603](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34774971603)
-at **11:33:03 PT** and posted its receipt a minute later. Both are recorded here.
+**Two reviews were in flight within half a minute of each other, and which one
+is "first" depends on which end you read.** DRE-3622's round 1 run,
+[34774971603](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34774971603),
+*started* twenty-eight seconds earlier, at **11:33:03 PT**; DRE-3623's *finished*
+first, posting its receipt at 11:39:26 PT against DRE-3622's at 11:40:28 PT.
+DRE-3623 is written up here because it is the larger epic and the one that ran
+all the way to a PASS; both are recorded, and neither was chosen after the fact
+for its result.
 
 **The ceiling the run sized itself to**, from the `Second critic — turn ceiling`
 step at `2026-09-13T18:33:48Z` (11:33:48 PT), verbatim:
