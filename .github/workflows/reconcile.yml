@@ -27,33 +27,41 @@ on:
         description: WIP cap for the dependency gate's auto-promotion (empty = the caller's reconcile.yml stub)
         type: string
         required: false
+      # RETIRED BY DRE-4141, AND STILL DECLARED. The sweep no longer moves a
+      # card out of Intake for any reason, so none of these three reaches the
+      # script: THE PEN'S SWITCH LIVES ON `groomer.yml` NOW, where the one
+      # remaining exit is (the approved batch's drain), and the window and the
+      # cap bounded a move that no longer happens.
+      #
+      # They stay declared because a `workflow_call` input a caller passes and
+      # the reusable does not declare is a HARD ERROR — "Invalid input, X is
+      # not defined in the referenced workflow" — and every stub on this
+      # channel would fail its next sweep on the merge rather than on a change
+      # anybody made to it. Accepted and ignored is the compatible shape; the
+      # stubs drop the lines on their own schedule, and these go with the
+      # scaffold's next pass.
       intake_hold:
         description: >-
-          THE PEN'S SWITCH (DRE-3035). Set it — ideally to the date you set
-          it — and the age-out moves nothing; the sweep prints one line per
-          pass saying the pen is closed and how much is behind it. Clear it
-          and the age-out resumes. `groomer.yml` takes the same switch, so a
-          closed pen holds both things that move a card out of Intake. Set it
-          before a cutover run; clear it when the front door is proven.
+          RETIRED (DRE-4141) — accepted and ignored. The hold is read by
+          `groomer.yml`, which is where the one exit from Intake is; set
+          `vars.INTAKE_HOLD` and pass it THERE. Passing it here holds nothing,
+          because this sweep moves nothing out of Intake.
         type: string
         required: false
         default: ""
       intake_max_age_minutes:
         description: >-
-          How long a card may sit in Intake before the sweep escalates it to
-          Green Light. EMPTY means the lane contract's own window for Intake
-          (48h) — the number is declared in config/lane-contract.json and a
-          default restated here would be the copy that drifts. Widening it is
-          the deliberate operator act with an end date the cutover runbook
-          describes.
+          RETIRED (DRE-4141) — accepted and ignored. No card leaves Intake
+          because it is old, so there is no window to widen: the CEO's signed
+          answer of 2026-09-17 removed the age-out rather than retuning it.
+          The sweep reports the lane's depth instead; delete this line.
         type: string
         required: false
         default: ""
       intake_escalation_cap:
         description: >-
-          How many aged Intake cards ONE sweep may move. Empty means
-          `intake_controls.DEFAULT_CAP`. Every product repo's sweep reads the
-          same board, so the fleet-wide rate is a multiple of this.
+          RETIRED (DRE-4141) — accepted and ignored. It capped how many aged
+          cards ONE sweep could move, and no sweep moves any. Delete this line.
         type: string
         required: false
         default: ""
@@ -161,15 +169,12 @@ jobs:
           GH_DISPATCH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           MAX_WIP: ${{ inputs.max_wip }}
-          # The operator's three controls on Intake (DRE-3035), threaded from
-          # the caller's inputs and never assigned a literal here: a per-repo
-          # value baked into the shared channel is how one repo's cutover
-          # window becomes everyone's. Each is empty-safe in the script — an
-          # unset input interpolates to "" and a bare int("") would turn a
-          # window question into a red sweep across the fleet.
-          INTAKE_HOLD: ${{ inputs.intake_hold }}
-          INTAKE_MAX_AGE_MINUTES: ${{ inputs.intake_max_age_minutes }}
-          INTAKE_ESCALATION_CAP: ${{ inputs.intake_escalation_cap }}
+          # The operator's controls on Intake are NOT threaded here any more
+          # (DRE-4141). The sweep moves no card out of Intake, so it reads no
+          # hold, no window and no cap; `groomer.yml` threads the hold to the
+          # one thing that still moves a card out of the lane. The three inputs
+          # above stay declared for callers that still pass them, and a value
+          # that reaches no environment is the whole of what "ignored" means.
           # WHY this pass was asked for and WHICH card it is about (DRE-3640),
           # threaded from the caller's inputs and never a literal here — a
           # scope baked into the shared channel would narrow every repo's

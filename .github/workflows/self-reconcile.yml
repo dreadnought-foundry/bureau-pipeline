@@ -27,28 +27,19 @@ jobs:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@main
     with:
       pipeline_ref: main
-      # The pen's switch (DRE-3035), read from a repository VARIABLE since
-      # DRE-3285 rather than committed here. Unset renders EMPTY, which is
-      # open: the age-out runs and an Intake card past the lane contract's
-      # 48-hour window is moved to Green Light.
-      #
-      # To hold this repo's intake — before a cutover run, or any week the
-      # answer is "not this week" — set the variable to the DATE you set it,
-      # and every sweep prints one line saying the pen is closed and how much
-      # is behind it. Delete it to resume. The point of the variable is that
-      # both of those are one command rather than a pull request through the
-      # critic and the merge gate, on the one day somebody needs the pen shut
-      # within the hour.
+      # THE PEN'S SWITCH IS NOT PASSED HERE ANY MORE (DRE-4141). This sweep
+      # moves no card out of Intake — no card leaves that lane because it is
+      # old — so there is nothing here for a hold to hold. The switch lives on
+      # `self-groomer.yml`, which calls the drain, which is the one exit:
       #
       #   gh variable set INTAKE_HOLD \
       #     --repo dreadnought-foundry/bureau-pipeline --body 2026-09-08
       #   gh variable delete INTAKE_HOLD --repo dreadnought-foundry/bureau-pipeline
       #
-      # ONE variable, read by BOTH halves: self-groomer.yml takes the same
-      # expression, because the age-out and the drain are the two things that
-      # move a card out of Intake and a switch only one of them reads is a pen
-      # with a hole in it.
-      intake_hold: ${{ vars.INTAKE_HOLD }}
+      # ONE variable, ONE reader, and that is the point of the change: it used
+      # to take a hold on every repo to stop this sweep ageing the whole
+      # fleet's Intake, and on 2026-09-17 one of them being deleted for eight
+      # minutes put three cards in the CEO's queue.
       # The dispatch's scope (DRE-3640). The relay fires `reconcile` because
       # ONE card moved, and this stub is the adapter that carries that fact
       # through: `reason` is why, `identifier` is the card. On `schedule` and
@@ -61,8 +52,7 @@ jobs:
       # to the other is this stub's job.
       sweep_reason: ${{ github.event.client_payload.reason }}
       sweep_card: ${{ github.event.client_payload.identifier }}
-      # intake_max_age_minutes / intake_escalation_cap are left empty on
-      # purpose — empty means the lane contract's own window and the script's
-      # own cap, which are correct on their own. Widening the window is an
-      # operator act with an end date, made here rather than in a release.
+      # intake_max_age_minutes / intake_escalation_cap were never passed here
+      # and are retired inputs now (DRE-4141) — there is no window and no cap,
+      # because there is no move for either to bound.
     secrets: inherit

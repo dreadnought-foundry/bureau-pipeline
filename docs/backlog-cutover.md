@@ -112,66 +112,82 @@ is what a later "the board looks wrong" gets compared against.
 The groomer (`docs/groomer.md`) sequences Intake into batches the CEO approves,
 and the approved batch goes to Planning.
 
-And if nobody runs it: an Intake card that sits past the lane contract's stall
-window for `Intake` — 48 hours — is **moved** by the sweep to `Green Light`,
-carrying whatever reason is already stated on it
-(`reconcile.escalate_aged_intake`). Not reported: moved. About 480 consecutive
-green sweeps once printed, in plain English, the exact reason five cards were
-frozen, and nobody read one. A report is a record; a move is a gate.
+**And if nobody runs it, nothing moves.** That is the rule as of DRE-4141, on
+the CEO's signed console answer of 2026-09-17: *"A card is never moved out of
+Intake because it is old. No 48-hour age-out and no window of any length; it
+stays where it is."* The groomer's approved batch is the only exit.
 
-The escalation is capped at three cards per sweep so that a 220-card Intake
-cannot empty itself into the CEO's queue in one go. The cap holds the remainder
-— they stay in Intake, still the oldest, and the next sweep takes the next
-three. It may hold a card; it may not forget one.
+The sweep still LOOKS at the lane. Every full pass prints one line —
+`intake-depth: N cards waiting in Intake, oldest D days` — in its own run log,
+and that is the whole of what it does there. A report, never a move.
 
-Two cards never age out at all: one labelled `hand-built` (no classification is
-coming from the pipeline for work a person is doing by hand) and one carrying
-the **PARKED** routing verdict — the vocabulary's own "deliberately not
-dispatchable, never reported as stalled". A clock that moved a PARKED card into
-Green Light would un-park a decision somebody made on purpose, in the loudest
-place available.
+### What used to be here, and why it went
+
+DRE-2687 gave Intake a timer: a card past the lane contract's stall window for
+`Intake` — 48 hours — was **moved** by the sweep to `Green Light`, three per
+sweep, carrying whatever reason was already stated on it. The argument was that
+a report is a record and a move is a gate, and about 480 consecutive green
+sweeps had once printed the exact reason five cards were frozen with nobody
+reading one.
+
+As a gate it fired on the whole lane:
+
+* **2026-09-10** — it put about 130 cards into Green Light in one morning.
+  `INTAKE_HOLD` was set on every repo to stop it and stayed set.
+* **2026-09-16** — the CEO's signed answer on DRE-4078: the 48-hour age-out
+  *"is what put 130 cards in my queue on 2026-09-10, and it stays switched off
+  until a card fixes that separately."*
+* **2026-09-17 05:33 PT** — one repo's hold was deleted for eight minutes by a
+  session that believed it was a repo-local setting. It is not: an Intake card
+  carries no `repo:` label, so **any one repo's sweep ages Intake for the whole
+  fleet**. Three cards reached the CEO's queue, two of them belonging to a repo
+  whose own hold was still set, and 221 more were past the window behind them.
+
+A valve held shut by four hand-set variables, that floods the decision queue the
+moment one of them is touched, is not a valve. The fear it answered — a lane
+nothing drains — is answered instead by the groomer running on a schedule
+(DRE-3586) and by the depth line above.
+
+**Two retired inputs.** `intake_max_age_minutes` (the window) and
+`intake_escalation_cap` (how many one sweep could move) are still DECLARED on
+`reconcile.yml` and read by nothing: a `workflow_call` input a caller passes and
+the reusable does not declare is a hard error, so they are accepted and ignored
+until the stubs drop the lines. If your stub still passes either, delete it —
+there is no window to widen and no cap to raise, because there is no move.
+
+The **off-rail refusal** (DRE-3629) went with them. It fenced sandbox sweeps out
+of the age-out after they helped age 130+ cards on 2026-09-09/10, and a sweep
+that moves nothing needs no fence.
 
 ## Controlling the inflow — the pen the operator holds
 
-Four things control how fast work enters the pipeline after the cutover, and
+Three things control how fast work enters the pipeline after the cutover, and
 between them the inflow is exactly the batches the CEO approves, at the capacity
 he sets, and nothing else:
 
-1. **The groomer batch** — the valve. Nothing leaves Intake without the CEO
-   approving that exact batch (`docs/groomer.md`).
-2. **PARKED** — the per-card "stay still", described above.
-3. **The sweep's three inputs**, below. They are **`workflow_call` inputs on the
-   repo's `reconcile.yml` stub**, and `make check-channel-fleet` reads them
-   there. There is no env var to edit and no pipeline release to cut.
-   `intake_hold` is threaded from a **repository variable** (DRE-3285) rather
-   than committed into the stub — see below; the other two are stub data,
-   because widening the window is a considered change and a pull request is the
-   right price for it.
-4. **The off-rail refusal** — the fence behind the dial, and the only one of the
-   four nobody sets. A sandbox sweep moves no Intake card, whatever the three
-   inputs say. In the table below.
+1. **The groomer batch** — the valve, and since DRE-4141 the only exit from
+   Intake. Nothing leaves without the CEO approving that exact batch
+   (`docs/groomer.md`).
+2. **PARKED** — the per-card "stay still". A PARKED card is deliberately not
+   dispatchable and is never reported as stalled by any sweep.
+3. **`intake_hold`** — the switch, below. It is a `workflow_call` input on the
+   repo's **`groomer.yml`** stub, threaded from a **repository variable**
+   (DRE-3285) rather than committed into the file, and `make
+   check-channel-fleet` reads it there. There is no env var to edit and no
+   pipeline release to cut.
 
 | Control | What it does | Empty means |
 | -- | -- | -- |
-| `intake_hold` | **The switch.** Set it — ideally to the date you set it — and the age-out moves nothing and the groomer's `drain` refuses. Each prints one line per pass: *"Intake held by the operator since &lt;date&gt;; N cards waiting, M past the window"*. The pen is visibly closed, not silently stuck. | open |
-| `intake_max_age_minutes` | How long a card may sit in Intake before the sweep escalates it. | the lane contract's own 48-hour window |
-| `intake_escalation_cap` | How many aged cards **one sweep** may move. | three |
-| **the off-rail refusal** — not an input | **The fence behind the dial (DRE-3629).** A sweep running as a repo that is not on the routing rail — a sandbox such as `bureau-harness` — moves no Intake card at all, and prints one line per pass opening `off-rail:`, naming the repo and what it declined. It is read **before** the lane is, so a refused pass spends no request, and the refusal is a normal green pass: a red sandbox sweep reads to the harness as a dead sandbox and blocks `main`'s proving run. | nothing to set — the rail is `config/repo-map.json` |
+| `intake_hold` | **The switch.** Set it — ideally to the date you set it — and the groomer's `drain` refuses, printing one line per pass: *"Intake held by the operator since &lt;date&gt;; N cards waiting, …"*. The pen is visibly closed, not silently stuck. | open |
 
-The fourth is not an operator knob and has no empty state: the rail is the same
-bundled routing snapshot the relay routes on and the Todo gate validates
-against, so onboarding a repo gives its sweep the age-out and nothing else has
-to be turned on. `agent-bureau-demo` **is** on the rail — cards route to it — so
-the fence does not cover it, and the operator's dated `INTAKE_HOLD` on that stub
-is what holds it until one production sweep is made the age-out owner.
+**`intake_hold` belongs on the `groomer.yml` stub, and only there** (DRE-4141).
+It used to belong on `reconcile.yml` as well, because the age-out and the drain
+were the two things that moved a card out of Intake and a switch only one of
+them read was a pen with a hole in it. There is one of them now. It is never a
+dispatch input: a hold the person running the drain can waive is not a hold.
 
-`intake_hold` belongs on **both** stubs — `reconcile.yml` and `groomer.yml` —
-because the age-out and the drain are the two things that move a card out of
-Intake, and both read the same variable. It is never a dispatch input: a hold
-the person running the drain can waive is not a hold.
-
-**It comes from a repository variable, not from the file (DRE-3285).** Every
-stub passes `intake_hold: ${{ vars.INTAKE_HOLD }}`, so an unset variable renders
+**It comes from a repository variable, not from the file (DRE-3285).** The stub
+passes `intake_hold: ${{ vars.INTAKE_HOLD }}`, so an unset variable renders
 empty and the pen is open — the fleet's normal state. Closing and re-opening it
 is one command per repo:
 
@@ -186,23 +202,21 @@ pen shut within the hour, and per repo, as each queue drains at its own pace.
 `make check-channel-fleet` in agent-bureau lists which stubs pass the variable;
 one it reports as outstanding cannot be held without a PR.
 
-**Plan the cutover and the first groomer batch together.** Every card moved on
-cutover day gets 48 hours of grace and then starts trickling into Green Light —
-which is the pressure working as designed, and it is still pressure the CEO
-feels. **Set `INTAKE_HOLD` on every repo to the cutover date before the run, and clear
-it repo by repo as the groomer catches up with each queue**; if the drain will
-genuinely take longer than the window, widen `intake_max_age_minutes` for the
-cutover instead of letting the queue fill. Either is a deliberate operator act
-with an end date, not an edit to the rule.
+**Plan the cutover and the first groomer batch together.** Cards moved on
+cutover day sit in Intake until the groomer proposes them and the CEO approves
+the batch — no grace period, because there is no clock. The pressure is the
+DEPTH of the lane, which the sweep reports and the console shows, rather than a
+queue filling itself. **`INTAKE_HOLD` is still worth setting on cutover day** if
+the first batches should wait, and clearing it repo by repo as the groomer
+catches up with each queue.
 
 ```yaml
-# .github/workflows/reconcile.yml in the product repo — the pen, wired
+# .github/workflows/groomer.yml in the product repo — the pen, wired
 jobs:
   call:
-    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@stable
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/groomer.yml@stable
     with:
       pipeline_ref: stable
       intake_hold: ${{ vars.INTAKE_HOLD }} # unset = open; set it to hold
-      intake_max_age_minutes: "20160"      # 14 days, for the cutover window only
     secrets: inherit
 ```

@@ -138,10 +138,6 @@ import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_dead_run  # noqa: E402
-# DRE-3035: ONE reading of the operator's controls on Intake — the hold, the
-# window and the per-sweep cap. `groomer.py drain` is the other thing that
-# moves a card out of the lane and reads the same switch from the same place.
-import intake_controls  # noqa: E402
 # DRE-2726: ONE source for the lanes, their order and their stall windows —
 # config/lane-contract.json, the file the harness asserts the live board against
 # and docs/lane-contract.md is rendered from.
@@ -469,61 +465,56 @@ PLANNING_MINUTES = int(
     os.environ.get("PLANNING_MINUTES", STALE_MINUTES["Planning"])
 )
 
-# Intake's own lane and threshold (DRE-2687). Until this card, Intake was in NO
-# lane set any live sweep read: SWEEP_STATES is the work-segment lanes and
-# WATCHDOG_LANES is Todo / In Progress, so a card that entered Intake and was
-# never drained was examined by nothing, ever — the Backlog this wave exists to
-# empty, one lane earlier and with a new name.
+# Intake's own lane (DRE-2687), and what the sweep is allowed to do with it
+# (DRE-4141). Until DRE-2687, Intake was in NO lane set any live sweep read:
+# SWEEP_STATES is the work-segment lanes and WATCHDOG_LANES is Todo /
+# In Progress, so a card that entered Intake was examined by nothing, ever. The
+# lane is still read here, and that half stands — what went is the TIMER.
 #
-# THE THRESHOLD IS ONE NAMED CONSTANT, and its value is the contract's own
-# stall window for the lane (the PLANNING_MINUTES rule): the number a reader
-# finds in docs/lane-contract.md is the number that runs. 48 hours, because
-# what an Intake card owes is a classification and the thing that produces one
-# runs ON DEMAND (groomer D5, 2026-08-23) — a shorter window alarms on a queue
-# that is simply waiting for the next batch, and a longer one is a lane nothing
-# drains. Two days is the point at which nothing is coming.
+# NO CARD LEAVES INTAKE FOR BEING OLD. The CEO's signed console answer of
+# 2026-09-17 09:57 PT, point 1: no 48 hours, no window of any length. Cards
+# leave Intake when the groomer proposes a batch and he approves it in Green
+# Light, and that is the only exit — `groomer.py drain` performs it, in its own
+# workflow, against an approval thread. This sweep performs none.
 #
-# Past it the card MOVES to Green Light. Not a report: DRE-2670's ~480
-# consecutive green sweeps printed, in plain English, the exact reason five
-# cards were frozen, and nobody read one. A report is a record; a move is a
-# gate.
+# WHY THE TIMER WENT. DRE-2687 moved an Intake card past the contract's
+# `stale_minutes` into Green Light, three per sweep, on the argument that a
+# report is a record and a move is a gate. As a gate it fired on the whole
+# lane: about 130 cards reached the CEO's queue on the morning of 2026-09-10,
+# and from that day it was held shut by a hand-set `INTAKE_HOLD` on every repo.
+# On 2026-09-17 one repo's hold was deleted for eight minutes and three more
+# cards went through — two of them belonging to a repo whose own hold was still
+# set, because an Intake card carries no `repo:` label and ANY repo's sweep
+# ages the whole fleet's. 221 cards were past the window behind them. A valve
+# held shut by four hand-set variables, that floods the queue the moment one of
+# them is touched, is not a valve, and the fear it answered — a lane nothing
+# drains — is answered instead by the groomer running on a schedule (DRE-3586)
+# and by the count below being visible.
 #
-# The window, the cap and the hold are the operator's three controls on the
-# lane, and `intake_controls` is the ONE reading of them — `groomer.py drain`
-# is the other thing that moves a card out of Intake, and a switch two readers
-# interpret separately is a pen with a hole in it (DRE-3035). None of them uses
-# a bare `int()` any more: each arrives as a workflow_call input, and an unset
-# input interpolates to the EMPTY STRING, which `int("")` turns into a red
-# sweep. Unset, empty and unparseable all mean the default — `resolve_max_wip`'s
-# rule, applied to the knobs the cutover ADR promised the operator.
+# So the count IS the mechanism now, and `report_intake_depth` prints it once
+# per pass. A report that moves nothing needs no cap, no window and no fence:
+# the three knobs that guarded the move went with it, and `INTAKE_HOLD` is left
+# with one job — pausing the groomer's drain (`intake_controls`).
 INTAKE_LANE = ("Intake",)
-INTAKE_MAX_AGE_MINUTES = intake_controls.max_age_minutes()
-INTAKE_AGED_TAG = "intake-aged"
 
-# The pen's switch, read once at import like every other knob here. Set, the
-# age-out moves nothing and says so once per pass; cleared, it resumes. The
-# operator sets it before a cutover run and clears it when the front door is
-# proven — with 209 cards entering Intake at once, this is the difference
-# between a trickle the CEO can read and ~70 cards an hour across the fleet.
-INTAKE_HOLD = intake_controls.hold()
+# Opens the one line the Intake phase prints, so a run log is greppable for it
+# and the tests can count lines rather than match prose — the shape
+# `intake_controls.TAG` already follows for the hold.
+#
+# A PREFIX, not an act tag, and the name says which. The act registry
+# (config/pipeline-acts.json) is the vocabulary of RECEIPTS: something the
+# pipeline did, announced on the card or the pull request, leaving the work in
+# a state and handing it to an actor. This line is a record in a run log. It
+# posts nothing, holds nothing and hands the work to nobody, so a row in the
+# registry would have to invent a `state` and a `next_actor` it does not have.
+INTAKE_DEPTH_PREFIX = "intake-depth"
 
-# How many aged cards one sweep may move. The cutover (backlog_cutover.py) puts
-# the whole legacy Backlog into Intake at once, so every one of those cards
-# crosses the threshold within minutes of each other: uncapped, the first sweep
-# after the window would empty ~220 cards into the CEO's queue, which is a lane
-# nobody can read — the failure this mechanism exists to prevent, achieved from
-# the other side. The cap HOLDS the remainder; it never forgets one. They stay
-# in Intake, still the oldest, and the next sweep takes the next three.
-INTAKE_ESCALATION_CAP = intake_controls.escalation_cap()
-
-# What the escalation says when the card carries no stated reason at all.
-# Console-honesty rule 2: absent data is rendered as absent, never as an
-# invented one — "nothing has ever been said about this card" is itself the
-# finding, and a different fact from "the critic could not classify it".
-NO_STATED_REASON = (
-    "No reason has ever been stated on this card — nothing has classified it, "
-    "and nothing has said why not. That is the finding."
-)
+# THE HOLD IS NOT READ HERE ANY MORE (DRE-4141). `INTAKE_HOLD` closed the pen
+# against BOTH things that moved a card out of Intake — this sweep's age-out
+# and the groomer's drain — and one of those two is gone, so the switch has one
+# reader left: `groomer.INTAKE_HOLD`, over in the workflow that performs the
+# one remaining exit. A constant here that nothing consulted would be a dial
+# wired to nothing, in the module whose dial it used to be.
 
 # Hand-built work is not stranded work (DRE-2524). On 2026-08-17 five portico
 # cards (DRE-2499/2500/2501/2505/2507) each collected a 🚨 notice plus the hold
@@ -585,10 +576,12 @@ def hand_built(card: dict) -> bool:
     pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
     are all the normal state, not evidence of a stall. Read by the callers that
     answer "should the pipeline start or restart an agent on this card":
-    flag_stranded and flag_stalled_planning (the alarms), _intake_candidates,
-    main()'s nudge loop on a card with no PR (the dispatch those alarms were
-    reporting on) — plus `_flag_hand_built_idle`, which is the other direction
-    and fires only on this label. Never read by a PR-keyed repair path, or this
+    flag_stranded and flag_stalled_planning (the alarms) and main()'s nudge
+    loop on a card with no PR (the dispatch those alarms were reporting on) —
+    plus `_flag_hand_built_idle`, which is the other direction and fires only
+    on this label. The Intake walk used to read it too, and does not any more:
+    its exemption was about what the age-out might MOVE, and DRE-4141 left it
+    with nothing to move and a whole-lane count to take. Never read by a PR-keyed repair path, or this
     would silently become a second, wider hold.
 
     `counts_against_wip` reads it too (DRE-3385), and that one is neither a
@@ -1144,7 +1137,7 @@ SWEEP_STATES = tuple(
 # Planning's and now Intake's — and no single place answered "is this lane
 # looked at by anything?". That question has a live cost: Intake was in none of
 # them, so a card that entered it was examined by no mechanism, ever. This is
-# the union, and tests/test_intake_escalation.py asserts it against the states
+# the union, and tests/test_intake_no_age_out.py asserts it against the states
 # the sweep really queries rather than against this tuple alone.
 SWEPT_LANES = tuple(
     dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES + PLANNING_LANE + INTAKE_LANE)
@@ -1915,188 +1908,84 @@ PARKED_STATES = (PARKED_STATE, ESCALATED_STATE)
 _BRANCH_CARD = re.compile(r"DRE-\d+", re.IGNORECASE)
 
 
-# The markers that carry a STATED REASON about a card, newest wins. Both are
-# read from the module that writes them — a copied string here would be a
-# second definition of somebody else's marker, and the escalation would quietly
-# stop finding reasons the day either one changed.
-_STATED_REASON_MARKERS = (
-    f"🚨 {critic_score.ESCALATE_TAG}:",       # the critic could not classify it
-    f"{routing_verdict.VERDICT_MARK} {routing_verdict.VERDICT_TAG}:",
-)
+# --- Intake's depth, reported (DRE-4141) -----------------------------------
+#
+# What stood here was the age-out: `intake_stated_reason`, the overdue
+# receipt, the candidate walk with its window and its per-sweep cap, and the
+# `cmd_advance` that put an old card in the CEO's queue. All of it is gone,
+# and none of it is replaced — the exit it claimed to be was never the exit,
+# and the groomer's approved batch is (`groomer.py drain`).
+#
+# WHAT IS LEFT IS A COUNT. The fear the timer answered — "Intake becomes the
+# new Backlog, a lane nothing drains" — is answered by the groomer running on
+# a schedule (DRE-3586) and by the size of the lane being visible in every
+# sweep's own log. One line, every full pass, naming how many cards are in
+# Intake and how old the oldest of them is. A report, never a move.
+#
+# It reads the WHOLE lane, with no exemption. The old walk skipped
+# `hand-built` and PARKED cards because those were cards it must not MOVE; a
+# count that skipped them would answer a different question from the one a
+# reader is asking, which is how big the lane is.
+#
+# Costs the sweep NOTHING: `active_cards` serves Intake out of the one board
+# read the pass already made (DRE-2929), and no card's comments are read at
+# all now that there is no reason to carry anywhere.
 
 
-def intake_stated_reason(bodies) -> str | None:
-    """The most recent reason stated on the card, or None.
+def intake_depth_line(waiting: int, oldest_minutes: float | None) -> str:
+    """The one line the Intake phase prints per pass.
 
-    An escalation with no reason on it is a card nobody can act on, and the
-    reason almost always already exists — the critic's unclassified alert, or
-    the routing verdict. This finds the newest one and hands it on verbatim.
-    Anchored at the START of a body, like every other marker read in this
-    pipeline: a notice that QUOTES a tag is not that tag.
+    Absent data renders as absent (console-honesty rule 2): an empty lane has
+    no oldest card, and `0.0 days` would be an age nobody measured. "The query
+    returned nothing" and "the thing is in state X" get visibly different
+    renderings.
     """
-    for body in reversed(list(bodies or ())):
-        text = (body or "").lstrip()
-        if text.startswith(_STATED_REASON_MARKERS):
-            return text.strip()
-    return None
-
-
-def intake_escalation_note(identifier: str, minutes: float, reason: str | None) -> str:
-    """What the card carries into the CEO's queue."""
-    days = minutes / 1440
+    if not waiting or oldest_minutes is None:
+        return (
+            f"{INTAKE_DEPTH_PREFIX}: 0 cards waiting in Intake, so there is no "
+            "oldest — nothing leaves this lane on age; the groomer's approved "
+            "batch is the way out"
+        )
     return (
-        f"🚨 {INTAKE_AGED_TAG}: {identifier} has sat in Intake for "
-        f"{days:.1f} days — past the {INTAKE_MAX_AGE_MINUTES // 60}-hour window "
-        f"the lane contract gives it — with nothing happening to it. Moved to "
-        f"**{ESCALATED_STATE}**, the queue you already open.\n\n"
-        "**Why you are seeing it:** Intake's exit is a classification, and no "
-        "classification arrived. This is a move rather than a report on "
-        "purpose — about 480 consecutive green sweeps once printed, in plain "
-        "English, the exact reason five cards were frozen, and nobody read "
-        "one. A report is a record; a move is a gate.\n\n"
-        f"**What is already on the card:**\n\n{reason or NO_STATED_REASON}\n\n"
-        "**What happens next:** move it back to Intake once it is worth "
-        "classifying and the groomer will sequence it, or answer it here."
+        f"{INTAKE_DEPTH_PREFIX}: {waiting} card{'' if waiting == 1 else 's'} "
+        f"waiting in Intake, oldest {oldest_minutes / 1440:.1f} days — nothing "
+        "leaves this lane on age; the groomer's approved batch is the way out"
     )
 
 
-def _intake_candidates() -> tuple[list[dict], list[tuple[float, dict]]]:
-    """`(waiting, aged)` — the Intake cards this gate speaks for, and those
-    past the window, oldest first.
+def report_intake_depth() -> None:
+    """Say how deep Intake is. Move nothing (DRE-4141).
 
-    Split out so a HELD sweep can report the size of the pen without
-    duplicating the walk, and so the two exemptions live in one place. Costs
-    zero Linear requests: the lane read is shared and `card_comment_bodies`
-    reads the bodies `active_cards` already selected inline (DRE-2929).
+    THE RULE IS THE CEO'S SIGNED CONSOLE ANSWER of 2026-09-17 09:57 PT, point
+    1: no card leaves Intake because it is old. No 48 hours, no timer. Cards
+    leave Intake when the groomer proposes them and he approves the batch in
+    Green Light, and `groomer.py drain` is the one writer that performs it.
+
+    This phase is what DRE-2687's age-out became. That gate moved any Intake
+    card past the lane contract's `stale_minutes` into Green Light, oldest
+    first, three per sweep, on the argument that a report is a record and a
+    move is a gate. The argument was sound and the gate was still wrong: it
+    put about 130 cards into the CEO's queue on the morning of 2026-09-10 and
+    spent every day after that switched off by hand, because an Intake card
+    carries no `repo:` label and so ANY repo's sweep aged the whole fleet's
+    lane — including, on 2026-09-17, cards whose own repo's hold was set.
+
+    Nothing here writes to Linear and nothing here reads a knob. There is no
+    window, no cap, no per-repo fence and no hold to honour: those existed to
+    bound a move, and there is no move. `INTAKE_HOLD` keeps one job, on the
+    other side of the pen, where it pauses the drain.
+
+    Raises whatever the lane read raises — `main` records an unreadable Intake
+    as a READ failure, never as an empty one (DRE-2034).
     """
-    waiting, aged = [], []
-    for card in active_cards(INTAKE_LANE):
-        if card["state"]["name"] != "Intake":
-            continue  # this rule speaks for one lane only
-        if hand_built(card):
-            print(
-                f"intake: {card['identifier']} is labeled '{HAND_BUILT_LABEL}' — "
-                "the pipeline is not classifying this card, so time spent in "
-                "Intake is not a strand"
-            )
-            continue
-        if routing_verdict.is_parked(card_comment_bodies(card)):
-            # DRE-2724, the same rule both watchdogs already apply: PARKED is
-            # the vocabulary's own "deliberately not dispatchable, never
-            # reported as stalled". A clock that moves one into Green Light
-            # un-parks a decision somebody made on purpose, and does it in the
-            # queue the CEO reads — the loudest possible place to override
-            # someone (DRE-3035).
-            print(
-                f"intake: {card['identifier']} is routed PARKED — deliberately "
-                "not built, so time spent in Intake is not a strand"
-            )
-            continue
-        waiting.append(card)
-        age = age_minutes(card["updatedAt"])
-        if age >= INTAKE_MAX_AGE_MINUTES:
-            aged.append((age, card))
-    aged.sort(key=lambda pair: pair[0], reverse=True)  # oldest first
-    return waiting, aged
-
-
-def escalate_aged_intake() -> set[str]:
-    """Move Intake cards past INTAKE_MAX_AGE_MINUTES into Green Light (DRE-2687).
-
-    The lane the whole wave is built around had no timer on it at all: nothing
-    swept Intake, so "Intake must not become the new Backlog" was a hope. This
-    is the gate that makes it a rule, and it MOVES the card — into the CEO's
-    existing "needs you" queue, carrying whatever reason is already stated on
-    it — because the wave exists on the evidence that recording is not
-    enforcing.
-
-    Idempotent BY CONSTRUCTION, which is the second reason a move beats a
-    report: an escalated card is no longer in Intake, so no marker, tag or
-    comment count is needed to stop it escalating twice. `cmd_advance` is
-    guarded on the from-lane, so a card a human moved mid-sweep is left alone.
-
-    Oldest first, capped per sweep (INTAKE_ESCALATION_CAP). The cap holds the
-    remainder in Intake — still the oldest, so the next sweep takes them. It
-    may hold a card; it may not forget one.
-
-    A sweep that is not on the routing rail at all is refused at the door
-    instead — `intake_controls.may_escalate`, before the walk, printing one
-    `off-rail` line and moving nothing (DRE-3629).
-
-    NO REPO FILTER, deliberately, and it has two consequences worth stating.
-    An Intake card has no `repo:` label yet — assigning one is what Planning
-    does — so filtering by repo would make this fire on nothing at all.
-    (flag_stalled_planning used to say the same and be unfiltered; since
-    DRE-2929 it filters on the OTHER answer — a card whose slug IS on the rail
-    and is not this repo's belongs to that repo's sweep — which leaves the
-    unlabelled front path untouched. The same filter would be correct here and
-    is deliberately not added: Intake's cards are unlabelled by definition, so
-    it would be a filter that never fires, and this gate is capped per sweep
-    rather than paying per card.) But every
-    product repo's sweep reads the same board, so the effective rate across the
-    fleet is a multiple of the per-sweep cap, and two sweeps landing together
-    can both post the note before either move lands. The move itself never
-    doubles — cmd_advance is guarded on the from-lane — so the cost of the race
-    is a duplicated comment on a card that has just left the lane. Suppressing
-    the second one permanently would be worse: a card a human returns to Intake
-    must be able to age out again.
-
-    Hand-built cards are skipped on DRE-2524's rule: no classification is
-    coming from the pipeline for work a person is doing by hand, so time spent
-    in Intake is not a strand. PARKED cards are skipped on DRE-2724's, and
-    `INTAKE_HOLD` stops the whole gate — both below.
-
-    Returns the identifiers escalated this sweep.
-    """
-    if not intake_controls.may_escalate(REPO_SLUG, validate_card.VALID_SLUGS):
-        print(intake_controls.off_rail_notice(REPO_SLUG, "the Intake age-out"))
-        return set()
-    escalated: set[str] = set()
-    waiting, aged = _intake_candidates()
-
-    # The operator's switch (DRE-3035). Read AFTER the walk, which costs
-    # nothing — the lane read is shared — so the held pass can say how much is
-    # behind the pen rather than only that it is closed. One line per pass: a
-    # hold that moved nothing and said nothing is indistinguishable from the
-    # stall it exists to prevent.
-    if INTAKE_HOLD is not None:
-        print(intake_controls.notice(
-            INTAKE_HOLD, len(waiting), f"{len(aged)} past the window"))
-        return escalated
-
-    for age, card in aged[:INTAKE_ESCALATION_CAP]:
-        ident = card["identifier"]
-        try:
-            reason = intake_stated_reason(linear_ops.comment_bodies(ident))
-        except linear_ops.LinearError as e:
-            # An unreadable card is not a card with no reason (DRE-2034): say
-            # so on the escalation rather than claiming nothing was ever said.
-            print(f"ERROR: intake: could not read {ident}'s comments: {e}", file=sys.stderr)
-            reason = None
-        try:
-            # The reason is posted BEFORE the move (critic_score.escalate's
-            # rule): a move that then fails still leaves the reason on the card.
-            linear_ops.cmd_comment(ident, pipeline_act.receipt(
-                "intake-overdue", intake_escalation_note(ident, age, reason)))
-            linear_ops.cmd_advance(ident, ESCALATED_STATE, "Intake")
-        except linear_ops.LinearError as e:
-            # A move that did not happen NEVER reads as done: recorded as a
-            # write failure, which exits the sweep red for medic.
-            _write_failures.append(f"{ident} intake escalation: {e}")
-            print(
-                f"ERROR: failed to escalate {ident} out of Intake: {e}",
-                file=sys.stderr,
-            )
-            continue
-        escalated.add(ident)
-        print(f"intake: {ident} aged out ({age / 1440:.1f}d) — moved to {ESCALATED_STATE}")
-    held_back = len(aged) - len(aged[:INTAKE_ESCALATION_CAP])
-    if held_back:
-        print(
-            f"intake: {held_back} more card(s) past the window, held for the "
-            f"next sweep (cap {INTAKE_ESCALATION_CAP}/sweep)"
-        )
-    return escalated
+    waiting = [
+        card for card in active_cards(INTAKE_LANE)
+        if card["state"]["name"] == "Intake"
+    ]
+    oldest = max(
+        (age_minutes(card["updatedAt"]) for card in waiting), default=None
+    )
+    print(intake_depth_line(len(waiting), oldest))
 
 
 # --- branch ownership: ONE definition, three named questions (DRE-2426) ------
@@ -7291,9 +7180,9 @@ def merged_card_scope() -> MergeScope | None:
 # `linear_ops`' own `linear-budget:` line says what the whole PROCESS spent and
 # nothing about where it went. Measured read-only on 2026-09-12 against this
 # repo's board, one full pass cost 65 Linear reads: 18 in `promote_ready`, 18
-# in `report_epic_growth`, 15 in `escalate_aged_intake`, 9 in
-# `close_finished_epics`, 4 for the board itself and 1 for the break-glass
-# count. Not one of those numbers was readable from the run log, so a cut could
+# in `report_epic_growth`, 15 in the Intake age-out DRE-4141 has since
+# deleted, 9 in `close_finished_epics`, 4 for the board itself and 1 for the
+# break-glass count. Not one of those numbers was readable from the run log, so a cut could
 # not show its effect live and a regression could not be placed against a
 # single total.
 #
@@ -7311,7 +7200,7 @@ class SweepSpend:
     `$(...)` — the sweep's own stdout is a run log nobody parses.
 
     The phase name is the function's name as it appears in this file
-    (`promote_ready`, `escalate_aged_intake`, …), plus `board_read` and
+    (`promote_ready`, `report_intake_depth`, …), plus `board_read` and
     `nudge_loop` for the two phases that are not a single call. A phase is
     charged where the request is actually sent, which matters for the board
     snapshot: it is read once per pass and shared (DRE-2929), so whichever
@@ -7534,23 +7423,24 @@ def main(
         # predate the hold label the watchdog just added).
         with _phase("flag_stranded"):
             flagged = flag_stranded()
-        # The Intake gate (DRE-2687). Full sweeps only: the event hooks run
-        # the dependency gate alone, and moving cards on every merge is not a
-        # code path anybody asked for one on. Its own try, like the backstops
-        # above — an Intake read that fails must not cost the sweep the rest
-        # of its work.
+        # Intake's depth (DRE-2687, emptied of its move by DRE-4141). Full
+        # sweeps only, exactly as the age-out that stood here was: the event
+        # hooks run the dependency gate alone and nothing else. Its own try,
+        # like the backstops above — an Intake read that fails must not cost
+        # the sweep the rest of its work.
         try:
-            with _phase("escalate_aged_intake"):
-                escalate_aged_intake()
+            with _phase("report_intake_depth"):
+                report_intake_depth()
         except ReconcileWriteError as e:
             _write_failures.append(str(e))
-            print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
+            print(f"ERROR: report_intake_depth: {e}", file=sys.stderr)
         except linear_ops.LinearError as e:
             # An unreadable Intake is not an empty Intake (DRE-2034): recorded
             # as a read failure — the sweep finishes its other work and still
-            # exits red, so medic sees it and the next sweep retries.
+            # exits red, so medic sees it and the next sweep retries. A count
+            # nobody could take must never render as a lane with nothing in it.
             _read_failures.append(f"intake: {e}")
-            print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
+            print(f"ERROR: report_intake_depth: {e}", file=sys.stderr)
         # The pen the OLD Planning rule filled (DRE-4124), emptied one card at
         # a time. Immediately after the watchdog that stopped filling it, and
         # on the same board read: the cards it repairs are exactly the ones
