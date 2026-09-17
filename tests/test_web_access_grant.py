@@ -191,9 +191,15 @@ class TestEveryWorkflowGrantsTheWebTools:
         import harness.agent_run as ar  # noqa: PLC0415 — heavy package import
 
         shipped = _TOOLS_RE.findall((WORKFLOWS / "agent-task.yml").read_text())
-        assert len(shipped) == 1, (
-            f"agent-task.yml now has {len(shipped)} tool grants; the harness "
-            f"mirror below can no longer name one of them"
+        assert shipped, "agent-task.yml declares no --allowedTools at all"
+        # More than one since DRE-4108: the agent step carries two retries for
+        # a GitHub rate-limit refusal that arrives before the model starts.
+        # They must all grant the same surface, or "the harness mirrors the
+        # workflow" has no single answer to mirror.
+        assert len(set(shipped)) == 1, (
+            f"agent-task.yml's {len(shipped)} agent steps grant different tool "
+            f"surfaces ({sorted(set(shipped))}); the harness mirror below "
+            f"cannot name one of them"
         )
         assert {t.strip() for t in ar.ALLOWED_TOOLS.split(",")} == \
             {t.strip() for t in shipped[0].split(",")}, (

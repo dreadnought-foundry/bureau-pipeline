@@ -496,6 +496,23 @@ class WorkflowWiring(unittest.TestCase):
         self.assertEqual(ids, list(ATTEMPT_IDS))
         self.assertEqual(len(ATTEMPT_IDS), crl.MAX_ATTEMPTS)
 
+    def test_the_workflow_and_the_classifier_agree_on_the_bound(self):
+        """Three steps in the YAML and a `--max-attempts` that said something
+        else would either waste a decision or promise a fourth attempt that
+        does not exist."""
+        for decision_id in DECISION_IDS:
+            with self.subTest(step=decision_id):
+                self.assertIn(
+                    f"--max-attempts {crl.MAX_ATTEMPTS}",
+                    _step(decision_id)["run"],
+                )
+
+    def test_the_terminal_gate_stays_off_a_bounced_or_duplicate_card(self):
+        condition = _step("agent_step_failed")["if"]
+        self.assertIn("steps.gate.outputs.bounced != 'true'", condition)
+        self.assertIn("steps.dedupe.outputs.skip != 'true'", condition)
+        self.assertIn("steps.claude_result.outputs.outcome == 'failure'", condition)
+
     def test_the_vendor_pin_is_unchanged_at_every_attempt(self):
         """The card's criterion in one assertion: the retry is ours, the
         action is theirs, and its commit does not move."""

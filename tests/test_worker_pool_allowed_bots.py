@@ -138,7 +138,12 @@ class PoolCoversEveryWorkerAllowlistTest(unittest.TestCase):
         expected = {
             "qa-review.yml": 2,
             "verify.yml": 2,
-            "agent-task.yml": 1,
+            # Three since DRE-4108: the agent step and its two retries
+            # for a pre-model GitHub rate-limit refusal. Every one of
+            # them is checked for the whole pool below, which is the
+            # point — a retry admitting a narrower set than the attempt
+            # it repeats would crash on the actor the first one allowed.
+            "agent-task.yml": 3,
             "plan.yml": 12,
         }
         for filename, count in expected.items():
