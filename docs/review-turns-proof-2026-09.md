@@ -191,10 +191,14 @@ card anticipates this — "expected: zero or one" — so the branch DRE-3499 cha
 was not exercised by a turn-cap death, and this record says that plainly rather
 than dressing something else up as one.
 
-**What was read by hand instead.** The medic runs that woke for the red plan runs
-on the day of the observed review, 2026-09-13, and the branch each one's
-`Is this a limit death?` step took — eight medic runs, read one at a time out of
-their own logs:
+**What was read by hand instead.** Twelve medic runs, read one at a time out of
+their own logs, and the branch each one's `Is this a limit death?` step took.
+This is a **superset** of what the criterion asks for, on purpose: it covers
+every red plan run in the window — 34707066435 (§3b), 34722278266, 34785966041,
+34789667828, 34865785548 — and sweeps up the medics that woke beside them for a
+fix, a sync or a test run on the same afternoons, so a `kind=claude` stamp could
+not hide in the traffic next door. The first eight are 2026-09-13, the day of the
+observed review:
 
 | medic run | watched plan run | card | `class=` | branch taken |
 | -- | -- | -- | -- | -- |
@@ -206,15 +210,35 @@ their own logs:
 | [34789684132](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34789684132) | 34789663752 | — | `linear_ratelimited` | `not a limit death (decision: requeue) — ordinary medic handling` |
 | [34789722560](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34789722560) | 34786751507 | — | `linear_ratelimited` | `🪦 limit-death: kind=linear stage=fix reset=unknown run=34786751507` |
 | [34790919330](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34790919330) | 34790899146 | — | `linear_ratelimited` | `not a limit death (decision: requeue) — ordinary medic handling` |
+| [34722589853](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34722589853) | 34722278266 | DRE-3694 | `normal` | `not a limit death (decision: requeue) — ordinary medic handling` |
+| [34722659876](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34722659876) | 34722278266 | DRE-3694 | `normal` | `not a limit death (decision: requeue) — ordinary medic handling` |
+| [34865827451](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34865827451) | 34865785548 | DRE-3893 | `linear_ratelimited` | `🪦 limit-death: kind=linear stage=classify reset=unknown run=34865785548` |
+| [34866096570](https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/34866096570) | 34865854325 | DRE-3638 | `linear_ratelimited` | `🪦 limit-death: kind=linear stage=sync reset=unknown run=34865854325` |
 
-**Not one `kind=claude` marker among them.** Three limit deaths were stamped and
-all three say **`kind=linear`** — the workspace's 2,500-requests-an-hour wall,
+(Four more medics woke in the 2026-09-14 burst — 34865846462, 34865860540,
+34866009114, 34866224267, watching a build, two sweeps and a sync. All four were
+read too; two stamped `kind=linear` and two took the not-a-limit branch. None is
+a plan run, so they are named here rather than tabled.)
+
+One red plan run is unaccounted for and says so: **34790847117** (DRE-3711,
+2026-09-13 16:50 PT, died at `Proof and demo cards`). No medic run that *ran*
+watched it — the only non-skipped medic in that span, 34790919330, watched a
+different run — so there is no `Is this a limit death?` output to read for it, and
+it therefore stamped nothing.
+
+**Not one `kind=claude` marker among the sixteen.** Six limit deaths were stamped
+and all six say **`kind=linear`** — the workspace's 2,500-requests-an-hour wall,
 which is a real wall and the correct reading; it is also the same exhaustion that
-made DRE-3623's rounds 3 and 4 fall back to the 100-turn ceiling in §2. Five runs
-took the not-a-limit branch and printed that sentence verbatim.
+made DRE-3623's rounds 3 and 4 fall back to the 100-turn ceiling in §2. The other
+ten took the not-a-limit branch and printed that sentence verbatim.
 
-No `🪦 limit-death: kind=claude` marker appears on **any** of the six epics whose
-threads were read for this record, over the whole window.
+**One `kind=claude` marker exists across the six epics' threads, and it is not in
+the review's window.** Grepping all six threads for `limit-death: kind=` returns
+exactly one `kind=claude`, on **DRE-3621, 2026-09-12** — the day before the
+observed review, and not from a turn-cap death. It is written up in full in §3b,
+because a proof that quietly declined to mention it would be worth nothing. From
+2026-09-13 onward — the day of the observed review and every day since in this
+record — there is none.
 
 ### 3b. The one `kind=claude` stamp in the neighbourhood, and why it is not this epic's
 
