@@ -76,6 +76,7 @@ def _clean_failure_state(monkeypatch):
     before AND after, so a leftover failure cannot turn another sweep red."""
     monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/bureau-pipeline")
     monkeypatch.setattr(reconcile, "REPO_SLUG", "bureau-pipeline")
+    monkeypatch.setattr(reconcile, "_gh_read_retries_spent", 0, raising=False)
     reconcile._write_failures.clear()
     reconcile._read_failures.clear()
     yield
@@ -296,6 +297,59 @@ def test_card_branches_still_records_a_write_failure_when_it_persists():
 
     assert len(reconcile._write_failures) == 1
     assert "branch listing failed" in reconcile._write_failures[0]
+
+
+# --------------------------------------------------------------------------
+# The retry is bounded PER SWEEP too (premortem Q3/Q5, DRE-1921)
+# --------------------------------------------------------------------------
+def test_the_sweep_stops_retrying_once_its_retry_budget_is_spent(capsys):
+    """Every retry at a vendor boundary is bounded (standards/vendor-boundaries
+    Q5, the DRE-1921 quota-burn class). Per-read it is three attempts; per
+    SWEEP there is a budget too, because `pr_for` runs once PER CARD and a
+    genuinely empty bucket refuses all of them. Unbounded, a dozen refused
+    reads would spend a dozen minutes of waiting and the 10-minute job timeout
+    would KILL the sweep — turning a loud, fast, correctly-filed failure into a
+    hung run that never prints its ledger. Past the budget, gh_read behaves
+    exactly as it did before this card: raise on the first refusal."""
+    fake_run, calls = _run_stub([(1, "", RATE_LIMITED)])
+    sleep, waits = _sleep_stub()
+
+    with mock.patch.object(reconcile.subprocess, "run", side_effect=fake_run), \
+            mock.patch.object(reconcile.time, "sleep", side_effect=sleep):
+        # Spend the budget on reads that are refused all the way down.
+        while len(waits) < reconcile.GH_READ_RETRY_BUDGET:
+            with pytest.raises(reconcile.ReconcileReadError):
+                reconcile.gh_read("api", "repos/o/r/branches")
+        spent_calls = len(calls)
+        with pytest.raises(reconcile.ReconcileReadError):
+            reconcile.gh_read("api", "repos/o/r/branches")
+
+    assert len(waits) == reconcile.GH_READ_RETRY_BUDGET, (
+        "the sweep never waits more than its whole-sweep budget"
+    )
+    assert len(calls) == spent_calls + 1, (
+        "past the budget a refused read costs ONE request, as it did before"
+    )
+    assert sum(waits) <= 180, "the worst case stays minutes, not the job timeout"
+    out = capsys.readouterr()
+    assert "retry budget" in (out.out + out.err), (
+        "and the run log says why the retrying stopped"
+    )
+
+
+def test_the_retry_budget_is_not_spent_by_reads_that_answer():
+    """A blip that clears costs one retry; a sweep of clean reads costs none,
+    so the budget is there for the sweep that needs it."""
+    fake_run, _calls = _run_stub([(0, "the listing", "")])
+    sleep, waits = _sleep_stub()
+
+    with mock.patch.object(reconcile.subprocess, "run", side_effect=fake_run), \
+            mock.patch.object(reconcile.time, "sleep", side_effect=sleep):
+        for _ in range(20):
+            reconcile.gh_read("api", "repos/o/r/branches")
+
+    assert waits == []
+    assert reconcile._gh_read_retries_spent == 0
 
 
 # --------------------------------------------------------------------------
