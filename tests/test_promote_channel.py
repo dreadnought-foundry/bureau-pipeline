@@ -315,16 +315,24 @@ class WorkflowWiringTest(unittest.TestCase):
 
     def test_only_a_main_candidate_spends_api_calls(self):
         """Every harness run now reaches the receipt; only a green one on the
-        trunk is worth two API calls and a token mint."""
+        trunk is worth two API calls and a token mint.
+
+        DRE-4111 adds a third admissible gate: a `workflow_dispatch` is a
+        person asking for this promotion by hand, so it is never one of the
+        PR-head runs this guard exists to keep cheap — and it has no
+        `workflow_run` context to read a branch out of.
+        """
         for step in self.wf["jobs"]["promote"]["steps"]:
             if "gh api" not in str(step.get("run", "")) \
                     and "app-token" not in str(step.get("uses", "")):
                 continue
             cond = str(step.get("if", ""))
-            # Either it is gated on the trunk directly, or on the decision —
-            # which cannot be `promote` for anything but a green trunk run.
+            # Either it is gated on the trunk directly, or on a hand dispatch,
+            # or on the decision — which cannot be `promote` for anything but a
+            # green trunk run or a by-hand one.
             self.assertTrue(
                 "head_branch == 'main'" in cond
+                or "workflow_dispatch" in cond
                 or "steps.decide.outputs.promote" in cond,
                 f"step {step.get('name')!r} spends API calls on PR runs",
             )
