@@ -2700,6 +2700,25 @@ def epic_thread(epic: str) -> list | None:
         return None
 
 
+def takes_no_slot(bodies) -> bool:
+    """Is this card bound for a PERSON — moved by the sweep, never dispatched?
+
+    WORKBENCH and OPERATOR, read off the vocabulary rather than spelled here:
+    a verdict the sweep promotes (`sweep_promotes`) that no run is dispatched
+    at (`is_promotable`). Such a card takes no slot under MAX_WIP, so a fleet
+    at its cap does not hold it (DRE-3385). False for a FLEET card, for a
+    verdict bound somewhere else, and for a card carrying no verdict at all —
+    none of those passes a full cap. Pure: `bodies` came with the candidates
+    query, so asking spends no Linear read.
+    """
+    verdict = routing_verdict.verdict_on(bodies)
+    return (
+        verdict is not None
+        and routing_verdict.sweep_promotes(verdict)
+        and not routing_verdict.is_promotable(verdict)
+    )
+
+
 def promote_ready(active_count: int, candidates: list[dict] | None = None) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -2723,6 +2742,14 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     hand-built promotions do not spend the WIP budget either: nothing is
     dispatched for them, so they take no slot, and a Backlog holding 33
     operator cards must not eat the fleet's promotion budget on its way out.
+
+    And they do not WAIT on it. The cap is asked per card, never once for the
+    sweep: a fleet at — or over — its cap holds every card a run would be
+    dispatched for, and still carries a WORKBENCH or OPERATOR card to Todo,
+    because "a hand-built card needs no room" (the lane contract's words). An
+    early return at the cap starved a person's card on every ordinary busy day
+    (PR #430's review); so did breaking out of the loop once the budget was
+    spent, since the candidates are read lowest number first.
     """
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
     # say what it was holding to, or a repo at "0" promoting at 8 reads exactly
@@ -2730,12 +2757,18 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     print(f"promotion: WIP cap {MAX_WIP}, read from {MAX_WIP_SOURCE}")
     budget = MAX_WIP - active_count
     if budget <= 0:
-        print(f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — none promoted")
-        return 0
+        # Said, not returned on (DRE-3385): this holds the cards a run would be
+        # dispatched for. A card bound for a person is still read below.
+        print(
+            f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — no card is "
+            "dispatched this sweep; a hand-built card needs no room and is "
+            "still considered"
+        )
     promoted = 0
     parentless = 0  # of `promoted` — the new path, reported rather than inferred
     by_hand = 0  # of `promoted` — WORKBENCH/OPERATOR, moved but never dispatched
     spent = 0  # of `budget` — only a card a run IS dispatched for takes a slot
+    waiting_reported = False  # the budget-spent line is ONE per sweep (DRE-2918)
     # Cache the epic-level gate per parent epic: it is the same answer for every
     # child of that epic, so consult Linear once per epic per sweep (DRE-1772).
     epic_gate: dict[str, bool] = {}
@@ -2751,18 +2784,6 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         key=lambda c: int(c["identifier"].split("-")[1]),
     )
     for index, card in enumerate(candidates):
-        if spent >= budget:
-            # ONE line per sweep, not one per card (DRE-2918): a 200-card
-            # Backlog must not print 200 lines. `candidates` is sorted ascending
-            # by card number, so the cards cut off here are always the newest,
-            # every sweep — and the summary at the end reports only a total.
-            unconsidered = candidates[index:]
-            print(
-                f"promotion: WIP budget spent ({spent}/{budget} dispatched) — "
-                f"{len(unconsidered)} candidate(s) not considered this sweep, "
-                f"lowest-numbered {unconsidered[0]['identifier']}"
-            )
-            break
         # The ONE deliberately silent exit in this loop (DRE-2918). The sweep is
         # per-repo over the whole team's Backlog, so speaking here would make
         # every repo print a line for every other repo's every card, every
@@ -2774,6 +2795,36 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # gates below read them — the epic test, the wave record and the
         # verdict. One comprehension, hoisted to the first of them.
         bodies = card_comment_bodies(card)
+        # The cap, asked PER CARD (DRE-3385). With the budget gone, only a card
+        # bound for a person goes on — WORKBENCH or OPERATOR: the sweep moves
+        # it and no run is dispatched at it, so it takes no slot. Everything
+        # else stops here, before any gate below spends a Linear read or posts
+        # a refusal on a sweep with no room to act: a FLEET card, and equally a
+        # card with no verdict or one bound somewhere else, exactly as when
+        # the loop broke. The verdict is read off comments the candidates query
+        # already returned, so asking costs nothing. `budget` may be negative
+        # (a cap lowered under work in flight); `spent >= budget` holds then too.
+        if spent >= budget and not takes_no_slot(bodies):
+            # ONE line per sweep, not one per card (DRE-2918): a 200-card
+            # Backlog must not print 200 lines. Said at the FIRST card held —
+            # the count is already exact there, because `spent` never falls and
+            # a hand-built promotion never raises it, so every later card of
+            # this repo's that needs a slot is held too. `candidates` is sorted
+            # ascending by card number, so the cards left waiting are always
+            # the newest, every sweep.
+            if not waiting_reported:
+                waiting_reported = True
+                unconsidered = [
+                    c["identifier"] for c in candidates[index:]
+                    if card_repo(c) == REPO_SLUG
+                    and not takes_no_slot(card_comment_bodies(c))
+                ]
+                print(
+                    f"promotion: WIP budget spent ({spent}/{max(budget, 0)} "
+                    f"dispatched) — {len(unconsidered)} candidate(s) not "
+                    f"considered this sweep, lowest-numbered {unconsidered[0]}"
+                )
+            continue
         if card_is_epic(card, bodies):
             print(
                 f"promotion: {card['identifier']} is an epic — epics are "
