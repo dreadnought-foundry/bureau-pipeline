@@ -36,11 +36,11 @@ agent-bureau repo; the third clause added by DRE-2103).
   tested sha; `release-gate.yml` fires on every `v*` tag push (and, since
   DRE-2551, on `stable` — see below) and goes
   loudly red when the tagged commit lacks that stamp
-  (`scripts/release_gate.py`, fail-closed). The harness also gates
-  boundary-touching PRs here via its `pull_request` trigger — the merge
-  gate's all-checks-green rule holds a PR whose harness run is red, and
-  since DRE-2551 it runs on every push to `main` as well, so trunk commits
-  carry a stamp of their own. Every attempt OPENS the same context `pending`
+  (`scripts/release_gate.py`, fail-closed). Since DRE-2551 the harness runs
+  on every push to `main`, so trunk commits carry a stamp of their own. It
+  does NOT run on pull requests (DRE-4149 — it did, on the boundary paths,
+  from DRE-2103 until 2026-09-17; see "The harness proves main" below).
+  Every attempt OPENS the same context `pending`
   before it runs a scenario (DRE-3515): a commit status stands on the sha
   until something posts over it, so before this a re-run spent its whole
   length under the previous attempt's verdict — on 2026-09-09 PR #332 read
@@ -125,18 +125,67 @@ commit in between. That is the trade — a skipped head, never a skipped
 channel. In the run list those skips look alarming and are not: a displaced run
 has `run_started_at == created_at`, because it never ran.
 
-**The residual gap, written down rather than papered over.** The group is one
-constant shared by the `push` and `pull_request` triggers, because it guards a
-single sandbox repo whose leftover-sweep would delete a concurrent run's
-branches. So a PR harness run and the trunk's proving run compete for the same
-pending slot, and the trunk's can lose (2026-09-03, run `33832750432`,
-`main@46ca2476`, displaced by the DRE-3059 PR run). Closing that needs a real
-lock on the sandbox, not a second concurrency group; until then the condition
-is reported rather than prevented.
+**The gap that used to sit here, and how it closed.** The group was once one
+constant shared by the `push` and `pull_request` triggers, so a PR harness run
+and the trunk's proving run competed for the same pending slot and the trunk's
+could lose (2026-09-03, run `33832750432`, `main@46ca2476`, displaced by the
+DRE-3059 PR run). DRE-3075 gave `main` its own lane; DRE-4149 then removed the
+pull-request run altogether, so `integration-harness-main` is the only lane
+and the only runs in it are pushes to `main` and by-hand dispatches.
+
+### The harness proves main, not every pull request (DRE-4149)
+
+From DRE-2103 until 2026-09-17 the harness also ran on pull requests touching
+the boundary paths, and a red run held the merge. It no longer does:
+
+- **The PR run largely re-proved `main`.** The sandbox (`bureau-harness`)
+  rides `@main` by standing decision and GitHub resolves that ref at dispatch.
+  The harness logged it on every PR run — *"agent-task.yml parses at <main
+  sha> (refs/heads/main), which is NOT the commit under test"* — and DRE-3101
+  had already handed a PR run `main`'s own sweep and probe rules. The run that
+  proves the merged result is the one on `main`, and it runs anyway.
+- **It was not free.** On 2026-09-17 the worker App's hourly GitHub allowance
+  ran out near the end of every hour (DRE-4132). Every harness run that needed
+  GitHub in that stretch was refused, so six approved PRs were held by a red
+  harness that said nothing about their code, and `stable` sat twelve merges
+  behind — with about ten PR runs that morning, each up to 26 minutes of
+  polling, among the heaviest spenders of that same allowance.
+
+**What a pull request merges on now:** the critic's approval and the
+verifier's verdict, both bound to the head, and the unit/contract suite — the
+bar every other repo in the fleet merges on. The merge gate keeps no list of
+checks it expects, and branch protection on `main` requires only `scripts unit
+tests` and `TDD commit discipline`, so a head with no harness check waits for
+nothing (`tests/test_harness_gate_evidence.py`).
+
+**What did not move:** `stable` advances only on a harness run that SUCCEEDED
+on `main`, and Red-Main Repair watches the harness on `main`. Products ride
+`stable`, so nothing reaches a product repo without a green harness, exactly
+as before.
+
+**Runs on `main` collapse to the newest commit** — by the rule above and
+nothing else: the proof in progress is never cancelled, the newest head waits
+behind it, and a head in between is dropped before it starts.
+
+**Proving a risky branch before it merges** is still possible and is now a
+deliberate act: `gh workflow run harness.yml -f pipeline_ref=<branch>`. The
+run rides `main`'s lane (it queues; it never runs beside `main`'s proof), and
+it proves without gating — its check run lands on the dispatch ref's tip and
+its stamp is a commit status, which the merge gate never reads.
+
+**The accepted cost, named (DRE-4149).** A change that breaks the pipeline
+end to end is found on `main` after it merges rather than on its pull request
+before. `stable` does not move onto it, so no product repo sees it; Red-Main
+Repair watches the harness on `main` (DRE-2820) and files the repair card.
+With several merges between two `main` runs, the failing run names a range of
+commits, not one.
+
+`tests/test_harness_proves_main.py` pins the triggers, so the pull-request run
+cannot return without someone deciding it should.
 
 ### Reading a channel that did not move
 
-Every completed harness run — on `main` or on a PR head — now leaves a
+Every completed harness run — on `main`, or by hand against a branch — leaves a
 promote-channel receipt naming one outcome, so "the channel is quiet", "the
 channel is starved" and "that run was never about the channel" are different
 strings instead of the same silence:
@@ -144,7 +193,7 @@ strings instead of the same silence:
 | receipt | what happened | what to do |
 | --- | --- | --- |
 | `harness-passed-promoting` | green run, strictly ahead — `stable` moved | nothing |
-| `harness-run-not-on-main` | a PR-head run; it proved a commit that is not on the trunk | nothing — it was never a candidate |
+| `harness-run-not-on-main` | a run whose branch is not `main` (before DRE-4149, a PR-head run); it proved a commit that is not on the trunk | nothing — it was never a candidate |
 | `harness-cancelled-by-newer-push` | displaced by a merge train; never started | nothing — it advances when the trunk quietens |
 | `harness-failed` | the harness went red on this commit | a red trunk; the medic and `red-main-repair.yml` own it |
 | `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
@@ -224,10 +273,11 @@ the proof alone:
 - the **hold**: `CHANNEL_HOLD` is a standing instruction not to advance the
   channel, and a by-hand promote does not talk over it;
 - the **trunk check**: the candidate must be reachable from `main`.
-  `harness.yml` also runs on `pull_request`, so a PR head carries a green
-  `integration-harness` stamp of its own — without this check a by-hand
-  promote could put `stable` on a commit that never merged, the proof present
-  and the code unshipped.
+  A by-hand harness run against a branch (`pipeline_ref`) stamps that
+  branch's head with a green `integration-harness` of its own — as every PR
+  head's run did before DRE-4149 — so without this check a by-hand promote
+  could put `stable` on a commit that never merged, the proof present and the
+  code unshipped.
 
 The push is made with the bot App token on this route too, so
 `release-gate.yml` fires and validates the move exactly as it does an

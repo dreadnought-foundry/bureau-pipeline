@@ -131,6 +131,12 @@ def run_post(td: Path, gate2: dict, *, gate1: dict | None = None,
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env.update({
+        # DRE-3226: the pipeline checkout the step runs its scripts out of,
+        # now outside the workspace and named by the workflow's own env var.
+        # This repo IS that checkout, so pointing at it is the honest fixture
+        # — and the step refuses to describe a run at all when it is absent,
+        # which tests/test_critic_experiment_containment.py pins.
+        "PIPELINE_DIR": str(ROOT),
         "CARD": "", "REAL": real, "PR": "297",
         "REVIEWED_SHA": "a" * 40, "CONTENT_ID": "",
         "MODEL_ID": "claude-sonnet-5", "MODEL_WHY": "advisory ladder top",

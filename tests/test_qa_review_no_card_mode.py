@@ -368,6 +368,10 @@ class LiveExtractionTest(unittest.TestCase):
             env = dict(
                 os.environ,
                 PATH=f"{bin_dir}:{os.environ['PATH']}",
+                # DRE-3226: the pipeline checkout moved out of the working
+                # tree and every step addresses it by this variable. The
+                # symlink above is that checkout.
+                PIPELINE_DIR=os.path.join(cwd, ".bureau-pipeline"),
                 PR="101",
                 CARD=card,
                 GH_TOKEN="test-token",

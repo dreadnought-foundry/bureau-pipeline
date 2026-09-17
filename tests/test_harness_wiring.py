@@ -62,11 +62,13 @@ class TriggerContractTest(unittest.TestCase):
         self.assertEqual(list(_doc()["jobs"]), ["harness"])
 
     def test_checkout_threads_the_ref_under_test(self):
-        # DRE-2103: on workflow_dispatch the ref under test is pipeline_ref
-        # (defaulted to main); on pull_request the inputs context is EMPTY,
-        # so without the middle clause every PR run would silently test
-        # main instead of the PR's own head — the chimera class DRE-2026
-        # exists to prevent.
+        # On workflow_dispatch the ref under test is pipeline_ref (defaulted
+        # to main) — the by-hand route that proves a risky branch before it
+        # merges. On a push to main the inputs context is EMPTY, so the tail
+        # clause is the commit that triggered the run. There was a middle
+        # clause for pull_request events (DRE-2103); the harness no longer
+        # runs on them (DRE-4149), and an arm no event reaches is removed
+        # rather than left to be mistaken for coverage.
         checkouts = [
             s for s in _steps(_doc())
             if (s.get("uses") or "").startswith("actions/checkout")
@@ -74,8 +76,7 @@ class TriggerContractTest(unittest.TestCase):
         self.assertTrue(checkouts, "no checkout step")
         self.assertEqual(
             (checkouts[0].get("with") or {}).get("ref"),
-            "${{ inputs.pipeline_ref || github.event.pull_request.head.sha "
-            "|| github.sha }}",
+            "${{ inputs.pipeline_ref || github.sha }}",
             "the driver code must come from the ref under test",
         )
 
@@ -85,9 +86,9 @@ class PushTriggerTest(unittest.TestCase):
     is what promote-channel.yml turns into a channel move.
 
     The binding is the stamped sha, so the checkout MUST resolve to the commit
-    that triggered the run. On a push event neither `inputs.pipeline_ref` (only
-    workflow_dispatch/workflow_call) nor `github.event.pull_request.head.sha`
-    (only PR events) resolve, so the last clause is the one that runs — and a
+    that triggered the run. On a push event `inputs.pipeline_ref` (only
+    workflow_dispatch/workflow_call) does not resolve, so the last clause is
+    the one that runs — and a
     mutable branch name there checks out main's tip AT JOB START. When a second
     PR merges in between (five PRs / twelve gate runs in 25 minutes on
     2026-08-17), the run stamps a newer sha than its own head_sha,
@@ -224,52 +225,21 @@ class IdentityWiringTest(unittest.TestCase):
         self.assertEqual(env.get("HARNESS_QA_TOKEN"), "${{ steps.qa.outputs.token }}")
 
 
-class PrGateTest(unittest.TestCase):
-    """DRE-2103: the harness is load-bearing on boundary-touching PRs.
+class ReleaseRouteTest(unittest.TestCase):
+    """What DRE-2103 wired in two ways is now wired in one.
 
-    merge_gate.py condition 1 requires EVERY check run on the head sha to
-    complete green, and harness.yml is not a review workflow, so a red
-    harness run holds the merge with no branch-protection change
-    (tests/test_harness_gate_evidence.py proves that arm). The wiring here
-    must (a) fire only on the boundary paths, (b) self-skip clean on a
-    dependabot-triggered pull_request — that event gets GitHub's SEPARATE
-    Dependabot secrets store, for us EMPTY, so the App-token mints would
-    crash red before a single scenario ran (DRE-2047/2067; premortem Q2).
+    The PR gate is gone (DRE-4149): harness.yml has no pull_request trigger,
+    its boundary-paths filter and its dependabot self-skip went with it, and
+    tests/test_harness_proves_main.py pins that they cannot quietly return.
+    What this class keeps is the half that still runs — the by-hand dispatch
+    against a candidate ref, and the permission its sha stamp needs.
     """
 
-    # The boundary: workflow wiring plus the dispatch/gate scripts the
-    # scenarios exercise end-to-end. Everything else stays silent.
-    BOUNDARY_PATHS = {
-        ".github/workflows/**",
-        "scripts/harness/**",
-        "scripts/reconcile.py",
-        "scripts/merge_gate.py",
-        "scripts/gate_note.py",
-        "scripts/dispatch_pool.py",
-        "scripts/dedupe_dispatch.py",
-        "scripts/should_review_pr.py",
-    }
-
-    def test_pull_request_trigger_filters_to_the_boundary_paths(self):
-        pr = _on(_doc()).get("pull_request")
-        self.assertIsInstance(pr, dict, "pull_request trigger required")
-        self.assertEqual(set(pr.get("paths") or []), self.BOUNDARY_PATHS)
-
-    def test_workflow_dispatch_survives_alongside_the_pr_trigger(self):
-        # The release-promotion route (pipeline_ref on a candidate sha)
-        # must keep working — the PR gate is additive.
+    def test_workflow_dispatch_is_the_by_hand_route(self):
+        # The release-promotion route (pipeline_ref on a candidate sha), and
+        # since DRE-4149 also how a person proves a risky branch BEFORE it
+        # merges — the job the PR run used to do for every boundary change.
         self.assertIn("workflow_dispatch", _on(_doc()))
-
-    def test_dependabot_pull_request_self_skips_at_the_job_level(self):
-        # Premortem Q1/Q2: dependabot's own opens/rebases of a
-        # .github/workflows/** bump fire pull_request AS dependabot[bot],
-        # which gets the empty Dependabot secrets store. The guard must sit
-        # on the JOB so the token-mint steps never execute; a skipped job's
-        # check run concludes `skipped` — green to the merge gate, never a
-        # red crash (the pr-review.yml:52 pattern, DRE-2047).
-        cond = _job(_doc()).get("if") or ""
-        self.assertIn("github.event_name != 'pull_request'", cond)
-        self.assertIn("github.actor != 'dependabot[bot]'", cond)
 
     def test_statuses_write_permission_for_the_sha_stamp(self):
         perms = _doc().get("permissions") or {}

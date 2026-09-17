@@ -37,6 +37,7 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -255,6 +256,11 @@ def _backlog_candidate(labels):
         "description": "**Repo:** agent-bureau\nwork",
         "parent": {"identifier": "DRE-1268", "state": {"name": "In Progress"}},
         "labels": {"nodes": labels},
+        # Since DRE-3385 a card carrying NO routing verdict is refused
+        # promotion, and a control card held back for the missing verdict
+        # would prove nothing about the hold label this pair is testing.
+        "comments": {"nodes": [{"body": routing_verdict.verdict_comment(
+            "FLEET", "the acceptance criteria are unit-testable")}]},
         "inverseRelations": {"nodes": []},
     }
 

@@ -453,6 +453,9 @@ class TheCommentNamesTheCauseTooTest(unittest.TestCase):
             # not, which is why the sibling suites fail here and pass in CI.
             env.setdefault("GITHUB_REPOSITORY", "dreadnought-foundry/agent-bureau")
             env.update({
+                # DRE-3226: the post step reads its scripts out of the
+                # checkout outside the workspace; this repo is one.
+                "PIPELINE_DIR": str(ROOT),
                 "CARD": "", "REAL": "false", "PR": "2344",
                 "REVIEWED_SHA": "d5e40993f" + "0" * 31, "CONTENT_ID": "",
                 "MODEL_ID": "claude-sonnet-5", "MODEL_WHY": "advisory ladder top",

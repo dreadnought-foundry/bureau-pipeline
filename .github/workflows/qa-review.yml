@@ -138,11 +138,64 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # `path:` must stay under $GITHUB_WORKSPACE — actions/checkout refuses
+      # anything else outright ("is not under") — so the checkout lands in the
+      # PR's working tree and the NEXT step moves it out. Keeping it an
+      # actions/checkout is deliberate: the ref threading this line carries is
+      # what scripts/check_pipeline_ref.py enforces, and a hand-rolled `git
+      # clone` would take this workflow out of that check's sight (DRE-2026).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
+
+      # DRE-3226: the pipeline the review RUNS ON leaves the pull request's
+      # working tree, and every later step addresses it by the absolute path
+      # exported here, once.
+      #
+      # The critic is asked to prove a PR's tests actually bite, which means
+      # reverting files to `main` and running them — and on bureau-pipeline
+      # PR #279 that experiment (a `git stash -u`, a `git clean -x`, a
+      # checkout of a path containing the nested clone) took `.bureau-pipeline`
+      # with it, because the pipeline's own checkout was sitting INSIDE the
+      # tree it was experimenting on. The post-review step then ran
+      # check_critic_result.py out of a directory that no longer existed and
+      # the review died; the PR got "could not run (infra error)" for a critic
+      # that had reviewed it fine. Nothing inside the repo can reach
+      # $RUNNER_TEMP, so no command the critic runs in the repo root can do
+      # this again — briefs/critic.md carries the other half, the two commands
+      # it must not run there at all.
+      #
+      # WHAT STAYS BEHIND, and why it is not the checkout: a `uses: ./…` local
+      # action is resolved under $GITHUB_WORKSPACE and `uses:` admits no
+      # `${{ }}` expression, so the two composite actions this job runs from
+      # the pinned channel cannot be addressed any other way. Only
+      # `.github/actions` is put back — no scripts, no config, nothing any
+      # step after the agent reads — and both `uses:` of it run before the
+      # critic starts. The assembled agent-context.md joins it there because
+      # that is where the agent is told to read it (one path, every workflow:
+      # tests/test_assemble_context_wiring.py).
+      - name: Move the pipeline checkout out of the PR's working tree
+        id: pipeline
+        run: |
+          DEST="$RUNNER_TEMP/bureau-pipeline"
+          rm -rf "$DEST"
+          mv "$GITHUB_WORKSPACE/.bureau-pipeline" "$DEST"
+          mkdir -p "$GITHUB_WORKSPACE/.bureau-pipeline/.github"
+          # A release cut before the shared actions existed carries no
+          # .github/actions, and the one step that `uses:` it is already
+          # gated on the file being there (the node probe below). A missing
+          # directory is that ref's answer, never a failed job.
+          if [ -d "$DEST/.github/actions" ]; then
+            cp -a "$DEST/.github/actions" \
+                  "$GITHUB_WORKSPACE/.bureau-pipeline/.github/actions"
+          fi
+          # ONE export, read by every step below as $PIPELINE_DIR — including
+          # the critic's own Bash tool, which is how its brief can name where
+          # the pipeline's scripts are.
+          echo "PIPELINE_DIR=$DEST" >> "$GITHUB_ENV"
+          echo "pipeline scripts: $DEST (outside $GITHUB_WORKSPACE)"
 
       # Authoritative review gate (DRE-1888). A workflow_dispatch always
       # reviews (operator asked for it explicitly). For a PR event, the critic
@@ -189,8 +242,13 @@ jobs:
           fi
           # Same call shape merge-gate.yml uses, so the skip and the gate
           # read the same record and can never disagree about the standing
-          # verdict.
-          gh api "repos/${{ github.repository }}/issues/$PR/comments" > /tmp/decide-comments.json 2>/dev/null \
+          # verdict. DRE-4139 made that shape a PAGINATED one at both ends:
+          # unpaginated, both read GitHub's default 30 — the OLDEST 30 — and
+          # a long PR's real verdict was invisible to each of them. Fixing
+          # only the gate would have broken the promise in the line above.
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+            > /tmp/decide-comments.json 2>/dev/null \
             || echo '[]' > /tmp/decide-comments.json
           # The gate's carry condition 4: the reviewed commit is still in
           # THIS PR's own commit record. Same call shape merge-gate.yml
@@ -201,7 +259,7 @@ jobs:
           gh api "repos/${{ github.repository }}/pulls/$PR/commits?per_page=100" > /tmp/decide-commits.json 2>/dev/null \
             || echo '[]' > /tmp/decide-commits.json
           set +e
-          OUT=$(python3 .bureau-pipeline/scripts/should_review_pr.py "$HEAD_REF" \
+          OUT=$(python3 "$PIPELINE_DIR"/scripts/should_review_pr.py "$HEAD_REF" \
             --comments-file /tmp/decide-comments.json \
             --compare-file /tmp/decide-compare.json \
             --pr-commits-file /tmp/decide-commits.json \
@@ -256,7 +314,7 @@ jobs:
           BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
           gh api "repos/${{ github.repository }}/compare/$BASE...$SHA" > /tmp/qa-compare.json 2>/dev/null \
             || echo '{}' > /tmp/qa-compare.json
-          CONTENT=$(python3 .bureau-pipeline/scripts/verdict_content.py --compare-file /tmp/qa-compare.json 2>/dev/null || true)
+          CONTENT=$(python3 "$PIPELINE_DIR"/scripts/verdict_content.py --compare-file /tmp/qa-compare.json 2>/dev/null || true)
           echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
           # DRE-2466: the PR's own size totals, for the review-strategy step
           # below. The compare record above already carries per-file counts
@@ -310,7 +368,7 @@ jobs:
           # API, which needs a token. Below it, no call is made.
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          python3 .bureau-pipeline/scripts/pr_size_strategy.py \
+          python3 "$PIPELINE_DIR"/scripts/pr_size_strategy.py \
             --compare-file /tmp/qa-compare.json \
             --pr-json-file /tmp/qa-size.json \
             --repo "${{ github.repository }}" \
@@ -332,17 +390,35 @@ jobs:
 
       # Assemble the critic's context = the standards it reviews AGAINST
       # (engineering + architecture) plus the comms standard for its verdict
-      # voice (DRE-1646). The critic has no role brief — standards are its whole
-      # knowledge channel. assemble_context.py reads the files from this checkout
-      # at run time, so a `@main` standards edit reaches the critic on its next
-      # run with no workflow change. Shared by both critic attempts below.
+      # voice (DRE-1646) — plus briefs/critic.md, the standing facts about the
+      # critic's own position that a run cannot re-derive (DRE-3084, and
+      # DRE-3226's rule about what its experiments may not run).
+      # assemble_context.py reads the files from this checkout at run time, so
+      # a `@main` standards edit reaches the critic on its next run with no
+      # workflow change. Shared by both critic attempts below.
+      #
+      # `--root "$PIPELINE_DIR"` is load-bearing (DRE-4158). The script's
+      # default root is the in-tree `.bureau-pipeline`, which the move above
+      # emptied of everything but the stub actions — so RUNNING the script
+      # from $PIPELINE_DIR while letting it READ from its default killed every
+      # review of a bureau-pipeline PR from the hour DRE-3226 merged
+      # (`FileNotFoundError: '.bureau-pipeline/standards/comms.md'`). Only the
+      # OUTPUT belongs in the tree: the move step's `mkdir -p` guarantees the
+      # directory, and the agent is told to read the file there.
+      # tests/test_critic_context_root.py executes this block as written.
       - name: Assemble critic context
         id: ctx
         if: steps.decide.outputs.review == 'true'
         run: |
-          python3 .bureau-pipeline/scripts/assemble_context.py assemble critic \
+          python3 "$PIPELINE_DIR"/scripts/assemble_context.py assemble critic \
+            --root "$PIPELINE_DIR" \
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of critic context"
+          # DRE-3226: keep the durable copy outside the working tree. The
+          # agent is pointed at the in-tree path — one path across every
+          # workflow — and attempt 1 is the one thing that can remove it, so
+          # the retry restores this copy rather than reviewing blind.
+          cp .bureau-pipeline/agent-context.md "$PIPELINE_DIR/agent-context.md"
 
       # ── Visual-QA stage (DRE-1481, layer 3b of DRE-1477) ──────────────────
       # When the PR's card has a **Design:** ref AND the PR changed UI, render
@@ -377,13 +453,13 @@ jobs:
           gh pr view "$PR" --json body --jq .body > /tmp/vqa/pr-body.txt 2>/dev/null || true
           : > /tmp/vqa/card.txt
           if [ -n "$CARD" ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py description "$CARD" > /tmp/vqa/card.txt 2>/dev/null || : > /tmp/vqa/card.txt
+            python3 "$PIPELINE_DIR"/scripts/linear_ops.py description "$CARD" > /tmp/vqa/card.txt 2>/dev/null || : > /tmp/vqa/card.txt
           fi
           # Changed files vs the PR base, repo-root-relative.
           gh pr diff "$PR" --name-only > /tmp/vqa/changed.txt 2>/dev/null || : > /tmp/vqa/changed.txt
           # The screen map is the harness's own contract (single source of truth).
           MJS=console/web/scripts/visual-qa/screens.mjs
-          python3 .bureau-pipeline/scripts/visual_qa_plan.py \
+          python3 "$PIPELINE_DIR"/scripts/visual_qa_plan.py \
             --card-text-file /tmp/vqa/card.txt \
             --pr-body-file /tmp/vqa/pr-body.txt \
             --changed-file /tmp/vqa/changed.txt \
@@ -420,10 +496,15 @@ jobs:
           # is not there is a step failure with nothing to read; the setup step
           # is gated on this file so that degrades like every other branch of
           # this stage instead.
+          #
+          # DRE-3226: in-tree on purpose, and the ONLY correct path here — it
+          # is the file the `uses: ./…` below actually loads, and a local
+          # action is resolved under $GITHUB_WORKSPACE. Probing the copy
+          # outside the tree would answer for a file the runner never reads.
           NODE_ACTION: .bureau-pipeline/.github/actions/setup-node-cached/action.yml
         run: |
           set +e
-          python3 .bureau-pipeline/scripts/consumer_node.py console/web \
+          python3 "$PIPELINE_DIR"/scripts/consumer_node.py console/web \
             > /tmp/vqa/node.txt 2> /tmp/vqa/node.err
           RC=$?
           cat /tmp/vqa/node.txt
@@ -529,7 +610,7 @@ jobs:
           NOTE="${{ steps.vqshots.outputs.note }}"
           # Map each screen key to its render path for the context block.
           RENDERED=$(python3 -c "import json;print(' '.join(f'{k}=console/design/images/_renders/{k}.png' for k in json.load(open('/tmp/vqa/plan.json')).get('screens',[])))")
-          python3 .bureau-pipeline/scripts/visual_qa_context.py \
+          python3 "$PIPELINE_DIR"/scripts/visual_qa_context.py \
             --plan-file /tmp/vqa/plan.json \
             --render-status "$STATUS" \
             --render-note "$NOTE" \
@@ -615,7 +696,7 @@ jobs:
               NOTE="no failed default-branch run found for $SHA"
             fi
           fi
-          python3 .bureau-pipeline/scripts/repair_context.py \
+          python3 "$PIPELINE_DIR"/scripts/repair_context.py \
             --branch "$BRANCH" \
             --changed-file /tmp/repair/changed.txt \
             --log-file /tmp/repair/original-failure.log \
@@ -723,17 +804,17 @@ jobs:
             echo "re-review after refutation: found a contested finding on $SHA8"
           fi
           # DRE-3091 — the act-registry consumer check, over THIS PR's registry
-          # (the `.` checkout is the head; `.bureau-pipeline` is the channel and
+          # (the `.` checkout is the head; $PIPELINE_DIR is the channel and
           # would answer for main, which is the very state this PR changes).
           # Writes an empty file when the PR does not touch the registry, and
           # never exits non-zero: the receipt is not a gate, the tests.yml job
           # is.
           : > /tmp/cardctx-acts.txt
-          python3 .bureau-pipeline/scripts/check_act_consumers.py context \
+          python3 "$PIPELINE_DIR"/scripts/check_act_consumers.py context \
             --changed-files /tmp/cardctx-changed.txt \
             --registry config/pipeline-acts.json \
             --out /tmp/cardctx-acts.txt || : > /tmp/cardctx-acts.txt
-          python3 .bureau-pipeline/scripts/review_card_context.py \
+          python3 "$PIPELINE_DIR"/scripts/review_card_context.py \
             --card "$CARD" \
             --branch "$BRANCH" \
             --pr-body-file /tmp/cardctx-pr-body.txt \
@@ -745,8 +826,9 @@ jobs:
       # nothing a human could edit changed it, and the agent registry could not
       # see it. The id now comes from config/models.yaml (agent `critic`, the
       # ADVISORY ladder) through the SAME availability-probing ladder walk the
-      # build agents use — the config is a file in the .bureau-pipeline checkout
-      # above, never a runtime lookup (these runners hold no cloud credentials).
+      # build agents use — the config is a file in the pipeline checkout
+      # ($PIPELINE_DIR, moved out of the working tree by DRE-3226), never a
+      # runtime lookup (these runners hold no cloud credentials).
       #
       # The critic is ADVISORY, so it gets the STRONGEST model we run. It gates
       # every unattended merge in a pipeline where no human reads a diff: a
@@ -788,10 +870,10 @@ jobs:
         run: |
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
           BUILT_ON=""
-          if [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py \
+          if [ -n "$CARD" ] && python3 "$PIPELINE_DIR"/scripts/linear_ops.py \
                dump-comments "$CARD" > "$RUNNER_TEMP/card-thread.json"; then
             BUILT_ON=$(python3 \
-              .bureau-pipeline/scripts/model_fallback.py build-model \
+              "$PIPELINE_DIR"/scripts/model_fallback.py build-model \
               "$RUNNER_TEMP/card-thread.json")
           fi
           if [ -n "$BUILT_ON" ]; then
@@ -801,7 +883,7 @@ jobs:
             SEPARATION_ARG="--built-on-unknown"
           fi
           # shellcheck disable=SC2086 # deliberate word split: one flag or two
-          MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select critic \
+          MODEL=$(python3 "$PIPELINE_DIR"/scripts/model_fallback.py select critic \
             $SEPARATION_ARG \
             --explain-file "$WHY_FILE")
           WHY=$(cat "$WHY_FILE")
@@ -1129,8 +1211,8 @@ jobs:
           # gate's finding, not this one — and it can only ever hold a
           # merge: `evidence=defective` lands on the same neutral path a
           # crash does, and an APPROVE is never gated.
-          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" \
-             && python3 .bureau-pipeline/scripts/verdict_evidence.py check /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" --hold-file /tmp/qa-evidence-hold.md; then
+          if python3 "$PIPELINE_DIR"/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" \
+             && python3 "$PIPELINE_DIR"/scripts/verdict_evidence.py check /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" --hold-file /tmp/qa-evidence-hold.md; then
             echo "real=true" >> "$GITHUB_OUTPUT"
           else
             echo "real=false" >> "$GITHUB_OUTPUT"
@@ -1145,7 +1227,16 @@ jobs:
         # qa-evidence-hold.md too (DRE-3005): attempt 1's list of
         # unevidenced claims describes attempt 1's verdict, and a retry that
         # writes a clean one must not post the dead list beside it.
-        run: rm -f /tmp/qa-verdict.md /tmp/qa-evidence-hold.md
+        run: |
+          rm -f /tmp/qa-verdict.md /tmp/qa-evidence-hold.md
+          # DRE-3226: attempt 1 ran inside the working tree, so the in-tree
+          # agent-context.md is the one file of ours its experiments could
+          # have removed. Restore it from the durable copy the assemble step
+          # kept outside the tree — a retry that reads no standards reviews
+          # against nothing and is worse than no retry.
+          mkdir -p "$GITHUB_WORKSPACE/.bureau-pipeline"
+          cp -f "$PIPELINE_DIR/agent-context.md" \
+                "$GITHUB_WORKSPACE/.bureau-pipeline/agent-context.md" || true
 
       # Back off before the retry (DRE-2429), same defect as verify.yml: the
       # retry ran as the immediately following step, so a deterministic
@@ -1461,8 +1552,8 @@ jobs:
           # reason the --github-output flag is — a retry that quietly held a
           # verdict to a weaker standard than attempt 1 is the drift these
           # duplicated blocks exist to warn about.
-          if python3 .bureau-pipeline/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" \
-             && python3 .bureau-pipeline/scripts/verdict_evidence.py check /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" --hold-file /tmp/qa-evidence-hold.md; then
+          if python3 "$PIPELINE_DIR"/scripts/check_critic_result.py "$EXEC_FILE" /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" \
+             && python3 "$PIPELINE_DIR"/scripts/verdict_evidence.py check /tmp/qa-verdict.md --github-output "$GITHUB_OUTPUT" --hold-file /tmp/qa-evidence-hold.md; then
             echo "real=true" >> "$GITHUB_OUTPUT"
           else
             echo "real=false" >> "$GITHUB_OUTPUT"
@@ -1480,6 +1571,18 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
+          # DRE-3484: this is the LAST `${{ }}` this step had in its script,
+          # and moving it here is what takes the script out of GitHub's
+          # expression ceiling altogether. A run block containing `${{ }}`
+          # compiles into one `format()` expression capped at 21,000
+          # characters — refused at DISPATCH, in every consumer repo at once,
+          # with no job and no log. A block with NO substitutions is never
+          # compiled as an expression and has no ceiling at any length, which
+          # is why tests/test_workflow_expression_budget.py measures only the
+          # blocks the ceiling can reach. This step is now outside its scope by
+          # construction rather than by sitting a few hundred characters under
+          # a number. Keep it that way: add env vars here, never `${{ }}` below.
+          REPO: ${{ github.repository }}
           # DRE-1990: the commit this review actually looked at, captured at
           # review start by the Resolve PR step.
           REVIEWED_SHA: ${{ steps.pr.outputs.sha }}
@@ -1561,6 +1664,23 @@ jobs:
           # composes it.
           INSTALL_FAILED: ${{ steps.install_claude.outcome == 'failure' }}
         run: |
+          # DRE-3226: is the pipeline checkout this step runs on still there?
+          # Asked BEFORE anything is composed, because the answer decides
+          # which comment is honest. On PR #279 it was not there — the
+          # critic's own experiment had deleted it out of the working tree —
+          # and the gates above ran nothing, so this step blamed a
+          # startup/auth failure for a reviewer that had actually reviewed.
+          # The checkout now lives outside the tree, so this should never
+          # fire again; if it ever does, it says what it found rather than
+          # dying on the first script it cannot open. The gate's own script
+          # is the probe, since that is the file whose absence started this.
+          if [ -n "${PIPELINE_DIR:-}" ] \
+             && [ -r "${PIPELINE_DIR}/scripts/check_critic_result.py" ]; then
+            PIPELINE_OK=true
+          else
+            PIPELINE_OK=false
+            echo "::warning::the pipeline checkout at '${PIPELINE_DIR:-<unset>}' is gone — posting a neutral status instead of a verdict"
+          fi
           if [ "${STRATEGY:-}" = "oversized" ]; then
             # No review was attempted. This message names the actual size and
             # asks for a split; it must NOT borrow the crash wording below,
@@ -1573,6 +1693,22 @@ jobs:
             # and carries no "VERDICT: REQUEST_CHANGES" so the fix agent is
             # not dispatched to fix findings nobody made.
             printf '%s\n' "${OVERSIZE_MESSAGE:-}" > /tmp/qa-comment.md
+          elif [ "$PIPELINE_OK" != "true" ]; then
+            # DRE-3226: the pipeline checkout this review runs on was missing
+            # when the verdict was composed, so the gates read nothing and
+            # there is no verdict to post. SAY THAT. Every other branch below
+            # describes something the reviewer did, and each of those
+            # sentences would be a claim this run cannot support — the
+            # credential was fine, the install was fine, and on PR #279 the
+            # critic had reviewed the diff perfectly well. Same neutral
+            # contract as the rest: "QA Critic" so merge-gate treats it as the
+            # latest word and it supersedes a stale APPROVE, and no "VERDICT:"
+            # line, so merge is held and the fix agent is not woken for
+            # findings nobody made.
+            printf '%s\n\n%s\n' \
+              "🔎 QA Critic could not post a verdict — the pipeline checkout was missing, this is NOT a code rejection." \
+              "The review workflow's own checkout of the pipeline was gone by the time the verdict was composed, so the step that reads the reviewer's output could not run and there is nothing to post. This is NOT an authentication, install or model failure — no credential needs rotating on the strength of this message — and it says nothing at all about the code in this pull request. The checkout lives outside this pull request's working tree (DRE-3226), so a command run inside the repository can no longer reach it; the job log names the path it looked for. Merge is held until a critic actually reviews this PR; this is not a request for changes." \
+              > /tmp/qa-comment.md
           else
           # DRE-2465: has this PR earned the "the reviewer never ran" notice?
           # That sentence is a claim about a credential and it may only be
@@ -1655,7 +1791,7 @@ jobs:
             BODY_EDITED=$(gh api graphql -f query='query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){lastEditedAt}}}' \
               -F owner="${GITHUB_REPOSITORY%%/*}" -F name="${GITHUB_REPOSITORY#*/}" -F pr="$PR" \
               --jq '.data.repository.pullRequest.lastEditedAt // ""' 2>/dev/null || true)
-            FOOTER=$(python3 .bureau-pipeline/scripts/verdict_evidence.py snapshot \
+            FOOTER=$(python3 "$PIPELINE_DIR"/scripts/verdict_evidence.py snapshot \
               --reviewed-at "${BODY_READ_AT:-}" --edited-at "${BODY_EDITED:-}" || true)
             if [ -n "$FOOTER" ]; then
               printf '\n%s\n' "$FOOTER" >> /tmp/qa-comment.md
@@ -1783,7 +1919,7 @@ jobs:
             { cat /tmp/qa-comment.md
               printf '\n\n🧠 model: %s — %s\n' "$MODEL_ID" "$MODEL_WHY"
             } > /tmp/qa-linear.md
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-linear.md)" || true
+            python3 "$PIPELINE_DIR"/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-linear.md)" || true
           fi
 
           # DRE-1874: reconcile the FORMAL review state with the verdict. When
@@ -1797,7 +1933,7 @@ jobs:
           # GitHub's reviewDecision becomes APPROVED. Best-effort (the script
           # never fails the job) and idempotent.
           if [ "$REAL" = "true" ] && head -1 /tmp/qa-verdict.md | grep -q "VERDICT: APPROVE"; then
-            python3 .bureau-pipeline/scripts/sync_review_state.py "${{ github.repository }}" "$PR" || true
+            python3 "$PIPELINE_DIR"/scripts/sync_review_state.py "$REPO" "$PR" || true
           fi
 
       # ── Head-bound review check (DRE-2291) ────────────────────────────────
@@ -1858,7 +1994,7 @@ jobs:
           # here there wasn't one: the workflow read the size and declined.
           TOO_LARGE: ${{ steps.size.outputs.strategy == 'oversized' && steps.size.outputs.size_phrase || '' }}
         run: |
-          python3 .bureau-pipeline/scripts/publish_review_check.py \
+          python3 "$PIPELINE_DIR"/scripts/publish_review_check.py \
             --repo "${{ github.repository }}" \
             --sha "${{ steps.pr.outputs.sha }}" \
             --verdict-file /tmp/qa-verdict.md \
@@ -1883,7 +2019,7 @@ jobs:
           # is honest here: a genuine review DID run, on CARRIED_SHA, and
           # its verdict provably still describes this head's content.
           printf 'VERDICT: APPROVE\n' > /tmp/qa-carried-verdict.md
-          python3 .bureau-pipeline/scripts/publish_review_check.py \
+          python3 "$PIPELINE_DIR"/scripts/publish_review_check.py \
             --repo "${{ github.repository }}" \
             --sha "${{ steps.decide.outputs.head_sha }}" \
             --verdict-file /tmp/qa-carried-verdict.md \

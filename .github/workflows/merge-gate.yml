@@ -292,7 +292,27 @@ jobs:
           # A transient comments-API failure must read as "no verdicts yet"
           # (the gate waits, fail-closed) — the same tolerance the inline
           # shell had — not as a red merge-gate run.
-          gh api "repos/${{ github.repository }}/issues/$PR/comments" > /tmp/comments.json 2>/dev/null \
+          #
+          # DRE-4139: EVERY PAGE. Unpaginated, this read saw GitHub's default
+          # page size of 30 — and page 1 of this endpoint is the OLDEST 30 —
+          # so once a pull request crossed thirty comments the verdict window
+          # was frozen: no verdict posted afterwards could ever enter it,
+          # re-running the reviewers pushed each new one further out, and the
+          # job still exited 0, so the run reported `success` while the PR sat
+          # unmergeable forever. agent-bureau#2588 had critic APPROVE and
+          # verifier PASS on a green head and was stranded exactly this way.
+          # `?per_page=100` alone is the same defect with a higher ceiling
+          # (DRE-2681) — hence --paginate, the shape nine other comment reads
+          # in these workflows already use. `--slurp` emits one array per PAGE
+          # and merge_gate.py flattens it (bare --paginate prints one array
+          # per page back to back and json.load would raise → a RED gate,
+          # worse than the wait it replaces). --slurp also buffers, so a
+          # mid-pagination failure yields NO output and the `[]` substitute
+          # below fires — a short read must read as "no verdicts yet", never
+          # as a partial record missing a verdict the PR already has.
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+            > /tmp/comments.json 2>/dev/null \
             || echo '[]' > /tmp/comments.json
           # DRE-1994: the review-run exclusion is by VERIFIED ORIGIN, not
           # name — a PR-authored job can call itself "sneaky-review" and it
@@ -375,6 +395,9 @@ jobs:
           # DRE-2340 suite, and the record is not asserted once-only
           # anywhere). What protects it is the per-PR concurrency group on
           # this job: two evaluations of one PR no longer overlap at all.
+          # DRE-4139: it reads the record the fetch above writes, so it now
+          # searches EVERY page — a mark past comment 30 used to be invisible
+          # and the gate re-posted the note on every evaluation.
           CARRY_MARK="carried verdict content:$CARRIED_ID"
           if [ -n "$CARRIED" ] && ! grep -q "$CARRY_MARK" /tmp/comments.json; then
             printf '%s\n\n%s\n\n%s\n' \

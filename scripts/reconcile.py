@@ -118,6 +118,7 @@ import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
 import tempfile
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import NamedTuple
 
@@ -582,16 +583,57 @@ def hand_built(card: dict) -> bool:
 
     The work is done by a human or a local agent rather than a dispatched
     pipeline agent, so "no run receipt", "no dispatch route" and "no PR yet"
-    are all the normal state, not evidence of a stall. Read by exactly two
-    callers, both answering "should the pipeline start or restart an agent on
-    this card": flag_stranded (the alarm) and main()'s nudge loop on a card
-    with no PR (the dispatch that alarm was reporting on). Never read by a
-    PR-keyed repair path, or this would silently become a second, wider hold.
+    are all the normal state, not evidence of a stall. Read by the callers that
+    answer "should the pipeline start or restart an agent on this card":
+    flag_stranded and flag_stalled_planning (the alarms), _intake_candidates,
+    main()'s nudge loop on a card with no PR (the dispatch those alarms were
+    reporting on) — plus `_flag_hand_built_idle`, which is the other direction
+    and fires only on this label. Never read by a PR-keyed repair path, or this
+    would silently become a second, wider hold.
+
+    `counts_against_wip` reads it too (DRE-3385), and that one is neither a
+    dispatch nor a repair: it asks whether the card occupies one of MAX_WIP's
+    slots, and work no run is coming for occupies none. Same label, one
+    spelling — tests/test_hand_built_not_stranded.py names every owner, so a
+    reader added later is a finding at the diff.
     """
     return any(
         lbl["name"].lower() == HAND_BUILT_LABEL
         for lbl in (card.get("labels") or {}).get("nodes", [])
     )
+
+
+def counts_against_wip(card: dict) -> bool:
+    """Does this card occupy one of MAX_WIP's slots? (DRE-3385)
+
+    The cap exists to stop the pipeline flooding itself with concurrent AGENT
+    RUNS. A card marked `hand-built` or `no-code` has no run to count — nothing
+    was dispatched for it and nothing will be — so counting it budgets the
+    fleet's capacity against work a person is doing by hand.
+
+    Measured on 2026-09-08: 19 such cards sat in Todo / In Progress / In Review
+    against agent-bureau's cap of 12, so the sweep printed "WIP at cap — none
+    promoted" and no engineer card could ever promote again. The two labels are
+    exactly the marks the OPERATOR and WORKBENCH verdicts stamp
+    (`routing_verdict.marks`), which is how a promoted operator card stops
+    counting the moment it is promoted.
+
+    `no-code` comes from `linear_ops`, the one place that label is spelled —
+    the same constant `auto_done_skip_reason` reads to leave an operator card
+    open when its runbook merges.
+    """
+    if hand_built(card):
+        return False
+    return not any(
+        lbl["name"].lower() == linear_ops.NO_CODE_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes", [])
+    )
+
+
+def wip_count(cards) -> int:
+    """How many of `cards` take a slot under the cap — the number every
+    promotion budget is computed from."""
+    return sum(1 for card in cards if counts_against_wip(card))
 
 
 def automation_card(card: dict) -> bool:
@@ -671,22 +713,125 @@ _stale_defects: list[str] = []
 PROSE_DEFECT_RED_MINUTES = 120
 
 
+#: How many times a read-path gh call is attempted when GitHub answers with a
+#: BRIEF refusal, and how long it waits between attempts (DRE-4109). Three
+#: attempts, ~15s then ~45s: under a minute of waiting in the worst case, which
+#: sits well inside the sweep's 10-minute job timeout, and long enough that a
+#: secondary-rate-limit blip has cleared. An hourly bucket that is genuinely
+#: empty will NOT clear in that minute — that run still raises, still exits 1
+#: and still files, which is exactly the "only tell me if it persists" the CEO
+#: asked for (signed console answer, 2026-09-16).
+GH_READ_ATTEMPTS = 3
+GH_READ_BACKOFF_SECONDS = (15, 45)
+
+#: And how many retries the WHOLE sweep may spend. Per-read the budget above is
+#: the card's; this is the bound `standards/vendor-boundaries.md` Q5 requires of
+#: every retry at a vendor boundary, and it exists because `pr_for` runs once
+#: PER CARD: a genuinely empty hourly bucket refuses every read of the sweep,
+#: not one. Unbounded, a dozen refused reads would spend a dozen minutes of
+#: waiting and the sweep's 10-minute job timeout would KILL the run — turning
+#: today's loud, fast, correctly-filed failure into a hung one that never
+#: prints its ledger, which is strictly worse than what DRE-4109 set out to
+#: fix. Six retries is the worst case this sweep will wait for — about three
+#: minutes, leaving seven — and it is spent only by refusals: a sweep of clean
+#: reads spends none, and six separate one-blip reads all get their retry.
+#: Past it, gh_read behaves exactly as it did before this card. (DRE-1921:
+#: re-running against an exhausted limit cannot succeed and deepens it.)
+GH_READ_RETRY_BUDGET = 6
+
+#: Retries spent by THIS process. Module state, like the failure ledgers above:
+#: one sweep is one process.
+_gh_read_retries_spent = 0
+
+#: GitHub's rate-limit wording, and ONLY that (DRE-4109). Deliberately narrower
+#: than medic_classify's log-scanning patterns: this one decides whether to
+#: spend another request, so it matches the refusals that a wait actually fixes
+#: — `API rate limit exceeded`, `secondary rate limit`, an HTTP 429. The OTHER
+#: 403, `Resource not accessible by integration`, is a permission failure that
+#: no amount of waiting repairs; retrying it would only deepen the quota burn
+#: DRE-1921 was filed for. The 429 alternative is anchored to an `http`/`status`
+#: word so a bare 429 inside an installation id or a PR number cannot match.
+_RATE_LIMIT_REFUSAL = re.compile(
+    r"api rate limit exceeded"
+    r"|secondary rate limit"
+    r"|(?:http|status)\D{0,6}\b429\b",
+    re.I,
+)
+
+
+def _is_rate_limit_refusal(stderr: str) -> bool:
+    """True iff `gh`'s stderr is GitHub declining THIS request for quota."""
+    return bool(_RATE_LIMIT_REFUSAL.search(stderr))
+
+
 def gh_read(*args: str) -> str:
-    """Run a read-path gh command LOUDLY: raise ReconcileReadError on rc!=0.
+    """Run a read-path gh command LOUDLY: raise ReconcileReadError on rc!=0,
+    after retrying a brief rate-limit refusal a couple of times.
 
     Origin (2026-06-28, twice live / DRE-2034): the silent gh() helper
     discarded exit code and stderr, so a 403/rate-limit on the PR lookup
     parsed as "[]" — indistinguishable from "this card has no PR" — and the
     sweep requeued healthy cards off that fabricated emptiness.
+
+    The retry (DRE-4109, and DRE-4107 the same hour on portico): the unlanded
+    watchdog's `repos/:r/branches --paginate` listing came back `HTTP 403: API
+    rate limit exceeded for installation ID 123249480` — the SHARED App
+    installation, momentarily throttled — `card_branches` recorded it as a
+    write failure, the sweep exited 1 and the medic filed a pipeline-failure
+    card, while every other phase of that sweep had run normally. A brief
+    refusal from an outside service is a retry, not a failure. The CEO's
+    answer named the remedy and its limits: back off and try again a couple of
+    times, do NOT ask for the data any less often (the freshness is worth more
+    than the occasional blip), and say so in the run log each time so the
+    pattern is visible without a card.
+
+    This is the ONE seam that retries, and it covers every read that goes
+    through it. `gh()` keeps its own fallbacks; `gh_actions_read()` /
+    `_actions_read()` run under GH_DISPATCH_TOKEN — a different GitHub quota
+    from the App installation that was refused — and their contract stays
+    "answer None and fail closed", never "raise".
+
+    Bounded twice: three attempts per read, and GH_READ_RETRY_BUDGET retries
+    per sweep. The second bound is there because a refusal is rarely alone —
+    `pr_for` runs once per card, so an empty bucket refuses every read of the
+    sweep, and unbounded waiting would run the job into its own timeout.
     """
-    p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
-        ["gh", *args], capture_output=True, text=True, check=False
-    )
-    if p.returncode != 0:
-        raise ReconcileReadError(
-            f"gh {' '.join(args)} failed rc={p.returncode}: {p.stderr.strip()[:400]}"
+    global _gh_read_retries_spent
+    for attempt in range(1, GH_READ_ATTEMPTS + 1):
+        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+            ["gh", *args], capture_output=True, text=True, check=False
         )
-    return p.stdout.strip()
+        if p.returncode == 0:
+            return p.stdout.strip()
+        stderr = p.stderr.strip()
+        retryable = attempt < GH_READ_ATTEMPTS and _is_rate_limit_refusal(stderr)
+        if retryable and _gh_read_retries_spent >= GH_READ_RETRY_BUDGET:
+            # Say it once per read, so nobody reads the missing retry line as
+            # the retry having silently stopped working.
+            print(
+                f"gh-read: this sweep's retry budget of {GH_READ_RETRY_BUDGET} "
+                f"is spent — `gh {' '.join(args)}` was refused for rate limit "
+                "and is NOT being retried; the bucket is empty, not blipping"
+            )
+            retryable = False
+        if not retryable:
+            raise ReconcileReadError(
+                f"gh {' '.join(args)} failed rc={p.returncode}: {stderr[:400]}"
+            )
+        _gh_read_retries_spent += 1
+        wait = GH_READ_BACKOFF_SECONDS[attempt - 1]
+        # ONE line per retry, to the run log, naming the command and where we
+        # are in the budget — this is the whole of the visibility the CEO asked
+        # for in place of a card.
+        print(
+            f"gh-read: GitHub refused `gh {' '.join(args)}` for rate limit on "
+            f"attempt {attempt} of {GH_READ_ATTEMPTS} — retrying in {wait}s: "
+            f"{stderr[:200]}"
+        )
+        time.sleep(wait)
+    # Unreachable: the final attempt either returns or raises above. Kept so
+    # the function has no implicit `return None` for a caller to act on.
+    raise ReconcileReadError(f"gh {' '.join(args)} failed: retries exhausted")
 
 
 def gh_dispatch(*args: str) -> None:
@@ -1090,13 +1235,34 @@ _swept_cards: list[dict] | None = None
 _pr_listing: list[dict] | None = None
 
 
+# ONE read per pass for every active epic (DRE-3642), the board snapshot's
+# per-epic twin. The board read carries every epic ALREADY — what it does not
+# carry is the epic's children states, its relations and its history, so each
+# consumer bought its own read per epic: one children read per active epic in
+# `close_finished_epics` (9 on the 2026-09-12 board) and one relations read per
+# epic with Backlog children in the epic gate (9 more). Both scale with the
+# number of active epics, and that number is what grew. Filled and read ONLY
+# through `epic_records()` below, and reset with the rest of the pass's state.
+_epic_records: dict[str, dict] = {}
+
+# WHY an epic is not in the record above, for the consumer that must say so.
+# Deliberately NOT a record with no fields: "Linear did not answer for this
+# epic" and "this epic has no children" are different facts, and an empty
+# record renders them identically — which is how a fail-safe becomes a close
+# (DRE-3148, DRE-1772). It doubles as the pass's "already asked" set, so one
+# unreadable epic costs one read per pass rather than one per consumer.
+_epic_record_gaps: dict[str, str] = {}
+
+
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
-    in linear_ops (DRE-3236) and the sweep's open-PR listing (DRE-3435).
-    Called once at the top of main()."""
+    in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435) and its
+    epic records (DRE-3642). Called once at the top of main()."""
     global _swept_cards, _pr_listing
     _swept_cards = None
     _pr_listing = None
+    _epic_records.clear()
+    _epic_record_gaps.clear()
     linear_ops.reset_pass_cache()
 
 
@@ -2486,28 +2652,188 @@ def card_state(identifier: str) -> str:
     return data["issue"]["state"]["name"]
 
 
+#: EVERYTHING the sweep's per-epic readers need, selected ONCE (DRE-3642).
+#: The union, not the intersection: the close needs the children's states, the
+#: epic gate needs the description and the inverse relations, and the growth
+#: record needs the children's `createdAt` and the epic's state history. A
+#: consumer that needs a field nobody selected reads `None` and decides on it —
+#: which is how `children(first: 1)` once reported "no children" for every epic
+#: on the board (DRE-3044) — so the shape is stated here, once, and the two
+#: queries below are the same selection asked for many epics or for one.
+EPIC_RECORD_GQL = """
+             identifier description state { name }
+             children(first: 250) { nodes { identifier createdAt state { name } } }
+             history(last: 50) { nodes { createdAt toState { name } } }
+             inverseRelations(first: 20) { nodes {
+               type issue { identifier state { name } }
+             } }"""
+
+#: How many epics one PAGE of the record asks for. Twenty-five, not the 100
+#: every other paged read here uses, because this selection is far heavier per
+#: node: 250 children + 50 history entries + 20 relations apiece. Linear prices
+#: a request on the nodes it could return, so 100 × 320 is a query it can
+#: refuse outright — and a refused batch would fall back to the per-epic reads
+#: this cut exists to remove, permanently and quietly. The yardstick is the one
+#: heavy query this repo KNOWS Linear answers: `backlog_children`, at 100 cards
+#: × a 50-comment window, live since DRE-2929. 25 × 320 sits in that same
+#: order. A board with more active epics than this pages, exactly as the
+#: 260-card Backlog read pages, and still costs the pass a handful of requests
+#: rather than two per epic. It cannot be measured from CI — no test here
+#: reaches Linear — so it is set conservatively on purpose.
+EPIC_RECORD_PAGE = 25
+
+_EPIC_RECORDS_QUERY = """query($after: String, $numbers: [Float!]) {
+           issues(first: %d, after: $after, filter: {
+             team: {key: {eq: "DRE"}},
+             number: {in: $numbers}
+           }) { nodes {%s
+           } pageInfo { hasNextPage endCursor } } }""" % (
+    EPIC_RECORD_PAGE, EPIC_RECORD_GQL,
+)
+
+_EPIC_RECORD_QUERY = """query($id: String!) { issue(id: $id) {%s
+         } }""" % EPIC_RECORD_GQL
+
+
+def epic_records(identifiers: Iterable[str]) -> dict[str, dict]:
+    """The named epics, keyed by identifier, for ONE paged read per pass.
+
+    The number of reads follows the number of PASSES, never the number of
+    epics: the same shape `backlog_children(only=…)` uses, asked for the epics
+    the pass is about to walk. Every identifier not already in the pass's cache
+    is read together; the cache is dropped by `reset_sweep_cards()`.
+
+    An identifier Linear did not answer is ABSENT from the returned dict, never
+    present as an empty record — `epic_record_gap()` says why, and the consumer
+    treats it exactly as it treats an unreadable read today: skipped for the
+    close (DRE-3148), fail-safe blocked for the gate (DRE-1772). Both out loud;
+    a batched read cannot be allowed to turn nine loud skips into one silent
+    one.
+    """
+    wanted = sorted({ident for ident in identifiers if ident})
+    unknown = [
+        ident for ident in wanted
+        if ident not in _epic_records and ident not in _epic_record_gaps
+    ]
+    if unknown:
+        _read_epic_records(unknown)
+    return {ident: _epic_records[ident] for ident in wanted if ident in _epic_records}
+
+
+def epic_record_gap(identifier: str) -> str:
+    """Why `identifier` is not in this pass's epic record — the sentence the
+    consumer prints. Never empty: "we did not look" is itself the answer, and a
+    blank reason reads like no reason at all."""
+    return _epic_record_gaps.get(identifier, "this pass did not read it")
+
+
+def _read_epic_records(identifiers: list[str]) -> None:
+    """Fill the pass's record for `identifiers` — one paged read, or the old
+    per-epic reads once if that read fails as a whole.
+
+    The fallback is the point of the guard: a Linear hiccup on the batch would
+    otherwise take EVERY epic's record out at once, which is a fail-safe gate
+    blocking every child on the board and an epic close that closes nothing.
+    Paying the old per-epic price for one sweep is the cheap outcome.
+
+    The one error it does NOT retry is a spent quota: nine more requests
+    against an exhausted limit cannot succeed and deepen it, which is the medic
+    loop DRE-1921 ended. Those epics are gaps, the fail-safes hold, and the
+    next sweep reads a refilled bucket.
+    """
+    askable, numbers = [], []
+    for ident in identifiers:
+        try:
+            numbers.append(int(ident.split("-")[1]))
+        except (IndexError, ValueError):
+            _epic_record_gaps[ident] = (
+                f"{ident!r} is not a Linear identifier the batched read can ask for"
+            )
+            continue
+        askable.append(ident)
+    if not askable:
+        return
+    try:
+        nodes = linear_ops.gql_paged(_EPIC_RECORDS_QUERY, {"numbers": numbers})
+    except linear_ops.LinearRateLimited as e:
+        # Not a hiccup — the bucket is dry. Retrying per epic cannot answer and
+        # deepens it (DRE-1921); every epic is a gap and the consumers say so.
+        for ident in askable:
+            _epic_record_gaps[ident] = str(e)
+        print(
+            f"epic-records: the batched read of {len(askable)} epic(s) was "
+            f"refused by the quota ({e}) — NOT retried one at a time, which "
+            f"cannot succeed against a spent bucket",
+            file=sys.stderr,
+        )
+        return
+    except Exception as e:  # noqa: BLE001 — any other failure falls back, once
+        # The count, never the identifiers: the epics that ARE read are not a
+        # failure and must not appear in a failure line (DRE-3148's log reads
+        # "this epic was skipped", and every name in it means that).
+        print(
+            f"epic-records: the batched read of {len(askable)} epic(s) failed "
+            f"({e}) — reading them one at a time this sweep, once",
+            file=sys.stderr,
+        )
+        for ident in askable:
+            _read_one_epic_record(ident)
+        return
+    answered = {
+        node.get("identifier"): node for node in nodes if node.get("identifier")
+    }
+    for ident in askable:
+        record = answered.get(ident)
+        if record is None:
+            _epic_record_gaps[ident] = (
+                "Linear did not answer for it in this pass's batched epic read"
+            )
+        else:
+            _epic_records[ident] = record
+
+
+def _read_one_epic_record(identifier: str) -> None:
+    """One epic, the old way — the fallback's unit, and isolated like the phase
+    it replaces: one epic Linear will not answer for is a gap in the record,
+    never the other eight epics' gap too."""
+    try:
+        issue = (linear_ops.gql(_EPIC_RECORD_QUERY, {"id": identifier}) or {}).get("issue")
+    except Exception as e:  # noqa: BLE001 — the reason travels to the consumer
+        _epic_record_gaps[identifier] = str(e) or type(e).__name__
+        return
+    if not issue:
+        _epic_record_gaps[identifier] = "Linear returned no issue for it"
+        return
+    _epic_records[identifier] = issue
+
+
 def _fetch_epic_relations(epic_identifier: str) -> dict | None:
-    """Read an epic's identifier, description, and `blocked-by` relations.
+    """An epic's identifier, description, and `blocked-by` relations.
 
     Returns the same shape `prose_blockers` consumes (identifier, description,
     inverseRelations) so the epic-level gate reads a card and an epic with one
-    set of functions. Returns None on any read failure so callers can fail SAFE
-    (DRE-1772).
+    set of functions. Returns None when the epic is not in this pass's record
+    so callers can fail SAFE (DRE-1772) — an unread epic and an unreadable one
+    are the same fact to this gate, and it says which epic and why.
+
+    Read off `epic_records()` since DRE-3642: this was one request per epic
+    with Backlog children, every sweep, for three fields of a card the board
+    read had already returned. A NEW dict, not the cached record, because
+    `epic_blockers_unmet` fills in the fields prose_blockers expects and a
+    consumer must not be able to edit the pass's record for everyone else.
     """
-    try:
-        data = linear_ops.gql(
-            """query($id: String!) { issue(id: $id) {
-                 identifier description
-                 inverseRelations(first: 20) { nodes {
-                   type issue { identifier state { name } }
-                 } }
-               } }""",
-            {"id": epic_identifier},
+    record = epic_records([epic_identifier]).get(epic_identifier)
+    if record is None:
+        print(
+            f"epic-gate: could not read relations for {epic_identifier}: "
+            f"{epic_record_gap(epic_identifier)}"
         )
-    except Exception as e:  # noqa: BLE001 — any Linear/transport error -> fail safe
-        print(f"epic-gate: could not read relations for {epic_identifier}: {e}")
         return None
-    return (data or {}).get("issue")
+    return {
+        "identifier": record.get("identifier") or epic_identifier,
+        "description": record.get("description"),
+        "inverseRelations": record.get("inverseRelations"),
+    }
 
 
 def epic_blockers_unmet(epic_identifier: str) -> bool:
@@ -2870,6 +3196,25 @@ def epic_thread(epic: str) -> list | None:
         return None
 
 
+def takes_no_slot(bodies) -> bool:
+    """Is this card bound for a PERSON — moved by the sweep, never dispatched?
+
+    WORKBENCH and OPERATOR, read off the vocabulary rather than spelled here:
+    a verdict the sweep promotes (`sweep_promotes`) that no run is dispatched
+    at (`is_promotable`). Such a card takes no slot under MAX_WIP, so a fleet
+    at its cap does not hold it (DRE-3385). False for a FLEET card, for a
+    verdict bound somewhere else, and for a card carrying no verdict at all —
+    none of those passes a full cap. Pure: `bodies` came with the candidates
+    query, so asking spends no Linear read.
+    """
+    verdict = routing_verdict.verdict_on(bodies)
+    return (
+        verdict is not None
+        and routing_verdict.sweep_promotes(verdict)
+        and not routing_verdict.is_promotable(verdict)
+    )
+
+
 def promote_ready(active_count: int, candidates: list[dict] | None = None) -> int:
     """Auto-promote Backlog cards whose blockers are all Done.
 
@@ -2884,6 +3229,23 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     `candidates` — Backlog cards in `backlog_children`'s shape — replaces the
     whole-Backlog read when the caller already knows which cards a moment can
     have changed (the merge path, DRE-3236). Every gate below is the same.
+
+    THREE verdicts leave this lane, not one (DRE-3385). FLEET is promoted and
+    dispatched; WORKBENCH and OPERATOR are promoted and NOT dispatched — the
+    marks their verdict declares go on first, so the card never sits in Todo
+    unmarked, and the receipt says whose turn it is. Only a verdict routed
+    somewhere else (PARKED, NEEDS WORK) or no verdict at all is refused. The
+    hand-built promotions do not spend the WIP budget either: nothing is
+    dispatched for them, so they take no slot, and a Backlog holding 33
+    operator cards must not eat the fleet's promotion budget on its way out.
+
+    And they do not WAIT on it. The cap is asked per card, never once for the
+    sweep: a fleet at — or over — its cap holds every card a run would be
+    dispatched for, and still carries a WORKBENCH or OPERATOR card to Todo,
+    because "a hand-built card needs no room" (the lane contract's words). An
+    early return at the cap starved a person's card on every ordinary busy day
+    (PR #430's review); so did breaking out of the loop once the budget was
+    spent, since the candidates are read lowest number first.
     """
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
     # say what it was holding to, or a repo at "0" promoting at 8 reads exactly
@@ -2891,10 +3253,18 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
     print(f"promotion: WIP cap {MAX_WIP}, read from {MAX_WIP_SOURCE}")
     budget = MAX_WIP - active_count
     if budget <= 0:
-        print(f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — none promoted")
-        return 0
+        # Said, not returned on (DRE-3385): this holds the cards a run would be
+        # dispatched for. A card bound for a person is still read below.
+        print(
+            f"promotion: WIP at cap ({active_count}/{MAX_WIP}) — no card is "
+            "dispatched this sweep; a hand-built card needs no room and is "
+            "still considered"
+        )
     promoted = 0
     parentless = 0  # of `promoted` — the new path, reported rather than inferred
+    by_hand = 0  # of `promoted` — WORKBENCH/OPERATOR, moved but never dispatched
+    spent = 0  # of `budget` — only a card a run IS dispatched for takes a slot
+    waiting_reported = False  # the budget-spent line is ONE per sweep (DRE-2918)
     # Cache the epic-level gate per parent epic: it is the same answer for every
     # child of that epic, so consult Linear once per epic per sweep (DRE-1772).
     epic_gate: dict[str, bool] = {}
@@ -2909,19 +3279,22 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         backlog_children() if candidates is None else candidates,
         key=lambda c: int(c["identifier"].split("-")[1]),
     )
+    # ONE read for every epic this gate will ask about (DRE-3642), before the
+    # loop rather than inside it: `epic_gate` above already made it one read
+    # per EPIC per sweep, and on a board with nine active epics that was still
+    # nine requests. Pure computation over cards the pass has already read —
+    # this repo's candidates, with a parent whose lane the gate would consult —
+    # so a card the loop never reaches costs nothing extra to have named here.
+    # On a full sweep the close ran first and every one of them is already in
+    # the record, so this line spends nothing at all.
+    epic_records({
+        (card.get("parent") or {}).get("identifier")
+        for card in candidates
+        if card_repo(card) == REPO_SLUG
+        and ((card.get("parent") or {}).get("state") or {}).get("name")
+        in EPIC_ACTIVE_STATES
+    })
     for index, card in enumerate(candidates):
-        if promoted >= budget:
-            # ONE line per sweep, not one per card (DRE-2918): a 200-card
-            # Backlog must not print 200 lines. `candidates` is sorted ascending
-            # by card number, so the cards cut off here are always the newest,
-            # every sweep — and the summary at the end reports only a total.
-            unconsidered = candidates[index:]
-            print(
-                f"promotion: WIP budget spent ({promoted}/{budget} promoted) — "
-                f"{len(unconsidered)} candidate(s) not considered this sweep, "
-                f"lowest-numbered {unconsidered[0]['identifier']}"
-            )
-            break
         # The ONE deliberately silent exit in this loop (DRE-2918). The sweep is
         # per-repo over the whole team's Backlog, so speaking here would make
         # every repo print a line for every other repo's every card, every
@@ -2933,6 +3306,36 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # gates below read them — the epic test, the wave record and the
         # verdict. One comprehension, hoisted to the first of them.
         bodies = card_comment_bodies(card)
+        # The cap, asked PER CARD (DRE-3385). With the budget gone, only a card
+        # bound for a person goes on — WORKBENCH or OPERATOR: the sweep moves
+        # it and no run is dispatched at it, so it takes no slot. Everything
+        # else stops here, before any gate below spends a Linear read or posts
+        # a refusal on a sweep with no room to act: a FLEET card, and equally a
+        # card with no verdict or one bound somewhere else, exactly as when
+        # the loop broke. The verdict is read off comments the candidates query
+        # already returned, so asking costs nothing. `budget` may be negative
+        # (a cap lowered under work in flight); `spent >= budget` holds then too.
+        if spent >= budget and not takes_no_slot(bodies):
+            # ONE line per sweep, not one per card (DRE-2918): a 200-card
+            # Backlog must not print 200 lines. Said at the FIRST card held —
+            # the count is already exact there, because `spent` never falls and
+            # a hand-built promotion never raises it, so every later card of
+            # this repo's that needs a slot is held too. `candidates` is sorted
+            # ascending by card number, so the cards left waiting are always
+            # the newest, every sweep.
+            if not waiting_reported:
+                waiting_reported = True
+                unconsidered = [
+                    c["identifier"] for c in candidates[index:]
+                    if card_repo(c) == REPO_SLUG
+                    and not takes_no_slot(card_comment_bodies(c))
+                ]
+                print(
+                    f"promotion: WIP budget spent ({spent}/{max(budget, 0)} "
+                    f"dispatched) — {len(unconsidered)} candidate(s) not "
+                    f"considered this sweep, lowest-numbered {unconsidered[0]}"
+                )
+            continue
         if card_is_epic(card, bodies):
             print(
                 f"promotion: {card['identifier']} is an epic — epics are "
@@ -3121,18 +3524,23 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
                         bodies,
                     )
             # Routing verdict (DRE-2724): the verdict answers WHO builds this
-            # card, and only FLEET means "an unattended agent, in one pull
-            # request". WORKBENCH needs an interactive flow, OPERATOR is not
-            # code at all, PARKED is deliberately not built, NEEDS WORK is not
-            # buildable as written — dispatching any of them sends the fleet at
-            # a card it cannot close. A CHILD with NO verdict promotes exactly as
-            # before: Backlog's "it carries a verdict" clause is enforced from
-            # Phase 5, and refusing the whole verdictless board today would
-            # freeze it rather than route it.
+            # card and WHERE it goes, and the sweep refuses only a card bound
+            # somewhere it does not go. PARKED is deliberately not built and
+            # NEEDS WORK belongs back with the planner; WORKBENCH and OPERATOR
+            # are bound for Todo like FLEET and are carried there, marked
+            # `hand-built`, with nothing dispatched (DRE-3385).
             #
-            # A PARENTLESS card is the one case where no verdict is itself the
-            # refusal (DRE-2735): a child inherits its epic's approval and this
-            # one has none to inherit, so the verdict IS the approval.
+            # NO VERDICT is the other refusal, and since DRE-3385 it holds for a
+            # child as well as a one-off. "A child with no verdict promotes
+            # exactly as before" was right while nothing wrote a verdict at
+            # planning exit and wrong once everything did — it dispatched an
+            # engineer agent at a `PROOF:` card the moment its siblings reached
+            # Done (DRE-3039).
+            #
+            # The no-verdict refusal still READS differently on each (DRE-2735):
+            # a child has an epic's approval to name, and a one-off has none to
+            # inherit, so its verdict IS the approval. Same tag, same outcome,
+            # different sentence — and the sentence is what a person acts on.
             if refusal is None:
                 refusal = (
                     routing_verdict.promotion_refusal(card["identifier"], bodies)
@@ -3161,17 +3569,36 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         # Gate passed — now mutate. A LinearError here is a WRITE failure, not a
         # bad reference: record it on the existing _write_failures path (fails
         # the run red for medic) instead of the bad-reference diagnostic.
+        #
+        # The verdict is on the card by now — the gate above refuses one that
+        # carries none — and it decides both halves of this move: whether the
+        # marks go on, and what the receipt says.
+        verdict = routing_verdict.verdict_on(bodies)
+        by_hand_note = routing_verdict.hand_built_promotion(verdict)
         try:
+            # MARKS FIRST, then the move (DRE-3385). The nudge loop leaves a
+            # hand-built card alone BECAUSE of the label, so a card that lands
+            # in Todo unmarked is a card the next sweep — fifteen minutes later
+            # — dispatches an agent at. The labels the card already carries came
+            # free with the candidates query; `add_label` is idempotent but
+            # costs a Linear read to find that out.
+            if by_hand_note is not None:
+                for label in routing_verdict.marks(verdict):
+                    if label.lower() not in labels:
+                        linear_ops.add_label(card["identifier"], label)
             linear_ops.cmd_advance(card["identifier"], "Todo", "Backlog")
-            # The receipt names what actually approved this card. "parent epic
-            # active" on a card with no parent would be a confident wrong
-            # answer about the one thing the reader is asking.
+            # The receipt names what actually approved this card, and — for the
+            # two verdicts nothing is dispatched for — whose turn it now is.
+            # "parent epic active" on a card with no parent would be a confident
+            # wrong answer about the one thing the reader is asking.
+            reason = by_hand_note or (
+                "parent epic active and all blockers Done."
+                if parent
+                else "no parent epic, a FLEET verdict, and all blockers Done."
+            )
             linear_ops.cmd_comment(
                 card["identifier"],
-                "🧹 Auto-promoted Backlog → Todo: parent epic active and all blockers Done."
-                if parent
-                else "🧹 Auto-promoted Backlog → Todo: no parent epic, a FLEET "
-                     "verdict, and all blockers Done.",
+                f"🧹 Auto-promoted Backlog → Todo: {reason}",
             )
         except linear_ops.LinearError as e:
             _write_failures.append(f"{card['identifier']} advance/comment: {e}")
@@ -3181,14 +3608,22 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
             )
             continue
         promoted += 1
+        if by_hand_note is not None:
+            by_hand += 1
+        else:
+            spent += 1
         if not parent:
             parentless += 1
     # The parentless count is printed on EVERY sweep, zero included: the new
     # path is meant to be visible rather than inferred from a total, and "no
-    # line" and "none promoted" must not render the same (DRE-2735).
+    # line" and "none promoted" must not render the same (DRE-2735). The
+    # hand-built count is there for the same reason (DRE-3385) — and it is the
+    # one number that explains a sweep promoting more cards than the cap has
+    # room for, because none of them took a slot.
     print(
         f"promotion: {promoted} card(s) promoted, {parentless} parentless "
-        f"one-off(s) (WIP {active_count}+{promoted}/{MAX_WIP})"
+        f"one-off(s), {by_hand} hand-built (nothing dispatched) "
+        f"(WIP {active_count}+{spent}/{MAX_WIP})"
     )
     if _card_skips:
         # A red pattern the run log can't miss (DRE-2035) — pairs with the
@@ -3209,8 +3644,20 @@ def close_finished_epics(epic_identifiers: set[str]) -> None:
     run — twice in a row on 2026-09-06. An epic that cannot be read or closed
     this sweep is logged and skipped; the input is recomputed every pass, so
     the next sweep closes it and nothing is lost.
+
+    ONE read for all of them (DRE-3642): the children states come off the
+    pass's epic record, read here for every epic at once instead of one request
+    per epic per sweep. The isolation above is unchanged — an epic the record
+    does not carry raises below, which is the same skip, with the same line,
+    for the same reason.
     """
-    for epic in sorted(epic_identifiers):
+    epics = sorted(epic_identifiers)
+    if epics:
+        # Outside the per-epic guard on purpose, and safe there: every failure
+        # this read can have is already a per-epic gap by the time it returns,
+        # and the guard below turns each one back into the skip it was.
+        epic_records(epics)
+    for epic in epics:
         try:
             _close_epic_if_finished(epic)
         except Exception as exc:  # noqa: BLE001 — isolate one epic, sweep the rest
@@ -3221,11 +3668,16 @@ def close_finished_epics(epic_identifiers: set[str]) -> None:
 
 
 def _close_epic_if_finished(epic: str) -> None:
-    kids = linear_ops.gql(
-        "query($id: String!) { issue(id: $id) { children { nodes { state { name } } } } }",
-        {"id": epic},
-    )["issue"]["children"]["nodes"]
-    states = [k["state"]["name"] for k in kids]
+    record = epic_records([epic]).get(epic)
+    if record is None:
+        # The same skip an unreadable children read has always taken: raised so
+        # the caller's guard prints the one line, with the reason the read
+        # itself gave, and the next sweep tries again (DRE-3148).
+        raise LookupError(
+            f"not in this pass's epic record — {epic_record_gap(epic)}"
+        )
+    kids = (record.get("children") or {}).get("nodes") or []
+    states = [(k.get("state") or {}).get("name") for k in kids]
     if (
         states
         and all(s in ("Done", "Canceled", "Duplicate") for s in states)
@@ -6756,7 +7208,7 @@ def recover_limit_deaths() -> None:
         cards = [c for c in active_cards() if card_repo(c) in (None, REPO_SLUG)]
         for line in limit_recovery.recover(
             linear_ops, datetime.now(UTC), os.environ.get("CLAUDE_ACCOUNT") or None,
-            MAX_WIP - sum(1 for c in cards if card_repo(c) == REPO_SLUG),
+            MAX_WIP - wip_count([c for c in cards if card_repo(c) == REPO_SLUG]),
             rerun=lambda run_id: gh_dispatch(
                 "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
             move=lambda ident, lane: linear_ops.cmd_state(ident, lane),
@@ -7148,13 +7600,13 @@ def main(
                 f"{len(scope.dependents)} dependent(s)"
             )
             promote_ready(
-                active_count=len(mine),
+                active_count=wip_count(mine),
                 candidates=backlog_children(only=scope.dependents),
             )
         else:
-            promote_ready(active_count=len(mine))
+            promote_ready(active_count=wip_count(mine))
     if promote_only:
-        print(f"promote-only: gate evaluated (WIP base {len(mine)})")
+        print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
         # The event-driven gate runs the epic gate too, so it can find a stale
         # prose defect — and a red run is the epic's whole escalation, so it
         # must be red on this path as well (DRE-2676).

@@ -382,6 +382,37 @@ def opens_with_marker(body: Optional[str], marker: str) -> bool:
     return bool(_marker_re(marker).match(first_line(body)))
 
 
+def flatten_pages(data) -> list:
+    """One comment list from either payload shape (DRE-2030, DRE-4139).
+
+    `gh api --paginate --slurp` emits one array PER PAGE, so the record a
+    workflow writes is an array of arrays; a caller that already holds a flat
+    array passes it through unchanged. Lived in fix_context until DRE-4139
+    made the gate a reader of the same record — fix_context imports this
+    module, so the definition moved down rather than being copied, and
+    `fix_context.flatten_pages` is this function.
+
+    Why the gate needs it at all: the unpaginated fetch it used to make saw
+    GitHub's default page size of 30 — the OLDEST 30 comments — so on any PR
+    past thirty the verdict window was frozen and no new verdict could ever
+    enter it (agent-bureau#2588). Bare `--paginate` is not the fix: it prints
+    one JSON array per page back to back and `json.load` raises. `--slurp`
+    without this is not either: the gate would then call `.get` on an inner
+    LIST. Both are a red run, which is worse than the wait they replace.
+
+    Raises ValueError on anything that is not provably a comment record, so
+    an unreadable payload fails closed at the caller rather than arriving as
+    a partial list.
+    """
+    if not isinstance(data, list):
+        raise ValueError("comments payload must be a JSON array")
+    if data and all(isinstance(page, list) for page in data):
+        data = [c for page in data for c in page]
+    if not all(isinstance(c, dict) for c in data):
+        raise ValueError("comments payload must contain comment objects")
+    return data
+
+
 def latest_verdict_comment(comments, qa_login: str, marker: str) -> Optional[str]:
     """Body of the LATEST comment that (a) is authored by the qa-bot App and
     (b) opens with the marker on its first line. None if no such comment —
@@ -942,13 +973,15 @@ def main(argv=None) -> int:
     if not isinstance(check_runs, list):
         _die("check-runs payload has no check_runs list")
 
+    # DRE-4139: the workflow writes `gh api --paginate --slurp`'s array of
+    # PAGES, so it is flattened here — one flat list, every page of it.
     try:
         with open(args.comments_file) as f:
-            comments = json.load(f)
+            comments = flatten_pages(json.load(f))
     except (OSError, json.JSONDecodeError) as e:
         _die(f"cannot read comments: {e}")
-    if not isinstance(comments, list):
-        _die("comments payload is not a list")
+    except ValueError as e:
+        _die(f"comments payload is not a comment record: {e}")
 
     try:
         with open(args.workflow_runs_file) as f:

@@ -851,6 +851,16 @@ scripts — the exact chimera this channel exists to prevent. Omitting both
 `tests/test_pipeline_ref_threading.py`) fails CI here if any internal
 checkout stops threading the input.
 
+**One workflow does not leave its copy in the working tree.** `qa-review.yml`
+moves the checkout to `$RUNNER_TEMP/bureau-pipeline` in the step right after
+it and addresses it as **`$PIPELINE_DIR`** from then on (DRE-3226) — the
+critic runs its experiments inside the reviewed repo, and a `git clean -x`
+there deleted the scripts its own review still needed. The checkout, the ref
+and the pairing rule above are unchanged; only where the files sit is. What
+stays in the tree is `.github/actions` (a `uses: ./…` local action is only
+resolvable under `$GITHUB_WORKSPACE`) and the assembled `agent-context.md`,
+both read before the agent starts.
+
 **Canary**: **agent-bureau is the designated canary and stays on `@main`**
 (no `pipeline_ref`), so every merge here soaks on the canary's real traffic
 before the fleet sees it. The fleet is one step behind the canary, on
@@ -944,8 +954,9 @@ is a separate, louder act (`-f force=true`), refused without a reason and
 refused to a bot login, and it raises a warning on the run naming the mover.
 Force is scoped to the proof alone: `stable` still cannot move backwards,
 `CHANNEL_HOLD` still holds, and the candidate must still be reachable from
-`main` — `harness.yml` also runs on pull requests, so a PR head carries a
-green stamp of its own and must not be promotable. The push uses the bot App
+`main` — a by-hand harness run against a branch (`pipeline_ref`) stamps that
+branch's head green, and a commit that never merged must not be promotable.
+The push uses the bot App
 token on this route too, so `release-gate.yml` fires and validates it. The
 full record, the receipt vocabulary and the incident are in
 `docs/self-hosting.md`, "Moving the channel by hand".
@@ -983,10 +994,30 @@ that command rather than trusting a number written into prose — the
 sentence this replaced is what an enumeration looks like once the set has
 moved (`adr-one-writer-per-fact`, DRE-2605).
 
-The harness is also a PR gate here: `harness.yml` runs on pull requests
-touching the boundary paths (workflow wiring + the dispatch/gate scripts),
-and the merge gate's all-checks-green rule holds any boundary PR whose
-harness run is red — no branch-protection change involved.
+**The harness proves `main`, not every pull request (DRE-4149).** Until
+2026-09-17 `harness.yml` also ran on pull requests touching the boundary paths
+(DRE-2103), and the merge gate's all-checks-green rule held any such PR whose
+harness run was red. That run is gone. It largely re-proved `main` — the
+sandbox's stubs ride `@main`, and the harness said so on every PR run
+("agent-task.yml parses at <main sha> … which is NOT the commit under test") —
+and on 2026-09-17, when the worker App's hourly GitHub allowance ran out
+(DRE-4132), refused harness runs held six approved PRs behind a red check that
+said nothing about their code while `stable` fell twelve merges behind. A PR
+here now merges on the critic, the verifier and the unit/contract suite, the
+bar every other repo in the fleet merges on; the harness runs once, on `main`,
+where it decides whether `stable` advances. Nothing was required of it by
+name — not in `scripts/merge_gate.py`, which keeps no list of expected checks,
+and not in branch protection — so a PR head with no harness check simply
+merges on the checks it has. To prove a risky branch BEFORE it merges,
+dispatch the harness by hand: `gh workflow run harness.yml -f
+pipeline_ref=<branch>`. That run proves; it does not gate.
+
+**The accepted cost, named (DRE-4149).** A change that breaks the pipeline
+end to end is found on `main` after it merges rather than on its pull request
+before. `stable` does not move onto it, so no product repo sees it; Red-Main
+Repair watches the harness on `main` (DRE-2820) and files the repair card.
+With several merges between two `main` runs, the failing run names a range of
+commits, not one.
 
 ## Channel staleness alarm (DRE-2552)
 

@@ -58,6 +58,12 @@ import mid_epic  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
+# The ROUTING verdict (DRE-2724), which is a different marker from the mid-epic
+# discovery verdict this file is about. Since DRE-3385 the sweep refuses a card
+# carrying none, so every promotion board below starts with one.
+ROUTING_FLEET = routing_verdict.verdict_comment(
+    "FLEET", "the acceptance criteria are unit-testable")
+
 GREEN_LIGHT = "2026-08-20T09:00:00.000Z"
 BEFORE = "2026-08-19T12:00:00.000Z"
 AFTER = "2026-08-25T14:00:00.000Z"
@@ -924,7 +930,10 @@ class _PromotionBoard:
             "parent": {"identifier": "DRE-2700", "state": {"name": "In Progress"}},
             "labels": {"nodes": [{"name": "repo:bureau-pipeline"},
                                  {"name": "agent:engineer"}]},
-            "comments": {"nodes": [{"body": b} for b in comments]},
+            # The ROUTING verdict is always present, and is not what this
+            # board is about: since DRE-3385 a card without one is refused for
+            # THAT reason, which would mask the mid-epic rule under test.
+            "comments": {"nodes": [{"body": b} for b in (*comments, ROUTING_FLEET)]},
             "inverseRelations": {"nodes": []},
         }
         self.advanced: list[tuple[str, str, str]] = []

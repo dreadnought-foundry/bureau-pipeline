@@ -33,6 +33,14 @@ os.environ.setdefault("REPO", "DeltaSolv/deltasolv")
 os.environ.setdefault("REPO_SLUG", "deltasolv")
 
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
+
+# Since DRE-3385 a Backlog card carrying NO routing verdict is refused
+# promotion outright, so every candidate below carries one — a fixture held
+# back for the missing verdict would say nothing about the gate under test.
+FLEET_VERDICT = routing_verdict.verdict_comment(
+    "FLEET", "the acceptance criteria are unit-testable")
+
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +94,7 @@ def _label_only_dependent():
         "description": "Offline-queue scaffold.\n\n**Blocked by:** DRE-1803",
         "parent": {"identifier": "DRE-1781", "state": {"name": "In Progress"}},
         "labels": {"nodes": [{"name": "agent:frontend"}, {"name": "repo:deltasolv"}]},
-        "comments": {"nodes": []},
+        "comments": {"nodes": [{"body": FLEET_VERDICT}]},
         # The formal relation the `**Blocked by:**` line documents. DRE-1803 is
         # Done, so it is not a live blocker — and since DRE-2676 the relation is
         # what the gate reads, with the prose line corroborated by it and

@@ -84,7 +84,10 @@ class ScriptInvocationTest(unittest.TestCase):
         self.assertIn(f"check-runs\" > {m.group(1)}", self.run_block)
         m = re.search(r"--comments-file (\S+)", self.run_block)
         self.assertIsNotNone(m)
-        self.assertIn(f"comments\" > {m.group(1)}", self.run_block)
+        # DRE-4139: the comment record is fetched PAGINATED, so the redirect
+        # sits on its own continuation line rather than beside the path.
+        self.assertIn(f"> {m.group(1)}", self.run_block)
+        self.assertIn("issues/$PR/comments?per_page=100", self.run_block)
 
     def test_review_origin_record_is_gathered_and_passed(self):
         """DRE-1994: the review-run exclusion needs GitHub's own record of

@@ -179,8 +179,8 @@ bad, only a wrong destination, which shows up immediately.
 | Verdict | Means | Where it goes / who picks it up |
 | -- | -- | -- |
 | **FLEET** | Buildable unattended in one PR | `Todo` — the sweep promotes it, an agent run builds it. The ONLY verdict that is dispatched. |
-| **WORKBENCH** | Needs an interactive flow or live system state | `Todo`, marked `hand-built` — the operator, at an interactive session. |
-| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Todo`, marked `hand-built` + `no-code` — the operator. |
+| **WORKBENCH** | Needs an interactive flow or live system state | `Todo`, marked `hand-built` — the sweep promotes it and stamps the mark; the operator works it there, at an interactive session. Nothing is dispatched. |
+| **OPERATOR** | Not code — a deploy, a migration run, a secret | `Todo`, marked `hand-built` + `no-code` — same move, same person, and no code is produced. |
 | **PARKED** | Well-formed and deliberately not to be built | `Backlog` — landed there by the planning-exit writer, and nobody picks it up. Never promoted, and **never reported as stalled** by any sweep. |
 | **NEEDS WORK** | Not buildable as written | `Planning` — the planner, with the specific missing thing named. |
 
@@ -273,11 +273,13 @@ convention that drifts:
 
 **And the check writes the verdict it computes onto the card** — the same
 `🧭 routing-verdict` comment every other verdict uses, so
-`routing_verdict.promotion_refusal` reads it and the sweep leaves the card in
-`Backlog` for the person who confirms it. It used to compute the verdict, print
-it and stamp nothing, and a verdictless child promotes exactly as it always
-had: the card was dispatched to a build agent the moment its siblings reached
-Done (DRE-3039). One writer, the one that already knows the answer. A legacy
+`routing_verdict.promotion_refusal` reads it and the sweep hands the card to
+the person who confirms it: to `Todo`, marked `hand-built` (plus `no-code` for
+OPERATOR), with nothing dispatched (DRE-3385). Those marks are the protection,
+and only the stamp produces them. It used to compute the verdict, print it and
+stamp nothing, and a verdictless child promoted exactly as it always had: the
+card was dispatched to a build agent the moment its siblings reached Done
+(DRE-3039). One writer, the one that already knows the answer. A legacy
 epic's second closing child is stamped only where its own verdict is one a
 human acts on — nothing checks that child any more, and writing `FLEET` onto an
 unchecked card would send the fleet at it rather than keep the fleet off it.

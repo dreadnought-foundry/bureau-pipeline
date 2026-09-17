@@ -97,13 +97,25 @@ def workflow(name):
 def agent_prompt(name):
     """The `prompt:` input of the workflow's claude-code-action step, read from
     the PARSED yaml — the string the agent actually receives, not a grep of the
-    file."""
+    file.
+
+    The step is carried three times since DRE-4108 (the agent step plus two
+    retries for a GitHub rate-limit refusal that lands before the model
+    starts), so the assertion is that every copy carries the SAME prompt
+    rather than that only one copy exists. That is what this file needs: a
+    retry that quietly dropped the commit-order self-check below would be a
+    way past it, and the old count could not have seen that at all.
+    """
     prompts = []
     for job in workflow(name)["jobs"].values():
         for step in job.get("steps") or []:
             if "anthropics/claude-code-action" in (step.get("uses") or ""):
                 prompts.append((step.get("with") or {}).get("prompt"))
-    assert len(prompts) == 1, f"{name}: expected one agent step, got {len(prompts)}"
+    assert prompts, f"{name}: no agent step"
+    assert len(set(prompts)) == 1, (
+        f"{name}: its {len(prompts)} agent steps carry different prompts — "
+        f"every attempt must hand the agent the same instructions"
+    )
     assert prompts[0], f"{name}: agent step has no prompt"
     return prompts[0]
 

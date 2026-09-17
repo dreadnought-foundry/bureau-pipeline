@@ -89,14 +89,28 @@ def workflow(name: str) -> dict:
 def agent_prompt(name: str) -> str:
     """The `prompt:` input of the workflow's claude-code-action step, read from
     the PARSED yaml — the string the agent actually receives, not a grep of the
-    file. Exactly one such step exists in each authoring workflow."""
+    file.
+
+    An authoring workflow may carry the step MORE THAN ONCE: DRE-4108 gave
+    agent-task.yml three attempts at it, because a GitHub rate-limit refusal
+    arriving before the model started is a retry rather than a failure. Every
+    attempt must hand the agent the SAME prompt — a retry that quietly dropped
+    the pre-submit gate would be a way past it — so the duplicates are asserted
+    identical here and the single prompt is returned. That is strictly stronger
+    than the old "exactly one step" assertion, which could not have caught a
+    second step with a different prompt at all.
+    """
     prompts = []
     for job in workflow(name)["jobs"].values():
         for step in job.get("steps") or []:
             uses = step.get("uses") or ""
             if "anthropics/claude-code-action" in uses:
                 prompts.append((step.get("with") or {}).get("prompt"))
-    assert len(prompts) == 1, f"{name}: expected one agent step, got {len(prompts)}"
+    assert prompts, f"{name}: no agent step"
+    assert len(set(prompts)) == 1, (
+        f"{name}: its {len(prompts)} agent steps carry different prompts — "
+        f"every attempt must hand the agent the same instructions"
+    )
     assert prompts[0], f"{name}: agent step has no prompt"
     return prompts[0]
 

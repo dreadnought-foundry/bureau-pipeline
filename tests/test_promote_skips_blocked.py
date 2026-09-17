@@ -33,11 +33,16 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
 
 BLOCKER = (
     "🛑 Agent blocked: the upstream `/v2/widgets` endpoint does not exist — "
     "parked in Backlog until the blocker is resolved. Run: https://x"
 )
+
+
+ROUTING_FLEET = routing_verdict.verdict_comment(
+    "FLEET", "the acceptance criteria are unit-testable")
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +64,12 @@ def _candidate(comments):
         "labels": {"nodes": [{"name": "size:M"}]},
         # Served NEWEST FIRST, the order Linear answers a comment window in
         # (DRE-3250); `comments` is written oldest→newest above.
-        "comments": {"nodes": [{"body": b} for b in reversed(list(comments))]},
+        # The routing verdict is the OLDEST comment on every card — it is
+        # written at planning exit — and since DRE-3385 a card carrying none is
+        # refused promotion, which would mask the blocker guard under test.
+        "comments": {"nodes": [
+            {"body": b} for b in reversed([ROUTING_FLEET, *comments])
+        ]},
         "inverseRelations": {"nodes": []},
     }
 

@@ -80,15 +80,23 @@ import validate_card  # noqa: E402
 from test_sweep_request_cuts import FakeLinear  # noqa: E402
 
 #: What ONE full sweep may spend on Linear READS over the committed board, with
-#: no phase mocked. MEASURED BY THIS REPLAY ON 2026-09-17: 66 requests — the
+#: no phase mocked. MEASURED BY THIS REPLAY ON 2026-09-17: 52 requests — the
 #: number the pass really spent that day, not the 30 the hand-built ceiling
 #: says and not a round number anybody hoped for. (A live pass on this repo's
 #: own board cost 65 on 2026-09-12 and 92 on agent-bureau; the replay lands on
 #: the same order because the board it replays is sized to that one.)
 #:
+#: It was 66 until DRE-3642 batched the epic reads: the epic close cost nine
+#: children reads and the epic gate six relations reads over this board, and
+#: the two now share ONE paged read of the epics they name. The card projected
+#: 50 off the LIVE board's nine-and-nine; the replay's board gives the gate six
+#: epics with Backlog children rather than nine, so 66 − 9 − 6 + 1 = 52 is what
+#: this pass really spends. The ceiling is what was measured, never what was
+#: projected — a number nobody measured is the defect this file replaced.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 66
+REAL_BOARD_SWEEP_BUDGET = 52
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -120,7 +128,7 @@ class ReplayLinear(FakeLinear):
     Every one of them is a read the cuts suite's fixture never reached because
     18 phases were mocked out of its pass: the epic's history read, the
     label-filtered break-glass count, the Backlog read scoped by identifier,
-    the children read and the relations read. The base class answers the rest,
+    and the pass's batched epic record. The base class answers the rest,
     and counts every request — including the ones handled here, which are
     appended to the same ledger exactly once.
     """
@@ -472,6 +480,34 @@ def test_the_pass_ran_to_its_end(replay):
         "the pass never reached its end: " + "\n".join(replay.printed[-8:])
     )
     assert replay.spend_lines[-1].startswith("sweep-spend: total ")
+
+
+def test_the_epic_reads_do_not_follow_the_number_of_epics(replay):
+    """DRE-3642's cut, measured where the ceiling is: however many epics are
+    active, the epic close and the epic gate's relations are ONE read between
+    them — the batched record — and not one per epic each.
+
+    The guard on the guard is the identifier count: a pass that batched one
+    epic would satisfy "one read" and prove nothing, so the read has to be
+    asked for the whole active set.
+    """
+    batched = [
+        v for q, v in replay.fake.queries
+        if "$numbers" in q and "inverseRelations" in q
+    ]
+    assert len(batched) == 1, f"{len(batched)} batched epic read(s) in one pass"
+    assert len(batched[0]["numbers"]) >= 9, (
+        f"the record was read for {len(batched[0]['numbers'])} epic(s) — the "
+        "2026-09-12 board had nine active, and a one-epic batch proves nothing"
+    )
+    assert replay.phases.get("close_finished_epics", 0) <= 1, replay.table()
+    per_epic = [
+        q for q, _ in replay.fake.queries
+        if "issue(id: $id)" in q and "inverseRelations" in q
+    ]
+    assert not per_epic, (
+        f"{len(per_epic)} per-epic relations read(s) survived the cut"
+    )
 
 
 def test_the_expensive_phases_really_ran(replay):
