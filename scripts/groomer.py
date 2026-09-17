@@ -1537,7 +1537,22 @@ def post_proposal(lops, card: str, proposal: dict,
     it here rather than asking Linear for the same fifty comments twice. Absent,
     the read happens here exactly as it always did — the idempotence rule is
     untouched either way.
+
+    AND NOT AT ALL FOR AN EMPTY BATCH (DRE-3712). A proposal of nothing asks
+    for a decision nobody has to make, and the console reads the marker rather
+    than the page: `🧺 groom-proposal: 2b10ecfb36f6` — 0 of 0 cards, posted on
+    2026-09-04 while Intake was empty — sat in the CEO's Green Light as
+    "waiting 196.9 h" until he asked about it eight days later (DRE-3708, whose
+    console half stops SHOWING such a row). The refusal lives here because this
+    is the one writer of the marker, so it covers the CLI, the workflow and
+    every retry. The lane is still sequenced, still written to `--out` and
+    still printed — an empty Intake is a fact worth reporting, just not a
+    decision worth queueing.
     """
+    if not proposal["batch"]["cards"]:
+        print(f"the batch is empty — no proposal posted to {card} "
+              "(a proposal of 0 cards is not a decision)")
+        return False
     if records is None:
         records = lops.comment_records(card)
     if already_proposed(proposal, records):
@@ -1740,20 +1755,50 @@ def _side(identifiers: list[str], word: str) -> str:
 # the proposal, as the CEO reads it                                            #
 # --------------------------------------------------------------------------- #
 
+def cycles_named(proposal: dict) -> str:
+    """The cycles this batch covers, as the page names them — `12`, `12, 13`,
+    or the empty string when the batch has no cycle because it has no cards."""
+    return ", ".join(str(n) for n in proposal["batch"]["cycles"])
+
+
+def title_line(proposal: dict) -> str:
+    """The proposal's first line, well-formed for every input (DRE-3712).
+
+    The console keeps the other copy of this pattern
+    (`console/backend/groom_proposal.py` in agent-bureau) and reads the cycle
+    off this line to title the decision it shows the CEO. A batch with no cycle
+    used to render `— cycle ` and nothing after it, and the reader's `\\s*`
+    walked across the blank line onto the paragraph below: the Green Light row
+    for the 2026-09-04 proposal read *"0 cards for cycle 0 cards of 0 in
+    Intake…"* for eight days (DRE-3708).
+
+    So the clause is written only when there is a cycle to name. A trailing
+    `— cycle` with nothing behind it is the whole of the bug, and the two
+    copies of the pattern change together.
+    """
+    cycles = cycles_named(proposal)
+    head = f"# Groom proposal `{proposal['id']}`"
+    return f"{head} — cycle {cycles}" if cycles else head
+
+
 def render_proposal(proposal: dict) -> str:
     batch = proposal["outcomes"]["now"]
-    cycles = ", ".join(str(n) for n in proposal["batch"]["cycles"])
+    cycles = cycles_named(proposal)
     w = []
     add = w.append
-    add(f"# Groom proposal `{proposal['id']}` — cycle {cycles}")
+    add(title_line(proposal))
     add("")
     # The CEO's last open decline, answered before anything else on the page
     # (DRE-3373). Absent unless `answer_decline` found one, so a proposal with
     # no decline behind it renders byte for byte as it did before that card.
     if proposal.get("answering"):
         w.extend(_render_answer(proposal["answering"]))
+    # The same clause one paragraph down, omitted on the same condition — it is
+    # what the runaway title actually quoted, and "proposed for cycle ," reads
+    # as broken to the person deciding even when nothing parses it.
+    proposed = "are proposed" + (f" for cycle {cycles}" if cycles else "")
     add(f"{len(batch)} cards of {proposal['population']} in {proposal['lane']} "
-        f"are proposed for cycle {cycles}, in the order below. Nothing moves "
+        f"{proposed}, in the order below. Nothing moves "
         f"until you approve it.")
     add("")
     # One line, before anything else, saying what did the ranking and what it
@@ -2547,10 +2592,22 @@ def blocked_by_held(on_offer: list[dict], cards: list[dict], held) -> list[dict]
 # written by `render_proposal` a few dozen lines up, and read back here: the
 # render and this parser are two halves of ONE contract, so the round trip is
 # asserted in tests/test_groomer_approval_gate.py rather than assumed.
+#
+# `[ \t]`, NEVER `\s` (DRE-3712). `\s` matches a newline, so `cycle\s+(.*)`
+# walked off the end of a heading with no cycle on it, across the blank line,
+# and captured the paragraph below — which is how reading the 2026-09-04
+# comment on DRE-2840 answers "cycles 0 and 0", two numbers quoted out of a
+# sentence. The clause is optional here because `title_line` stops writing it
+# when there is no cycle to name, and old comments do not re-render: the reader
+# meets both shapes and must take a cycle from neither wrongly. This is the
+# same fix as the console's copy of the pattern, which is where the CEO saw it
+# (`console/backend/groom_proposal.py` in agent-bureau, DRE-3708).
 _PROPOSAL_HEADING = re.compile(
-    r"^#\s+Groom proposal\s+`([0-9a-f]{6,})`\s+—\s+cycle\s+(.*)$", re.M)
+    r"^#[ \t]+Groom proposal[ \t]+`([0-9a-f]{6,})`"
+    r"(?:[ \t]+—[ \t]+cycle[ \t]*(.*))?$", re.M)
 _LANE_LINE = re.compile(
-    r"^\d+\s+cards?\s+of\s+\d+\s+in\s+(.+?)\s+are proposed for cycle\b", re.M)
+    r"^\d+[ \t]+cards?[ \t]+of[ \t]+\d+[ \t]+in[ \t]+(.+?)[ \t]+are proposed"
+    r"(?:[ \t]+for cycle\b|,)", re.M)
 _BATCH_HEADING = "## The batch, in order"
 _BATCH_ROW = re.compile(r"^\|\s*(\d+)\s*\|\s*(DRE-\d+)\s*\|")
 
@@ -2598,7 +2655,9 @@ def parse_proposal_comment(body: str | None) -> dict | None:
     return {
         "id": marker.group(1),
         "lane": lane.group(1).strip() if lane else None,
-        "cycles": [int(n) for n in re.findall(r"\d+", heading.group(2))]
+        # `group(2)` is None on a heading that names no cycle — a batch with no
+        # cards, and the drain has nothing to assign anyway (DRE-3712).
+        "cycles": [int(n) for n in re.findall(r"\d+", heading.group(2) or "")]
                   if heading else [],
         "batch": sorted(batch, key=lambda r: r["position"]),
     }
@@ -3119,6 +3178,14 @@ def main(argv=None) -> int:
                            help="write the ranked read's raw answer here, for "
                                 "the run artifact — only when a call answered "
                                 "(DRE-3331)")
+    # DRE-3712. A demonstration is not a decision: the 2026-09-04 dry run was
+    # an ordinary `--post`, so what it demonstrated ended up in the CEO's Green
+    # Light queue for eight days. With this, the same run renders the whole
+    # page to the run log and writes nothing to the card.
+    p_propose.add_argument("--dry-run", dest="dry_run", action="store_true",
+                           help="post NOTHING, whatever --post names — the "
+                                "proposal it would have posted goes to the run "
+                                "log instead (DRE-3712)")
 
     # NO shaping flags (DRE-3338). The batch a drain moves is read off the
     # approved proposal record, so there is nothing left for a flag to shape —
@@ -3161,7 +3228,13 @@ def main(argv=None) -> int:
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(proposal, fh, indent=2)
         print(f"wrote {args.out} ({proposal['id']})")
-    if args.post:
+    # A dry run reads everything a real one reads — the lane, the cycles, the
+    # thread — and writes none of it (DRE-3712). Said out loud, because the
+    # page below it is otherwise indistinguishable from one on the card.
+    if args.post and getattr(args, "dry_run", False):
+        print(f"dry run — nothing posted to {args.post}; the proposal it "
+              "would have posted follows")
+    elif args.post:
         post_proposal(linear_ops, args.post, proposal, records)
     print(render_proposal(proposal))
     return 0

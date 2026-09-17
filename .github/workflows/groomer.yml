@@ -80,6 +80,17 @@ on:
         type: string
         required: false
         default: "on"
+      dry_run:
+        description: >-
+          `true` demonstrates a proposal and writes NOTHING to the card
+          (DRE-3712) — no `🧺 groom-proposal:`, no `🧠 model-attempt:` receipt.
+          The whole page goes to the run log and the step summary instead. The
+          2026-09-04 demonstration had no such switch, so it ran as an ordinary
+          `--post` and sat in the CEO's Green Light for eight days. Anything
+          but `true` is a real propose.
+        type: string
+        required: false
+        default: ""
     secrets:
       LINEAR_API_KEY:
         required: true
@@ -146,6 +157,7 @@ jobs:
           CARD: ${{ inputs.card }}
           INTAKE_HOLD: ${{ inputs.intake_hold }}
           JUDGEMENT: ${{ inputs.judgement }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           # Every input through env, never interpolated into the shell line.
@@ -169,11 +181,17 @@ jobs:
             # unchanged, so the switch and the CLI are one contract.
             JUDGE=()
             if [ "$JUDGEMENT" != "on" ]; then JUDGE=(--no-judgement); fi
+            # The demonstration switch (DRE-3712). `--post` is still passed —
+            # the run reads the card's thread exactly as a real one does, so
+            # what the log shows is the page that WOULD have been posted — and
+            # the flag is what stops it being written.
+            DRY=()
+            if [ "$DRY_RUN" = "true" ]; then DRY=(--dry-run); fi
             # `--keep-answer` (DRE-3331): the ranked read's raw answer, kept
             # for the artifact below. Model output over card text — an
             # artifact, never a comment. Absent when no call answered.
             python3 .bureau-pipeline/scripts/groomer.py propose \
-              "${SHAPING[@]}" "${JUDGE[@]}" "${POST[@]}" \
+              "${SHAPING[@]}" "${JUDGE[@]}" "${POST[@]}" "${DRY[@]}" \
               --keep-answer judgement-answer.txt \
               --out proposal.json | tee proposal.txt
           fi
@@ -196,8 +214,13 @@ jobs:
       # EMPTY file rather than failing, so this step never turns a missing
       # footnote into a red run over a proposal sitting on the card exactly as
       # intended (Q5: `proposal.json` is written before anything is posted).
+      #
+      # A DRY RUN POSTS NOTHING AT ALL (DRE-3712), this footnote included. The
+      # promise is "no marker", not "no proposal marker" — a receipt comment on
+      # a card nobody proposed anything to is the same demonstration leaking
+      # into the record.
       - name: Judgement receipt — the model that answered
-        if: ${{ inputs.mode != 'drain' && inputs.card != '' }}
+        if: ${{ inputs.mode != 'drain' && inputs.card != '' && inputs.dry_run != 'true' }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           CARD: ${{ inputs.card }}
