@@ -416,16 +416,43 @@ def test_the_rendered_contract_is_regenerated_from_the_file():
     )
 
 
-def test_the_lane_contract_check_passes():
+def test_the_lane_contract_check_faults_nothing_it_can_read():
     """THE CRITERION, run as the CLI the build runs — not as a library call
-    with the inputs chosen here, which would prove only what this test asked."""
+    with the inputs chosen here, which would prove only what this test asked.
+
+    `LINEAR_API_KEY` is stripped on purpose. Three of this contract's clauses
+    read the live board, and the CLI is explicit that a clause it could not
+    evaluate is reported as a failure and never as a pass — so `check` cannot
+    exit 0 anywhere without an authenticated Linear key, and CI has none (the
+    unit job sets `LINEAR_API_KEY: test-key`, which 401s). Asserting
+    `returncode == 0` therefore asserted a credential, not this card. What is
+    real offline is the rest: every clause the CLI CAN assert without the
+    board — the contract loading and parsing, and Intake's rewritten exit among
+    them — comes back clean, and a malformed or self-contradictory clause added
+    here still turns this red."""
     import subprocess
 
+    env = {k: v for k, v in os.environ.items() if k != "LINEAR_API_KEY"}
     done = subprocess.run(  # nosec B603 — fixed argv, no shell
         [sys.executable, str(ROOT / "scripts" / "lane_contract.py"), "check"],
-        capture_output=True, text=True, cwd=str(ROOT),
+        capture_output=True, text=True, cwd=str(ROOT), env=env,
     )
-    assert done.returncode == 0, done.stdout + done.stderr
+    # 0 or 1 is a report; anything else is the CLI falling over on the contract.
+    assert done.returncode in (0, 1), done.stdout + done.stderr
+    assert "Traceback" not in done.stderr, done.stderr
+
+    unreadable = "the board could not be read"
+    offenders = [
+        line for line in done.stdout.splitlines()
+        if line.lstrip().startswith("[FAIL") and unreadable not in line
+    ]
+    assert offenders == [], (
+        "a lane-contract clause that does NOT need the live board is failing:\n"
+        + "\n".join(offenders)
+    )
+    # The board clauses are the only ones excused, and they must still be
+    # REPORTED — an excuse that silently stopped printing would hide a real one.
+    assert any(unreadable in line for line in done.stdout.splitlines()), done.stdout
 
 
 def test_the_window_is_not_a_trigger_anywhere_in_the_tree():

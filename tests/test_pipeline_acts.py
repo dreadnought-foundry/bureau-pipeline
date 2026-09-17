@@ -94,10 +94,14 @@ class TestEveryActHasARow:
         assert list(names) == declared
 
     def test_every_reconcile_tag_constant_has_a_row(self):
-        """The ten constants scattered through reconcile.py, declared once."""
+        """The nine constants scattered through reconcile.py, declared once.
+
+        Ten until DRE-4141 removed the Intake age-out and `INTAKE_AGED_TAG`
+        with it — the sweep no longer performs that act, so it no longer
+        announces one."""
         emitted = {tag for _, tag in _TAG_CONSTANT.findall(RECONCILE.read_text("utf-8"))}
-        assert len(emitted) == 10, (
-            "reconcile.py should still define ten tag constants; if that "
+        assert len(emitted) == 9, (
+            "reconcile.py should still define nine tag constants; if that "
             "changed, the registry changes with it"
         )
         declared = {pipeline_act.tag(name) for name in pipeline_act.acts()}
@@ -108,7 +112,11 @@ class TestEveryActHasARow:
         [
             "unresolvable-blocker-reference",
             "stranded-watchdog",
-            "intake-aged",
+            # `intake-aged` stood here until DRE-4141 removed the Intake
+            # age-out. It is deliberately NOT in this list: nothing emits that
+            # receipt any more, and `test_the_act_registry_no_longer_declares_
+            # the_age_out` in tests/test_intake_no_age_out.py is what now holds
+            # the registry to its absence.
             "no-checks-watchdog",
             "unlanded-work-watchdog",
             "fix-restart-on-operator-decision",

@@ -1133,7 +1133,7 @@ SWEEP_STATES = tuple(
 # Planning's and now Intake's — and no single place answered "is this lane
 # looked at by anything?". That question has a live cost: Intake was in none of
 # them, so a card that entered it was examined by no mechanism, ever. This is
-# the union, and tests/test_intake_escalation.py asserts it against the states
+# the union, and tests/test_intake_no_age_out.py asserts it against the states
 # the sweep really queries rather than against this tuple alone.
 SWEPT_LANES = tuple(
     dict.fromkeys(SWEEP_STATES + WATCHDOG_LANES + PLANNING_LANE + INTAKE_LANE)
