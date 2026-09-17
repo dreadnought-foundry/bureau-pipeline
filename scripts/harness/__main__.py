@@ -85,6 +85,35 @@ def token_supplier(
     return supply
 
 
+def spend_lines(clients) -> list:
+    """One `github-spend:` line per DISTINCT identity the run used (DRE-4132).
+
+    `billed` is what the run cost that identity's hourly GitHub allowance;
+    `free` is how many reads GitHub answered `304 Not Modified` and did not
+    charge. Printed on every run, zero included, for the reason the sweep's
+    `sweep-spend:` lines are: on 2026-09-17 the worker installation ran dry
+    every hour and nobody could say what a harness run cost, because nothing
+    had ever counted. The qa client falls back to the worker's when no qa
+    token is minted — the same object, so it is reported once.
+    """
+    lines, seen = [], set()
+    for role, client in clients:
+        if client is None or id(client) in seen:
+            continue
+        seen.add(id(client))
+        # Telemetry must never be what fails a run: a stand-in client with no
+        # ledger is skipped, not crashed on.
+        ledger = getattr(client, "spend", None)
+        if not callable(ledger):
+            continue
+        spend = ledger()
+        lines.append(
+            f"github-spend: {role} {spend['billed']} billed, "
+            f"{spend['free']} free (304 Not Modified)"
+        )
+    return lines
+
+
 def wait_deadline_seconds(raw: str | None) -> float:
     """The per-wait sandbox-liveness deadline, in seconds, from the workflow's
     minutes-shaped input. Empty (a push/pull_request run, where the `inputs`
@@ -341,6 +370,10 @@ def main(argv=None) -> int:
         print(f"  {r.scenario}: {status}")
         for err in r.errors:
             print(f"    - {err}")
+    for line in spend_lines(
+        [("worker", gh), ("qa", gh_qa), ("console", gh_console)]
+    ):
+        print(line)
     if blocked:
         # Not a verdict on the commit: the sandbox never let us reach one.
         print(
