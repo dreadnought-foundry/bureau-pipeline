@@ -25,8 +25,13 @@ FIX UNDER TEST:
     the medic to re-run a healthy-but-slow card — the 21:36 re-run raced the
     park in the incident).
   - agent-task.yml: the execute job's total-runtime cap rises so normal long
-    builds finish (45 murdered them); the Gate and Report steps thread
-    `steps.claude.outcome` into the scripts.
+    builds finish (45 murdered them); the Gate and Report steps thread the
+    agent step's outcome into the scripts. DRE-4108 gave that step two
+    retries, so the value they thread is now `steps.claude_result.outputs.
+    outcome` — the resolved outcome of the LAST attempt that ran, which
+    `claude_rate_limit_retry.resolve_attempts` carries `cancelled` through
+    unchanged. The property below is the same property; the step that
+    answers it moved.
   - Requeue-cap accounting for GENUINE deaths (silent / hung / is_error) is
     unchanged.
 
@@ -178,6 +183,23 @@ def _step(name):
     return matches[0]
 
 
+# The agent step's outcome as the rest of the job reads it. Since DRE-4108
+# that is the RESOLVED outcome across the step's three attempts, not attempt
+# 1's: a build the retry finished must not be reported off the attempt that
+# was refused, and a cancelled run must still read as cancelled.
+_RESOLVED_OUTCOME = "${{ steps.claude_result.outputs.outcome }}"
+
+
+def test_the_resolved_outcome_carries_a_cancellation_through():
+    """The DRE-2074 property at the new seam: whatever else the resolver does,
+    a killed agent may not come out of it as anything but `cancelled`."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import claude_rate_limit_retry as crl
+
+    outcome, _, _ = crl.resolve_attempts([("cancelled", "")])
+    assert outcome == "cancelled"
+
+
 def test_execute_job_timeout_allows_long_builds():
     """45 minutes murdered normal long builds (DRE-2070 profiled a 7-minute
     vitest suite repeatedly — killed at the 45-minute mark, 4×). The job
@@ -192,7 +214,7 @@ def test_execute_job_timeout_allows_long_builds():
 
 def test_report_step_threads_the_claude_outcome():
     step = _step("Report result to Linear")
-    assert step["env"].get("CLAUDE_OUTCOME") == "${{ steps.claude.outcome }}", (
+    assert step["env"].get("CLAUDE_OUTCOME") == _RESOLVED_OUTCOME, (
         "the Report step must know whether the agent step was cancelled "
         "(job timeout / external cancel) — that is not a dead agent"
     )
@@ -214,7 +236,7 @@ def test_report_step_defer_action_moves_no_state():
 
 def test_gate_step_threads_the_claude_outcome():
     step = _step("Gate on agent result")
-    assert step["env"].get("CLAUDE_OUTCOME") == "${{ steps.claude.outcome }}"
+    assert step["env"].get("CLAUDE_OUTCOME") == _RESOLVED_OUTCOME
     assert "--claude-outcome" in step["run"], (
         "a cancelled step must not read as a silent death, or the red gate "
         "summons the medic to re-run a healthy-but-slow card"

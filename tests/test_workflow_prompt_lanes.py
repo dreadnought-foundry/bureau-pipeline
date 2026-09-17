@@ -29,7 +29,12 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # that is not here fails this test and has to be classified deliberately.
 EXPECTED_PROMPT_FILES = {
     "agent-fix.yml": 1,
-    "agent-task.yml": 1,
+    # Three since DRE-4108: the agent step plus two retries for a GitHub
+    # rate-limit refusal that arrives before the model starts. The three
+    # prompts are byte-identical — tests/test_presubmit_gate_prompt.py
+    # asserts that — so this is one prompt shipped three times, and each
+    # copy is checked for live lane names here like any other.
+    "agent-task.yml": 3,
     "medic.yml": 1,
     # DRE-3897: the model trial's prompt. It names no lane and no card — it is
     # a fixed, checkable task on a candidate model — but it is an inline agent
