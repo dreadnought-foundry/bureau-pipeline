@@ -62,6 +62,9 @@ MEDIC_STUB = ROOT / ".github" / "workflows" / "self-medic.yml"
 
 OPUS = "claude-opus-5"
 SONNET = "claude-sonnet-4-6"
+# The workhorse ladder's backup rung since 2026-09-16 (DRE-3880) — it replaced
+# SONNET there, which kept the judgement ladder's last rung.
+SONNET5 = "claude-sonnet-5"
 FABLE = "claude-fable-5"
 RETIRED_OPUS = "claude-opus-4-8"
 
@@ -447,7 +450,7 @@ def test_generating_the_snapshot_never_mutates_the_ladder_or_agents_yaml(tmp_pat
     )
 
     assert "claude-opus-99" in out.read_text(), "the snapshot did record it"
-    assert mf.LADDER == ladder_before == [OPUS, SONNET]
+    assert mf.LADDER == ladder_before == [OPUS, SONNET5]
     assert "claude-opus-99" not in mf.LADDER
     assert set(mf.KNOWN_MODELS) == known_before
     assert hashlib.sha256(AGENTS_YAML.read_bytes()).hexdigest() == yaml_before

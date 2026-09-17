@@ -69,6 +69,17 @@
 #                  entries; the four label-routed roles
 #                  (engineer/frontend/devops/planner) are also the role strings
 #                  the workflows pass to `model_fallback.py select`.
+#   review_separation
+#                  the build/review fence, bought at SELECTION time rather than
+#                  by keeping the ladders disjoint (DRE-3880). `roles` names the
+#                  reviewer roles it binds — the critic and the verifier, both
+#                  advisory — and `rules` names, for each model that sits on the
+#                  advisory ladder AND a build ladder, the model those reviewers
+#                  use instead when the pull request in front of them was BUILT
+#                  on it. Schema validation refuses a BARE overlap (one with no
+#                  rule), a rule that sends the reviewer back to the build
+#                  model, a `reviewers_use` that is not on the advisory ladder,
+#                  and a STALE rule describing an overlap that no longer exists.
 #   discovery      what happens to a model id the system SEES but this file
 #                  does not name. `on_new_model` may be `advisory` (it may join
 #                  the advisory ladder, after a human edits this file) or
@@ -122,8 +133,16 @@ ladders:
   workhorse:
     - model: claude-opus-5
       reason: "preferred — the workhorse build model (2026-08-09)"
-    - model: claude-sonnet-4-6
-      reason: "fallback if Opus is unavailable"
+    - model: claude-sonnet-5
+      reason: >-
+        fallback if Opus is unavailable. Replaced `claude-sonnet-4-6` here on
+        2026-09-16 (CEO decision, DRE-3880): same 1M context and 128k output,
+        and cheaper ($2/$10 against $3/$15). Sonnet 4.6 was NOT retired — it
+        keeps the judgement ladder's last rung below, and only its WORKHORSE
+        entry was replaced. This rung is ALSO the top of the advisory ladder,
+        which makes it the one model on two ladders in this file; the fence
+        that used to be bought by keeping the lists disjoint is bought at
+        selection time instead, and `review_separation` below declares it.
 
   # The ADVISORY ladder: the roles that judge rather than build. Sonnet-first
   # since 2026-08-12 on MEASURED cost. The premise this ladder was built on —
@@ -132,6 +151,8 @@ ladders:
   advisory:
     - model: claude-sonnet-5
       reason: >-
+        ALSO the workhorse ladder's backup rung since 2026-09-16 (DRE-3880) —
+        the one declared overlap in this file, see `review_separation`.
         promoted to primary 2026-08-12 on measured cost with no measured
         quality loss. Fable cost 5.5x per critic review ($0.60 -> $3.33 median,
         portico) while the critic's run rate rose 27/day -> 63/day, taking it
@@ -185,7 +206,14 @@ ladders:
         CLI as `--fallback-model`. DRE-3969 had taken Fable off this ladder as
         the hotfix while that was built.
     - model: claude-sonnet-4-6
-      reason: "last resort — never block a plan on availability"
+      reason: >-
+        last resort — never block a plan on availability. It left the WORKHORSE
+        ladder on 2026-09-16 (DRE-3880) and kept this rung, on the CEO's answer
+        in as many words: do not retire it. It sits below the rung this ladder
+        degrades onto, which is admissible because it is CHEAPER than that rung
+        ($3/$15 against Opus at $5/$25, config/model-prices.yaml) — the rule is
+        "no dearer model hides below the fallback", and validation reads the
+        declared price rather than assuming every lower rung is a build model.
 
 default_ladder: workhorse
 
@@ -216,6 +244,40 @@ agents:
   # are capped at two rounds per epic, so the volume stays bounded by design.
   plan-critic-pre: advisory
   plan-critic-post: advisory
+
+# THE BUILD/REVIEW FENCE, DECLARED (DRE-3880, CEO decision 2026-09-16)
+# --------------------------------------------------------------------
+# `claude-sonnet-5` tops the advisory ladder AND backs the workhorse one, so
+# the separation the old schema rule bought by keeping those two lists disjoint
+# has to be bought somewhere else. It is bought HERE, per pull request: when a
+# build ran on a model named below, the reviewers for that pull request skip it
+# and use the model this file names instead.
+#
+# The overlap is not new in principle — the advisory ladder's own fallback is
+# `claude-opus-5`, the workhorse PRIMARY, so reviewer and worker have coincided
+# whenever the critic falls back. What is new is that the guarantee is explicit
+# per run instead of incidental.
+#
+# A rule is not decoration: `model_fallback.policy_errors` refuses a bare
+# overlap, a rule pointing back at the build model, a `reviewers_use` that is
+# not on the advisory ladder, and a rule that no longer describes a real
+# overlap. That last one is the DRE-3892 carry-forward — a future same-family
+# adoption moves this rung on BOTH ladders at once, and an adoption that did
+# not move the rule with it fails `sync_model_config.py --check` twice over.
+review_separation:
+  # The two roles that REVIEW a pull request. The medic is advisory too and is
+  # deliberately absent: it diagnoses a failed run and reviews nothing, so
+  # binding it would be a spend change nobody asked for.
+  roles:
+    - critic
+    - verifier
+  rules:
+    - built_on: claude-sonnet-5
+      reviewers_use: claude-opus-5
+      reason: >-
+        a Sonnet-5 build is never reviewed by Sonnet 5. Opus 5 is the advisory
+        ladder's own next rung, so the substitute is a model these roles
+        already run on rather than a new spend decision.
 
 discovery:
   # A model id we SEE but do not name here may, at most, be proposed for the

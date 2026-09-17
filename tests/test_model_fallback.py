@@ -53,6 +53,14 @@ FABLE = "claude-fable-5"
 # the planner's, and no build role's. A different model from the id above.
 FABLE51 = "claude-fable-5-1"
 OPUS = "claude-opus-5"
+# The WORKHORSE ladder's backup rung since 2026-09-16 (DRE-3880). It is also
+# the top of the advisory ladder — the one model on two ladders in this config
+# — and the fence that used to be bought by keeping those lists disjoint is
+# bought per pull request instead (tests/test_review_separation.py).
+SONNET5 = "claude-sonnet-5"
+# Sonnet 4.6, which DRE-3880 took OFF the workhorse ladder and deliberately did
+# not retire: it keeps the judgement ladder's last rung, the one that exists so
+# a plan never blocks on availability.
 SONNET = "claude-sonnet-4-6"
 # Rotated OUT of the ladder (Opus 5 replaced it) but still recognizable, so a
 # death marker stamped before the rotation keeps its attribution.
@@ -72,7 +80,7 @@ class LadderShapeTest(unittest.TestCase):
     def test_ladder_is_best_first(self):
         # Best → worst. The ladder is the contract; every build role shares it.
         # Fable is deliberately absent — see FableIsNotABuildModelTest.
-        self.assertEqual(mf.LADDER, [OPUS, SONNET])
+        self.assertEqual(mf.LADDER, [OPUS, SONNET5])
 
     def test_ladder_entries_are_all_known_models(self):
         self.assertTrue(set(mf.LADDER) <= mf.KNOWN_MODELS)
@@ -149,16 +157,16 @@ class SelectLadderTest(unittest.TestCase):
         self.assertEqual(mf.select("devops", probe=lambda m: avail[m]), OPUS)
 
     def test_opus_unavailable_returns_sonnet(self):
-        avail = {OPUS: False, SONNET: True}
-        self.assertEqual(mf.select("engineer", probe=lambda m: avail[m]), SONNET)
+        avail = {OPUS: False, SONNET5: True}
+        self.assertEqual(mf.select("engineer", probe=lambda m: avail[m]), SONNET5)
 
     def test_all_unavailable_falls_through_to_last_known_good(self):
         # Degrade safely: if NOTHING probes available, never block a build —
         # fall through to the last (lowest) known-good model rather than return
         # nothing or a model just confirmed gone.
-        avail = {OPUS: False, SONNET: False}
+        avail = {OPUS: False, SONNET5: False}
         chosen = mf.select("engineer", probe=lambda m: avail[m])
-        self.assertEqual(chosen, SONNET)
+        self.assertEqual(chosen, SONNET5)
         self.assertIn(chosen, mf.LADDER)
 
     def test_probe_exception_treated_as_inconclusive_falls_through(self):
@@ -169,7 +177,7 @@ class SelectLadderTest(unittest.TestCase):
             if m == OPUS:
                 raise TimeoutError("probe network error")
             return True
-        self.assertEqual(mf.select("engineer", probe=probe), SONNET)
+        self.assertEqual(mf.select("engineer", probe=probe), SONNET5)
 
 
 class CachingTest(unittest.TestCase):
@@ -188,20 +196,20 @@ class CachingTest(unittest.TestCase):
 
         def probe(m):
             calls.append(m)
-            return {OPUS: False, SONNET: True}[m]
+            return {OPUS: False, SONNET5: True}[m]
 
         t = [1000.0]
         # First select: Opus probed (False) then Sonnet probed (True) → 2 calls.
         self.assertEqual(
-            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET
+            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET5
         )
         first = list(calls)
         self.assertIn(OPUS, first)
-        self.assertIn(SONNET, first)
+        self.assertIn(SONNET5, first)
         # A second role on the SAME ladder within the TTL: nothing new probed —
         # served from cache.
         self.assertEqual(
-            mf.select("devops", probe=probe, clock=fixed_clock(t)), SONNET
+            mf.select("devops", probe=probe, clock=fixed_clock(t)), SONNET5
         )
         self.assertEqual(calls, first, "probe re-called within TTL window")
 
@@ -209,7 +217,7 @@ class CachingTest(unittest.TestCase):
         # Recovery is bounded by the ladder's CONTENTS: it can restore a model
         # we already chose to run on, never add one we didn't (which is how an
         # enabled Fable promoted the whole fleet on 2026-08-09).
-        state = {OPUS: False, SONNET: True}
+        state = {OPUS: False, SONNET5: True}
 
         def probe(m):
             return state[m]
@@ -217,13 +225,13 @@ class CachingTest(unittest.TestCase):
         t = [1000.0]
         # Opus unavailable → Sonnet chosen.
         self.assertEqual(
-            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET
+            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET5
         )
         # Opus comes back online.
         state[OPUS] = True
         # Still within TTL: cached "Opus unavailable" → still Sonnet.
         self.assertEqual(
-            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET
+            mf.select("engineer", probe=probe, clock=fixed_clock(t)), SONNET5
         )
         # Advance past the TTL: next probe sees Opus available → Opus.
         t[0] += mf.AVAILABILITY_TTL_SECONDS + 1
@@ -306,8 +314,8 @@ class CliTest(unittest.TestCase):
 
     def test_cli_select_skips_an_unavailable_top_of_ladder(self):
         self.assertEqual(
-            self._select("engineer", {OPUS: False, SONNET: True}),
-            SONNET,
+            self._select("engineer", {OPUS: False, SONNET5: True}),
+            SONNET5,
         )
 
     def test_cli_select_returns_top_of_ladder_when_available(self):

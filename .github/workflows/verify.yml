@@ -358,6 +358,16 @@ jobs:
       # the same availability-probing ladder walk the build agents use, read
       # out of the .bureau-pipeline checkout above (never a runtime lookup —
       # these runners hold no cloud credentials).
+      #
+      # A SONNET-5 BUILD IS NEVER VERIFIED BY SONNET 5 (DRE-3880). The verifier
+      # is the second reviewer role the `review_separation` block binds, and it
+      # does this exactly the way the critic's step in qa-review.yml does:
+      # `build-model` reads the model this card's last attempt ran on out of
+      # its own `model-attempt:` heartbeat, `--built-on` hands it to the ladder
+      # walk, and a card we cannot read is `--built-on-unknown`, which bars
+      # every declared overlap. Fail CLOSED — absence of evidence that the
+      # build ran on something else is not evidence that it did. The substitute
+      # is DATA (config/models.yaml), never a literal here.
       - name: Select model
         id: model
         if: steps.scope.outputs.in_scope == 'true'
@@ -365,9 +375,27 @@ jobs:
           # The probe authenticates with the same CLAUDE token the verifier uses.
           ANTHROPIC_API_KEY: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          # Reads the card's own attempt heartbeat (DRE-3880) — see the run block.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          CARD: ${{ steps.pr.outputs.card }}
         run: |
           WHY_FILE="$RUNNER_TEMP/model-why.txt"
+          BUILT_ON=""
+          if [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py \
+               dump-comments "$CARD" > "$RUNNER_TEMP/card-thread.json"; then
+            BUILT_ON=$(python3 \
+              .bureau-pipeline/scripts/model_fallback.py build-model \
+              "$RUNNER_TEMP/card-thread.json")
+          fi
+          if [ -n "$BUILT_ON" ]; then
+            SEPARATION_ARG="--built-on $BUILT_ON"
+          else
+            # No card, no thread, or no heartbeat we recognise — fail CLOSED.
+            SEPARATION_ARG="--built-on-unknown"
+          fi
+          # shellcheck disable=SC2086 # deliberate word split: one flag or two
           MODEL=$(python3 .bureau-pipeline/scripts/model_fallback.py select verifier \
+            $SEPARATION_ARG \
             --explain-file "$WHY_FILE")
           WHY=$(cat "$WHY_FILE")
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
