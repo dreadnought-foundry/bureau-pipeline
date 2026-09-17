@@ -1,4 +1,5 @@
-# Automatic channel promotion (DRE-2551, Wave 1 Step 2).
+# Channel promotion — automatic (DRE-2551, Wave 1 Step 2) and, since
+# DRE-4111, by hand.
 #
 # The tag move is a human act: it happened five times in ten days
 # (2026-07-11 → 07-21) and then stopped, and nothing noticed for a month while
@@ -25,19 +26,96 @@
 # so the move is made with the bot App token and release-gate.yml's trigger is
 # amended to actually match the ref being moved.
 #
+# THE BY-HAND PATH (DRE-4111). Until this card there was exactly ONE trigger
+# below, so when the harness failed for a reason that was not about the code,
+# `stable` froze and the only move was to re-run the harness and hope. On
+# 2026-09-16 the channel sat five merge commits and six merged pull requests
+# behind while four of the harness's five scenarios died on `API rate limit
+# exceeded for installation ID 123249480` — the worker App's hourly bucket,
+# empty. Nothing was wrong with any merged commit, and every promote-channel
+# run that night concluded SUCCESS having promoted nothing, because every step
+# here is guarded on the harness conclusion and a failed harness skips them
+# all.
+#
+# The `workflow_dispatch` below is that missing entry point, in the shape the
+# release train already uses for its surfaces. The safety line is the whole
+# design and it is NOT relaxed here: the harness is what proves a commit, and
+# `bureau-harness` is deliberately the one repo kept off the channel so
+# promotion can never validate itself. So the ordinary by-hand promote still
+# re-reads the candidate's own `integration-harness` commit status — from
+# whichever run stamped it, which is exactly the case this exists for — and
+# forcing past a red or absent stamp is a separate, louder, operator-only
+# input that records a required reason on the run. Force overrides the PROOF
+# and nothing else: not the ancestry rail, not the hold, not the trunk check.
+#
+# THE VENDOR PREMORTEM for the new trigger (standards/vendor-boundaries.md):
+#   Q1 WHO INITIATES. A `workflow_dispatch` initiates as whoever ran it, and
+#      GitHub requires repo WRITE to start one — that is the operator gate on
+#      the ordinary by-hand promote. It is not enough for the forced one,
+#      because every build agent in this fleet runs under an App token
+#      carrying `actions: write` and can dispatch a workflow; so the decision
+#      refuses a forced promote to a bot login (`promote_channel.
+#      is_machine_actor`). The push itself is still the App's, as below.
+#   Q2 WHICH SECRETS STORE. A dispatch in this repo reads this repo's normal
+#      store, so `BUREAU_APP_ID` / `BUREAU_APP_PRIVATE_KEY` mint exactly as on
+#      the automatic path — which is load-bearing: a by-hand move pushed with
+#      `github.token` would fire no release-gate.yml, the trap above.
+#   Q3 RETRY / RE-RUN. A re-run re-reads the same three records. The candidate
+#      the first run promoted now compares `identical`, so the second is a
+#      named no-op rather than a second move.
+#   Q4 COMMAND LIMITS. `github.event.inputs.force` is the STRING `"true"`, not
+#      a boolean, so it is compared as one. The `sha` input is resolved
+#      through the commits API, which both normalises a short sha and refuses
+#      one that does not exist.
+#   Q5 CRASH MID-FLOW. Nothing is written before the ref move, and the ref
+#      move is idempotent. A crash before it leaves the channel where it was,
+#      which the next dispatch or harness run reads and advances.
+#
 # The decision lives in scripts/promote_channel.py (unit-tested red and green
-# in tests/test_promote_channel.py); this file only gathers GitHub's records
-# and acts on the verdict — the merge-gate.yml thin-caller shape.
+# in tests/test_promote_channel.py and tests/test_promote_channel_by_hand.py);
+# this file only gathers GitHub's records and acts on the verdict — the
+# merge-gate.yml thin-caller shape.
 name: Promote Channel
 
 on:
   workflow_run:
     workflows: ["Integration Harness"]
     types: [completed]
+  # The by-hand route (DRE-4111). Dispatching needs repo write, which is the
+  # operator gate; the proof gate is the candidate's own commit status and is
+  # enforced in the decision, not here.
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: >-
+          Candidate commit to promote. Blank = the head of main (the
+          repository's default branch). A short sha or a ref is resolved
+          through the commits API; a commit that is not on main is refused.
+        type: string
+        required: false
+        default: ""
+      reason:
+        description: >-
+          Why the channel is being moved by hand. Recorded on the run beside
+          who moved it and which sha, and REQUIRED when forcing.
+        type: string
+        required: true
+      force:
+        description: >-
+          Promote past a failed or absent integration-harness status. The
+          loud act — operator-only, never the default, refused without a
+          reason. It overrides the harness proof and nothing else: the
+          channel still cannot move backwards, the hold still holds, and the
+          candidate must still be on main.
+        type: boolean
+        required: false
+        default: false
 
 # One mover at a time. Two harness runs finishing close together must not race
 # to write the same ref; the ancestry check refuses a backwards move, but only
-# if it reads a settled channel head.
+# if it reads a settled channel head. Declared at WORKFLOW level, so since
+# DRE-4111 it covers the by-hand dispatch too — a person and the automatic
+# mover queue for the ref rather than racing for it.
 concurrency:
   group: promote-channel
   cancel-in-progress: false
@@ -66,19 +144,63 @@ jobs:
     # `steps.decide.outputs.promote`, below, unchanged — and the API calls and
     # the token mint are still gated on that same pair, so the added runs cost
     # a checkout and one `python3`.
+    #
+    # DRE-4111 adds ONE more thing those gates admit: a `workflow_dispatch`,
+    # which is a person asking for this promotion by hand and so is never one
+    # of the PR-head runs the gates exist to keep cheap. Nothing else about
+    # the shape changes — the dispatch reaches the same decision, spends the
+    # same reads, and is refused by the same rails.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # WHICH COMMIT THIS RUN IS ABOUT (DRE-4111). One answer for both
+      # triggers, so every step below reads one output instead of branching on
+      # the event five times.
+      #
+      # On a dispatch the input is resolved through the commits API rather than
+      # trusted: that normalises a short sha or a branch name to the full
+      # commit sha, and a candidate that does not exist resolves to nothing and
+      # is refused downstream by the trunk check — fail closed, no red run for
+      # a typo. The input travels through `env`, never interpolated into the
+      # shell line (the tests.yml `BASE_REF` rule): a dispatch needs repo write,
+      # but the value is still somebody's typing.
+      - name: Which commit is this run about?
+        id: resolve
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.head_branch == 'main')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ github.event.inputs.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$EVENT" != "workflow_dispatch" ]; then
+            echo "candidate=${RUN_SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          WANTED="$(printf '%s' "$INPUT_SHA" | tr -d '[:space:]')"
+          [ -n "$WANTED" ] || WANTED="$DEFAULT_BRANCH"
+          CANDIDATE="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${WANTED}" \
+            --jq '.sha' 2>/dev/null || true)"
+          echo "candidate=${CANDIDATE}" >> "$GITHUB_OUTPUT"
+          echo "asked for ${WANTED} → ${CANDIDATE:-<unresolvable>}"
+
       # contents:write to move the ref, and — the load-bearing part — an
       # identity that is NOT the default token, so the push actually fires
-      # release-gate.yml.
+      # release-gate.yml. A by-hand promote mints the same identity for the
+      # same reason (DRE-4111): the trap is about the token, not the trigger.
       - name: Mint bot token
         id: app
         if: >-
-          github.event.workflow_run.conclusion == 'success' &&
-          github.event.workflow_run.head_branch == 'main'
+          github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.head_branch == 'main')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
@@ -91,13 +213,19 @@ jobs:
       # settles it, and a cancelled run is now the ORDINARY case on a busy
       # night — two API calls per displaced merge would be pure noise. The
       # decision step reads `{}` (the file is absent) and never gets that far.
+      #
+      # THIS IS THE PROOF, on both routes (DRE-4111). It is the COMMIT's own
+      # status, so it carries the stamp of whichever harness run proved the
+      # sha — not only the newest one. That is the entire by-hand case: the
+      # proof passed an hour ago and the channel is still behind.
       - name: Fetch the candidate's combined commit status
         if: >-
-          github.event.workflow_run.conclusion == 'success' &&
-          github.event.workflow_run.head_branch == 'main'
+          github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.head_branch == 'main')
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate }}
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/commits/${CANDIDATE}/status" \
             > combined_status.json || echo '{}' > combined_status.json
@@ -105,28 +233,66 @@ jobs:
       # base=channel, head=candidate. "ahead" is the only answer that may move
       # the ref. A missing channel ref is the first promotion, not an error;
       # anything unreadable stays unknown and fails closed downstream.
+      #
+      # The channel HEAD comes out of the same read since DRE-4111, because a
+      # by-hand refusal names the last proven sha — "which status was missing"
+      # and "where the channel actually is" are the two facts the operator
+      # needs, and on 2026-09-16 reading the 403 gave neither.
       - name: Compare the candidate against the current channel head
         id: ancestry
         if: >-
-          github.event.workflow_run.conclusion == 'success' &&
-          github.event.workflow_run.head_branch == 'main'
+          github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.head_branch == 'main')
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate }}
         run: |
-          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" >/dev/null 2>&1; then
+          CHANNEL_HEAD="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" \
+            --jq '.object.sha' 2>/dev/null || true)"
+          if [ -z "$CHANNEL_HEAD" ]; then
             echo "status=no-channel-yet" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "head=${CHANNEL_HEAD}" >> "$GITHUB_OUTPUT"
           STATUS="$(gh api \
             "repos/${GITHUB_REPOSITORY}/compare/stable...${CANDIDATE}" \
             --jq '.status' 2>/dev/null || true)"
           echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
 
+      # IS THE CANDIDATE ON THE TRUNK (DRE-4111)? The by-hand analogue of the
+      # branch question the automatic path asks of its triggering run — and a
+      # dispatch has no run to ask, so it asks the commit.
+      #
+      # It is load-bearing rather than belt-and-braces: harness.yml also runs
+      # on `pull_request`, so a PR head carries a green `integration-harness`
+      # stamp of its own. Without this, a by-hand promote of such a sha would
+      # pass the proof gate and put `stable` on a commit that never merged.
+      # base=main, head=candidate: `behind` or `identical` mean the candidate
+      # is reachable from main; anything else, including an unreadable
+      # compare, fails closed in the decision.
+      - name: Is the candidate on the trunk?
+        id: trunk
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          STATUS="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/compare/${DEFAULT_BRANCH}...${CANDIDATE}" \
+            --jq '.status' 2>/dev/null || true)"
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+          echo "${DEFAULT_BRANCH}...${CANDIDATE:-<none>} = ${STATUS:-<unreadable>}"
+
       - name: Decide
         id: decide
         env:
-          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          # `steps.resolve` did not run on a PR-head harness run, and that run
+          # still reaches the decision (DRE-3070) — so fall back to the run's
+          # own head, which is what it is refused for naming.
+          CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
           # The hold switch (D2). A repository variable: explicit, auditable,
           # and flippable without a release. UNSET MEANS RUN — autonomy by
           # default. DRE-2552 alarms if a hold persists, because an un-alarmed
@@ -141,14 +307,38 @@ jobs:
           # the shell line — a head branch is attacker-controllable text on a
           # fork PR (the tests.yml `BASE_REF` rule).
           BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # The by-hand facts (DRE-4111). All five are empty on a
+          # `workflow_run`, and `--manual` is what switches the route — so a
+          # harness run can never reach the forced arm however the rest reads.
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ github.event.inputs.force }}
+          REASON_GIVEN: ${{ github.event.inputs.reason }}
+          # The mover, as GitHub names them. A forced promote is refused to a
+          # bot login, so this is a gate and not only a receipt.
+          ACTOR: ${{ github.actor }}
+          TRUNK: ${{ steps.trunk.outputs.status }}
+          CHANNEL_HEAD: ${{ steps.ancestry.outputs.head }}
         run: |
+          ARGS=()
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            ARGS+=(--manual)
+            ARGS+=(--trunk "$TRUNK")
+            ARGS+=(--actor "$ACTOR")
+            ARGS+=(--reason "$REASON_GIVEN")
+            ARGS+=(--channel-head "$CHANNEL_HEAD")
+            # A boolean workflow_dispatch input arrives as the STRING "true".
+            if [ "$FORCE" = "true" ]; then
+              ARGS+=(--force)
+            fi
+          fi
           python3 scripts/promote_channel.py \
             --sha "$CANDIDATE" \
             --statuses-file combined_status.json \
             --ancestry "$ANCESTRY" \
             --hold "$HOLD" \
             --conclusion "$CONCLUSION" \
-            --branch "$BRANCH"
+            --branch "$BRANCH" \
+            "${ARGS[@]}"
 
       # Force, because the channel is a MOVING ref by design — that is what
       # makes it a staged deploy rather than a frozen pin.
@@ -156,7 +346,7 @@ jobs:
         if: steps.decide.outputs.promote == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate }}
         run: |
           gh api --method PATCH \
             "repos/${GITHUB_REPOSITORY}/git/refs/tags/stable" \
@@ -185,7 +375,9 @@ jobs:
       # fetched.
       - name: Where the channel stands
         id: channel
-        if: github.event.workflow_run.head_branch == 'main'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          github.event.workflow_run.head_branch == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -218,32 +410,71 @@ jobs:
       # commit is bad* and sends someone to a diff nobody looked at. The
       # distinction is carried in the DESCRIPTION, which is why the status
       # fetch above takes the whole payload rather than --jq'ing out a state.
+      # DRE-4111 adds the other half of that sentence. "A row of green
+      # promote-channel runs that promoted nothing is indistinguishable, at a
+      # glance, from a channel that is up to date" — so the headline now
+      # carries WHICH of the two it is, and a promotion gets a block of its
+      # own naming the mover: who, when, which sha, and why by hand. A forced
+      # promote raises a warning on top, because it is the one outcome here
+      # that shipped a commit the harness did not prove.
+      #
+      # And the loud block below is no longer gated on `BRANCH = main`, which
+      # is EMPTY on a dispatch — a by-hand decline would have been the silent
+      # green run this card is named after, in a third place.
       - name: Say what happened
         env:
           OUTCOME: ${{ steps.decide.outputs.outcome }}
           REASON: ${{ steps.decide.outputs.reason }}
           PROMOTED: ${{ steps.decide.outputs.promote }}
           HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
-          CANDIDATE: ${{ github.event.workflow_run.head_sha }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SCENARIOS: ${{ steps.channel.outputs.scenarios }}
           CHANNEL_RECEIPT: ${{ steps.channel.outputs.receipt }}
+          CHANNEL_HEAD: ${{ steps.ancestry.outputs.head }}
+          EVENT: ${{ github.event_name }}
+          MOVER: ${{ github.actor }}
+          REASON_GIVEN: ${{ github.event.inputs.reason }}
         run: |
+          if [ "$PROMOTED" = "true" ]; then
+            HEADLINE="moved stable to ${CANDIDATE:0:7}"
+          else
+            # A PR-head run reads neither the ref nor the compare, so say so
+            # rather than print an empty sha where a head belongs.
+            STILL_AT="${CHANNEL_HEAD:0:7}"
+            HEADLINE="nothing moved — stable is still at ${STILL_AT:-an unread head}"
+          fi
           {
-            echo "🏁 promote-channel: ${OUTCOME}"
+            echo "🏁 promote-channel: ${OUTCOME} — ${HEADLINE}"
             echo ""
             echo "${REASON}"
             echo ""
-            echo "Harness run: ${HARNESS_RUN}"
+            echo "Harness run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$BRANCH" = "main" ] && [ "$PROMOTED" != "true" ]; then
-            echo "::warning title=Did not promote::${OUTCOME} — candidate ${CANDIDATE:0:7}, gating run ${HARNESS_RUN}, scenarios ${SCENARIOS:-none}: ${REASON}"
+          if [ "$PROMOTED" = "true" ]; then
+            {
+              echo "## Promoted"
+              echo ""
+              echo "- stable now at: \`${CANDIDATE}\`"
+              echo "- outcome: \`${OUTCOME}\`"
+              echo "- mover: ${MOVER} (${EVENT})"
+              echo "- at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "- reason given: ${REASON_GIVEN:-n/a — the harness moved it}"
+              echo ""
+              echo "${REASON}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$OUTCOME" = "by-hand-forced-promoting" ]; then
+              echo "::warning title=Forced channel promotion::${MOVER} moved stable to ${CANDIDATE:0:7} PAST the integration-harness status: ${REASON_GIVEN}"
+            fi
+          elif [ "$BRANCH" = "main" ] || [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "::warning title=Did not promote::${OUTCOME} — candidate ${CANDIDATE:0:7}, gating run ${HARNESS_RUN:-none}, scenarios ${SCENARIOS:-none}: ${REASON}"
             {
               echo "## Did not promote"
               echo ""
               echo "- candidate: \`${CANDIDATE}\`"
               echo "- outcome: \`${OUTCOME}\`"
-              echo "- gating run: ${HARNESS_RUN}"
+              echo "- stable is still at: \`${CHANNEL_HEAD:-unknown}\`"
+              echo "- gating run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
               echo "- failing scenarios: ${SCENARIOS:-none}"
               echo ""
               echo "${REASON}"

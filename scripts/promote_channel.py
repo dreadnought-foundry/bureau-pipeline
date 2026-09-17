@@ -48,6 +48,41 @@ machine-readably, so `channel_watch.py` can count merge trains instead of
 reporting the cause as unknown. Three more names cover the refusals that
 already existed and were equally silent: `channel-held`, `no-harness-stamp`,
 `not-ahead-of-channel`.
+
+THE BY-HAND PATH, AND THE LINE IT MUST NOT CROSS (DRE-4111)
+-----------------------------------------------------------
+Everything above is reached by exactly one trigger: a `workflow_run` on the
+harness. So when the harness fails for a reason that is not about the code,
+`stable` freezes and the only move is to re-run it and hope. On 2026-09-16 the
+channel sat five merge commits and six merged pull requests behind while four
+of the harness's five scenarios died on
+
+    GitHub API 403: "API rate limit exceeded for installation ID 123249480"
+
+— the worker App's hourly bucket, empty. Nothing was wrong with any merged
+commit, and every promote-channel run that night reported success while
+promoting nothing.
+
+`evaluate(manual=True)` is the by-hand route, and its whole design is the line
+it does not cross. The harness is what PROVES a commit, and `bureau-harness` is
+deliberately the one repo kept off the channel so promotion can never validate
+itself — so a by-hand promote must not become "skip the proof":
+
+  * The ORDINARY by-hand promote re-reads the candidate's own combined commit
+    status and still requires a green `integration-harness` there. That status
+    is run-agnostic: it is the stamp from whichever run proved the sha, which
+    is exactly the case this exists for — the proof passed an hour ago and the
+    channel is still behind.
+  * FORCING past a red or absent stamp is a separate, louder act: its own
+    input, never the default, refused without a stated reason and refused to a
+    machine actor. It overrides the PROOF and nothing else — not the ancestry
+    rail, not the hold, and not the trunk check.
+  * The TRUNK check is the by-hand analogue of the branch question the
+    automatic path asks of its triggering run. `harness.yml` also runs on
+    `pull_request`, so a PR head carries a green stamp of its own; without this
+    a by-hand promote could put `stable` on a commit that never merged — the
+    proof present, the code unshipped.
+  * The mover is recorded either way: who, when, which sha, and why by hand.
 """
 
 from __future__ import annotations
@@ -114,6 +149,24 @@ OUTCOME_BLOCKED = "harness-blocked-by-sandbox"
 OUTCOME_UNPROVEN = "no-harness-stamp"
 OUTCOME_NOT_AHEAD = "not-ahead-of-channel"
 
+#: The by-hand vocabulary (DRE-4111). Separate names on purpose: "the harness
+#: moved the channel" and "a person moved the channel" are different facts, and
+#: a row of receipts that cannot tell them apart is the thing this card is
+#: named after.
+OUTCOME_BY_HAND = "by-hand-promoting"
+OUTCOME_BY_HAND_FORCED = "by-hand-forced-promoting"
+OUTCOME_FORCE_NEEDS_REASON = "by-hand-force-needs-reason"
+OUTCOME_FORCE_NOT_OPERATOR = "by-hand-force-not-operator"
+OUTCOME_NOT_ON_TRUNK = "by-hand-candidate-not-on-main"
+
+#: Actors a FORCED promote is refused to. Forcing past the harness is the one
+#: act here that is operator-only, and "a person ticked the box" has to be
+#: checked rather than assumed: every build agent in this fleet runs under an
+#: App token carrying `actions: write` and can therefore dispatch a workflow
+#: (agent-task.yml, plan.yml). A bot login is the one thing GitHub tells us for
+#: free, so it is what we read.
+MACHINE_ACTORS = ("github-actions", "github-actions[bot]")
+
 
 class Decision(NamedTuple):
     """`(promote, reason, outcome)` — prose for a human, a token for a reader.
@@ -168,6 +221,168 @@ def blocked_by_sandbox(combined: dict | None) -> str | None:
     return description if description.startswith(BLOCKED_MARKER) else None
 
 
+def is_machine_actor(actor: str | None) -> bool:
+    """Is this login a bot rather than a person (DRE-4111)?
+
+    Nobody named is TRUE — the caller that cannot say who asked for a forced
+    promote has not established that anybody did, and this is the one gate in
+    the file that exists to keep the fleet's own agents out.
+    """
+    name = (actor or "").strip().lower()
+    if not name:
+        return True
+    return name.endswith("[bot]") or name in MACHINE_ACTORS
+
+
+def _ancestry_gate(
+    sha: str,
+    ancestry: str | None,
+    *,
+    promoting: str,
+    creating: str,
+    outcome: str,
+) -> Decision:
+    """The channel may only ever advance.
+
+    Two harness runs can finish out of order; without this, the
+    later-finishing older commit wins and the channel silently regresses —
+    which would look exactly like a working channel while shipping older code.
+
+    Shared by both routes since DRE-4111, because this is precisely the rail a
+    by-hand promote does not get to skip: `--force` is about the PROOF, and a
+    promotion that moved `stable` backwards would be a rollback wearing a
+    promotion's receipt.
+    """
+    if ancestry == NO_CHANNEL_YET:
+        return Decision(True, creating, outcome)
+    if ancestry == IDENTICAL:
+        return Decision(
+            False, f"{CHANNEL} is already at {sha} — nothing to do.",
+            OUTCOME_NOT_AHEAD,
+        )
+    if ancestry == BEHIND:
+        return Decision(False, (
+            f"refusing to move {CHANNEL} backwards to {sha}: it is behind the "
+            f"current channel head. A late-finishing older run must not "
+            f"regress the channel."
+        ), OUTCOME_NOT_AHEAD)
+    if ancestry != AHEAD:
+        return Decision(False, (
+            f"not promoting {sha}: could not establish that it is ahead of "
+            f"{CHANNEL} (ancestry={ancestry!r}). Failing closed."
+        ), OUTCOME_NOT_AHEAD)
+    return Decision(True, promoting, outcome)
+
+
+def by_hand(
+    combined: dict | None,
+    sha: str,
+    *,
+    hold: str | None = None,
+    ancestry: str | None = None,
+    force: bool = False,
+    reason: str | None = None,
+    actor: str | None = None,
+    trunk: str | None = None,
+    channel_head: str | None = None,
+) -> Decision:
+    """The `workflow_dispatch` route (DRE-4111) — a person moving the channel.
+
+    `trunk` is GitHub's compare status for `base=<default branch>,
+    head=<candidate>`: `behind` or `identical` mean the candidate is reachable
+    from the trunk, anything else means it is not (and an unreadable compare
+    fails closed, like every other unverifiable read here).
+
+    Order, and why: the hold first, because a held channel is a standing
+    instruction and neither by-hand route may talk over it; then the shape of
+    the force request itself, because a malformed one must be refused before it
+    is weighed against anything; then the trunk, then the proof, then the
+    ancestry rail that both routes share.
+    """
+    stated = (reason or "").strip()
+
+    # 1. The hold outranks a by-hand promote exactly as it outranks the
+    #    automatic one. It is an operator saying "do not advance the channel",
+    #    and `--force` is about the harness, not about that.
+    if hold and hold.strip():
+        return Decision(False, (
+            f"channel HELD — not promoting {sha} by hand. Reason on record: "
+            f"{hold.strip()}. A by-hand promote does not talk over the hold; "
+            f"clear the hold variable and dispatch again."
+        ), OUTCOME_HELD)
+
+    # 2. Forcing is the louder act, so it is the one with conditions. A reason
+    #    is the record the run is kept for — an unexplained force is the July
+    #    ceremony back again, this time with a button.
+    if force and not stated:
+        return Decision(False, (
+            f"refusing to force {CHANNEL} to {sha}: forcing past the harness "
+            f"requires a stated reason, and none was given. Dispatch again "
+            f"with the reason that makes this safe."
+        ), OUTCOME_FORCE_NEEDS_REASON)
+    if force and is_machine_actor(actor):
+        return Decision(False, (
+            f"refusing to force {CHANNEL} to {sha}: forcing past the harness "
+            f"is operator-only and this run was started by "
+            f"{actor or 'nobody we can name'}. An ordinary by-hand promote of "
+            f"a proven commit is still open."
+        ), OUTCOME_FORCE_NOT_OPERATOR)
+
+    # 3. On the trunk at all? The automatic path asks this of its triggering
+    #    run's branch; a dispatch has no run to ask, so it asks the commit.
+    #    harness.yml also runs on `pull_request`, so a PR head carries a green
+    #    stamp of its own — without this, a by-hand promote could put the
+    #    channel on a commit that never merged.
+    if trunk not in (BEHIND, IDENTICAL):
+        return Decision(False, (
+            f"not promoting {sha} by hand: could not establish that it is on "
+            f"the trunk (compare={trunk!r}). The channel carries merged code; "
+            f"a commit with a green harness stamp is not necessarily one that "
+            f"shipped. Failing closed."
+        ), OUTCOME_NOT_ON_TRUNK)
+
+    # 4. The proof. This is the safety line: the candidate's own combined
+    #    status, from whichever run stamped it — not the newest run, which is
+    #    the entire reason this route exists.
+    blocked = blocked_by_sandbox(combined)
+    verdict = _harness_verdict(combined)
+    proven = verdict == SUCCESS and not blocked
+    if not proven:
+        seen = blocked or verdict or "no stamp at all"
+        if not force:
+            return Decision(False, (
+                f"refusing to promote {sha} by hand: its {STATUS_CONTEXT} "
+                f"status reports {seen}. The by-hand path promotes a commit "
+                f"the harness has ALREADY proved — from any run, not only the "
+                f"newest — and this one is not proved. The last proven sha is "
+                f"{channel_head or 'unknown'}, where {CHANNEL} stands now. "
+                f"Re-run the harness on {sha}, or dispatch again with force "
+                f"and a reason."
+            ), OUTCOME_UNPROVEN)
+        return _ancestry_gate(sha, ancestry, outcome=OUTCOME_BY_HAND_FORCED, promoting=(
+            f"FORCED: moving {CHANNEL} to {sha} past an {STATUS_CONTEXT} "
+            f"status of {seen}. Mover: {actor}. Reason: {stated}. The "
+            f"harness did not prove this commit and nothing here pretends "
+            f"otherwise."
+        ), creating=(
+            f"FORCED: creating {CHANNEL} at {sha} past an {STATUS_CONTEXT} "
+            f"status of {seen}. Mover: {actor}. Reason: {stated}."
+        ))
+
+    # 5. Proven, on the trunk, no hold. An ordinary by-hand promote — and if
+    #    force was ticked, say plainly that it was not needed rather than file
+    #    a routine move under the loud receipt.
+    unneeded = " (force was asked for and not needed)" if force else ""
+    return _ancestry_gate(sha, ancestry, outcome=OUTCOME_BY_HAND, promoting=(
+        f"promoting {CHANNEL} to {sha} BY HAND{unneeded} — {STATUS_CONTEXT} "
+        f"green on that commit, strictly ahead. Mover: {actor}. Reason: "
+        f"{stated or 'none given'}."
+    ), creating=(
+        f"creating {CHANNEL} at {sha} BY HAND{unneeded} — first proven "
+        f"commit. Mover: {actor}. Reason: {stated or 'none given'}."
+    ))
+
+
 def evaluate(
     combined: dict | None,
     sha: str,
@@ -176,6 +391,12 @@ def evaluate(
     ancestry: str | None = None,
     conclusion: str | None = None,
     branch: str | None = None,
+    manual: bool = False,
+    force: bool = False,
+    reason: str | None = None,
+    actor: str | None = None,
+    trunk: str | None = None,
+    channel_head: str | None = None,
 ) -> Decision:
     """Return ``(promote, reason, outcome)``. The reason is operator-facing.
 
@@ -194,7 +415,18 @@ def evaluate(
     `branch` and `conclusion` are both optional and both mean "nobody said"
     when absent — the stamp and the ancestry stay the authorities, which is
     what every caller before DRE-3070 relied on.
+
+    `manual` switches to the by-hand route (DRE-4111) and is the ONLY way to
+    reach it: `force`, `reason`, `actor` and `trunk` are dispatch-only facts
+    and are ignored here, so a `workflow_run` carrying a stray `force` cannot
+    promote an unproven commit.
     """
+    if manual:
+        return by_hand(
+            combined, sha, hold=hold, ancestry=ancestry, force=force,
+            reason=reason, actor=actor, trunk=trunk, channel_head=channel_head,
+        )
+
     # 1. Was this run ever about the trunk? The PR trigger runs the same
     #    harness against a PR head, which proves a commit that is not on main.
     #    Skipping it was always right; saying nothing about it was not — on
@@ -266,36 +498,12 @@ def evaluate(
             f"move {CHANNEL}."
         ), OUTCOME_UNPROVEN)
 
-    # 6. The channel may only ever advance. Two harness runs can finish out of
-    #    order; without this, the later-finishing older commit wins and the
-    #    channel silently regresses — which would look exactly like a working
-    #    channel while shipping older code.
-    if ancestry == NO_CHANNEL_YET:
-        return Decision(
-            True, f"creating {CHANNEL} at {sha} — first proven commit.",
-            OUTCOME_PROMOTING,
-        )
-    if ancestry == IDENTICAL:
-        return Decision(
-            False, f"{CHANNEL} is already at {sha} — nothing to do.",
-            OUTCOME_NOT_AHEAD,
-        )
-    if ancestry == BEHIND:
-        return Decision(False, (
-            f"refusing to move {CHANNEL} backwards to {sha}: it is behind the "
-            f"current channel head. A late-finishing older run must not "
-            f"regress the channel."
-        ), OUTCOME_NOT_AHEAD)
-    if ancestry != AHEAD:
-        return Decision(False, (
-            f"not promoting {sha}: could not establish that it is ahead of "
-            f"{CHANNEL} (ancestry={ancestry!r}). Failing closed."
-        ), OUTCOME_NOT_AHEAD)
-
-    return Decision(
-        True,
-        f"promoting {CHANNEL} to {sha} — harness green, strictly ahead.",
-        OUTCOME_PROMOTING,
+    # 6. The channel may only ever advance — the rail both routes share, in
+    #    `_ancestry_gate` since DRE-4111.
+    return _ancestry_gate(
+        sha, ancestry, outcome=OUTCOME_PROMOTING,
+        promoting=f"promoting {CHANNEL} to {sha} — harness green, strictly ahead.",
+        creating=f"creating {CHANNEL} at {sha} — first proven commit.",
     )
 
 
@@ -317,6 +525,39 @@ def main(argv: list[str] | None = None) -> int:
              f"{TRUNK!r} is a PR-head run and no candidate; absent means "
              "'nobody said'.",
     )
+    # The by-hand route (DRE-4111). None of these has any effect without
+    # --manual, so a workflow_run can never reach the forced arm.
+    parser.add_argument(
+        "--manual", action="store_true",
+        help="this is a workflow_dispatch — a person promoting by hand. The "
+             "candidate's own commit status is the proof, from any run.",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="promote past a failed or absent harness status. Operator-only, "
+             "requires --reason, and overrides the PROOF only — never the "
+             "hold, the trunk check or the ancestry rail.",
+    )
+    parser.add_argument(
+        "--reason", default=None,
+        help="why the channel is being moved by hand. Required with --force.",
+    )
+    parser.add_argument(
+        "--actor", default=None,
+        help="the login that started the run — the mover, recorded on it.",
+    )
+    parser.add_argument(
+        "--trunk", default=None,
+        help="GitHub's compare status for base=<default branch>, "
+             f"head=<candidate>: {BEHIND!r} or {IDENTICAL!r} mean the "
+             "candidate is reachable from the trunk. Anything else fails "
+             "closed.",
+    )
+    parser.add_argument(
+        "--channel-head", default=None,
+        help=f"the sha {CHANNEL} points at now — the last proven sha, which a "
+             "refusal names so the operator does not have to go and look.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -332,6 +573,12 @@ def main(argv: list[str] | None = None) -> int:
         ancestry=args.ancestry,
         conclusion=(args.conclusion or None),
         branch=(args.branch or None),
+        manual=args.manual,
+        force=args.force,
+        reason=(args.reason or None),
+        actor=(args.actor or None),
+        trunk=(args.trunk or None),
+        channel_head=(args.channel_head or None),
     )
     # The receipt: the token first so it can be grepped out of a run log, the
     # prose after it so a human never has to.

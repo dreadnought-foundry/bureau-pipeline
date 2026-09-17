@@ -50,7 +50,8 @@ agent-bureau repo; the third clause added by DRE-2103).
 - **`stable` moves itself; `vN` is still cut by hand (DRE-2551).**
   `promote-channel.yml` keeps one moving tag, `stable`, on the newest
   commit on `main` carrying a green `integration-harness` stamp. No
-  operator is involved, the repository variable `CHANNEL_HOLD` pauses it
+  operator is involved in the ordinary case (there is a by-hand route since
+  DRE-4111 — see below), the repository variable `CHANNEL_HOLD` pauses it
   (unset means run), and `release-gate.yml` fires on `stable` too, so an
   automatic move is validated exactly like a hand-cut tag. Two limits are
   the point of this entry:
@@ -150,10 +151,94 @@ strings instead of the same silence:
 | `harness-blocked-by-sandbox` | the harness never judged this commit — its own sandbox (reconcile/merge-gate/linear-sync) failed first | nothing proven either way; the next run re-proves this trunk |
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
+| `by-hand-promoting` | a person promoted a commit the harness had already proved | nothing — the run records who, when and why |
+| `by-hand-forced-promoting` | a person promoted PAST the harness, with a reason on the run | read the reason; the commit is on the channel unproven |
+| `by-hand-candidate-not-on-main` | the named sha is not reachable from `main` | name a merged commit; a green PR head is not one |
+| `by-hand-force-needs-reason` | `force` with no reason | dispatch again with the reason that makes it safe |
+| `by-hand-force-not-operator` | `force` asked for by a bot login | forcing is operator-only; a person dispatches it |
 
 Before this, those runs concluded `skipped` with nothing else on them: on
 2026-09-03 four consecutive PR-head runs each produced one, and learning that
 nothing was wrong meant opening all four.
+
+### Moving the channel by hand (DRE-4111)
+
+Until 2026-09-17 `promote-channel.yml` was triggered by exactly one thing — a
+`workflow_run` on the harness — with no dispatch, no inputs and no override.
+**There was no way for a person to promote the channel.** That is fine while
+the harness is a signal about the code; it stops being fine when the harness
+fails for a reason that is not about the code, because then `stable` freezes
+and the only move is to re-run the harness and hope.
+
+**2026-09-16, the incident this closes.** `stable` sat at `8b54d629a` while
+`main` reached `34807775b` — five merge commits and six merged pull requests
+behind, including four cards unblocked that afternoon. The harness on main
+failed at 01:00Z and 01:05Z, and four of its five scenarios died on the same
+line:
+
+```
+GitHub API 403: "API rate limit exceeded for installation ID 123249480"
+```
+
+The fifth, `lane_contract`, is read-only and passed 15 of 15. Nothing was wrong
+with any merged commit — the worker App's hourly bucket, the fleet's known
+single point of throttling, was empty, and the harness needs it to drive the
+sandbox. Meanwhile every promote-channel run reported SUCCESS, because every
+step is guarded on the harness conclusion and a failed harness skips them all.
+A row of green runs that promoted nothing read exactly like a channel that was
+up to date. The recovery was manual and lucky: read the 403, check the bucket
+had refilled (4,280/5,000), re-run the harness on the same sha.
+
+**The ordinary by-hand promote** — a commit the harness HAS proved, just not on
+the most recent run:
+
+```bash
+gh workflow run promote-channel.yml \
+  --repo dreadnought-foundry/bureau-pipeline \
+  -f sha=<candidate-sha> \
+  -f reason="harness 403 on the shared App bucket; DRE-4111"
+```
+
+`sha` may be left blank for the head of `main`. This is **not** a way past the
+proof: it re-reads the candidate's own combined commit status and still
+requires a green `integration-harness` there. What it drops is the requirement
+that the newest run be the one that proved it.
+
+**Forcing past a red or absent status** is a separate, louder act — `-f
+force=true`, refused without a reason and refused to a bot login, and it raises
+a warning on the run naming the mover and the reason:
+
+```bash
+gh workflow run promote-channel.yml \
+  --repo dreadnought-foundry/bureau-pipeline \
+  -f sha=<candidate-sha> -f force=true \
+  -f reason="who=<name> <why this is safe>"
+```
+
+**What force does NOT override**, and why the list is short. The harness is
+what proves a commit, and `bureau-harness` is deliberately the one repo kept
+off the channel so promotion can never validate itself — so force is scoped to
+the proof alone:
+
+- the **ancestry rail**: `stable` still cannot move backwards, forced or not;
+- the **hold**: `CHANNEL_HOLD` is a standing instruction not to advance the
+  channel, and a by-hand promote does not talk over it;
+- the **trunk check**: the candidate must be reachable from `main`.
+  `harness.yml` also runs on `pull_request`, so a PR head carries a green
+  `integration-harness` stamp of its own — without this check a by-hand
+  promote could put `stable` on a commit that never merged, the proof present
+  and the code unshipped.
+
+The push is made with the bot App token on this route too, so
+`release-gate.yml` fires and validates the move exactly as it does an
+automatic one. The `promote-channel` concurrency group is declared at workflow
+level, so a person and the automatic mover queue for the ref rather than race
+for it.
+
+**Not closed by this**: making the harness resilient to the shared App bucket,
+which is the root cause of that particular instance. The two are independent —
+"the proof passed an hour ago and the channel is still behind" has other
+causes. Re-pointing `vN` is untouched and stays operator-only.
 
 `channel-watch.yml` counts the `cancelled` harness runs on `main` since the
 channel head and, at two or more, names a **merge train** in the staleness
