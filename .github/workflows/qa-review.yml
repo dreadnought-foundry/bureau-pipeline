@@ -396,11 +396,22 @@ jobs:
       # assemble_context.py reads the files from this checkout at run time, so
       # a `@main` standards edit reaches the critic on its next run with no
       # workflow change. Shared by both critic attempts below.
+      #
+      # `--root "$PIPELINE_DIR"` is load-bearing (DRE-4158). The script's
+      # default root is the in-tree `.bureau-pipeline`, which the move above
+      # emptied of everything but the stub actions — so RUNNING the script
+      # from $PIPELINE_DIR while letting it READ from its default killed every
+      # review of a bureau-pipeline PR from the hour DRE-3226 merged
+      # (`FileNotFoundError: '.bureau-pipeline/standards/comms.md'`). Only the
+      # OUTPUT belongs in the tree: the move step's `mkdir -p` guarantees the
+      # directory, and the agent is told to read the file there.
+      # tests/test_critic_context_root.py executes this block as written.
       - name: Assemble critic context
         id: ctx
         if: steps.decide.outputs.review == 'true'
         run: |
           python3 "$PIPELINE_DIR"/scripts/assemble_context.py assemble critic \
+            --root "$PIPELINE_DIR" \
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of critic context"
           # DRE-3226: keep the durable copy outside the working tree. The
