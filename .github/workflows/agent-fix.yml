@@ -283,24 +283,38 @@ jobs:
           # merges can conflict the same PR several times in minutes, and
           # that churn must not consume the review budget (PR #13 nearly
           # hit human-hold this way while holding an APPROVE verdict).
+          # DRE-4139: ONE read of the WHOLE record, for all three answers
+          # below. They were three unpaginated calls, so each saw GitHub's
+          # default page size of 30 — the OLDEST 30 — and on a PR past that
+          # the standing verdict and the last push marker were both invisible
+          # and a DIRTY PR picked the wrong mode. Reading it once also means
+          # the two indexes are indexes into the SAME list, which three
+          # separate calls never guaranteed. `add // []` flattens the
+          # per-page arrays `--slurp` emits, and tolerates the `[]` blip
+          # substitute, whose `add` is null.
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+            > "$TMPD/mode-thread.json" 2>/dev/null \
+            || echo '[]' > "$TMPD/mode-thread.json"
           # DRE-1988: a "QA Critic" verdict only counts if the qa-bot identity
           # authored it — any commenter can plant the marker text otherwise.
-          VERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-            --jq '[.[] | select(.user.login == "agent-bureau-qa-bot[bot]") | select(.body | contains("QA Critic"))] | last | .body' 2>/dev/null | head -1 || true)
+          VERDICT=$(jq -r '[(add // [])[] | select(.user.login == "agent-bureau-qa-bot[bot]") | select(.body | contains("QA Critic"))] | last | .body // empty' \
+            "$TMPD/mode-thread.json" 2>/dev/null | head -1 || true)
           # A REQUEST_CHANGES verdict is only OUTSTANDING if no fix has been
           # pushed since it landed. A conflict arriving while a pushed fix
           # awaits re-review must route to conflict mode — otherwise it burns
           # review attempts on a fix the critic never saw (PR #25 hit
           # budget-exhaustion this way with a fix the critic never saw).
-          LAST_VERDICT_IDX=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-            --jq '[to_entries[] | select(.value.user.login == "agent-bureau-qa-bot[bot]") | select(.value.body | contains("QA Critic"))] | last | .key // -1')
+          LAST_VERDICT_IDX=$(jq -r '[(add // []) | to_entries[] | select(.value.user.login == "agent-bureau-qa-bot[bot]") | select(.value.body | contains("QA Critic"))] | last | .key // -1' \
+            "$TMPD/mode-thread.json")
           # DRE-1995: the push marker (and the two attempt counters below) are
           # posted by THIS workflow as agent-bureau-bot[bot] — the worker
           # identity, not qa-bot, which is why DRE-1988's gating didn't cover
           # them. Filter the read-back to that author, or any commenter can
           # plant the marker to flip fix-vs-conflict routing.
-          LAST_PUSH_IDX=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
-            --jq '[to_entries[] | select(.value.user.login == "agent-bureau-bot[bot]") | select(.value.body | contains("pushed — CI and critic review re-running"))] | last | .key // -1')
+          LAST_PUSH_IDX=$(jq -r '[(add // []) | to_entries[] | select(.value.user.login == "agent-bureau-bot[bot]") | select(.value.body | contains("pushed — CI and critic review re-running"))] | last | .key // -1' \
+            "$TMPD/mode-thread.json")
           MODE=fix
           if [ "$MSTATE" = "DIRTY" ]; then
             case "$VERDICT" in
@@ -324,7 +338,7 @@ jobs:
           # newer than a standing answer, and the sweep stood down forever
           # (PR #199, 2026-08-29 — answer 15:27, hand dispatch 15:29, sweep
           # stands down 15:33).
-          TMPD="${RUNNER_TEMP:-/tmp}"
+          # TMPD is set once, above the mode reads (DRE-4139).
           gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
             > "$TMPD/fix-budget-thread.json" 2>/dev/null \
@@ -1519,9 +1533,15 @@ jobs:
               # full comment list to fix_dead_run.py; it filters to
               # worker-bot-authored markers (DRE-1995 discipline) and stops the
               # count at the last push marker.
+              # "Full" means EVERY PAGE (DRE-4139): unpaginated this read saw
+              # GitHub's default 30 — the OLDEST 30 — so on a long PR the cap
+              # counted deaths that were no longer the consecutive run, or
+              # none at all, and a dead loop kept being retried.
+              # fix_dead_run.py flattens the per-page arrays `--slurp` emits.
               [ -n "$EXEC_FILE" ] || EXEC_FILE=/home/runner/work/_temp/claude-execution-output.json
               COMMENTS_JSON=$(mktemp)
-              gh api "repos/$REPO/issues/$PR/comments" \
+              gh api --paginate --slurp \
+                "repos/$REPO/issues/$PR/comments?per_page=100" \
                 > "$COMMENTS_JSON" || echo '[]' > "$COMMENTS_JSON"
               DECISION=$(python3 .bureau-pipeline/scripts/fix_dead_run.py decide \
                 "$EXEC_FILE" --comments-json "$COMMENTS_JSON" --run-url "$RUN_URL")

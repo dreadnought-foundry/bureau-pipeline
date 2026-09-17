@@ -647,17 +647,13 @@ def render(comments, worker_login: str) -> str:
     return "\n".join(out)
 
 
-def flatten_pages(data) -> list:
-    """One comment list from either payload shape (DRE-2030), shared with the
-    reconcile sweep so both read the thread identically: a flat array, or the
-    array-of-pages `gh api --paginate --slurp` emits."""
-    if not isinstance(data, list):
-        raise ValueError("comments payload must be a JSON array")
-    if data and all(isinstance(page, list) for page in data):
-        data = [c for page in data for c in page]
-    if not all(isinstance(c, dict) for c in data):
-        raise ValueError("comments payload must contain comment objects")
-    return data
+#: One comment list from either payload shape (DRE-2030), shared with the
+#: reconcile sweep so both read the thread identically: a flat array, or the
+#: array-of-pages `gh api --paginate --slurp` emits. It now lives in
+#: merge_gate, which DRE-4139 made a reader of the same record — this module
+#: imports that one, so the definition moved down rather than being copied.
+#: Callers here and in fix_budget/reconcile are unchanged.
+flatten_pages = merge_gate.flatten_pages
 
 
 def _load_comments(path: str) -> list:

@@ -224,7 +224,9 @@ class TheReviewSkipReadsTheSameRecordTest(unittest.TestCase):
              "--qa-login", QA_LOGIN],
             capture_output=True, text=True,
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # 1 is the SKIP exit (qa-review.yml runs it under `set +e`), 0 the
+        # review; only a traceback would be a crashed review job.
+        self.assertIn(proc.returncode, (0, 1), proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
         return proc.stdout
 
