@@ -283,8 +283,11 @@ class TheDeadRunCapReadsTheSameRecordTest(unittest.TestCase):
 # The wiring: every workflow read of this record asks for every page.
 # --------------------------------------------------------------------------
 #: Any path on GitHub's issue-comments endpoint, however the workflow spells
-#: the repo and the PR number.
-_COMMENT_ENDPOINT = re.compile(r"issues/[^\s\"']+/comments")
+#: the repo and the PR number — `$PR`, `${{ steps.pr.outputs.number }}`, and
+#: anything else that is not a quote. NOT `\S`: two of these reads spell the
+#: number as a GitHub expression with spaces in it, and a needle that cannot
+#: see them is a guard with a hole exactly where a new read would land.
+_COMMENT_ENDPOINT = re.compile(r"""issues/[^"']+?/comments""")
 #: A write, not a read — the gate's carry note and every `gh api … -F body=`.
 _WRITE_FLAGS = ("-F body=", "--method POST", "--input", "-f body=")
 
