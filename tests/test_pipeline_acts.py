@@ -131,7 +131,7 @@ class TestEveryActHasARow:
         [
             (".github/workflows/agent-fix.yml", "Conflict-resolution agent dispatched (round"),
             (".github/workflows/agent-fix.yml", "pushed — CI and critic review re-running."),
-            (".github/workflows/agent-fix.yml", "blocked: $(cat /tmp/fix-blocker.txt)"),
+            (".github/workflows/agent-fix.yml", "blocked: $BLOCKER"),
             (".github/workflows/medic.yml", 'linear_ops.py comment DRE-N "<report>"'),
         ],
     )

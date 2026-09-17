@@ -42,9 +42,9 @@
   },
   "workflow": {
     "conflict-agent-dispatched": "🔀 Conflict-resolution agent dispatched (round ${{ steps.pr.outputs.attempt }}/5) — merging main into PR #${{ steps.pr.outputs.number }}.",
-    "fix-attempt-landed/fix": "🔧 Fix attempt ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running.",
-    "fix-attempt-landed/conflict": "🔀 Conflict resolution round ${{ steps.pr.outputs.attempt }} pushed — CI and critic review re-running.",
-    "fix-attempt-disputed": "🛑 Fix attempt ${{ steps.pr.outputs.attempt }} blocked: $(cat /tmp/fix-blocker.txt)\n\n          $FORMAT",
+    "fix-attempt-landed/fix": "🔧 Fix attempt $ATTEMPT pushed — CI and critic review re-running.",
+    "fix-attempt-landed/conflict": "🔀 Conflict resolution round $ATTEMPT pushed — CI and critic review re-running.",
+    "fix-attempt-disputed": "🛑 Fix attempt $ATTEMPT blocked: $BLOCKER\n\n          $FORMAT",
     "run-failure-diagnosed": "\"<report>\""
   }
 }
