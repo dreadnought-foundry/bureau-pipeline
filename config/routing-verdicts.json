@@ -18,6 +18,15 @@
     "with no turn ever coming (DRE-2735 — the promoter skips a parentless card,",
     "and it skips a non-FLEET verdict too).",
     "",
+    "THE TURN COMES NOW (DRE-3385). The sweep promotes every verdict whose",
+    "destination is Todo — FLEET, WORKBENCH and OPERATOR — and stamps the",
+    "verdict's own `marks` before it moves the card, so a card a person builds",
+    "never sits in Todo unmarked. So DESTINATION and PROMOTABLE answer two",
+    "different questions and both are read: destination says where the sweep",
+    "carries the card, `promotable` says whether a run is dispatched at it",
+    "there. Read as one, OPERATOR and WORKBENCH had a destination and no turn,",
+    "and on 2026-09-08 that was 33 of the board's 40 Backlog cards.",
+    "",
     "ACTOR is per-lane, not global (DRE-2824). PARKED named `operator` on",
     "`Backlog`, a lane whose permitted writers are all process — so a PARKED",
     "card was sent to a lane the actor named to handle it may not write. Backlog",
@@ -56,7 +65,7 @@
       "actor": "operator",
       "promotable": false,
       "marks": ["hand-built"],
-      "why": "It is real work and it goes on the board where work goes — but a person does it at an interactive session, so it carries `hand-built`, which is already the signal that stops the sweep dispatching a competing run or reporting the card as stranded (DRE-2524). Backlog was the old answer and Backlog is a dead end: nothing there ever moves a non-FLEET card on."
+      "why": "It is real work and it goes on the board where work goes — but a person does it at an interactive session, so it carries `hand-built`, which is already the signal that stops the sweep dispatching a competing run or reporting the card as stranded (DRE-2524). Backlog was the old answer and Backlog is a dead end. The sweep performs this move itself (DRE-3385), on the same gates a FLEET card passes and stamping the mark before the card lands, because the destination written here was true for a year and nothing ever carried a card to it."
     },
     {
       "name": "OPERATOR",

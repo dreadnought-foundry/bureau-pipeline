@@ -47,6 +47,14 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
+
+# Since DRE-3385 a Backlog card carrying NO routing verdict is refused
+# promotion outright, so every candidate below carries one — a fixture held
+# back for the missing verdict would say nothing about the gate under test.
+FLEET_VERDICT = routing_verdict.verdict_comment(
+    "FLEET", "the acceptance criteria are unit-testable")
+
 
 
 # The live epic body, verbatim in the parts that matter (DRE-2492). Both lines
@@ -204,7 +212,7 @@ def test_children_of_the_prose_jammed_epic_promote():
             "description": "**Repo:** agent-bureau\nwork",
             "parent": {"identifier": "DRE-2492", "state": {"name": "In Progress"}},
             "labels": {"nodes": [{"name": "size:M"}]},
-            "comments": {"nodes": []},
+            "comments": {"nodes": [{"body": FLEET_VERDICT}]},
             "inverseRelations": {"nodes": []},
         }
         for ident in ("DRE-2494", "DRE-2496", "DRE-2497", "DRE-2498", "DRE-2650")

@@ -48,6 +48,8 @@ CREATED = "2026-07-01T00:00:00.000Z"  # before the green light: never a mid-epic
 
 FLEET = routing_verdict.verdict_comment("FLEET", "the acceptance criteria are unit-testable")
 WORKBENCH = routing_verdict.verdict_comment("WORKBENCH", "it drives a live auth flow")
+PARKED = routing_verdict.verdict_comment("PARKED", "we decided not to build this")
+NEEDS_WORK = routing_verdict.verdict_comment("NEEDS WORK", "it states no exit condition")
 
 
 def _card(
@@ -98,6 +100,7 @@ class _Board:
         self.blocker_state = blocker_state
         self.advanced: list[tuple[str, str, str]] = []
         self.posted: list[tuple[str, str]] = []
+        self.labelled: list[tuple[str, str]] = []
         self.lanes = {c["identifier"]: ["Backlog"] for c in self.cards}
         self.epic_gate_reads: list[str] = []
         self.green_light_reads: list[str] = []
@@ -123,6 +126,10 @@ class _Board:
             reconcile.mid_epic, "last_green_light", side_effect=green_light
         ), patch.object(
             reconcile, "card_state", return_value=self.blocker_state
+        ), patch.object(
+            # A hand-built card's marks go on before the move (DRE-3385).
+            reconcile.linear_ops, "add_label",
+            side_effect=lambda i, label: self.labelled.append((i, label)),
         ), patch.object(
             reconcile.linear_ops, "cmd_advance", side_effect=advance
         ), patch.object(
@@ -162,13 +169,19 @@ class TestTheFourCells:
         assert board.promote() == 1
         assert board.lane_of("DRE-2735") == "Todo"
 
-    def test_parent_active_without_a_verdict_still_promotes_to_todo(self):
-        """Unchanged by this card: a verdictless CHILD promotes exactly as
-        before, because Backlog's "it carries a verdict" clause is enforced from
-        Phase 5 and refusing the whole verdictless board today would freeze it."""
+    def test_parent_active_without_a_verdict_stays_in_backlog_too(self):
+        """This cell flipped in DRE-3385. It was "a verdictless CHILD promotes
+        exactly as before", on the reasoning that refusing the whole verdictless
+        board would freeze it — true while nothing wrote a verdict at planning
+        exit, and false once everything did. The epic's approval is evidence
+        about the PLAN; it never says who builds this piece."""
         board = _Board(_card(parent_state="In Progress", comments=[]))
-        assert board.promote() == 1
-        assert board.lane_of("DRE-2735") == "Todo"
+        assert board.promote() == 0
+        assert board.lane_of("DRE-2735") == "Backlog"
+        assert any(
+            routing_verdict.NO_VERDICT_TAG in b
+            for b in board.comments_on("DRE-2735")
+        )
 
     def test_parentless_with_fleet_verdict_promotes_to_todo(self):
         """The new behaviour: no parent, so the verdict IS the approval."""
@@ -251,15 +264,30 @@ class TestTheRefusalsAreDistinguishable:
 # A one-off is not exempt from anything else
 # --------------------------------------------------------------------------
 class TestAOneOffPassesEveryOtherGate:
-    def test_a_non_fleet_verdict_is_still_refused(self):
-        """WORKBENCH needs a person at an interactive session — the whole point
-        of the verdict is that only FLEET is dispatched."""
+    def test_a_verdict_routed_away_from_todo_is_still_refused(self):
+        """PARKED is deliberately inert and NEEDS WORK belongs to the planner —
+        the sweep promotes to Todo and nowhere else.
+
+        This test used to use WORKBENCH, on the reading that only FLEET leaves
+        Backlog at all. DRE-3385 corrected that: WORKBENCH names Todo as its
+        destination, so it leaves — marked `hand-built`, with nothing dispatched
+        (see test_operator_card_promotion.py). What is refused is a wrong
+        DESTINATION, which is what these two are."""
+        for verdict in (PARKED, NEEDS_WORK):
+            board = _Board(_card(parent_state=None, comments=[verdict]))
+            assert board.promote() == 0
+            assert board.lane_of("DRE-2735") == "Backlog"
+            assert any(
+                routing_verdict.NOT_FLEET_TAG in b
+                for b in board.comments_on("DRE-2735")
+            )
+
+    def test_a_workbench_one_off_leaves_for_a_person(self):
+        """The other half of the correction, pinned here so this file cannot
+        drift back to "only FLEET leaves Backlog"."""
         board = _Board(_card(parent_state=None, comments=[WORKBENCH]))
-        assert board.promote() == 0
-        assert board.lane_of("DRE-2735") == "Backlog"
-        assert any(
-            routing_verdict.NOT_FLEET_TAG in b for b in board.comments_on("DRE-2735")
-        )
+        assert board.promote() == 1
+        assert board.lane_of("DRE-2735") == "Todo"
 
     def test_an_unmet_blocker_still_holds_it(self):
         board = _Board(
@@ -346,11 +374,16 @@ class TestParentlessPromotionRefusal:
     def test_a_fleet_verdict_is_not(self):
         assert routing_verdict.parentless_promotion_refusal("DRE-2735", [FLEET]) is None
 
-    def test_a_non_fleet_verdict_keeps_its_own_refusal(self):
+    def test_a_workbench_verdict_is_not_a_refusal_at_all(self):
+        """It names Todo, and the sweep goes to Todo (DRE-3385)."""
+        assert routing_verdict.parentless_promotion_refusal(
+            "DRE-2735", [WORKBENCH]) is None
+
+    def test_a_wrong_destination_keeps_its_own_refusal(self):
         """The wrong-destination refusal already exists and says where the card
         goes instead — do not replace it with "no verdict", which is a different
         fact."""
-        refusal = routing_verdict.parentless_promotion_refusal("DRE-2735", [WORKBENCH])
+        refusal = routing_verdict.parentless_promotion_refusal("DRE-2735", [PARKED])
         assert refusal is not None
         assert routing_verdict.NOT_FLEET_TAG in refusal
         assert routing_verdict.NO_VERDICT_TAG not in refusal
@@ -366,7 +399,7 @@ class TestParentlessPromotionRefusal:
         """The sweep posts each refusal at most once, keyed on the tag — pair a
         notice with the wrong tag and the two refusals silence each other."""
         no_verdict = routing_verdict.parentless_promotion_refusal("DRE-2735", [])
-        not_fleet = routing_verdict.parentless_promotion_refusal("DRE-2735", [WORKBENCH])
+        not_fleet = routing_verdict.parentless_promotion_refusal("DRE-2735", [PARKED])
         assert routing_verdict.refusal_tag(no_verdict) == routing_verdict.NO_VERDICT_TAG
         assert routing_verdict.refusal_tag(not_fleet) == routing_verdict.NOT_FLEET_TAG
 

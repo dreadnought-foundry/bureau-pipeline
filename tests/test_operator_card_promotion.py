@@ -219,6 +219,16 @@ class TestTheSweepPerformsTheMove:
         assert board.labels_on("DRE-3385") == []
         assert board.lane_of("DRE-3385") == "Todo"
 
+    def test_nothing_is_dispatched_for_it(self):
+        """The promoter never dispatches — the relay does, off the Todo
+        transition — and the marks are what stop it there (DRE-3341). Asserted
+        rather than assumed, because "promoted" and "dispatched" became one word
+        in this gate once before."""
+        with patch.object(reconcile, "redispatch") as dispatch:
+            board = _Board(_card(comments=[OPERATOR]))
+            assert board.promote() == 1
+        dispatch.assert_not_called()
+
     def test_a_fleet_card_is_still_promoted_and_still_unmarked(self):
         """Control: the path this card extends must keep working, and FLEET
         declares no marks — stamping one would stop the fleet dispatching."""
@@ -377,20 +387,32 @@ class TestTheWipCount:
         assert reconcile.counts_against_wip(self._in_lane("Todo", "hand-built-ish"))
 
     def test_twelve_hand_built_todo_cards_do_not_starve_the_fleet(self):
-        """The acceptance criterion, as a board. Twelve hand-built cards in Todo
-        at a cap of twelve used to print "WIP at cap — none promoted" for ever;
-        the FLEET card behind them promotes."""
-        board = [
+        """The acceptance criterion, as a board and through the real read.
+        Twelve hand-built cards in Todo at a cap of twelve used to print "WIP at
+        cap — none promoted" for ever; the FLEET card behind them promotes."""
+        occupied = [
             self._in_lane("Todo", reconcile.HAND_BUILT_LABEL, identifier=f"DRE-{n}")
             for n in range(100, 112)
         ]
-        assert len(board) == 12
-        assert reconcile.wip_count(board) == 0
+        assert len(occupied) == 12
+        with patch.object(reconcile, "active_cards", return_value=occupied):
+            counted = reconcile.wip_count(reconcile.active_cards())
+        assert counted == 0
         with patch.object(reconcile, "MAX_WIP", 12):
-            promoted = _Board(_card(comments=[FLEET])).promote(
-                active_count=reconcile.wip_count(board)
-            )
+            promoted = _Board(_card(comments=[FLEET])).promote(active_count=counted)
         assert promoted == 1
+
+    def test_the_same_twelve_without_the_mark_do_hold_the_fleet_at_the_cap(self):
+        """Guard the guard: the exemption is the label, not the harness."""
+        occupied = [
+            self._in_lane("Todo", identifier=f"DRE-{n}") for n in range(100, 112)
+        ]
+        with patch.object(reconcile, "active_cards", return_value=occupied):
+            counted = reconcile.wip_count(reconcile.active_cards())
+        assert counted == 12
+        with patch.object(reconcile, "MAX_WIP", 12):
+            promoted = _Board(_card(comments=[FLEET])).promote(active_count=counted)
+        assert promoted == 0
 
     def test_the_sweep_budgets_promotion_off_the_filtered_count(self):
         """The count is not merely available — `main()` has to be the caller

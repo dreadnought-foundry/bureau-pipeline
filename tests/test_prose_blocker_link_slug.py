@@ -44,6 +44,14 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 import blocker_prose  # noqa: E402
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402
+import routing_verdict  # noqa: E402
+
+# Since DRE-3385 a Backlog card carrying NO routing verdict is refused
+# promotion outright, so every candidate below carries one — a fixture held
+# back for the missing verdict would say nothing about the gate under test.
+FLEET_VERDICT = routing_verdict.verdict_comment(
+    "FLEET", "the acceptance criteria are unit-testable")
+
 
 
 # DRE-3061's live `**Blocked by:**` line, VERBATIM as Linear's API returns it
@@ -111,7 +119,7 @@ def _card(description: str, identifier="DRE-3061", relations=()) -> dict:
         "description": "**Repo:** agent-bureau\n" + description,
         "parent": {"identifier": "DRE-3060", "state": {"name": "In Progress"}},
         "labels": {"nodes": [{"name": "size:M"}]},
-        "comments": {"nodes": []},
+        "comments": {"nodes": [{"body": FLEET_VERDICT}]},
         "inverseRelations": {"nodes": list(relations)},
     }
 

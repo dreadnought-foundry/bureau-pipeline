@@ -295,6 +295,11 @@ def in_promoter_reach(card: dict) -> bool:
     Note that a held card is still in reach: `needs-human` is why it is stuck,
     not a reason the promoter never looks. Five of the seven cards measured on
     2026-08-23 were held by the phantom-blocker defect and were counted.
+
+    `sweep_promotes`, not `is_promotable` (DRE-3385): the promoter carries
+    every card whose verdict is bound for Todo, and only dispatches a run at
+    one of them. A parentless WORKBENCH card is live work the sweep will move,
+    so it is in reach here too.
     """
     labels = _labels(card)
     if "agent:planner" in labels:
@@ -304,7 +309,7 @@ def in_promoter_reach(card: dict) -> bool:
         return (parent.get("state") or {}).get("name") in EPIC_ACTIVE_STATES
     bodies = [c.get("body") or "" for c in _comments(card)]
     verdict = routing_verdict.verdict_on(bodies)
-    return bool(verdict and routing_verdict.is_promotable(verdict))
+    return bool(verdict and routing_verdict.sweep_promotes(verdict))
 
 
 def _created(card: dict) -> str:

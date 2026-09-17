@@ -16,11 +16,20 @@ engineer agent wrote the proof of its own siblings' work. DRE-2746 says a proof
 the fleet can close by merging its own code is not a proof.
 
 WHAT THIS PINS: the verdict `proof_and_demo` computes, written as the comment
-`routing_verdict` reads, holds the pair in Backlog when every card it is
-blocked by is Done — and the refusal the sweep prints NAMES that verdict. The
-plan-time comment is built by calling `proof_and_demo.stamps()`, never
-hand-written here: delete the stamp and this test goes red, which is the whole
-point of it.
+`routing_verdict` reads, keeps the fleet off the pair when every card it is
+blocked by is Done. The plan-time comment is built by calling
+`proof_and_demo.stamps()`, never hand-written here: delete the stamp and this
+test goes red, which is the whole point of it.
+
+WHERE THE PAIR ENDS UP CHANGED IN DRE-3385, AND THE PROTECTION DID NOT. It used
+to be held in `Backlog`, because OPERATOR named `Todo` as its destination and
+nothing performed the move. The sweep performs it now — and stamps the verdict's
+own marks, `hand-built` and `no-code`, before the card lands, which is what
+keeps a build run off it (the relay refuses to dispatch an engineer at a
+`hand-built` card entering Todo, DRE-3341). So the assertion moved from "the
+card does not move" to "the card arrives marked, and nothing was dispatched".
+The fact under test is the same one: an agent must not write the proof of its
+own siblings' work.
 
 DRE-3669 halved the SHAPE — the planner files one closing child now — and left
 this seam alone. The fixture keeps both cards on purpose: it is the legacy epic
@@ -171,6 +180,7 @@ class _Board:
         self.thread_reads: list[str] = []
         self.advanced: list[tuple[str, str, str]] = []
         self.posted: list[tuple[str, str]] = []
+        self.labelled: list[tuple[str, str]] = []
         self.lanes = {c["identifier"]: ["Backlog"] for c in self.cards}
 
     def promote(self, active_count: int = 0) -> int:
@@ -200,6 +210,11 @@ class _Board:
         ), patch.object(
             reconcile, "card_state", return_value="Done"
         ), patch.object(
+            # A hand-built card's marks go on before the move (DRE-3385) — and
+            # on this pair they are the whole protection.
+            reconcile.linear_ops, "add_label",
+            side_effect=lambda i, label: self.labelled.append((i, label)),
+        ), patch.object(
             reconcile.linear_ops, "cmd_advance", side_effect=advance
         ), patch.object(
             reconcile.linear_ops, "cmd_comment",
@@ -218,6 +233,9 @@ class _Board:
     def comments_on(self, identifier: str) -> list[str]:
         return [b for i, b in self.posted if i == identifier]
 
+    def labels_on(self, identifier: str) -> list[str]:
+        return [l for i, l in self.labelled if i == identifier]
+
 
 @pytest.fixture(autouse=True)
 def _clear_write_failures():
@@ -235,26 +253,41 @@ def _pair_in_backlog():
     ]
 
 
-class TestThePairIsNotPromoted:
-    def test_the_build_children_being_done_does_not_release_the_pair(self):
-        board = _Board(*_pair_in_backlog())
-        assert board.promote() == 0
-        assert board.lane_of(PROOF) == "Backlog"
-        assert board.lane_of(DEMO) == "Backlog"
-        assert board.advanced == []
+class TestThePairIsNotHandedToTheFleet:
+    """WHAT CHANGED IN DRE-3385, and what did not.
 
-    def test_the_refusal_names_the_verdict(self, capsys):
+    This class used to assert the pair stayed in `Backlog`. That was never the
+    goal — `Backlog` was where the verdict's destination said `Todo` and nothing
+    performed the move, and leaving a proof card there is how 33 of 40 Backlog
+    cards came to be proof and operator cards on 2026-09-08. The sweep carries
+    the pair to `Todo` now.
+
+    The protection DRE-3039 bought is unchanged and is asserted below, one layer
+    down: the pair arrives carrying OPERATOR's own marks — `hand-built` and
+    `no-code` — which is what keeps a build run off it (the relay refuses to
+    dispatch an engineer at a `hand-built` card entering Todo, DRE-3341), and
+    the receipt says in words that nothing was dispatched. Strip the plan-time
+    stamp and no marks are applied at all, which is the mutation this class
+    exists for.
+    """
+
+    def test_the_pair_is_promoted_to_todo_when_its_siblings_are_done(self):
+        board = _Board(*_pair_in_backlog())
+        assert board.promote() == 2
+        assert board.lane_of(PROOF) == "Todo"
+        assert board.lane_of(DEMO) == "Todo"
+
+    def test_it_arrives_carrying_the_marks_that_keep_the_fleet_off_it(self):
+        """The whole of the protection. An OPERATOR card in Todo WITHOUT these
+        is a card the relay dispatches an engineer at — and the thing it would
+        build is the proof of its own siblings' work."""
         board = _Board(*_pair_in_backlog())
         board.promote()
-        out = capsys.readouterr().out
         for identifier in (PROOF, DEMO):
-            assert identifier in out
-            assert "OPERATOR" in out
-        assert routing_verdict.NOT_FLEET_TAG in out
+            assert board.labels_on(identifier) == list(
+                routing_verdict.marks("OPERATOR"))
 
-    def test_the_refusal_is_surfaced_on_the_card_itself(self):
-        """A refusal nobody can see is the silent-accretion problem wearing a
-        different hat — the sweep posts it once, naming where the card goes."""
+    def test_the_receipt_names_the_verdict_and_says_nothing_ran(self, capsys):
         board = _Board(*_pair_in_backlog())
         board.promote()
         for identifier in (PROOF, DEMO):
@@ -262,30 +295,52 @@ class TestThePairIsNotPromoted:
             assert len(posted) == 1, posted
             assert "OPERATOR" in posted[0]
             assert "operator" in posted[0]
+            assert "nothing was dispatched" in posted[0]
+        assert "hand-built" in capsys.readouterr().out
 
-    def test_without_the_plan_time_stamp_the_pair_promotes(self):
-        """The mutation this test exists for. Same cards, same Done siblings,
-        no verdict comment — and the sweep hands both to the fleet, which is
-        exactly what was happening before this card."""
-        records = {c["identifier"]: c for c in _planner_output()}
-        board = _Board(*[_backlog_card(records[i], []) for i in (PROOF, DEMO)])
-        assert board.promote() == 2
+    def test_the_hand_built_promotions_do_not_spend_the_wip_budget(self, capsys):
+        """Nothing is dispatched for either card, so neither takes a slot."""
+        board = _Board(*_pair_in_backlog())
+        board.promote(active_count=reconcile.MAX_WIP - 1)
         assert board.lane_of(PROOF) == "Todo"
         assert board.lane_of(DEMO) == "Todo"
+        assert "budget spent" not in capsys.readouterr().out
+
+    def test_without_the_plan_time_stamp_nothing_is_marked_at_all(self):
+        """The mutation this test exists for. Same cards, same Done siblings,
+        no verdict comment — and the card that would have been marked is not
+        marked, which before this card meant it was handed to the fleet.
+
+        It is refused outright now (DRE-3385 closed the verdictless-child gap),
+        so the pair is held rather than dispatched either way — but the fact
+        under test is the one the plan-time stamp is responsible for: delete
+        `proof_and_demo.stamps()` and NOTHING puts `hand-built` on these cards.
+        """
+        records = {c["identifier"]: c for c in _planner_output()}
+        board = _Board(*[_backlog_card(records[i], []) for i in (PROOF, DEMO)])
+        assert board.promote() == 0
+        assert board.labelled == []
+        for identifier in (PROOF, DEMO):
+            assert board.lane_of(identifier) == "Backlog"
+            assert any(routing_verdict.NO_VERDICT_TAG in b
+                       for b in board.comments_on(identifier))
 
 
 class TestTheGateStillPromotesWork:
-    def test_a_fleet_sibling_beside_the_pair_still_goes_to_todo(self):
-        """The refusal is about the verdict on the card, not about the sweep
-        having stopped: a build card in the same roster promotes."""
+    def test_a_fleet_sibling_beside_the_pair_goes_to_todo_unmarked(self):
+        """One sweep, two destinations for the work: the build card is handed to
+        an agent, the pair is handed to a person, and the marks are what tell
+        them apart once all three are sitting in the same lane."""
         work = {c["identifier"]: c for c in _planner_output()}[WORK[0]]
         fleet = routing_verdict.verdict_comment(
             "FLEET", "the acceptance criteria are unit-testable")
         board = _Board(_backlog_card(work, [fleet]), *_pair_in_backlog())
-        assert board.promote() == 1
+        assert board.promote() == 3
         assert board.lane_of(WORK[0]) == "Todo"
-        assert board.lane_of(PROOF) == "Backlog"
-        assert board.lane_of(DEMO) == "Backlog"
+        assert board.labels_on(WORK[0]) == []
+        for identifier in (PROOF, DEMO):
+            assert board.lane_of(identifier) == "Todo"
+            assert reconcile.HAND_BUILT_LABEL in board.labels_on(identifier)
 
 
 # --------------------------------------------------------------------------- #

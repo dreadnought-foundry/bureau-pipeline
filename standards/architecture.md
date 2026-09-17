@@ -44,7 +44,9 @@ Intake → Planning → Green Light → Backlog → Todo → In Progress → In 
   an agent escalation awaiting a decision, in one lane. An epic activates when
   the CEO moves ONLY the epic to `In Progress`.
 - **`Backlog`** — process-controlled: a card here carries a routing verdict, and
-  the sweep promotes only a FLEET one.
+  the sweep promotes every card whose verdict is bound for `Todo` — FLEET for a
+  dispatched run, WORKBENCH and OPERATOR marked `hand-built` for a person
+  (DRE-3385). PARKED stays, and a card carrying no verdict at all is refused.
 - **`Todo` → `In Progress` → `In Review` → `Done`** — the build path. ONE review
   lane: `In Review` means "a pull request is open and being checked". The two
   lanes that preceded it were retired by DRE-2726 and deleted from the board and
