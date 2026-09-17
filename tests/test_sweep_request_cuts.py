@@ -77,9 +77,10 @@ import validate_card  # noqa: E402
 
 #: What one busy-repo sweep may spend on Linear READS, over the fixture board
 #: below. The card's target. Two paged reads of the active lanes and the
-#: Backlog (three pages at 260 cards), two reads per active epic (its relations
-#: and its green-light history), one `viewer` read for authorship, and one
-#: children read per epic for the epic close — nothing per card.
+#: Backlog (three pages at 260 cards), one read per active epic for its
+#: green-light history, one `viewer` read for authorship, and ONE paged read of
+#: the epics for the close's children states and the gate's relations together
+#: (DRE-3642 — it was a read per epic for each of them) — nothing per card.
 SWEEP_BUDGET = 30
 
 #: What one merge-sync may spend on Linear READS: card-done's one read of the
@@ -204,6 +205,10 @@ def _parent_ref(epic: dict) -> dict:
 # --------------------------------------------------------------------------
 _BOARD_READ = "state: {name: {in: $states}}"
 _BACKLOG_READ = 'state: {name: {eq: "Backlog"}}'
+#: The pass's epic records (DRE-3642): the same identifier-scoped filter the
+#: Backlog read uses, with no lane of its own — an active epic is not in
+#: Backlog — so the two are told apart by the lane filter the other one has.
+_EPIC_RECORDS_READ = "number: {in: $numbers}"
 _PAGE = 100
 
 
@@ -255,6 +260,33 @@ class FakeLinear:
     def _find(self, ident: str) -> dict | None:
         return self.cards.get(ident)
 
+    def _epic_record(self, card: dict) -> dict:
+        """One epic in `reconcile.EPIC_RECORD_GQL`'s shape (DRE-3642).
+
+        The UNION of the two answers this fake gave the per-epic reads it
+        replaces — the children with their states, and the empty description
+        and relations the single-issue relations read returned — so the only
+        thing the batched read changes about a sweep over this board is what it
+        COSTS. A record that started answering with the epic's real prose would
+        change which epics the gate holds, and that is a different card.
+        """
+        kids = [
+            {"identifier": c["identifier"], "createdAt": c["createdAt"],
+             "state": c["state"]}
+            for c in self.cards.values()
+            if (c.get("parent") or {}).get("identifier") == card["identifier"]
+        ]
+        return {
+            "identifier": card["identifier"],
+            "description": "",
+            "state": card["state"],
+            "children": {"nodes": kids},
+            "history": {"nodes": [
+                {"createdAt": _iso(1440), "toState": {"name": "In Progress"}}
+            ]},
+            "inverseRelations": {"nodes": []},
+        }
+
     # -- the seam -----------------------------------------------------------
     def gql(self, query, variables=None):
         v = variables or {}
@@ -270,6 +302,16 @@ class FakeLinear:
             if v.get("numbers"):
                 keep = {int(n) for n in v["numbers"]}
                 nodes = [c for c in nodes if int(c["identifier"].split("-")[1]) in keep]
+            return self._page(nodes, v.get("after"))
+        if _EPIC_RECORDS_READ in q:
+            # The pass's epic records, one paged read for every epic named
+            # (DRE-3642) — the close's children states and the gate's
+            # relations, which used to be two requests per epic.
+            keep = {int(n) for n in v.get("numbers") or ()}
+            nodes = [
+                self._epic_record(c) for c in self.cards.values()
+                if int(c["identifier"].split("-")[1]) in keep
+            ]
             return self._page(nodes, v.get("after"))
         if "mutation" in q:
             return {"issueUpdate": {"success": True}, "commentCreate": {"success": True}}
@@ -311,6 +353,10 @@ class FakeLinear:
             }
             return {"issue": {"identifier": card["identifier"], "state": card["state"],
                               "relations": relations, "parent": parent}}
+        if "inverseRelations" in q and "history(last: 50)" in q:
+            # The per-epic fallback of the read above: same selection, one
+            # epic, taken only when the batch itself failed.
+            return {"issue": self._epic_record(card)}
         if "history(last: 50)" in q and "children(first: 250)" in q:
             # mid_epic._EPIC_QUERY — the epic's green light.
             kids = [

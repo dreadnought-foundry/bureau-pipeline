@@ -118,6 +118,7 @@ import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
 import tempfile
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import NamedTuple
 
@@ -1189,13 +1190,34 @@ _swept_cards: list[dict] | None = None
 _pr_listing: list[dict] | None = None
 
 
+# ONE read per pass for every active epic (DRE-3642), the board snapshot's
+# per-epic twin. The board read carries every epic ALREADY — what it does not
+# carry is the epic's children states, its relations and its history, so each
+# consumer bought its own read per epic: one children read per active epic in
+# `close_finished_epics` (9 on the 2026-09-12 board) and one relations read per
+# epic with Backlog children in the epic gate (9 more). Both scale with the
+# number of active epics, and that number is what grew. Filled and read ONLY
+# through `epic_records()` below, and reset with the rest of the pass's state.
+_epic_records: dict[str, dict] = {}
+
+# WHY an epic is not in the record above, for the consumer that must say so.
+# Deliberately NOT a record with no fields: "Linear did not answer for this
+# epic" and "this epic has no children" are different facts, and an empty
+# record renders them identically — which is how a fail-safe becomes a close
+# (DRE-3148, DRE-1772). It doubles as the pass's "already asked" set, so one
+# unreadable epic costs one read per pass rather than one per consumer.
+_epic_record_gaps: dict[str, str] = {}
+
+
 def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
-    in linear_ops (DRE-3236) and the sweep's open-PR listing (DRE-3435).
-    Called once at the top of main()."""
+    in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435) and its
+    epic records (DRE-3642). Called once at the top of main()."""
     global _swept_cards, _pr_listing
     _swept_cards = None
     _pr_listing = None
+    _epic_records.clear()
+    _epic_record_gaps.clear()
     linear_ops.reset_pass_cache()
 
 
@@ -2378,28 +2400,188 @@ def card_state(identifier: str) -> str:
     return data["issue"]["state"]["name"]
 
 
+#: EVERYTHING the sweep's per-epic readers need, selected ONCE (DRE-3642).
+#: The union, not the intersection: the close needs the children's states, the
+#: epic gate needs the description and the inverse relations, and the growth
+#: record needs the children's `createdAt` and the epic's state history. A
+#: consumer that needs a field nobody selected reads `None` and decides on it —
+#: which is how `children(first: 1)` once reported "no children" for every epic
+#: on the board (DRE-3044) — so the shape is stated here, once, and the two
+#: queries below are the same selection asked for many epics or for one.
+EPIC_RECORD_GQL = """
+             identifier description state { name }
+             children(first: 250) { nodes { identifier createdAt state { name } } }
+             history(last: 50) { nodes { createdAt toState { name } } }
+             inverseRelations(first: 20) { nodes {
+               type issue { identifier state { name } }
+             } }"""
+
+#: How many epics one PAGE of the record asks for. Twenty-five, not the 100
+#: every other paged read here uses, because this selection is far heavier per
+#: node: 250 children + 50 history entries + 20 relations apiece. Linear prices
+#: a request on the nodes it could return, so 100 × 320 is a query it can
+#: refuse outright — and a refused batch would fall back to the per-epic reads
+#: this cut exists to remove, permanently and quietly. The yardstick is the one
+#: heavy query this repo KNOWS Linear answers: `backlog_children`, at 100 cards
+#: × a 50-comment window, live since DRE-2929. 25 × 320 sits in that same
+#: order. A board with more active epics than this pages, exactly as the
+#: 260-card Backlog read pages, and still costs the pass a handful of requests
+#: rather than two per epic. It cannot be measured from CI — no test here
+#: reaches Linear — so it is set conservatively on purpose.
+EPIC_RECORD_PAGE = 25
+
+_EPIC_RECORDS_QUERY = """query($after: String, $numbers: [Float!]) {
+           issues(first: %d, after: $after, filter: {
+             team: {key: {eq: "DRE"}},
+             number: {in: $numbers}
+           }) { nodes {%s
+           } pageInfo { hasNextPage endCursor } } }""" % (
+    EPIC_RECORD_PAGE, EPIC_RECORD_GQL,
+)
+
+_EPIC_RECORD_QUERY = """query($id: String!) { issue(id: $id) {%s
+         } }""" % EPIC_RECORD_GQL
+
+
+def epic_records(identifiers: Iterable[str]) -> dict[str, dict]:
+    """The named epics, keyed by identifier, for ONE paged read per pass.
+
+    The number of reads follows the number of PASSES, never the number of
+    epics: the same shape `backlog_children(only=…)` uses, asked for the epics
+    the pass is about to walk. Every identifier not already in the pass's cache
+    is read together; the cache is dropped by `reset_sweep_cards()`.
+
+    An identifier Linear did not answer is ABSENT from the returned dict, never
+    present as an empty record — `epic_record_gap()` says why, and the consumer
+    treats it exactly as it treats an unreadable read today: skipped for the
+    close (DRE-3148), fail-safe blocked for the gate (DRE-1772). Both out loud;
+    a batched read cannot be allowed to turn nine loud skips into one silent
+    one.
+    """
+    wanted = sorted({ident for ident in identifiers if ident})
+    unknown = [
+        ident for ident in wanted
+        if ident not in _epic_records and ident not in _epic_record_gaps
+    ]
+    if unknown:
+        _read_epic_records(unknown)
+    return {ident: _epic_records[ident] for ident in wanted if ident in _epic_records}
+
+
+def epic_record_gap(identifier: str) -> str:
+    """Why `identifier` is not in this pass's epic record — the sentence the
+    consumer prints. Never empty: "we did not look" is itself the answer, and a
+    blank reason reads like no reason at all."""
+    return _epic_record_gaps.get(identifier, "this pass did not read it")
+
+
+def _read_epic_records(identifiers: list[str]) -> None:
+    """Fill the pass's record for `identifiers` — one paged read, or the old
+    per-epic reads once if that read fails as a whole.
+
+    The fallback is the point of the guard: a Linear hiccup on the batch would
+    otherwise take EVERY epic's record out at once, which is a fail-safe gate
+    blocking every child on the board and an epic close that closes nothing.
+    Paying the old per-epic price for one sweep is the cheap outcome.
+
+    The one error it does NOT retry is a spent quota: nine more requests
+    against an exhausted limit cannot succeed and deepen it, which is the medic
+    loop DRE-1921 ended. Those epics are gaps, the fail-safes hold, and the
+    next sweep reads a refilled bucket.
+    """
+    askable, numbers = [], []
+    for ident in identifiers:
+        try:
+            numbers.append(int(ident.split("-")[1]))
+        except (IndexError, ValueError):
+            _epic_record_gaps[ident] = (
+                f"{ident!r} is not a Linear identifier the batched read can ask for"
+            )
+            continue
+        askable.append(ident)
+    if not askable:
+        return
+    try:
+        nodes = linear_ops.gql_paged(_EPIC_RECORDS_QUERY, {"numbers": numbers})
+    except linear_ops.LinearRateLimited as e:
+        # Not a hiccup — the bucket is dry. Retrying per epic cannot answer and
+        # deepens it (DRE-1921); every epic is a gap and the consumers say so.
+        for ident in askable:
+            _epic_record_gaps[ident] = str(e)
+        print(
+            f"epic-records: the batched read of {len(askable)} epic(s) was "
+            f"refused by the quota ({e}) — NOT retried one at a time, which "
+            f"cannot succeed against a spent bucket",
+            file=sys.stderr,
+        )
+        return
+    except Exception as e:  # noqa: BLE001 — any other failure falls back, once
+        # The count, never the identifiers: the epics that ARE read are not a
+        # failure and must not appear in a failure line (DRE-3148's log reads
+        # "this epic was skipped", and every name in it means that).
+        print(
+            f"epic-records: the batched read of {len(askable)} epic(s) failed "
+            f"({e}) — reading them one at a time this sweep, once",
+            file=sys.stderr,
+        )
+        for ident in askable:
+            _read_one_epic_record(ident)
+        return
+    answered = {
+        node.get("identifier"): node for node in nodes if node.get("identifier")
+    }
+    for ident in askable:
+        record = answered.get(ident)
+        if record is None:
+            _epic_record_gaps[ident] = (
+                "Linear did not answer for it in this pass's batched epic read"
+            )
+        else:
+            _epic_records[ident] = record
+
+
+def _read_one_epic_record(identifier: str) -> None:
+    """One epic, the old way — the fallback's unit, and isolated like the phase
+    it replaces: one epic Linear will not answer for is a gap in the record,
+    never the other eight epics' gap too."""
+    try:
+        issue = (linear_ops.gql(_EPIC_RECORD_QUERY, {"id": identifier}) or {}).get("issue")
+    except Exception as e:  # noqa: BLE001 — the reason travels to the consumer
+        _epic_record_gaps[identifier] = str(e) or type(e).__name__
+        return
+    if not issue:
+        _epic_record_gaps[identifier] = "Linear returned no issue for it"
+        return
+    _epic_records[identifier] = issue
+
+
 def _fetch_epic_relations(epic_identifier: str) -> dict | None:
-    """Read an epic's identifier, description, and `blocked-by` relations.
+    """An epic's identifier, description, and `blocked-by` relations.
 
     Returns the same shape `prose_blockers` consumes (identifier, description,
     inverseRelations) so the epic-level gate reads a card and an epic with one
-    set of functions. Returns None on any read failure so callers can fail SAFE
-    (DRE-1772).
+    set of functions. Returns None when the epic is not in this pass's record
+    so callers can fail SAFE (DRE-1772) — an unread epic and an unreadable one
+    are the same fact to this gate, and it says which epic and why.
+
+    Read off `epic_records()` since DRE-3642: this was one request per epic
+    with Backlog children, every sweep, for three fields of a card the board
+    read had already returned. A NEW dict, not the cached record, because
+    `epic_blockers_unmet` fills in the fields prose_blockers expects and a
+    consumer must not be able to edit the pass's record for everyone else.
     """
-    try:
-        data = linear_ops.gql(
-            """query($id: String!) { issue(id: $id) {
-                 identifier description
-                 inverseRelations(first: 20) { nodes {
-                   type issue { identifier state { name } }
-                 } }
-               } }""",
-            {"id": epic_identifier},
+    record = epic_records([epic_identifier]).get(epic_identifier)
+    if record is None:
+        print(
+            f"epic-gate: could not read relations for {epic_identifier}: "
+            f"{epic_record_gap(epic_identifier)}"
         )
-    except Exception as e:  # noqa: BLE001 — any Linear/transport error -> fail safe
-        print(f"epic-gate: could not read relations for {epic_identifier}: {e}")
         return None
-    return (data or {}).get("issue")
+    return {
+        "identifier": record.get("identifier") or epic_identifier,
+        "description": record.get("description"),
+        "inverseRelations": record.get("inverseRelations"),
+    }
 
 
 def epic_blockers_unmet(epic_identifier: str) -> bool:
@@ -2801,6 +2983,21 @@ def promote_ready(active_count: int, candidates: list[dict] | None = None) -> in
         backlog_children() if candidates is None else candidates,
         key=lambda c: int(c["identifier"].split("-")[1]),
     )
+    # ONE read for every epic this gate will ask about (DRE-3642), before the
+    # loop rather than inside it: `epic_gate` above already made it one read
+    # per EPIC per sweep, and on a board with nine active epics that was still
+    # nine requests. Pure computation over cards the pass has already read —
+    # this repo's candidates, with a parent whose lane the gate would consult —
+    # so a card the loop never reaches costs nothing extra to have named here.
+    # On a full sweep the close ran first and every one of them is already in
+    # the record, so this line spends nothing at all.
+    epic_records({
+        (card.get("parent") or {}).get("identifier")
+        for card in candidates
+        if card_repo(card) == REPO_SLUG
+        and ((card.get("parent") or {}).get("state") or {}).get("name")
+        in EPIC_ACTIVE_STATES
+    })
     for index, card in enumerate(candidates):
         if promoted >= budget:
             # ONE line per sweep, not one per card (DRE-2918): a 200-card
@@ -3101,8 +3298,20 @@ def close_finished_epics(epic_identifiers: set[str]) -> None:
     run — twice in a row on 2026-09-06. An epic that cannot be read or closed
     this sweep is logged and skipped; the input is recomputed every pass, so
     the next sweep closes it and nothing is lost.
+
+    ONE read for all of them (DRE-3642): the children states come off the
+    pass's epic record, read here for every epic at once instead of one request
+    per epic per sweep. The isolation above is unchanged — an epic the record
+    does not carry raises below, which is the same skip, with the same line,
+    for the same reason.
     """
-    for epic in sorted(epic_identifiers):
+    epics = sorted(epic_identifiers)
+    if epics:
+        # Outside the per-epic guard on purpose, and safe there: every failure
+        # this read can have is already a per-epic gap by the time it returns,
+        # and the guard below turns each one back into the skip it was.
+        epic_records(epics)
+    for epic in epics:
         try:
             _close_epic_if_finished(epic)
         except Exception as exc:  # noqa: BLE001 — isolate one epic, sweep the rest
@@ -3113,11 +3322,16 @@ def close_finished_epics(epic_identifiers: set[str]) -> None:
 
 
 def _close_epic_if_finished(epic: str) -> None:
-    kids = linear_ops.gql(
-        "query($id: String!) { issue(id: $id) { children { nodes { state { name } } } } }",
-        {"id": epic},
-    )["issue"]["children"]["nodes"]
-    states = [k["state"]["name"] for k in kids]
+    record = epic_records([epic]).get(epic)
+    if record is None:
+        # The same skip an unreadable children read has always taken: raised so
+        # the caller's guard prints the one line, with the reason the read
+        # itself gave, and the next sweep tries again (DRE-3148).
+        raise LookupError(
+            f"not in this pass's epic record — {epic_record_gap(epic)}"
+        )
+    kids = (record.get("children") or {}).get("nodes") or []
+    states = [(k.get("state") or {}).get("name") for k in kids]
     if (
         states
         and all(s in ("Done", "Canceled", "Duplicate") for s in states)
