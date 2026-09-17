@@ -179,8 +179,10 @@ model's order.
 
 **The rules constrain that read; they do not re-rank it.** A collision still
 re-orders it, a blocker still holds, an epic is still one unit, and capacity
-still caps. A card the answer omits or garbles is `unranked` and stays exactly
-where the rules had it; a card the read calls `likely-done` joins the dead
+still caps. A card the answer omits or garbles is `unranked` and comes OUT of
+the batch, whatever the rules did with it — the proposed cards and the
+unranked ones are disjoint, asserted where the proposal is written
+(DRE-3544); a card the read calls `likely-done` joins the dead
 recommendations with its evidence beside the regex's. Every reason passes
 `planning_escalation.refusal` before it is written, because the CEO reads
 outcomes and never code.
@@ -461,6 +463,18 @@ class CycleRefused(DrainRefused, ValueError):
     with no way to say which card is in which, or Linear carries no open cycle
     with that number. A ValueError as well, because it was one before DRE-3370
     made every refusal a written record and callers still catch it that way."""
+
+
+class ProposalContradiction(RuntimeError):
+    """The proposal both proposes a card and says the read could not place it
+    (DRE-3544).
+
+    Raised at write time, never repaired: the two lists are made disjoint where
+    the batch is built, so an overlap here is a defect upstream of the page and
+    the proposal it would write is one a drain must not be allowed to move.
+    Failing the run costs a groom pass; posting it puts a card the model
+    declined in front of the CEO as work, with "could not rank — needs a
+    person" printed as the reason it is being proposed."""
 
 
 class WillNotCancel(RuntimeError):
@@ -1010,8 +1024,13 @@ def _batchable(unit_list: list[dict], unit_edges: set[tuple[str, str]], *,
 
     With a judgement (DRE-3150) the model's `now` set is what the batch is made
     of. A unit the model ranked `not-now` is out — that is the answer it gave —
-    and a unit it said nothing usable about falls back to today's window rule,
-    because an `unranked` card stays exactly where the rules had it.
+    and a unit it said nothing usable about falls back to today's window rule.
+
+    That fallback is about the UNIT's place in the order, not about the card:
+    the declined cards themselves come out of the batch in `propose`
+    (DRE-3544). Both are needed — a declined card can still be the blocker a
+    batched card is waiting on, and a unit dropped here would take its
+    neighbours' constraints with it.
     """
     if verdicts is None:
         keep = {u["key"] for u in unit_list if u["band"] != BAND_OLDER}
@@ -1159,9 +1178,29 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     deferred = [r for r in ordered if r["deferred"]]
 
     batch_numbers = sorted({r["cycle"] for r in rows})[:batch_cycles]
+    # A card the read DECLINED is not in the batch (DRE-3544). The rules put
+    # DRE-3020 at position 32 of `f673bfefa340` — inside the window, under the
+    # capacity — and the model had said it could not place it, so the CEO was
+    # shown a batch row whose own reason read "could not rank — needs a
+    # person" and a drain would have moved it. The removal is HERE, where the
+    # batch is made, so `outcomes["now"]` and `judgement["unranked"]` are
+    # disjoint by construction rather than by where the sequence happened to
+    # land: batch 2 was clean by one position, which is the difference between
+    # a guard and a coincidence (`docs/groomer-judged-batch.md`).
+    #
+    # Per CARD, not per unit: an epic is one unit for ORDER, and that is not a
+    # way into the batch for a card the read refused to place. The declined
+    # card is reported as `not-now` with no cycle and no trigger — what is
+    # owed is a person — and named in its own section.
+    declined = declined_cards(verdicts, getattr(judgement, "problem", None))
     now_rows, later_rows = [], []
     for row in rows:
-        if row["cycle"] in batch_numbers:
+        if row["identifier"] in declined:
+            later_rows.append({"identifier": row["identifier"],
+                               "title": row["title"], "repo": row["repo"],
+                               "reconsidered_in": None, "projected": False,
+                               "older_than_window": False})
+        elif row["cycle"] in batch_numbers:
             now_rows.append({k: row[k] for k in
                              ("identifier", "title", "position", "cycle",
                               "cycle_id", "unit", "epic", "repo", "projected",
@@ -1177,8 +1216,14 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                     "projected": False, "older_than_window": True}
                    for row in deferred]
 
-    sequence_rows = [{**r, "outcome": ("now" if r["cycle"] in batch_numbers
-                                       else "not-now")} for r in rows]
+    # The declined rows lose their cycle here too: the sequence is what the
+    # console and the audit read, and a row that says `not-now` beside the
+    # cycle it was going to be batched in is the same contradiction one layer
+    # down.
+    sequence_rows = [{**r, "cycle": None, "cycle_id": None, "projected": False,
+                      "outcome": "not-now"} if r["identifier"] in declined
+                     else {**r, "outcome": ("now" if r["cycle"] in batch_numbers
+                                            else "not-now")} for r in rows]
     sequence_rows += [{**r, "cycle": None, "cycle_id": None, "projected": False,
                        "outcome": "not-now"} for r in deferred]
     sequence_rows.sort(key=lambda r: r["position"])
@@ -1221,7 +1266,11 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     }
     proposal["deprioritised"] = _deprioritised(proposal)
     proposal["judgement"] = _annotate(proposal, judgement, verdicts,
-                                      window_days=window_days)
+                                      window_days=window_days,
+                                      declined=declined)
+    # `proposed ∩ unranked = ∅`, checked on the thing that was actually built
+    # rather than trusted from the filter above (DRE-3544).
+    assert_disjoint(proposal)
     # LAST, and deliberately after the annotation: `proposal_id` digests the
     # batch's cards, positions and cycles and NOTHING else, so a reason that
     # reads differently on a re-run cannot retire a CEO approval of the same
@@ -1233,6 +1282,57 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
 # --------------------------------------------------------------------------- #
 # the judgement, written onto the rows                                         #
 # --------------------------------------------------------------------------- #
+
+
+def declined_cards(verdicts: dict | None, problem: str | None) -> set:
+    """The cards THE READ ITSELF refused to place (DRE-3544).
+
+    The `unranked` cards of a run that ranked something — the five of
+    `f673bfefa340`, one of which the rules batched anyway.
+
+    **A run carrying a `problem` declined nothing.** `problem` is set on
+    exactly the paths where no card in the population was ranked — no model
+    could be chosen, the call never answered, the answer could not be read —
+    and every card is `unranked` by default there. The proposal falls back to
+    the rules exactly as it did before the read existed, and the page says so
+    above the batch. Reading that list as refusals would empty the batch on
+    the one path where the groomer most needs to propose something.
+    """
+    if problem:
+        return set()
+    return {identifier for identifier, verdict in (verdicts or {}).items()
+            if verdict.outcome == "unranked"}
+
+
+def assert_disjoint(proposal: dict) -> None:
+    """`proposed ∩ unranked = ∅`, or refuse the proposal (DRE-3544).
+
+    The two lists say opposite things about a card — *this is in the batch you
+    are approving* and *nobody could place this* — and the drain reads the
+    first while the CEO reads both. Asserted rather than repaired: the removal
+    happens in `propose`, where the batch is made, so anything left here is a
+    defect in a later change and dropping the row quietly would hide it.
+
+    Called twice on purpose, at the two moments the batch becomes real: at the
+    end of `propose`, and in `proposal_comment` — the one writer of the batch
+    table a drain parses, whatever built the dict it is handed.
+
+    Recomputed off the written proposal rather than trusted from the filter in
+    `propose`: two derivations of one rule that disagree is exactly the bug
+    this refuses.
+    """
+    block = proposal.get("judgement") or {}
+    batch = {row["identifier"] for row in proposal["outcomes"]["now"]}
+    # `declined_cards` says why a `problem` run declines nothing. The page for
+    # one of those says, above the batch, that every card below is placed by
+    # the rules alone.
+    unranked = (set() if block.get("problem")
+                else set(block.get("unranked") or ()))
+    both = sorted(batch & unranked, key=_card_sort_key)
+    if both:
+        raise ProposalContradiction(
+            f"{_plural(len(both), 'card')} would be proposed and reported as "
+            f"one the read could not place: {', '.join(both)}")
 
 
 def _verdicts_of(judgement) -> dict | None:
@@ -1282,7 +1382,7 @@ def _rules_trigger(row: dict) -> str:
 
 
 def _mark(outcome: str, row: dict, verdict, *, window_days: int,
-          withheld: list) -> dict:
+          withheld: list, declined: bool = False) -> dict:
     """The four fields DRE-3150 puts on every row: reason, trigger, evidence,
     judged.
 
@@ -1292,6 +1392,10 @@ def _mark(outcome: str, row: dict, verdict, *, window_days: int,
     refused evidence is dropped to None — a dead recommendation whose evidence
     cannot be shown is still reported as judged, and the run log holds the text
     nobody could put on the page.
+
+    `declined` is `propose`'s own answer to "did the READ refuse this card"
+    (DRE-3544) — the one place that question is decided, so a row taken out of
+    the batch and a row given no trigger are the same rows by construction.
     """
     identifier = row.get("identifier")
     # A card its OWN DESCRIPTION condemned was never placed by the read: the
@@ -1312,7 +1416,13 @@ def _mark(outcome: str, row: dict, verdict, *, window_days: int,
             reason = WITHHELD_REASON
 
     trigger = None
-    if outcome == "not-now":
+    # A declined card is out of the batch (DRE-3544) and names NO trigger: it
+    # is not a deferral somebody scheduled, and the rules' fallback here would
+    # invent one ("when cycle N opens") for a card no cycle is waiting on.
+    # `_render_not_now` lists only the rows that carry a trigger, so it is
+    # reported once, under "Could not rank — needs a person", where what it is
+    # owed — a person — is what the section says.
+    if outcome == "not-now" and not declined:
         trigger = verdict.pointer if (judged and verdict.outcome == "not-now") \
             else None
         if trigger is not None and not _showable(trigger):
@@ -1332,7 +1442,7 @@ def _mark(outcome: str, row: dict, verdict, *, window_days: int,
 
 
 def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
-              window_days: int) -> dict:
+              window_days: int, declined: set | frozenset = frozenset()) -> dict:
     """Write the reason, trigger, evidence and judged flag onto every row, and
     return the proposal's `judgement` block.
 
@@ -1352,7 +1462,8 @@ def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
     marks = {
         identifier: _mark(outcome, row,
                           (verdicts or {}).get(identifier),
-                          window_days=window_days, withheld=withheld)
+                          window_days=window_days, withheld=withheld,
+                          declined=identifier in declined)
         for identifier, (outcome, row) in context.items()
     }
     for rows in (proposal["outcomes"]["now"], proposal["outcomes"]["not-now"],
@@ -1492,6 +1603,9 @@ def approval_comment(pid: str) -> str:
 
 
 def proposal_comment(proposal: dict) -> str:
+    # The last gate before the batch table the drain parses exists as text
+    # (DRE-3544). Every posting path comes through here.
+    assert_disjoint(proposal)
     return (f"{MARK} {PROPOSAL_TAG}: {proposal['id']}\n\n"
             + render_proposal(proposal))
 
@@ -2094,18 +2208,26 @@ def _render_unranked(proposal: dict) -> list:
 
     Never folded into "not now": a card nobody could place is not a card
     deliberately deferred, and a refusal that renders as a deferral is a
-    refusal nobody ever reads. The rules kept each of these exactly where they
-    had them — what is owed is a person, not a cycle.
+    refusal nobody ever reads. None of them is in the batch — what is owed is
+    a person, not a cycle (DRE-3544).
+
+    Nothing at all on a run carrying a `problem`, and that is the same rule:
+    there the list is the WHOLE population, the read declined none of it, and
+    printing every batched card under a heading that says nobody could place
+    it is the contradiction this section exists to report. The line above the
+    batch says what happened to that run instead.
     """
     block = proposal.get("judgement") or {}
-    if not block.get("enabled") or not block.get("unranked"):
+    if not block.get("enabled") or block.get("problem"):
+        return []
+    if not block.get("unranked"):
         return []
     titles = {row["identifier"]: row.get("title") or ""
               for row in proposal["sequence"]}
     w = ["## Could not rank — needs a person", ""]
     w.append(f"{_plural(len(block['unranked']), 'card')} the read could not "
-             f"place. They stayed exactly where the rules had them, and each "
-             f"one wants a human answer rather than another pass.")
+             f"place. None of them is in the batch, and each one wants a "
+             f"human answer rather than another pass.")
     w.append("")
     for identifier in block["unranked"]:
         w.append(f"- {identifier} · {_trim(titles.get(identifier, ''))}")
