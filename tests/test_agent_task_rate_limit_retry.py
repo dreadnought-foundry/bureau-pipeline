@@ -64,6 +64,12 @@ import claude_rate_limit_retry as crl  # noqa: E402
 # answered with. Both are quoted from the card so the fingerprint under test
 # is the one production actually produced.
 FAILING_CALL = "/users/agent-bureau-bot-2%5Bbot%5D"
+
+# The call the classifier re-issues. ONE name, not five: the quota bucket is
+# per installation, so the first name in `allowed_bots` answers for all of
+# them — and the incident's own call is the same shape, which is what
+# `test_the_probed_call_has_the_shape_the_incident_died_on` pins.
+PROBED_CALL = "/users/agent-bureau-bot%5Bbot%5D"
 RATE_LIMIT_BODY = json.dumps(
     {
         "message": "API rate limit exceeded for installation ID 123249480.",
@@ -119,7 +125,13 @@ def _step(step_id: str) -> dict:
 
 
 def _run_shell(script: str, env: dict) -> subprocess.CompletedProcess:
-    """Execute a workflow `run:` block exactly as the runner would."""
+    """Execute a workflow `run:` block exactly as the runner would.
+
+    The one rewrite: on a runner the pipeline's scripts are checked out at
+    `.bureau-pipeline/`, and in this repo they are simply `scripts/`. Same
+    files, same code — the path is the checkout layout, not behaviour.
+    """
+    script = script.replace(".bureau-pipeline/scripts/", "scripts/")
     full = dict(os.environ)
     full.update({k: ("" if v is None else str(v)) for k, v in env.items()})
     return subprocess.run(
@@ -162,6 +174,14 @@ class RateLimitSignature(unittest.TestCase):
     def test_an_unreadable_probe_is_not_the_signature(self):
         self.assertFalse(crl.is_rate_limit_refusal(None, ""))
 
+    def test_the_probed_call_has_the_shape_the_incident_died_on(self):
+        """The `[bot]` suffix is percent-encoded in the path — get that wrong
+        and the probe asks GitHub about a user that does not exist, which
+        answers 404 and reads as 'not rate limited' forever."""
+        self.assertEqual(
+            crl.BOT_LOOKUP_PATH.format(name="agent-bureau-bot-2"), FAILING_CALL
+        )
+
 
 # --------------------------------------------------------------------------- #
 # The decision table                                                           #
@@ -192,7 +212,7 @@ class DecisionTable(unittest.TestCase):
         attempt. It is the only trace the operator gets: the vendor step's own
         log says nothing a later step can read."""
         d = self._decide()
-        self.assertIn(FAILING_CALL, d.line)
+        self.assertIn(PROBED_CALL, d.line)
         self.assertIn("attempt 1 of 3", d.line)
 
     def test_a_run_that_reached_the_model_is_never_retried(self):
@@ -395,7 +415,7 @@ class TheScriptAsTheWorkflowRunsIt(unittest.TestCase):
     def test_it_writes_the_receipt_line_to_the_run_log(self):
         with tempfile.TemporaryDirectory() as td:
             got = self._decide(Path(td))
-        self.assertIn(FAILING_CALL, got["_stdout"])
+        self.assertIn(PROBED_CALL, got["_stdout"])
         self.assertIn("attempt 1 of 3", got["_stdout"])
 
     def test_a_run_that_reached_the_model_asks_for_no_retry(self):
@@ -439,8 +459,9 @@ class TheScriptAsTheWorkflowRunsIt(unittest.TestCase):
                  "--github-output", str(out)],
                 capture_output=True, text=True, check=False, env=env,
             )
+            written = out.read_text()
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("retry=false", out.read_text())
+        self.assertIn("retry=false", written)
 
     def test_resolve_prints_the_outputs_the_job_reads(self):
         with tempfile.TemporaryDirectory() as td:
@@ -530,7 +551,13 @@ class WorkflowWiring(unittest.TestCase):
                 backoff = steps[index - 1]
                 self.assertEqual(backoff.get("id"), f"backoff{decision_id[-1]}")
                 self.assertEqual(backoff["if"], _step(attempt_id)["if"])
-                self.assertIn(f"steps.{decision_id}.outputs.delay", backoff["run"])
+                # The wait the decision computed, carried through `env:` so
+                # the script block holds no `${{ }}` at all (DRE-3484).
+                self.assertEqual(
+                    backoff["env"]["DELAY"],
+                    f"${{{{ steps.{decision_id}.outputs.delay }}}}",
+                )
+                self.assertIn("sleep", backoff["run"])
 
     def test_the_backoff_clears_the_stale_execution_record(self):
         """qa-review.yml clears the stale verdict before its retry for the same
@@ -553,12 +580,38 @@ class WorkflowWiring(unittest.TestCase):
     def test_the_downstream_gate_and_report_read_the_resolved_result(self):
         """Every consumer of the agent step moved to the resolver — a consumer
         left reading `steps.claude.*` would judge the whole run by attempt 1
-        and report a dead agent for a build the retry finished."""
+        and report a dead agent for a build the retry finished.
+
+        The three steps allowed to read an individual attempt are the ones
+        whose whole job is to look at one: the resolver, and the retry
+        decision and backoff that follow attempt 1.
+        """
+        allowed = {"claude_result", "retry1", "backoff1"}
+        for step in _steps():
+            if step.get("id") in allowed:
+                continue
+            rendered = yaml.safe_dump(step)
+            with self.subTest(step=step.get("name")):
+                self.assertNotIn("steps.claude.outcome", rendered)
+                self.assertNotIn("steps.claude.outputs.execution_file", rendered)
+
         text = WORKFLOW.read_text()
-        self.assertNotIn("steps.claude.outcome", text)
-        self.assertNotIn("steps.claude.outputs.execution_file", text)
         self.assertIn("steps.claude_result.outputs.outcome", text)
         self.assertIn("steps.claude_result.outputs.execution_file", text)
+
+    def test_each_retry_decision_reads_the_attempt_it_follows(self):
+        """retry2 must read attempt 2, not attempt 1 — a decision wired to the
+        wrong attempt would re-run a build on a stale outcome."""
+        for decision_id, attempt_id in zip(DECISION_IDS, ATTEMPT_IDS):
+            with self.subTest(step=decision_id):
+                self.assertEqual(
+                    _step(decision_id)["env"]["CLAUDE_EXECUTION_FILE"],
+                    f"${{{{ steps.{attempt_id}.outputs.execution_file }}}}",
+                )
+                self.assertEqual(
+                    _step(f"backoff{decision_id[-1]}")["env"]["CLAUDE_EXECUTION_FILE"],
+                    f"${{{{ steps.{attempt_id}.outputs.execution_file }}}}",
+                )
 
     def test_the_resolver_runs_before_anything_reads_it(self):
         ids = [s.get("id") for s in _steps()]
