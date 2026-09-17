@@ -110,7 +110,7 @@ is what DRE-3879 was filed for and fixed. The mechanism this observation proves
 therefore has exactly **one** successful production run behind it, and this
 record says so rather than implying a settled cadence.
 
-**The gap that cost the loop six days.** `ledger_context.py` calls a ledger older
+**The gap that cost the loop three and a half days.** `ledger_context.py` calls a ledger older
 than `LEDGER_MAX_AGE_HOURS` (72) `UNKNOWN`. With the previous derivation at
 2026-09-10 06:42 PT, the ledger was stale to the planner from **2026-09-13
 06:42 PT until 2026-09-16 21:48 PT** — three and a half days in which every
