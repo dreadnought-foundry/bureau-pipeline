@@ -1,7 +1,8 @@
 """Card-to-branch lookup must be ANCHORED (DRE-2025).
 
-agent-task.yml resolves a card's branch twice — the "Gate on agent result"
-step and the "Report result to Linear" step — with:
+agent-task.yml resolves a card's branch at several steps — "Gate on agent
+result", "Report result to Linear", and (since DRE-4108) each of the two
+retry-decision steps — with:
 
     BRANCH=$(git branch -r | grep -o "agent/${CARD}[^ ]*" | head -1 | ...)
 
@@ -37,9 +38,17 @@ def workflow_src() -> str:
     return open(WORKFLOW).read()
 
 
+# Every step in agent-task.yml that resolves a card to its branch. Four
+# since DRE-4108: the Gate step, the Report step, and the two retry-decision
+# steps, which read the same fact for the same reason — a pushed branch is
+# the other proof the agent reached the model, so a retry decision made
+# without it would re-run a build that did real work.
+LOOKUP_SITES = 4
+
+
 def lookup_statements() -> list:
     """The card-to-branch lookup statements, extracted from the live
-    workflow. Both the Gate step and the Report step carry one."""
+    workflow. Every site carries the same one."""
     return LOOKUP_RE.findall(workflow_src())
 
 
@@ -74,25 +83,26 @@ def branch_listing(*branches: str) -> str:
 
 
 class LookupSiteEnumerationTest(unittest.TestCase):
-    def test_exactly_two_lookup_sites(self):
-        # Gate step + Report step. If a third lookup appears it must be
-        # added to the harness below; if one disappears the false-receipt
-        # surface moved and this suite no longer covers it.
-        self.assertEqual(len(lookup_statements()), 2)
+    def test_every_lookup_site_is_covered(self):
+        # If a further lookup appears the census moves with it and every
+        # case below runs against it too; if one disappears the
+        # false-receipt surface moved and this suite no longer covers it.
+        self.assertEqual(len(lookup_statements()), LOOKUP_SITES)
 
-    def test_both_sites_use_the_same_expression(self):
-        # Drift guard: the two steps must never disagree about which
-        # branch a card owns.
+    def test_every_site_uses_the_same_expression(self):
+        # Drift guard: the steps must never disagree about which branch a
+        # card owns — a retry decision that resolved a different branch
+        # from the Report step would answer a different question.
         stmts = lookup_statements()
-        self.assertEqual(stmts[0], stmts[1])
+        self.assertEqual(len(set(stmts)), 1, stmts)
 
 
 class AnchoredLookupTest(unittest.TestCase):
-    """Behavioral cases, executed against BOTH live lookup sites."""
+    """Behavioral cases, executed against EVERY live lookup site."""
 
     def all_sites(self, card: str, listing: str) -> list:
         stmts = lookup_statements()
-        self.assertEqual(len(stmts), 2)
+        self.assertEqual(len(stmts), LOOKUP_SITES)
         return [run_lookup(s, card, listing) for s in stmts]
 
     def test_short_card_does_not_match_longer_card_branch(self):

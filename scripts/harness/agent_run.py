@@ -115,7 +115,15 @@ class AgentRunResult:
 def agent_task_prompt(workflow_path) -> str:
     """The `prompt:` input of agent-task.yml's claude-code-action step, read
     from the PARSED workflow — the same read tests/test_presubmit_gate_prompt.py
-    makes, so both see the string the agent actually receives."""
+    makes, so both see the string the agent actually receives.
+
+    The step appears MORE THAN ONCE since DRE-4108: a GitHub rate-limit
+    refusal that arrives before the model started is retried, so agent-task.yml
+    carries three attempts at it. The harness still ships ONE prompt, and that
+    is the condition below — every attempt must hand the agent the same
+    instructions, or "the prompt the harness exercises" has no single answer.
+    Distinct prompts still raise, which is the case this guard was written for.
+    """
     import yaml  # noqa: PLC0415 — see the import note at the top of the module
 
     with open(workflow_path, encoding="utf-8") as f:
@@ -127,10 +135,11 @@ def agent_task_prompt(workflow_path) -> str:
         if "anthropics/claude-code-action" in (step.get("uses") or "")
     ]
     prompts = [p for p in prompts if p]
-    if len(prompts) != 1:
+    if len(set(prompts)) != 1:
         raise ValueError(
-            f"{workflow_path}: expected exactly one agent prompt, found "
-            f"{len(prompts)} — the harness cannot guess which one ships"
+            f"{workflow_path}: expected one agent prompt, found "
+            f"{len(set(prompts))} distinct across {len(prompts)} step(s) — "
+            f"the harness cannot guess which one ships"
         )
     return prompts[0]
 
