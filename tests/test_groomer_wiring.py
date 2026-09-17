@@ -337,6 +337,50 @@ class DecisionRecordTest(unittest.TestCase):
                           f"the wiring test's docstring never names {token}")
 
 
+class DryRunSwitchTest(unittest.TestCase):
+    """DRE-3712: a dry run posts no marker at all, and it is reachable.
+
+    The 2026-09-04 demonstration was a real `workflow_dispatch`, so a dry run
+    that exists only as a CLI flag is a dry run nobody would have taken. The
+    switch is an input on both files, it reaches `--dry-run` on the step, and
+    it silences the OTHER comment the run writes — the judgement receipt —
+    because "no marker at all" is the whole of the promise.
+    """
+
+    def setUp(self):
+        self.doc = _load("groomer.yml")
+        self.groom = _step(self.doc, GROOM_STEP)
+        self.env = self.groom.get("env") or {}
+
+    def test_the_switch_exists_on_both_files_and_is_off_by_default(self):
+        spec = (_on(self.doc)["workflow_call"].get("inputs") or {}).get("dry_run")
+        self.assertIsNotNone(spec, "the reusable takes no dry_run input")
+        self.assertEqual(spec.get("type"), "string")
+        self.assertEqual(spec.get("default"), "")
+
+        stub = _on(_load("self-groomer.yml"))["workflow_dispatch"]
+        spec = (stub.get("inputs") or {}).get("dry_run")
+        self.assertIsNotNone(spec, "the stub offers no dry-run choice")
+        self.assertEqual(spec.get("type"), "boolean")
+        self.assertIs(spec.get("default"), False)
+
+    def test_the_stub_threads_the_switch_to_the_reusable(self):
+        job = _load("self-groomer.yml")["jobs"]["call"]
+        self.assertEqual(
+            _expression((job.get("with") or {}).get("dry_run")),
+            "inputs.dry_run")
+
+    def test_the_switch_reaches_the_step_and_turns_the_flag_on(self):
+        self.assertEqual(_expression(self.env.get("DRY_RUN")), "inputs.dry_run")
+        self.assertIn("--dry-run", self.groom.get("run") or "",
+                      "the reusable never passes the flag the CLI reads")
+
+    def test_a_dry_run_posts_no_judgement_receipt_either(self):
+        condition = _expression(_step(self.doc, RECEIPT_STEP).get("if"))
+        self.assertIn("inputs.dry_run != 'true'", condition,
+                      "a dry run would still write the 🧠 receipt comment")
+
+
 class JudgedReadReachableTest(unittest.TestCase):
     """DRE-3153: the judged read is unreachable from the workflow that runs the
     groomer until the reusable DECLARES the credentials it needs.

@@ -78,6 +78,11 @@ on:
         # makes every workflow's own `on:` key a surprise to a YAML reader.
         options: ["on", "off"]
         default: "on"
+      dry_run:
+        description: >-
+          demonstrate a proposal and write NOTHING to the card (DRE-3712)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -101,6 +106,10 @@ jobs:
       priority: ${{ inputs.priority }}
       card: ${{ inputs.card }}
       judgement: ${{ inputs.judgement }}
+      # The demonstration switch (DRE-3712). Offered on THIS trigger only: the
+      # drain writes the record of a decision that was already made, and there
+      # is nothing to demonstrate about it.
+      dry_run: ${{ inputs.dry_run }}
       # The pen's switch (DRE-3035), and NOT a dispatch input on purpose: a
       # hold the person dispatching the drain can waive is not a hold.
       #

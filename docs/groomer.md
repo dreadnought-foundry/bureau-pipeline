@@ -67,7 +67,10 @@ the same `🧠 model-attempt:` marker the planning classifier posts, naming the
 model that answered, the call count, the output budget the call was sized with
 and whether the answer was cut short. It is composed by
 `scripts/groomer_receipt.py` over `proposal.json` and printed into the step
-summary as well.
+summary as well. Not on a `dry_run`: that switch means no marker of any kind on
+the card (DRE-3712), so the step is skipped and the receipt is neither posted
+nor composed. What the run cost is still in `proposal.json`, which the run
+keeps as an artifact either way.
 
 ## The order, applied top to bottom
 
@@ -198,6 +201,28 @@ one at most once: before posting it reads the card and skips a proposal already
 there, so re-running it after a crash or a transient failure leaves the thread as
 it was rather than adding a duplicate copy. A population that MOVED has a
 different id and does post — the retry is silent, the groomer is not.
+
+**And it writes nothing at all for an empty batch** (DRE-3712). A proposal of
+zero cards asks for a decision nobody has to make, and the console reads the
+marker rather than the page: `🧺 groom-proposal: 2b10ecfb36f6` — 0 of 0 cards,
+posted on 2026-09-04 while Intake was empty — sat in the CEO's Green Light as
+"waiting 196.9 h" until he asked about it eight days later. The lane is still
+sequenced, still written to `proposal.json` and still printed; it is the
+comment that is not written. (The console half of the same incident, DRE-3708,
+stops SHOWING such a row.)
+
+**A demonstration is a `--dry-run`, and posts no marker of any kind.**
+
+```
+python3 scripts/groomer.py propose --lane Intake --capacity 20 \
+  --post DRE-2683 --dry-run
+```
+
+The run reads the lane, the cycles and the card's own thread exactly as a real
+one does, renders the whole page to the run log and the step summary, and
+writes neither the proposal nor the `🧠 model-attempt:` receipt. The workflow's
+`dry_run` input is the same switch — the 2026-09-04 demonstration had no such
+thing, so it was run as an ordinary `--post`.
 
 To approve, the CEO comments on that card, with the marker opening the comment:
 
