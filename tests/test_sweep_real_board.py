@@ -42,6 +42,8 @@ IT measures, ending at 30. A ceiling that fails on the real board before the
 cuts exist is just a red build.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_sweep_real_board.py -v
+Re-measure and re-record (what a cut sibling runs once its cut is green):
+     cd bureau-pipeline && python3 tests/test_sweep_real_board.py --record
 """
 from __future__ import annotations
 
@@ -53,8 +55,8 @@ import os
 import sys
 import time
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest import mock
 from unittest.mock import patch
 
 import pytest
@@ -198,7 +200,8 @@ class Replay:
     took, and whether it reached the network."""
 
     def __init__(
-        self, fake, decisions, spend_lines, seconds, urlopen, stubbed, printed
+        self, fake, decisions, spend_lines, seconds, urlopen, stubbed, printed,
+        spy_delegates,
     ):
         self.fake = fake
         self.decisions = decisions
@@ -209,6 +212,8 @@ class Replay:
         self.stubbed = stubbed
         #: Everything the pass printed, so a test can check it reached its end.
         self.printed = printed
+        #: Whether the refusal recorder wrapped the real `_surface_once`.
+        self.spy_delegates = spy_delegates
 
     @property
     def requests(self) -> int:
@@ -246,11 +251,15 @@ class Replay:
         return "\n".join(["  phase" + " " * (width - 5) + "  reads"] + lines)
 
 
-def _mocked_names(module) -> tuple[str, ...]:
-    """Every name in `module` that is a mock right now."""
+def _changed_names(module, before: dict) -> tuple[str, ...]:
+    """Every name in `module` that is not the object it was in `before`.
+
+    Identity, not `isinstance(..., Mock)`: a stub does not have to be a mock to
+    replace a phase, and the card's claim is about what this replay CHANGED
+    about the sweep, not about which library it changed it with.
+    """
     return tuple(sorted(
-        name for name in dir(module)
-        if isinstance(getattr(module, name, None), mock.NonCallableMock)
+        name for name, value in vars(module).items() if before.get(name) is not value
     ))
 
 
@@ -297,6 +306,8 @@ def _run_replay() -> Replay:
         refusals.append((identifier, str(tag)))
         return real_surface(identifier, tag, notice)
 
+    before_reconcile = dict(vars(reconcile))
+    before_linear = dict(vars(linear_ops))
     out = io.StringIO()
     with contextlib.ExitStack() as stack:
         enter = stack.enter_context
@@ -329,12 +340,23 @@ def _run_replay() -> Replay:
         # `issueUpdate` apiece for a record a live epic already has.
         enter(patch.object(linear_ops, "set_description"))
         urlopen = enter(patch.object(urllib.request, "urlopen"))
-        # WHAT IS STUBBED, read off the modules themselves while the pass is
-        # live — never a list this file keeps. "No phase is mocked" is the
-        # card's central claim, and a claim checked against its own declaration
-        # is not checked at all: a stub added later would be added to the list
-        # too.
-        stubbed = (_mocked_names(reconcile), _mocked_names(linear_ops))
+        # WHAT THIS REPLAY CHANGED, read off the modules themselves while the
+        # pass is live — never a list this file keeps. "No phase is mocked" is
+        # the card's central claim, and a claim checked against its own
+        # declaration is not checked at all: a stub added later would be added
+        # to the list too.
+        stubbed = (
+            _changed_names(reconcile, before_reconcile),
+            _changed_names(linear_ops, before_linear),
+        )
+        # …and that the one non-mock replacement really is a spy: it wraps the
+        # function it stands in for, so the refusals are recorded BY watching
+        # the real one rather than instead of it. Checked here, while the patch
+        # is live — outside the stack the name is the real function again and
+        # the question cannot be asked.
+        spy_delegates = (
+            reconcile._surface_once.__wrapped__ is before_reconcile["_surface_once"]
+        )
         reconcile.reset_sweep_cards()
         started = time.monotonic()
         with contextlib.redirect_stdout(out), contextlib.suppress(SystemExit):
@@ -346,7 +368,7 @@ def _run_replay() -> Replay:
     lines = [l for l in printed if l.startswith("sweep-spend:")]
     return Replay(
         fake, _decisions(advance, state, label, refusals), lines, seconds,
-        urlopen, stubbed, printed,
+        urlopen, stubbed, printed, spy_delegates,
     )
 
 
@@ -365,6 +387,7 @@ def _recorded() -> dict:
 # 1: the ceiling
 # --------------------------------------------------------------------------
 def test_a_full_sweep_over_the_real_board_stays_inside_the_budget(replay):
+    """The card's ceiling, measured on the board the sweep really sweeps."""
     assert replay.requests <= REAL_BOARD_SWEEP_BUDGET, (
         f"one full sweep over the committed board spent {replay.requests} "
         f"Linear read request(s), budget {REAL_BOARD_SWEEP_BUDGET}. Where it "
@@ -400,21 +423,33 @@ def test_every_linear_write_is_stubbed(replay):
     )
 
 
-def test_no_reconcile_function_is_mocked(replay):
-    """THE CARD'S CENTRAL CLAIM, checked against the module rather than against
-    a list this file keeps: while the pass ran, the only mocks in `reconcile`
-    were the five GitHub seams. Every backstop, watchdog, gate and report is
-    the real function — which is what `test_sweep_request_cuts` cannot say,
-    with 18 of them mocked out of its pass."""
+def test_no_reconcile_function_is_stubbed(replay):
+    """THE CARD'S CENTRAL CLAIM, checked against the modules rather than
+    against a list this file keeps: while the pass ran, the only things about
+    `reconcile` that were not the real thing were the five GitHub seams, two
+    config VALUES, and one call-through spy. Every backstop, watchdog, gate and
+    report is the real function — which is what `test_sweep_request_cuts`
+    cannot say, with 18 of them mocked out of its pass."""
     in_reconcile, in_linear = replay.stubbed
     assert set(in_reconcile) == {
+        # GitHub, and only GitHub
         "gh", "gh_actions_read", "gh_dispatch", "gh_read", "_nudge",
-    }, f"a seam other than GitHub's was mocked in reconcile: {in_reconcile}"
-    # linear_ops: the read seam, its counter's source, and the writes.
+        # values the run takes from its environment, not phases
+        "MAX_WIP", "REPO_SLUG",
+        # the refusal recorder, which calls the real one (asserted below)
+        "_surface_once",
+    }, f"the replay changed something else about the sweep: {in_reconcile}"
+    assert replay.spy_delegates, (
+        "the refusal recorder replaced `_surface_once` instead of wrapping it "
+        "— then the holds below are this test's behaviour, not the sweep's"
+    )
     assert set(in_linear) == {
-        "gql", "cmd_comment", "cmd_advance", "cmd_state",
+        # the read seam and the counter that reads its ledger
+        "gql", "requests_made",
+        # the writes, stubbed the way the existing suite stubs them
+        "cmd_comment", "cmd_advance", "cmd_state",
         "add_label", "remove_label", "set_description",
-    }, f"a Linear READER other than the seam was mocked: {in_linear}"
+    }, f"a Linear READER other than the seam was stubbed: {in_linear}"
 
 
 def test_the_pass_ran_to_its_end(replay):
@@ -446,11 +481,34 @@ def test_the_expensive_phases_really_ran(replay):
 # --------------------------------------------------------------------------
 # 3: the decisions
 # --------------------------------------------------------------------------
+def _decision_diff(made: dict, recorded: dict) -> str:
+    """What moved, by name and by key — never the two 233-line lists side by
+    side, which is a wall nobody reads."""
+    out = []
+    for key in sorted(set(made) | set(recorded)):
+        mine, theirs = set(made.get(key, ())), set(recorded.get(key, ()))
+        for label, gap in (("no longer", theirs - mine), ("newly", mine - theirs)):
+            if gap:
+                shown = sorted(gap)
+                out.append(
+                    f"  {key}: {len(gap)} {label} decided — "
+                    + ", ".join(shown[:8]) + (", …" if len(shown) > 8 else "")
+                )
+    return "\n".join(out)
+
+
 def test_the_sweeps_decisions_match_the_recorded_ones(replay):
+    """The ceiling alone can be met by a sweep that does less work. This is
+    what makes such a cut fail by name — and what makes a cut that changes no
+    decision pass, which is the whole point of the cut siblings."""
     recorded = _recorded()["decisions"]
-    assert replay.decisions == recorded, (
-        "the sweep's decisions over the committed board changed — a cut that "
-        "meets the ceiling by doing less work fails here, by name"
+    # A boolean, so the failure is the diff below and not pytest's own
+    # side-by-side repr of two 233-line lists.
+    unchanged = replay.decisions == recorded
+    assert unchanged, (
+        "the sweep's decisions over the committed board changed:\n"
+        + _decision_diff(replay.decisions, recorded)
+        + f"\n(re-record with the replay if the change is intended: {DECISIONS_PATH.name})"
     )
 
 
@@ -489,3 +547,53 @@ def test_the_replay_never_touches_the_network(replay):
         f"the replay reached the network {replay.urlopen.call_count} time(s) — "
         "every Linear request must be served by the fake"
     )
+
+
+# --------------------------------------------------------------------------
+# Re-recording, for the cut siblings
+# --------------------------------------------------------------------------
+def _record() -> int:
+    """Measure the replay and write both halves of its record: the decisions
+    file, and the number a cut sibling puts in `REAL_BOARD_SWEEP_BUDGET`.
+
+    Here rather than in a script of its own, because the thing that measures
+    and the thing that records must be the same pass: a recorder that built the
+    board its own way would record a board the ceiling was never measured over.
+    """
+    replay = _run_replay()
+    DECISIONS_PATH.write_text(
+        json.dumps(
+            {
+                "record": "what one full reconcile sweep DECIDES over the "
+                          "replayed board: which cards it promotes, holds, "
+                          "escalates and closes",
+                "produced_by": "tests/test_sweep_real_board.py --record",
+                "board": f"board_snapshot.synthetic({REAL_BOARD_CARDS}) — the "
+                         "board DRE-3918 left in place of the real 2026-09-12 "
+                         "snapshot, sized to the card count that snapshot "
+                         "recorded",
+                "recorded_on": datetime.now(UTC).date().isoformat(),
+                "no_request_count_here": "the ceiling lives once, in "
+                                         "REAL_BOARD_SWEEP_BUDGET; a second "
+                                         "number in this file could disagree "
+                                         "with it",
+                "decisions": replay.decisions,
+            },
+            indent=1,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"recorded {DECISIONS_PATH.relative_to(ROOT)}: "
+          + ", ".join(f"{k} {len(v)}" for k, v in replay.decisions.items()))
+    print(f"REAL_BOARD_SWEEP_BUDGET is {REAL_BOARD_SWEEP_BUDGET}; this pass "
+          f"spent {replay.requests}:")
+    print(replay.table())
+    return 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["--record"]:
+        sys.exit("usage: python3 tests/test_sweep_real_board.py --record")
+    sys.exit(_record())

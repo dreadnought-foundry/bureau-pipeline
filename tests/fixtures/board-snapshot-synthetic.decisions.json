@@ -1,7 +1,7 @@
 {
  "record": "what one full reconcile sweep DECIDES over the replayed board: which cards it promotes, holds, escalates and closes",
- "produced_by": "tests/test_sweep_real_board.py",
- "board": "board_snapshot.synthetic(406) — the board DRE-3918 left in place of the real 2026-09-12 snapshot, sized to the 406 cards that snapshot recorded",
+ "produced_by": "tests/test_sweep_real_board.py --record",
+ "board": "board_snapshot.synthetic(406) — the board DRE-3918 left in place of the real 2026-09-12 snapshot, sized to the card count that snapshot recorded",
  "recorded_on": "2026-09-17",
  "no_request_count_here": "the ceiling lives once, in REAL_BOARD_SWEEP_BUDGET; a second number in this file could disagree with it",
  "decisions": {
