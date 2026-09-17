@@ -1555,6 +1555,18 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
+          # DRE-3484: this is the LAST `${{ }}` this step had in its script,
+          # and moving it here is what takes the script out of GitHub's
+          # expression ceiling altogether. A run block containing `${{ }}`
+          # compiles into one `format()` expression capped at 21,000
+          # characters — refused at DISPATCH, in every consumer repo at once,
+          # with no job and no log. A block with NO substitutions is never
+          # compiled as an expression and has no ceiling at any length, which
+          # is why tests/test_workflow_expression_budget.py measures only the
+          # blocks the ceiling can reach. This step is now outside its scope by
+          # construction rather than by sitting a few hundred characters under
+          # a number. Keep it that way: add env vars here, never `${{ }}` below.
+          REPO: ${{ github.repository }}
           # DRE-1990: the commit this review actually looked at, captured at
           # review start by the Resolve PR step.
           REVIEWED_SHA: ${{ steps.pr.outputs.sha }}
@@ -1905,7 +1917,7 @@ jobs:
           # GitHub's reviewDecision becomes APPROVED. Best-effort (the script
           # never fails the job) and idempotent.
           if [ "$REAL" = "true" ] && head -1 /tmp/qa-verdict.md | grep -q "VERDICT: APPROVE"; then
-            python3 "$PIPELINE_DIR"/scripts/sync_review_state.py "${{ github.repository }}" "$PR" || true
+            python3 "$PIPELINE_DIR"/scripts/sync_review_state.py "$REPO" "$PR" || true
           fi
 
       # ── Head-bound review check (DRE-2291) ────────────────────────────────
