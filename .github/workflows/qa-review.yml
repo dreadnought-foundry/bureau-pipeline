@@ -189,8 +189,13 @@ jobs:
           fi
           # Same call shape merge-gate.yml uses, so the skip and the gate
           # read the same record and can never disagree about the standing
-          # verdict.
-          gh api "repos/${{ github.repository }}/issues/$PR/comments" > /tmp/decide-comments.json 2>/dev/null \
+          # verdict. DRE-4139 made that shape a PAGINATED one at both ends:
+          # unpaginated, both read GitHub's default 30 — the OLDEST 30 — and
+          # a long PR's real verdict was invisible to each of them. Fixing
+          # only the gate would have broken the promise in the line above.
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$PR/comments?per_page=100" \
+            > /tmp/decide-comments.json 2>/dev/null \
             || echo '[]' > /tmp/decide-comments.json
           # The gate's carry condition 4: the reviewed commit is still in
           # THIS PR's own commit record. Same call shape merge-gate.yml

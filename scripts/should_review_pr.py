@@ -213,6 +213,19 @@ def _load(path: str | None, fallback):
         return fallback
 
 
+def _flatten(comments):
+    """The comment record as one flat list, through the gate's own flattener
+    (DRE-4139). A payload that is not a comment record at all carries no
+    proof of a carry, so it degrades to `[]` — review — rather than raising
+    inside a step whose every read is fail-soft."""
+    try:
+        return merge_gate.flatten_pages(comments)
+    except ValueError as e:
+        print(f"should_review_pr: unreadable comment record: {e}",
+              file=sys.stderr)
+        return []
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("branch", nargs="?", default="",
@@ -236,7 +249,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     branch = args.branch
-    comments = _load(args.comments_file, [])
+    # DRE-4139: qa-review.yml fetches this record with the same call shape
+    # merge-gate.yml uses, so the skip and the gate can never disagree about
+    # the standing verdict — which now means every page of it, arriving as
+    # the array of PAGES `--slurp` emits. Unflattenable reads as no record at
+    # all, this step's fail-soft direction (→ review).
+    comments = _flatten(_load(args.comments_file, []))
     head_content_id = content_id(_load(args.compare_file, {}))
     pr_commit_shas = merge_gate.commit_shas(_load(args.pr_commits_file, []))
     carried = carried_approve(

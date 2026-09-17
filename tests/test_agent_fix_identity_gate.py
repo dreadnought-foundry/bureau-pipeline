@@ -156,24 +156,35 @@ FIX_MARKER = "🔧 Fix attempt 1 pushed — CI and critic review re-running."
 CONFLICT_MARKER = "🔀 Conflict resolution round 1 pushed — CI and critic review re-running."
 
 
+#: Either spelling of a jq filter in the workflow: `gh api --jq` for a read
+#: that fetches its own record, and `jq -r` over the one paginated record the
+#: three routing reads have shared since DRE-4139.
+_JQ_EXPR = re.compile(r"(?:--jq|jq -r) '([^']*)'")
+
+
 def extract_jq(marker: str) -> str:
-    """Pull the single --jq expression containing `marker` out of the live
+    """Pull the single jq expression containing `marker` out of the live
     workflow, so the harness executes the REAL filter, not a copy."""
-    exprs = [
-        e for e in re.findall(r"--jq '([^']*)'", workflow_src()) if marker in e
-    ]
+    exprs = [e for e in _JQ_EXPR.findall(workflow_src()) if marker in e]
     if len(exprs) != 1:
         raise AssertionError(
-            f"expected exactly one --jq expression containing {marker!r} "
+            f"expected exactly one jq expression containing {marker!r} "
             f"in agent-fix.yml, found {len(exprs)}"
         )
     return exprs[0]
 
 
-def run_jq(expr: str, data) -> str:
+def run_jq(expr: str, data, *, page_size: int = 100) -> str:
+    """Run `expr` over the record AS THE WORKFLOW WRITES IT.
+
+    Since DRE-4139 that is the array of per-page arrays `gh api --paginate
+    --slurp` emits, which the filter flattens with `add` — feeding it a flat
+    list would `add` the comment OBJECTS together instead.
+    """
+    pages = [data[i:i + page_size] for i in range(0, len(data), page_size)]
     proc = subprocess.run(
         ["jq", expr],
-        input=json.dumps(data),
+        input=json.dumps(pages or [[]]),
         capture_output=True,
         text=True,
     )
@@ -284,8 +295,11 @@ class PushMarkerHarnessTest(unittest.TestCase):
     DIRTY branch — a forged 'pushed' marker landing after a genuine verdict
     would flip the mode and dodge the review budget."""
 
-    def _idx(self, comments) -> int:
-        return int(run_jq(extract_jq("pushed — CI and critic review re-running"), comments))
+    def _idx(self, comments, *, page_size: int = 100) -> int:
+        return int(run_jq(
+            extract_jq("pushed — CI and critic review re-running"),
+            comments, page_size=page_size,
+        ))
 
     def test_genuine_worker_bot_marker_found_at_its_index(self):
         thread = [
@@ -308,6 +322,15 @@ class PushMarkerHarnessTest(unittest.TestCase):
             comment("dependabot[bot]", CONFLICT_MARKER),
         ]
         self.assertEqual(self._idx(thread), -1)
+
+    def test_the_index_is_into_the_whole_record_not_one_page(self):
+        """DRE-4139: LAST_PUSH_IDX and LAST_VERDICT_IDX are compared with
+        each other, so both must index the FLATTENED record. A per-page index
+        would compare positions from different pages and flip the mode on any
+        PR long enough to need a second page."""
+        thread = [comment("someone", f"chatter {n}") for n in range(40)]
+        thread[35] = comment(WORKER_BOT, FIX_MARKER)
+        self.assertEqual(self._idx(thread, page_size=10), 35)
 
 
 if __name__ == "__main__":

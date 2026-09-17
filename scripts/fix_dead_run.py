@@ -66,6 +66,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_agent_result  # noqa: E402
+# One flattener for the paginated comment record, shared with the gate
+# (DRE-4139) so no two readers of this thread disagree about its shape.
+import merge_gate  # noqa: E402
 
 # The worker-bot PR-comment marker the reconcile sweep re-dispatches on and
 # the Report step counts toward the cap. Must never collide with the markers
@@ -142,13 +145,22 @@ def consecutive_prior_deaths(
 
 
 def _load_comments(path: str) -> list:
-    """Read the REST issues/comments JSON array; [] on any read/parse error."""
+    """Read the REST issues/comments record; [] on any read/parse error.
+
+    DRE-4139: agent-fix.yml fetches it paginated, so the file holds the array
+    of PAGES `gh api --paginate --slurp` emits — flattened here through the
+    gate's own flattener. Truncated to page 1, the consecutive-death cap
+    counted the wrong deaths on any PR past thirty comments.
+    """
     try:
         with open(path) as f:
             data = json.load(f)
     except (OSError, ValueError):
         return []
-    return data if isinstance(data, list) else []
+    try:
+        return merge_gate.flatten_pages(data)
+    except ValueError:
+        return []
 
 
 class Decision:
