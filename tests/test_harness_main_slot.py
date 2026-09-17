@@ -32,6 +32,18 @@ So both halves are pinned here:
 These tests must FAIL against the single shared group + unscoped sweep,
 and PASS after.
 
+**Amended by DRE-4149 (2026-09-17).** The harness no longer runs on pull
+requests, so there is no PR lane left to keep out of main's way: the
+`pr-<number>` arm of the concurrency group went with the trigger, and the
+five slot tests that compared a pull_request event against a push to main
+went with the arm (they evaluated an expression that no longer exists;
+tests/test_harness_proves_main.py pins what replaced them — one lane, and
+no way for the PR trigger to come back quietly). What stays is everything
+whose code stays: main's lane and the never-cancel rule, and the whole
+namespace/sweep half — `framework` still accepts a `pr<n>` namespace and
+still refuses to collect a live foreign one, which is what protects main's
+run from a by-hand or local run beside it.
+
 Run: python3 -m pytest tests/test_harness_main_slot.py -v
 """
 
@@ -51,16 +63,8 @@ WORKFLOW = (
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "harness.yml"
 )
 
-#: The PR whose proving run held the slot on 2026-09-03 (DRE-3042's branch).
-PR_NUMBER = 251
-OTHER_PR = 252
-
-#: The group the card names for each kind of run.
+#: The one lane every run rides since DRE-4149 — main's.
 MAIN_GROUP = "integration-harness-main"
-PR_GROUP = f"integration-harness-pr-{PR_NUMBER}"
-
-#: The single group both kinds shared before this card.
-SHARED_GROUP = "integration-harness-sandbox"
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -100,17 +104,6 @@ def push_to_main_event():
     }
 
 
-def pull_request_event(number=PR_NUMBER):
-    return {
-        "github": {
-            "event_name": "pull_request",
-            "ref": f"refs/pull/{number}/merge",
-            "event": {"pull_request": {"number": number, "head": {"sha": SHA_B}}},
-        },
-        "inputs": {},
-    }
-
-
 def dispatch_event(pipeline_ref="main"):
     return {
         "github": {
@@ -125,40 +118,9 @@ def dispatch_event(pipeline_ref="main"):
 class HarnessSlotTest(unittest.TestCase):
     """The concurrency half, evaluated the way GitHub evaluates it."""
 
-    def test_main_and_a_pull_request_resolve_to_the_groups_the_card_names(self):
-        doc = _doc()
-        self.assertEqual(fix_concurrency.group(doc, push_to_main_event()), MAIN_GROUP)
-        self.assertEqual(fix_concurrency.group(doc, pull_request_event()), PR_GROUP)
-
-    def test_a_pull_requests_run_neither_blocks_nor_evicts_mains(self):
-        # The incident, both directions: a PR run holding the slot must not
-        # make main queue, and main arriving must not cancel the PR's run.
-        doc = _doc()
-        pr, main = pull_request_event(), push_to_main_event()
-        self.assertFalse(
-            fix_concurrency.evicts(doc, pending=pr, arriving=main),
-            "main's run still shares the PR run's queue — it would wait",
-        )
-        self.assertFalse(
-            fix_concurrency.evicts(doc, pending=main, arriving=pr),
-            "a PR run would drop main's pending run — the 2026-09-03 replace",
-        )
-
-    def test_two_pull_requests_get_a_lane_each(self):
-        doc = _doc()
-        self.assertNotEqual(
-            fix_concurrency.group(doc, pull_request_event()),
-            fix_concurrency.group(doc, pull_request_event(OTHER_PR)),
-        )
-
-    def test_one_pull_request_still_serializes_against_itself(self):
-        # Two pushes to the same PR drive the same sandbox namespace, so
-        # they must still queue rather than run side by side.
-        doc = _doc()
-        self.assertTrue(
-            fix_concurrency.evicts(
-                doc, pending=pull_request_event(), arriving=pull_request_event()
-            )
+    def test_a_push_to_main_resolves_to_mains_group(self):
+        self.assertEqual(
+            fix_concurrency.group(_doc(), push_to_main_event()), MAIN_GROUP
         )
 
     def test_a_hand_dispatch_rides_mains_lane(self):
@@ -172,18 +134,6 @@ class HarnessSlotTest(unittest.TestCase):
         self.assertFalse(
             fix_concurrency.cancel_in_progress(_doc()),
             "cancelling mid-scenario strands sandbox state the sweep then owns",
-        )
-
-    def test_the_group_this_replaced_would_have_queued_them_together(self):
-        # Non-vacuity: the same assertions against the pre-fix YAML fail.
-        drifted = _doc()
-        drifted["concurrency"]["group"] = SHARED_GROUP
-        self.assertTrue(
-            fix_concurrency.evicts(
-                drifted, pending=pull_request_event(), arriving=push_to_main_event()
-            ),
-            "the old single group is what made main wait — this test proves "
-            "the new one is doing the work",
         )
 
 
@@ -437,7 +387,6 @@ class DriverWiringTest(unittest.TestCase):
         for event, namespace, group in (
             (push_to_main_event(), "main", MAIN_GROUP),
             (dispatch_event(), "main", MAIN_GROUP),
-            (pull_request_event(), f"pr{PR_NUMBER}", PR_GROUP),
         ):
             resolved = fix_concurrency.interpolate(expr, event)
             self.assertEqual(framework.validate_namespace(resolved), namespace)
