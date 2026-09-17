@@ -425,6 +425,37 @@ class TestTheRepairPass:
         assert board.run(reconcile.repair_frozen_planning_holds) == set()
         assert board.states == [] and board.removed == []
 
+    def test_hand_built_work_is_left_where_its_owner_put_it(self):
+        """DRE-2524's rule, honoured by every member of this family: no agent
+        was ever coming for that card, so moving it into the CEO's queue would
+        take it out of the hands of the person building it."""
+        card = _frozen_card()
+        card["labels"]["nodes"].append({"name": reconcile.HAND_BUILT_LABEL})
+        board = _Board([card])
+        assert board.run(reconcile.repair_frozen_planning_holds) == set()
+        assert board.states == [] and board.removed == []
+
+    def test_a_parked_card_is_not_put_in_front_of_the_ceo(self):
+        """DRE-2724: PARKED is a decision, not a stall — a card routed PARKED
+        is "never reported as stalled by any sweep", so it is not one a sweep
+        gets to escalate either."""
+        card = _frozen_card()
+        card["comments"]["nodes"].insert(0, {
+            "body": routing_verdict.verdict_comment(
+                "PARKED", "we decided not to do this"),
+            "createdAt": _iso(0),
+        })
+        board = _Board([card])
+        assert board.run(reconcile.repair_frozen_planning_holds) == set()
+        assert board.states == [] and board.removed == []
+
+    def test_another_repos_card_is_that_repos_sweeps_business(self):
+        card = _frozen_card()
+        card["labels"]["nodes"].append({"name": "repo:atlas"})
+        board = _Board([card])
+        assert board.run(reconcile.repair_frozen_planning_holds) == set()
+        assert board.states == []
+
     def test_a_card_outside_planning_is_not_the_repairs_business(self):
         card = _frozen_card()
         card["state"]["name"] = "Backlog"

@@ -1639,7 +1639,9 @@ def repair_frozen_planning_holds() -> set[str]:
     Hand-built cards are skipped on DRE-2524's rule, the same one every other
     member of this family honours: no agent was ever coming for that card, a
     person owns it, and moving it into the CEO's queue would take it out of
-    their hands.
+    their hands. PARKED cards are skipped on DRE-2724's: a card routed PARKED
+    is deliberately not built and is "never reported as stalled by any sweep",
+    so it is not one a sweep gets to put in front of the CEO either.
 
     Each one is escalated with its reason, the label is removed, and the card
     is printed. Idempotent by construction: a repaired card is no longer in
@@ -1670,6 +1672,7 @@ def repair_frozen_planning_holds() -> set[str]:
         and held(card)
         and not hand_built(card)
         and not _another_repos_card(card)
+        and not routing_verdict.is_parked(card_comment_bodies(card))
         and any(WATCHDOG_TAG in b for b in card_comment_bodies(card))
     ]
     if not candidates:
