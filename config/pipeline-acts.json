@@ -200,14 +200,14 @@
       "tag": "stranded-watchdog",
       "adopted": true,
       "kind": "hold",
-      "means": "A card sits in an active lane with no evidence any run ever started — no route, no run receipt, or nothing at all recorded in Planning.",
+      "means": "A Todo or In Progress card sits in an active lane with no evidence any run ever started — no route, or no run receipt.",
       "state": "held",
       "next_actor": "operator",
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
       "cadence_why": "Null: the hold labels the card for a person, and scripts/reconcile.py declares no bound on how long an operator takes to answer it.",
-      "why": "The board said work was happening while nothing ran; DRE-1978 sat in Planning for seven days and the CEO found it by asking. One tag covers the three conditions that all mean the same thing to a reader — no run has begun — because it is one idempotency key and splitting it would let the same card be flagged three times.",
+      "why": "The board said work was happening while nothing ran; DRE-1978 sat in Planning for seven days and the CEO found it by asking. One tag covers the conditions that all mean the same thing to a reader — no run has begun — because it is one idempotency key and splitting it would let the same card be flagged twice. PLANNING LEFT THIS ACT ON 2026-09-17 (DRE-4124): a held card is skipped by everything downstream, so a Planning card labelled here and never moved was frozen where nobody was ever asked — twenty-three such cards across the fleet, thirteen of them in Planning, the oldest for thirty-five days. A stalled Planning card is now escalated into the CEO's decision queue instead, by the same seam the planner's hand-planning escalation takes. Old receipts of this tag still stand on those cards and are what the repair pass reads to know the label was ours.",
       "emits": {
         "file": "scripts/reconcile.py",
         "anchor": "no agent run has started. Observed: this card has sat in"

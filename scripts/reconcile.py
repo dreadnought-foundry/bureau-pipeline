@@ -173,6 +173,10 @@ import plan_run  # noqa: E402
 # The tags below stay exactly where they are — they are live idempotency keys
 # and per-sha budget counters, not prose.
 import pipeline_act  # noqa: E402
+# DRE-4124: ONE route out of Planning for a card nobody can move — the same
+# seam the planner's own hand-planning escalation takes, so a card the sweep
+# escalates and a card the planner escalates read the same in the CEO's queue.
+import planning_escalation  # noqa: E402
 # DRE-2676: ONE source for "what is a dependency" — the formal `blocks`
 # relations are the gate, the description's declaring lines are evidence, and a
 # claim the board does not corroborate is a defect in the card.
@@ -1416,8 +1420,24 @@ def flag_stranded() -> set[str]:
     return flagged | flag_stalled_planning()
 
 
+def _another_repos_card(card: dict) -> bool:
+    """Does this card belong to a DIFFERENT repo's sweep? (DRE-2929)
+
+    One reading, shared by Planning's two passes below, because they walk the
+    same lane on the same board read and a filter spelled twice is a filter
+    that drifts. It reads oddly on purpose: a card in Planning usually has no
+    `repo:` label — assigning one is what Planning does — so filtering on "is
+    this mine" would fire on nothing. It filters on the OTHER answer: a card
+    whose slug is on the routing rail and is not this repo's belongs to that
+    repo's sweep, which reads the same board and applies the same rule. An
+    unlabelled card is nobody's in particular and stays everybody's.
+    """
+    slug = card_repo(card)
+    return slug is not None and slug in validate_card.VALID_SLUGS and slug != REPO_SLUG
+
+
 def flag_stalled_planning() -> set[str]:
-    """DRE-2736 watchdog: flag cards stalled in Planning, on Planning's terms.
+    """DRE-2736 watchdog: ESCALATE cards stalled in Planning, on Planning's terms.
 
     Planning's occupants owe a CLASSIFICATION — the decision about what the
     card is and where it goes — and nothing else. Not a `repo:` label
@@ -1437,10 +1457,34 @@ def flag_stalled_planning() -> set[str]:
     seven days back.
 
     Same manners as flag_stranded: held and hand-built cards are skipped, the
-    repo filter leaves another repo's card to that repo's own sweep, the
-    WATCHDOG_TAG comment is the once-ever idempotency marker, and flagging is
-    one plain-English comment plus HOLD_LABEL — no state move, no cancel.
-    Returns the identifiers flagged this sweep.
+    repo filter leaves another repo's card to that repo's own sweep, and the
+    WATCHDOG_TAG comment left by an older sweep is still honoured as a
+    once-ever marker.
+
+    WHAT IT DOES WITH A STALLED CARD IS A MOVE (DRE-4124). It used to post one
+    comment and add HOLD_LABEL — "no state move, no cancel" — and that label is
+    a permanent freeze, because everything else skips a held card: this same
+    watchdog on the next pass, promotion, limit recovery, and the console's
+    operator runner. Planning is deliberately outside the nudge loop, so
+    nothing else was watching either. Measured on 2026-09-16/17: twenty-three
+    cards across the fleet carried `needs-human`, every one applied by the
+    pipeline and none by a person, and thirteen were sitting here — the oldest
+    for thirty-five days, looking like work in flight and asking nobody
+    anything.
+
+    The same defect was fixed one lane upstream by DRE-2687, and this is that
+    remedy: `planning_escalation.escalate` posts the plain-English reason and
+    moves the card to the CEO's decision queue. A card nobody can move belongs
+    in the queue for the person who can. No label: `needs-human` goes back to
+    meaning a person put it there.
+
+    The escalation is handed the card and its comments rather than re-reading
+    them — the board read already carries both, and a per-card read here is the
+    cost DRE-2929 removed. Its own move is guarded live all the same.
+
+    Idempotent by construction, the second reason a move beats a report: an
+    escalated card is no longer in Planning, so nothing needs to remember it.
+    Returns the identifiers escalated this sweep.
 
     THE REPO FILTER IS flag_stranded's, EXACTLY (DRE-2929), and the reason it
     reads oddly here is the reason it was missing: a card in Planning usually
@@ -1470,8 +1514,7 @@ def flag_stalled_planning() -> set[str]:
                 "Planning is not a strand"
             )
             continue
-        slug = card_repo(card)
-        if slug is not None and slug in validate_card.VALID_SLUGS and slug != REPO_SLUG:
+        if _another_repos_card(card):
             continue  # that repo's own sweep applies this same rule to its cards
         # The age gate runs BEFORE anything reads what the card says (DRE-2929).
         # It needs `updatedAt` and nothing else, and a young card is the common
@@ -1493,21 +1536,186 @@ def flag_stalled_planning() -> set[str]:
             continue
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
-        reason = (
-            "planning has produced nothing. Observed: this card has sat in "
-            f"Planning for {PLANNING_MINUTES}+ minutes with nothing posted or "
-            "changed on it — a card in Planning owes a decision about what it "
-            "is and where it goes, and no decision has been recorded. Why is "
-            "not known from here. If planning is genuinely still going, remove "
-            f"the '{HOLD_LABEL}' label and it will carry on; otherwise this "
-            "card needs a human to look."
-        )
-        linear_ops.cmd_comment(ident, pipeline_act.receipt(
-            "card-stranded", f"🚨 {WATCHDOG_TAG}: {reason}"))
-        linear_ops.add_label(ident, HOLD_LABEL)
-        flagged.add(ident)
-        print(f"watchdog: {ident} in Planning flagged (no-classification)")
+        if escalate_out_of_planning(card, stalled_planning_reason()):
+            flagged.add(ident)
+            print(
+                f"watchdog: {ident} stalled in Planning (no-classification) — "
+                f"escalated to {ESCALATED_STATE}"
+            )
     return flagged
+
+
+def stalled_planning_reason() -> str:
+    """What the CEO reads on a card that has stood still in Planning.
+
+    Plain English and nothing else: `planning_escalation.refusal` reads this
+    text before it is posted and will not put a diff, a path or a command in
+    front of him (`standards/comms.md`). It no longer mentions a label, because
+    since DRE-4124 this rule writes none — the card moves instead.
+    """
+    return (
+        "planning has produced nothing. This card has sat in Planning for "
+        f"{PLANNING_MINUTES}+ minutes with nothing posted or changed on it — a "
+        "card in Planning owes a decision about what it is and where it goes, "
+        "and none has been recorded. Why is not known from here, which is why "
+        "it is in front of you rather than being guessed at."
+    )
+
+
+def escalate_out_of_planning(card: dict, reason: str) -> bool:
+    """Post the reason and move the card to the CEO's queue. True when it moved.
+
+    ONE seam for both of Planning's escalations — the stall watchdog's and the
+    repair pass's — so a card that stalled today and a card frozen five weeks
+    ago reach the decision queue by the same route and read the same way there.
+
+    The card and its comment window are HANDED to the escalation rather than
+    re-read (DRE-2929): the board read already returned both, and a per-card
+    read here is the request that exhausted the workspace quota. Its own state
+    write is still guarded on a live re-read.
+
+    A write that did not happen never reads as done: the failure goes on the
+    fail-loudly rail, which exits the sweep red for the medic, and the card is
+    left exactly as it was found.
+    """
+    ident = card["identifier"]
+    try:
+        outcome = planning_escalation.escalate(
+            linear_ops,
+            ident,
+            reason,
+            issue=card,
+            comments=linear_ops.window_nodes(card.get("comments")),
+        )
+    except (linear_ops.LinearError, planning_escalation.EscalationError) as e:
+        _write_failures.append(f"{ident} planning escalation: {e}")
+        print(
+            f"ERROR: failed to escalate {ident} out of Planning: {e}",
+            file=sys.stderr,
+        )
+        return False
+    if not outcome.parked:
+        # DRE-3654's stand-down: the card had already moved on, so it was left
+        # where it is and told so once.
+        print(f"planning: {ident} was left alone — {outcome.stood_down}")
+        return False
+    return True
+
+
+#: What the CEO reads on a card the OLD rule froze. Same seam, different
+#: sentence: nothing has changed on this card for weeks because the pipeline
+#: stopped looking at it, and saying "planning has produced nothing" would be a
+#: confident wrong answer about why (`standards/console-honesty.md`).
+FROZEN_PLANNING_REASON = (
+    "this card was held for a person weeks ago and then nobody was asked. Our "
+    "own watchdog marked it as needing a human and left it sitting in Planning, "
+    "where every other part of the pipeline is built to leave a held card "
+    "alone — so it looked like work in flight and no question ever reached you. "
+    "Nothing is wrong with the card. It is in front of you now because that is "
+    "where it should have gone in the first place."
+)
+
+
+def repair_frozen_planning_holds() -> set[str]:
+    """Escalate the cards the OLD Planning rule froze (DRE-4124). Once each.
+
+    THE BACKLOG THIS DEFECT CREATED. Measured 2026-09-16/17: twenty-three cards
+    across the fleet carried HOLD_LABEL, every one applied by the pipeline and
+    none by a person, and thirteen were sitting in Planning — the oldest,
+    DRE-2415, for thirty-five days. `flag_stalled_planning` above stops making
+    more of them; this empties the pen.
+
+    A card is repaired when ALL FOUR hold:
+
+      * it is in Planning — the lane the old rule left it in;
+      * it carries HOLD_LABEL;
+      * it carries the watchdog's own WATCHDOG_TAG receipt. THIS IS HOW
+        "BOT-APPLIED" IS KNOWN: the label arrived with that comment, so a card
+        without one is a person's hold and is left alone. The pipeline does not
+        get to decide it knows better than whoever typed the label;
+      * it has no open pull request. Work in flight is work in flight whatever
+        the label says, and a card being built is nobody's decision to take.
+
+    Hand-built cards are skipped on DRE-2524's rule, the same one every other
+    member of this family honours: no agent was ever coming for that card, a
+    person owns it, and moving it into the CEO's queue would take it out of
+    their hands.
+
+    Each one is escalated with its reason, the label is removed, and the card
+    is printed. Idempotent by construction: a repaired card is no longer in
+    Planning, so the next pass never sees it — and the label it no longer
+    carries is the second reason.
+
+    An UNREADABLE pull-request listing repairs nothing (DRE-2034): "could not
+    read" is not "no open pull requests", so the pass acts on nothing and the
+    next sweep asks again.
+
+    The label comes off AFTER the move, never before: a label removed on a card
+    that then fails to move is a card no longer held and no longer flagged,
+    which is worse than the freeze (`dead_run.park`'s both-or-neither rule,
+    read in the other direction).
+
+    THE REPO FILTER IS flag_stalled_planning's, EXACTLY, and it leaves the same
+    residual: a frozen card usually has no `repo:` label — it never got far
+    enough to be given one — so it is nobody's in particular and every repo's
+    sweep sees it. The escalation is keyed on its own tag and the move is
+    guarded on the from-lane, so the cost of two sweeps landing together is a
+    duplicated comment on a card that has just left the lane, never a double
+    move (`escalate_aged_intake` states the same trade).
+    """
+    repaired: set[str] = set()
+    candidates = [
+        card for card in active_cards(PLANNING_LANE)
+        if card["state"]["name"] == "Planning"
+        and held(card)
+        and not hand_built(card)
+        and not _another_repos_card(card)
+        and any(WATCHDOG_TAG in b for b in card_comment_bodies(card))
+    ]
+    if not candidates:
+        return repaired
+    prs = _open_pr_listing()
+    if prs is None:
+        print(
+            f"planning-repair: {len(candidates)} frozen card(s) found and none "
+            "touched — the open pull requests could not be read, and unreadable "
+            "is not 'no open pull request'"
+        )
+        return repaired
+    building = {
+        branch_card(pr.get("headRefName") or "")
+        for pr in prs
+        if card_branch(pr.get("headRefName"))
+    }
+    for card in candidates:
+        ident = card["identifier"]
+        if ident in building:
+            print(
+                f"planning-repair: {ident} has an open pull request — work in "
+                "flight is not a frozen card; left alone"
+            )
+            continue
+        if not escalate_out_of_planning(card, FROZEN_PLANNING_REASON):
+            continue
+        try:
+            linear_ops.remove_label(ident, HOLD_LABEL)
+        except linear_ops.LinearError as e:
+            # The card is in the CEO's queue either way, which is the point of
+            # the repair; a label left on it is recorded rather than retried
+            # here, because the next pass no longer sees this card.
+            _write_failures.append(f"{ident} planning-repair label: {e}")
+            print(
+                f"ERROR: {ident} was escalated but the '{HOLD_LABEL}' label "
+                f"could not be removed: {e}",
+                file=sys.stderr,
+            )
+        repaired.add(ident)
+        print(
+            f"planning-repair: {ident} was frozen in Planning by our own "
+            f"watchdog — escalated to {ESCALATED_STATE} and the "
+            f"'{HOLD_LABEL}' label removed"
+        )
+    return repaired
 
 
 # Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
@@ -6888,6 +7096,19 @@ def main(
             # exits red, so medic sees it and the next sweep retries.
             _read_failures.append(f"intake: {e}")
             print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
+        # The pen the OLD Planning rule filled (DRE-4124), emptied one card at
+        # a time. Immediately after the watchdog that stopped filling it, and
+        # on the same board read: the cards it repairs are exactly the ones
+        # that watchdog now skips as already held.
+        try:
+            with _phase("repair_frozen_planning_holds"):
+                repair_frozen_planning_holds()
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"planning-repair: {e}")
+            print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
     # Automation cards (DRE-3665) are out of `mine` — and `mine` is BOTH the
     # WIP base promotion is budgeted against and the list the nudge loop
     # walks. A dependabot card has no agent run to count and no `agent/`

@@ -142,14 +142,11 @@ def _drive_stranded_no_run(mp):
     reconcile.flag_stranded()
 
 
-@site("card-stranded/planning", "card-stranded")
-def _drive_stranded_planning(mp):
-    mp.setattr(reconcile, "active_cards", lambda *_a, **_k: [_watchdog_card("Planning")])
-    mp.setattr(reconcile, "held", lambda _c: False)
-    mp.setattr(reconcile, "hand_built", lambda _c: False)
-    mp.setattr(reconcile.linear_ops, "comment_bodies", lambda *_a, **_k: [])
-    _card_recorder(mp)
-    reconcile.flag_stalled_planning()
+# `card-stranded/planning` was the second site of this act and is GONE
+# (DRE-4124). A Planning card that stalls is no longer held in place with a
+# receipt — it is escalated into the CEO's decision queue by
+# `planning_escalation`, whose notes are declared `unconverted` and carry no
+# trailer. The act keeps its one remaining site above, in flag_stranded.
 
 
 @site("intake-overdue", "intake-overdue")

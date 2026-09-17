@@ -139,7 +139,9 @@ class _Board:
 
     def __init__(self, cards, prs=()):
         self.cards = list(cards)
-        self.prs = list(prs)
+        #: None stands for an UNREADABLE listing, which `_open_pr_listing`
+        #: answers with rather than `[]` (DRE-2034).
+        self.prs = None if prs is None else list(prs)
         self.posted: list[tuple[str, str]] = []
         self.states: list[tuple[str, str]] = []
         self.added: list[tuple[str, str]] = []
@@ -197,7 +199,8 @@ class _Board:
         with patch.object(
             reconcile, "active_cards", side_effect=self.active_cards
         ), patch.object(
-            reconcile, "_open_pr_listing", side_effect=lambda: list(self.prs)
+            reconcile, "_open_pr_listing",
+            side_effect=lambda: None if self.prs is None else list(self.prs),
         ), patch.object(
             reconcile.linear_ops, "cmd_comment", side_effect=self.cmd_comment
         ), patch.object(
@@ -418,10 +421,9 @@ class TestTheRepairPass:
     def test_an_unreadable_pr_listing_repairs_nothing(self):
         """DRE-2034: unreadable is not "no open pull requests". A pass that
         cannot answer the question acts on nothing and tries again next sweep."""
-        board = _Board([_frozen_card()])
-        with patch.object(reconcile, "_open_pr_listing", return_value=None):
-            assert board.run(reconcile.repair_frozen_planning_holds) == set()
-        assert board.states == []
+        board = _Board([_frozen_card()], prs=None)
+        assert board.run(reconcile.repair_frozen_planning_holds) == set()
+        assert board.states == [] and board.removed == []
 
     def test_a_card_outside_planning_is_not_the_repairs_business(self):
         card = _frozen_card()

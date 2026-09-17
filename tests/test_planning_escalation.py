@@ -404,13 +404,32 @@ class TestTheEscalationReReadsTheLaneBeforeItParks:
         assert planning_escalation.STOOD_DOWN_TAG in note
         assert lane in note and planning_escalation.ORIGIN in note
 
-    def test_a_verdict_stops_the_park_whatever_the_lane(self):
-        """A card carrying a routing verdict is past classification — even one
-        the board still shows in Planning, as DRE-3604 was for five seconds."""
+    def test_a_current_verdict_stops_the_park_in_planning_too(self):
+        """A card carrying a routing verdict FROM THIS ATTEMPT is past
+        classification — even one the board still shows in Planning, as
+        DRE-3604 was for five seconds.
+
+        DRE-4124 narrowed this from "whatever the lane it is in": the verdict
+        has to be current. `moved_on` is asked directly here because the CLI
+        reads the card's comments as plain strings, which carry no time — and
+        an unreadable time is stale, which is the case below."""
+        card = _dre_3604(lane=planning_escalation.ORIGIN)
+        where = planning_escalation.moved_on(
+            {"state": {"name": planning_escalation.ORIGIN}},
+            [{"body": b, "createdAt": ESCALATION_AT} for b in card.comments],
+            attempt_since=HAND_MOVE_AT,
+        )
+        assert where is not None and "WORKBENCH" in where
+
+    def test_a_verdict_from_a_spent_attempt_does_not_stop_the_park(self):
+        """DRE-4124, and the card it is named for: on 2026-09-16 23:42 PT this
+        branch stood DRE-2415 down on a verdict from 09-08 while the board
+        plainly showed it still in Planning, where it had then sat for
+        thirty-five days. A card that is still here has not moved on."""
         card = _dre_3604(lane=planning_escalation.ORIGIN)
         _escalate(card, DRE_3604)
-        assert card.states == []
-        assert "WORKBENCH" in card.bodies()
+        assert card.states == [(DRE_3604, planning_escalation.destination())]
+        assert planning_escalation.ESCALATION_TAG in card.bodies()
 
     def test_the_verdict_is_read_by_the_vocabularys_own_reader(self):
         """A body that merely QUOTES a verdict — the sweep's refusal notice
