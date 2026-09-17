@@ -224,3 +224,51 @@ class TestTheStandardsTheWaveChanged:
             "architecture.md must point at the contract the flow is rendered "
             "from rather than carry a second copy that drifts"
         )
+
+    def test_design_system_states_the_lock_and_multi_brand_rules(self):
+        # DRE-3938: the CEO's 2026-09-14 decision, stated where agents read it.
+        # The folder shape without the lock rule is a filing convention; the
+        # lock rule is what makes a design's atoms a closed, checkable set.
+        body = _read(STANDARDS / "design-system.md")
+        assert "## The lock rule" in body
+        assert "## The multi-brand rule" in body
+        assert "LOCK.json" in body, (
+            "design-system.md states a lock with nowhere to record it"
+        )
+        assert "adr-design-system-and-new-roles.md" in body, (
+            "design-system.md must link the agent-bureau ADR that is the "
+            "decision record, rather than be its own authority"
+        )
+
+    def test_the_design_checklist_is_answerable_from_the_files(self):
+        # Every item is a file question on purpose. A gate that needs a live
+        # tool, a login or a person's eye is not a gate (DRE-3075's shape: a
+        # criterion nobody can answer at the moment it is asked).
+        body = _read(STANDARDS / "design-system.md")
+        assert "from the files alone" in body
+        assert "blocking finding" in body, (
+            "a checklist whose failure is not blocking gates nothing"
+        )
+
+    def test_the_unanswerable_design_check_stays_out_and_says_why(self):
+        # The absence is a decision (CEO, 2026-09-16), and the ADR still
+        # describes the published project — so a reader who finds this
+        # checklist shorter than the ADR must find the reason here rather than
+        # conclude the item was forgotten and put it back.
+        body = _read(STANDARDS / "design-system.md")
+        heading = "## Not on the checklist, deliberately"
+        assert heading in body, (
+            "design-system.md drops the published-Claude-Design check without "
+            "recording that it was dropped"
+        )
+        checklist = body[body.index("checklist — what gates") : body.index(heading)]
+        assert "Claude Design" not in checklist, (
+            "the published-Claude-Design item is back in the checklist; it "
+            "cannot be answered from the files"
+        )
+        record = body[body.index(heading) :]
+        assert "cannot be answered from the files" in record
+        assert re.search(r"Designer verifies it by hand", record), (
+            "the record must name who does check it, or the check is simply "
+            "gone rather than moved"
+        )

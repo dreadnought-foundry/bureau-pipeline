@@ -118,13 +118,24 @@ line per card, before anything moves.
 | `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "created inside the window") — and, on a judged run, the five **labelled reasons** below. |
 | `not-now` | **Wanted, and deliberately not this batch**. Either it names the cycle it is reconsidered in, or it is older than the window and stays in Intake ungroomed. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
 | `dead` (the read calls it `likely-done`) | **Recommended for cancellation, and never cancelled here**. Two readers propose one and the proposal says which: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | **evidence** — the card, merged PR or decision it points at. A recommendation nobody can check is one nobody should act on. |
-| `could not rank` | **The read could not place it.** The rules kept it exactly where they had it. | **itself** — its own section in the proposal, never folded into "not now". |
+| `could not rank` | **The read could not place it**, so it is **out of the batch** — whatever the rules did with it (DRE-3544). It carries no cycle and no trigger: what is owed is a person, not a fortnight. | **itself** — its own section in the proposal, never folded into "not now". |
 
 `not-now` is first-class on purpose. A card can be well-formed, wanted, and
 correctly left alone for a month — without a "later", Intake is a pass/fail
 funnel and the only way to say "later" is to say "no". `could not rank` is
 first-class for the same reason from the other end: a refusal that renders as
 a deferral is a refusal nobody reads, and refusal is not a default.
+
+**The proposed batch and the refusals are disjoint, and `propose` asserts it**
+(DRE-3544). Judged batch `f673bfefa340` carried DRE-3020 at position 32 with
+its printed reason "could not rank — needs a person" and listed it under the
+refusals in the same comment; a drain would have moved a card the model had
+declined to place. A card the read declines is removed where the batch is
+made, and a proposal whose two lists overlap raises rather than being posted.
+The one run that declines nothing is a run whose read answered nothing at all
+— `problem` is set, every card is `unranked` by default, and the proposal falls
+back to the rules exactly as it did before the read existed, which the page
+says above the batch.
 
 A reason written in technical terms never reaches the page. It goes through
 the same plain-English guard the planner's escalation goes through, is replaced

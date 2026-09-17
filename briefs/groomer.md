@@ -55,7 +55,8 @@ Four rules decide it, in this order:
    say `not-now` and name what would settle it as the trigger.
 4. **Say `unranked` rather than guess.** A card you do not understand, a card
    whose body is a single sentence, a card that could be either — all of them
-   are `unranked`, and the run puts them in front of a person untouched.
+   are `unranked`, and the run takes them out of the batch and puts them in
+   front of a person.
 
 **Plain words only.** Every reason you write is shown to a non-technical reader.
 No file names, no commands, no code fences, no function names, no diffs — a
@@ -110,12 +111,14 @@ spent on the handful of cards the batch holds and on none of the rest. The
 whole answer is sized at roughly eighty tokens a card, so the
 budget you spend writing three sentences about one card is a card further down
 the census that the answer never reaches — and a card the answer never reaches
-is `unranked` and stays exactly where it was. Say the one thing that decided it
-and move to the next line.
+is `unranked`, which takes it out of the batch. Say the one thing that decided
+it and move to the next line.
 
 The order of your `now` lines is the order the batch is filled in, so put the
 card you would start first at the top. A card you leave out of the answer is
-`unranked` and stays exactly where it is.
+`unranked`, and an `unranked` card is **not in the batch** — it is put in front
+of a person instead. Leaving a card out is a refusal, not a way of handing it
+back to the rules.
 
 ## What the rules do to your answer
 
