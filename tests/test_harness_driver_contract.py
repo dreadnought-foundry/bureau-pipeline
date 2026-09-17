@@ -36,6 +36,14 @@ current even when the driver it checks out is months old. The guard
 therefore lives in the workflow, reads the contract version out of the
 checked-out driver, and fails the run BEFORE a sandbox credential is minted.
 
+**Still needed after DRE-4149.** The harness no longer runs on pull requests,
+so the incident above cannot recur by that route — but a by-hand dispatch
+checks out whatever `pipeline_ref` names, at whatever vintage that branch was
+cut, while the workflow file comes from the ref the dispatch ran ON (main).
+That is the same shape: a current workflow, a possibly months-old driver, and
+main's live proving run in the sandbox beside it. The guard and these tests
+stay exactly as they were.
+
 These tests must FAIL against a harness.yml with no guard step, and PASS
 after.
 

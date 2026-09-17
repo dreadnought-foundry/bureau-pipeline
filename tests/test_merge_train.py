@@ -242,44 +242,14 @@ class TheSandboxIsStillSerialisedTest(unittest.TestCase):
     that DO share a namespace (two pushes to main) still share a slot,
     because a second live run there is exactly what the sweep would tear
     down mid-scenario.
+
+    DRE-4149 then removed the PR run altogether, so the two tests that set a
+    pull_request event against a push to main are gone with the expression
+    they evaluated. The residual below is now the WHOLE behaviour, and it is
+    the one the card asks for by name: runs on main collapse to the newest
+    commit — the run in progress finishes, the newest head waits behind it,
+    and a head in between is dropped before it starts.
     """
-
-    def test_the_group_now_varies_by_kind_of_run(self):
-        group = _harness_concurrency().get("group")
-        self.assertIsInstance(group, str)
-        self.assertIn(
-            "${{", group,
-            "DRE-3075: the group must vary by event kind so main and a PR "
-            "run never share a pending slot",
-        )
-
-    def test_a_pull_request_run_no_longer_displaces_mains_pending_run(self):
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
-        import fix_concurrency  # noqa: E402
-
-        doc = yaml.safe_load(HARNESS.read_text())
-        main_event = {
-            "github": {
-                "event_name": "push",
-                "ref": "refs/heads/main",
-                "sha": SHA,
-                "event": {"ref": "refs/heads/main"},
-            },
-            "inputs": {},
-        }
-        pr_event = {
-            "github": {
-                "event_name": "pull_request",
-                "ref": "refs/pull/251/merge",
-                "event": {"pull_request": {"number": 251, "head": {"sha": SHA}}},
-            },
-            "inputs": {},
-        }
-        self.assertFalse(
-            fix_concurrency.evicts(doc, pending=main_event, arriving=pr_event),
-            "DRE-3075 regression: a PR run must not evict main's pending run "
-            "again — that was the 2026-09-03 incident this class pins",
-        )
 
     def test_two_pushes_to_main_still_share_mains_one_pending_slot(self):
         outcomes = simulate(
