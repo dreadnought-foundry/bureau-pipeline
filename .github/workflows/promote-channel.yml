@@ -1,4 +1,5 @@
-# Automatic channel promotion (DRE-2551, Wave 1 Step 2).
+# Channel promotion — automatic (DRE-2551, Wave 1 Step 2) and, since
+# DRE-4111, by hand.
 #
 # The tag move is a human act: it happened five times in ten days
 # (2026-07-11 → 07-21) and then stopped, and nothing noticed for a month while
@@ -143,6 +144,12 @@ jobs:
     # `steps.decide.outputs.promote`, below, unchanged — and the API calls and
     # the token mint are still gated on that same pair, so the added runs cost
     # a checkout and one `python3`.
+    #
+    # DRE-4111 adds ONE more thing those gates admit: a `workflow_dispatch`,
+    # which is a person asking for this promotion by hand and so is never one
+    # of the PR-head runs the gates exist to keep cheap. Nothing else about
+    # the shape changes — the dispatch reaches the same decision, spends the
+    # same reads, and is refused by the same rails.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
