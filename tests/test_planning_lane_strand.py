@@ -107,7 +107,13 @@ def _run_watchdog(cards, bodies=()):
     `cards`, with the active_cards stub honouring the lane filter it is handed
     the way Linear does and carrying each card's comments the way the real
     query does since DRE-2929. Returns (flagged, cmd_comment mock, add_label
-    mock)."""
+    mock, cmd_state mock).
+
+    `get_issue` is stubbed because the Planning pass now ESCALATES rather than
+    labelling in place (DRE-4124), and the escalation re-reads the card's lane
+    live before it writes anything. Unstubbed, every Planning case here would
+    reach for the real Linear.
+    """
     cards = [
         dict(card, comments={"nodes": [{"body": b} for b in bodies]})
         for card in cards
@@ -116,17 +122,32 @@ def _run_watchdog(cards, bodies=()):
     def by_lane(states=reconcile.SWEEP_STATES):
         return [c for c in cards if c["state"]["name"] in states]
 
+    def live_read(identifier, **kw):
+        card = next(c for c in cards if c["identifier"] == identifier)
+        return {
+            "id": card["id"], "identifier": identifier, "title": card["title"],
+            "team": {"id": "team-id"}, "state": {"name": card["state"]["name"],
+                                                 "type": "unstarted"},
+            "labels": card["labels"], "children": {"nodes": []},
+        }
+
     with patch.object(
         reconcile, "active_cards", side_effect=by_lane
     ), patch.object(
         reconcile.linear_ops, "comment_bodies", side_effect=_no_per_card_fetch
     ), patch.object(
+        reconcile.linear_ops, "get_issue", side_effect=live_read
+    ), patch.object(
+        reconcile.linear_ops, "count_comments", return_value=0
+    ), patch.object(
+        reconcile.linear_ops, "cmd_state"
+    ) as state, patch.object(
         reconcile.linear_ops, "cmd_comment"
     ) as comment, patch.object(
         reconcile.linear_ops, "add_label"
     ) as add_label:
         flagged = reconcile.flag_stranded()
-    return flagged, comment, add_label
+    return flagged, comment, add_label, state
 
 
 # --------------------------------------------------------------------------
@@ -139,7 +160,7 @@ def test_planning_card_without_a_repo_label_is_not_flagged():
     WATCHDOG_MINUTES: the no-route grace period alone would not save this
     card, only taking Planning out of that class does."""
     card = _card(labels=(), minutes_stale=reconcile.WATCHDOG_MINUTES + 15)
-    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    flagged, comment, add_label, state = _run_watchdog([card], bodies=[])
     assert flagged == set()
     comment.assert_not_called()
     add_label.assert_not_called()
@@ -152,7 +173,7 @@ def test_planning_card_with_an_off_map_repo_label_is_not_flagged():
         labels=("repo:ghost-product",),
         minutes_stale=reconcile.WATCHDOG_MINUTES + 15,
     )
-    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    flagged, comment, add_label, state = _run_watchdog([card], bodies=[])
     assert flagged == set()
     comment.assert_not_called()
     add_label.assert_not_called()
@@ -169,7 +190,7 @@ def test_planner_created_child_in_planning_is_not_flagged_for_a_missing_receipt(
         labels=("repo:agent-bureau", "agent:engineer"),
         minutes_stale=reconcile.WATCHDOG_MINUTES + 15,
     )
-    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    flagged, comment, add_label, state = _run_watchdog([card], bodies=[])
     assert flagged == set()
     comment.assert_not_called()
     add_label.assert_not_called()
@@ -187,15 +208,22 @@ def test_planning_is_not_a_watchdog_lane():
 # --------------------------------------------------------------------------
 def test_card_stuck_in_planning_past_its_own_threshold_is_surfaced():
     """A card that has sat in Planning with nothing happening to it is still
-    a strand — Planning just owes a classification rather than a receipt."""
+    a strand — Planning just owes a classification rather than a receipt.
+
+    SURFACED IS NOW A MOVE (DRE-4124). The receipt is unchanged and still
+    opens the notice; what changed is what follows it — the card is escalated
+    into the CEO's queue instead of collecting a label in a lane nothing
+    watches. `tests/test_stalled_planning_escalates.py` owns that behaviour;
+    this asserts the flag itself still fires and still says what it saw."""
     card = _card(labels=(), minutes_stale=reconcile.PLANNING_MINUTES + 5)
-    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    flagged, comment, add_label, state = _run_watchdog([card], bodies=[])
     assert flagged == {"DRE-2736"}
-    body = comment.call_args.args[1]
+    body = comment.call_args_list[0].args[1]
     assert body.startswith(f"🚨 {reconcile.WATCHDOG_TAG}:")
     assert str(reconcile.PLANNING_MINUTES) in body
     assert "Planning" in body, "the notice must name the lane it observed"
-    add_label.assert_called_once_with("DRE-2736", reconcile.HOLD_LABEL)
+    add_label.assert_not_called()
+    state.assert_called_once_with("DRE-2736", reconcile.ESCALATED_STATE)
 
 
 def test_the_dre_1978_shape_is_still_caught():
@@ -207,9 +235,9 @@ def test_the_dre_1978_shape_is_still_caught():
         labels=("repo:ghost-product", "agent:planner"),
         minutes_stale=7 * 24 * 60,
     )
-    flagged, comment, _ = _run_watchdog([card], bodies=[])
+    flagged, comment, *_ = _run_watchdog([card], bodies=[])
     assert flagged == {"DRE-1978"}
-    assert "Planning" in comment.call_args.args[1]
+    assert "Planning" in comment.call_args_list[0].args[1]
 
 
 def test_planning_threshold_is_its_own_and_longer():
@@ -221,7 +249,7 @@ def test_planning_threshold_is_its_own_and_longer():
 
 def test_planning_card_under_its_own_threshold_is_left_alone():
     card = _card(labels=(), minutes_stale=reconcile.PLANNING_MINUTES - 5)
-    flagged, comment, add_label = _run_watchdog([card], bodies=[])
+    flagged, comment, add_label, state = _run_watchdog([card], bodies=[])
     assert flagged == set()
     comment.assert_not_called()
     add_label.assert_not_called()
@@ -231,7 +259,7 @@ def test_a_live_planner_run_keeps_the_card_fresh():
     """Proof-of-life is what bumps updatedAt: every receipt the planner posts
     resets the clock, so a run in flight can never trip the rule."""
     card = _card(labels=("repo:agent-bureau", "agent:planner"), minutes_stale=1)
-    flagged, comment, _ = _run_watchdog(
+    flagged, comment, *_ = _run_watchdog(
         [card],
         bodies=["🧠 model-attempt: claude-opus-4-8 — planner agent starting."],
     )
@@ -245,7 +273,7 @@ def test_a_live_planner_run_keeps_the_card_fresh():
 def test_planning_flag_is_once_ever():
     """The WATCHDOG_TAG comment is the idempotency marker for BOTH rules."""
     card = _card(minutes_stale=7 * 24 * 60)
-    flagged, comment, add_label = _run_watchdog(
+    flagged, comment, add_label, state = _run_watchdog(
         [card], bodies=[f"🚨 {reconcile.WATCHDOG_TAG}: planning has produced nothing …"]
     )
     assert flagged == set()
@@ -255,7 +283,7 @@ def test_planning_flag_is_once_ever():
 
 def test_held_planning_card_is_never_spammed():
     card = _card(labels=(reconcile.HOLD_LABEL,), minutes_stale=7 * 24 * 60)
-    flagged, comment, add_label = _run_watchdog([card])
+    flagged, comment, add_label, state = _run_watchdog([card])
     assert flagged == set()
     comment.assert_not_called()
     add_label.assert_not_called()
@@ -265,7 +293,7 @@ def test_hand_built_planning_card_is_not_flagged():
     """DRE-2524's exemption covers the new rule too: nothing is being planned
     by the pipeline on work a human is building by hand."""
     card = _card(labels=(reconcile.HAND_BUILT_LABEL,), minutes_stale=7 * 24 * 60)
-    flagged, comment, add_label = _run_watchdog([card])
+    flagged, comment, add_label, state = _run_watchdog([card])
     assert flagged == set()
     comment.assert_not_called()
     add_label.assert_not_called()

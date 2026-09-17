@@ -114,6 +114,9 @@ class _Board:
         self.states: list[tuple[str, str]] = []
         self.added: list[tuple[str, str]] = []
         self.removed: list[tuple[str, str]] = []
+        #: Every write in the order it was made, so "the question lands before
+        #: the card moves" is asserted against the sequence, not assumed.
+        self.events: list[str] = []
         self.prs: dict[str, dict] = {}
         for card in self.cards:
             self.comments[card["identifier"]] = [
@@ -158,10 +161,12 @@ class _Board:
 
     def cmd_comment(self, ident, body, *rest):
         self.posted.append((ident, body))
+        self.events.append("comment")
         self.comments[ident].append({"body": body, "createdAt": _iso(0)})
 
     def cmd_state(self, ident, state, *rest):
         self.states.append((ident, state))
+        self.events.append("state")
         self.card(ident)["state"]["name"] = state
 
     def add_label(self, ident, label):
@@ -269,13 +274,8 @@ class TestTheWatchdogEscalatesInsteadOfLabelling:
         """`escalate`'s rule, inherited: a move without the question is a
         silent park, and the CEO sees something appear with nothing to answer."""
         board = _Board([_card()])
-        order: list[str] = []
-        with patch.object(reconcile.linear_ops, "cmd_comment",
-                          side_effect=lambda i, b, *a: order.append("comment")):
-            with patch.object(reconcile.linear_ops, "cmd_state",
-                              side_effect=lambda i, s, *a: order.append("state")):
-                board.run(reconcile.flag_stalled_planning)
-        assert order and order.index("comment") < order.index("state")
+        board.run(reconcile.flag_stalled_planning)
+        assert board.events.index("comment") < board.events.index("state")
 
     def test_the_receipt_is_still_posted_so_the_hold_stays_readable(self):
         """The watchdog's own receipt is the once-ever idempotency marker AND

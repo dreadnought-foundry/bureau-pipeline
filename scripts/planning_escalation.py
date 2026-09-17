@@ -130,6 +130,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402
@@ -344,7 +345,8 @@ def refusal(reason: str | None) -> str | None:
 
 
 def escalation_comment(identifier: str, reason: str | None,
-                       transport: bool = False, rewrite: bool = False) -> str:
+                       transport: bool = False, rewrite: bool = False,
+                       stalled: bool = False) -> str:
     """The note that IS the escalation. One card, one of these.
 
     Written to `standards/comms.md`: purpose in the first sentence, the reason
@@ -368,9 +370,24 @@ def escalation_comment(identifier: str, reason: str | None,
     to do the one thing the bound exists to stop. So the wrapper branches where
     it makes a claim, on the flag the decision already published, rather than
     re-reading the text to guess which kind of park this is.
+
+    `stalled` is DRE-4124's arrival, and it is the same lesson a fourth time.
+    The sweep's Planning watchdog now takes this exit, and over a card nothing
+    has touched for hours the default opening — "the reasoning itself is the
+    deliverable here" — is a claim nobody made: no agent read the card and
+    decided that, the card simply went quiet. What is true is that planning
+    produced no decision and none is coming on its own, so that is what it
+    says. The ask is the same as the default's, because the remedy is.
     """
     lane = destination()
-    if rewrite:
+    if stalled:
+        opening = (
+            f"{ESCALATION_MARK} {ESCALATION_TAG}: {identifier} has been sitting "
+            "where new work is planned with nothing happening to it, and needs "
+            "you to look — no decision about what this card is or where it goes "
+            "was ever recorded, and none is coming on its own."
+        )
+    elif rewrite:
         opening = (
             f"{REWRITE_MARK} {ESCALATION_TAG}: {identifier} has been sent back "
             "as many times as this route allows, and what it needs now is a "
@@ -541,21 +558,79 @@ def in_escalation_segment(name: str, contract: dict | None = None) -> bool:
         return False
 
 
-def moved_on(issue: dict, comment_bodies, contract: dict | None = None) -> str | None:
+def comment_records(comments) -> list:
+    """`[(body, created_at_or_None)]` — the one normaliser for this module.
+
+    Callers hand this module either bare bodies (`linear_ops.comment_bodies`)
+    or the dated records the board read already carries
+    (`linear_ops.comment_timeline`, `reconcile.card_comment_records`). Both are
+    read here so no caller has to know which shape the reader it used returns,
+    and a body with no date carries None rather than a guessed instant.
+    """
+    out: list = []
+    for item in comments or ():
+        if isinstance(item, dict):
+            out.append((
+                item.get("body") or "",
+                item.get("createdAt") or item.get("created_at") or None,
+            ))
+        else:
+            out.append((item or "", None))
+    return out
+
+
+def _instant(value: str | None):
+    """An ISO instant as a datetime, or None when it cannot be read.
+
+    Parsed rather than string-compared: Linear writes milliseconds and Python
+    writes microseconds, so `"…11.123Z" > "…11.123456Z"` lexically and a clock
+    built on that is wrong by a fraction of a second in the wrong direction.
+    """
+    try:
+        at = datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    # A naive instant would raise on comparison, which would strand the card
+    # over a missing offset. Linear writes UTC; so does every clock here.
+    return at if at.tzinfo is not None else at.replace(tzinfo=UTC)
+
+
+def moved_on(issue: dict, comments, contract: dict | None = None, *,
+             attempt_since: str | None = None) -> str | None:
     """Why this card is past the escalation, or None when it is still ours.
 
     Two facts, and both are said when both hold: the lane the board shows the
     card in is outside the segment (`in_escalation_segment`), and/or the card
-    already carries a routing verdict — read by `routing_verdict`'s own reader,
-    never matched here, so a note that merely quotes one carries none. A
-    verdict means the classification this escalation stands in for has already
-    been answered, so the card is past this step whatever lane it is in.
+    carries a routing verdict FROM THE CURRENT ATTEMPT — read by
+    `routing_verdict`'s own reader, never matched here, so a note that merely
+    quotes one carries none. Such a verdict means the classification this
+    escalation stands in for has just been answered and the move is on its way,
+    so the card is past this step whatever lane it is in (DRE-3604: the answer
+    was stamped at 18:05:33 and the hand move landed five seconds later).
+
+    THE VERDICT IS EVIDENCE WITH A SHELF LIFE (DRE-4124). Read without one it
+    said the opposite of the truth on the cards that needed it most: on
+    2026-09-16 at 23:42 PT it stood DRE-2415 down on a verdict from 09-08 while
+    the board plainly showed the card where this escalation had found it, and
+    the card stayed there — 35 days, nobody asked anything. So `attempt_since`
+    is the instant the CURRENT attempt began, and a verdict older than it
+    belongs to an attempt that ENDED: stale evidence, not movement, and the
+    card's own LANE is then the only fact. A verdict that cannot be dated at
+    all is stale too — `in_escalation_segment`'s rule applied to a clock, since
+    the only thing this answer licenses is walking away from a card nobody has
+    been asked about. Callers that do not know when the attempt began pass
+    nothing and get the DRE-3654 reading unchanged.
     """
     lane = ((issue or {}).get("state") or {}).get("name") or ""
     facts: list[str] = []
     if not in_escalation_segment(lane, contract):
         facts.append(f"it is in {lane or 'no lane the board reports'}")
-    verdicts = routing_verdict.verdicts_on(comment_bodies)
+    started = _instant(attempt_since)
+    current = [
+        body for body, at in comment_records(comments)
+        if started is None or ((_instant(at) or started) > started)
+    ]
+    verdicts = routing_verdict.verdicts_on(current)
     if verdicts:
         facts.append(
             "it already carries a routing verdict (" + ", ".join(verdicts) + ")"
@@ -565,7 +640,7 @@ def moved_on(issue: dict, comment_bodies, contract: dict | None = None) -> str |
 
 def stood_down_comment(identifier: str, where: str, reason: str | None,
                        withdrawn: bool = False, transport: bool = False,
-                       rewrite: bool = False) -> str:
+                       rewrite: bool = False, stalled: bool = False) -> str:
     """The record a card gets when the escalation reached it too late.
 
     `where` is `moved_on()`'s sentence. `withdrawn` is the crash-between-the-
@@ -593,9 +668,11 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
     why = refusal(reason)
     # `rewrite` sits with `transport` rather than with the question: neither one
     # ASKED anything, so "what this run had to ask" over either of them is the
-    # same wrong sentence the rewrite park was flagged for (DRE-4058).
-    heading = "**What this run had found:**" if (transport or rewrite) else \
-        "**What this run had to ask:**"
+    # same wrong sentence the rewrite park was flagged for (DRE-4058). `stalled`
+    # sits with them for the same reason (DRE-4124) — a sweep that noticed a
+    # quiet card had a finding, not a question.
+    heading = "**What this run had found:**" \
+        if (transport or rewrite or stalled) else "**What this run had to ask:**"
     if why is None:
         lines += [f"{heading} {(reason or '').strip()}", ""]
     elif not (reason or "").strip():
@@ -611,7 +688,9 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
 
 
 def escalate(linear_ops, identifier: str, reason: str | None,
-             transport: bool = False, rewrite: bool = False) -> Outcome:
+             transport: bool = False, rewrite: bool = False, *,
+             stalled: bool = False, attempt_since: str | None = None,
+             comments=None) -> Outcome:
     """Post the escalation and park the card — if the card is still ours.
 
     The lane is read LIVE first (`fresh=True`, never the command's memo — the
@@ -631,11 +710,20 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     converge rather than turn one decision into a thread — and the move is
     re-asserted every time, because the crash this guards against is the one
     between the two writes.
+
+    `attempt_since` dates the current planning attempt for `moved_on` above,
+    and `comments` lets a caller that has ALREADY read this card's thread hand
+    it over instead of buying it again — the sweep reads every card's comment
+    window inline with its one board read (DRE-2929), and a per-card fetch here
+    would put back exactly the request that read exists to remove. The LANE is
+    still read live either way: that is the read DRE-3604 was wrong by, and it
+    is the fact this decision now turns on.
     """
     lane = destination()
     issue = linear_ops.get_issue(identifier, fresh=True)
-    bodies = linear_ops.comment_bodies(identifier)
-    elsewhere = moved_on(issue, bodies)
+    bodies = (linear_ops.comment_bodies(identifier)
+              if comments is None else comments)
+    elsewhere = moved_on(issue, bodies, attempt_since=attempt_since)
     already = 0
     try:
         already = linear_ops.count_comments(identifier, ESCALATION_TAG)
@@ -654,7 +742,7 @@ def escalate(linear_ops, identifier: str, reason: str | None,
         else:
             linear_ops.cmd_comment(identifier, stood_down_comment(
                 identifier, elsewhere, reason, withdrawn=bool(already),
-                transport=transport, rewrite=rewrite))
+                transport=transport, rewrite=rewrite, stalled=stalled))
             posted = True
         return Outcome(parked=False, posted=posted, stood_down=elsewhere)
     if already:
@@ -662,7 +750,7 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     else:
         linear_ops.cmd_comment(
             identifier,
-            escalation_comment(identifier, reason, transport, rewrite))
+            escalation_comment(identifier, reason, transport, rewrite, stalled))
         posted = True
     linear_ops.cmd_state(identifier, lane)
     return Outcome(parked=True, posted=posted, stood_down=None)

@@ -118,7 +118,7 @@ import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -167,6 +167,12 @@ import plan_critic  # noqa: E402
 # longer ask through it — the relay dispatches on the lane entry (DRE-3659,
 # DRE-3664).
 import plan_run  # noqa: E402
+# DRE-2848/DRE-4124: ONE route out of the planning segment for a card the
+# pipeline cannot move on its own — it posts the plain-English reason and parks
+# the card in the CEO's decision queue. The stalled-Planning watchdog below
+# takes it rather than labelling a card in place and leaving it in a lane
+# nothing watches.
+import planning_escalation  # noqa: E402
 # DRE-2825/2826: ONE writer for an act's receipt. Every notice this sweep posts
 # for one of the ten acts declared in config/pipeline-acts.json goes through
 # receipt(), which returns the body BYTE-IDENTICALLY and appends the trailer.
@@ -1112,8 +1118,21 @@ def card_comment_bodies(card: dict) -> list[str]:
     this list as "the card's recent history, newest last", and on a card past
     fifty comments the untouched window is the OLDEST fifty.
     """
+    return [record["body"] for record in card_comment_records(card)]
+
+
+def card_comment_records(card: dict) -> list[dict]:
+    """The same window as `card_comment_bodies`, with each comment's DATE.
+
+    `{"body", "createdAt"}` per comment, oldest→newest — the shape
+    `linear_ops.comment_timeline` returns, off the query that fetched the card
+    and therefore for zero requests. Two readers below need the clock rather
+    than only the text: the repair pass reads when the watchdog's receipt
+    landed, and `planning_escalation.moved_on` reads whether a routing verdict
+    belongs to the current planning attempt or to one that ended (DRE-4124).
+    """
     return [
-        node.get("body") or ""
+        {"body": node.get("body") or "", "createdAt": node.get("createdAt") or ""}
         for node in linear_ops.window_nodes(card.get("comments"))
     ]
 
@@ -1437,10 +1456,27 @@ def flag_stalled_planning() -> set[str]:
     seven days back.
 
     Same manners as flag_stranded: held and hand-built cards are skipped, the
-    repo filter leaves another repo's card to that repo's own sweep, the
-    WATCHDOG_TAG comment is the once-ever idempotency marker, and flagging is
-    one plain-English comment plus HOLD_LABEL — no state move, no cancel.
-    Returns the identifiers flagged this sweep.
+    repo filter leaves another repo's card to that repo's own sweep, and the
+    WATCHDOG_TAG comment is the once-ever idempotency marker.
+
+    FLAGGING IS AN ESCALATION, NOT A LABEL (DRE-4124). It used to be one
+    plain-English comment plus HOLD_LABEL and no state move, and that label was
+    a permanent freeze: this watchdog skips a held card on later passes,
+    promotion skips it, limit recovery skips it, the console repo's operator
+    runner skips it — and Planning is deliberately outside the nudge loop, so
+    nothing else was watching either. Measured on 2026-09-16/17, 13 cards were
+    sitting in Planning under a bot-applied hold, the oldest for 35 days,
+    looking like work in flight while nobody was ever asked anything.
+
+    The remedy is the one DRE-2687 already wrote one lane upstream, for exactly
+    this failure: *"Past it the card MOVES to Green Light. Not a report… A
+    report is a record; a move is a gate."* So the card takes the planning
+    segment's own escalation exit — `planning_escalation.escalate`, which posts
+    the reason in business terms and parks the card in the CEO's decision
+    queue — and this watchdog applies no label at all. `needs-human` goes back
+    to meaning what a person put there.
+
+    Returns the identifiers escalated this sweep.
 
     THE REPO FILTER IS flag_stranded's, EXACTLY (DRE-2929), and the reason it
     reads oddly here is the reason it was missing: a card in Planning usually
@@ -1480,8 +1516,12 @@ def flag_stalled_planning() -> set[str]:
         if age_minutes(card["updatedAt"]) < PLANNING_MINUTES:
             continue  # planning is young — let it produce its classification
         # Off the card the board read already returned (DRE-2929): no per-card
-        # request, however many cards Planning holds.
-        bodies = card_comment_bodies(card)
+        # request, however many cards Planning holds. The DATES come with them
+        # and are handed to the escalation below, which needs to know whether a
+        # verdict on this card belongs to the attempt that just went quiet or
+        # to one that ended weeks ago (DRE-4124).
+        records = card_comment_records(card)
+        bodies = [record["body"] for record in records]
         if routing_verdict.is_parked(bodies):
             # DRE-2724, same rule as flag_stranded: PARKED is a decision, not a
             # stall. A parked card in Planning owes nobody a classification —
@@ -1493,21 +1533,226 @@ def flag_stalled_planning() -> set[str]:
             continue
         if any(WATCHDOG_TAG in b for b in bodies):
             continue  # flagged once already — idempotent forever
-        reason = (
-            "planning has produced nothing. Observed: this card has sat in "
-            f"Planning for {PLANNING_MINUTES}+ minutes with nothing posted or "
-            "changed on it — a card in Planning owes a decision about what it "
-            "is and where it goes, and no decision has been recorded. Why is "
-            "not known from here. If planning is genuinely still going, remove "
-            f"the '{HOLD_LABEL}' label and it will carry on; otherwise this "
-            "card needs a human to look."
-        )
+        reason = stalled_planning_reason()
         linear_ops.cmd_comment(ident, pipeline_act.receipt(
             "card-stranded", f"🚨 {WATCHDOG_TAG}: {reason}"))
-        linear_ops.add_label(ident, HOLD_LABEL)
+        try:
+            planning_escalation.escalate(
+                linear_ops, ident, reason, stalled=True,
+                attempt_since=planning_attempt_since(), comments=records,
+            )
+        except linear_ops.LinearError as e:
+            # A move that did not happen NEVER reads as done (the Intake gate's
+            # rule): recorded as a write failure, so the sweep exits red for the
+            # medic and the next pass re-asserts the park.
+            _write_failures.append(f"{ident} planning escalation: {e}")
+            print(
+                f"ERROR: failed to escalate {ident} out of Planning: {e}",
+                file=sys.stderr,
+            )
+            continue
         flagged.add(ident)
-        print(f"watchdog: {ident} in Planning flagged (no-classification)")
+        print(
+            f"watchdog: {ident} in Planning escalated to {ESCALATED_STATE} "
+            "(no-classification)"
+        )
     return flagged
+
+
+def stalled_planning_reason() -> str:
+    """What the watchdog says about a card Planning went quiet on.
+
+    One definition, because two writers say it: the watchdog when it first
+    notices, and the repair pass below when it clears a card the OLD watchdog
+    labelled and left. Plain English and no remedy addressed to the reader —
+    it used to close by telling them to clear the hold label, and since
+    DRE-4124 nothing applies one, so that sentence would ask a person to undo
+    something that never happened.
+    """
+    return (
+        "planning has produced nothing. Observed: this card has sat in "
+        f"Planning for {PLANNING_MINUTES}+ minutes with nothing posted or "
+        "changed on it — a card in Planning owes a decision about what it "
+        "is and where it goes, and no decision has been recorded. Why is "
+        "not known from here. If planning is genuinely still going, move the "
+        "card back to Planning and it will carry on."
+    )
+
+
+def planning_attempt_since() -> str:
+    """When the planning attempt this sweep is judging began, ISO (DRE-4124).
+
+    `planning_escalation.moved_on` reads a routing verdict on a card as proof
+    that classification has answered and the card is on its way out. On a card
+    the age gate above has just measured as IDLE for the whole window, that
+    reading is wrong by construction: nothing has been posted or changed on the
+    card in that stretch, so any verdict it carries was stamped by an attempt
+    that ended. It stood DRE-2415 down on 2026-09-16 on a verdict from 09-08,
+    and the card stayed in Planning — 35 days, nobody asked anything.
+
+    So the attempt is the window the gate measured, and it is the LANE'S OWN
+    stall window rather than a second number invented here: the same
+    `PLANNING_MINUTES` the card was judged idle against, read back as an
+    instant. A verdict inside it is classification speaking now; anything
+    older belongs to an attempt nothing has acted on.
+    """
+    return (
+        (datetime.now(UTC) - timedelta(minutes=PLANNING_MINUTES))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def watchdog_receipt_on(records) -> dict | None:
+    """The watchdog's own receipt on this card, or None (DRE-4124).
+
+    THE EVIDENCE THAT A HOLD WAS BOT-APPLIED, and the only evidence there is:
+    the label arrived WITH this comment, so a held card carrying one was held
+    by the sweep and a held card carrying none was held by a person. Linear
+    does not report who attached a label, and inferring it from anything else
+    — the card's age, its lane, the absence of a human comment — would be the
+    console-honesty failure this repair pass exists to clean up after.
+
+    Anchored at the START of a body, like every other marker read here: a
+    notice that QUOTES the tag is not the receipt. Newest first, because what
+    the caller wants is the most recent flag and when it landed.
+    """
+    prefix = f"🚨 {WATCHDOG_TAG}:"
+    for record in reversed(list(records or ())):
+        if (record.get("body") or "").lstrip().startswith(prefix):
+            return record
+    return None
+
+
+def watchdog_stated_reason(record: dict | None) -> str | None:
+    """What the watchdog said when it flagged the card, verbatim — or None.
+
+    The receipt's body up to the act trailer `pipeline_act.receipt` appended.
+    Taken from the card rather than recomposed so the escalation carries what
+    the card was actually told, whatever the wording was on the day it was
+    flagged.
+    """
+    prefix = f"🚨 {WATCHDOG_TAG}:"
+    body = ((record or {}).get("body") or "").lstrip()
+    if not body.startswith(prefix):
+        return None
+    return body[len(prefix):].split("\n\n")[0].strip() or None
+
+
+def frozen_hold_reason(stated: str | None, days: float) -> str:
+    """What the CEO reads on a card the old watchdog labelled and left.
+
+    Plain English, and it says the true thing rather than the flattering one:
+    this card was flagged, a label was attached, and nobody was ever asked
+    anything. The words the watchdog used at the time are carried through when
+    they are fit to show — `planning_escalation.jargon` is the same reader the
+    escalation's own write seam uses, so a reason that would be refused there
+    is dropped here instead of costing the reader the whole note.
+    """
+    note = (
+        f"This card was flagged as stuck about {days:.0f} days ago and marked "
+        "for a person to look at, but it was never actually put in front of "
+        "anybody — it stayed where new work is planned, which is a lane nothing "
+        "else watches, so it has been sitting still ever since. It is in your "
+        "queue now so the decision it has been waiting for can be made."
+    )
+    if stated and not planning_escalation.jargon(stated):
+        note += f" What was said at the time: {stated}"
+    return note
+
+
+def repair_planning_holds() -> set[str]:
+    """Clear the backlog the old stalled-Planning flag created (DRE-4124).
+
+    Thirteen cards were sitting in Planning under a hold the sweep itself
+    applied, the oldest for 35 days, with nothing coming for any of them. The
+    writer is fixed above; this is the one pass that repairs what it already
+    did, and it is deliberately narrow — four conditions, every one of them
+    evidence rather than inference:
+
+      * the card is in Planning — the ONE shape that had no move. The six
+        other writers of this label all park the card in Backlog or Triage,
+        where a person is looking, and none of them is this pass's business;
+      * it carries HOLD_LABEL;
+      * it carries the watchdog's own receipt, which is how "bot-applied" is
+        known (`watchdog_receipt_on`). A hold no receipt explains is a
+        person's, and a person's hold is left exactly where they put it;
+      * it has no OPEN pull request. Somebody building the card is the one
+        state in which nothing here should touch it, and that is read from
+        GitHub rather than guessed from the lane.
+
+    Each survivor is escalated to the decision queue with its reason, once, the
+    label is removed, and the card is printed. IDEMPOTENT BY CONSTRUCTION, the
+    same way the Intake age-out is: an escalated card is no longer in Planning,
+    so the next pass does not see it at all — and `escalate` is keyed on its own
+    tag underneath that, so even a card dragged back does not get a second note.
+
+    The repo filter is `flag_stalled_planning`'s, exactly, and for its reason:
+    a card whose slug is on the rail and is not this repo's belongs to that
+    repo's sweep, while an unlabelled card is nobody's in particular and stays
+    everybody's.
+
+    Returns the identifiers repaired this pass.
+    """
+    repaired: set[str] = set()
+    for card in active_cards(PLANNING_LANE):
+        ident, state = card["identifier"], card["state"]["name"]
+        if state != "Planning" or not held(card):
+            continue
+        slug = card_repo(card)
+        if slug is not None and slug in validate_card.VALID_SLUGS and slug != REPO_SLUG:
+            continue  # that repo's own sweep applies this same rule to its cards
+        records = card_comment_records(card)
+        receipt = watchdog_receipt_on(records)
+        if receipt is None:
+            print(
+                f"planning-hold: {ident} is held with no {WATCHDOG_TAG} receipt "
+                "on it — that is a person's hold, left where they put it"
+            )
+            continue
+        try:
+            pr = pr_for(ident)
+        except ReconcileReadError as e:
+            # An unreadable answer is NOT "no PR" (DRE-2034): act on nothing for
+            # this card, finish the pass, and the sweep exits red for the medic.
+            _read_failures.append(f"planning-hold {ident}: {e}")
+            print(f"ERROR: planning-hold: could not read {ident}'s PR: {e}",
+                  file=sys.stderr)
+            continue
+        if pr and pr.get("state") == "OPEN":
+            print(
+                f"planning-hold: {ident} has an open pull request "
+                f"(#{pr.get('number')}) — somebody is on it; left alone"
+            )
+            continue
+        flagged_at = receipt.get("createdAt") or card["updatedAt"]
+        reason = frozen_hold_reason(
+            watchdog_stated_reason(receipt), age_minutes(flagged_at) / 1440)
+        try:
+            outcome = planning_escalation.escalate(
+                linear_ops, ident, reason, stalled=True,
+                attempt_since=planning_attempt_since(), comments=records,
+            )
+            if outcome.parked:
+                # LAST, and only on a park: the label is what stopped every
+                # other reader touching this card, so it is released once the
+                # card is somewhere a person will actually see it.
+                linear_ops.remove_label(ident, HOLD_LABEL)
+        except linear_ops.LinearError as e:
+            _write_failures.append(f"{ident} planning-hold repair: {e}")
+            print(f"ERROR: failed to repair {ident}'s planning hold: {e}",
+                  file=sys.stderr)
+            continue
+        if not outcome.parked:
+            print(f"planning-hold: {ident} was left where it is — {outcome.stood_down}")
+            continue
+        repaired.add(ident)
+        print(
+            f"planning-hold: {ident} repaired — held {age_minutes(flagged_at) / 1440:.1f}d "
+            f"in Planning with no move, escalated to {ESCALATED_STATE} and "
+            f"the '{HOLD_LABEL}' label removed"
+        )
+    return repaired
 
 
 # Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
@@ -6888,6 +7133,22 @@ def main(
             # exits red, so medic sees it and the next sweep retries.
             _read_failures.append(f"intake: {e}")
             print(f"ERROR: escalate_aged_intake: {e}", file=sys.stderr)
+        # The repair pass for the holds the old watchdog left behind
+        # (DRE-4124), immediately after the two gates that now MOVE a quiet
+        # card, because it answers the same question for the cards those gates
+        # used only to label. Full sweeps only, and its own try for the Intake
+        # gate's reason: a GitHub read that fails must not cost the sweep the
+        # rest of its work. Self-limiting — nothing applies this hold in this
+        # lane any more, so the set it walks drains to empty and stays there.
+        try:
+            with _phase("repair_planning_holds"):
+                repair_planning_holds()
+        except ReconcileWriteError as e:
+            _write_failures.append(str(e))
+            print(f"ERROR: repair_planning_holds: {e}", file=sys.stderr)
+        except linear_ops.LinearError as e:
+            _read_failures.append(f"planning-hold: {e}")
+            print(f"ERROR: repair_planning_holds: {e}", file=sys.stderr)
     # Automation cards (DRE-3665) are out of `mine` — and `mine` is BOTH the
     # WIP base promotion is budgeted against and the list the nudge loop
     # walks. A dependabot card has no agent run to count and no `agent/`
