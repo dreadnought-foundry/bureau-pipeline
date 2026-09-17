@@ -678,6 +678,25 @@ PROSE_DEFECT_RED_MINUTES = 120
 GH_READ_ATTEMPTS = 3
 GH_READ_BACKOFF_SECONDS = (15, 45)
 
+#: And how many retries the WHOLE sweep may spend. Per-read the budget above is
+#: the card's; this is the bound `standards/vendor-boundaries.md` Q5 requires of
+#: every retry at a vendor boundary, and it exists because `pr_for` runs once
+#: PER CARD: a genuinely empty hourly bucket refuses every read of the sweep,
+#: not one. Unbounded, a dozen refused reads would spend a dozen minutes of
+#: waiting and the sweep's 10-minute job timeout would KILL the run — turning
+#: today's loud, fast, correctly-filed failure into a hung one that never
+#: prints its ledger, which is strictly worse than what DRE-4109 set out to
+#: fix. Six retries is the worst case this sweep will wait for — about three
+#: minutes, leaving seven — and it is spent only by refusals: a sweep of clean
+#: reads spends none, and six separate one-blip reads all get their retry.
+#: Past it, gh_read behaves exactly as it did before this card. (DRE-1921:
+#: re-running against an exhausted limit cannot succeed and deepens it.)
+GH_READ_RETRY_BUDGET = 6
+
+#: Retries spent by THIS process. Module state, like the failure ledgers above:
+#: one sweep is one process.
+_gh_read_retries_spent = 0
+
 #: GitHub's rate-limit wording, and ONLY that (DRE-4109). Deliberately narrower
 #: than medic_classify's log-scanning patterns: this one decides whether to
 #: spend another request, so it matches the refusals that a wait actually fixes
@@ -725,7 +744,13 @@ def gh_read(*args: str) -> str:
     `_actions_read()` run under GH_DISPATCH_TOKEN — a different GitHub quota
     from the App installation that was refused — and their contract stays
     "answer None and fail closed", never "raise".
+
+    Bounded twice: three attempts per read, and GH_READ_RETRY_BUDGET retries
+    per sweep. The second bound is there because a refusal is rarely alone —
+    `pr_for` runs once per card, so an empty bucket refuses every read of the
+    sweep, and unbounded waiting would run the job into its own timeout.
     """
+    global _gh_read_retries_spent
     for attempt in range(1, GH_READ_ATTEMPTS + 1):
         p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
             ["gh", *args], capture_output=True, text=True, check=False
@@ -733,10 +758,21 @@ def gh_read(*args: str) -> str:
         if p.returncode == 0:
             return p.stdout.strip()
         stderr = p.stderr.strip()
-        if attempt >= GH_READ_ATTEMPTS or not _is_rate_limit_refusal(stderr):
+        retryable = attempt < GH_READ_ATTEMPTS and _is_rate_limit_refusal(stderr)
+        if retryable and _gh_read_retries_spent >= GH_READ_RETRY_BUDGET:
+            # Say it once per read, so nobody reads the missing retry line as
+            # the retry having silently stopped working.
+            print(
+                f"gh-read: this sweep's retry budget of {GH_READ_RETRY_BUDGET} "
+                f"is spent — `gh {' '.join(args)}` was refused for rate limit "
+                "and is NOT being retried; the bucket is empty, not blipping"
+            )
+            retryable = False
+        if not retryable:
             raise ReconcileReadError(
                 f"gh {' '.join(args)} failed rc={p.returncode}: {stderr[:400]}"
             )
+        _gh_read_retries_spent += 1
         wait = GH_READ_BACKOFF_SECONDS[attempt - 1]
         # ONE line per retry, to the run log, naming the command and where we
         # are in the budget — this is the whole of the visibility the CEO asked
