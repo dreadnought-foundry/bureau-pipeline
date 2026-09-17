@@ -213,6 +213,65 @@ def test_the_lead_line_names_no_empty_cycle_either():
     assert "for cycle ," not in text
 
 
+# --------------------------------------------------------------------------
+# the other copy of the pattern IN THIS REPO — the drain's own reader
+# --------------------------------------------------------------------------
+#
+# `render_proposal` and `parse_proposal_comment` are two halves of one
+# contract, and the parser had the console's bug exactly: `cycle\s+(.*)`, and
+# `\s+` crosses a blank line. The console's copy is the one this card cannot
+# touch; this one it must, in the same change.
+
+#: The comment as it stands on DRE-2840 today — the head of it, verbatim. Old
+#: comments do not re-render, so the reader has to survive one whatever the
+#: writer does now.
+INCIDENT_COMMENT = (
+    f"{groomer.MARK} {groomer.PROPOSAL_TAG}: {INCIDENT_ID}\n"
+    "\n"
+    f"# Groom proposal `{INCIDENT_ID}` — cycle \n"
+    "\n"
+    "0 cards of 0 in Intake are proposed for cycle , in the order below. "
+    "Nothing moves until you approve it.\n"
+    "\n"
+    "## The batch, in order\n"
+    "\n"
+    "| # | Card | Pri | Repo | Epic | Title | Why |\n"
+    "| -- | -- | -- | -- | -- | -- | -- |\n")
+
+
+def test_the_drains_reader_takes_no_cycle_from_the_next_line():
+    """Read the 2026-09-04 comment and the parser used to answer "cycles 0 and
+    0" — two numbers quoted out of the paragraph below the heading. The drain
+    refuses a batch that spans two cycles, so the record was unreadable as well
+    as empty."""
+    record = groomer.parse_proposal_comment(INCIDENT_COMMENT)
+    assert record is not None
+    assert record["id"] == INCIDENT_ID
+    assert record["cycles"] == [], \
+        "the drain read a cycle number out of the line below the heading"
+
+
+def test_the_drains_reader_still_reads_a_real_heading():
+    """Non-vacuous: a parser that gave up on every heading would pass above."""
+    record = groomer.parse_proposal_comment(groomer.proposal_comment(batch()))
+    assert record is not None
+    assert record["cycles"] == [12]
+    assert record["lane"] == "Intake"
+    assert [row["identifier"] for row in record["batch"]] == \
+        [row["identifier"] for row in sorted(batch()["outcomes"]["now"],
+                                             key=lambda r: r["position"])]
+
+
+def test_the_drains_reader_finds_the_lane_on_a_page_with_no_cycle():
+    """The lane line carries the same clause and loses it the same way. The
+    lane is what the drain moves cards OUT of, so a page that no longer names
+    a cycle must still name that."""
+    record = groomer.parse_proposal_comment(groomer.proposal_comment(empty()))
+    assert record is not None
+    assert record["lane"] == "Intake"
+    assert record["cycles"] == []
+
+
 def test_the_lead_line_still_names_a_real_cycle():
     assert ("3 cards of 6 in Intake are proposed for cycle 12, in the order "
             "below.") in groomer.render_proposal(batch())
