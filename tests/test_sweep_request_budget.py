@@ -392,17 +392,24 @@ def _run_sweep(fake) -> FakeLinear:
     return fake
 
 
+#: An Intake card far past any window the lane ever had. A literal since
+#: DRE-4141: the sweep has no opinion about how old an Intake card is any
+#: more, so a fixture that asked the code for one would have nothing to ask.
+_THIRTY_DAYS = 30 * 24 * 60
+
+
 def _fixed_board(scale: int = 1):
     """A board whose every card is one the sweep must LOOK at: stale Todo
     cards with no run receipt (the watchdog's own case, which then makes the
-    nudge loop skip them), stale Planning cards, and aged Intake cards."""
+    nudge loop skip them), stale Planning cards, and long-waiting Intake
+    cards."""
     active = []
     for n in range(4 * scale):
         active.append(_card(f"DRE-{7000 + n}", state="Todo", minutes_stale=600.0))
         active.append(_card(f"DRE-{7300 + n}", state="Planning",
                             minutes_stale=6000.0))
         active.append(_card(f"DRE-{7600 + n}", state="Intake", labels=(),
-                            minutes_stale=reconcile.INTAKE_MAX_AGE_MINUTES + 600))
+                            minutes_stale=_THIRTY_DAYS))
     backlog = [
         _card(f"DRE-{8000 + n}", state="Backlog", labels=("repo:atlas",))
         for n in range(4 * scale)
@@ -438,12 +445,14 @@ def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
 # --------------------------------------------------------------------------
 # 6: the budget itself
 # --------------------------------------------------------------------------
-# What one full sweep may spend on Linear, over ANY board. Two paged reads —
-# the active lanes and the Backlog — plus at most INTAKE_ESCALATION_CAP stated-
-# reason reads, which are capped per sweep by construction. Raising this number
-# is a decision, and it is made here rather than discovered by a quota
+# What one full sweep may spend on Linear, over ANY board. TWO paged reads —
+# the active lanes and the Backlog — and nothing else. It used to be two plus
+# the Intake age-out's per-card stated-reason reads, capped per sweep by
+# construction; DRE-4141 deleted the age-out, so the lane costs the count it
+# takes off the board read it already paid for and nothing more. Raising this
+# number is a decision, and it is made here rather than discovered by a quota
 # exhaustion at 11am (2026-09-01: 2,500/hr, seven hours of a stopped fleet).
-SWEEP_REQUEST_BUDGET = 2 + reconcile.INTAKE_ESCALATION_CAP
+SWEEP_REQUEST_BUDGET = 2
 
 
 def test_one_sweep_stays_within_the_request_budget():

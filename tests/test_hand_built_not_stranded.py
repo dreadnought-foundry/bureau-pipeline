@@ -299,17 +299,13 @@ _WATCHDOG_OWNERS = {
     "flag_stranded", "flag_stalled_planning", "main", "_flag_hand_built_idle",
 }
 
-#: The Intake gate (DRE-2687) reads hand-built and NOT held, and the difference
-#: is the point of the lane. Hand-built means no classification is coming from
-#: the pipeline, so time spent in Intake is not a strand — the same exemption
-#: every other member of this family honours. `needs-human` is the opposite
-#: case: it says a person owes the card an action, and a card in Intake is
-#: sitting where nobody looks, so the escalation MOVES it into the queue people
-#: actually open rather than leaving it labelled and invisible. Skipping a held
-#: card there would rebuild the hole the gate exists to close, one label wide.
-#: The gate's walk is `_intake_candidates` since DRE-3035 — a HELD sweep reports
-#: how much is behind the pen, which needs the same walk without the moves, so
-#: the two exemptions (hand-built, and now PARKED) live in the walk itself.
+#: THE INTAKE GATE IS NOT IN THIS SET ANY MORE (DRE-4141). It read hand-built
+#: because hand-built meant no classification was coming from the pipeline, so
+#: time spent in Intake was not a strand and the card must not be MOVED. No
+#: card is moved out of Intake for any reason now — `report_intake_depth`
+#: counts the lane and prints one line — and a COUNT that skipped a label would
+#: answer a different question from the one its reader is asking, which is how
+#: big the lane is.
 #: The WIP reader (DRE-3385), and it is the one member of this set that is
 #: neither an alarm nor a dispatch. `counts_against_wip` asks whether the card
 #: occupies one of MAX_WIP's slots, and work no run is coming for occupies
@@ -317,28 +313,29 @@ _WATCHDOG_OWNERS = {
 #: print "WIP at cap — none promoted" for ever, so a person's queue starved the
 #: fleet's. It is in this set rather than spelling the label a second time,
 #: because a second spelling is exactly what this guard exists to catch.
-_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {"_intake_candidates", "counts_against_wip"}
+_HAND_BUILT_OWNERS = _WATCHDOG_OWNERS | {"counts_against_wip"}
 
 
 def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
     """Structural guard, not a sentinel: if a later change wires hand-built
     into a PR-keyed repair path, this says so.
 
-    Four readers in the "would the pipeline start or restart an agent on this
+    Three readers in the "would the pipeline start or restart an agent on this
     card" family: flag_stranded (the alarm), flag_stalled_planning (the same
-    alarm for the Planning lane, DRE-2736), _intake_candidates (the same
-    question for Intake — escalate_aged_intake's own walk, DRE-2687/DRE-3035)
-    and main (the no-PR dispatch the alarm was reporting on). Every PR-level
-    backstop stays label-blind.
+    alarm for the Planning lane, DRE-2736) and main (the no-PR dispatch the
+    alarm was reporting on). Every PR-level backstop stays label-blind.
 
-    The fifth reader is the other direction, and it is why the guard exists
+    The Intake gate was the fourth until DRE-4141 deleted the move it guarded
+    — see the note above the set.
+
+    The fourth reader is the other direction, and it is why the guard exists
     rather than a bare count: _flag_hand_built_idle (DRE-2682) fires ONLY on
     hand-built work — the alarm that replaces what this label suppresses. A
     label that switches off the only thing which would say the work had
     stopped, with nothing put in its place, is what left DRE-2655's finished
     work invisible on a pushed branch for nineteen hours.
 
-    The sixth is `counts_against_wip` — see the note above the set.
+    The fifth is `counts_against_wip` — see the note above the set.
     """
     assert _call_owners("hand_built") == _HAND_BUILT_OWNERS
 
@@ -346,12 +343,12 @@ def test_only_the_watchdog_and_the_sweeps_own_dispatch_consult_the_label():
 def test_the_owner_sweep_can_actually_see_a_call():
     """Guard the guard: a detector that matches nothing would pass forever.
 
-    `held` also pins the other half of the Intake gate's decision — it is NOT
-    in this set, because a `needs-human` card in Intake is exactly a card that
-    belongs in the queue a human opens (see _HAND_BUILT_OWNERS).
     """
     assert _call_owners("held") == _WATCHDOG_OWNERS
-    assert "escalate_aged_intake" not in _call_owners("held")
+    assert "report_intake_depth" not in _call_owners("held"), (
+        "the Intake count consulted a label — it reports how big the lane is, "
+        "and a count with an exemption answers a question nobody asked"
+    )
 
 
 # --------------------------------------------------------------------------

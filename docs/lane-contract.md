@@ -11,7 +11,7 @@ Wave phase reached: **2** — the lane contract asserted by the harness. A claus
 
 | # | Lane | Segment | Stall window |
 | --- | --- | --- | --- |
-| 1 | Intake | planning | 2880 min |
+| 1 | Intake | planning | — |
 | 2 | Planning | planning | 120 min |
 | 3 | Green Light | planning | — |
 | 4 | Backlog | work | — |
@@ -38,7 +38,7 @@ Planning exit is the transition **Green Light → Backlog** — where the second
 | --- | --- | --- |
 | **entrance** | Every writer that creates work writes here first — the relay, the planner, a mid-epic discovery, a human. There is no other valid first lane.  
 _Waiting on: DRE-2680 points every writer at Intake._ | Phase 5 — promised |
-| **exit** | A classification exists: one-off, epic, or wave — or the card has sat here past the lane's own stall window, in which case the sweep moves it to Green Light carrying whatever reason is already stated on it (DRE-2687). Intake is the one planning lane with a timer, because a lane nothing drains is what this wave exists to remove. | Phase 5 — promised |
+| **exit** | A classification exists: one-off, epic, or wave. The way out is the groomer — it proposes a batch, the CEO approves it in Green Light, and the approved batch drains to Planning (groomer.py drain). That is the only exit, and AGE IS NOT ONE: no card is moved out of this lane for being old, this lane carries no stall window, and there is no window of any length in its place (DRE-4141, on the CEO's signed answer of 2026-09-17). The sweep reports how many cards are waiting and how old the oldest is, and moves none of them. | Phase 5 — promised |
 | **writers** | Anything that creates a card, the retroactive pass that moves the legacy Backlog in, and nothing that moves one onward.  
 Permitted writers: `relay`, `plan.yml`, `mid_epic.py`, `linear_ops.py`, `backlog_cutover.py`, `operator` | Phase 2 — live |
 | **evidence** | The card exists and carries no classification yet. | Phase 5 — promised |

@@ -625,7 +625,7 @@ def _run_sweep_over_epic(comment_total: int) -> str:
         "report_fleet_reviewer_outage": MagicMock(),
         "check_dependabot_capacity": MagicMock(),
         "flag_stranded": MagicMock(return_value=set()),
-        "escalate_aged_intake": MagicMock(),
+        "report_intake_depth": MagicMock(),
         "close_finished_epics": MagicMock(),
         "promote_ready": MagicMock(return_value=0),
         "active_cards": MagicMock(return_value=[epic]),

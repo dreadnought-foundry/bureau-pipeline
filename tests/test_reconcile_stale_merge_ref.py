@@ -452,7 +452,7 @@ def test_a_failed_put_makes_main_exit_non_zero():
         "redispatch_standing_verdicts",
         "restart_answered_blockers", "review_dependabot_prs", "card_dependabot_prs",
         "recover_crashed_reviews", "check_dependabot_capacity",
-        "escalate_aged_intake", "close_finished_epics", "promote_ready",
+        "report_intake_depth", "close_finished_epics", "promote_ready",
         "report_break_glass", "report_epic_growth", "report_fix_concurrency",
         "report_evicted_fix_runs",
     )}
@@ -517,7 +517,7 @@ def test_the_full_sweep_runs_the_rule_right_after_the_conflict_sweep():
                  "fix_approved_but_red", "retry_dead_fix_runs",
                  "restart_answered_blockers", "review_dependabot_prs", "card_dependabot_prs",
                  "recover_crashed_reviews", "check_dependabot_capacity",
-                 "escalate_aged_intake")}
+                 "report_intake_depth")}
     mocks["flag_stranded"] = MagicMock(return_value=set())
     mocks["active_cards"] = MagicMock(return_value=[])
     for quiet in ("close_finished_epics", "promote_ready",
