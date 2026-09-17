@@ -429,6 +429,15 @@ def test_throttled_with_no_retry_after_says_it_does_not_know():
     assert death_cause.reset(silent, NOON) is None
 
 
+def test_a_zero_second_window_is_now_not_unknown():
+    """`retry-after: 0` is "retry immediately", which is a stated window. A
+    reader that treated it as unknown would wait for a wall that is down."""
+    at_once = dict(
+        ACCOUNT_RATE_LIMIT, errors=[{"status": 429, "headers": {"retry-after": "0"}}]
+    )
+    assert death_cause.reset(at_once, NOON) == NOON
+
+
 @pytest.mark.parametrize(
     "now, expected",
     [

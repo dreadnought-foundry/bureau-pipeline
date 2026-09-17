@@ -236,7 +236,9 @@ def reset(record: dict | None, now: datetime) -> datetime | None:
     text = _diagnostic_text(record)
     if found == THROTTLED:
         seconds = _retry_after(text)
-        return now.astimezone(UTC) + timedelta(seconds=seconds) if seconds else None
+        if seconds is None:  # nobody stated a window: unknown, not now
+            return None
+        return now.astimezone(UTC) + timedelta(seconds=seconds)
     return dead_run.limit_reset(text, "claude", now)
 
 
