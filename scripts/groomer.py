@@ -253,6 +253,11 @@ DEAD_FROM_JUDGEMENT = "judgement"
 # cards render this exact string.
 WITHHELD_REASON = groom_judgement.WITHHELD_REASON
 
+# The heading the labelled reasons live under (DRE-3764). Written once and
+# exported, because the console's reader finds the section by it — the same
+# render-and-read-back contract `_BATCH_HEADING` carries for the table.
+BATCH_REASONS_HEADING = "## Why each card is in the batch"
+
 # The lane the drain writes into: Intake's exit is a classification, and
 # Planning is what produces one (DRE-2719).
 DRAIN_TO = "Planning"
@@ -1383,15 +1388,19 @@ def _rules_trigger(row: dict) -> str:
 
 def _mark(outcome: str, row: dict, verdict, *, window_days: int,
           withheld: list, declined: bool = False) -> dict:
-    """The four fields DRE-3150 puts on every row: reason, trigger, evidence,
-    judged.
+    """The five fields DRE-3150 and DRE-3764 put on every row: reason, trigger,
+    evidence, judged, reasons.
 
     Every one of them that a model wrote passes `_showable` first. A refused
     REASON is replaced with the contract's exact sentence and the card is
     listed in `withheld`; a refused trigger falls back to the rules' own, and
     refused evidence is dropped to None — a dead recommendation whose evidence
     cannot be shown is still reported as judged, and the run log holds the text
-    nobody could put on the page.
+    nobody could put on the page. A refused LABELLED reason is dropped and the
+    card is listed in `withheld` too, and nothing stands in for it: a label
+    with a sentence about the guard under it reads as an answer, and the whole
+    point of the five is that the reader can tell what was said from what was
+    not.
 
     `declined` is `propose`'s own answer to "did the READ refuse this card"
     (DRE-3544) — the one place that question is decided, so a row taken out of
@@ -1437,8 +1446,19 @@ def _mark(outcome: str, row: dict, verdict, *, window_days: int,
             withheld.append(identifier)
             evidence = None
 
+    # The labelled reasons, and only on a card that is actually IN the batch —
+    # a `now` the cap moved to `not-now` is not a card the section renders, so
+    # its labels are not shown and not guarded (DRE-3764).
+    reasons = {}
+    if outcome == "now" and judged:
+        for label, text in (verdict.reasons or {}).items():
+            if _showable(text):
+                reasons[label] = text
+            else:
+                withheld.append(identifier)
+
     return {"reason": reason, "trigger": trigger, "evidence": evidence,
-            "judged": judged}
+            "judged": judged, "reasons": reasons}
 
 
 def _annotate(proposal: dict, judgement, verdicts: dict | None, *,
@@ -1917,6 +1937,10 @@ def render_proposal(proposal: dict) -> str:
             f"{row['epic'] or '—'} | {_trim(row['title'])} | "
             f"{_cell(row.get('reason'), 90)} |")
     add("")
+    # The same reasons, in full, in their own section — the table above is
+    # unchanged, because the console and the drain both read it back
+    # (DRE-3764).
+    w.extend(_render_batch_reasons(proposal))
     # Only when a judgement ran. `--no-judgement` renders exactly what it
     # rendered before this card, so the audit (DRE-3151) compares two readings
     # of one population rather than two documents.
@@ -2001,6 +2025,50 @@ def render_proposal(proposal: dict) -> str:
     add(CYCLE_IS_NOT_SPRINT_PLANNING)
     add("")
     return "\n".join(w)
+
+
+def _render_batch_reasons(proposal: dict) -> list:
+    """Why each card is in the batch, in full and in labelled form (DRE-3764).
+
+    The batch table carries one `Why`, cut at ninety characters to fit a
+    column, and the CEO opening a row in the console wants the rest of it: why
+    now, what it is worth, what it costs, what happens if it waits, what it
+    waits on. So the same strings are written again here, uncut, one block per
+    batch card, in the order the batch is in.
+
+    Its own section, AFTER the table, on purpose. The table is read back by two
+    parsers — the drain's (`parse_proposal_comment`) and the console's
+    (`groom_proposal._BATCH_ROW`) — and a sixth column would have moved both;
+    a section after it moves neither.
+
+    A grammar, not a paragraph: `### <card id>`, then `- **<Label>:** <line>`.
+    The console parses it, so it is fixed in tests rather than left to read
+    well. Nothing is written for a label the read did not answer or the
+    plain-English guard refused — an absent line is the honest rendering of an
+    absent reason, and `withheld` already says how many there were.
+
+    Absent on the `--no-judgement` path, like every other thing the ranked read
+    writes: the rules place a card by priority and age and have no fifth
+    labelled thing to say about it, and the audit (DRE-3151) compares two
+    readings of one population rather than two documents.
+    """
+    block = proposal.get("judgement") or {}
+    batch = sorted(proposal["outcomes"]["now"], key=lambda r: r["position"])
+    if not block.get("enabled") or not batch:
+        return []
+    w = [BATCH_REASONS_HEADING, ""]
+    w.append("The same reasons as the table above, in full — this is what the "
+             "console shows when you open a row. A line the read did not give "
+             "is left out rather than filled in.")
+    w.append("")
+    for row in batch:
+        w.append(f"### {row['identifier']}")
+        w.append(f"- **Why:** {_line(row.get('reason'))}")
+        for label, text in (row.get("reasons") or {}).items():
+            w.append(f"- **{groom_judgement.REASON_LABELS[label]}:** "
+                     f"{_line(text)}")
+        w.append("")
+    return w
 
 
 def _render_judgement(proposal: dict) -> list:
@@ -3114,6 +3182,12 @@ def _plural(count: int, noun: str) -> str:
 def _trim(text: str, width: int = 60) -> str:
     text = " ".join((text or "").split())
     return text if len(text) <= width else text[:width - 1] + "…"
+
+
+def _line(text: str | None) -> str:
+    """One line of prose, whole. `_cell`'s opposite number: no width, and no
+    pipe to escape, because this one is not in a table (DRE-3764)."""
+    return " ".join((text or "—").split())
 
 
 def _cell(text: str | None, width: int = 60) -> str:
