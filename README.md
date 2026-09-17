@@ -851,6 +851,16 @@ scripts — the exact chimera this channel exists to prevent. Omitting both
 `tests/test_pipeline_ref_threading.py`) fails CI here if any internal
 checkout stops threading the input.
 
+**One workflow does not leave its copy in the working tree.** `qa-review.yml`
+moves the checkout to `$RUNNER_TEMP/bureau-pipeline` in the step right after
+it and addresses it as **`$PIPELINE_DIR`** from then on (DRE-3226) — the
+critic runs its experiments inside the reviewed repo, and a `git clean -x`
+there deleted the scripts its own review still needed. The checkout, the ref
+and the pairing rule above are unchanged; only where the files sit is. What
+stays in the tree is `.github/actions` (a `uses: ./…` local action is only
+resolvable under `$GITHUB_WORKSPACE`) and the assembled `agent-context.md`,
+both read before the agent starts.
+
 **Canary**: **agent-bureau is the designated canary and stays on `@main`**
 (no `pipeline_ref`), so every merge here soaks on the canary's real traffic
 before the fleet sees it. The fleet is one step behind the canary, on

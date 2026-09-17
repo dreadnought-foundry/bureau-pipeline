@@ -227,6 +227,9 @@ def run_post(td: Path, gate2: dict, *, gate1: dict | None = None,
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env.update({
+        # DRE-3226: the post step reads its scripts out of the checkout
+        # outside the workspace; this repo is one.
+        "PIPELINE_DIR": str(ROOT),
         "CARD": "", "REAL": real, "PR": "364",
         "REVIEWED_SHA": "a" * 40, "CONTENT_ID": "",
         "MODEL_ID": "claude-sonnet-5", "MODEL_WHY": "advisory ladder top",

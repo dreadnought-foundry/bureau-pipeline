@@ -230,9 +230,15 @@ class PipelineCheckoutLivesOutsideTheWorkspaceTest(unittest.TestCase):
         )
         self.assertLess(checkout_i, reloc_i,
                         "the checkout must happen before it is moved")
-        first_use = _index(lambda s: "$PIPELINE_DIR" in (s.get("run") or "")
-                           and s is not relocation)
-        self.assertLess(reloc_i, first_use,
+        uses = [
+            i for i, s in enumerate(order)
+            if i != reloc_i
+            and any("$PIPELINE_DIR" in line
+                    for line in (s.get("run") or "").splitlines()
+                    if not line.lstrip().startswith("#"))
+        ]
+        self.assertTrue(uses, "nothing reads $PIPELINE_DIR")
+        self.assertLess(reloc_i, min(uses),
                         "PIPELINE_DIR is used before it is exported")
 
 
@@ -355,11 +361,17 @@ class CriticBriefNamesTheForbiddenCommandsTest(unittest.TestCase):
     def test_the_brief_reaches_the_critic(self):
         # A rule in a file nobody injects is a rule nobody follows: the
         # critic's context is assembled by the same script the workflow runs.
-        out = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "assemble_context.py"),
-             "assemble", "critic"],
-            capture_output=True, text=True, check=True, cwd=ROOT,
-        ).stdout
+        # assemble_context.py reads its inputs from the pipeline checkout it
+        # is run beside, so the harness stands one up the way the workflow
+        # does — pointed at THIS tree, not at the one already on disk.
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            (td / IN_TREE).symlink_to(ROOT)
+            out = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "assemble_context.py"),
+                 "assemble", "critic"],
+                capture_output=True, text=True, check=True, cwd=td,
+            ).stdout
         self.assertIn("git stash -u", out)
         self.assertIn("git clean -x", out)
 
