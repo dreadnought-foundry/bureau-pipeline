@@ -78,10 +78,15 @@ import validate_card  # noqa: E402
 from test_sweep_request_cuts import FakeLinear  # noqa: E402
 
 #: What ONE full sweep may spend on Linear READS over the committed board, with
-#: no phase mocked. Measured by this replay on 2026-09-17: 0 requests. It is
-#: the only place the real-board ceiling lives; each cut sibling lowers it to
-#: what it measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 0
+#: no phase mocked. MEASURED BY THIS REPLAY ON 2026-09-17: 66 requests — the
+#: number the pass really spent that day, not the 30 the hand-built ceiling
+#: says and not a round number anybody hoped for. (A live pass on this repo's
+#: own board cost 65 on 2026-09-12 and 92 on agent-bureau; the replay lands on
+#: the same order because the board it replays is sized to that one.)
+#:
+#: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
+#: it to what IT measures, ending at 30.
+REAL_BOARD_SWEEP_BUDGET = 66
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -192,7 +197,9 @@ class Replay:
     """One replayed sweep: what it spent, where, what it decided, how long it
     took, and whether it reached the network."""
 
-    def __init__(self, fake, decisions, spend_lines, seconds, urlopen, stubbed):
+    def __init__(
+        self, fake, decisions, spend_lines, seconds, urlopen, stubbed, printed
+    ):
         self.fake = fake
         self.decisions = decisions
         self.spend_lines = spend_lines
@@ -200,6 +207,8 @@ class Replay:
         self.urlopen = urlopen
         #: `(reconcile, linear_ops)` — the names that were mocks during the pass.
         self.stubbed = stubbed
+        #: Everything the pass printed, so a test can check it reached its end.
+        self.printed = printed
 
     @property
     def requests(self) -> int:
@@ -266,8 +275,19 @@ def _github_stubbed():
         yield
 
 
+#: The sweep's own process-level ledgers. Cleared around the replay: in
+#: production one process is one pass, and a ledger this pass filled would
+#: otherwise be read by whatever suite runs next in the same session.
+_LEDGERS = (
+    reconcile._write_failures, reconcile._read_failures,
+    reconcile._stale_defects, reconcile._card_skips,
+)
+
+
 def _run_replay() -> Replay:
     """One full sweep over the committed board, measured."""
+    for ledger in _LEDGERS:
+        ledger.clear()
     fake = ReplayLinear(board_snapshot.synthetic(REAL_BOARD_CARDS))
     refusals: list[tuple[str, str]] = []
     real_surface = reconcile._surface_once
@@ -320,10 +340,13 @@ def _run_replay() -> Replay:
         with contextlib.redirect_stdout(out), contextlib.suppress(SystemExit):
             reconcile.main()
         seconds = time.monotonic() - started
-    lines = [l for l in out.getvalue().splitlines() if l.startswith("sweep-spend:")]
+    for ledger in _LEDGERS:
+        ledger.clear()
+    printed = out.getvalue().splitlines()
+    lines = [l for l in printed if l.startswith("sweep-spend:")]
     return Replay(
         fake, _decisions(advance, state, label, refusals), lines, seconds,
-        urlopen, stubbed,
+        urlopen, stubbed, printed,
     )
 
 
@@ -392,6 +415,16 @@ def test_no_reconcile_function_is_mocked(replay):
         "gql", "cmd_comment", "cmd_advance", "cmd_state",
         "add_label", "remove_label", "set_description",
     }, f"a Linear READER other than the seam was mocked: {in_linear}"
+
+
+def test_the_pass_ran_to_its_end(replay):
+    """A sweep that died in phase three would spend little and decide little,
+    and both numbers below would read as a win. The pass prints one line when
+    it has finished its own work, and the total is the last thing it prints."""
+    assert any(l.startswith("sweep complete:") for l in replay.printed), (
+        "the pass never reached its end: " + "\n".join(replay.printed[-8:])
+    )
+    assert replay.spend_lines[-1].startswith("sweep-spend: total ")
 
 
 def test_the_expensive_phases_really_ran(replay):
