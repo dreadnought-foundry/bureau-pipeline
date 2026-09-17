@@ -919,6 +919,37 @@ What this channel automated is the *proof*, never the release: cutting or
 moving a `vN` tag is still **operator-only**, exactly as the promotion block
 above describes. No repo consumes a `vN` tag.
 
+**And there is a by-hand path into the channel (DRE-4111).** Until
+2026-09-17 `promote-channel.yml` had one trigger and no override, so a
+harness failure that was not about the code froze `stable` outright: on
+2026-09-16 the channel sat five merge commits and six merged pull requests
+behind while four of the harness's five scenarios died on `API rate limit
+exceeded for installation ID 123249480` — the worker App's hourly bucket,
+empty — and every promote-channel run that night reported success having
+promoted nothing.
+
+```bash
+gh workflow run promote-channel.yml \
+  --repo dreadnought-foundry/bureau-pipeline \
+  -f sha=<candidate-sha> \
+  -f reason="harness 403 on the shared App bucket; DRE-4111"
+```
+
+Blank `sha` means the head of `main`. **This is not a way past the proof.**
+The ordinary by-hand promote re-reads the candidate's own combined commit
+status and still requires a green `integration-harness` there — from
+whichever run stamped it, which is the entire case: the proof passed an hour
+ago and the channel is still behind. Promoting past a red or absent status
+is a separate, louder act (`-f force=true`), refused without a reason and
+refused to a bot login, and it raises a warning on the run naming the mover.
+Force is scoped to the proof alone: `stable` still cannot move backwards,
+`CHANNEL_HOLD` still holds, and the candidate must still be reachable from
+`main` — `harness.yml` also runs on pull requests, so a PR head carries a
+green stamp of its own and must not be promotable. The push uses the bot App
+token on this route too, so `release-gate.yml` fires and validates it. The
+full record, the receipt vocabulary and the incident are in
+`docs/self-hosting.md`, "Moving the channel by hand".
+
 **"Not proven yet" is a third answer, and the receipt says so (DRE-3076).**
 A harness run can end without judging the commit at all: on 2026-09-03 the
 SANDBOX's own reconcile sweep was rate-limited by Linear at 20:27 PT, and the

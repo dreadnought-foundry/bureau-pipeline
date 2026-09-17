@@ -509,6 +509,10 @@ class WorkflowWiringTest(unittest.TestCase):
     def test_a_forced_promote_raises_a_warning(self):
         summary = self._step("GITHUB_STEP_SUMMARY")["run"]
         self.assertIn("::warning title=Forced channel promotion", summary)
+        # The bash branches on the receipt token, which is defined in exactly
+        # one place. Rename the constant without the workflow and the loud
+        # promote goes quiet — which is this card's own failure mode.
+        self.assertIn(promote_channel.OUTCOME_BY_HAND_FORCED, summary)
 
 
 class TheRuleIsWrittenDownTest(unittest.TestCase):
