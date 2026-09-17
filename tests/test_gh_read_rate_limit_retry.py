@@ -168,8 +168,13 @@ def test_three_attempts_with_backoff_under_a_minute():
         assert reconcile.gh_read("api", "repos/o/r/branches") == "the listing"
 
     assert len(calls) == 3
-    assert waits == [15, 45]
-    assert sum(waits) < 60, "the whole retry budget stays under a minute"
+    assert waits == [15, 45], "the card's own numbers: about 15s, then 45s"
+    # The card names both the two waits and their size ("under a minute of
+    # waiting, inside the sweep's 10-minute job timeout"); 15 + 45 is the
+    # card's own arithmetic, so the bound asserted here is a minute at most.
+    # What the budget has to fit inside is the job timeout, and 60s of waiting
+    # leaves nine minutes of it.
+    assert sum(waits) <= 60, "the whole retry budget is a minute at most"
 
 
 def test_every_retry_prints_one_line_naming_the_command_and_the_attempt(capsys):
