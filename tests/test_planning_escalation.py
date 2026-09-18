@@ -114,6 +114,11 @@ def _moments_ago() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: A seeded comment's time when the record carries NO `createdAt` key at all —
+#: distinct from `None`, which means "stamp it `commented_at`" (DRE-4223).
+MISSING = object()
+
+
 class _Card:
     """One card, with the CLI's writes recorded rather than posted.
 
@@ -134,8 +139,9 @@ class _Card:
     A seeded comment is a plain body stamped `commented_at`, or a
     `(body, created_at)` pair carrying its own time (DRE-4223: two attempts on
     one card are two different times, and a clock that stamps every comment
-    alike cannot seed one). `comments` stays a list of BODIES either way — the
-    `count_comments` stub and the vocabulary readers below read it as such.
+    alike cannot seed one) — `MISSING` for a record with no `createdAt` key.
+    `comments` stays a list of BODIES either way — the `count_comments` stub
+    and the vocabulary readers below read it as such.
     """
 
     def __init__(self, comments=(), *, lane: str = planning_escalation.ORIGIN,
@@ -188,9 +194,13 @@ class _Card:
 
         def timeline(identifier):
             self.comment_reads.append("timeline")
-            return [{"body": body,
-                     "createdAt": self.commented_at if at is None else at}
-                    for body, at in zip(self.comments, self.stamps)]
+            records = []
+            for body, at in zip(self.comments, self.stamps):
+                record = {"body": body}
+                if at is not MISSING:
+                    record["createdAt"] = self.commented_at if at is None else at
+                records.append(record)
+            return records
 
         with patch.object(
             linear_ops, "comment_bodies", side_effect=bodies
@@ -792,7 +802,8 @@ class TestASecondEscalationOutOfAFreshAttempt:
         assert card.posted == []
 
     # --- a receipt with no readable time is placed by its position ----------
-    @pytest.mark.parametrize("bad_time", [None, "", "not a time", "2026-13-45"])
+    @pytest.mark.parametrize("bad_time", [MISSING, "", "not a time", "2026-13-45"],
+                             ids=["no-createdAt-key", "empty", "garbage", "bad-date"])
     def test_a_receipt_with_no_readable_time_before_the_boundary_earns_a_new_note(
             self, bad_time):
         """The card's own criterion said the opposite — "counts as this
@@ -810,7 +821,8 @@ class TestASecondEscalationOutOfAFreshAttempt:
         assert len(_escalation_notes(card)) == 1
         assert card.states == [(DRE_2428, planning_escalation.destination())]
 
-    @pytest.mark.parametrize("bad_time", [None, "", "not a time"])
+    @pytest.mark.parametrize("bad_time", [MISSING, "", "not a time"],
+                             ids=["no-createdAt-key", "empty", "garbage"])
     def test_a_receipt_with_no_readable_time_after_the_boundary_is_this_attempts(
             self, bad_time):
         card = _dre_2428(
