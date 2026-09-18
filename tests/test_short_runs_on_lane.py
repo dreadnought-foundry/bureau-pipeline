@@ -1,4 +1,4 @@
-"""The short-job runner lane (DRE-3887).
+"""The short-job runner lane (DRE-3887, widened to the sweeps by DRE-4276).
 
 On 2026-09-13 twenty-two agent-bureau Merge Gate runs sat queued from 16:40 PT,
 about an hour. All three light runners were busy with long Claude jobs — Agent
@@ -7,22 +7,32 @@ cause was one expression: every job in `merge-gate.yml` and `linear-sync.yml`
 read `vars.BUREAU_RUNS_ON`, the SAME variable that routes the 20-minute agent
 and critic jobs, so a 30-second gate queued behind them for a slot.
 
+On 2026-09-18 at 13:47 PT it happened again one lane over (DRE-4276): the
+mini's six runners were all busy, 38 jobs were queued, the oldest reviews had
+waited about 100 minutes, and fifteen of the queued jobs were agent-bureau
+`Pipeline Medic` runs plus three `Reconcile` sweeps — sub-minute scripts that
+read and write GitHub and Linear, taking a turn ahead of every review. They
+still read `vars.BUREAU_RUNS_ON` alone, so a repo could not move them without
+moving its reviews too.
+
 The lane this file pins:
 
-* Every job of the two bookkeeping reusables reads
+* Every SHORT job of the four bookkeeping reusables reads
   `BUREAU_SHORT_RUNS_ON || BUREAU_RUNS_ON || '["ubuntu-latest"]'`. That is
-  today's expression with ONE variable in front of it, so a repo that has not
-  set the new variable renders byte-identically to what it renders today — the
-  change is inert until a repo opts in, and `test_an_unset_short_variable_
+  the long expression with ONE variable in front of it, so a repo that has not
+  set the new variable renders byte-identically to what it rendered before —
+  the change is inert until a repo opts in, and `test_an_unset_short_variable_
   renders_todays_runner` below is the proof, computed rather than asserted.
 * No long Claude job reads the short variable. `agent-task`, `qa-review`,
-  `verify`, `plan` and `medic` are the jobs whose 20 minutes the gates were
-  queueing behind; routing THEM to the short pool would recreate the incident
-  with the lanes swapped.
+  `verify` and `plan` are whole files of them; inside `medic.yml` the one such
+  job is `diagnose`, which runs a Claude agent for up to twenty minutes and is
+  pinned BY NAME to the long chain. Routing any of them to the short pool
+  would recreate the incident with the lanes swapped.
 
-The scope is exactly these two files. Another sub-minute job that would fit the
-lane is a follow-up card, not a tidy-up here — which is why the job list below
-is pinned by name rather than discovered.
+The scope is exactly these four files, and inside them every job is named:
+short ones in `SHORT_JOBS`, long ones in `LONG_JOBS`. A job added to any of
+them without a runner decision fails here rather than inheriting one, and
+widening the lane to another file is a card, not a tidy-up.
 """
 from __future__ import annotations
 
@@ -39,28 +49,42 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runs_on_switchable import (  # noqa: E402
+    LONG_JOBS,
     SHORT_LANE,
     SHORT_SWITCHABLE,
     SWITCHABLE,
     _load,
     _runner_jobs,
+    expected_runs_on,
 )
 
 SHORT_VAR = "BUREAU_SHORT_RUNS_ON"
 
-# Every job of the two files, named. The card's first criterion is "a test pins
-# that list", so a job added to either file without a runner decision fails
-# here rather than inheriting one.
+# Every short job of the four files, named. DRE-3887's criterion was "a test
+# pins that list"; DRE-4276 adds the two sweeps to it. The medic's eight
+# script jobs — the classifier, the one retry, and the six that write a note
+# or a receipt and end — are each `timeout-minutes: 5` and call nothing but
+# `gh` and `python3`; reconcile's `sweep` is `reconcile.py` and nothing else.
 SHORT_JOBS = {
     "merge-gate.yml": {"resolve", "evaluate"},
     "linear-sync.yml": {"card-done", "conflict-sweep"},
+    "reconcile.yml": {"sweep"},
+    "medic.yml": {
+        "classify",
+        "retry",
+        "retry_declined",
+        "stall_record",
+        "backoff",
+        "upstream_outage",
+        "linear_rate_limited",
+        "environment_hold",
+    },
 }
 
-# The long Claude jobs the card names — none of them may read the short
-# variable. `agent-fix.yml`, `groomer.yml`, `plan.yml`'s siblings and the rest
-# of the fleet are covered by the sweep below; these five are pinned by name
-# because they are the ones the incident was about.
-LONG_CLAUDE = ["agent-task.yml", "qa-review.yml", "verify.yml", "plan.yml", "medic.yml"]
+# The whole-file long Claude jobs the DRE-3887 card named — none of them may
+# so much as mention the short variable. `medic.yml` left this list in
+# DRE-4276: its one Claude job is pinned by name in `LONG_JOBS` instead.
+LONG_CLAUDE = ["agent-task.yml", "qa-review.yml", "verify.yml", "plan.yml"]
 
 _EXPR = re.compile(r"^\$\{\{ fromJSON\((?P<chain>.+?)\) \}\}$")
 
@@ -92,13 +116,20 @@ def _jobs(name: str) -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------
-# the short lane reads the new expression
+# the lane is a named list of jobs
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("name", sorted(SHORT_JOBS))
-def test_the_short_lane_is_the_job_list_the_card_names(name: str) -> None:
-    assert set(_jobs(name)) == SHORT_JOBS[name], (
-        f"{name}'s runner jobs moved; the short lane is pinned by name so a "
-        f"new job cannot join or leave it unnoticed"
+def test_every_job_of_a_short_lane_file_has_a_named_lane(name: str) -> None:
+    """Every runner job in the file is either a short job or a named long
+    job. A job added without a runner decision fails here rather than
+    inheriting one."""
+    named = SHORT_JOBS[name] | LONG_JOBS.get(name, set())
+    assert set(_jobs(name)) == named, (
+        f"{name}'s runner jobs moved; the lane is pinned by job name so a new "
+        f"job cannot join or leave it unnoticed"
+    )
+    assert not SHORT_JOBS[name] & LONG_JOBS.get(name, set()), (
+        f"{name}: a job cannot be on both lanes"
     )
 
 
@@ -107,18 +138,37 @@ def test_every_short_job_reads_the_short_variable_first(name: str) -> None:
     wrong = {
         job_id: runs_on
         for job_id, runs_on in _jobs(name).items()
-        if runs_on != SHORT_SWITCHABLE
+        if job_id in SHORT_JOBS[name] and runs_on != SHORT_SWITCHABLE
     }
     assert not wrong, (
-        f"{name}: every job must read {SHORT_SWITCHABLE} so a repo can route "
-        f"its sub-minute jobs off the long-job runners. Wrong: {wrong}"
+        f"{name}: every short job must read {SHORT_SWITCHABLE} so a repo can "
+        f"route its sub-minute jobs off the long-job runners. Wrong: {wrong}"
     )
 
 
-def test_the_short_lane_is_exactly_two_files() -> None:
-    """The scope the CEO signed on 2026-09-14: merge-gate and linear-sync, and
-    nothing else. Widening the lane is a decision, not a refactor."""
+def test_the_medics_diagnosis_agent_stays_in_the_agent_lane() -> None:
+    """The one medic job that spends a Claude run — `diagnose`, twenty minutes
+    and sixty turns of it — keeps reading the long chain (DRE-4276). It is the
+    job the short lane is being cleared FOR, not one that belongs on it."""
+    assert LONG_JOBS["medic.yml"] == {"diagnose"}
+    jobs = _jobs("medic.yml")
+    assert jobs["diagnose"] == SWITCHABLE, (
+        f"medic.yml:diagnose runs a Claude agent for minutes; it must keep "
+        f"reading {SWITCHABLE}, got {jobs['diagnose']!r}"
+    )
+
+
+def test_the_short_lane_is_exactly_four_files() -> None:
+    """The scope the CEO signed on 2026-09-14 (merge-gate and linear-sync) plus
+    the two sweeps DRE-4276 added on 2026-09-18 — and nothing else. Widening
+    the lane again is a decision, not a refactor."""
     assert SHORT_LANE == set(SHORT_JOBS)
+    assert SHORT_LANE == {
+        "merge-gate.yml",
+        "linear-sync.yml",
+        "reconcile.yml",
+        "medic.yml",
+    }
     mentions = {
         path.name
         for path in sorted(WORKFLOWS.glob("*.yml"))
@@ -152,9 +202,9 @@ def test_long_claude_jobs_never_read_the_short_variable(name: str) -> None:
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("name", sorted(SHORT_JOBS))
 def test_an_unset_short_variable_renders_todays_runner(name: str) -> None:
-    """The third acceptance criterion, computed: with `BUREAU_SHORT_RUNS_ON`
-    unset, every short job renders what the old expression renders — for a repo
-    that sets nothing AND for a repo already on the pool."""
+    """Computed, not asserted: with `BUREAU_SHORT_RUNS_ON` unset, every job in
+    the file — short or long — renders what the long expression renders, for a
+    repo that sets nothing AND for a repo already on the pool."""
     for variables in (
         {},
         {"BUREAU_RUNS_ON": '["self-hosted", "macos", "bureau"]'},
@@ -167,20 +217,38 @@ def test_an_unset_short_variable_renders_todays_runner(name: str) -> None:
             )
 
 
-def test_the_short_variable_wins_when_a_repo_sets_it() -> None:
+# The card's second criterion, over the RENDERED expressions of the real jobs:
+# with both variables set, the sweep jobs land in the short lane and the agent
+# job lands in the long one.
+_BOTH_SET = {
+    "BUREAU_SHORT_RUNS_ON": '["ubuntu-latest"]',
+    "BUREAU_RUNS_ON": '["self-hosted", "linux", "arm64", "bureau-mini"]',
+}
+
+
+@pytest.mark.parametrize("name", sorted(SHORT_JOBS))
+def test_the_short_variable_wins_on_every_short_job(name: str) -> None:
     """…and the lane is not decoration: set it and the short jobs move, while
-    the long jobs stay exactly where they were."""
-    variables = {
-        "BUREAU_SHORT_RUNS_ON": '["self-hosted", "macos", "bureau-short"]',
-        "BUREAU_RUNS_ON": '["self-hosted", "macos", "bureau"]',
-    }
-    assert render_runs_on(SHORT_SWITCHABLE, variables) == [
-        "self-hosted",
-        "macos",
-        "bureau-short",
-    ]
-    assert render_runs_on(SWITCHABLE, variables) == ["self-hosted", "macos", "bureau"]
+    the long jobs stay exactly where they were — per job, off the expression
+    the workflow file actually carries."""
+    short = render_runs_on(SHORT_SWITCHABLE, _BOTH_SET)
+    long = render_runs_on(SWITCHABLE, _BOTH_SET)
+    assert short == ["ubuntu-latest"]
+    assert long == ["self-hosted", "linux", "arm64", "bureau-mini"]
+    for job_id, runs_on in _jobs(name).items():
+        want = short if job_id in SHORT_JOBS[name] else long
+        assert render_runs_on(runs_on, _BOTH_SET) == want, (
+            f"{name}:{job_id} rendered {render_runs_on(runs_on, _BOTH_SET)}, "
+            f"expected {want} (expression {expected_runs_on(name, job_id)})"
+        )
 
 
-def test_the_default_is_still_the_hosted_runner() -> None:
+@pytest.mark.parametrize("name", sorted(SHORT_JOBS))
+def test_the_default_is_still_the_hosted_runner(name: str) -> None:
+    """The card's third criterion: with neither variable set, every job in
+    the file still resolves to `ubuntu-latest`."""
     assert render_runs_on(SHORT_SWITCHABLE, {}) == ["ubuntu-latest"]
+    for job_id, runs_on in _jobs(name).items():
+        assert render_runs_on(runs_on, {}) == ["ubuntu-latest"], (
+            f"{name}:{job_id} does not default to the hosted runner"
+        )
