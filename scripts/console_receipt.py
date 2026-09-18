@@ -26,6 +26,16 @@ and its own domain line so no signature carries between the two kinds. The
 groom format above is untouched. `Verifier.check_answer` is its check;
 `spoken_thread.py` is the reader that asks it.
 
+"COULD NOT BE CHECKED" IS NOT "DOES NOT VERIFY" (DRE-4153). The key is read
+over the network, so reading it can fail on its own — and on 2026-09-17 one
+10-second abort during a ~40 s console stall made a correctly signed CEO
+answer read as a forged voice. So `fetch_key` asks again, a bounded number of
+times, and `Verifier.key()` hands back its reason as a `CouldNotCheck`: a
+reason that says the check never RAN. The wire format is untouched — `SPEC`
+and `ANSWER_SPEC` are pinned byte for byte by both halves' suites — and an
+unchecked receipt is still nobody's answer. What changes is the label a reader
+puts on it, because the two facts have different next actions.
+
 WHY THE FLEET CANNOT FORGE ONE. The fleet's Linear key can write any comment,
 including one carrying this trailer. It cannot produce the signature: the
 private key lives only in the console backend's database, encrypted at rest,
@@ -57,7 +67,10 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
+import urllib.error
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
@@ -186,6 +199,28 @@ ANSWER_DOMAIN = "bureau-console-answer/v1"
 #: docstring for why no variable may move it.
 KEY_URL = "https://app.agent-bureau.com/api/v1/receipt-key"
 KEY_FETCH_TIMEOUT_SECONDS = 10
+
+#: THE FETCH RETRIES, BOUNDED (DRE-4153) — the shape DRE-3087 gave the sweep's
+#: request seam: a few attempts, a short fixed pause, and only for the faults a
+#: second ask can clear. On 2026-09-17 ONE aborted request made a correctly
+#: signed CEO answer read as a forged voice: the console proxy logged
+#: `GET /api/v1/receipt-key … durationMs 10009, aborted: true` while the
+#: backend wrote nothing at all — health checks included — for ~40 seconds.
+#: Over ~27 h two of fifty key reads aborted at the limit and one took 8.45 s,
+#: so a single extra ask is what tells a stalled console from a dead one.
+KEY_FETCH_ATTEMPTS = 3
+KEY_FETCH_BACKOFF_SECONDS = 1.0
+#: The worst a caller waits for the key, as a number rather than as the word
+#: "bounded" — every attempt's timeout plus every pause between them. The whole
+#: run pays it once: `Verifier.key()` remembers the failure.
+KEY_FETCH_MAX_WAIT_SECONDS = (
+    KEY_FETCH_ATTEMPTS * KEY_FETCH_TIMEOUT_SECONDS
+    + (KEY_FETCH_ATTEMPTS - 1) * KEY_FETCH_BACKOFF_SECONDS)
+
+#: The statuses a second attempt can actually fix: a gateway that was not there
+#: for one request. NOT a 4xx and not a 500 — `linear_ops`'s set, for
+#: `linear_ops`'s reasons.
+_RETRYABLE_STATUSES = frozenset({502, 503, 504})
 
 #: A repo switch names no batch; its receipt says so with this.
 NO_PROPOSAL = "-"
@@ -349,7 +384,53 @@ def parse_answer(body: str | None) -> AnswerReceipt | None:
 
 class KeyUnavailable(RuntimeError):
     """The console's public key could not be read — every receipted marker is
-    refused with this reason, and nothing else is affected."""
+    refused with this reason, and nothing else is affected.
+
+    `transient` says whether one more attempt could plausibly clear it: a lost
+    socket, a gateway that was not there for one request. A malformed key, a
+    404, a URL that is not https — asking again only spends the wait."""
+
+    def __init__(self, *args, transient: bool = False):
+        super().__init__(*args)
+        self.transient = transient
+
+
+class CouldNotCheck(str):
+    """A refusal reason that means the check COULD NOT RUN — never that it ran
+    and failed (DRE-4153).
+
+    The console's key could not be read, so nothing is known about the
+    signature either way. It is still not the CEO's voice, and the words are
+    still withheld; what changes is the LABEL a reader puts on it, and the two
+    have different next actions. On 2026-09-17 a correctly signed answer was
+    labelled REFUSED — read as a forged voice — because one key fetch timed
+    out, and a real decision did not stick. Readers tell the two apart with
+    `is_unchecked`, which is why this is a `str`: every existing caller keeps
+    reading the reason exactly as before."""
+
+
+def is_unchecked(why: str | None) -> bool:
+    """True when `why` is a reason the check could not RUN, as opposed to a
+    receipt that was checked and refused. One predicate, so a reader of these
+    reasons never matches on the wording."""
+    return isinstance(why, CouldNotCheck)
+
+
+def is_transient(exc: BaseException) -> bool:
+    """True when `exc` is a network fault one more attempt can plausibly clear.
+
+    The same rule as `linear_ops.is_transient` (DRE-3087), written here rather
+    than imported because this module is a LEAF — it imports nothing from
+    `scripts/`, so the drain can run it with the standard library and nothing
+    else. `tests/test_unchecked_console_answer.py` pins the two classifiers to
+    the same answers shape by shape, so the copy cannot drift.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in _RETRYABLE_STATUSES
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        return isinstance(reason, BaseException) and is_transient(reason)
+    return isinstance(exc, (ConnectionResetError, TimeoutError))
 
 
 @dataclass(frozen=True)
@@ -378,21 +459,48 @@ class PublicKey:
 
 
 def fetch_key(url: str = KEY_URL, *,
-              timeout: float = KEY_FETCH_TIMEOUT_SECONDS) -> PublicKey:
-    """The console's public key, read over HTTPS. Raises KeyUnavailable,
-    naming what went wrong, on anything but a well-formed Ed25519 answer whose
-    kid is the key's own."""
+              timeout: float = KEY_FETCH_TIMEOUT_SECONDS,
+              attempts: int | None = None) -> PublicKey:
+    """The console's public key, read over HTTPS, asking again on a fault a
+    second ask can clear. Raises KeyUnavailable, naming what went wrong, on
+    anything but a well-formed Ed25519 answer whose kid is the key's own.
+
+    Bounded twice over: at most `KEY_FETCH_ATTEMPTS` asks, at most
+    `KEY_FETCH_MAX_WAIT_SECONDS` of waiting, and the caller pays it once —
+    `Verifier.key()` remembers a failure for the rest of the run."""
     if not url.startswith("https://"):
         raise KeyUnavailable(f"{url} is not an https URL")
+    attempts = KEY_FETCH_ATTEMPTS if attempts is None else max(1, attempts)
+    for attempt in range(1, attempts + 1):
+        try:
+            return _fetch_key_once(url, timeout)
+        except KeyUnavailable as exc:
+            if attempt == attempts or not exc.transient:
+                raise
+            # One line per retry, so a run that needed one says so. Without it
+            # the only evidence the console stalled is a step that took a few
+            # seconds longer than usual.
+            print(f"console key fetch: transient fault, asking again "
+                  f"({attempt + 1}/{attempts}): {exc}", file=sys.stderr)
+            time.sleep(KEY_FETCH_BACKOFF_SECONDS)
+    raise KeyUnavailable(  # pragma: no cover — the loop returns or raises
+        f"the key could not be read from {url} in {attempts} attempts")
+
+
+def _fetch_key_once(url: str, timeout: float) -> PublicKey:
+    """One ask. Every failure is a KeyUnavailable that says whether asking
+    again could change the answer."""
     try:
         with urlopen(Request(url, headers={"Accept": "application/json"}),
                      timeout=timeout) as response:
             status = getattr(response, "status", 200)
             payload = response.read()
     except Exception as exc:  # noqa: BLE001 — every transport failure refuses
-        raise KeyUnavailable(f"{type(exc).__name__}: {exc}") from exc
+        raise KeyUnavailable(f"{type(exc).__name__}: {exc}",
+                             transient=is_transient(exc)) from exc
     if status != 200:
-        raise KeyUnavailable(f"the endpoint answered HTTP {status}")
+        raise KeyUnavailable(f"the endpoint answered HTTP {status}",
+                             transient=status in _RETRYABLE_STATUSES)
     try:
         doc = json.loads(payload)
     except (ValueError, UnicodeDecodeError) as exc:
@@ -521,20 +629,24 @@ class Verifier:
     """One run's reader of console receipts. The key is loaded at most once —
     on the first receipt that gets far enough to need it — and a failure to
     load it is remembered, so a console that is down refuses every receipted
-    marker with one reason and costs one timeout, not one per comment."""
+    marker with one reason and costs one bounded fetch, not one per comment."""
 
     def __init__(self, key_loader: Callable[[], PublicKey] = fetch_key):
         self._load = key_loader
         self._key: PublicKey | None = None
-        self._key_why: str | None = None
+        self._key_why: CouldNotCheck | None = None
 
-    def key(self) -> tuple[PublicKey | None, str | None]:
+    def key(self) -> tuple[PublicKey | None, CouldNotCheck | None]:
+        """The key, or the reason there is none — and that reason is a
+        `CouldNotCheck`: with no key the check cannot RUN, which is not the
+        same fact as a receipt that was checked and failed (DRE-4153)."""
         if self._key is None and self._key_why is None:
             try:
                 self._key = self._load()
             except KeyUnavailable as exc:
-                self._key_why = (f"the console's public key could not be read "
-                                 f"from {KEY_URL} — {exc}")
+                self._key_why = CouldNotCheck(
+                    f"the console's public key could not be read from "
+                    f"{KEY_URL} — {exc}")
         return self._key, self._key_why
 
     def check(self, body: str | None, *, card: str, proposal: str,

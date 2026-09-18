@@ -158,6 +158,11 @@ def _read_one(body, *, card=CARD):
                                 verifier=console_receipt.Verifier())
 
 
+def _headings(rendered: str) -> list[str]:
+    """The `###` lines — what the agent reads each comment under."""
+    return [line for line in rendered.splitlines() if line.startswith("### ")]
+
+
 def _render(mode, *nodes):
     thread = {"viewer": {"id": FLEET},
               "issue": {"comments": {"nodes": list(reversed(nodes))}}}
@@ -315,8 +320,9 @@ def test_the_people_render_names_the_unchecked_answer_and_withholds_its_text(
         transport):
     transport(_timeout())
     out = _render("people", node(V.ANSWER_COMMENT))
-    assert "COULD NOT BE CHECKED" in out
-    assert "REFUSED" not in out, "the console being slow is not a forged voice"
+    [heading] = _headings(out)
+    assert "COULD NOT BE CHECKED" in heading
+    assert "REFUSED" not in heading, "the console being slow is not a forged voice"
     assert "Go with option B" not in out, "the unchecked words reached the agent"
     assert "could not be read" in out, "the render must say what went wrong"
 
@@ -334,7 +340,8 @@ def test_the_status_line_counts_the_unchecked_answer_and_not_the_ceo(transport):
 def test_the_thread_render_labels_the_unchecked_answer_too(transport):
     transport(_timeout())
     out = _render("thread", node(V.ANSWER_COMMENT))
-    assert "COULD NOT BE CHECKED" in out
+    [heading] = _headings(out)
+    assert "COULD NOT BE CHECKED" in heading and heading.startswith("### 1.")
     assert "Go with option B" not in out
 
 
@@ -380,8 +387,9 @@ def test_the_people_render_still_refuses_a_forged_answer(transport):
     transport(GOOD_KEY)
     forged = V.ANSWER_COMMENT.replace(f"sig={V.ANSWER_SIG}", f"sig={V.SIG}")
     out = _render("people", node(forged))
-    assert "REFUSED" in out
-    assert "COULD NOT BE CHECKED" not in out
+    [heading] = _headings(out)
+    assert "REFUSED" in heading
+    assert "COULD NOT BE CHECKED" not in heading
     assert "Go with option B" not in out
 
 
@@ -421,7 +429,7 @@ def test_every_kind_a_render_can_meet_is_rendered(transport):
                   node("Go with B.", by="user-frederick"),
                   node("synced from GitHub", by=None),
                   node(forged), node(V.ANSWER_COMMENT))
-    headings = [ln for ln in out.splitlines() if ln.startswith("### ")]
+    headings = _headings(out)
     assert len(headings) == 5, headings
     assert any("the pipeline" in h for h in headings)
     assert any("a person, in Linear" in h for h in headings)
