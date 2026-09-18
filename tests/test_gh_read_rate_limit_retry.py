@@ -23,8 +23,9 @@ nowhere else:
     inside the sweep's 10-minute job timeout;
   - every retry prints ONE line to the run log naming the `gh` command and
     `attempt N of 3`, so the pattern is visible without a card;
-  - a refusal on every attempt raises `ReconcileReadError` exactly as today,
-    so the sweep still exits 1 and the medic still files;
+  - a refusal on every attempt raises `ReconcileReadError` exactly as today
+    (since DRE-4214 the `ReconcileRateLimited` subclass, so the caller can
+    tell the fault it handles from one it does not);
   - anything that is NOT a rate-limit refusal — `403 Resource not accessible
     by integration`, a 404, a network error — raises AT ONCE, with no retry
     and no wait. Retrying a permission failure only burns quota.
@@ -77,11 +78,17 @@ def _clean_failure_state(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/bureau-pipeline")
     monkeypatch.setattr(reconcile, "REPO_SLUG", "bureau-pipeline")
     monkeypatch.setattr(reconcile, "_gh_read_retries_spent", 0, raising=False)
-    reconcile._write_failures.clear()
-    reconcile._read_failures.clear()
+    _clear_ledgers()
     yield
+    _clear_ledgers()
+
+
+def _clear_ledgers() -> None:
     reconcile._write_failures.clear()
     reconcile._read_failures.clear()
+    degraded = getattr(reconcile, "_degraded", None)  # DRE-4214's ledger
+    if degraded is not None:
+        degraded.clear()
 
 
 def _run_stub(answers):
@@ -284,10 +291,16 @@ def test_a_persisting_rate_limit_still_raises_after_three_attempts():
     assert "rate limit exceeded" in str(exc_info.value)
 
 
-def test_card_branches_still_records_a_write_failure_when_it_persists():
-    """The red-sweep chain the card was filed by is unchanged for a REAL
-    outage: card_branches answers None and the write-failure ledger carries
-    the reason, so the sweep exits 1 and the medic files."""
+def test_card_branches_degrades_rather_than_fails_when_it_persists():
+    """A REAL outage of the bucket: card_branches still answers None (an
+    unreadable listing is never an empty one), and the watchdog reports
+    nothing this sweep. What changed with DRE-4214 (the operator's scope on
+    that card, 2026-09-18, after six red sweeps in two hours for this exact
+    reason): the refusal is a fault the step HANDLED, so it goes on the
+    degraded ledger and not the write-failure one — the run says what it
+    could not read and does not exit red for it. An unhandled reason (a
+    permission 403) still lands on `_write_failures`: see
+    tests/test_degraded_step_is_not_a_red_run.py."""
     fake_run, _calls = _run_stub([(1, "", RATE_LIMITED)])
     sleep, _waits = _sleep_stub()
 
@@ -295,8 +308,9 @@ def test_card_branches_still_records_a_write_failure_when_it_persists():
             mock.patch.object(reconcile.time, "sleep", side_effect=sleep):
         assert reconcile.card_branches() is None
 
-    assert len(reconcile._write_failures) == 1
-    assert "branch listing failed" in reconcile._write_failures[0]
+    assert reconcile._write_failures == [], "a handled fault is not a failure"
+    assert len(reconcile._degraded) == 1
+    assert "branch listing" in reconcile._degraded[0]
 
 
 # --------------------------------------------------------------------------
