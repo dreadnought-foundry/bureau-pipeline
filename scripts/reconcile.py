@@ -684,6 +684,21 @@ class ReconcileReadError(RuntimeError):
     empty result (a 403 is NOT "this card has no PR")."""
 
 
+class ReconcileRateLimited(ReconcileReadError):
+    """A read-path gh call was refused for GitHub quota and the refusal
+    outlasted `gh_read`'s retry (DRE-4214).
+
+    Still a `ReconcileReadError` — every caller that catches the parent, and
+    every rule about an unreadable answer, holds unchanged. The subclass
+    exists so a caller can tell the ONE fault the read seam already
+    classifies and handles (`_is_rate_limit_refusal`: an hourly bucket that
+    refills on its own) from a fault nothing handles (a permission 403, a
+    404, a network error). A step that fails closed on the first may degrade
+    — say what it could not read, report nothing, and leave the run green;
+    a step that fails on the second still fails the run.
+    """
+
+
 #: Write failures collected during the sweep; non-empty -> exit 1 so the
 #: Actions run goes red and medic picks it up.
 _write_failures: list[str] = []
@@ -700,6 +715,44 @@ _read_failures: list[str] = []
 #: would dispatch a planning run at a problem that is a sentence.
 _stale_defects: list[str] = []
 
+#: What this sweep could not read and HANDLED (DRE-4214): the step that owns
+#: the read said so, reported nothing for it, and the rest of the sweep went
+#: on. A FOURTH ledger, and the one that does NOT decide the exit. On
+#: 2026-09-18 six sweeps in two hours exited 1 over the unlanded watchdog's
+#: branch listing, refused for GitHub quota past the DRE-4109 retry — after
+#: the watchdog had printed "reporting nothing this sweep" and every other
+#: phase had finished normally. Six medic diagnoses, one card, and a lesson
+#: nobody wants taught: that a red run can be ignored. A refusal an outside
+#: service will lift on its own, handled by a step that fails closed, is not
+#: a failure of the sweep; it is a reading the sweep did not get, and the
+#: whole of what it owes is to SAY SO — the `DEGRADED:` line each entry
+#: prints, and the one summary line `main` prints before it decides the
+#: exit. Nothing goes on this ledger for a reason the step did not handle:
+#: a permission 403 on the same listing is a wrong token, a wrong token
+#: would leave the watchdog blind for good, and that stays on
+#: `_write_failures` — red run, medic, card.
+_degraded: list[str] = []
+
+
+def _degrade(step: str, what: str, err: object) -> None:
+    """Record that `step` could not read `what`, handled it by reporting
+    nothing this sweep, and carried on — one ledger entry, one run-log line.
+    Stdout, not stderr: it is a reading the sweep did not get, not an error."""
+    entry = f"{step}: {what} unreadable — reporting nothing this sweep: {err}"
+    _degraded.append(entry)
+    print(f"DEGRADED: {entry}")
+
+
+def _report_degraded() -> None:
+    """One line, only when there is something to say — the run stays green
+    and this is where a reader learns it was not a complete one."""
+    if _degraded:
+        print(
+            f"reconcile: {len(_degraded)} step(s) degraded — a fault each step "
+            "handled by reporting nothing; see the DEGRADED lines above for "
+            "what this sweep could not read. Not a red run."
+        )
+
 #: How long a prose defect may stand before the sweep goes red for it. Two
 #: hours ≈ eight sweeps: long enough that the run that FINDS one stays green
 #: and whoever is looking at the card can fix it, short enough that an ignored
@@ -712,9 +765,14 @@ PROSE_DEFECT_RED_MINUTES = 120
 #: attempts, ~15s then ~45s: under a minute of waiting in the worst case, which
 #: sits well inside the sweep's 10-minute job timeout, and long enough that a
 #: secondary-rate-limit blip has cleared. An hourly bucket that is genuinely
-#: empty will NOT clear in that minute — that run still raises, still exits 1
-#: and still files, which is exactly the "only tell me if it persists" the CEO
-#: asked for (signed console answer, 2026-09-16).
+#: empty will NOT clear in that minute — that run still raises, and it raises
+#: `ReconcileRateLimited` so the caller knows which fault it is (DRE-4214). What
+#: the caller does with it is the caller's: a step that only ever ADDS a notice
+#: degrades — says what it could not read, reports nothing, and the run stays
+#: green — while a read the sweep ACTS on (`pr_for`) still lands on the read
+#: ledger and still exits 1. "Only tell me if it persists" (signed console
+#: answer, 2026-09-16) is then told by the `DEGRADED:` line on every sweep it
+#: persists through, not by a red run and a medic card per sweep.
 #:
 #: The numbers, the classifier and the loop live in scripts/gh_read_retry.py
 #: since DRE-4157 — agent-fix.yml's comment reads needed the same retry, and
@@ -754,8 +812,10 @@ _is_rate_limit_refusal = gh_read_retry.is_rate_limit_refusal
 
 
 def gh_read(*args: str) -> str:
-    """Run a read-path gh command LOUDLY: raise ReconcileReadError on rc!=0,
-    after retrying a brief rate-limit refusal a couple of times.
+    """Run a read-path gh command LOUDLY: raise ReconcileReadError on rc!=0
+    (its `ReconcileRateLimited` subclass when the refusal is GitHub's
+    rate-limit wording, DRE-4214), after retrying a brief rate-limit refusal
+    a couple of times.
 
     Origin (2026-06-28, twice live / DRE-2034): the silent gh() helper
     discarded exit code and stderr, so a 403/rate-limit on the PR lookup
@@ -811,7 +871,12 @@ def gh_read(*args: str) -> str:
         # for in place of a card. `print` is the run log here.
         return gh_read_retry.read(args, may_retry=spend_one_retry, log=print)
     except gh_read_retry.GhReadError as e:
-        raise ReconcileReadError(str(e)) from e
+        # Named by the STDERR, not by whether a retry was afforded: a
+        # rate-limit refusal past the sweep's budget is still the fault the
+        # seam handles (DRE-4214). `rate_limited` is the loop's own reading
+        # of the stderr, taken before it asked whether a retry was affordable.
+        fault = ReconcileRateLimited if e.rate_limited else ReconcileReadError
+        raise fault(str(e)) from e
 
 
 def gh_dispatch(*args: str) -> None:
@@ -4541,12 +4606,25 @@ def card_branches() -> list[dict] | None:
     back as [], and _flag_hand_built_idle would then tell a person "no branch,
     no pull request" about a branch it simply could not see. Same discipline,
     same reason, as pr_head_refs below (DRE-2034).
+
+    WHICH ledger the failure lands on is decided by the fault (DRE-4214). A
+    rate-limit refusal that outlasted the retry is the one fault this read
+    handles: the caller fails closed, reports nothing this sweep, and the
+    bucket refills on its own — so it is recorded as DEGRADED and the run
+    stays green (six red sweeps and six medic diagnoses on 2026-09-18 said
+    nothing a `DEGRADED:` line does not). Every other reason — a permission
+    403, a 404, a network error — is one nothing handles, and it stays a
+    write failure: red run, medic, card, because a wrong token that only
+    ever printed a green run would leave this watchdog blind for good.
     """
     try:
         out = gh_read(
             "api", f"repos/{REPO}/branches", "--paginate",
             "--jq", ".[] | {name: .name, sha: .commit.sha}",
         )
+    except ReconcileRateLimited as e:
+        _degrade("unlanded watchdog", "branch listing", e)
+        return None
     except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
         _write_failures.append(f"unlanded watchdog: branch listing failed: {e}")
         print(
@@ -7484,9 +7562,12 @@ def main(
             promote_ready(active_count=wip_count(mine))
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
+        _report_degraded()
         # The event-driven gate runs the epic gate too, so it can find a stale
         # prose defect — and a red run is the epic's whole escalation, so it
-        # must be red on this path as well (DRE-2676).
+        # must be red on this path as well (DRE-2676). `_degraded` is not read
+        # here or below (DRE-4214): a step that handled its fault owes the
+        # line above, not a red run.
         if _write_failures or _stale_defects:
             sys.exit(
                 f"reconcile: {len(_write_failures)} write failure(s), "
@@ -7737,12 +7818,15 @@ def main(
             "before the line (docs/epic-comment-cap.md)"
         )
     print(f"sweep complete: {nudges} nudge(s)")
+    _report_degraded()
     if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
         # when a write we claimed to make didn't happen (DRE-1254 lesson), when
         # a card's PR state was unreadable (DRE-2034 lesson), or when a card
         # defect the sweep reported hours ago is still standing (DRE-2676 —
         # a report nobody reads is how five cards froze for five days).
+        # `_degraded` is deliberately not in this list (DRE-4214): a fault a
+        # step handled by reporting nothing is said above, not exited on.
         sys.exit(
             f"reconcile: {len(_write_failures)} write / {len(_read_failures)} read "
             f"failure(s), {len(_stale_defects)} unfixed card defect(s) — see "
