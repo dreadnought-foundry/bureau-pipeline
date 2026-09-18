@@ -60,9 +60,11 @@ os.environ.setdefault("GH_TOKEN", "x")
 import break_glass  # noqa: E402
 import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
+import plan_critic  # noqa: E402
 import planning_escalation  # noqa: E402
 import planning_route  # noqa: E402
 import planning_shape  # noqa: E402
+import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
 SHAPES = ROOT / "config" / "planning-shapes.json"
@@ -128,11 +130,23 @@ class _Card:
     hands back plain strings with no time, `comment_timeline` hands back
     `{"body", "createdAt"}`. A test whose stub gave both a time would pass
     against the bug.
+
+    A seeded comment is a plain body stamped `commented_at`, or a
+    `(body, created_at)` pair carrying its own time (DRE-4223: two attempts on
+    one card are two different times, and a clock that stamps every comment
+    alike cannot seed one). `comments` stays a list of BODIES either way — the
+    `count_comments` stub and the vocabulary readers below read it as such.
     """
 
     def __init__(self, comments=(), *, lane: str = planning_escalation.ORIGIN,
                  commented_at: str = A_SPENT_ATTEMPT_AT):
-        self.comments = list(comments)
+        self.comments: list[str] = []
+        #: One entry per comment: its own time, or None for `commented_at`.
+        self.stamps: list = []
+        for entry in comments:
+            body, at = entry if isinstance(entry, tuple) else (entry, None)
+            self.comments.append(body)
+            self.stamps.append(at)
         self.commented_at = commented_at
         self.lane = lane
         self.posted: list[tuple[str, str]] = []
@@ -150,6 +164,7 @@ class _Card:
         def post(identifier, body):
             self.posted.append((identifier, body))
             self.comments.append(body)
+            self.stamps.append(None)
             self.events.append("comment")
 
         def move(identifier, lane, *rest):
@@ -173,8 +188,9 @@ class _Card:
 
         def timeline(identifier):
             self.comment_reads.append("timeline")
-            return [{"body": body, "createdAt": self.commented_at}
-                    for body in self.comments]
+            return [{"body": body,
+                     "createdAt": self.commented_at if at is None else at}
+                    for body, at in zip(self.comments, self.stamps)]
 
         with patch.object(
             linear_ops, "comment_bodies", side_effect=bodies
@@ -604,6 +620,240 @@ class TestTheEscalationReReadsTheLaneBeforeItParks:
         left = _dre_3604().run(
             lambda: planning_escalation.escalate(linear_ops, DRE_3604, REASON))
         assert not left.parked and left.posted and "In Progress" in left.stood_down
+
+
+# ===========================================================================
+# 1c. A second escalation out of a FRESH attempt still posts its note (DRE-4223)
+# ===========================================================================
+#
+# The DRE-2428 timeline, 2026-09-17/18 PT, is the regression fixture:
+#
+#   20:42:34  `🙋 planning-escalation` — the first escalation, with a reason;
+#             the CEO answered it and the card went back to Planning
+#   07:17:33  `📋 A fresh planning attempt on DRE-2428 starts here…` and, as
+#             its own comment, the `plan-cycle: start epic=DRE-2428` boundary
+#             (plan.yml opens every planning attempt with both)
+#   09:24     the stall watchdog fired again: `escalate()` found the 20:42
+#             receipt, printed `already escalated`, posted nothing, and moved
+#             the card Planning → Green Light. The CEO's decision queue held a
+#             card with nothing to answer.
+#
+# "Already escalated" has to mean "already escalated ON THIS ATTEMPT". The
+# boundary is the one `plan_critic` writes and reads (`CYCLE_PREFIX`), and the
+# scope is positional — the comments AFTER the newest boundary — the same
+# reading `plan_critic.current_cycle` and `linear_ops.count_comments(since=)`
+# make. Position, not the clock: a receipt whose time cannot be read is still
+# somewhere in the thread, and "treat it as this attempt's" is exactly the
+# silent move this card exists to end.
+DRE_2428 = "DRE-2428"
+FIRST_ESCALATION_AT = "2026-09-17T20:42:34-07:00"
+FRESH_ATTEMPT_AT = "2026-09-18T07:17:33-07:00"
+STALL_WHY = (
+    "planning has produced nothing. This card has sat in Planning for 120+ "
+    "minutes with nothing posted or changed on it."
+)
+
+
+def _receipt(identifier: str = DRE_2428) -> str:
+    """The escalation note a previous attempt left on the card."""
+    return planning_escalation.escalation_comment(identifier, REASON)
+
+
+def _boundary(identifier: str = DRE_2428) -> str:
+    """The fresh-attempt marker as plan.yml posts it: the boundary line alone."""
+    return plan_critic.cycle_marker(identifier)
+
+
+def _dre_2428(*comments) -> _Card:
+    """The card as the sweep found it at 09:24: still in Planning, no verdict,
+    carrying whatever `comments` seeds — `(body, created_at)` pairs."""
+    return _Card(comments=list(comments), lane=planning_escalation.ORIGIN)
+
+
+def _escalation_notes(card: _Card) -> list[str]:
+    return [body for _, body in card.posted
+            if planning_escalation.ESCALATION_TAG in body]
+
+
+class TestASecondEscalationOutOfAFreshAttempt:
+    def test_the_fixture_is_the_timeline(self):
+        """The fresh attempt opened 10h 34m 59s after the first escalation,
+        and the boundary really is what plan.yml posts."""
+        assert _seconds_between(FIRST_ESCALATION_AT, FRESH_ATTEMPT_AT) == 38099
+        assert _boundary().startswith(plan_critic.CYCLE_PREFIX)
+        assert plan_critic.CYCLE_PREFIX not in plan_critic.cycle_start_note(DRE_2428), (
+            "the human note is not the boundary — the record is its own comment"
+        )
+
+    # --- the incident: a receipt from a SPENT attempt must not silence this one
+    def test_dre_2428_a_receipt_from_a_spent_attempt_does_not_silence_this_one(self):
+        """The CLI path (`planning_route._cmd_exit`, `escalate DRE-N`): the
+        window holds the old receipt, then the fresh-attempt boundary. A NEW
+        question is posted, and only then is the card moved."""
+        card = _dre_2428(
+            (_receipt(), FIRST_ESCALATION_AT),
+            (_boundary(), FRESH_ATTEMPT_AT),
+        )
+        assert _escalate(card, DRE_2428) == 0
+        assert len(_escalation_notes(card)) == 1, (
+            "the card was moved with no note — a silent park"
+        )
+        assert card.states == [(DRE_2428, planning_escalation.destination())]
+        assert card.events.index("comment") < card.events.index("state")
+
+    def test_dre_2428_through_the_sweeps_handed_window(self):
+        """The path the incident actually took: the stall watchdog hands the
+        board read's comment window to the escalation (`window_nodes`, newest
+        first off the API) rather than re-reading the card."""
+        nodes = [  # newest first, exactly as the API answers `comments(first:)`
+            {"body": _boundary(), "createdAt": FRESH_ATTEMPT_AT, "user": {"id": "bot"}},
+            {"body": _receipt(), "createdAt": FIRST_ESCALATION_AT, "user": {"id": "bot"}},
+        ]
+        card = _dre_2428()
+        issue = {
+            "identifier": DRE_2428, "title": "a card",
+            "state": {"name": planning_escalation.ORIGIN, "type": "unstarted"},
+            "labels": {"nodes": []},
+            "comments": {"nodes": nodes, "pageInfo": {"hasNextPage": False}},
+        }
+        moved = card.run(
+            lambda: reconcile.escalate_out_of_planning(issue, STALL_WHY))
+        assert moved is True
+        assert len(_escalation_notes(card)) == 1, (
+            "the sweep moved the card with no note — a silent park"
+        )
+        assert STALL_WHY in card.bodies()
+        assert card.states == [(DRE_2428, planning_escalation.destination())]
+        assert card.events.index("comment") < card.events.index("state")
+
+    # --- the other direction: a repeat INSIDE one attempt still converges ---
+    def test_a_repeat_within_the_same_attempt_writes_no_second_note(self):
+        """Boundary first, receipt after it: this attempt already asked. No
+        second question, and the move is re-asserted — today's behaviour, byte
+        for byte."""
+        card = _dre_2428(
+            (_boundary(), FRESH_ATTEMPT_AT),
+            (_receipt(), "2026-09-18T07:30:00-07:00"),
+        )
+        assert _escalate(card, DRE_2428) == 0
+        assert card.posted == []
+        assert card.states == [(DRE_2428, planning_escalation.destination())]
+
+    def test_a_card_never_re_planned_keeps_the_once_per_card_reading(self):
+        """No boundary anywhere: every receipt counts, exactly as before."""
+        card = _dre_2428((_receipt(), FIRST_ESCALATION_AT))
+        assert _escalate(card, DRE_2428) == 0
+        assert card.posted == []
+        assert card.states == [(DRE_2428, planning_escalation.destination())]
+
+    def test_only_the_newest_boundary_opens_the_attempt(self):
+        """Two attempts, each with its own boundary and its own receipt, then a
+        third boundary: the third attempt has not asked yet."""
+        card = _dre_2428(
+            (_boundary(), "2026-09-17T18:00:00-07:00"),
+            (_receipt(), FIRST_ESCALATION_AT),
+            (_boundary(), "2026-09-18T01:00:00-07:00"),
+            (_receipt(), "2026-09-18T01:05:00-07:00"),
+            (_boundary(), FRESH_ATTEMPT_AT),
+        )
+        _escalate(card, DRE_2428)
+        assert len(_escalation_notes(card)) == 1
+
+    # --- the boundary is read through the constant, never a copied string ---
+    def test_the_boundary_is_recognised_through_the_constant(self):
+        """Patch `plan_critic.CYCLE_PREFIX` and the reading follows: the real
+        boundary line stops opening an attempt, and a line under the patched
+        prefix starts to."""
+        with patch.object(plan_critic, "CYCLE_PREFIX", "attempt-boundary:"):
+            real = _dre_2428(
+                (_receipt(), FIRST_ESCALATION_AT),
+                ("plan-cycle: start epic=DRE-2428", FRESH_ATTEMPT_AT),
+            )
+            _escalate(real, DRE_2428)
+            assert real.posted == [], (
+                "the boundary was matched against a copied string, not the constant"
+            )
+            patched = _dre_2428(
+                (_receipt(), FIRST_ESCALATION_AT),
+                ("attempt-boundary: start epic=DRE-2428", FRESH_ATTEMPT_AT),
+            )
+            _escalate(patched, DRE_2428)
+            assert len(_escalation_notes(patched)) == 1
+
+    def test_the_human_note_alone_opens_nothing(self):
+        """The 📋 note the CEO reads carries no boundary (pinned in
+        `test_plan_critic.py`); a card carrying only it has not been
+        re-planned as far as this reading is concerned."""
+        card = _dre_2428(
+            (_receipt(), FIRST_ESCALATION_AT),
+            (plan_critic.cycle_start_note(DRE_2428), FRESH_ATTEMPT_AT),
+        )
+        _escalate(card, DRE_2428)
+        assert card.posted == []
+
+    # --- a receipt with no readable time is placed by its position ----------
+    @pytest.mark.parametrize("bad_time", [None, "", "not a time", "2026-13-45"])
+    def test_a_receipt_with_no_readable_time_before_the_boundary_earns_a_new_note(
+            self, bad_time):
+        """The card's own criterion said the opposite — "counts as this
+        attempt's: no second note, the move is re-asserted" — and its critic
+        sent it back on exactly that: a previous attempt's receipt with a
+        broken clock, read as this attempt's, IS the silent move. The scope is
+        the thread's order, which the clock does not decide. Before the
+        boundary, the receipt is a spent attempt's and the question is asked
+        again."""
+        card = _dre_2428(
+            (_receipt(), bad_time),
+            (_boundary(), FRESH_ATTEMPT_AT),
+        )
+        _escalate(card, DRE_2428)
+        assert len(_escalation_notes(card)) == 1
+        assert card.states == [(DRE_2428, planning_escalation.destination())]
+
+    @pytest.mark.parametrize("bad_time", [None, "", "not a time"])
+    def test_a_receipt_with_no_readable_time_after_the_boundary_is_this_attempts(
+            self, bad_time):
+        card = _dre_2428(
+            (_boundary(), FRESH_ATTEMPT_AT),
+            (_receipt(), bad_time),
+        )
+        _escalate(card, DRE_2428)
+        assert card.posted == []
+        assert card.states == [(DRE_2428, planning_escalation.destination())]
+
+    # --- the move never happens without the note ----------------------------
+    def test_the_move_never_happens_when_the_note_fails(self):
+        """Pinned, not assumed: when the question is due and the comment write
+        raises, `cmd_state` is never reached. The failure goes up to the caller
+        (the sweep's fail-loudly rail), and the card is left as it was found."""
+        card = _dre_2428(
+            (_receipt(), FIRST_ESCALATION_AT),
+            (_boundary(), FRESH_ATTEMPT_AT),
+        )
+
+        def escalate_with_a_failing_write():
+            with patch.object(linear_ops, "cmd_comment",
+                              side_effect=linear_ops.LinearError("comment refused")):
+                return planning_escalation.escalate(linear_ops, DRE_2428, REASON)
+
+        with pytest.raises(linear_ops.LinearError):
+            card.run(escalate_with_a_failing_write)
+        assert card.states == [], "the card was moved without its note"
+
+    def test_the_stand_down_withdraws_only_this_attempts_ask(self):
+        """`withdrawn` reads the same scoped value: a card that left Planning
+        by hand carrying only a SPENT attempt's receipt has no standing ask to
+        withdraw, so the stand-down is the plain one."""
+        card = _Card(
+            comments=[(_receipt(), FIRST_ESCALATION_AT),
+                      (_boundary(), FRESH_ATTEMPT_AT)],
+            lane="In Progress",
+        )
+        _escalate(card, DRE_2428)
+        assert card.states == []
+        note = card.bodies()
+        assert planning_escalation.STOOD_DOWN_TAG in note
+        assert "is withdrawn" not in note
 
 
 # ===========================================================================
