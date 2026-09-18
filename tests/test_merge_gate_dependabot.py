@@ -283,10 +283,10 @@ class WorkflowWiringTest(unittest.TestCase):
         cls.run_block = runs[0]
 
     def test_workflow_run_leg_wakes_on_dependabot_branches(self):
-        # DRE-2508: the event-leg filter sits on the ENTRY job (`resolve`),
-        # which every leg funnels through — `evaluate` is only reachable via
-        # its resolved PR number (the per-PR concurrency key).
-        cond = self.doc["jobs"]["resolve"]["if"]
+        # DRE-2508 put the event-leg filter on the entry job (`resolve`);
+        # since DRE-4279 an event that names its PR skips that lookup, so the
+        # filter sits on `evaluate` — the one job every leg reaches.
+        cond = self.doc["jobs"]["evaluate"]["if"]
         self.assertIn(
             "startsWith(github.event.workflow_run.head_branch, 'dependabot/')",
             cond,
