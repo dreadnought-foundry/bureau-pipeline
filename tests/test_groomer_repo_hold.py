@@ -294,6 +294,10 @@ def test_a_held_card_never_reaches_the_model(monkeypatch):
     ops = FakeOps([held()])
     monkeypatch.setattr(groomer.linear_ops, "comment_records",
                         ops.comment_records)
+    # `_build` reads the wall clock; the fixture is dated against NOW and ages
+    # past `WINDOW_DAYS` on its own (DRE-4274). This test held only because a
+    # `now` verdict bypasses the window band — pinned so it holds by design.
+    monkeypatch.setattr(groomer, "_now", lambda: NOW)
     monkeypatch.setattr(groomer, "read_population", lambda lops, l: cards)
     monkeypatch.setattr(groomer, "read_cycles", lambda lops: CYCLES)
     monkeypatch.setattr(groom_context, "read_pack", lambda lops: PACK)
@@ -550,6 +554,20 @@ def test_the_self_approval_refusal_is_unchanged_by_the_switch():
 # the flag, for a dry run with no card
 # --------------------------------------------------------------------------
 def _cli_build(monkeypatch, cards, **extra):
+    """`propose` through the CLI's `_build`, on the fixture's clock.
+
+    `_build` never passes `now` — production wants the wall clock — so
+    `propose` reads `groomer._now()`, while `proposal()` above pins `now=NOW`.
+    Every other argument the two hand `propose` is identical (the `priority`
+    both carry is `REPO_PRIORITY`, and `judgement` is None on both). The cards
+    are `days=1` old against NOW, and `WINDOW_DAYS` is 14: from
+    2026-09-18T12:00Z (05:00 PT) the wall clock put every one of them past the
+    window, `_build` batched nothing, and the parity test below failed on a
+    clean `main` — a deterministic red the moment the fixture aged out, not a
+    groomer that drops cards under the flag (DRE-4274). The clock is pinned
+    here so the two paths differ in NOTHING but the flag.
+    """
+    monkeypatch.setattr(groomer, "_now", lambda: NOW)
     monkeypatch.setattr(groomer, "read_population", lambda lops, l: cards)
     monkeypatch.setattr(groomer, "read_cycles", lambda lops: CYCLES)
     args = dict(lane="Intake", capacity=20, batch_cycles=1, judgement=False,
@@ -567,6 +585,33 @@ def test_the_hold_repo_flag_behaves_exactly_as_the_marker_does(monkeypatch):
     assert by_flag["offered"] == by_marker["offered"]
     assert batched(by_flag) == batched(by_marker)
     assert by_flag["id"] == by_marker["id"]
+
+
+def test_a_hold_leaves_the_other_repos_cards_offered_on_both_paths(monkeypatch):
+    """The parity above is satisfied by two EMPTY batches — which is exactly
+    what the flag path produced once the fixture aged past the window
+    (DRE-4274). A groomer that offers nothing is the worst reading a hold can
+    have: since DRE-4141 the approved batch is the only way a card leaves
+    Intake, so an empty proposal is no work reaching the board at all. So the
+    batch is pinned to its LITERAL contents on both paths: the held repo's
+    cards out, every other repo's card in.
+    """
+    cards = lane(atlas=12, portico=4)
+    portico = [f"DRE-{200 + n:03d}" for n in range(4)]
+    for path, built in (("flag", _cli_build(monkeypatch, cards, hold_repo=[HELD])),
+                        ("marker", proposal(cards, holds=[HELD]))):
+        assert batched(built) == portico, (
+            f"the {path} path did not offer the other repo's cards: "
+            f"{batched(built)}"
+        )
+        assert not any(row["identifier"].startswith("DRE-0")
+                       for row in built["sequence"]), (
+            f"the {path} path sequenced a card from the held repo"
+        )
+        assert built["older_than_window"]["cards"] == 0, (
+            f"the {path} path aged the fixture out of the window — the clock "
+            "is not the fixture's"
+        )
 
 
 def test_the_flag_is_repeatable(monkeypatch):
