@@ -34,6 +34,11 @@
 # Reusable workflow: permissions live in the calling stub (contents: read,
 # actions: write). Job-level concurrency stays here — it keys off
 # github.event, which is the caller's.
+#
+# ONE billed job per evaluation when the event names its PR (DRE-4279):
+# GitHub rounds every job up to a whole minute, so the ~20-second lookup job
+# that used to precede every evaluation doubled the gate's bill. It now runs
+# only for a workflow_run that names no pull request.
 name: Merge Gate (reusable)
 
 on:
@@ -65,7 +70,7 @@ on:
         required: true
 
 jobs:
-  # DRE-2508: the gate's ENTRY job — it answers one question, "which PR did
+  # DRE-2508: the PR-lookup job — it answers one question, "which PR did
   # this event wake me about?", so the evaluating job below can key its
   # concurrency group on that single identity.
   #
@@ -77,37 +82,34 @@ jobs:
   # waiting-for-human note, the carried-verdict record) is a race the moment
   # they do. Live on 2026-08-17: twelve gate runs in twenty-five minutes
   # during a burst of five PRs, two waiting-for-human comments on one PR,
-  # harness red. Resolving the PR here costs one job (~20s) and makes the
-  # key event-independent.
+  # harness red.
   #
-  # The event-leg filter lives here now, on the funnel every leg passes
-  # through; `evaluate` is reachable only via this job's resolved number.
+  # DRE-4279: this job is the FALLBACK, not the funnel. GitHub bills every
+  # job rounded UP to a whole minute, so the ~20 seconds this lookup takes
+  # billed a full minute on every evaluation — 1,200+ times in three days
+  # across agent-bureau and bureau-harness, beside the evaluating job's own
+  # minute. Three of the four legs already carry the PR number in the
+  # event: `issue.number` on the verdict leg, `inputs.pr_number` on a
+  # dispatch, and `workflow_run.pull_requests[0].number` on the CI leg (a
+  # same-repo `pull_request` run names the PR it was created for — 24 of 24
+  # live runs sampled on agent-bureau and portico did). Those legs skip this
+  # job and `evaluate` keys its group on the event's own number. The lookup
+  # runs only for a workflow_run that names NO pull request — a fork PR, or
+  # a run whose PR closed before it finished (GitHub empties the array once
+  # the PR is closed) — and there it answers exactly what it always did.
+  #
+  # The event-leg filter moved with the funnel: it lives ONCE, on
+  # `evaluate`, and the condition here is deliberately narrow — the event
+  # kind and "no named PR" — so the branch list is written in one place
+  # (eight hand-copied answers to that question stranded four PRs for ten
+  # hours, DRE-2426). The cost of not repeating it: a lookup minute on a
+  # hand-named branch whose PR closed before CI finished, which `evaluate`'s
+  # filter then declines.
   resolve:
-    # issue_comment leg (DRE-1987): only a verdict comment AUTHORED BY the
-    # qa-bot App wakes the gate — anyone can type "QA Critic" in a comment.
-    # The literal must match the BUREAU_QA_APP bot login; the decision steps
-    # below re-derive the same login from the minted token (app-slug), but a
-    # job-if runs before any step can mint one, so the login is hardcoded
-    # here and does NOT follow an App rename.
-    # RENAME PROCEDURE (DRE-2120): renaming the qa App must update every
-    # hardcoded login site in .github/workflows/ together with the roster in
-    # tests/test_qa_login_literal_roster.py, in one commit — a missed site
-    # sends this leg dark silently (verdicts stop landing merges until
-    # reconcile's ~15-min gate nudge picks them up).
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'pull_request' &&
-       (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
-        startsWith(github.event.workflow_run.head_branch, 'repair/') ||
-        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
-        github.event.workflow_run.head_branch == 'bot/standards-sync' ||
-        github.event.workflow_run.head_branch == 'bot/split-ledger' ||
-        github.event.workflow_run.head_branch == 'bot/model-drift')) ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, 'QA Critic') &&
-       github.event.comment.user.login == 'agent-bureau-qa-bot[bot]')
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      !github.event.workflow_run.pull_requests[0].number
     # The SHORT-job lane (DRE-3887). Every job in this file is bookkeeping that
     # finishes in well under a minute, and until now it drew from the same
     # `BUREAU_RUNS_ON` pool as the 20-minute agent, critic and verifier jobs: on
@@ -135,19 +137,13 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ steps.qa.outputs.token }}
-          EVENT: ${{ github.event_name }}
           WR_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          IC_PR: ${{ github.event.issue.number }}
-          INPUT_PR: ${{ github.event.inputs.pr_number }}
         run: |
           set -euo pipefail
-          # Resolve the PR number from whichever event fired. No checkout
-          # here, so the repo is named explicitly.
-          case "$EVENT" in
-            workflow_run)      PR=$(gh pr list --repo "${{ github.repository }}" --head "$WR_BRANCH" --state open --json number --jq '.[0].number' || true) ;;
-            workflow_dispatch) PR=$INPUT_PR ;;
-            *)                 PR=$IC_PR ;;
-          esac
+          # The one leg that reaches this job (DRE-4279) is a workflow_run
+          # that named no PR: look the open one up by head branch. No
+          # checkout here, so the repo is named explicitly.
+          PR=$(gh pr list --repo "${{ github.repository }}" --head "$WR_BRANCH" --state open --json number --jq '.[0].number' || true)
           if [ -z "${PR:-}" ] || [ "$PR" = "null" ]; then
             echo "no open PR — nothing to do"
             PR=""
@@ -157,20 +153,75 @@ jobs:
 
   evaluate:
     needs: resolve
-    # Fail-closed on both counts: a resolve that FAILED (rather than
-    # skipped) must not let the gate evaluate a guessed PR, and an empty
-    # number means the event pointed at nothing to gate. A custom `if`
-    # replaces the implicit success() check, so it is spelled out.
-    if: needs.resolve.result == 'success' && needs.resolve.outputs.pr != ''
+    # The gate's ENTRY for every event that names its PR (DRE-4279), and the
+    # event-leg filter every leg passes through — nothing reaches the
+    # evaluation around it.
+    #
+    # `!cancelled()` first, on purpose: `needs: resolve` carries an implicit
+    # success() that would SKIP this job whenever `resolve` was skipped —
+    # i.e. on every leg this card makes one job. Naming a status function
+    # drops that implicit check; `!cancelled()` (not `always()`) still
+    # refuses a run being cancelled.
+    #
+    # Fail-closed on the lookup leg, unchanged: a `resolve` that FAILED
+    # (rather than skipped) must not let the gate evaluate a guessed PR,
+    # and an empty number means the event pointed at nothing to gate.
+    #
+    # issue_comment leg (DRE-1987): only a verdict comment AUTHORED BY the
+    # qa-bot App wakes the gate — anyone can type "QA Critic" in a comment.
+    # The literal must match the BUREAU_QA_APP bot login; the decision steps
+    # below re-derive the same login from the minted token (app-slug), but a
+    # job-if runs before any step can mint one, so the login is hardcoded
+    # here and does NOT follow an App rename.
+    # RENAME PROCEDURE (DRE-2120): renaming the qa App must update every
+    # hardcoded login site in .github/workflows/ together with the roster in
+    # tests/test_qa_login_literal_roster.py, in one commit — a missed site
+    # sends this leg dark silently (verdicts stop landing merges until
+    # reconcile's ~15-min gate nudge picks them up).
+    #
+    # The comment predicate is deliberately no narrower than "a qa-bot QA
+    # Critic comment". Measured 2026-09-15..18 on agent-bureau + portico:
+    # 279 of 279 comment wakes were exactly that; 149 were REQUEST_CHANGES
+    # or a neutral hold, which cannot merge but CAN act — merge_gate.py runs
+    # the conflict arm first, so either one on a conflicted PR dispatches
+    # the fix agent, and a verdict from a workflow_dispatch re-review has no
+    # other wake (its run's completion is not a `pull_request` event). The
+    # one provable no-op, a comment on an already-closed PR, was 3 of 279.
+    if: >
+      !cancelled() &&
+      ((github.event_name == 'workflow_dispatch' &&
+        github.event.inputs.pr_number != '') ||
+       (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, 'QA Critic') &&
+        github.event.comment.user.login == 'agent-bureau-qa-bot[bot]') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        (startsWith(github.event.workflow_run.head_branch, 'agent/') ||
+         startsWith(github.event.workflow_run.head_branch, 'repair/') ||
+         startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
+         github.event.workflow_run.head_branch == 'bot/standards-sync' ||
+         github.event.workflow_run.head_branch == 'bot/split-ledger' ||
+         github.event.workflow_run.head_branch == 'bot/model-drift') &&
+        ((needs.resolve.result == 'skipped' &&
+          github.event.workflow_run.pull_requests[0].number) ||
+         (needs.resolve.result == 'success' &&
+          needs.resolve.outputs.pr != ''))))
     # The short lane, same as `resolve` above (DRE-3887).
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # One group per PR, whatever woke the gate — the CI leg, the verdict
-    # leg, and a dispatch all land here (DRE-2508). Never cancel-in-progress:
-    # the queued wake is the one that was going to merge, and dropping it
-    # would leave the PR waiting for reconcile's ~15-minute nudge.
+    # leg, and a dispatch all land here (DRE-2508). The key is the PR NUMBER
+    # from whichever place this event carries it: the lookup's answer when
+    # it ran, else the event's own field (DRE-4279) — every leg renders the
+    # same string for the same PR, and tests/test_merge_gate_one_job.py
+    # renders all four to prove it. The SAME expression is the `PR` the step
+    # below evaluates, so the serialization and the evaluation can never be
+    # about different PRs. Never cancel-in-progress: the queued wake is the
+    # one that was going to merge, and dropping it would leave the PR
+    # waiting for reconcile's ~15-minute nudge.
     concurrency:
-      group: merge-gate-pr-${{ needs.resolve.outputs.pr }}
+      group: merge-gate-pr-${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.inputs.pr_number }}
       cancel-in-progress: false
     steps:
       - name: Mint qa-bot token (author != merger)
@@ -192,10 +243,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.qa.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          # Resolved by the `resolve` job — the SAME number this job's
-          # concurrency group is keyed on, so the serialization and the
-          # evaluation can never be about different PRs (DRE-2508).
-          PR: ${{ needs.resolve.outputs.pr }}
+          # The SAME expression this job's concurrency group is keyed on —
+          # the lookup's answer when it ran, else the event's own number —
+          # so the serialization and the evaluation can never be about
+          # different PRs (DRE-2508, DRE-4279).
+          PR: ${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.inputs.pr_number }}
         run: |
           set -euo pipefail
 

@@ -100,14 +100,17 @@ _REUSABLE = "/agent-fix.yml@"
 # Just enough GitHub expression to evaluate a concurrency group and a job gate
 # ---------------------------------------------------------------------------
 # Not a general implementation and not trying to be: it covers the operators
-# the two shipped expressions actually use (`||`, `&&`, `==`, `!=`, `!`,
-# `contains()`, parentheses, single-quoted literals, dotted context paths), so
-# a test can put the live PR #199 events through the live YAML. Anything it
-# cannot parse raises rather than guessing — a silently mis-evaluated gate
+# the shipped expressions actually use (`||`, `&&`, `==`, `!=`, `!`,
+# `contains()`, `startsWith()`, `format()`, the `cancelled()` status function,
+# parentheses, single-quoted literals, dotted context paths and the array
+# index `[N]` — the last three added for merge-gate.yml's job-ifs, DRE-4279),
+# so a test can put the live PR #199 events through the live YAML. Anything
+# it cannot parse raises rather than guessing — a silently mis-evaluated gate
 # would be a worse answer than no answer.
 
 _TOKEN = re.compile(
-    r"\|\||&&|==|!=|!|\(|\)|,|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_.]*|[0-9]+"
+    r"\|\||&&|==|!=|!|\(|\)|\[|\]|,|'(?:[^']|'')*'"
+    r"|[A-Za-z_][A-Za-z0-9_.]*|\.[A-Za-z_][A-Za-z0-9_]*|[0-9]+"
 )
 
 
@@ -218,8 +221,33 @@ class _Parser:
                 if self.peek() == ",":
                     self.take()
             self.take()
-            return _call(tok, args)
-        return _lookup(tok, self.ctx)
+            return _call(tok, args, self.ctx)
+        return self.postfix(_lookup(tok, self.ctx))
+
+    def postfix(self, value):
+        """`[N]` and `.name` after a context path — the way GitHub reads
+        `github.event.workflow_run.pull_requests[0].number`. Out of range, a
+        non-array, or a property of null all read as null, never raise: the
+        gate's fallback to its lookup job hangs on exactly that reading."""
+        while True:
+            nxt = self.peek()
+            if nxt == "[":
+                self.take()
+                index = self.or_()
+                if self.take() != "]":
+                    raise ValueError("unbalanced brackets in expression")
+                if isinstance(value, (list, tuple)) and isinstance(index, int) \
+                        and not isinstance(index, bool) and 0 <= index < len(value):
+                    value = value[index]
+                elif isinstance(value, dict) and isinstance(index, str):
+                    value = value.get(index)
+                else:
+                    value = None
+            elif nxt is not None and nxt.startswith("."):
+                self.take()
+                value = value.get(nxt[1:]) if isinstance(value, dict) else None
+            else:
+                return value
 
 
 def _loose_eq(a, b) -> bool:
@@ -238,12 +266,21 @@ def _loose_eq(a, b) -> bool:
     return a == b
 
 
-def _call(name: str, args: list):
+def _call(name: str, args: list, ctx: dict | None = None):
     if name == "contains":
         haystack, needle = args[0], args[1]
         if isinstance(haystack, (list, tuple)):
             return any(_loose_eq(item, needle) for item in haystack)
         return str(needle).lower() in str(haystack or "").lower()
+    if name == "startsWith":
+        # Case-insensitive, like GitHub's; null reads as the empty string.
+        return str(args[0] or "").lower().startswith(str(args[1]).lower())
+    if name == "cancelled":
+        # The status function merge-gate.yml's evaluate job opens with
+        # (DRE-4279): a job-if that names one drops the implicit success(),
+        # so a SKIPPED dependency no longer skips the job — while a run that
+        # is being cancelled still is. A context says so with `cancelled`.
+        return bool((ctx or {}).get("cancelled", False))
     if name == "format":
         # GitHub's format('{0}-{1}', a, b), with {{ and }} as the literal
         # braces. Added for harness.yml's per-run-kind concurrency group

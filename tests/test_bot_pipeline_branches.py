@@ -113,8 +113,10 @@ def _shell_gate_prefixes() -> set[str]:
     return {p.strip().rstrip("*") for p in m.group(1).split("|")}
 
 
-def _resolve_if() -> str:
-    return _doc("merge-gate.yml")["jobs"]["resolve"]["if"]
+def _evaluate_if() -> str:
+    # DRE-4279: the event-leg filter sits on `evaluate`, the one job every
+    # leg reaches; `resolve` is only the PR lookup for a run that names none.
+    return _doc("merge-gate.yml")["jobs"]["evaluate"]["if"]
 
 
 def _gate_pattern() -> str:
@@ -194,10 +196,10 @@ class TheTrustedListTest(unittest.TestCase):
                 self.assertIn(branch, prefixes)
 
     def test_the_merge_gate_event_filter_admits_both(self):
-        """The `resolve` job's `if:` decides whether the gate wakes at all on
+        """The `evaluate` job's `if:` decides whether the gate wakes at all on
         the CI leg. A branch in the case statement but not here is a PR the
         gate never evaluates until reconcile's ~15-minute nudge finds it."""
-        condition = _resolve_if()
+        condition = _evaluate_if()
         for branch in JOB_BRANCHES.values():
             with self.subTest(branch=branch):
                 self.assertIn(f"head_branch == '{branch}'", condition)

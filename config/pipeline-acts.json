@@ -571,7 +571,7 @@
       "why": "The third ordinary place a card waits, and the one where the measurement says NOT to use its own number. MEASURED (DRE-3388, 2026-09-08 15:10 PT, against live Actions runs on agent-bureau and bureau-pipeline): the last 50 completed merge-gate runs per repo — 100 runs, 64 green — with a longest green duration of 1.0 min. That is how long the gate takes to RUN, not how long a pull request sitting at it may be silent: the gate re-fires on each check-run and on the 15-minute reconcile sweep, and what the row is actually waiting on is the review that must complete on its head. So it takes the same 3900 s `fix-attempt-landed` carries, and the measurement is recorded here as the reason a 60-second cadence was refused. Nothing new is posted for it — the console reads the gate's re-check from GitHub.",
       "emits": {
         "file": ".github/workflows/merge-gate.yml",
-        "anchor": "group: merge-gate-pr-${{ needs.resolve.outputs.pr }}"
+        "anchor": "group: merge-gate-pr-${{ needs.resolve.outputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.issue.number || github.event.inputs.pr_number }}"
       }
     },
     {

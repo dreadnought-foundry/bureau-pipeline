@@ -644,12 +644,13 @@ class SerializationTest(unittest.TestCase):
         outputs = jobs["resolve"].get("outputs") or {}
         self.assertIn("pr", outputs, "the resolve job publishes no PR number")
 
-    def test_every_event_leg_resolves_through_that_one_job(self):
+    def test_the_unnamed_leg_resolves_through_that_one_job(self):
+        # DRE-4279: only a workflow_run that names no PR is looked up here —
+        # every other leg carries its PR number in the event and skips this
+        # job (one billed minute, not two). The lookup itself is unchanged.
         run = "\n".join(
             s.get("run", "") for s in self.doc["jobs"]["resolve"]["steps"]
         )
-        for leg in ("workflow_run", "workflow_dispatch"):
-            self.assertIn(leg, run, f"the {leg} leg is not resolved")
         self.assertIn("gh pr list", run, "the workflow_run leg needs a lookup")
         self.assertIn("--state", run, "gh pr list must name its state (DRE-2316)")
 
@@ -661,12 +662,25 @@ class SerializationTest(unittest.TestCase):
         )
 
     def test_the_group_cannot_differ_between_event_legs(self):
+        """DRE-4279: the group reads github.event again — each leg's OWN
+        name for the PR — so the property is proved by rendering, not by
+        forbidding the read: every leg's event for one PR lands in the same
+        group (tests/test_merge_gate_one_job.py renders all four legs)."""
+        import fix_concurrency as fc
+
         group = self.doc["jobs"]["evaluate"]["concurrency"]["group"]
-        self.assertNotIn(
-            "github.event", group,
-            "the group still reads github.event — a workflow_run wake and an "
-            "issue_comment wake for the SAME PR then land in different "
-            "groups and run concurrently (DRE-2508)",
+        needs = {"needs": {"resolve": {"result": "skipped", "outputs": {"pr": ""}}}}
+        by_comment = fc.interpolate(group, {**fc.comment_event(88, "agent-bureau-qa-bot[bot]"), **needs})
+        run_event = {
+            "github": {"event_name": "workflow_run", "event": {"workflow_run": {
+                "event": "pull_request", "head_branch": "agent/x",
+                "pull_requests": [{"number": 88}]}}},
+            **needs,
+        }
+        self.assertEqual(
+            by_comment, fc.interpolate(group, run_event),
+            "a workflow_run wake and an issue_comment wake for the SAME PR "
+            "land in different groups and run concurrently (DRE-2508)",
         )
 
     def test_a_queued_evaluation_is_not_cancelled(self):
@@ -689,9 +703,10 @@ class SerializationTest(unittest.TestCase):
 
     def test_the_event_leg_filter_still_gates_the_gate(self):
         """The #57 filter (only a qa-bot-authored verdict comment wakes the
-        gate) moved to the entry job with the resolution — it must still be
-        there, and no leg may reach evaluate around it."""
-        cond = " ".join((self.doc["jobs"]["resolve"]["if"] or "").split())
+        gate) moved to the entry job with the resolution; since DRE-4279 the
+        entry for every event that names its PR is `evaluate` itself, so the
+        filter sits there — and no leg may reach the evaluation around it."""
+        cond = " ".join((self.doc["jobs"]["evaluate"]["if"] or "").split())
         self.assertIn(
             "github.event.comment.user.login == 'agent-bureau-qa-bot[bot]'", cond
         )
