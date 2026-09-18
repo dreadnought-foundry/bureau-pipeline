@@ -49,6 +49,25 @@ on:
         required: false
       BUREAU_QA_APP_PRIVATE_KEY:
         required: false
+      # Dispatch-pool workers (DRE-2013), wired in here by DRE-4282: the fix
+      # loop's READS — the comment thread it fetches twice per run, the
+      # verdict, the check runs — go out as the pool App with the most
+      # headroom. Its writes (the checkout the agent pushes through, the
+      # attempt markers fix_budget.py counts by the worker's login, the fix
+      # itself) stay on the original App. ALL optional: a repo without these
+      # pairs runs on the original App exactly as before.
+      BUREAU_APP_ID_2:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_2:
+        required: false
+      BUREAU_APP_ID_3:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_3:
+        required: false
+      BUREAU_APP_ID_4:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_4:
+        required: false
 
 jobs:
   fix:
@@ -113,7 +132,20 @@ jobs:
     # smaller ceiling than this job carries. Pinned against agent-task's own
     # timeout by tests/test_fix_turn_budget.py.
     timeout-minutes: 120
+    env:
+      # The secrets context is not readable in a step-level `if:`, so the
+      # dispatch-pool probe mints check slot PRESENCE via these job-env
+      # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
+      # and the pool shrinks (DRE-2013 graceful degradation).
+      BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+      BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+      BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     steps:
+      # Boot token: the ORIGINAL app (pool slot 1). It stays the identity
+      # this loop WRITES as — the branch checkout the agent pushes through,
+      # the attempt markers and receipts fix_budget.py counts by this App's
+      # login, the fix agent's own token — and it is slot 1's /rate_limit
+      # probe. The reads move to the selected pool app below (DRE-4282).
       - name: Mint bot token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -134,6 +166,79 @@ jobs:
           repository: dreadnought-foundry/bureau-pipeline
           ref: ${{ inputs.pipeline_ref || 'main' }}
           path: .bureau-pipeline
+
+      # ---- Dispatch-pool reader selection (DRE-2013, wired here by DRE-4282) ----
+      # verify.yml's shape, copied: mint a probe token per CONFIGURED pool app
+      # (absent secrets skip the step and shrink the pool; continue-on-error so
+      # a broken pool app can never fail a fix), let dispatch_pool.py read each
+      # bucket's quota-exempt /rate_limit and pick the app with the MOST
+      # remaining, then mint this run's READ token from that app. Selection
+      # sits before the first thread fetch on purpose — that fetch is one of
+      # the reads that emptied installation 123249480 on 2026-09-17
+      # (DRE-4132), and it must not spend from the bucket it is about to leave.
+      # The selector only ever sees app ids and probe tokens, never keys; the
+      # mint below maps the chosen slot to its secret pair explicitly and falls
+      # through to the original app, so a repo without the new secrets is a
+      # single-app pool behaving exactly as before.
+      - name: Mint pool probe token (2)
+        id: probe_2
+        if: env.BUREAU_APP_ID_2 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_2 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+      - name: Mint pool probe token (3)
+        id: probe_3
+        if: env.BUREAU_APP_ID_3 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_3 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+      - name: Mint pool probe token (4)
+        id: probe_4
+        if: env.BUREAU_APP_ID_4 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_4 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
+
+      - name: Select dispatch-pool app
+        id: pool
+        env:
+          BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+          BUREAU_POOL_TOKEN: ${{ steps.app.outputs.token }}
+          BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          BUREAU_POOL_TOKEN_2: ${{ steps.probe_2.outputs.token }}
+          BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          BUREAU_POOL_TOKEN_3: ${{ steps.probe_3.outputs.token }}
+          BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          BUREAU_POOL_TOKEN_4: ${{ steps.probe_4.outputs.token }}
+          # Deterministic fallback key on read failure: the PR, so a re-run of
+          # the same fix picks the same slot instead of scattering.
+          BUREAU_POOL_KEY: fix:${{ github.event.issue.number || github.event.inputs.pr_number }}
+        run: |
+          python3 .bureau-pipeline/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
+
+      # Read token: minted from the SELECTED pool app. Explicit per-N map
+      # (Actions can't index secrets dynamically); each clause yields '' when
+      # not selected, so the chain always falls through to the original pair.
+      - name: Mint read token (selected pool app)
+        id: reader
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       # DRE-3451: the expensive half of the comment gate. The job `if` above
       # admitted a User comment on a pull request; this decides whether that
@@ -159,7 +264,9 @@ jobs:
         id: decision
         if: github.event_name == 'issue_comment'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # A READ, so the pool-selected token (DRE-4282). The login below is
+          # still the WRITER's: it names whose markers to count, not who asks.
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           # The loop's own identity from THIS run's minted token (DRE-1988
           # discipline — never a hardcoded name an App rename outdates), the
           # same derivation the Resolve step below makes.
@@ -216,7 +323,9 @@ jobs:
         id: pr
         if: steps.decision.outputs.start != 'skip'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Reads only (the PR record, the thread) — the pool-selected token
+          # (DRE-4282); the login below stays the writer's.
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           # The loop's own identity, from THIS run's minted token (DRE-1988
           # discipline — never a hardcoded name that an App rename outdates).
           WORKER_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
@@ -587,7 +696,8 @@ jobs:
         id: unfixable
         if: steps.pr.outputs.go == 'true' && steps.pr.outputs.mode == 'fix'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Check-run reads — the pool-selected token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           CARD: ${{ steps.pr.outputs.card }}
@@ -692,7 +802,8 @@ jobs:
           steps.pr.outputs.mode == 'fix' &&
           steps.unfixable.outputs.escalate != 'true'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Check-run reads on two commits — the pool-selected token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           PR: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
@@ -993,7 +1104,9 @@ jobs:
       - name: Fetch critic verdict (qa-bot authored only)
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # A read — the pool-selected token (DRE-4282). The verdict is still
+          # filtered to the qa-bot's login; who FETCHES it is nobody's concern.
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
         run: |
           # DRE-4157: to a FILE through the retry seam, then jq on the file.
           # This was `gh api … --jq … | tail -1`: on a throttled answer gh
@@ -1048,7 +1161,9 @@ jobs:
       - name: Fetch fix-loop thread (blockers + operator decisions)
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # The paginated thread read — the pool-selected token (DRE-4282);
+          # the login it filters by is still the writer's.
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           WORKER_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
         run: |
           gh api --paginate --slurp \

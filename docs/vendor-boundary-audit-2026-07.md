@@ -627,11 +627,31 @@ one unwatched surface (accepted: it never mutates state beyond comments).
 
 ## Pool dispatch — scripts/dispatch_pool.py
 
+**Who consults it (DRE-4282).** `agent-task.yml` (DRE-2013), `verify.yml`
+(DRE-2429) and `red-main-repair.yml` mint their WORKER token through the pool.
+Since DRE-4282 the heavy READERS do too, each in verify.yml's shape (guarded
+probe mints → `dispatch_pool.py select` → a `reader` mint that maps the slot and
+falls back to the workflow's own original pair): `qa-review.yml` (the critic's
+PR reads and its check-run write; slot 1 there is the qa-bot App, so DRE-1921's
+bucket stays the fallback), `reconcile.yml` (`GH_READ_TOKEN`, swapped in by
+`reconcile.gh_read`), `agent-fix.yml` (the thread and verdict fetches),
+`plan.yml` (every planner and critic run's token, through DRE-3940's re-mints)
+and `harness.yml` (the driver's reader client). What did NOT move, per
+workflow: the PR-authoring checkout, push and fix in agent-fix; the receipts
+reconcile posts and counts by the worker's login; the verdict comment
+merge-gate attributes to the qa-bot; the harness's acting identities (the
+worker authors, the qa-bot merges). `medic.yml` is deliberately not a
+consumer: its reads ride `github.token` because the App lacks `actions:read`
+(DRE-1346), a bucket the pool cannot improve on. All pinned by
+`tests/test_readers_on_the_pool.py`.
+
 **Q1 — actor.** The selected slot's App token authors the PR, so the PR author
 is `agent-bureau-bot` or `-2/-3/-4` — every allowlist that admits the worker
 must admit the whole pool, enforced live by `test_worker_pool_allowed_bots.py`
 (the DRE-2020 lockout, mechanically pinned). There is no generated single
-source of truth for the rosters; the test IS the sync mechanism.
+source of truth for the rosters; the test IS the sync mechanism. A READ
+carries no actor anyone checks, which is what lets the readers above spread
+across the pool without touching any allowlist.
 
 **Q2 — secrets.** The selector sees app ids and short-lived probe tokens only,
 never private keys (those stay in the workflow's per-slot mint clauses).

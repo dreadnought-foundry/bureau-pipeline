@@ -130,6 +130,7 @@ def read(
     *,
     may_retry: Callable[[], bool] | None = None,
     log: Callable[[str], None] = print,
+    env: dict | None = None,
 ) -> str:
     """Run `gh <args>` and return its stdout (stripped), retrying a brief
     rate-limit refusal; raise GhReadError otherwise.
@@ -143,12 +144,18 @@ def read(
 
     `log` receives ONE line per retry, naming the command and `attempt N of
     3` — the whole of the visibility the CEO asked for in place of a card.
+
+    `env` is the environment `gh` runs in — None is the process's own, as
+    before. The sweep passes one with `GH_TOKEN` swapped for its pool-selected
+    read token (DRE-4282), the same shape `reconcile.gh_dispatch` uses for
+    `GH_DISPATCH_TOKEN`; the identity a READ goes out as is nobody's
+    concern, so the read seam is where the swap belongs.
     """
     cmd = "gh " + " ".join(args)
     waits = backoff_seconds()
     for attempt in range(1, ATTEMPTS + 1):
         p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
-            ["gh", *args], capture_output=True, text=True, check=False
+            ["gh", *args], capture_output=True, text=True, check=False, env=env
         )
         if p.returncode == 0:
             return p.stdout.strip()

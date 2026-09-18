@@ -49,6 +49,24 @@ on:
         required: false
       BUREAU_QA_APP_PRIVATE_KEY:
         required: false
+      # Dispatch-pool workers (DRE-2013), wired in here by DRE-4282: every
+      # planner and critic run's GitHub token — the re-mints DRE-3940 makes
+      # before each model step — is minted from the pool App with the most
+      # headroom rather than the original App by habit. The checkout and the
+      # portal push keep the original App. ALL optional: a repo without these
+      # pairs plans on the original App exactly as before.
+      BUREAU_APP_ID_2:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_2:
+        required: false
+      BUREAU_APP_ID_3:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_3:
+        required: false
+      BUREAU_APP_ID_4:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_4:
+        required: false
 
 jobs:
   plan:
@@ -139,6 +157,13 @@ jobs:
     # without it.
     env:
       LINEAR_IDENTITY: fleet
+      # The secrets context is not readable in a step-level `if:`, so the
+      # dispatch-pool probe mints check slot PRESENCE via these job-env
+      # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
+      # and the pool shrinks (DRE-2013 graceful degradation).
+      BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+      BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+      BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     # Read by the `publish` job below (DRE-2720): the plan artifact is
     # rendered and published from a SEPARATE job so the document portal never
     # enters the planner agent's workspace.
@@ -283,6 +308,85 @@ jobs:
       # one turn, no tools — and keeps the raw POST only as the API-key fast
       # path. The env below is unchanged, because the CLI reads the same two
       # variables claude-code-action is handed.
+      # ---- Dispatch-pool reader selection (DRE-2013, wired here by DRE-4282) ----
+      # verify.yml's shape, copied: mint a probe token per CONFIGURED pool app
+      # (absent secrets skip the step and shrink the pool; continue-on-error so
+      # a broken pool app can never fail a plan), let dispatch_pool.py read
+      # each bucket's quota-exempt /rate_limit and pick the app with the MOST
+      # remaining, then mint from that app. Chosen ONCE, here, after the two
+      # bail gates: every re-mint below (DRE-3940's fresh token before each
+      # model step) repeats the same per-slot map and reads the same
+      # `steps.pool.outputs.n`, so a plan that runs past the hour re-mints the
+      # slot it started on rather than re-selecting. The selector only ever
+      # sees app ids and probe tokens, never keys; each mint maps the chosen
+      # slot to its secret pair explicitly and falls through to the original
+      # app, so a repo without the new secrets is a single-app pool behaving
+      # exactly as before.
+      - name: Mint pool probe token (2)
+        id: probe_2
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && env.BUREAU_APP_ID_2 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_2 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+      - name: Mint pool probe token (3)
+        id: probe_3
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && env.BUREAU_APP_ID_3 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_3 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+      - name: Mint pool probe token (4)
+        id: probe_4
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && env.BUREAU_APP_ID_4 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_4 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
+
+      - name: Select dispatch-pool app
+        id: pool
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        env:
+          BUREAU_APP_ID: ${{ secrets.BUREAU_APP_ID }}
+          BUREAU_POOL_TOKEN: ${{ steps.app.outputs.token }}
+          BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          BUREAU_POOL_TOKEN_2: ${{ steps.probe_2.outputs.token }}
+          BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          BUREAU_POOL_TOKEN_3: ${{ steps.probe_3.outputs.token }}
+          BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          BUREAU_POOL_TOKEN_4: ${{ steps.probe_4.outputs.token }}
+          # Deterministic fallback key on read failure: the epic, so a re-run
+          # of the same plan picks the same slot instead of scattering.
+          BUREAU_POOL_KEY: plan:${{ github.event.client_payload.identifier }}
+        run: |
+          python3 .bureau-pipeline/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
+
+      # The first token from the SELECTED pool app — the one-off critic's,
+      # below, the only model step that reads a token minted this early. Every
+      # later model step re-mints this same map (test_plan_token_remint.py).
+      # Explicit per-N map (Actions can't index secrets dynamically); each
+      # clause yields '' when not selected, so the chain always falls through
+      # to the original pair.
+      - name: Mint read token (selected pool app)
+        id: reader
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+
       - name: Classify the card — one-off, epic or wave
         id: classify
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -726,7 +830,9 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          # The pool-selected token (DRE-4282) — this critic runs before any
+          # re-mint, so it takes the reader mint's token directly.
+          github_token: ${{ steps.reader.outputs.token }}
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,github-actions
           claude_args: |
             --max-turns 20
@@ -882,16 +988,21 @@ jobs:
       #
       # This is agent-task.yml's shape (DRE-3043's `Mint fresh push token`): a
       # `run:` step cannot mint, so the mint is its own step, immediately before
-      # its consumers, with the same pinned action and the same App as `Mint bot
-      # token`. Deliberately NOT continue-on-error, unlike agent-task.yml's
+      # its consumers, with the same pinned action and — since DRE-4282 — the
+      # same per-slot pool map as `Mint read token (selected pool app)`: the
+      # slot chosen once up front, never re-selected, falling through to the
+      # original App. Deliberately NOT continue-on-error, unlike agent-task.yml's
       # rescue mints: those must never redden a build that is otherwise fine,
       # while a mint that fails here should go red AT the mint, not as `Bad
       # credentials` one step later. Each re-mint's `if:` covers every consumer
       # it feeds, so it runs whenever one of them can.
       #
-      # Q1/Q2 (standards/vendor-boundaries.md): unchanged — the same App
-      # identity and the same two secrets as `Mint bot token`, from the same
-      # store; only the token's age changes. Q3: minting is idempotent and a
+      # Q1/Q2 (standards/vendor-boundaries.md): the same identity the reader
+      # mint chose and the same secret store; only the token's age changes.
+      # Every pool App mirrors the original's permissions exactly (DRE-1922)
+      # and sits in every worker allowlist (DRE-2020), so the one write these
+      # tokens make — the re-review `repository_dispatch` further down — goes
+      # through as any of them. Q3: minting is idempotent and a
       # rerun mints again. Q5: a failed mint stops the job before the step that
       # would have spent a dead token.
       - name: Re-mint bot token — planner
@@ -899,8 +1010,16 @@ jobs:
         if: steps.route.outputs.mode == 'plan'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Plan epic
         id: claude
@@ -1100,8 +1219,16 @@ jobs:
         if: (steps.route.outputs.mode == 'plan') && steps.plan_cap.outputs.retry == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Plan epic — on the next rung
         id: claude_retry
@@ -1576,8 +1703,16 @@ jobs:
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: First critic — round 1 (before the CEO reads it)
         id: prea
@@ -1710,8 +1845,16 @@ jobs:
         if: steps.pre1.outputs.action == 'hold'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Re-plan after send-back
         id: replan
@@ -1791,8 +1934,16 @@ jobs:
         if: (steps.pre1.outputs.action == 'hold') && steps.replan_cap.outputs.retry == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Re-plan after send-back — on the next rung
         id: replan_retry
@@ -1950,8 +2101,16 @@ jobs:
         if: steps.pre1.outputs.action == 'hold'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: First critic — round 2
         id: preb
@@ -2211,8 +2370,16 @@ jobs:
         if: steps.route.outputs.mode == 'activate'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       # `continue-on-error`, because THE RESULT FILE DECIDES and this step's
       # outcome does not (DRE-3501). On 2026-09-07 run 34144302622 FINISHED —
@@ -2404,8 +2571,16 @@ jobs:
         if: steps.route.outputs.mode == 'activate'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       # The review DIED — the action ended without a decision (DRE-3241). On
       # 2026-09-05 that left nothing on the epic: the job went red, every
@@ -2454,7 +2629,8 @@ jobs:
       #
       # Q1/Q2: the dispatch needs `contents:write`, which the App token holds
       # (minted fresh by `Re-mint bot token — after the second critic`, the
-      # same App as `Mint bot token`, DRE-3940) and the stub's own
+      # pool slot the reader mint selected — every pool App carries the same
+      # `contents:write`, DRE-1922 — DRE-3940/DRE-4282) and the stub's own
       # `github.token` does not
       # (`plan_run.py`'s docstring) — the same path reconcile.redispatch uses,
       # initiating as a bot already in every reachable `allowed_bots` list. The
@@ -2690,8 +2866,16 @@ jobs:
         if: (steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold') && steps.postreplan_cap.outputs.retry == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Re-plan after the second critic sent it back — on the next rung
         id: postreplan_retry
@@ -2843,8 +3027,16 @@ jobs:
         if: steps.route.outputs.mode == 'activate' && steps.post1.outputs.action == 'hold'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       # Held — and the three things that can be true of a held plan, in this
       # order (DRE-3291). The children never promote in any of them.
@@ -2874,8 +3066,8 @@ jobs:
       #
       # Q1/Q2 (standards/vendor-boundaries.md): the dispatch is the same seam
       # the dead-review step uses — the App token, minted fresh by
-      # `Re-mint bot token — send-back` from the same App as `Mint bot token`
-      # (DRE-3940), which holds the `contents:write` the stub's own
+      # `Re-mint bot token — send-back` from the pool slot the reader mint
+      # selected (DRE-3940, DRE-4282), which holds the `contents:write` the stub's own
       # `github.token` does not, initiating as a bot already in every
       # reachable `allowed_bots` list. Q5: the receipt is written FROM the
       # dispatch's rc and never ahead of it (DRE-2034), and a dispatch that
@@ -3027,8 +3219,16 @@ jobs:
         if: steps.shape.outputs.route == 'wave'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Wave route — write the wave plan
         id: wave
@@ -3131,8 +3331,16 @@ jobs:
         if: (steps.shape.outputs.route == 'wave') && steps.wave_cap.outputs.retry == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Wave route — write the wave plan — on the next rung
         id: wave_retry

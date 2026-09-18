@@ -135,9 +135,28 @@ pre-DRE-4132 client.
 Every run ends with one line per identity, zero included — in this shape (the
 numbers here are an illustration, not a measurement):
 
-    github-spend: worker 212 billed, 1840 free (304 Not Modified)
+    github-spend: worker 12 billed, 0 free (304 Not Modified)
+    github-spend: reader (pool slot 3) 200 billed, 1840 free (304 Not Modified)
+    github-spend: qa 4 billed, 0 free (304 Not Modified)
 
 `billed` is what the run cost that identity's hour. Read it before guessing.
+
+### Reads ride the dispatch pool (DRE-4282)
+
+The polling above is READS, and a read is not an action anyone attributes — no
+scenario asserts who asked. So `harness.yml` selects a dispatch-pool App the
+way `verify.yml` does (`scripts/dispatch_pool.py`: probe every configured
+slot's `/rate_limit`, take the most headroom, mint from that App's key,
+sandbox-scoped) and hands the driver `HARNESS_READER_TOKEN`. The worker client
+is built with that client as its `reader`, and every `GET` it would have sent
+goes out as the reader instead — its own hour, its own ETag memory, its own
+`github-spend:` line naming the slot. Writes stay the worker's, and so does
+`GitHub.current_token()`, the credential the agent scenarios clone and push
+with: WHICH identity ACTS is still the thing under test. The reader re-mints
+mid-run from `HARNESS_READER_APP_ID/_PRIVATE_KEY`, the SELECTED App's pair, so
+a long run never drifts back to slot 1. Without the pool secrets the reader is
+absent, reads ride the worker on slot 1 exactly as before, and the run says so
+in one `note:` line.
 
 ## Namespacing and self-cleaning
 
@@ -244,7 +263,9 @@ is about writes and is unchanged: no mutation, and still no card addressed.
   repo's `BUREAU_APP_*` / `BUREAU_QA_APP_*` secrets mint sandbox-scoped
   tokens (the qa token is also threaded to the driver as
   `HARNESS_QA_TOKEN` — the proven reader for commit check-runs,
-  merge-gate.yml's own path).
+  merge-gate.yml's own path). The pool Apps (`BUREAU_APP_ID_2/3/4`,
+  DRE-1922, installed All-repositories on the org) add the reader; a slot
+  whose sandbox-scoped probe mint fails is simply not in the pool that run.
 * The pipeline stubs (qa-review on `pull_request`, merge-gate on its
   `workflow_run` list) with the sandbox's own secrets, plus at least one
   CI workflow that reports a check run on PR heads — the merge gate

@@ -7,8 +7,29 @@ Every agent run hammers ONE GitHub App installation's REST quota
 (5,000 req/hr) — the 2026-06-28 incident exhausted it twice. Three
 worker-identical Apps now exist (agent-bureau-bot-2/3/4, App IDs
 4266537/4266538/4266539) next to the original, giving four independent
-buckets (~20,000 req/hr total, $0). This script picks WHICH app the
-worker-token mint in agent-task.yml should use for the current run.
+buckets (~20,000 req/hr total, $0). This script picks WHICH app a
+workflow's token mint should use for the current run.
+
+Who consults it
+---------------
+  * ``agent-task.yml`` — the engineer's worker token (DRE-2013, the first).
+  * ``verify.yml`` — the verifier's token (DRE-2429).
+  * ``red-main-repair.yml`` — the repair worker, keyed ``repair:<sha>``.
+  * Since DRE-4282, every heavy READER: ``qa-review.yml`` (the critic's PR
+    reads and its check-run write; slot 1 there is the qa-bot App, DRE-1921's
+    bucket), ``reconcile.yml`` (``GH_READ_TOKEN`` for the sweep's reads),
+    ``agent-fix.yml`` (the thread and verdict fetches), ``plan.yml`` (every
+    planner and critic run's token) and ``harness.yml`` (the driver's
+    reader). In each the identity-sensitive writes — the PR push, the
+    worker-attributed comments, the verdict comment, the merge — keep the
+    App they used before; only reads and unattributed writes moved.
+  * NOT ``medic.yml``: its reads ride ``github.token`` because the App has no
+    ``actions:read`` (DRE-1346), a bucket this pool cannot improve on.
+
+Every consumer is a copy of the same shape (probe mints gated on the slot
+being configured, this selector, a mint that maps the slot to its secret
+pair and falls back to the workflow's original pair), pinned by
+tests/test_readers_on_the_pool.py and tests/test_dispatch_pool_wiring.py.
 
 Interface (safety-first)
 ------------------------

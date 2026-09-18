@@ -13,6 +13,20 @@ Env (harness.yml sets all of these):
                         Absent: those reads fall back to the worker token
                         and a permission refusal surfaces loudly.
   HARNESS_WORKER_LOGIN  informational — the authoring identity
+  HARNESS_READER_TOKEN  optional — the dispatch-pool App with the most
+                        headroom, sandbox-scoped (DRE-4282: harness.yml
+                        probes every configured slot with dispatch_pool.py
+                        and mints from the one it picks). Every GET the
+                        worker client would send goes out as this identity
+                        instead; writes, and the clone/push credential, stay
+                        the worker's. Absent: reads ride the worker on pool
+                        slot 1, exactly as before, and the run says so.
+  HARNESS_READER_APP_ID / HARNESS_READER_APP_PRIVATE_KEY
+                        optional — the SELECTED App's credentials, so the
+                        reader re-mints mid-run from its own key rather than
+                        drifting back to the worker's.
+  HARNESS_POOL_SLOT     the slot the reads rode on (`n` from the selector),
+                        named in the reader's `github-spend:` line.
   HARNESS_WORKER_APP_ID / HARNESS_WORKER_APP_PRIVATE_KEY
   HARNESS_CONSOLE_TOKEN optional — a token scoped to the CONSOLE's repository,
                         for the lane contract's console-parity clause. Absent:
@@ -94,7 +108,10 @@ def spend_lines(clients) -> list:
     `sweep-spend:` lines are: on 2026-09-17 the worker installation ran dry
     every hour and nobody could say what a harness run cost, because nothing
     had ever counted. The qa client falls back to the worker's when no qa
-    token is minted — the same object, so it is reported once.
+    token is minted — the same object, so it is reported once. The reader
+    (DRE-4282) is its own identity and its own line, labelled with the pool
+    slot it was minted from; absent, there is no line, and the worker's
+    `billed` is the reads.
     """
     lines, seen = [], set()
     for role, client in clients:
@@ -241,11 +258,35 @@ def main(argv=None) -> int:
         os.environ.get("HARNESS_WORKER_APP_PRIVATE_KEY", ""),
         args.repo,
     )
-    gh = GitHub(token, token_supplier=worker_supplier)
+    # The pool reader (DRE-4282): the worker client's GETs go out as the
+    # dispatch-pool App harness.yml selected, on that App's own hour; the
+    # worker's writes, and the credential the agent scenarios clone and push
+    # with, are untouched. Its re-mint comes from the SELECTED App's key.
+    reader_token = os.environ.get("HARNESS_READER_TOKEN")
+    pool_slot = (os.environ.get("HARNESS_POOL_SLOT") or "").strip() or "1"
+    gh_reader = (
+        GitHub(
+            reader_token,
+            token_supplier=token_supplier(
+                "reader",
+                os.environ.get("HARNESS_READER_APP_ID", ""),
+                os.environ.get("HARNESS_READER_APP_PRIVATE_KEY", ""),
+                args.repo,
+            ),
+        )
+        if reader_token
+        else None
+    )
+    gh = GitHub(token, token_supplier=worker_supplier, reader=gh_reader)
     if not worker_supplier:
         print(
             "note: HARNESS_WORKER_APP_ID/_PRIVATE_KEY unset — no token "
             "re-mint; a run longer than an hour will 401"
+        )
+    if not gh_reader:
+        print(
+            "note: HARNESS_READER_TOKEN unset — reads ride the worker identity "
+            "(pool slot 1), the pre-DRE-4282 shape"
         )
     qa_token = os.environ.get("HARNESS_QA_TOKEN")
     gh_qa = (
@@ -370,8 +411,15 @@ def main(argv=None) -> int:
         print(f"  {r.scenario}: {status}")
         for err in r.errors:
             print(f"    - {err}")
+    # The reader's line names the slot its reads rode on (DRE-4282); with no
+    # reader the worker's line IS the reads, and the note above said so.
     for line in spend_lines(
-        [("worker", gh), ("qa", gh_qa), ("console", gh_console)]
+        [
+            ("worker", gh),
+            (f"reader (pool slot {pool_slot})", gh_reader),
+            ("qa", gh_qa),
+            ("console", gh_console),
+        ]
     ):
         print(line)
     if blocked:

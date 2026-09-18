@@ -52,6 +52,27 @@ on:
         required: true
       BUREAU_QA_APP_PRIVATE_KEY:
         required: true
+      # Dispatch-pool workers (DRE-2013), wired in here by DRE-4282. The
+      # critic's READS — the PR record, the compare record, the diff, the
+      # files listing, the card context, the model's own reads — used to draw
+      # on the qa-bot bucket alone (DRE-1921's split). That bucket is now the
+      # pool's slot 1 for this workflow: the selector reads every bucket's
+      # headroom and the reads go to the one with the most, which is the qa
+      # bucket itself whenever it is the roomiest. The verdict COMMENT never
+      # moves — merge-gate attributes it to the qa-bot. ALL optional: a repo
+      # without these pairs reviews on the qa-bot App exactly as before.
+      BUREAU_APP_ID_2:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_2:
+        required: false
+      BUREAU_APP_ID_3:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_3:
+        required: false
+      BUREAU_APP_ID_4:
+        required: false
+      BUREAU_APP_PRIVATE_KEY_4:
+        required: false
 
 jobs:
   review:
@@ -123,12 +144,22 @@ jobs:
     # tests/test_critic_size_strategy.py pins this against the turn budget
     # and the backoff sleep, so changing either re-opens the arithmetic.
     timeout-minutes: 65
+    env:
+      # The secrets context is not readable in a step-level `if:`, so the
+      # dispatch-pool probe mints check slot PRESENCE via these job-env
+      # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
+      # and the pool shrinks (DRE-2013 graceful degradation).
+      BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+      BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+      BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
     steps:
       # Mint from the qa-bot App so the critic's GitHub calls draw from the
       # qa-bot installation's SEPARATE 5,000/hr quota — not the dispatch bot's
       # bucket the relay's repository_dispatch already consumes (DRE-1921).
-      # Kept as id `app` so every `steps.app.outputs.token` reference below is
-      # unchanged; only the App identity behind the token moved.
+      # Kept as id `app`: it is the token the VERDICT is posted with (the
+      # qa-bot authorship merge-gate checks), the review decision's token, and
+      # — since DRE-4282 — the pool's slot 1 and its /rate_limit probe. The
+      # heavy reads after the decision run on the selected pool app below.
       - name: Mint qa-bot token (separate quota from relay dispatch)
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -271,11 +302,92 @@ jobs:
           # the review check against exactly this commit.
           echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
 
+      # ---- Dispatch-pool reader selection (DRE-2013, wired here by DRE-4282) ----
+      # verify.yml's shape, copied, with ONE difference: slot 1 is the qa-bot
+      # App (the `app` token above), not the dispatch App — DRE-1921 gave the
+      # critic its own bucket and that bucket stays the fallback; the pool
+      # adds three more. Mint a probe token per CONFIGURED pool app (absent
+      # secrets skip the step and shrink the pool; continue-on-error so a
+      # broken pool app can never fail a review), let dispatch_pool.py read
+      # each bucket's quota-exempt /rate_limit and pick the app with the MOST
+      # remaining, then mint the review's READ token from it. Gated on the
+      # review decision, like verify's scope gate: a skipped review must not
+      # spend three mints on a pool it will never use. The selector only ever
+      # sees app ids and probe tokens, never keys; the mint below maps the
+      # chosen slot to its secret pair explicitly and falls through to the
+      # qa-bot pair, so a repo without the new secrets is a single-app pool
+      # behaving exactly as before.
+      - name: Mint pool probe token (2)
+        id: probe_2
+        if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_2 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_2 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
+      - name: Mint pool probe token (3)
+        id: probe_3
+        if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_3 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_3 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
+      - name: Mint pool probe token (4)
+        id: probe_4
+        if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_4 != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID_4 }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
+
+      - name: Select dispatch-pool app
+        id: pool
+        if: steps.decide.outputs.review == 'true'
+        env:
+          # Slot 1 IS the qa-bot App here (see above) — the selector's names
+          # are positional, not the App's.
+          BUREAU_APP_ID: ${{ secrets.BUREAU_QA_APP_ID }}
+          BUREAU_POOL_TOKEN: ${{ steps.app.outputs.token }}
+          BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
+          BUREAU_POOL_TOKEN_2: ${{ steps.probe_2.outputs.token }}
+          BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
+          BUREAU_POOL_TOKEN_3: ${{ steps.probe_3.outputs.token }}
+          BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+          BUREAU_POOL_TOKEN_4: ${{ steps.probe_4.outputs.token }}
+          # Deterministic fallback key on read failure: the PR, so a re-review
+          # of the same PR picks the same slot instead of scattering.
+          BUREAU_POOL_KEY: review:${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          python3 "$PIPELINE_DIR"/scripts/dispatch_pool.py select >> "$GITHUB_OUTPUT"
+
+      # Read token: minted from the SELECTED pool app. Explicit per-N map
+      # (Actions can't index secrets dynamically); each clause yields '' when
+      # not selected, so the chain always falls through to the qa-bot pair.
+      - name: Mint read token (selected pool app)
+        id: reader
+        if: steps.decide.outputs.review == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_QA_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+
       - name: Resolve PR
         if: steps.decide.outputs.review == 'true'
         id: pr
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Reads (the PR record, the compare record) — the pool-selected
+          # token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
         run: |
           PR=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           echo "number=$PR" >> "$GITHUB_OUTPUT"
@@ -365,8 +477,9 @@ jobs:
         env:
           # The per-file STATUSES (DRE-3995): above the compare record's
           # 300-file cap the script reads them from the paginated PR files
-          # API, which needs a token. Below it, no call is made.
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # API, which needs a token. Below it, no call is made. A read, so
+          # the pool-selected token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
         run: |
           python3 "$PIPELINE_DIR"/scripts/pr_size_strategy.py \
             --compare-file /tmp/qa-compare.json \
@@ -440,7 +553,8 @@ jobs:
         if: steps.decide.outputs.review == 'true' && steps.size.outputs.strategy != 'oversized'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Reads — the pool-selected token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
@@ -654,7 +768,8 @@ jobs:
         if: steps.decide.outputs.review == 'true'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Reads — the pool-selected token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           RUNS_TOKEN: ${{ github.token }}
           PR: ${{ steps.pr.outputs.number }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -730,7 +845,8 @@ jobs:
         id: actsreg
         if: steps.decide.outputs.review == 'true'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # A read — the pool-selected token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           PR: ${{ steps.pr.outputs.number }}
         run: |
           gh pr view "$PR" --json files --jq '.files[].path' \
@@ -760,7 +876,9 @@ jobs:
         id: cardctx
         if: steps.decide.outputs.review == 'true'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          # Reads (the thread, the refutations) — the pool-selected token
+          # (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
           PR: ${{ steps.pr.outputs.number }}
           CARD: ${{ steps.pr.outputs.card }}
           # DRE-3091: empty on every review that is not about the act registry,
@@ -981,7 +1099,11 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          # The critic READS the PR through this token and writes its verdict
+          # to a file; the comment is posted below with the qa-bot token. So
+          # this is the pool-selected reader (DRE-4282) — the model's reads
+          # are the bulk of a review's GitHub spend.
+          github_token: ${{ steps.reader.outputs.token }}
           # qa-bot retained from the DRE-1924 skew-guard: merge-gate's
           # update-branch push fired synchronize as agent-bureau-qa-bot
           # (DRE-2037). DRE-2416 removed that push, so the entry is now
@@ -1304,7 +1426,11 @@ jobs:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ vars.CLAUDE_AUTH_MODE == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
-          github_token: ${{ steps.app.outputs.token }}
+          # The critic READS the PR through this token and writes its verdict
+          # to a file; the comment is posted below with the qa-bot token. So
+          # this is the pool-selected reader (DRE-4282) — the model's reads
+          # are the bulk of a review's GitHub spend.
+          github_token: ${{ steps.reader.outputs.token }}
           # qa-bot retained from the DRE-1924 skew-guard: merge-gate's
           # update-branch push fired synchronize as agent-bureau-qa-bot
           # (DRE-2037). DRE-2416 removed that push, so the entry is now
@@ -1972,13 +2098,28 @@ jobs:
       # it the head carries nothing and every consumer (gh pr checks, the
       # console, reconcile's crashed-review backstop, a human) reads
       # "unreviewed", which is exactly what it is not.
+      #
+      # A check run is a write nobody attributes — merge_gate.py reads the
+      # verdict COMMENT, never the check's author — so since DRE-4282 it is
+      # minted from the pool slot the reader selected (every pool App mirrors
+      # the dispatch App's checks:write, DRE-1922) and falls through to the
+      # dispatch App: on the carried-verdict path the selector never ran, its
+      # output is empty, and the chain lands on the same pair it always used.
       - name: Mint dispatch-bot token (checks:write — qa-bot has checks:read)
         id: checks_app
         if: always() && !cancelled() && (steps.decide.outputs.review == 'true' || steps.decide.outputs.carried_sha != '')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BUREAU_APP_ID }}
-          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Publish review check on the reviewed head
         if: always() && !cancelled() && steps.decide.outputs.review == 'true'

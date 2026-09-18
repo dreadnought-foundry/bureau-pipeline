@@ -849,6 +849,18 @@ def gh_read(*args: str) -> str:
     agent-fix.yml's comment reads run through. What is the SWEEP's here is
     the per-process budget, supplied as the callback the loop asks before
     each wait, and the ReconcileReadError the ledgers are built on.
+
+    WHOSE hour the read spends (DRE-4282): `GH_READ_TOKEN`, when reconcile.yml
+    sets it, is the token of the dispatch-pool App with the most headroom
+    (`dispatch_pool.py select`, the verify.yml shape), and every read through
+    this seam goes out as that App — `pr_for` once per card, the unlanded
+    watchdog's branch listing, the reads that emptied installation 123249480
+    on 2026-09-17 (DRE-4132). The WRITES do not move: the receipts
+    `_worker_receipt_count` counts are counted by `WORKER_BOT_LOGIN`, so the
+    App that writes them must be the App that login names, and they stay on
+    `GH_TOKEN`. Unset — a stub without the pool pairs, linear-sync.yml's and
+    plan.yml's reconcile steps, a local run — the read goes out as GH_TOKEN,
+    exactly as before; that is why it is not in REQUIRED_ENV.
     """
 
     def spend_one_retry() -> bool:
@@ -865,11 +877,15 @@ def gh_read(*args: str) -> str:
         _gh_read_retries_spent += 1
         return True
 
+    read_token = os.environ.get("GH_READ_TOKEN")
+    read_env = {**os.environ, "GH_TOKEN": read_token} if read_token else None
     try:
         # ONE line per retry, to the run log, naming the command and where we
         # are in the budget — this is the whole of the visibility the CEO asked
         # for in place of a card. `print` is the run log here.
-        return gh_read_retry.read(args, may_retry=spend_one_retry, log=print)
+        return gh_read_retry.read(
+            args, may_retry=spend_one_retry, log=print, env=read_env
+        )
     except gh_read_retry.GhReadError as e:
         # Named by the STDERR, not by whether a retry was afforded: a
         # rate-limit refusal past the sweep's budget is still the fault the
