@@ -105,8 +105,8 @@
       ],
       "why": "The split ledger's own population (config/split-ledger.json, DRE-3077), read through scripts/split_ledger.py `reasons`: a turn-cap death, a cancel with pieces citing it, or a hand-back to Planning. WIDER than `size`, which reads the turn-cap receipt and nothing else — a card handed back to Planning as an epic never hit the cap and is a `size` agreement, and it is the clearest split there is. Every card the planner creates is one-PR-scoped by standards/card-quality.md, so the claim is fixed and history is the variable.",
       "ledger": "config/split-ledger.json",
-      "ledger_injected_at": null,
-      "ledger_injected_why": "DRE-3078 is the piece that puts the ledger in front of the planner, and it has not shipped. Until it does there is no 'after', so `planner_score.py split-rate` reports every month as BEFORE and the after half as UNKNOWN — never an empty bucket printed as zero, which would read as an improvement the pipeline has not made. Set this to the date the injection merges and the same command draws the comparison DRE-3022 asked for."
+      "ledger_injected_at": "2026-09-10T22:16:25Z",
+      "ledger_injected_why": "The date the ledger actually reached the planner: bureau-pipeline PR #359 (DRE-3359, `agent/DRE-3359-ledger-into-planner-context`) merged at 2026-09-10T22:16:25Z — 2026-09-10 15:16 PT — wiring `ledger_context.py render` into `plan.yml`'s planner context and telling the brief to size against it. Before that line there was no 'after' at all; the field held null and said so. It is read here rather than guessed because `planner_score.py split-rate` buckets every month against it, and a month either side of a wrong date is a comparison of nothing. The 'after' half stays UNKNOWN until a whole calendar month has passed on the far side of it — never an empty bucket printed as zero, which would read as an improvement the pipeline has not made. Observed and set by DRE-3363; the reading is recorded in docs/split-ledger-audit.md."
     },
     "proof-and-demo": {
       "question": "Did the epic end with a proof card?",

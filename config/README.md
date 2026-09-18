@@ -91,10 +91,17 @@ of it is ever a runtime lookup.
   workflow stops running it. `docs/planner-audit.md` records the first run.
   The `split-rate` dimension (DRE-3079) is the one that reads a FILE rather
   than a receipt — `split-ledger.json` below — so it names it in `ledger`,
-  and `ledger_injected_at` is the date that ledger reached the planner. `null`
-  there is an answer, not a gap: DRE-3078 has not shipped, so every month is
-  BEFORE and the after half is UNKNOWN rather than an empty bucket that would
-  read as an improvement.
+  and `ledger_injected_at` is the date that ledger reached the planner. It is
+  set: `2026-09-10T22:16:25Z` — 2026-09-10 15:16 PT — the merge of DRE-3359
+  (PR #359), which is the injection that actually shipped. Bucketing is by
+  month: every month earlier than 2026-09 reports BEFORE, and 2026-09 itself
+  and everything after it report AFTER. The caveat the boundary carries is
+  that the `after` side is not a clean month yet: September straddles it and
+  the shipped reader has two sides, not three, so September's `after`
+  figure includes cards cut before the planner had ever seen the ledger. A
+  bucket with no finished cards still reports UNKNOWN rather than an empty
+  bucket that would read as an improvement. `docs/split-ledger-audit.md`
+  records the reading the date was set from.
 - **`groomer-audit.json`** — the dimensions the GROOMER'S JUDGEMENT is scored on
   (DRE-3155), read by `scripts/groomer_score.py`. Like the two files above it
   carries no answers, only the vocabulary: the audit table's exact header (one

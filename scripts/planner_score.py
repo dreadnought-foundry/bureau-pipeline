@@ -91,9 +91,10 @@ has to be split, month by month, before and after the split ledger reached the
 planner. `split-rate` is that reader. Its population is the LEDGER's own —
 `split_ledger.reasons`, so "did not fit one run" is decided once — and a month
 whose cards have not finished reports UNKNOWN rather than a rate flattered by
-work that has not been put to the test. With no injection date declared
-(DRE-3078 has not shipped) every month is BEFORE and the after half is UNKNOWN,
-never an empty bucket printed as zero.
+work that has not been put to the test. The injection is DRE-3359 (PR #359,
+merged 2026-09-10T22:16:25Z) and that date is the boundary; with no injection
+date declared every month is BEFORE and the after half is UNKNOWN, never an
+empty bucket printed as zero.
 """
 
 from __future__ import annotations
@@ -627,9 +628,9 @@ def ledger_injected_at(doc: dict | None = None):
     """When the split ledger reached the planner, or None.
 
     Declared data (`config/planner-audit.json`), not a constant here: the
-    injection is DRE-3078's to make, and the date it lands is the boundary this
-    comparison is drawn at. None means it has not happened — which is a fact
-    about the pipeline, not a missing value.
+    injection was DRE-3359's to make and landed 2026-09-10T22:16:25Z, and the
+    date it landed is the boundary this comparison is drawn at. None means it
+    has not happened — which is a fact about the pipeline, not a missing value.
     """
     return dimensions(doc).get(SPLIT_DIMENSION, {}).get("ledger_injected_at")
 
@@ -667,7 +668,8 @@ def split_rate(children: list, *, injected_at=None, ledger=None) -> dict:
 
     With no injection date the AFTER half is UNKNOWN, never an empty bucket
     reported as zero: "nothing has happened after" and "nothing happened after"
-    are different facts, and until DRE-3078 lands only the first one is true.
+    are different facts, and with no date declared only the first one is true.
+    For this repo's config the date is declared — DRE-3359, 2026-09-10.
     """
     ledger_cards = split_ledger_cards(ledger)
     unreadable: list[str] = []
