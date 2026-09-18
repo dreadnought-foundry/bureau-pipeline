@@ -97,7 +97,18 @@ jobs:
   # the failed run's logs once and exposes `infra_crash` to gate the jobs below.
   classify:
     if: github.event.workflow_run.conclusion == 'failure'
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The SHORT-job lane (DRE-3887, widened to the sweeps by DRE-4276). Every
+    # job in this file but `diagnose` is a sub-minute script — the classifier,
+    # one `gh run rerun`, and six that write a note or a receipt and end — and
+    # until now each drew from the same `BUREAU_RUNS_ON` pool as the 20-minute
+    # agent, critic and verifier jobs: on 2026-09-18 at 13:47 PT the mini's six
+    # runners were all busy, 38 jobs were queued, the oldest reviews had waited
+    # about 100 minutes, and fifteen of the queued jobs were agent-bureau
+    # Pipeline Medic runs taking a turn ahead of them. A repo routes its short
+    # jobs elsewhere by setting `BUREAU_SHORT_RUNS_ON`; with it unset this is
+    # the same chain it has always been, so nothing changes until a repo opts
+    # in (`tests/test_short_runs_on_lane.py`).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
@@ -296,7 +307,8 @@ jobs:
       needs.classify.outputs.class != 'linear_ratelimited' &&
       needs.classify.outputs.limit != 'true' &&
       needs.classify.outputs.retry != 'false'
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - name: Rerun failed jobs once
@@ -332,7 +344,8 @@ jobs:
        needs.classify.outputs.rule == 'stalled-no-stream-repeat') &&
       needs.classify.outputs.retry == 'false' &&
       needs.classify.outputs.card != ''
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -381,7 +394,8 @@ jobs:
       needs.classify.outputs.class == 'stalled_no_stream' &&
       needs.classify.outputs.rule != 'stalled-no-stream-repeat' &&
       needs.classify.outputs.card != ''
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -453,7 +467,8 @@ jobs:
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1 &&
       needs.classify.outputs.infra_crash == 'true'
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -521,7 +536,8 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       needs.classify.outputs.class == 'upstream_5xx'
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - name: Note the upstream GitHub outage — no rerun, no diagnosis
@@ -549,7 +565,8 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       needs.classify.outputs.class == 'linear_ratelimited'
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - name: Note the Linear rate limit — no rerun, no diagnosis
@@ -586,7 +603,8 @@ jobs:
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt >= 2 &&
       needs.classify.outputs.class == 'environment_crash'
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The short lane, same as `classify` above (DRE-4276).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -635,6 +653,12 @@ jobs:
       needs.classify.outputs.class != 'upstream_5xx' &&
       needs.classify.outputs.class != 'linear_ratelimited' &&
       needs.classify.outputs.limit != 'true'
+    # NOT the short lane (DRE-4276): this is the one job in the file that
+    # spends a Claude run — the diagnosis agent below, up to twenty minutes
+    # and sixty turns of it. It belongs with the agent, critic and verifier
+    # jobs on `BUREAU_RUNS_ON`; routing it to the short pool would recreate
+    # DRE-3875 with the lanes swapped. `tests/test_short_runs_on_lane.py`
+    # pins it here by name.
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     steps:

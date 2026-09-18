@@ -19,6 +19,11 @@ The rule this file pins:
   gates somewhere else. The rest of the rule is unchanged, and a repo that
   sets nothing renders exactly what it renders today —
   `tests/test_short_runs_on_lane.py` is where that lane is pinned.
+  DRE-4276 widened it to the two SWEEPS — reconcile's `sweep` and every medic
+  job but `diagnose`, which runs a Claude agent for up to twenty minutes and
+  stays on the long chain. So the lane is now a set of JOBS, not of files:
+  `SHORT_LANE` names the files that read the short variable and `LONG_JOBS`
+  names the jobs inside them that do not.
 * Every job in a workflow that runs only in THIS repo stays on the literal
   `ubuntu-latest`. bureau-pipeline is public, its minutes bill at $0, and the
   org's Default runner group refuses public repos — a public-repo job pointed
@@ -43,10 +48,24 @@ SHORT_SWITCHABLE = (
     "${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON"
     " || '[\"ubuntu-latest\"]') }}"
 )
-# The two reusables that carry only sub-minute bookkeeping jobs. Exactly these
-# — the scope is the card's, and widening it is a decision, not a tidy-up.
-SHORT_LANE = {"merge-gate.yml", "linear-sync.yml"}
+# The reusables that carry sub-minute bookkeeping jobs. Exactly these — the
+# scope is the cards' (DRE-3887 the gates, DRE-4276 the sweeps), and widening
+# it is a decision, not a tidy-up.
+SHORT_LANE = {"merge-gate.yml", "linear-sync.yml", "reconcile.yml", "medic.yml"}
+# The jobs INSIDE a short-lane file that stay on the long chain, by name: a
+# job that spends a Claude run for minutes belongs with the agent, critic and
+# verifier jobs, and routing it to the short pool would recreate DRE-3875 with
+# the lanes swapped (DRE-4276).
+LONG_JOBS = {"medic.yml": {"diagnose"}}
+SHORT_VAR_HINT = "vars.BUREAU_SHORT_RUNS_ON"
 HOSTED = "ubuntu-latest"
+
+
+def expected_runs_on(name: str, job_id: str) -> str:
+    """The one expression a reusable job's `runs-on` must be, by file and job."""
+    if name in SHORT_LANE and job_id not in LONG_JOBS.get(name, set()):
+        return SHORT_SWITCHABLE
+    return SWITCHABLE
 
 
 def _load(path: Path) -> dict:
@@ -94,15 +113,15 @@ def test_every_runner_job_declares_where_it_runs(path: Path) -> None:
 )
 def test_reusable_jobs_read_the_callers_runner_variable(path: Path) -> None:
     doc = _load(path)
-    expected = SHORT_SWITCHABLE if path.name in SHORT_LANE else SWITCHABLE
     wrong = [
-        f"{job_id}: {runs_on!r}"
+        f"{job_id}: {runs_on!r} (expected {expected_runs_on(path.name, job_id)})"
         for job_id, runs_on in _runner_jobs(doc)
-        if runs_on != expected
+        if runs_on != expected_runs_on(path.name, job_id)
     ]
     assert not wrong, (
-        f"{path.name} is a workflow_call reusable; every job must read "
-        f"{expected} . Not switchable: {wrong}"
+        f"{path.name} is a workflow_call reusable; every job must read the "
+        f"caller's runner variable, short-lane jobs with {SHORT_VAR_HINT} in "
+        f"front. Not switchable: {wrong}"
     )
 
 
