@@ -214,24 +214,6 @@
       }
     },
     {
-      "name": "intake-overdue",
-      "tag": "intake-aged",
-      "adopted": true,
-      "kind": "hold",
-      "means": "A card has sat in Intake past the window the lane contract gives it with nothing happening to it, and has been moved into the CEO's queue.",
-      "state": "escalated",
-      "next_actor": "operator",
-      "discharges": null,
-      "subscriber": "reconcile.yml",
-      "cadence_s": null,
-      "cadence_why": "Null: the card has been moved into the CEO's queue, and scripts/reconcile.py declares no bound on a CEO decision.",
-      "why": "A move rather than a report, on purpose: about 480 consecutive green sweeps once printed, in plain English, the exact reason five cards were frozen, and nobody read one. A report is a record; a move is a gate (DRE-2687).",
-      "emits": {
-        "file": "scripts/reconcile.py",
-        "anchor": "Intake's exit is a classification, and no"
-      }
-    },
-    {
       "name": "pr-without-checks",
       "tag": "no-checks-watchdog",
       "adopted": true,

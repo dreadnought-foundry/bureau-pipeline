@@ -217,7 +217,7 @@ def _sweep(cards, dispatch_ok=True, prior=0):
         "close_finished_epics": mock.MagicMock(),
         "promote_ready": mock.MagicMock(return_value=0),
         "flag_stranded": mock.MagicMock(return_value=set()),
-        "escalate_aged_intake": mock.MagicMock(return_value=set()),
+        "report_intake_depth": mock.MagicMock(return_value=None),
         "report_break_glass": mock.MagicMock(),
         "report_epic_growth": mock.MagicMock(),
         "report_fix_concurrency": mock.MagicMock(),

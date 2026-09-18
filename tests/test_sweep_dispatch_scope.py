@@ -83,7 +83,7 @@ assert CARD_DONE_BUDGET <= MERGE_SYNC_BUDGET
 
 #: The full pass's work that a card-done pass must never do. The backstops are
 #: whatever `_sweep_mocks` stands in; these two are the full pass's own.
-FULL_PASS_ONLY = ("flag_stranded", "escalate_aged_intake")
+FULL_PASS_ONLY = ("flag_stranded", "report_intake_depth")
 
 
 @pytest.fixture(autouse=True)
@@ -296,7 +296,7 @@ def test_anything_but_card_done_with_a_card_is_the_full_pass(
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     sweep = Sweep(FakeLinear(_busy_board(merged=MERGED))).run()
-    assert set(sweep.called) >= {"escalate_aged_intake", "flag_stranded",
+    assert set(sweep.called) >= {"report_intake_depth", "flag_stranded",
                                  "drain_retiring_lanes", "unstick_conflicts"}, (
         f"only {sweep.called} ran — a full pass must run the full pass's work"
     )

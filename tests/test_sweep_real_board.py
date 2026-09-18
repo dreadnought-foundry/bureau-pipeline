@@ -3,7 +3,8 @@ of one sweep, replayed over a committed board (DRE-3641).
 
 THE DEFECT THIS REPLACES. `tests/test_sweep_request_cuts.py` says a busy sweep
 costs at most 30 Linear reads, and it is not wrong about its own fixture: that
-board is hand-built, carries no wave-committed cards and no aged Intake cards,
+board is hand-built, carries no wave-committed cards and no long-waiting
+Intake cards,
 and 18 of the sweep's phases are mocked out of the pass entirely. A live pass
 costs 65 requests here and 92 on agent-bureau. A ceiling that passes on a board
 nobody sweeps is the defect; this one runs EVERY phase, live, over a committed
@@ -160,8 +161,12 @@ class ReplayLinear(FakeLinear):
 # The decisions: what the sweep would DO to the board, off its write seams
 # --------------------------------------------------------------------------
 #: The two lanes an escalation reaches, named by the sweep rather than here:
-#: the CEO's queue (the Intake age-out) and the broken-card lane (the
-#: prose-blocker defect route).
+#: the CEO's queue and the broken-card lane (the prose-blocker defect route).
+#: DRE-4141 deleted the Intake age-out, which was the first one's only writer
+#: here; DRE-4124 gave it another, Planning's stall escalation, which is what
+#: reaches it off this board now. Nothing reaches the second — and both lanes
+#: stay named, because a lane missing from this tuple is a decision the record
+#: cannot see.
 _ESCALATION_LANES = (
     reconcile.ESCALATED_STATE, reconcile.prose_blockers.DEFECT_LANE,
 )
@@ -175,14 +180,16 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
                  tag, so a cut that changes the reason fails too), or parked
                  behind the hold label.
       escalate — a card moved into the CEO's queue or into the broken-card
-                 lane: the Intake age-out, the prose-blocker defect route, and
-                 Planning's stall escalation.
+                 lane: the prose-blocker defect route and Planning's stall
+                 escalation (the Intake age-out was a third, until DRE-4141
+                 deleted it).
       close    — a card or epic moved to Done.
 
-    BOTH move seams are read, and that is not tidiness (DRE-4124). The Intake
-    age-out advances (`cmd_advance`); `planning_escalation.escalate` writes the
-    lane directly (`cmd_state`), because it parks a card rather than walking it
-    along the rail. Reading only the first is what made 68 stalled Planning
+    BOTH move seams are read, and that is not tidiness (DRE-4124). A lane can
+    be reached by walking a card along the rail (`cmd_advance`);
+    `planning_escalation.escalate` writes the lane directly (`cmd_state`),
+    because it parks a card rather than walking it along the rail. Reading
+    only the first is what made 68 stalled Planning
     cards — held under `needs-human` until this card, escalated after it —
     drop out of the record entirely rather than move buckets. A decision this
     file cannot see is a decision a cut can delete for free, which is the one
@@ -513,17 +520,43 @@ def test_the_epic_reads_do_not_follow_the_number_of_epics(replay):
 def test_the_expensive_phases_really_ran(replay):
     """Guard the guard: a ceiling met by a pass that skipped the expensive
     phases measures nothing. The phases the 2026-09-12 measurement found the
-    spend in are in this pass's own attribution, and the Intake gate — which
-    spends nothing here, because the board read already carried the comments it
-    needs — is proved by the cards it moved instead."""
+    spend in are in this pass's own attribution, and the Intake phase — which
+    spends nothing at all, because it counts a lane the board read already
+    carried — is proved by the line it printed instead.
+
+    The age-out used to be proved by the cards it MOVED, and three of this
+    board's Intake cards used to reach Green Light on every replay. DRE-4141
+    deleted it: no card leaves Intake for being old, so the proof is the depth
+    report, measured here against a board with a real Intake in it rather than
+    against a fixture.
+
+    The escalation check below is keyed on INTAKE rather than on an empty list
+    (DRE-4124). Green Light has a second writer now — Planning's stall
+    escalation — so "nothing escalates" would no longer state the age-out's
+    absence, it would forbid a different rule. Scoped to Intake it still fails
+    as loudly if the timer is ever restored, which is the thing it guards."""
     for name in ("promote_ready", "report_epic_growth", "close_finished_epics",
                  "nudge_loop"):
         assert name in replay.phases, (
             f"{name} spent nothing — it did not run: {replay.spend_lines}"
         )
-    assert any(
-        d.endswith(f"→ {reconcile.ESCALATED_STATE}") for d in replay.decisions["escalate"]
-    ), f"the Intake age-out moved nothing: {replay.decisions['escalate']}"
+    depth = [
+        line for line in replay.printed
+        if line.startswith(f"{reconcile.INTAKE_DEPTH_PREFIX}:")
+    ]
+    assert len(depth) == 1, f"the Intake phase said nothing: {replay.spend_lines}"
+    assert " waiting in Intake" in depth[0], depth[0]
+    intake = {
+        card["identifier"] for card in replay.fake.snapshot["cards"]
+        if card["state"]["name"] in reconcile.INTAKE_LANE
+    }
+    from_intake = [
+        entry for entry in replay.decisions["escalate"]
+        if entry.split(" → ")[0] in intake
+    ]
+    assert not from_intake, (
+        f"an Intake card was escalated off this board: {from_intake}"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -566,16 +599,31 @@ def test_the_recorded_decisions_say_something(replay):
     — one line per card the gate refused, naming the card AND the reason — so a
     cut that meets the ceiling by not evaluating the Backlog fails by name.
 
-    `promote` and `close` are recorded EMPTY on this board and that is a pinned
+    `promote` and `close` are recorded EMPTY on this board and each is a pinned
     decision too: no epic here carries a second-critic round and no one-off
-    carries a verdict the fleet wrote, so nothing is promotable, and no lane
-    the board holds is Done, so no epic is finished. A cut that started
-    promoting cards under those conditions fails here as loudly.
+    carries a verdict the fleet wrote, so nothing is promotable; and no lane the
+    board holds is Done, so no epic is finished. A cut that started moving cards
+    under those conditions fails here as loudly.
+
+    `escalate` used to be recorded empty as the evidence the age-out was gone —
+    three Intake cards past the 48-hour window reached Green Light on every
+    replay until DRE-4141 deleted the rule. Since DRE-4124 the lane has a
+    second writer, Planning's stall escalation, so the evidence is no longer an
+    empty list but the ABSENCE OF INTAKE from a list that is otherwise full:
+    still no card leaving Intake for being old, and a restored timer still
+    fails here.
     """
     recorded = _recorded()["decisions"]
     assert set(recorded) == {"promote", "hold", "escalate", "close"}
     assert len(recorded["hold"]) > 100, recorded["hold"][:5]
-    assert recorded["escalate"], "the recorded escalations are empty"
+    intake = {
+        card["identifier"] for card in replay.fake.snapshot["cards"]
+        if card["state"]["name"] in reconcile.INTAKE_LANE
+    }
+    assert not [
+        entry for entry in recorded["escalate"]
+        if entry.split(" → ")[0] in intake
+    ], recorded["escalate"]
     for entry in recorded["hold"]:
         ident, _, reason = entry.partition(" ")
         assert ident.startswith("DRE-") and reason, entry
