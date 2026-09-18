@@ -446,6 +446,47 @@ the build if any workflow re-hardcodes a cap, if a promotion path stops taking
 the input, if the declared default drifts from the script's, or if this repo's
 own stubs disagree with each other.
 
+## The two runner lanes: long jobs and short jobs (DRE-3887, DRE-4276)
+
+Every job in a reusable reads the CALLER's repository variable
+`BUREAU_RUNS_ON` and runs on `ubuntu-latest` when it is unset (DRE-3350). The
+jobs that finish in seconds read `BUREAU_SHORT_RUNS_ON` **in front of** that
+same chain, so a repo whose long-job runners are busy can route its
+bookkeeping elsewhere by setting one more variable — and with it unset every
+job renders exactly what it rendered before. The expression is one exact
+string, `fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON ||
+'["ubuntu-latest"]')`, so a grep finds every site.
+
+| lane | variable | what rides it | how long a job takes |
+|---|---|---|---|
+| long | `BUREAU_RUNS_ON` | the Claude jobs: `agent-task`, `qa-review`, `verify`, `agent-fix`, `plan`, and medic's `diagnose` | minutes to an hour, nearly all of it waiting on the model |
+| short | `BUREAU_SHORT_RUNS_ON` | merge-gate's `resolve` and `evaluate`; linear-sync's `card-done` and `conflict-sweep` (DRE-3887); reconcile's `sweep`; and medic's eight script jobs — `classify`, `retry`, `retry_declined`, `stall_record`, `backoff`, `upstream_outage`, `linear_rate_limited`, `environment_hold` (DRE-4276) | well under a minute, no model call at all |
+
+**Why.** On 2026-09-13 twenty-two agent-bureau Merge Gate runs sat queued for
+about an hour behind 20-minute Claude jobs while three heavy runners sat idle
+(DRE-3875/DRE-3887). On 2026-09-18 at 13:47 PT the same thing happened one
+lane over: the mini's six runners were all busy, 38 jobs were queued, the
+oldest reviews had waited about 100 minutes, and fifteen of the queued jobs
+were agent-bureau `Pipeline Medic` runs plus three `Reconcile` sweeps — each a
+sub-minute script that reads and writes GitHub and Linear — taking a turn
+ahead of every review (DRE-4276).
+
+**The rule to keep.** A job belongs on the short lane only if it is sub-minute
+bookkeeping: no Claude call, no product test suite, no build. That is why
+medic's `diagnose` stays on the long lane — it is the one medic job that
+spends a Claude run, up to twenty minutes and sixty turns of it — and why the
+lane is pinned **by job name** in `tests/test_short_runs_on_lane.py`: a job
+added to one of these four files without a runner decision fails the build
+rather than inheriting one, and widening the lane to a fifth file is a card,
+not a tidy-up.
+
+**Setting the variable is the consuming repo's operator step**, never this
+repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
+the command, the rollback and the runner-class reasoning for the fleet.
+agent-bureau and portico already carry `BUREAU_SHORT_RUNS_ON`, so their sweeps
+move the moment this reaches `stable`; bureau-pipeline's own workflows run
+hosted already.
+
 ## A dependabot pull request gets a card of its own (DRE-3665)
 
 Every carded pull request is joined to its card by the **head ref**

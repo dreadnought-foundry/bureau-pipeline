@@ -119,7 +119,17 @@ on:
 
 jobs:
   sweep:
-    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # The SHORT-job lane (DRE-3887, widened to the sweeps by DRE-4276). This
+    # job is `reconcile.py` and nothing else — no Claude call, no test suite,
+    # no build — and until now it drew from the same `BUREAU_RUNS_ON` pool as
+    # the 20-minute agent, critic and verifier jobs: on 2026-09-18 at 13:47 PT
+    # the mini's six runners were all busy, 38 jobs were queued, the oldest
+    # reviews had waited about 100 minutes, and three of the queued jobs were
+    # agent-bureau Reconcile sweeps taking a turn ahead of them. A repo routes
+    # its short jobs elsewhere by setting `BUREAU_SHORT_RUNS_ON`; with it unset
+    # this is the same chain it has always been, so nothing changes until a
+    # repo opts in (`tests/test_short_runs_on_lane.py`).
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     concurrency:
       group: reconcile
