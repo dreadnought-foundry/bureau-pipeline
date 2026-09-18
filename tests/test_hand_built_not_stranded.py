@@ -297,6 +297,12 @@ def _call_owners(name: str) -> set[str]:
 
 _WATCHDOG_OWNERS = {
     "flag_stranded", "flag_stalled_planning", "main", "_flag_hand_built_idle",
+    # DRE-4124's repair pass, which empties the pen the OLD Planning rule
+    # filled. It reads BOTH labels for the same reasons the alarm above does:
+    # `needs-human` is what it repairs, and hand-built means no agent was ever
+    # coming — a person owns that card, and moving it into the CEO's queue
+    # would take it out of their hands.
+    "repair_frozen_planning_holds",
 }
 
 #: THE INTAKE GATE IS NOT IN THIS SET ANY MORE (DRE-4141). It read hand-built

@@ -642,7 +642,11 @@ class TestParkedIsNeverStalled:
 
     def test_guard_the_guard_an_unparked_card_in_the_same_shape_is_flagged(self):
         assert _StallBoard("Todo", []).run(reconcile.flag_stranded) == {"DRE-2799"}
-        assert _StallBoard("Planning", []).run(reconcile.flag_stalled_planning) == {"DRE-2799"}
+        planning = _StallBoard("Planning", [])
+        assert planning.run(reconcile.flag_stalled_planning) == {"DRE-2799"}
+        assert planning.states == [("DRE-2799", reconcile.ESCALATED_STATE)], (
+            "an unparked stalled card is escalated, not left in Planning"
+        )
 
     def test_every_stall_reporter_consults_the_parked_check(self):
         """Structural, so a THIRD stall sweep cannot be added that skips it —
@@ -808,6 +812,12 @@ class _StallBoard:
         self.comments = list(comments)
         self.posted: list[tuple[str, str]] = []
         self.labelled: list[tuple[str, str]] = []
+        #: The stalled-Planning watchdog MOVES the card since DRE-4124 rather
+        #: than labelling it, so the move is a write this board has to record.
+        #: Unpatched it reached the live API, the escalation's write failed,
+        #: and the card read as un-flagged — a guard-the-guard that went green
+        #: on a card the sweep never spared.
+        self.states: list[tuple[str, str]] = []
 
     def run(self, fn):
         with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), patch.object(
@@ -817,6 +827,9 @@ class _StallBoard:
         ), patch.object(
             reconcile.linear_ops, "cmd_comment",
             side_effect=lambda i, b: self.posted.append((i, b)),
+        ), patch.object(
+            reconcile.linear_ops, "cmd_state",
+            side_effect=lambda i, lane, *rest: self.states.append((i, lane)),
         ), patch.object(
             reconcile.linear_ops, "add_label",
             side_effect=lambda i, label: self.labelled.append((i, label)),

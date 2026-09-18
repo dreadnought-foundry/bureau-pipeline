@@ -1774,6 +1774,14 @@ class _Lops:
     def comment_bodies(self, identifier):
         return list(self.bodies)
 
+    def comment_timeline(self, identifier):
+        """The escalation's own read (DRE-4124): the same thread WITH each
+        comment's `createdAt`, so a verdict stamped by this planning attempt
+        can be told from one a spent attempt left behind. These bodies are the
+        probe's pre-existing history, so they predate this run."""
+        return [{"body": body, "createdAt": "2026-09-08T11:02:00-07:00"}
+                for body in self.bodies]
+
     def count_comments(self, identifier, needle, **kwargs):
         return sum(1 for body in self.bodies if needle in body)
 

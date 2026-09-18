@@ -130,6 +130,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import break_glass  # noqa: E402
@@ -165,6 +166,12 @@ REWRITE_MARK = "📝"
 # is also the lane `break-glass` repays its skipped classification to, and
 # `bypass_problems` binds the two rather than letting them drift apart.
 ORIGIN = "Planning"
+
+#: When this process started, which is the default answer to "when did the
+#: current planning attempt begin" (`attempt_started_at`, DRE-4124). Captured
+#: at import so every read inside one run agrees, and so a verdict posted while
+#: this run was working still reads as current.
+_PROCESS_STARTED_AT = datetime.now(UTC).isoformat()
 
 # What the note says when the planner stated no reason at all, and when it
 # stated one the CEO must not be handed. Named constants because the tests and
@@ -541,21 +548,79 @@ def in_escalation_segment(name: str, contract: dict | None = None) -> bool:
         return False
 
 
-def moved_on(issue: dict, comment_bodies, contract: dict | None = None) -> str | None:
+def attempt_started_at() -> str:
+    """When the attempt THIS process is making began, ISO-8601.
+
+    The card's own planning history is not readable from here — Linear's issue
+    query carries no lane-entry time — so the honest answer to "when did the
+    current planning attempt begin" is the one fact this process can state
+    about itself: when it started. A caller that knows better (a workflow that
+    can hand over its run's start) passes `attempt_since` explicitly.
+    """
+    return _PROCESS_STARTED_AT
+
+
+def _body(record) -> str:
+    """One comment's text, whether it arrived as a string or as a
+    `{"body", "createdAt"}` record (`linear_ops.comment_timeline`'s shape)."""
+    if isinstance(record, dict):
+        return record.get("body") or ""
+    return record or ""
+
+
+def _stale(record, attempt_since: str | None) -> bool:
+    """Was this comment posted BEFORE the current planning attempt began?
+
+    With no attempt stated, nothing is stale — the two seams that predate
+    DRE-4124 keep the reading they have always had. With one stated, a comment
+    whose time cannot be read is stale: unknown is never a pass
+    (`standards/console-honesty.md` rule 2), and the only thing a fresh verdict
+    licenses is leaving a card standing in the lane it is stuck in.
+    """
+    if not attempt_since:
+        return False
+    when = record.get("createdAt") if isinstance(record, dict) else None
+    try:
+        posted = datetime.fromisoformat(str(when).replace("Z", "+00:00"))
+        began = datetime.fromisoformat(str(attempt_since).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return True
+    return posted < began
+
+
+def moved_on(issue: dict, comment_bodies, contract: dict | None = None,
+             *, attempt_since: str | None = None) -> str | None:
     """Why this card is past the escalation, or None when it is still ours.
 
     Two facts, and both are said when both hold: the lane the board shows the
     card in is outside the segment (`in_escalation_segment`), and/or the card
-    already carries a routing verdict — read by `routing_verdict`'s own reader,
-    never matched here, so a note that merely quotes one carries none. A
-    verdict means the classification this escalation stands in for has already
-    been answered, so the card is past this step whatever lane it is in.
+    carries a routing verdict FROM THE CURRENT PLANNING ATTEMPT — read by
+    `routing_verdict`'s own reader, never matched here, so a note that merely
+    quotes one carries none.
+
+    THE VERDICT USED TO BE READ "whatever lane it is in" (DRE-4124). On
+    2026-09-16 23:42 PT that stood DRE-2415 down on a verdict from 09-08 while
+    the board plainly showed the card still in Planning, where it had then sat
+    for thirty-five days. A verdict is the answer to one planning attempt, and
+    an attempt that ended thirty-five days ago is not evidence about this one —
+    the card is still here, which is the fact the lane reports and the verdict
+    cannot overrule. So the lane is the load-bearing read, and a verdict older
+    than `attempt_since` is stale.
+
+    It is still a real fact when it is CURRENT: a verdict stamped since this
+    attempt began is this attempt's answer, and a card that has just been
+    classified is past this step even if the move has not landed yet — the
+    five-second window DRE-3654 was written for. `attempt_since=None` states no
+    attempt, and then nothing is stale and the reading is exactly the one the
+    two pre-DRE-4124 callers have always had.
     """
     lane = ((issue or {}).get("state") or {}).get("name") or ""
     facts: list[str] = []
     if not in_escalation_segment(lane, contract):
         facts.append(f"it is in {lane or 'no lane the board reports'}")
-    verdicts = routing_verdict.verdicts_on(comment_bodies)
+    current = [_body(c) for c in (comment_bodies or ())
+               if not _stale(c, attempt_since)]
+    verdicts = routing_verdict.verdicts_on(current)
     if verdicts:
         facts.append(
             "it already carries a routing verdict (" + ", ".join(verdicts) + ")"
@@ -611,12 +676,35 @@ def stood_down_comment(identifier: str, where: str, reason: str | None,
 
 
 def escalate(linear_ops, identifier: str, reason: str | None,
-             transport: bool = False, rewrite: bool = False) -> Outcome:
+             transport: bool = False, rewrite: bool = False, *,
+             issue: dict | None = None, comments=None,
+             attempt_since: str | None = None) -> Outcome:
     """Post the escalation and park the card — if the card is still ours.
 
-    The lane is read LIVE first (`fresh=True`, never the command's memo — the
-    memo is the state the card was in when the run began, and that is the read
-    DRE-3604 was wrong by), and nothing is written until it has been. A card
+    `issue` and `comments` let a caller that has ALREADY read the card hand
+    over what it read instead of paying for it again (DRE-4124). The reconcile
+    sweep is that caller: its board read returns every Planning card's lane and
+    its comment window inline, and a second per-card read here would put back
+    exactly the request DRE-2929 took out — one per card, per sweep, per repo,
+    the term that exhausted the workspace quota for seven hours. The state
+    write below is guarded on its own live re-read (`linear_ops.cmd_state` →
+    `guarded_state_write`), so the move is no less careful; what is traded is
+    the freshness of the STAND-DOWN decision, against a snapshot taken seconds
+    earlier in the same pass.
+
+    Otherwise the lane is read LIVE first (`fresh=True`, never the command's
+    memo — the memo is the state the card was in when the run began, and that
+    is the read DRE-3604 was wrong by), and the comments come from
+    `comment_timeline` — WITH their `createdAt`, because since DRE-4124 a
+    verdict is only a stand-down while it is CURRENT and `_stale` reads a time
+    it cannot parse as stale. `comment_bodies` is the same one window with the
+    times thrown away, so reading it here made EVERY verdict stale and parked
+    cards a fresh verdict had just stood down — the two non-sweep callers
+    (`planning_route._cmd_exit`, `_cmd_escalate`) lost DRE-3604/DRE-3654's
+    five-second window entirely. Both read the same `_THREAD_QUERY`, so the
+    switch costs no extra request inside a pass; outside one it is the same
+    read `comment_bodies` would have made. Nothing is written until it has
+    been. A card
     that has moved on — out of the segment, or already carrying a verdict —
     gets NO state write and one stand-down note, keyed on its own tag so a
     retry converges on "left alone"; if the escalation note had already
@@ -633,22 +721,30 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     between the two writes.
     """
     lane = destination()
-    issue = linear_ops.get_issue(identifier, fresh=True)
-    bodies = linear_ops.comment_bodies(identifier)
-    elsewhere = moved_on(issue, bodies)
-    already = 0
-    try:
-        already = linear_ops.count_comments(identifier, ESCALATION_TAG)
-    except Exception as exc:  # noqa: BLE001 — a read failure must not strand the card
-        print(f"{identifier}: could not read prior escalations ({exc})", file=sys.stderr)
+    handed = comments is not None
+    if issue is None:
+        issue = linear_ops.get_issue(identifier, fresh=True)
+    bodies = list(comments) if handed else linear_ops.comment_timeline(identifier)
+    elsewhere = moved_on(
+        issue, bodies, attempt_since=attempt_since or attempt_started_at())
+
+    def _count(tag: str, what: str) -> int:
+        """How many of `tag` the card already carries. Counted off the handed
+        comments when there are any — same substring test `count_comments`
+        makes, for no request."""
+        if handed:
+            return sum(1 for record in bodies if tag in _body(record))
+        try:
+            return linear_ops.count_comments(identifier, tag)
+        except Exception as exc:  # noqa: BLE001 — a read failure must not strand the card
+            print(f"{identifier}: could not read prior {what} ({exc})",
+                  file=sys.stderr)
+            return 0
+
+    already = _count(ESCALATION_TAG, "escalations")
     posted = False
     if elsewhere is not None:
-        recorded = 0
-        try:
-            recorded = linear_ops.count_comments(identifier, STOOD_DOWN_TAG)
-        except Exception as exc:  # noqa: BLE001 — same rule: report, do not strand
-            print(f"{identifier}: could not read prior stand-downs ({exc})",
-                  file=sys.stderr)
+        recorded = _count(STOOD_DOWN_TAG, "stand-downs")
         if recorded:
             print(f"{identifier}: already recorded, under {STOOD_DOWN_TAG}")
         else:

@@ -465,9 +465,12 @@ def test_the_board_read_is_its_own_phase(capsys):
     """`board_read` is one of the contract's phase names. The board snapshot is
     read once per pass and shared (DRE-2929), so the line appears when this is
     the phase that paid for it — with the watchdogs that usually read it first
-    stood down, that is here."""
+    stood down, that is here. `repair_frozen_planning_holds` (DRE-4124) is the
+    third of them: it runs on the same board read, so it pays for the snapshot
+    whenever the two before it do not."""
     fake = FakeLinear(*_busy_board())
-    _run_sweep(fake, mocks=("flag_stranded", "report_intake_depth"))
+    _run_sweep(fake, mocks=("flag_stranded", "report_intake_depth",
+                            "repair_frozen_planning_holds"))
     printed = _phase_lines(_spend_lines(capsys))
     assert printed.get("board_read") == 1, (
         f"the board read must be charged to `board_read`: {printed}"
