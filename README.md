@@ -446,21 +446,21 @@ the build if any workflow re-hardcodes a cap, if a promotion path stops taking
 the input, if the declared default drifts from the script's, or if this repo's
 own stubs disagree with each other.
 
-## The two runner lanes: long jobs and short jobs (DRE-3887, DRE-4276)
+## The two runner lanes: short jobs and long jobs (DRE-3887, DRE-4276)
 
 Every job in a reusable reads the CALLER's repository variable
 `BUREAU_RUNS_ON` and runs on `ubuntu-latest` when it is unset (DRE-3350). The
-jobs that finish in seconds read `BUREAU_SHORT_RUNS_ON` **in front of** that
-same chain, so a repo whose long-job runners are busy can route its
-bookkeeping elsewhere by setting one more variable — and with it unset every
-job renders exactly what it rendered before. The expression is one exact
-string, `fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON ||
+bookkeeping jobs read `BUREAU_SHORT_RUNS_ON` **in front of** that same chain,
+so a repo whose long-job runners are busy can route its bookkeeping elsewhere
+by setting one more variable — and with it unset every job renders exactly
+what it rendered before. The expression is one exact string,
+`fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON ||
 '["ubuntu-latest"]')`, so a grep finds every site.
 
 | lane | variable | what rides it | how long a job takes |
 |---|---|---|---|
-| long | `BUREAU_RUNS_ON` | the Claude jobs: `agent-task`, `qa-review`, `verify`, `agent-fix`, `plan`, and medic's `diagnose` | minutes to an hour, nearly all of it waiting on the model |
-| short | `BUREAU_SHORT_RUNS_ON` | merge-gate's `resolve` and `evaluate`; linear-sync's `card-done` and `conflict-sweep` (DRE-3887); reconcile's `sweep`; and medic's eight script jobs — `classify`, `retry`, `retry_declined`, `stall_record`, `backoff`, `upstream_outage`, `linear_rate_limited`, `environment_hold` (DRE-4276) | well under a minute, no model call at all |
+| short | `BUREAU_SHORT_RUNS_ON` | exactly these, by name: merge-gate's `resolve` and `evaluate`; linear-sync's `card-done` and `conflict-sweep` (DRE-3887); reconcile's `sweep`; and medic's eight script jobs — `classify`, `retry`, `retry_declined`, `stall_record`, `backoff`, `upstream_outage`, `linear_rate_limited`, `environment_hold` (DRE-4276) | seconds to a couple of minutes, and no model call at all — see the rule below for the observed numbers |
+| long | `BUREAU_RUNS_ON` | the default: **every reusable job the short row does not name.** Not enumerated here on purpose — a list would be wrong the day the next reusable lands; `test_reusable_jobs_read_the_callers_runner_variable` is the live enumeration and it fails on any job that reads neither variable | the Claude jobs run minutes to an hour; the rest are scripts, and they sit on this lane because nothing has moved them, not because they are slow |
 
 **Why.** On 2026-09-13 twenty-two agent-bureau Merge Gate runs sat queued for
 about an hour behind 20-minute Claude jobs while three heavy runners sat idle
@@ -468,12 +468,19 @@ about an hour behind 20-minute Claude jobs while three heavy runners sat idle
 lane over: the mini's six runners were all busy, 38 jobs were queued, the
 oldest reviews had waited about 100 minutes, and fifteen of the queued jobs
 were agent-bureau `Pipeline Medic` runs plus three `Reconcile` sweeps — each a
-sub-minute script that reads and writes GitHub and Linear — taking a turn
-ahead of every review (DRE-4276).
+short script that reads and writes GitHub and Linear — taking a turn ahead of
+every review (DRE-4276).
 
-**The rule to keep.** A job belongs on the short lane only if it is sub-minute
-bookkeeping: no Claude call, no product test suite, no build. That is why
-medic's `diagnose` stays on the long lane — it is the one medic job that
+**The rule to keep.** A job belongs on the short lane only if it makes **no
+Claude call, runs no product test suite and runs no build**. That criterion is
+the load-bearing one, not the clock: these jobs are quick, but not all of them
+are sub-minute. This repo's own `Reconcile` sweeps, sampled over 2026-09-18
+19:46–22:04 UTC, took 13 to 70 seconds across thirteen successful runs, five of
+them over a minute; the short-lane jobs carry `timeout-minutes` of five (medic's
+eight, merge-gate's `resolve`, linear-sync's `card-done`) or ten (reconcile's
+`sweep`, merge-gate's `evaluate`, linear-sync's `conflict-sweep`). What makes
+them safe to move is that none of them needs anything the long-lane runners
+have. That is why medic's `diagnose` stays on the long lane — it is the one medic job that
 spends a Claude run, up to twenty minutes and sixty turns of it — and why the
 lane is pinned **by job name** in `tests/test_short_runs_on_lane.py`: a job
 added to one of these four files without a runner decision fails the build
@@ -485,7 +492,12 @@ repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
 the command, the rollback and the runner-class reasoning for the fleet.
 agent-bureau and portico already carry `BUREAU_SHORT_RUNS_ON`, so their sweeps
 move the moment this reaches `stable`; bureau-pipeline's own workflows run
-hosted already.
+hosted already. **That move costs money**: a sweep on the mini bills nothing
+per minute and the same sweep on `ubuntu-latest` bills GitHub-hosted minutes,
+on the meter DRE-3350 was created to shut off. `reconcile` is the
+highest-frequency job in the fleet, so it is the bulk of that spend — the trade
+is reviews waiting behind chores versus a small hosted bill, it is opt-in per
+repo, and deleting the variable puts the sweeps straight back.
 
 ## A dependabot pull request gets a card of its own (DRE-3665)
 
