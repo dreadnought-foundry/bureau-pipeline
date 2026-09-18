@@ -383,11 +383,8 @@ class ReaderMintTest(unittest.TestCase):
 
     @staticmethod
     def _fallback_of(mint: dict, spec: dict) -> tuple[str, str]:
-        # qa-review's check-run mint falls back to the DISPATCH App (checks:
-        # write — the qa-bot has checks:read, test_head_bound_review_check);
-        # every other pool mint falls back to the workflow's slot 1.
-        if mint.get("id") == "checks_app":
-            return ("BUREAU_APP_ID", "BUREAU_APP_PRIVATE_KEY")
+        # Every pool mint falls back to the workflow's slot 1. (qa-review's
+        # check-run mint is not a pool mint at all — see the writer pin below.)
         return spec["original"]
 
     def test_pool_secrets_are_declared_optional_on_every_reusable(self):
@@ -446,14 +443,29 @@ class ReadsMoveWritesStayTest(unittest.TestCase):
             (app.get("with") or {}).get("app-id"), "${{ secrets.BUREAU_QA_APP_ID }}"
         )
 
-    def test_qa_reviews_check_run_write_rides_the_pool(self):
-        # A check run is a write nobody attributes (merge_gate.py reads the
-        # verdict COMMENT, never the check) — it rides the selected slot and
-        # falls back to the dispatch App, the one pair with checks:write.
+    def test_qa_reviews_check_run_writer_is_one_app_and_never_the_pool_slot(self):
+        # Critic finding on DRE-4282, round 1. publish_review_check.py UPDATES
+        # the head's review check run in place, and GitHub lets only the App
+        # that CREATED a check run update it. A mint that followed the pool
+        # slot would fail at the last step of any re-review that landed on a
+        # different slot, leave the head with a stale check, and make the
+        # crash-recovery loop read a working reviewer as broken. So the
+        # check-run writer is ONE App — the dispatch App, which has always
+        # written it — for both the publish and the carried re-publish.
         _, mint = by_id("qa-review.yml", "checks_app")
         with_ = mint.get("with") or {}
-        self.assertIn("steps.pool.outputs.n", with_.get("app-id", ""))
-        self.assertRegex(with_.get("app-id", ""), r"\|\|\s*secrets\.BUREAU_APP_ID\s*}}\s*$")
+        self.assertEqual(with_.get("app-id"), "${{ secrets.BUREAU_APP_ID }}")
+        self.assertEqual(with_.get("private-key"), "${{ secrets.BUREAU_APP_PRIVATE_KEY }}")
+        self.assertNotIn("steps.pool", yaml.safe_dump(with_))
+        writers = [
+            s for s in steps("qa-review.yml")
+            if "publish_review_check.py" in (s.get("run") or "")
+        ]
+        self.assertEqual(len(writers), 2, "the publish and the carried re-publish")
+        for step in writers:
+            self.assertEqual(
+                token_of(step, "env", "GH_TOKEN"), "${{ steps.checks_app.outputs.token }}"
+            )
 
     def test_plans_model_steps_all_read_a_pool_selected_token(self):
         # plan.yml re-mints before every model step (DRE-3940). Each of those

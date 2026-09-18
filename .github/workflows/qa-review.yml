@@ -2099,27 +2099,23 @@ jobs:
       # console, reconcile's crashed-review backstop, a human) reads
       # "unreviewed", which is exactly what it is not.
       #
-      # A check run is a write nobody attributes — merge_gate.py reads the
-      # verdict COMMENT, never the check's author — so since DRE-4282 it is
-      # minted from the pool slot the reader selected (every pool App mirrors
-      # the dispatch App's checks:write, DRE-1922) and falls through to the
-      # dispatch App: on the carried-verdict path the selector never ran, its
-      # output is empty, and the chain lands on the same pair it always used.
+      # NOT the pool slot, on purpose (DRE-4282, critic round 1). A check run
+      # is a write nobody attributes, but it is not a write anybody may make:
+      # publish_review_check.py UPDATES the head's existing review check in
+      # place, and GitHub lets only the App that CREATED a check run update
+      # it. Minted from whichever slot the selector picked, a re-review on a
+      # different slot would fail at this last step, the head would keep its
+      # stale check, and the crash-recovery loop would read a working
+      # reviewer as broken. So this mint stays on the one App that has always
+      # written the review check — the dispatch App — at the cost of one
+      # look-up per review. The reads above ride the pool; this does not.
       - name: Mint dispatch-bot token (checks:write — qa-bot has checks:read)
         id: checks_app
         if: always() && !cancelled() && (steps.decide.outputs.review == 'true' || steps.decide.outputs.carried_sha != '')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: >-
-            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
-             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
-             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
-             || secrets.BUREAU_APP_ID }}
-          private-key: >-
-            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
-             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
-             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
-             || secrets.BUREAU_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
 
       - name: Publish review check on the reviewed head
         if: always() && !cancelled() && steps.decide.outputs.review == 'true'
