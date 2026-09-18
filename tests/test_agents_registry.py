@@ -312,7 +312,11 @@ class AgentsRegistryTest(unittest.TestCase):
         """The surface read on 2026-08-26, pinned so the next change to it is
         visible: LINEAR_API_KEY reaches the agent step in six of the seven
         agent workflows (qa-review withholds it deliberately), and the
-        dispatch pool reaches agent-task, red-main-repair and verify.
+        dispatch pool reaches agent-task, red-main-repair and verify — and,
+        since DRE-4282, the three heavy readers that run a model: qa-review
+        (the critic), agent-fix (the fixer) and plan (the planner and its two
+        critics). medic is the one agent workflow the pool does not reach:
+        its reads ride github.token (DRE-1346).
 
         Note for the reader: the pool that reaches the agent step is
         BUREAU_APP_ID_2..4, three names, not four — the first App's id is
@@ -344,7 +348,8 @@ class AgentsRegistryTest(unittest.TestCase):
             {"agent-task.yml", "agent-fix.yml", "plan.yml", "medic.yml",
              "verify.yml", "red-main-repair.yml"}, with_linear)
         self.assertEqual(
-            {"agent-task.yml", "red-main-repair.yml", "verify.yml"}, with_pool)
+            {"agent-task.yml", "red-main-repair.yml", "verify.yml",
+             "qa-review.yml", "agent-fix.yml", "plan.yml"}, with_pool)
 
     def test_header_says_which_fields_are_enforced_and_by_what(self):
         """The next person must not have to discover the enforcement the way
